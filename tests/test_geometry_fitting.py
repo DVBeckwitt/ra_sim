@@ -2510,6 +2510,151 @@ def test_prepare_reflection_subset_clears_stale_local_source_ids() -> None:
         assert key not in subset.measured_entries[0]
 
 
+def test_filter_simulation_subset_preserves_local_fixed_source_rows() -> None:
+    miller = np.array(
+        [
+            [5.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 2.0, 7.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 99,
+            "source_peak_index": 1,
+            "q_group_key": ("q", 2),
+            "branch_group_key": ("branch", 1),
+            "fit_source_resolution_kind": "provider_fixed_source_local",
+            "optimizer_request_source": "provider_pair",
+            "optimizer_request_has_fixed_source": True,
+            "optimizer_request_fallback_row": False,
+            "provider_selected_source_identity_canonical": {
+                "normalized_hkl": [2, 0, 0],
+                "source_table_index": 99,
+                "source_peak_index": 1,
+            },
+        }
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.reduced is True
+    assert subset.fixed_source_reflection_count == 1
+    assert subset.fallback_hkl_count == 0
+    assert np.array_equal(subset.original_indices, np.array([1], dtype=np.int64))
+    entry = subset.measured_entries[0]
+    assert entry["original_source_table_index"] == 99
+    assert entry["source_table_index"] == 99
+    assert entry["resolved_table_index"] == 0
+    assert entry["source_peak_index"] == 1
+    assert entry["resolved_peak_index"] == 1
+    assert entry["q_group_key"] == ("q", 2)
+    assert entry["branch_group_key"] == ("branch", 1)
+    assert "source_reflection_index" not in entry
+    hit_tables = [
+        np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+    ]
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        subset.measured_entries,
+        hit_tables,
+    )
+    assert len(resolved) == 1
+    assert fallback_entries == []
+    assert resolution_lookup[id(entry)]["resolution_kind"] == "fixed_source"
+    assert resolution_lookup[id(entry)]["resolution_reason"] == "resolved"
+
+
+def test_filter_simulation_subset_assigns_duplicate_hkl_local_fixed_rows() -> None:
+    miller = np.array(
+        [
+            [5.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 2.0, 3.0, 7.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 99,
+            "source_peak_index": 0,
+            "source_branch_index": 0,
+            "source_row_index": 24,
+            "fit_source_resolution_kind": "provider_fixed_source_local",
+            "optimizer_request_source": "provider_pair",
+            "optimizer_request_has_fixed_source": True,
+            "optimizer_request_fallback_row": False,
+        },
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 8.0,
+            "y": 8.0,
+            "source_table_index": 101,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
+            "source_row_index": 24,
+            "fit_source_resolution_kind": "provider_fixed_source_local",
+            "optimizer_request_source": "provider_pair",
+            "optimizer_request_has_fixed_source": True,
+            "optimizer_request_fallback_row": False,
+        },
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.reduced is True
+    assert subset.fixed_source_reflection_count == 2
+    assert subset.fallback_hkl_count == 0
+    assert np.array_equal(subset.original_indices, np.array([1, 2], dtype=np.int64))
+    assert subset.measured_entries[0]["original_source_table_index"] == 99
+    assert subset.measured_entries[0]["resolved_table_index"] == 0
+    assert subset.measured_entries[0]["source_peak_index"] == 0
+    assert subset.measured_entries[1]["original_source_table_index"] == 101
+    assert subset.measured_entries[1]["resolved_table_index"] == 1
+    assert subset.measured_entries[1]["source_peak_index"] == 1
+    assert "source_reflection_index" not in subset.measured_entries[0]
+    assert "source_reflection_index" not in subset.measured_entries[1]
+
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0],
+                [1.0, 5.0, 5.0, 10.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        ),
+        np.asarray(
+            [
+                [1.0, 7.0, 7.0, -10.0, 2.0, 0.0, 0.0],
+                [1.0, 8.0, 8.0, 10.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        ),
+    ]
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        subset.measured_entries,
+        hit_tables,
+    )
+    assert len(resolved) == 2
+    assert fallback_entries == []
+    assert all(
+        resolution_lookup[id(entry)]["resolution_kind"] == "fixed_source"
+        for entry in subset.measured_entries
+    )
+
+
 def test_geometry_fit_correspondence_simulated_point_ignores_stale_source_table_ids() -> None:
     correspondence = {
         "source_table_index": 13,

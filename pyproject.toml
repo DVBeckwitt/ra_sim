@@ -43,17 +43,23 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "build",
+  "coverage[toml]",
   "mypy",
   "pre-commit",
   "pytest",
+  "pytest-cov",
   "ruff",
 ]
 
 [dependency-groups]
 dev = [
+  "build",
+  "coverage[toml]",
   "mypy",
   "pre-commit",
   "pytest",
+  "pytest-cov",
   "ruff",
 ]
 
@@ -80,6 +86,17 @@ markers = [
   "benchmark: benchmark-oriented regression tests excluded from fast tier",
   "slow_baseline_fit: real geometry baseline fitting acceptance coverage",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["ra_sim"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.coverage.xml]
+output = "coverage.xml"
 
 [tool.ruff]
 target-version = "py311"

@@ -10,6 +10,17 @@ See also:
 - [Debug and cache guide](debug-and-cache.md)
 - [README configuration section](../README.md#configuration)
 
+## Setup Doctor
+
+Symptom:
+
+- you need a compact setup report before launching the GUI or running real-data workflows
+
+Fix:
+
+- Run `python -m ra_sim.dev doctor`. Missing local experiment files are warnings by default.
+- Use `python -m ra_sim.dev doctor --strict` when local config should point at existing required inputs.
+
 ## Tkinter Missing
 
 Symptom:

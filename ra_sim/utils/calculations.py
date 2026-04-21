@@ -43,6 +43,11 @@ _FORMULA_MASS = float(np.dot(_STOICHIOMETRY, _ATOMIC_MASSES))
 _MASS_FRACTIONS = (_STOICHIOMETRY * _ATOMIC_MASSES) / _FORMULA_MASS
 _TOTAL_ATOMIC_NUMBER = float(np.dot(_STOICHIOMETRY, _ATOMIC_NUMBERS))
 _WEIGHTED_MASS_ATTENUATION = float(np.dot(_MASS_FRACTIONS, _MASS_ATTENUATION))
+_LEGACY_MU_M = _DENSITY * _WEIGHTED_MASS_ATTENUATION * 1.0e2
+_LEGACY_RHO_G_M3 = _DENSITY * 1.0e6
+_LEGACY_FORMULA_VOLUME_M3 = _FORMULA_MASS / _LEGACY_RHO_G_M3
+_LEGACY_FORMULAS_PER_M3 = 1.0 / _LEGACY_FORMULA_VOLUME_M3
+_LEGACY_ELECTRON_DENSITY_M3 = _TOTAL_ATOMIC_NUMBER * (_LEGACY_FORMULAS_PER_M3 * N_A)
 _HC_ANGSTROM_EV = 12398.419843320026
 _ELEMENT_SYMBOL_RE = re.compile(r"[A-Z][a-z]?")
 
@@ -240,21 +245,18 @@ def IndexofRefraction(lambda_m=LAMBDA_DEFAULT):
     if not np.isfinite(lambda_m) or lambda_m <= 0.0:
         lambda_m = LAMBDA_DEFAULT
 
-    # Linear attenuation coefficient (m^-1)
-    mu_cm = _DENSITY * _WEIGHTED_MASS_ATTENUATION
-    mu_m = mu_cm * 1.0e2
-
-    # Electron density (m^-3)
-    rho_g_m3 = _DENSITY * 1.0e6
-    V_mol = _FORMULA_MASS / rho_g_m3
-    n_formulas = 1.0 / V_mol
-    rho_e = _TOTAL_ATOMIC_NUMBER * (n_formulas * N_A)
-
     # delta and beta
-    delta = (R_E * (lambda_m ** 2) * rho_e) / (2.0 * math.pi)
-    beta = (mu_m * lambda_m) / (4.0 * math.pi)
+    delta = (R_E * (lambda_m ** 2) * _LEGACY_ELECTRON_DENSITY_M3) / (2.0 * math.pi)
+    beta = (_LEGACY_MU_M * lambda_m) / (4.0 * math.pi)
 
     return 1.0 - delta + 1.0j * beta
+
+
+def _legacy_material_complex_index_from_lambda_m(lambda_m_array) -> np.ndarray:
+    lambda_arr = np.asarray(lambda_m_array, dtype=np.float64).reshape(-1)
+    delta = (R_E * np.square(lambda_arr) * _LEGACY_ELECTRON_DENSITY_M3) / (2.0 * np.pi)
+    beta = (_LEGACY_MU_M * lambda_arr) / (4.0 * np.pi)
+    return (1.0 - delta).astype(np.complex128) + 1.0j * beta
 
 
 def _sanitize_lambda_m(lambda_m) -> float:
@@ -274,6 +276,47 @@ def _sanitize_lambda_array(lambda_m_array) -> np.ndarray:
     if np.any(invalid):
         out[invalid] = LAMBDA_DEFAULT
     return out
+
+
+def _n2_wavelength_snapshot_from_angstrom(wavelength_angstrom_array) -> np.ndarray:
+    return np.ascontiguousarray(
+        np.asarray(wavelength_angstrom_array, dtype=np.float64).reshape(-1),
+        dtype=np.float64,
+    )
+
+
+def _normalize_n2_source_meta(value):
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        kind, payload = value
+        if kind == "cif_path" and payload:
+            return ("cif_path", str(Path(payload).expanduser().resolve()))
+        if kind == "legacy_material":
+            return ("legacy_material", None)
+    return None
+
+
+def _legacy_kernel_n2_sample_array_from_angstrom(
+    wavelength_angstrom_array,
+    *,
+    nominal_n2: complex,
+    sample_count: int,
+) -> np.ndarray:
+    wavelength = _n2_wavelength_snapshot_from_angstrom(wavelength_angstrom_array)
+    resolved_sample_count = max(int(sample_count), 0)
+    nominal_value = np.complex128(complex(nominal_n2))
+    if wavelength.size != resolved_sample_count:
+        return np.full(resolved_sample_count, nominal_value, dtype=np.complex128)
+
+    out = np.empty(resolved_sample_count, dtype=np.complex128)
+    valid = np.isfinite(wavelength) & (wavelength > 0.0)
+    out[~valid] = nominal_value
+    if np.any(valid):
+        out[valid] = _legacy_material_complex_index_from_lambda_m(
+            wavelength[valid] * 1.0e-10
+        )
+    return np.ascontiguousarray(out, dtype=np.complex128)
 
 
 def _normalize_element_symbol(raw_value) -> str | None:

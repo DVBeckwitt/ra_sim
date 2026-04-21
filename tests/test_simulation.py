@@ -1,6 +1,7 @@
 import numpy as np
 
 from ra_sim.simulation import simulation as sim_mod
+from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
 
 
 class _DummyVar:
@@ -23,6 +24,10 @@ def test_simulate_diffraction_reuses_supplied_profile_samples(monkeypatch):
         seen["theta_array"] = np.asarray(args[18], dtype=np.float64).copy()
         seen["phi_array"] = np.asarray(args[19], dtype=np.float64).copy()
         seen["wavelength_array"] = np.asarray(args[23], dtype=np.float64).copy()
+        seen["n2_sample_array_override"] = np.asarray(
+            kwargs["n2_sample_array_override"],
+            dtype=np.complex128,
+        ).copy()
         image = np.array(args[6], copy=True)
         image += 3.0
         return image, [], np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
@@ -75,3 +80,9 @@ def test_simulate_diffraction_reuses_supplied_profile_samples(monkeypatch):
     assert np.allclose(image, 3.0)
     for key, expected in profile_samples.items():
         assert np.array_equal(seen[key], expected)
+    expected_n2 = _legacy_kernel_n2_sample_array_from_angstrom(
+        profile_samples["wavelength_array"],
+        nominal_n2=1.0,
+        sample_count=2,
+    )
+    np.testing.assert_allclose(seen["n2_sample_array_override"], expected_n2)

@@ -221,3 +221,211 @@ def test_fit_peak_profile_recovers_pseudo_voigt_eta() -> None:
     assert abs(float(fit["center"]) + 0.4) < 0.03
     assert abs(float(fit["fwhm"]) - 1.3) < 0.08
     assert abs(float(fit["eta"]) - 0.65) < 0.08
+
+
+def test_fit_composite_peak_profile_single_peak_uses_full_curve() -> None:
+    x_values = np.linspace(-5.0, 6.0, 550)
+    y_values = analysis_peak_tools.gaussian_profile(
+        x_values,
+        baseline=0.4,
+        amplitude=5.2,
+        center=1.35,
+        fwhm=0.62,
+    )
+
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        x_values,
+        y_values,
+        [1.3],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    assert fit["success"] is True
+    assert len(fit["components"]) == 1
+    assert len(fit["x_fit"]) == len(x_values)
+    assert np.isclose(float(fit["x_fit"][0]), float(x_values[0]))
+    assert np.isclose(float(fit["x_fit"][-1]), float(x_values[-1]))
+    assert abs(float(fit["components"][0]["center"]) - 1.35) < 0.03
+    assert abs(float(fit["components"][0]["fwhm"]) - 0.62) < 0.08
+
+
+def test_fit_composite_peak_profile_two_gaussians_sums_components() -> None:
+    x_values = np.linspace(-6.0, 6.0, 601)
+    y_values = (
+        0.8
+        + analysis_peak_tools.gaussian_profile(
+            x_values,
+            baseline=0.0,
+            amplitude=4.5,
+            center=-1.4,
+            fwhm=0.55,
+        )
+        + analysis_peak_tools.gaussian_profile(
+            x_values,
+            baseline=0.0,
+            amplitude=3.8,
+            center=1.8,
+            fwhm=0.9,
+        )
+    )
+
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        x_values,
+        y_values,
+        [-1.35, 1.75],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    fitted_centers = [float(component["center"]) for component in fit["components"]]
+
+    assert fit["success"] is True
+    assert len(fit["components"]) == 2
+    assert len(fit["x_fit"]) == len(x_values)
+    assert np.isclose(float(fit["x_fit"][0]), float(x_values[0]))
+    assert np.isclose(float(fit["x_fit"][-1]), float(x_values[-1]))
+    assert np.allclose(fitted_centers, [-1.4, 1.8], atol=0.08)
+    assert float(fit["rmse"]) < 0.1
+
+
+def test_fit_composite_peak_profile_pseudo_voigt_returns_eta_and_full_curve() -> None:
+    x_values = np.linspace(-4.0, 4.0, 480)
+    y_values = analysis_peak_tools.pseudo_voigt_profile(
+        x_values,
+        baseline=0.9,
+        amplitude=4.2,
+        center=-0.6,
+        fwhm=1.1,
+        eta=0.72,
+    )
+
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        x_values,
+        y_values,
+        [-0.55],
+        model=analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
+    )
+
+    assert fit["success"] is True
+    assert len(fit["components"]) == 1
+    assert len(fit["x_fit"]) == len(x_values)
+    assert abs(float(fit["components"][0]["center"]) + 0.6) < 0.05
+    assert abs(float(fit["components"][0]["fwhm"]) - 1.1) < 0.12
+    assert abs(float(fit["components"][0]["eta"]) - 0.72) < 0.1
+
+
+def test_fit_composite_peak_profile_collapses_near_duplicate_centers() -> None:
+    x_values = np.linspace(-2.5, 2.5, 500)
+    y_values = analysis_peak_tools.gaussian_profile(
+        x_values,
+        baseline=0.3,
+        amplitude=4.8,
+        center=0.12,
+        fwhm=0.45,
+    )
+
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        x_values,
+        y_values,
+        [0.12, 0.125],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    assert fit["success"] is True
+    assert len(fit["components"]) == 1
+    assert fit["component_groups"] == [{"component_index": 0, "center_guess_indices": [0, 1]}]
+
+
+def test_fit_composite_peak_profile_does_not_use_samples_outside_selected_window() -> None:
+    x_values = np.linspace(-10.0, 10.0, 801)
+    y_values = analysis_peak_tools.gaussian_profile(
+        x_values,
+        baseline=0.5,
+        amplitude=3.2,
+        center=1.1,
+        fwhm=0.85,
+    )
+    selected_mask = (x_values >= -2.0) & (x_values <= 3.0)
+    selected_x = x_values[selected_mask]
+    selected_y = y_values[selected_mask]
+
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        selected_x,
+        selected_y,
+        [1.05],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    assert fit["success"] is True
+    assert np.allclose(np.asarray(fit["x_fit"], dtype=float), selected_x)
+    assert float(np.min(fit["x_fit"])) >= -2.0
+    assert float(np.max(fit["x_fit"])) <= 3.0
+
+
+def test_fit_composite_peak_profile_handles_wrapped_selected_azimuth_window() -> None:
+    x_values = np.concatenate(
+        (
+            np.linspace(-179.5, -170.0, 96),
+            np.linspace(170.0, 179.5, 96),
+        )
+    )
+    baseline = 0.35
+    amplitude = 4.1
+    center = 179.1
+    fwhm = 4.8
+
+    wrapped_delta = ((x_values - center + 180.0) % 360.0) - 180.0
+    y_values = baseline + amplitude * np.exp(
+        -4.0 * np.log(2.0) * (wrapped_delta / fwhm) ** 2
+    )
+
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        x_values,
+        y_values,
+        [178.8],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    fit_center = float(fit["components"][0]["center"])
+    wrapped_center_error = ((fit_center - center + 180.0) % 360.0) - 180.0
+
+    assert fit["success"] is True
+    assert len(fit["components"]) == 1
+    assert len(fit["x_fit"]) == len(x_values)
+    assert np.all(np.asarray(fit["x_fit"], dtype=float) >= np.min(x_values))
+    assert np.all(np.asarray(fit["x_fit"], dtype=float) <= np.max(x_values))
+    assert abs(wrapped_center_error) < 0.3
+    assert np.min(np.abs(np.asarray(fit["x_fit"], dtype=float) - fit_center)) < 0.25
+    assert abs(float(fit["components"][0]["fwhm"]) - fwhm) < 0.5
+
+
+def test_fit_composite_peak_profile_reports_wrapped_center_on_selected_axis_domain() -> None:
+    x_values = np.concatenate(
+        (
+            np.linspace(-179.5, -170.0, 96),
+            np.linspace(170.0, 179.5, 96),
+        )
+    )
+    baseline = 0.35
+    amplitude = 4.1
+    center = -179.1
+    fwhm = 4.8
+
+    wrapped_delta = ((x_values - center + 180.0) % 360.0) - 180.0
+    y_values = baseline + amplitude * np.exp(
+        -4.0 * np.log(2.0) * (wrapped_delta / fwhm) ** 2
+    )
+
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        x_values,
+        y_values,
+        [179.0],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    fit_center = float(fit["components"][0]["center"])
+    wrapped_center_error = ((fit_center - center + 180.0) % 360.0) - 180.0
+
+    assert fit["success"] is True
+    assert abs(wrapped_center_error) < 0.3
+    assert np.min(np.abs(np.asarray(fit["x_fit"], dtype=float) - fit_center)) < 0.25
+    assert abs(float(fit["components"][0]["fwhm"]) - fwhm) < 0.5

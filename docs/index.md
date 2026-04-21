@@ -15,6 +15,7 @@ you need implementation-level detail.
 - [tracking/index.md](tracking/index.md): live work notes for substantial recoveries, investigations, and planned efforts
 - [gui-workflow.md](gui-workflow.md): operator workflow through calibrant, GUI, and refinement stages
 - [architecture.md](architecture.md): package layout, major subsystems, and where to edit
+- [adr/index.md](adr/index.md): accepted architecture decision records
 - [debug-and-cache.md](debug-and-cache.md): debug controls, output locations, and cache retention
 - [troubleshooting.md](troubleshooting.md): common setup, config, and workflow failures
 
@@ -24,6 +25,7 @@ If you need to:
 
 - run or launch the app: start with [README.md](../README.md#usage)
 - change simulation/fitting code: read [architecture.md](architecture.md) and then the code map in [simulation_and_fitting.md](simulation_and_fitting.md#code-map)
+- understand stable architecture decisions: read [adr/index.md](adr/index.md)
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
 - inspect live recovery work or substantial investigations: start with [tracking/index.md](tracking/index.md)
 - inspect the current fitter project order: start with [tracking/index.md](tracking/index.md)

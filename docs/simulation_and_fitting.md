@@ -2826,6 +2826,12 @@ When `debug.global.disable_all` is `true`, every debug/log output path documente
 
 Legacy environment variables still work as compatibility overrides. They are no longer the primary interface.
 
+The packaged simulation GUI also prompts at startup for one run only:
+`Start Normally (Diagnostics Off)`, `Use Saved Debug Settings`, or
+`Boot In Debug`. That launcher choice temporarily overrides logging for the GUI
+run without editing `config/debug.yaml`. CLI and headless paths continue to use
+the saved config plus environment overrides directly.
+
 ### Primary config
 
 The repo default is `config/debug.yaml`:

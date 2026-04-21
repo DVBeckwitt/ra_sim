@@ -341,6 +341,8 @@ def geometry_fit_extra_sections_enabled(
     geometry_cfg = fit_cfg.get("geometry")
     if isinstance(geometry_cfg, Mapping):
         fit_cfg = geometry_cfg
+    if "debug_logging" not in fit_cfg and "debug_mode" not in fit_cfg:
+        return _DEBUG_DEFAULTS["geometry_fit"]["extra_sections"]
     return _coerce_bool(
         fit_cfg.get("debug_logging", fit_cfg.get("debug_mode", False)),
         False,
@@ -567,6 +569,9 @@ def start_run_bundle(*, entrypoint: str | None = None) -> None:
     """Start one process-scoped artifact bundle session if not already active."""
 
     global _RUN_BUNDLE_STATE
+
+    if is_logging_disabled():
+        return
 
     with _RUN_BUNDLE_LOCK:
         state = _RUN_BUNDLE_STATE

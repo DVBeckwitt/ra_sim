@@ -4,7 +4,355 @@ import numpy as np
 import pytest
 
 from ra_sim.simulation import diffraction
-from ra_sim.utils.calculations import IndexofRefraction, resolve_index_of_refraction
+from ra_sim.simulation import diffraction_debug
+from ra_sim.utils.calculations import (
+    IndexofRefraction,
+    _legacy_kernel_n2_sample_array_from_angstrom,
+    resolve_index_of_refraction,
+)
+from ra_sim.utils import stacking_fault
+
+
+def test_legacy_kernel_n2_sample_array_matches_kernel_fallback_rules():
+    wavelengths = np.array([1.0, np.nan, -1.0, 1.54], dtype=np.float64)
+    nominal_n2 = 0.99 + 0.01j
+
+    actual = _legacy_kernel_n2_sample_array_from_angstrom(
+        wavelengths,
+        nominal_n2=nominal_n2,
+        sample_count=4,
+    )
+
+    expected = np.array(
+        [
+            IndexofRefraction(1.0e-10),
+            nominal_n2,
+            nominal_n2,
+            IndexofRefraction(1.54e-10),
+        ],
+        dtype=np.complex128,
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=0.0)
+
+
+def test_process_peaks_parallel_debug_uses_override_sample_weight_and_pixel_size(
+    monkeypatch,
+):
+    solve_q_calls: list[float] = []
+    intersection_call = {"count": 0}
+
+    def fake_intersect_line_plane(_p0, _k_vec, plane_point, _n_plane):
+        call_idx = intersection_call["count"] % 2
+        intersection_call["count"] += 1
+        if call_idx == 0:
+            return 0.0, 0.0, 0.0, True
+        return float(plane_point[0] + 2.0e-4), float(plane_point[1]), float(plane_point[2]), True
+
+    def fake_solve_q(k_in_crystal, k_scat, _g_vec, _sigma_rad):
+        solve_q_calls.append(float(k_scat))
+        assert np.isclose(np.linalg.norm(k_in_crystal), 4.0 * np.pi)
+        return np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64)
+
+    monkeypatch.setattr(diffraction_debug, "intersect_line_plane", fake_intersect_line_plane)
+    monkeypatch.setattr(diffraction_debug, "solve_q", fake_solve_q)
+
+    image = np.zeros((24, 24), dtype=np.float64)
+    image_out, max_positions, q_data, q_count = diffraction_debug.process_peaks_parallel_debug(
+        np.asarray([[0.0, 0.0, 1.0]], dtype=np.float64),
+        np.asarray([1.0], dtype=np.float64),
+        24,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        7.0 + 0.0j,
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        0.0,
+        0.0,
+        0.0,
+        np.asarray([1.0], dtype=np.float64),
+        0.0,
+        0.0,
+        [12.0, 12.0],
+        0.0,
+        0.0,
+        np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=1,
+        sample_weights=np.asarray([2.0], dtype=np.float64),
+        pixel_size_m=2.0e-4,
+        n2_sample_array_override=np.asarray([2.0 + 0.0j], dtype=np.complex128),
+    )
+
+    assert solve_q_calls == pytest.approx([4.0 * np.pi])
+    assert image_out[12, 13] == pytest.approx(2.0)
+    np.testing.assert_allclose(max_positions[0, :3], [2.0, 13.0, 12.0])
+    assert q_data.shape[0] == 1
+    assert int(q_count[0]) == 1
+
+
+def test_process_peaks_parallel_debug_skips_nonpositive_sample_weights(monkeypatch):
+    solve_q_calls: list[float] = []
+
+    monkeypatch.setattr(
+        diffraction_debug,
+        "intersect_line_plane",
+        lambda *_args, **_kwargs: pytest.fail("zero-weight samples must skip projection"),
+    )
+    monkeypatch.setattr(
+        diffraction_debug,
+        "solve_q",
+        lambda *_args, **_kwargs: solve_q_calls.append(1.0),
+    )
+
+    image = np.zeros((16, 16), dtype=np.float64)
+    image_out, max_positions, _q_data, _q_count = diffraction_debug.process_peaks_parallel_debug(
+        np.asarray([[0.0, 0.0, 1.0]], dtype=np.float64),
+        np.asarray([1.0], dtype=np.float64),
+        16,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        0.0,
+        0.0,
+        0.0,
+        np.asarray([1.0], dtype=np.float64),
+        0.0,
+        0.0,
+        [8.0, 8.0],
+        0.0,
+        0.0,
+        np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=0,
+        sample_weights=np.asarray([0.0], dtype=np.float64),
+    )
+
+    assert solve_q_calls == []
+    assert np.count_nonzero(image_out) == 0
+    np.testing.assert_allclose(max_positions[0], [-1.0, np.nan, np.nan, -1.0, np.nan, np.nan], equal_nan=True)
+
+
+def test_process_peaks_parallel_debug_clamps_mismatched_core_sample_arrays(monkeypatch):
+    solve_q_calls: list[float] = []
+    intersection_call = {"count": 0}
+
+    def fake_intersect_line_plane(_p0, _k_vec, plane_point, _n_plane):
+        call_idx = intersection_call["count"] % 2
+        intersection_call["count"] += 1
+        if call_idx == 0:
+            return 0.0, 0.0, 0.0, True
+        return float(plane_point[0] + 2.0e-4), float(plane_point[1]), float(plane_point[2]), True
+
+    def fake_solve_q(k_in_crystal, k_scat, _g_vec, _sigma_rad):
+        solve_q_calls.append(float(k_scat))
+        assert np.isclose(np.linalg.norm(k_in_crystal), 4.0 * np.pi)
+        return np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64)
+
+    monkeypatch.setattr(diffraction_debug, "intersect_line_plane", fake_intersect_line_plane)
+    monkeypatch.setattr(diffraction_debug, "solve_q", fake_solve_q)
+
+    image = np.zeros((24, 24), dtype=np.float64)
+    image_out, max_positions, q_data, q_count = diffraction_debug.process_peaks_parallel_debug(
+        np.asarray([[0.0, 0.0, 1.0]], dtype=np.float64),
+        np.asarray([1.0], dtype=np.float64),
+        24,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        7.0 + 0.0j,
+        np.asarray([0.0, 9.9], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0, 0.2], dtype=np.float64),
+        np.asarray([0.0, 0.3], dtype=np.float64),
+        0.0,
+        0.0,
+        0.0,
+        np.asarray([1.0, 1.6], dtype=np.float64),
+        0.0,
+        0.0,
+        [12.0, 12.0],
+        0.0,
+        0.0,
+        np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=1,
+        sample_weights=np.asarray([3.0, 99.0], dtype=np.float64),
+        pixel_size_m=2.0e-4,
+        n2_sample_array_override=np.asarray([2.0 + 0.0j, 9.0 + 0.0j], dtype=np.complex128),
+    )
+
+    assert solve_q_calls == pytest.approx([4.0 * np.pi])
+    assert image_out[12, 13] == pytest.approx(3.0)
+    np.testing.assert_allclose(max_positions[0, :3], [3.0, 13.0, 12.0])
+    assert q_data.shape[0] == 1
+    assert int(q_count[0]) == 1
+
+
+@pytest.mark.parametrize("pixel_size_m", [0.0, np.nan])
+def test_process_peaks_parallel_debug_falls_back_for_invalid_pixel_size(
+    monkeypatch,
+    pixel_size_m,
+):
+    solve_q_calls: list[float] = []
+    intersection_call = {"count": 0}
+
+    def fake_intersect_line_plane(_p0, _k_vec, plane_point, _n_plane):
+        call_idx = intersection_call["count"] % 2
+        intersection_call["count"] += 1
+        if call_idx == 0:
+            return 0.0, 0.0, 0.0, True
+        return float(plane_point[0] + 2.0e-4), float(plane_point[1]), float(plane_point[2]), True
+
+    def fake_solve_q(k_in_crystal, k_scat, _g_vec, _sigma_rad):
+        solve_q_calls.append(float(k_scat))
+        assert np.isclose(np.linalg.norm(k_in_crystal), 4.0 * np.pi)
+        return np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64)
+
+    monkeypatch.setattr(diffraction_debug, "intersect_line_plane", fake_intersect_line_plane)
+    monkeypatch.setattr(diffraction_debug, "solve_q", fake_solve_q)
+
+    image = np.zeros((24, 24), dtype=np.float64)
+    image_out, max_positions, q_data, q_count = diffraction_debug.process_peaks_parallel_debug(
+        np.asarray([[0.0, 0.0, 1.0]], dtype=np.float64),
+        np.asarray([1.0], dtype=np.float64),
+        24,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        7.0 + 0.0j,
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        0.0,
+        0.0,
+        0.0,
+        np.asarray([1.0], dtype=np.float64),
+        0.0,
+        0.0,
+        [12.0, 12.0],
+        0.0,
+        0.0,
+        np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=1,
+        pixel_size_m=pixel_size_m,
+        n2_sample_array_override=np.asarray([2.0 + 0.0j], dtype=np.complex128),
+    )
+
+    assert solve_q_calls == pytest.approx([4.0 * np.pi])
+    assert image_out[12, 14] == pytest.approx(1.0)
+    np.testing.assert_allclose(max_positions[0, :3], [1.0, 14.0, 12.0])
+    assert q_data.shape[0] == 1
+    assert int(q_count[0]) == 1
+
+
+def test_process_qr_rods_parallel_debug_forwards_optional_debug_kwargs(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        stacking_fault,
+        "qr_dict_to_arrays",
+        lambda _qr_dict: (
+            np.asarray([[0.0, 0.0, 1.0]], dtype=np.float64),
+            np.asarray([2.0], dtype=np.float64),
+            np.asarray([3], dtype=np.int64),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        diffraction_debug,
+        "process_peaks_parallel_debug",
+        lambda *_args, **kwargs: captured.update(kwargs) or ("image", "maxpos", "qdata", "qcount"),
+    )
+
+    result = diffraction_debug.process_qr_rods_parallel_debug(
+        {},
+        16,
+        1.0,
+        1.0,
+        1.0,
+        np.zeros((16, 16), dtype=np.float64),
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        0.0,
+        0.0,
+        0.0,
+        np.asarray([1.0], dtype=np.float64),
+        0.0,
+        0.0,
+        [8.0, 8.0],
+        0.0,
+        0.0,
+        np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=0,
+        psi_z_deg=0.2,
+        sample_weights=np.asarray([4.0], dtype=np.float64),
+        pixel_size_m=3.0e-4,
+        n2_sample_array_override=np.asarray([1.1 + 0.0j], dtype=np.complex128),
+    )
+
+    np.testing.assert_array_equal(captured["sample_weights"], [4.0])
+    assert captured["pixel_size_m"] == pytest.approx(3.0e-4)
+    np.testing.assert_array_equal(captured["n2_sample_array_override"], [1.1 + 0.0j])
+    assert result[:4] == ("image", "maxpos", "qdata", "qcount")
+    np.testing.assert_array_equal(result[4], np.asarray([3], dtype=np.int64))
 
 
 def test_process_peaks_parallel_skips_negative_l(monkeypatch):

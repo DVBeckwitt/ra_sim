@@ -43,6 +43,9 @@ cp config/file_paths.example.yaml config/file_paths.yaml
 cp config/hbn_paths.example.yaml config/hbn_paths.yaml
 ```
 
+Run `python -m ra_sim.dev doctor` to inspect setup and path status without
+loading experiment data. Missing local experiment files are warnings by default.
+
 Rules:
 
 - Do not commit machine-local paths, raw data, generated bundles, or secrets.
@@ -87,7 +90,13 @@ Tier details:
   tier, and the current mypy frontier.
 - `python -m ra_sim.dev test-integration`: slower workflow-heavy tests marked
   `integration`.
+- `python -m ra_sim.dev test-coverage-fast`: optional coverage report for the
+  fast tier; coverage is not a quality gate.
 - `python -m ra_sim.dev test-all`: full suite when you need every pytest target.
+- `python -m ra_sim.dev doctor`: warning-first setup report for config, local
+  paths, writable dirs, Tkinter, and dev tooling.
+- `python -m ra_sim.dev build`: optional package build validation before release
+  or distribution checks.
 - `python -m ra_sim.dev hooks`: install the local `pre-commit` hooks from
   `.pre-commit-config.yaml`.
 - `python -m ra_sim.dev lock`: refresh `pylock.toml` after dependency changes.
@@ -125,6 +134,7 @@ Start with these docs depending on task:
 - [docs/tracking/index.md](docs/tracking/index.md) for substantial live work notes
 - [docs/gui-workflow.md](docs/gui-workflow.md) for operator workflow
 - [docs/architecture.md](docs/architecture.md) for package layout and data flow
+- [docs/adr/index.md](docs/adr/index.md) for accepted architecture decisions
 - [docs/debug-and-cache.md](docs/debug-and-cache.md) for logging and cache policy
 - [docs/troubleshooting.md](docs/troubleshooting.md) for common setup and config failures
 - [docs/simulation_and_fitting.md](docs/simulation_and_fitting.md) for the full canonical reference

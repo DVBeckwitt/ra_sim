@@ -29,8 +29,12 @@ from ra_sim.simulation.diffraction import (
     process_peaks_parallel_safe as _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
 )
 from ra_sim.utils.calculations import (
+    _legacy_kernel_n2_sample_array_from_angstrom,
+    _n2_wavelength_snapshot_from_angstrom,
+    _normalize_n2_source_meta,
     d_spacing,
     resolve_canonical_branch,
+    resolve_index_of_refraction_array,
     source_branch_index_from_phi_deg,
     two_theta,
 )
@@ -2637,6 +2641,9 @@ def _prepare_reflection_subset(
     def _trusted_full_reflection_index(
         entry: Mapping[str, object],
     ) -> Optional[int]:
+        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+        if fit_kind == "provider_fixed_source_local":
+            return None
         reflection_idx = _coerce_index(entry.get("source_reflection_index"))
         if reflection_idx is None:
             return None
@@ -2666,15 +2673,149 @@ def _prepare_reflection_subset(
             return int(reflection_idx)
         return None
 
+    def _local_provider_peak_index(entry: Mapping[str, object]) -> Optional[int]:
+        branch_idx, _branch_source = _measured_source_peak_index_with_source(entry)
+        if branch_idx in {0, 1}:
+            return int(branch_idx)
+        peak_idx = _coerce_index(entry.get("source_peak_index"))
+        if peak_idx in {0, 1}:
+            return int(peak_idx)
+        resolved_peak_idx = _coerce_index(entry.get("resolved_peak_index"))
+        if resolved_peak_idx in {0, 1}:
+            return int(resolved_peak_idx)
+        return None
+
+    def _is_provider_local_fixed_source(entry: Mapping[str, object]) -> bool:
+        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+        if "fallback" in fit_kind or bool(entry.get("optimizer_request_fallback_row", False)):
+            return False
+        provider_marked = bool(entry.get("optimizer_request_has_fixed_source", False)) and (
+            str(entry.get("optimizer_request_source", "") or "") == "provider_pair"
+            or fit_kind in {"provider_fixed_source", "provider_fixed_source_local"}
+        )
+        if not provider_marked:
+            return False
+        if _entry_hkl_key(entry) is None:
+            return False
+        table_idx = _coerce_index(entry.get("source_table_index"))
+        if table_idx is None:
+            table_idx = _coerce_index(entry.get("resolved_table_index"))
+        if table_idx is None:
+            return False
+        row_idx = _coerce_index(entry.get("source_row_index"))
+        return bool(_local_provider_peak_index(entry) in {0, 1} or row_idx is not None)
+
+    def _resolve_local_provider_reflection_index(
+        entry: Mapping[str, object],
+    ) -> Optional[int]:
+        measured_hkl = _entry_hkl_key(entry)
+        if measured_hkl is None:
+            return None
+        for key in ("source_table_index", "resolved_table_index"):
+            namespace = str(entry.get(f"{key}_namespace", "") or "").strip().lower()
+            if namespace not in {"full", "full_reflection", "miller", "full_hit_table"}:
+                continue
+            table_idx = _coerce_index(entry.get(key))
+            if table_idx is None:
+                continue
+            if 0 <= table_idx < total_reflections:
+                source_hkl = _miller_key_from_row(miller_arr[table_idx])
+                if source_hkl == measured_hkl:
+                    return int(table_idx)
+                return None
+        matching_indices = hkl_to_reflection_indices.get(measured_hkl, [])
+        if len(matching_indices) == 1:
+            return int(matching_indices[0])
+        return None
+
+    local_provider_reflection_indices: Dict[int, int] = {}
+    local_provider_groups: Dict[Tuple[int, int, int], List[int]] = {}
+    for entry_index, entry in enumerate(normalized_measured):
+        if not _is_provider_local_fixed_source(entry):
+            continue
+        hkl_key = _entry_hkl_key(entry)
+        if hkl_key is None:
+            continue
+        local_provider_groups.setdefault(hkl_key, []).append(int(entry_index))
+
+    for hkl_key, entry_indices in local_provider_groups.items():
+        matching_indices = list(hkl_to_reflection_indices.get(hkl_key, []))
+        if not matching_indices:
+            continue
+        used_indices: set[int] = set()
+        for entry_index in entry_indices:
+            reflection_idx = _resolve_local_provider_reflection_index(
+                normalized_measured[int(entry_index)]
+            )
+            if reflection_idx is None or reflection_idx not in matching_indices:
+                continue
+            if reflection_idx in used_indices:
+                continue
+            local_provider_reflection_indices[int(entry_index)] = int(reflection_idx)
+            used_indices.add(int(reflection_idx))
+        remaining_indices = [
+            int(reflection_idx)
+            for reflection_idx in matching_indices
+            if int(reflection_idx) not in used_indices
+        ]
+
+        def _assign_local_provider_reflection(
+            entry_index: int,
+            *,
+            from_end: bool = False,
+        ) -> None:
+            if int(entry_index) in local_provider_reflection_indices:
+                return
+            if not remaining_indices:
+                return
+            reflection_idx = (
+                remaining_indices.pop()
+                if bool(from_end)
+                else remaining_indices.pop(0)
+            )
+            local_provider_reflection_indices[int(entry_index)] = int(reflection_idx)
+
+        branch_zero_entries: List[int] = []
+        branch_one_entries: List[int] = []
+        other_entries: List[int] = []
+        for entry_index in entry_indices:
+            if int(entry_index) in local_provider_reflection_indices:
+                continue
+            branch_idx = _local_provider_peak_index(
+                normalized_measured[int(entry_index)]
+            )
+            if branch_idx == 0:
+                branch_zero_entries.append(int(entry_index))
+            elif branch_idx == 1:
+                branch_one_entries.append(int(entry_index))
+            else:
+                other_entries.append(int(entry_index))
+        for entry_index in branch_zero_entries:
+            _assign_local_provider_reflection(int(entry_index), from_end=False)
+        for entry_index in branch_one_entries:
+            _assign_local_provider_reflection(int(entry_index), from_end=True)
+        for entry_index in other_entries:
+            _assign_local_provider_reflection(int(entry_index), from_end=False)
+
     selected_original_indices: List[int] = []
     selected_lookup: set[int] = set()
     fixed_source_entry_indices: set[int] = set()
     resolved_reflection_indices: Dict[int, int] = {}
+    local_fixed_reflection_indices: Dict[int, int] = {}
     for entry_index, entry in enumerate(normalized_measured):
         reflection_idx = _resolve_reflection_index(entry)
+        local_fixed = False
+        if reflection_idx is None and _is_provider_local_fixed_source(entry):
+            reflection_idx = local_provider_reflection_indices.get(int(entry_index))
+            if reflection_idx is None:
+                reflection_idx = _resolve_local_provider_reflection_index(entry)
+            local_fixed = reflection_idx is not None
         if reflection_idx is None:
             continue
-        resolved_reflection_indices[int(entry_index)] = int(reflection_idx)
+        if local_fixed:
+            local_fixed_reflection_indices[int(entry_index)] = int(reflection_idx)
+        else:
+            resolved_reflection_indices[int(entry_index)] = int(reflection_idx)
         raw_hkl = entry.get("hkl")
         if isinstance(raw_hkl, tuple) and len(raw_hkl) == 3:
             source_hkl = _miller_key_from_row(miller_arr[reflection_idx])
@@ -2771,6 +2912,40 @@ def _prepare_reflection_subset(
                 remapped_entry.pop("source_branch_index", None)
                 remapped_entry.pop("source_peak_index", None)
                 remapped_entry.pop("source_table_index", None)
+        elif int(entry_index) in local_fixed_reflection_indices:
+            local_reflection_idx = local_fixed_reflection_indices[int(entry_index)]
+            source_table_idx = _coerce_index(entry.get("source_table_index"))
+            if source_table_idx is None:
+                source_table_idx = _coerce_index(entry.get("resolved_table_index"))
+            if source_table_idx is not None:
+                remapped_entry["original_source_table_index"] = int(source_table_idx)
+            local_idx = local_index_map.get(int(local_reflection_idx))
+            if local_idx is not None:
+                remapped_entry["resolved_table_index"] = int(local_idx)
+            else:
+                remapped_entry.pop("resolved_table_index", None)
+            if "source_table_index" in entry and source_table_idx is not None:
+                remapped_entry["source_table_index"] = int(source_table_idx)
+            row_idx = _coerce_index(entry.get("source_row_index"))
+            if row_idx is not None:
+                remapped_entry["source_row_index"] = int(row_idx)
+            else:
+                remapped_entry.pop("source_row_index", None)
+            peak_idx = _local_provider_peak_index(entry)
+            if peak_idx in {0, 1}:
+                remapped_entry["resolved_peak_index"] = int(peak_idx)
+                if _coerce_index(entry.get("source_branch_index")) in {0, 1}:
+                    remapped_entry["source_branch_index"] = int(peak_idx)
+                else:
+                    remapped_entry.pop("source_branch_index", None)
+                remapped_entry["source_peak_index"] = int(peak_idx)
+            else:
+                remapped_entry.pop("resolved_peak_index", None)
+                remapped_entry.pop("source_branch_index", None)
+                remapped_entry.pop("source_peak_index", None)
+            remapped_entry.pop("source_reflection_index", None)
+            remapped_entry.pop("source_reflection_namespace", None)
+            remapped_entry.pop("source_reflection_is_full", None)
         else:
             local_table_idx = _coerce_index(entry.get("source_table_index"))
             if (
@@ -5281,6 +5456,33 @@ def fit_mosaic_widths_separable(
     center = tuple(params.get("center", (image_size / 2.0, image_size / 2.0)))
     unit_x = np.asarray(params.get("uv1", np.array([1.0, 0.0, 0.0])), dtype=np.float64)
     n_detector = np.asarray(params.get("uv2", np.array([0.0, 1.0, 0.0])), dtype=np.float64)
+    kernel_params_base = dict(params)
+    kernel_params_base.update(
+        {
+            "optics_mode": params.get("optics_mode", 0),
+            "sample_depth_m": params.get(
+                "sample_depth_m", params.get("thickness", 0.0)
+            ),
+            "pixel_size_m": params.get(
+                "pixel_size_m", params.get("pixel_size", 100e-6)
+            ),
+            "sample_width_m": params.get("sample_width_m", 0.0),
+            "sample_length_m": params.get("sample_length_m", 0.0),
+        }
+    )
+    kernel_mosaic_base = dict(mosaic_params)
+    kernel_mosaic_base.update(
+        {
+            "beam_x_array": beam_x,
+            "beam_y_array": beam_y,
+            "theta_array": theta_array,
+            "phi_array": phi_array,
+            "wavelength_array": wavelength_array,
+            "solve_q_steps": solve_q_steps,
+            "solve_q_rel_tol": solve_q_rel_tol,
+            "solve_q_mode": solve_q_mode,
+        }
+    )
 
     full_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
@@ -5295,6 +5497,10 @@ def fit_mosaic_widths_separable(
         record_hits: bool = False,
     ) -> Tuple[np.ndarray, Optional[List[np.ndarray]]]:
         buffer.fill(0.0)
+        kernel_kwargs = _simulation_kernel_kwargs(
+            kernel_params_base,
+            kernel_mosaic_base,
+        )
         image, hit_tables, *_ = _process_peaks_parallel_safe(
             miller_subset,
             intens_subset,
@@ -5328,21 +5534,7 @@ def fit_mosaic_widths_separable(
             unit_x,
             n_detector,
             0,
-            **_simulation_kernel_kwargs(
-                {
-                    "optics_mode": params.get("optics_mode", 0),
-                    "sample_depth_m": params.get("sample_depth_m", params.get("thickness", 0.0)),
-                    "pixel_size_m": params.get("pixel_size_m", params.get("pixel_size", 100e-6)),
-                    "sample_width_m": params.get("sample_width_m", 0.0),
-                    "sample_length_m": params.get("sample_length_m", 0.0),
-                },
-                {
-                    "solve_q_steps": solve_q_steps,
-                    "solve_q_rel_tol": solve_q_rel_tol,
-                    "solve_q_mode": solve_q_mode,
-                    "n2_sample_array": params.get("mosaic_params", {}).get("n2_sample_array"),
-                },
-            ),
+            **kernel_kwargs,
         )
         image = np.asarray(image, dtype=np.float64)
         if not record_hits:
@@ -6706,7 +6898,7 @@ def _fit_mosaic_shape_parameters_legacy(
         local_mosaic["beam_y_array"] = beam_y
         local_mosaic["theta_array"] = theta_array
         local_mosaic["phi_array"] = phi_array
-        local_mosaic["wavelength_array"] = wavelength_array
+        _set_mosaic_wavelength_array(local_mosaic, wavelength_array)
         local["mosaic_params"] = local_mosaic
         local.setdefault("theta_offset", 0.0)
         if optimize_theta:
@@ -8016,7 +8208,7 @@ def _fit_mosaic_shape_parameters_profiles(
         local_mosaic["beam_y_array"] = beam_y
         local_mosaic["theta_array"] = theta_array
         local_mosaic["phi_array"] = phi_array
-        local_mosaic["wavelength_array"] = wavelength_array
+        _set_mosaic_wavelength_array(local_mosaic, wavelength_array)
         local["mosaic_params"] = local_mosaic
         local.setdefault("theta_offset", 0.0)
         if optimize_theta:
@@ -8943,13 +9135,128 @@ def _simulation_kernel_kwargs(
         "sample_width_m": float(params.get("sample_width_m", 0.0)),
         "sample_length_m": float(params.get("sample_length_m", 0.0)),
     }
+
+    beam_sample_count = int(
+        np.asarray(mosaic_params.get("beam_x_array", []), dtype=np.float64).reshape(-1).size
+    )
+    wavelength_array = mosaic_params.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic_params.get("wavelength_i_array")
+    if wavelength_array is None and beam_sample_count > 0:
+        try:
+            wavelength_array = np.full(
+                beam_sample_count,
+                float(params.get("lambda", np.nan)),
+                dtype=np.float64,
+            )
+        except Exception:
+            wavelength_array = np.empty(0, dtype=np.float64)
+    wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(
+        [] if wavelength_array is None else wavelength_array
+    )
+    sample_count = beam_sample_count if beam_sample_count > 0 else int(wavelength_snapshot.size)
+    nominal_n2 = complex(params.get("n2", 1.0 + 0.0j))
+
+    def _store_managed_n2(
+        n2_array: np.ndarray,
+        *,
+        source_meta: tuple[str, object] | None,
+    ) -> np.ndarray:
+        normalized_n2 = np.ascontiguousarray(
+            np.asarray(n2_array, dtype=np.complex128).reshape(-1),
+            dtype=np.complex128,
+        )
+        mosaic_params["n2_sample_array"] = normalized_n2
+        mosaic_params["_n2_sample_array_source"] = source_meta
+        mosaic_params["_n2_sample_array_wavelength_snapshot"] = wavelength_snapshot.copy()
+        return normalized_n2
+
+    def _legacy_fallback_n2_array() -> np.ndarray:
+        return np.ascontiguousarray(
+            _legacy_kernel_n2_sample_array_from_angstrom(
+                wavelength_snapshot,
+                nominal_n2=nominal_n2,
+                sample_count=sample_count,
+            ),
+            dtype=np.complex128,
+        )
+
+    def _recompute_n2_from_source(source_meta: tuple[str, object] | None) -> np.ndarray:
+        normalized_source = (
+            ("legacy_material", None) if source_meta is None else source_meta
+        )
+        if normalized_source[0] == "cif_path":
+            try:
+                n2_array = resolve_index_of_refraction_array(
+                    wavelength_snapshot * 1.0e-10,
+                    cif_path=str(normalized_source[1]),
+                )
+            except Exception:
+                return _legacy_fallback_n2_array()
+        else:
+            n2_array = _legacy_fallback_n2_array()
+        return _store_managed_n2(n2_array, source_meta=normalized_source)
+
+    source_meta = _normalize_n2_source_meta(mosaic_params.get("_n2_sample_array_source"))
+    if source_meta is not None:
+        mosaic_params["_n2_sample_array_source"] = source_meta
+    source_wavelength_snapshot = mosaic_params.get("_n2_sample_array_wavelength_snapshot")
     n2_sample_array = mosaic_params.get("n2_sample_array")
+    n2_override = None
+    normalized_n2 = None
     if n2_sample_array is not None:
-        kwargs["n2_sample_array_override"] = np.asarray(
-            n2_sample_array,
+        try:
+            normalized_n2 = np.ascontiguousarray(
+                np.asarray(n2_sample_array, dtype=np.complex128).reshape(-1),
+                dtype=np.complex128,
+            )
+        except Exception:
+            normalized_n2 = None
+        if normalized_n2 is not None and normalized_n2.size == sample_count:
+            if source_meta is not None and source_wavelength_snapshot is not None:
+                try:
+                    cached_snapshot = _n2_wavelength_snapshot_from_angstrom(
+                        source_wavelength_snapshot
+                    )
+                except Exception:
+                    cached_snapshot = None
+                if (
+                    cached_snapshot is not None
+                    and cached_snapshot.size == wavelength_snapshot.size
+                    and np.array_equal(cached_snapshot, wavelength_snapshot, equal_nan=True)
+                ):
+                    n2_override = normalized_n2
+                else:
+                    n2_override = _recompute_n2_from_source(source_meta)
+            else:
+                n2_override = normalized_n2
+        elif source_meta is not None:
+            n2_override = _recompute_n2_from_source(source_meta)
+    elif source_meta is not None:
+        n2_override = _recompute_n2_from_source(source_meta)
+    else:
+        n2_override = _recompute_n2_from_source(None)
+
+    if n2_override is not None and np.asarray(n2_override).reshape(-1).size == sample_count:
+        kwargs["n2_sample_array_override"] = np.ascontiguousarray(
+            np.asarray(n2_override, dtype=np.complex128).reshape(-1),
             dtype=np.complex128,
         )
     return kwargs
+
+
+def _set_mosaic_wavelength_array(
+    mosaic: Dict[str, object],
+    wavelength_array,
+    *,
+    key: str = "wavelength_array",
+) -> None:
+    mosaic[key] = np.ascontiguousarray(
+        np.asarray(wavelength_array, dtype=np.float64).reshape(-1),
+        dtype=np.float64,
+    )
+    mosaic.pop("n2_sample_array", None)
+    mosaic.pop("_n2_sample_array_wavelength_snapshot", None)
 
 
 def _interpolate_line(points: List[Tuple[float, float]]) -> np.ndarray:
@@ -13152,14 +13459,12 @@ def fit_geometry_parameters(
                 scaled_wavelength = np.asarray(base_wavelength_template, dtype=np.float64) * (
                     float(lambda_trial) / float(base_lambda_scalar)
                 )
-                local_mosaic["wavelength_array"] = np.asarray(
-                    scaled_wavelength,
-                    dtype=np.float64,
-                )
+                _set_mosaic_wavelength_array(local_mosaic, scaled_wavelength)
                 if base_wave_key == "wavelength_i_array":
-                    local_mosaic["wavelength_i_array"] = np.asarray(
+                    _set_mosaic_wavelength_array(
+                        local_mosaic,
                         scaled_wavelength,
-                        dtype=np.float64,
+                        key="wavelength_i_array",
                     )
             elif "beam_x_array" in local_mosaic:
                 try:
@@ -13169,10 +13474,13 @@ def fit_geometry_parameters(
                 except Exception:
                     beam_count = 0
                 if beam_count > 0:
-                    local_mosaic["wavelength_array"] = np.full(
-                        beam_count,
-                        float(lambda_trial),
-                        dtype=np.float64,
+                    _set_mosaic_wavelength_array(
+                        local_mosaic,
+                        np.full(
+                            beam_count,
+                            float(lambda_trial),
+                            dtype=np.float64,
+                        ),
                     )
         local["mosaic_params"] = local_mosaic
         local["center"] = [float(center_row), float(center_col)]

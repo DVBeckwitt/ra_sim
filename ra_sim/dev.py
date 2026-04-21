@@ -29,6 +29,7 @@ def typecheck_targets() -> list[str]:
         "ra_sim/config/models.py",
         "ra_sim/config/validation.py",
         "ra_sim/dev.py",
+        "ra_sim/dev_doctor.py",
         "ra_sim/fitting/optimization_mosaic_profiles.py",
         "ra_sim/fitting/optimization_runtime.py",
         "ra_sim/gui/_runtime/live_cache_helpers.py",
@@ -45,6 +46,7 @@ def format_targets() -> list[str]:
             "ra_sim/fitting/optimization.py",
             "ra_sim/gui/_runtime/runtime_session.py",
             "tests/test_dev_cli.py",
+            "tests/test_dev_doctor.py",
             "tests/test_gui_runtime_primary_cache.py",
             "tests/test_mosaic_shape_optimization.py",
         }
@@ -140,6 +142,15 @@ def pytest_command_for_tier(tier: str) -> list[str]:
     )
 
 
+def pytest_coverage_fast_command() -> list[str]:
+    return [
+        *pytest_command_for_tier("fast"),
+        "--cov=ra_sim",
+        "--cov-report=term-missing:skip-covered",
+        "--cov-report=xml",
+    ]
+
+
 def bootstrap() -> int:
     cwd = repo_root()
     exit_code = _run_all(
@@ -193,6 +204,10 @@ def test_fast() -> int:
     return _run(pytest_command_for_tier("fast"), cwd=repo_root())
 
 
+def test_coverage_fast() -> int:
+    return _run(pytest_coverage_fast_command(), cwd=repo_root())
+
+
 def test_integration() -> int:
     return _run(pytest_command_for_tier("integration"), cwd=repo_root())
 
@@ -206,6 +221,20 @@ def test_all() -> int:
 
 def install_hooks() -> int:
     return _run(pre_commit_install_command(), cwd=repo_root())
+
+
+def doctor(*, strict: bool = False) -> int:
+    from ra_sim.dev_doctor import run_doctor
+
+    return run_doctor(strict=strict)
+
+
+def build_command() -> list[str]:
+    return _python_module_command("-m", "build")
+
+
+def build() -> int:
+    return _run(build_command(), cwd=repo_root())
 
 
 def check() -> int:
@@ -239,8 +268,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("lint", help="Run ruff.")
     subparsers.add_parser("typecheck", help="Run current mypy frontier.")
     subparsers.add_parser("test-fast", help="Run fast pytest tier.")
+    subparsers.add_parser("test-coverage-fast", help="Run fast pytest tier with coverage.")
     subparsers.add_parser("test-integration", help="Run integration pytest tier.")
     subparsers.add_parser("test-all", help="Run full pytest suite.")
+    doctor_parser = subparsers.add_parser("doctor", help="Report local setup health.")
+    doctor_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return nonzero for required setup failures.",
+    )
+    subparsers.add_parser("build", help="Build the package.")
     subparsers.add_parser("check", help="Run lint + fast tests + typecheck.")
     return parser
 
@@ -265,10 +302,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return typecheck()
     if args.command == "test-fast":
         return test_fast()
+    if args.command == "test-coverage-fast":
+        return test_coverage_fast()
     if args.command == "test-integration":
         return test_integration()
     if args.command == "test-all":
         return test_all()
+    if args.command == "doctor":
+        return doctor(strict=bool(args.strict))
+    if args.command == "build":
+        return build()
     if args.command == "check":
         return check()
     parser.error(f"unknown command: {args.command}")

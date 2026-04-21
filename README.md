@@ -155,6 +155,12 @@ cp config/hbn_paths.example.yaml config/hbn_paths.yaml
 # Copy-Item config/hbn_paths.example.yaml config/hbn_paths.yaml
 ```
 
+Check the toolchain and local path status without loading experiment data:
+
+```bash
+python -m ra_sim.dev doctor
+```
+
 ### 4. Point Config at Your Data
 
 At minimum, update the local config with paths to your experiment files:
@@ -428,8 +434,8 @@ For the exact logging, debug, and cache semantics, use
 
 ### Per-Run Debug Bundles
 
-Each full RA-SIM process run now writes one zip bundle into `debug_log_dir`
-when the process exits normally:
+When diagnostics are enabled for the run, RA-SIM writes one zip bundle into
+`debug_log_dir` when the process exits normally:
 
 - `run_bundle_<stamp>.zip`
 
@@ -608,6 +614,7 @@ Use these entry points depending on the question:
 - [docs/tracking/index.md](docs/tracking/index.md): live work notes for substantial recoveries, investigations, and planned efforts
 - [docs/gui-workflow.md](docs/gui-workflow.md): operator workflow and headless equivalents
 - [docs/architecture.md](docs/architecture.md): package layout and edit routing
+- [docs/adr/index.md](docs/adr/index.md): accepted architecture decision records
 - [docs/debug-and-cache.md](docs/debug-and-cache.md): logging, output locations, and cache policy
 - [docs/troubleshooting.md](docs/troubleshooting.md): setup and config failures
 - [docs/simulation_and_fitting.md](docs/simulation_and_fitting.md): canonical implementation reference
@@ -625,15 +632,18 @@ on Python 3.11.
 | Command | What it does |
 | --- | --- |
 | `python -m ra_sim.dev bootstrap` | Install editable package with dev tooling |
+| `python -m ra_sim.dev doctor` | Report setup, config, local-path, and dev-tool health |
 | `python -m ra_sim.dev format` | Format the current formatter frontier |
 | `python -m ra_sim.dev format-check` | Check formatting on the formatter frontier |
 | `python -m ra_sim.dev hooks` | Install local pre-commit hooks |
 | `python -m ra_sim.dev lint` | Run `ruff check .` |
 | `python -m ra_sim.dev typecheck` | Run the current mypy frontier |
 | `python -m ra_sim.dev test-fast` | Run the `fast` pytest tier |
+| `python -m ra_sim.dev test-coverage-fast` | Run optional coverage reporting for the `fast` tier |
 | `python -m ra_sim.dev test-integration` | Run the slower `integration` tier |
 | `python -m ra_sim.dev test-all` | Run the full pytest suite |
 | `python -m ra_sim.dev check` | Run format-check + lint + fast tests + typecheck |
+| `python -m ra_sim.dev build` | Build the package distribution |
 | `python -m ra_sim.dev lock` | Refresh `pylock.toml` |
 
 Installed-script equivalents work too:
@@ -641,7 +651,10 @@ Installed-script equivalents work too:
 ```bash
 ra-sim-dev format-check
 ra-sim-dev check
+ra-sim-dev doctor
+ra-sim-dev test-coverage-fast
 ra-sim-dev test-integration
+ra-sim-dev build
 ra-sim-dev hooks
 ra-sim-dev lock
 ```
@@ -661,16 +674,29 @@ of creating repo-root cache folders. Direct tool runs share the configured
   - `ra_sim/dev.py`
   - `ra_sim/fitting/optimization_runtime.py`
   - `ra_sim/gui/_runtime/live_cache_helpers.py`
+- `python -m ra_sim.dev test-coverage-fast` writes an optional coverage report
+  for the fast tier; coverage is not a required quality gate.
+- `python -m ra_sim.dev build` is optional package validation before release or
+  distribution checks.
 
 ### CI and Security Automation
 
 - CI bootstrap uses `python -m ra_sim.dev bootstrap`
 - CI fast checks use `python -m ra_sim.dev check`
 - integration tests run on Python 3.11
+- coverage reporting is available locally through `python -m ra_sim.dev test-coverage-fast`
+  but is not a required CI quality gate
 - security automation rejects tracked machine-local paths, runs `pip-audit`,
   and scans the repo with `gitleaks`
 
 ## Troubleshooting
+
+### Setup Doctor
+
+Use `python -m ra_sim.dev doctor` for a compact report of Python version, config
+resolution, local path status, writable directories, Tkinter, and dev tooling.
+Missing local experiment files are warnings by default; `--strict` makes
+explicit local config inputs and required dev setup fail the command.
 
 ### Tkinter Missing
 

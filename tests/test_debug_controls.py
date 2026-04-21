@@ -46,7 +46,11 @@ def _make_config_dir(
     _write_yaml(cfg / "dir_paths.yaml", {"debug_log_dir": str(tmp_path / "logs")})
     _write_yaml(cfg / "materials.yaml", {})
     if debug is not None:
-        _write_yaml(cfg / "debug.yaml", debug)
+        debug_payload = dict(debug)
+        debug_root = dict(debug_payload.get("debug", {}))
+        debug_root.setdefault("global", {"disable_all": False})
+        debug_payload["debug"] = debug_root
+        _write_yaml(cfg / "debug.yaml", debug_payload)
     _write_yaml(cfg / "instrument.yaml", instrument or {})
     return cfg
 
@@ -122,6 +126,26 @@ def test_env_overrides_take_precedence_over_debug_yaml(
     assert not projection_debug_logging_enabled()
     assert intersection_cache_logging_enabled()
     assert resolve_intersection_cache_log_root() == tmp_path / "from-env"
+
+
+def test_default_debug_controls_allow_cli_opt_ins_when_debug_yaml_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path)
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    monkeypatch.setenv("RA_SIM_DEBUG", "1")
+    monkeypatch.setenv("RA_SIM_LOG_INTERSECTION_CACHE", "1")
+
+    assert not is_logging_disabled()
+    assert console_debug_enabled()
+    assert runtime_update_trace_logging_enabled()
+    assert geometry_fit_log_files_enabled()
+    assert geometry_fit_extra_sections_enabled()
+    assert mosaic_fit_log_files_enabled()
+    assert projection_debug_logging_enabled()
+    assert diffraction_debug_csv_logging_enabled()
+    assert intersection_cache_logging_enabled()
 
 
 def test_startup_debug_log_path_is_reused_for_one_process(tmp_path: Path) -> None:
@@ -266,12 +290,26 @@ def test_startup_debug_override_can_force_all_debug_off(
         assert not intersection_cache_logging_enabled()
 
 
+def test_start_run_bundle_stays_off_when_startup_override_disables_all(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path)
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    with temporary_startup_debug_override("disable_all"):
+        start_run_bundle(entrypoint="test:start-disabled")
+
+    assert finalize_run_bundle() is None
+
+
 def test_geometry_fit_extra_sections_fall_back_to_legacy_instrument_key_when_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     cfg = _make_config_dir(
         tmp_path,
+        debug={"debug": {"geometry_fit": {"log_files": True}}},
         instrument={"instrument": {"fit": {"geometry": {"debug_logging": False}}}},
     )
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
@@ -286,7 +324,14 @@ def test_geometry_fit_debug_yaml_overrides_legacy_instrument_key(
 ) -> None:
     cfg = _make_config_dir(
         tmp_path,
-        debug={"debug": {"geometry_fit": {"extra_sections": True}}},
+        debug={
+            "debug": {
+                "geometry_fit": {
+                    "log_files": True,
+                    "extra_sections": True,
+                }
+            }
+        },
         instrument={"instrument": {"fit": {"geometry": {"debug_logging": False}}}},
     )
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
@@ -378,6 +423,7 @@ def test_run_bundle_zips_run_outputs_and_non_osc_non_cif_inputs(
         cfg / "debug.yaml",
         {
             "debug": {
+                "global": {"disable_all": False},
                 "intersection_cache": {
                     "enabled": True,
                     "log_dir": str(cache_logs_dir),
@@ -445,3 +491,18 @@ def test_run_bundle_zips_run_outputs_and_non_osc_non_cif_inputs(
     assert manifest["entrypoints"] == ["test:bundle"]
 
     reset_run_bundle_state()
+
+
+def test_run_bundle_stays_off_when_global_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={"debug": {"global": {"disable_all": True}}},
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    start_run_bundle(entrypoint="test:quiet")
+
+    assert finalize_run_bundle() is None

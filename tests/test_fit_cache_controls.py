@@ -10,6 +10,7 @@ from scipy.optimize import OptimizeResult
 from ra_sim.config import loader
 from ra_sim.fitting import optimization
 from ra_sim.fitting.optimization import SimulationCache
+from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -33,6 +34,251 @@ def _reset_loader_cache() -> None:
     loader.clear_config_cache()
     yield
     loader.clear_config_cache()
+
+
+def test_simulation_kernel_kwargs_builds_legacy_managed_n2_cache_when_missing() -> None:
+    wavelengths = np.array([1.0, np.nan], dtype=np.float64)
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": wavelengths.copy(),
+    }
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 0.97 + 0.02j}, mosaic)
+
+    expected = _legacy_kernel_n2_sample_array_from_angstrom(
+        wavelengths,
+        nominal_n2=0.97 + 0.02j,
+        sample_count=2,
+    )
+    np.testing.assert_allclose(kwargs["n2_sample_array_override"], expected)
+    np.testing.assert_allclose(mosaic["n2_sample_array"], expected)
+    assert mosaic["_n2_sample_array_source"] == ("legacy_material", None)
+    np.testing.assert_array_equal(
+        mosaic["_n2_sample_array_wavelength_snapshot"],
+        wavelengths,
+    )
+
+
+def test_simulation_kernel_kwargs_normalizes_cif_source_and_recomputes_in_meters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cif_path = tmp_path / "sample.cif"
+    cif_path.write_text("data_sample\n", encoding="utf-8")
+    wavelengths = np.array([1.0, 1.2], dtype=np.float64)
+    returned = np.array([0.91 + 0.01j, 0.92 + 0.02j], dtype=np.complex128)
+    captured: dict[str, object] = {}
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": wavelengths.copy(),
+        "n2_sample_array": np.array([1.0 + 0.0j], dtype=np.complex128),
+        "_n2_sample_array_source": ["cif_path", str(cif_path)],
+        "_n2_sample_array_wavelength_snapshot": np.array([1.5, 1.6], dtype=np.float64),
+    }
+
+    def fake_resolve(lambda_m_array, *, cif_path=None):
+        captured["lambda_m_array"] = np.asarray(lambda_m_array, dtype=np.float64).copy()
+        captured["cif_path"] = cif_path
+        return returned.copy()
+
+    monkeypatch.setattr(optimization, "resolve_index_of_refraction_array", fake_resolve)
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 1.0}, mosaic)
+
+    np.testing.assert_allclose(captured["lambda_m_array"], wavelengths * 1.0e-10)
+    assert captured["cif_path"] == str(cif_path.resolve())
+    assert mosaic["_n2_sample_array_source"] == ("cif_path", str(cif_path.resolve()))
+    np.testing.assert_allclose(kwargs["n2_sample_array_override"], returned)
+    np.testing.assert_allclose(mosaic["n2_sample_array"], returned)
+    np.testing.assert_allclose(
+        mosaic["_n2_sample_array_wavelength_snapshot"],
+        wavelengths,
+    )
+
+
+def test_simulation_kernel_kwargs_preserves_authoritative_array_without_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cif_path = tmp_path / "sample.cif"
+    cif_path.write_text("data_sample\n", encoding="utf-8")
+    supplied = np.array([0.95 + 0.05j, 0.96 + 0.06j], dtype=np.complex128)
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": np.array([1.0, 1.1], dtype=np.float64),
+        "n2_sample_array": supplied.copy(),
+        "_n2_sample_array_source": ("cif_path", str(cif_path)),
+    }
+
+    monkeypatch.setattr(
+        optimization,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("CIF recompute should not run without a snapshot")
+        ),
+    )
+    monkeypatch.setattr(
+        optimization,
+        "_legacy_kernel_n2_sample_array_from_angstrom",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy helper should not run for authoritative arrays")
+        ),
+    )
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 1.0}, mosaic)
+
+    np.testing.assert_allclose(kwargs["n2_sample_array_override"], supplied)
+    np.testing.assert_allclose(mosaic["n2_sample_array"], supplied)
+
+
+def test_simulation_kernel_kwargs_recomputes_wrong_length_array_when_source_known(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cif_path = tmp_path / "sample.cif"
+    cif_path.write_text("data_sample\n", encoding="utf-8")
+    wavelengths = np.array([1.0, 1.1], dtype=np.float64)
+    returned = np.array([0.9 + 0.01j, 0.91 + 0.02j], dtype=np.complex128)
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": wavelengths.copy(),
+        "n2_sample_array": np.array([1.0 + 0.0j], dtype=np.complex128),
+        "_n2_sample_array_source": ("cif_path", str(cif_path)),
+    }
+
+    monkeypatch.setattr(
+        optimization,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: returned.copy(),
+    )
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 1.0}, mosaic)
+
+    np.testing.assert_allclose(kwargs["n2_sample_array_override"], returned)
+    np.testing.assert_allclose(mosaic["n2_sample_array"], returned)
+    np.testing.assert_allclose(
+        mosaic["_n2_sample_array_wavelength_snapshot"],
+        wavelengths,
+    )
+
+
+def test_simulation_kernel_kwargs_recomputes_malformed_array_when_source_known(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cif_path = tmp_path / "sample.cif"
+    cif_path.write_text("data_sample\n", encoding="utf-8")
+    wavelengths = np.array([1.0, 1.1], dtype=np.float64)
+    returned = np.array([0.88 + 0.01j, 0.89 + 0.02j], dtype=np.complex128)
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": wavelengths.copy(),
+        "n2_sample_array": ["bad-cache"],
+        "_n2_sample_array_source": ("cif_path", str(cif_path)),
+    }
+
+    monkeypatch.setattr(
+        optimization,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: returned.copy(),
+    )
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 1.0}, mosaic)
+
+    np.testing.assert_allclose(kwargs["n2_sample_array_override"], returned)
+    np.testing.assert_allclose(mosaic["n2_sample_array"], returned)
+    np.testing.assert_allclose(
+        mosaic["_n2_sample_array_wavelength_snapshot"],
+        wavelengths,
+    )
+
+
+def test_simulation_kernel_kwargs_recomputes_malformed_snapshot_when_source_known(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cif_path = tmp_path / "sample.cif"
+    cif_path.write_text("data_sample\n", encoding="utf-8")
+    wavelengths = np.array([1.0, 1.1], dtype=np.float64)
+    returned = np.array([0.87 + 0.01j, 0.88 + 0.02j], dtype=np.complex128)
+    supplied = np.array([0.95 + 0.05j, 0.96 + 0.06j], dtype=np.complex128)
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": wavelengths.copy(),
+        "n2_sample_array": supplied.copy(),
+        "_n2_sample_array_source": ("cif_path", str(cif_path)),
+        "_n2_sample_array_wavelength_snapshot": ["bad-snapshot"],
+    }
+
+    monkeypatch.setattr(
+        optimization,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: returned.copy(),
+    )
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 1.0}, mosaic)
+
+    np.testing.assert_allclose(kwargs["n2_sample_array_override"], returned)
+    np.testing.assert_allclose(mosaic["n2_sample_array"], returned)
+    np.testing.assert_allclose(
+        mosaic["_n2_sample_array_wavelength_snapshot"],
+        wavelengths,
+    )
+
+
+def test_simulation_kernel_kwargs_drops_wrong_length_authoritative_array_without_source() -> None:
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": np.array([1.0, 1.1], dtype=np.float64),
+        "n2_sample_array": np.array([1.0 + 0.0j], dtype=np.complex128),
+    }
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 1.0}, mosaic)
+
+    assert "n2_sample_array_override" not in kwargs
+
+
+def test_simulation_kernel_kwargs_drops_malformed_authoritative_array_without_source() -> None:
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": np.array([1.0, 1.1], dtype=np.float64),
+        "n2_sample_array": ["bad-cache"],
+    }
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 1.0}, mosaic)
+
+    assert "n2_sample_array_override" not in kwargs
+
+
+def test_simulation_kernel_kwargs_falls_back_to_legacy_when_cif_recompute_breaks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cif_path = tmp_path / "missing.cif"
+    wavelengths = np.array([1.0, np.nan], dtype=np.float64)
+    mosaic = {
+        "beam_x_array": np.array([0.0, 0.0], dtype=np.float64),
+        "wavelength_array": wavelengths.copy(),
+        "_n2_sample_array_source": ("cif_path", str(cif_path)),
+    }
+
+    monkeypatch.setattr(
+        optimization,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("missing cif")),
+    )
+
+    kwargs = optimization._simulation_kernel_kwargs({"lambda": 1.0, "n2": 0.97 + 0.02j}, mosaic)
+
+    expected = _legacy_kernel_n2_sample_array_from_angstrom(
+        wavelengths,
+        nominal_n2=0.97 + 0.02j,
+        sample_count=2,
+    )
+    np.testing.assert_allclose(kwargs["n2_sample_array_override"], expected)
+    assert mosaic["_n2_sample_array_source"] == ("cif_path", str(cif_path.resolve()))
+    assert "n2_sample_array" not in mosaic
+    assert "_n2_sample_array_wavelength_snapshot" not in mosaic
 
 
 def test_simulation_cache_retains_entries_when_enabled(

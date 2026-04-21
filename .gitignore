@@ -23,6 +23,10 @@ config/*local*.yaml
 
 # Test artifacts
 *.npz
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Local tool caches and temp output
 /.cache/

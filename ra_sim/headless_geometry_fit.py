@@ -935,12 +935,7 @@ def _copy_intersection_cache_tables(
     if not isinstance(cache, Sequence) or isinstance(cache, (str, bytes)):
         return copied
     for table in cache:
-        copied.append(
-            schema.coerce_float64_table(
-                table,
-                empty_width=schema.CURRENT_DETECTOR_CACHE_WIDTH,
-            )
-        )
+        copied.append(schema.coerce_intersection_cache_table(table))
     return copied
 
 
@@ -1254,13 +1249,11 @@ def run_headless_geometry_fit(
             saved_peak_records,
         )
 
-    structure_state, _atom_site_override_state, _active_cif_path, nominal_n2 = (
-        _load_structure_model(
-            defaults,
-            saved_state,
-            var_store,
-            simulation_runtime_state,
-        )
+    structure_state, _atom_site_override_state, active_cif_path, nominal_n2 = _load_structure_model(
+        defaults,
+        saved_state,
+        var_store,
+        simulation_runtime_state,
     )
 
     downloads_path = (
@@ -1425,6 +1418,11 @@ def run_headless_geometry_fit(
         )
     )
     nominal_lambda = float(defaults.lambda_angstrom)
+    calc_runtime = _load_calculation_runtime()
+    n2_source_meta = calc_runtime._normalize_n2_source_meta(("cif_path", active_cif_path))
+    n2_wavelength_snapshot = calc_runtime._n2_wavelength_snapshot_from_angstrom(
+        np.array([nominal_lambda], dtype=np.float64)
+    )
     mosaic_params = {
         "beam_x_array": np.zeros(1, dtype=np.float64),
         "beam_y_array": np.zeros(1, dtype=np.float64),
@@ -1433,6 +1431,8 @@ def run_headless_geometry_fit(
         "wavelength_array": np.array([nominal_lambda], dtype=np.float64),
         "wavelength_i_array": np.array([nominal_lambda], dtype=np.float64),
         "n2_sample_array": np.array([nominal_n2], dtype=np.complex128),
+        "_n2_sample_array_source": n2_source_meta,
+        "_n2_sample_array_wavelength_snapshot": n2_wavelength_snapshot,
         "sigma_mosaic_deg": _coerce_float(
             var_store["sigma_mosaic_var"].get(),
             defaults.defaults["sigma_mosaic_deg"],
@@ -1742,7 +1742,9 @@ def run_headless_geometry_fit(
                     "fallback_used": False,
                     "max_positions_row_count": int(max_positions_row_count),
                     "peak_record_count": int(peak_record_count),
-                    "active_signature_matches": bool(provenance.get("active_signature_matches", False)),
+                    "active_signature_matches": bool(
+                        provenance.get("active_signature_matches", False)
+                    ),
                     "source_snapshot_row_count": int(
                         provenance.get("source_snapshot_row_count", 0) or 0
                     ),

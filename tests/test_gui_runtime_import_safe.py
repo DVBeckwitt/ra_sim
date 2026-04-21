@@ -6588,73 +6588,6 @@ def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
         [[800.0, 70.5, 80.5, 4.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0]],
         dtype=np.float64,
     )
-    primary_intersection_cache = np.asarray(
-        [
-            [
-                2.0,
-                4.0,
-                42.5,
-                55.5,
-                1000.0,
-                -8.0,
-                1.0,
-                0.0,
-                2.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-            ],
-            [
-                2.0,
-                4.0,
-                52.5,
-                65.5,
-                900.0,
-                8.0,
-                1.0,
-                0.0,
-                2.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                1.0,
-            ],
-        ],
-        dtype=np.float64,
-    )
-    secondary_intersection_cache = np.asarray(
-        [
-            [
-                1.0,
-                2.0,
-                70.5,
-                80.5,
-                800.0,
-                4.0,
-                0.0,
-                1.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-            ]
-        ],
-        dtype=np.float64,
-    )
     sanity_records = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
         [primary_hit_table, secondary_hit_table],
         image_shape=(128, 128),
@@ -6717,7 +6650,7 @@ def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
             [],
         )
 
-    def _simulate_request_via_engine(request):
+    def _simulate_request_from_main_run(request):
         a_value = float(request.geometry.av)
         simulate_calls.append(
             (
@@ -6733,7 +6666,7 @@ def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
     monkeypatch.setattr(
         runtime_session,
         "simulate_request",
-        _simulate_request_via_engine,
+        _simulate_request_from_main_run,
         raising=False,
     )
     monkeypatch.setattr(
@@ -6947,6 +6880,10 @@ def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
         image_size=lambda: 128,
         display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
         native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 0.25,
+            float(row) + 0.5,
+        ),
         filter_simulated_peaks=lambda rows: (list(rows or []), None, None),
         collapse_simulated_peaks=lambda rows, merge_radius_px=6.0: (
             list(rows or []),
@@ -7068,6 +7005,348 @@ def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
     assert np.isfinite(float(nearest_dist))
     assert within_window is True
     assert runtime_state.stored_intersection_cache == []
+
+
+def test_selection_cache_update_builds_reduced_qr_hkl_picker_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_q_group_manager = importlib.import_module("ra_sim.gui.geometry_q_group_manager")
+    manual_geometry = importlib.import_module("ra_sim.gui.manual_geometry")
+    peak_selection = importlib.import_module("ra_sim.gui.peak_selection")
+    state_module = importlib.import_module("ra_sim.gui.state")
+    projection_debug = importlib.import_module("ra_sim.simulation.projection_debug")
+
+    primary_hit_table = np.asarray(
+        [
+            [1000.0, 42.5, 55.5, -8.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0],
+            [900.0, 52.5, 65.5, 8.0, 1.0, 0.0, 2.0, 0.0, 1.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    secondary_hit_table = np.asarray(
+        [[800.0, 70.5, 80.5, 4.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    primary_intersection_cache = np.asarray(
+        [
+            [2.0, 4.0, 42.5, 55.5, 1000.0, -8.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [2.0, 4.0, 52.5, 65.5, 900.0, 8.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    secondary_intersection_cache = np.asarray(
+        [[1.0, 2.0, 70.5, 80.5, 800.0, 4.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    simulate_calls: list[tuple[bool, bool, float]] = []
+
+    monkeypatch.setattr(projection_debug, "start_projection_debug_session", lambda *_a, **_k: None)
+    monkeypatch.setattr(projection_debug, "finalize_projection_debug_session", lambda *_a, **_k: None)
+
+    def _simulate_request_from_main_run(request):
+        a_value = float(request.geometry.av)
+        simulate_calls.append(
+            (
+                bool(request.collect_hit_tables),
+                bool(request.build_intersection_cache),
+                a_value,
+            )
+        )
+        assert request.collect_hit_tables is True
+        assert request.build_intersection_cache is True
+        request.best_sample_indices_out = np.asarray([0, 1], dtype=np.int64)
+        if a_value < 6.0:
+            hit_tables = [primary_hit_table]
+            cache_tables = [primary_intersection_cache]
+        else:
+            hit_tables = [secondary_hit_table]
+            cache_tables = [secondary_intersection_cache]
+        return SimpleNamespace(
+            image=np.full((4, 4), a_value, dtype=np.float64),
+            hit_tables=hit_tables,
+            intersection_cache=cache_tables,
+            used_python_runner=False,
+        )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulate_request",
+        _simulate_request_from_main_run,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulate_qr_rods_request",
+        lambda *_args, **_kwargs: pytest.fail("hidden simulation rerun should stay unused"),
+        raising=False,
+    )
+
+    result = runtime_session._run_simulation_generation_job(
+        _make_runtime_simulation_generation_job(
+            run_primary=True,
+            run_secondary=True,
+            collect_hit_tables=True,
+            collect_primary_hit_tables=True,
+            collect_secondary_hit_tables=True,
+            build_primary_intersection_cache=True,
+            build_secondary_intersection_cache=True,
+            capture_primary_hit_tables_raw=True,
+            capture_secondary_hit_tables_raw=True,
+        )
+    )
+
+    assert simulate_calls == [(True, True, 5.0), (True, True, 7.0)]
+    assert result["primary_intersection_cache_built"] is True
+    assert result["secondary_intersection_cache_built"] is True
+    assert runtime_session._table_row_count(result["primary_intersection_cache"]) > 0
+    assert runtime_session._table_row_count(result["secondary_intersection_cache"]) > 0
+
+    runtime_state = state_module.SimulationRuntimeState()
+    geometry_state = state_module.GeometryRuntimeState()
+    background_state = state_module.BackgroundRuntimeState()
+    background_state.current_background_index = 0
+    background_state.current_background_image = np.ones((128, 128), dtype=np.float64)
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(runtime_session, "background_runtime_state", background_state, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 128, raising=False)
+    monkeypatch.setattr(runtime_session, "a_var", _RuntimeVar(5.0), raising=False)
+    monkeypatch.setattr(runtime_session, "c_var", _RuntimeVar(6.0), raising=False)
+    monkeypatch.setattr(runtime_session, "weight1_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "weight2_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_caked_intersection_cache",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_trace_live_cache_event",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_cache_signature_summary",
+        lambda value: value,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: {"a": 5.0, "c": 6.0},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_source_snapshot_signature_for_background",
+        lambda _idx, _params=None: (
+            "snapshot",
+            runtime_state.stored_q_group_content_signature,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "filter_enabled_q_group_rows",
+        lambda rows, _state: [dict(entry) for entry in rows],
+        raising=False,
+    )
+
+    runtime_session._apply_ready_simulation_result(result)
+    assert runtime_state.stored_primary_intersection_cache_signature == result["hit_table_signature"]
+    assert runtime_state.stored_secondary_intersection_cache_signature == result["hit_table_signature"]
+    combined_diagnostics = runtime_session._publish_combined_simulation_state(
+        image_size_value=128,
+        primary_a_value=5.0,
+        primary_c_value=6.0,
+        secondary_a_value=7.0,
+        secondary_c_value=8.0,
+        active_peak_row_sides=result["active_peak_row_sides"],
+    )
+    assert combined_diagnostics["active_sides"] == ("primary", "secondary")
+    assert combined_diagnostics["published_intersection_cache_row_count"] > 0
+    assert runtime_session._table_row_count(runtime_state.stored_intersection_cache) > 0
+    runtime_state.peak_records = [
+        {
+            "hkl": (9, 9, 9),
+            "q_group_key": ("stale", 9, 9, 9),
+            "native_col": 1.0,
+            "native_row": 1.0,
+            "display_col": 1.0,
+            "display_row": 1.0,
+        }
+    ]
+
+    q_group_state = SimpleNamespace(disabled_qr_sets=set(), disabled_qz_sections=set())
+    value_callbacks = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=SimpleNamespace(excluded_keys=set(), overlay=SimpleNamespace(pairs=[])),
+        q_group_state=q_group_state,
+        fit_config={},
+        current_geometry_fit_var_names_factory=lambda: [],
+        primary_a_factory=lambda: 5.0,
+        primary_c_factory=lambda: 6.0,
+        image_size_factory=lambda: 128,
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        caked_view_enabled_factory=lambda: True,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 0.25,
+            float(row) + 0.5,
+        ),
+        project_peaks_to_current_view=lambda rows: [dict(entry) for entry in rows or ()],
+    )
+    projection_callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.ones((128, 128), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(0.0, 127.0, 128),
+        last_caked_azimuth_values=lambda: np.linspace(0.0, 127.0, 128),
+        current_background_display=lambda: np.ones((128, 128), dtype=float),
+        current_background_native=lambda: np.ones((128, 128), dtype=float),
+        image_size=lambda: 128,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 0.25,
+            float(row) + 0.5,
+        ),
+        filter_simulated_peaks=lambda rows: (list(rows or []), None, None),
+        collapse_simulated_peaks=lambda rows, merge_radius_px=6.0: (
+            list(rows or []),
+            None,
+        ),
+        build_live_preview_simulated_peaks_from_cache=(
+            value_callbacks.build_live_preview_simulated_peaks_from_cache
+        ),
+    )
+    cache_state = {"signature": None, "data": {}}
+    cache_callbacks = manual_geometry.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: result["signature"],
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.ones((128, 128), dtype=float),
+        use_caked_space=projection_callbacks.pick_uses_caked_space,
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {"a": 5.0, "c": 6.0},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
+        build_grouped_candidates=projection_callbacks.pick_candidates,
+        build_simulated_lookup=projection_callbacks.simulated_lookup,
+        project_peaks_to_current_view=projection_callbacks.project_peaks_to_current_view,
+        entry_display_coords=projection_callbacks.entry_display_coords,
+        peak_records=lambda: [],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        cache_callbacks.get_pick_cache,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_hkl_pick_simulation_points_payload_cache",
+        {},
+        raising=False,
+    )
+
+    cache_data = runtime_session._get_geometry_manual_pick_cache(
+        param_set={"a": 5.0, "c": 6.0},
+        prefer_cache=True,
+    )
+    assert value_callbacks.last_live_preview_cache_metadata()["cache_source"] == (
+        "stored_intersection_cache"
+    )
+    grouped_candidates = cache_data["grouped_candidates"]
+    assert sum(len(entries) for entries in grouped_candidates.values()) > 0
+    primary_entries = [
+        dict(entry)
+        for entries in grouped_candidates.values()
+        for entry in entries
+        if tuple(entry.get("hkl", ())) == (1, 0, 2)
+    ]
+    assert len(primary_entries) >= 2
+    branch_values = {
+        int(entry["source_branch_index"])
+        for entry in primary_entries
+        if "source_branch_index" in entry
+    }
+    assert branch_values == {0, 1}
+
+    qr_candidate = primary_entries[0]
+    for key in ("qr", "qz", "hkl", "source_branch_index"):
+        assert qr_candidate.get(key) is not None
+    for key in (
+        "native_col",
+        "native_row",
+        "sim_col",
+        "sim_row",
+        "sim_col_raw",
+        "sim_row_raw",
+        "display_col",
+        "display_row",
+    ):
+        assert np.isfinite(float(qr_candidate[key]))
+    caked_x = qr_candidate.get("caked_x", qr_candidate.get("raw_caked_x"))
+    caked_y = qr_candidate.get("caked_y", qr_candidate.get("raw_caked_y"))
+    assert np.isfinite(float(caked_x))
+    assert np.isfinite(float(caked_y))
+
+    qr_group_key = qr_candidate["q_group_key"]
+    qr_col = float(qr_candidate["caked_x"])
+    qr_row = float(qr_candidate["caked_y"])
+    selected_group, selected_entries, selected_dist = manual_geometry.geometry_manual_choose_group_at(
+        grouped_candidates,
+        qr_col,
+        qr_row,
+        window_size_px=20.0,
+        use_caked_display=True,
+    )
+    assert selected_group == qr_group_key
+    assert selected_entries
+    assert np.isfinite(float(selected_dist))
+
+    payload = runtime_session._hkl_pick_simulation_points_from_qr_picker_cache()
+    assert payload["candidates"]
+    hkl_candidates = [
+        dict(candidate)
+        for candidate in payload["candidates"]
+        if tuple(candidate.get("hkl", ())) == (1, 0, 2)
+    ]
+    assert hkl_candidates
+    hkl_candidate = hkl_candidates[0]
+    hkl_col = float(hkl_candidate["caked_x"])
+    hkl_row = float(hkl_candidate["caked_y"])
+    nearest_idx, nearest_candidate, nearest_dist, within_window = (
+        peak_selection._nearest_simulation_point_for_click(
+            runtime_state,
+            hkl_col,
+            hkl_row,
+            candidate_records=payload,
+            max_axis_distance_px=20.0,
+            use_caked_display=True,
+        )
+    )
+    assert nearest_idx >= -1
+    assert nearest_candidate is not None
+    assert tuple(nearest_candidate["hkl"]) == (1, 0, 2)
+    assert np.isfinite(float(nearest_dist))
+    assert within_window is True
+    assert simulate_calls == [(True, True, 5.0), (True, True, 7.0)]
 
 
 def test_restore_combined_detector_cache_refuses_stale_cache_after_raw_only_run(
@@ -8423,6 +8702,596 @@ def _patch_apply_ready_simulation_result_to_store_first_visible_simulation(
         raising=False,
     )
     return apply_ready_calls
+
+
+def test_raw_only_full_update_restores_qr_and_hkl_picker_rows_job_builds_raw_only_requests(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixture)
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=[],
+        scheduled_settle_calls=[],
+        apply_scale_factor_calls=[],
+    )
+    state = runtime_session.simulation_runtime_state
+    state.sim_miller1 = np.asarray([[1.0, 0.0, 0.0]], dtype=np.float64)
+    state.sim_intens1 = np.asarray([10.0], dtype=np.float64)
+    state.sim_miller2 = np.asarray([[0.0, 1.0, 0.0]], dtype=np.float64)
+    state.sim_intens2 = np.asarray([5.0], dtype=np.float64)
+    state.stored_primary_max_positions = None
+    state.stored_secondary_max_positions = None
+    state.stored_intersection_cache = []
+    state.stored_hit_table_signature = ("stale-hit-tables",)
+    state.last_sim_signature = fixture["sim_signature"]
+    state.last_simulation_signature = fixture["sim_signature"] + (0, 0)
+    state.peak_positions = []
+    state.peak_millers = []
+    state.selected_peak_record = None
+    state.primary_contribution_cache_signature = None
+    state.primary_source_mode = "miller"
+    state.primary_active_contribution_keys = []
+    state.primary_hit_table_cache = {}
+    state.simulation_epoch = 1
+    state.worker_ready_result = None
+    state.worker_future = None
+    state.worker_job_counter = 0
+    state.worker_error_text = None
+    runtime_session.weight2_var.set(1.0)
+    monkeypatch.setattr(runtime_session, "_should_collect_hit_tables_for_update", lambda: True)
+    monkeypatch.setattr(
+        runtime_session,
+        "_cached_hit_tables_reusable",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(runtime_session, "lambda_", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "n2", 1.0 + 0.0j, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "build_mosaic_params",
+        lambda: {
+            "beam_x_array": np.asarray([0.0], dtype=np.float64),
+            "beam_y_array": np.asarray([0.0], dtype=np.float64),
+            "theta_array": np.asarray([0.0], dtype=np.float64),
+            "phi_array": np.asarray([0.0], dtype=np.float64),
+            "wavelength_array": np.asarray([1.0], dtype=np.float64),
+            "sample_weights": None,
+            "n2_sample_array": None,
+            "_n2_sample_array_source": None,
+            "_n2_sample_array_wavelength_snapshot": None,
+            "sigma_mosaic_deg": 0.0,
+            "gamma_mosaic_deg": 0.0,
+            "eta": 0.0,
+            "solve_q_steps": 7,
+            "solve_q_rel_tol": 1.0e-6,
+            "solve_q_mode": 2,
+            "_sampling_signature": (),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(
+            refresh_requested=False,
+            disabled_qr_sets=set(),
+            disabled_qz_sections=set(),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.geometry_runtime_state,
+        "manual_pick_armed",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "peak_selection_state",
+        SimpleNamespace(hkl_pick_armed=False, selected_hkl_target=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_session_active",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_runtime_primary_cache,
+        "resolve_incremental_sf_prune_action",
+        lambda **_kwargs: SimpleNamespace(
+            mode="full",
+            added_keys=(),
+            removed_keys=(),
+            missing_keys=(),
+            reason="raw_only_picker_refresh",
+        ),
+        raising=False,
+    )
+    captured_jobs: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_async_simulation_job",
+        lambda job: captured_jobs.append(dict(job)) or "submitted",
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert len(captured_jobs) == 1
+    job = captured_jobs[0]
+    assert job["job_kind"] == "full"
+    assert job["collect_primary_hit_tables"] is True
+    assert job["collect_secondary_hit_tables"] is True
+    assert job["capture_primary_hit_tables_raw"] is True
+    assert job["capture_secondary_hit_tables_raw"] is True
+    assert job["build_primary_intersection_cache"] is False
+    assert job["build_secondary_intersection_cache"] is False
+    assert job["active_peak_row_sides"] == ("primary", "secondary")
+
+
+def test_selection_cache_refresh_not_blocked_by_stored_raw_rows_or_peak_records(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixture)
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=[],
+        scheduled_settle_calls=[],
+        apply_scale_factor_calls=[],
+    )
+    state = runtime_session.simulation_runtime_state
+    primary_rows = np.asarray(
+        [[1000.0, 42.5, 55.5, -8.0, 1.0, 0.0, 2.0]],
+        dtype=np.float64,
+    )
+    secondary_rows = np.asarray(
+        [[800.0, 70.5, 80.5, 8.0, 0.0, 1.0, 1.0]],
+        dtype=np.float64,
+    )
+    state.sim_miller1 = np.asarray([[1.0, 0.0, 2.0]], dtype=np.float64)
+    state.sim_intens1 = np.asarray([10.0], dtype=np.float64)
+    state.sim_miller2 = np.asarray([[0.0, 1.0, 1.0]], dtype=np.float64)
+    state.sim_intens2 = np.asarray([5.0], dtype=np.float64)
+    state.stored_primary_sim_image = np.ones((2, 2), dtype=np.float64)
+    state.stored_secondary_sim_image = np.full((2, 2), 2.0, dtype=np.float64)
+    state.stored_primary_max_positions = [primary_rows.copy()]
+    state.stored_secondary_max_positions = [secondary_rows.copy()]
+    state.stored_max_positions_local = [primary_rows.copy(), secondary_rows.copy()]
+    state.stored_intersection_cache = []
+    state.stored_primary_intersection_cache = []
+    state.stored_secondary_intersection_cache = []
+    state.stored_primary_intersection_cache_signature = ("stale-cache", "primary")
+    state.stored_secondary_intersection_cache_signature = ("stale-cache", "secondary")
+    state.stored_hit_table_signature = ("stale-hit-tables",)
+    state.last_sim_signature = ("stale-image",)
+    state.last_simulation_signature = ("stale-full",)
+    state.peak_positions = [(42.5, 55.5), (70.5, 80.5)]
+    state.peak_millers = [(1, 0, 2), (0, 1, 1)]
+    state.peak_intensities = [1000.0, 800.0]
+    state.peak_records = [
+        {
+            "hkl": (1, 0, 2),
+            "qr": 2.0,
+            "qz": 4.0,
+            "q_group_key": ("primary", 1, 0, 2),
+            "native_col": 42.5,
+            "native_row": 55.5,
+            "display_col": 42.5,
+            "display_row": 55.5,
+        }
+    ]
+    state.selected_peak_record = None
+    state.primary_contribution_cache_signature = None
+    state.primary_source_mode = "miller"
+    state.primary_active_contribution_keys = []
+    state.primary_hit_table_cache = {}
+    state.simulation_epoch = 1
+    state.worker_ready_result = None
+    state.worker_future = None
+    state.worker_job_counter = 0
+    state.worker_error_text = None
+    runtime_session.weight2_var.set(1.0)
+    monkeypatch.setattr(
+        runtime_session,
+        "_cached_hit_tables_reusable",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(runtime_session, "_should_collect_hit_tables_for_update", lambda: False)
+    monkeypatch.setattr(runtime_session, "lambda_", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "n2", 1.0 + 0.0j, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "build_mosaic_params",
+        lambda: {
+            "beam_x_array": np.asarray([0.0], dtype=np.float64),
+            "beam_y_array": np.asarray([0.0], dtype=np.float64),
+            "theta_array": np.asarray([0.0], dtype=np.float64),
+            "phi_array": np.asarray([0.0], dtype=np.float64),
+            "wavelength_array": np.asarray([1.0], dtype=np.float64),
+            "sample_weights": None,
+            "n2_sample_array": None,
+            "_n2_sample_array_source": None,
+            "_n2_sample_array_wavelength_snapshot": None,
+            "sigma_mosaic_deg": 0.0,
+            "gamma_mosaic_deg": 0.0,
+            "eta": 0.0,
+            "solve_q_steps": 7,
+            "solve_q_rel_tol": 1.0e-6,
+            "solve_q_mode": 2,
+            "_sampling_signature": (),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(
+            refresh_requested=True,
+            disabled_qr_sets=set(),
+            disabled_qz_sections=set(),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.geometry_runtime_state,
+        "manual_pick_armed",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "peak_selection_state",
+        SimpleNamespace(hkl_pick_armed=True, selected_hkl_target=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_runtime_primary_cache,
+        "resolve_incremental_sf_prune_action",
+        lambda **_kwargs: SimpleNamespace(
+            mode="full",
+            added_keys=(),
+            removed_keys=(),
+            missing_keys=(),
+            reason="selection_cache_refresh",
+        ),
+        raising=False,
+    )
+    submitted_jobs: list[dict[str, object]] = []
+
+    def _submit_async(job: dict[str, object]) -> None:
+        submitted_jobs.append(dict(job))
+        state.worker_active_job = dict(job)
+        state.worker_future = object()
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_submit_async_simulation_job",
+        _submit_async,
+        raising=False,
+    )
+
+    assert state.stored_max_positions_local
+    assert state.peak_records
+    assert state.stored_intersection_cache == []
+    runtime_session.do_update()
+    runtime_session.do_update()
+
+    assert len(submitted_jobs) == 1
+    job = submitted_jobs[0]
+    assert job["job_kind"] == "full"
+    assert job["active_peak_row_sides"] == ("primary", "secondary")
+    assert job["collect_primary_hit_tables"] is True
+    assert job["collect_secondary_hit_tables"] is True
+    assert job["capture_primary_hit_tables_raw"] is True
+    assert job["capture_secondary_hit_tables_raw"] is True
+    assert job["build_primary_intersection_cache"] is True
+    assert job["build_secondary_intersection_cache"] is True
+    assert not (job["build_primary_intersection_cache"] and not job["collect_primary_hit_tables"])
+    assert not (
+        job["build_secondary_intersection_cache"] and not job["collect_secondary_hit_tables"]
+    )
+
+
+def test_do_update_selection_cache_refresh_omits_zero_weight_secondary(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixture)
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=[],
+        scheduled_settle_calls=[],
+        apply_scale_factor_calls=[],
+    )
+    state = runtime_session.simulation_runtime_state
+    state.sim_miller1 = np.asarray([[1.0, 0.0, 2.0]], dtype=np.float64)
+    state.sim_intens1 = np.asarray([10.0], dtype=np.float64)
+    state.sim_miller2 = np.asarray([[0.0, 1.0, 1.0]], dtype=np.float64)
+    state.sim_intens2 = np.asarray([5.0], dtype=np.float64)
+    state.stored_primary_sim_image = np.ones((2, 2), dtype=np.float64)
+    state.stored_secondary_sim_image = np.full((2, 2), 2.0, dtype=np.float64)
+    state.stored_primary_max_positions = [
+        np.asarray([[1000.0, 42.5, 55.5, -8.0, 1.0, 0.0, 2.0]], dtype=np.float64)
+    ]
+    state.stored_secondary_max_positions = [
+        np.asarray([[800.0, 70.5, 80.5, 8.0, 0.0, 1.0, 1.0]], dtype=np.float64)
+    ]
+    state.stored_intersection_cache = []
+    state.stored_primary_intersection_cache = []
+    state.stored_secondary_intersection_cache = []
+    state.stored_hit_table_signature = ("stale-hit-tables",)
+    state.last_sim_signature = ("stale-image",)
+    state.last_simulation_signature = ("stale-full",)
+    state.peak_positions = []
+    state.peak_millers = []
+    state.peak_intensities = []
+    state.peak_records = []
+    state.selected_peak_record = None
+    state.primary_contribution_cache_signature = None
+    state.primary_source_mode = "miller"
+    state.primary_active_contribution_keys = []
+    state.primary_hit_table_cache = {}
+    state.simulation_epoch = 1
+    state.worker_ready_result = None
+    state.worker_future = None
+    state.worker_job_counter = 0
+    state.worker_error_text = None
+    runtime_session.weight2_var.set(0.0)
+    monkeypatch.setattr(
+        runtime_session,
+        "_cached_hit_tables_reusable",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(runtime_session, "_should_collect_hit_tables_for_update", lambda: False)
+    monkeypatch.setattr(runtime_session, "lambda_", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "n2", 1.0 + 0.0j, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "build_mosaic_params",
+        lambda: {
+            "beam_x_array": np.asarray([0.0], dtype=np.float64),
+            "beam_y_array": np.asarray([0.0], dtype=np.float64),
+            "theta_array": np.asarray([0.0], dtype=np.float64),
+            "phi_array": np.asarray([0.0], dtype=np.float64),
+            "wavelength_array": np.asarray([1.0], dtype=np.float64),
+            "sample_weights": None,
+            "n2_sample_array": None,
+            "_n2_sample_array_source": None,
+            "_n2_sample_array_wavelength_snapshot": None,
+            "sigma_mosaic_deg": 0.0,
+            "gamma_mosaic_deg": 0.0,
+            "eta": 0.0,
+            "solve_q_steps": 7,
+            "solve_q_rel_tol": 1.0e-6,
+            "solve_q_mode": 2,
+            "_sampling_signature": (),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(
+            refresh_requested=True,
+            disabled_qr_sets=set(),
+            disabled_qz_sections=set(),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.geometry_runtime_state,
+        "manual_pick_armed",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "peak_selection_state",
+        SimpleNamespace(hkl_pick_armed=True, selected_hkl_target=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_runtime_primary_cache,
+        "resolve_incremental_sf_prune_action",
+        lambda **_kwargs: SimpleNamespace(
+            mode="full",
+            added_keys=(),
+            removed_keys=(),
+            missing_keys=(),
+            reason="selection_cache_refresh",
+        ),
+        raising=False,
+    )
+    requested_jobs: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_async_simulation_job",
+        lambda job: requested_jobs.append(dict(job)) or "submitted",
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert len(requested_jobs) == 1
+    job = requested_jobs[0]
+    assert job["active_peak_row_sides"] == ("primary",)
+    assert job["run_primary"] is True
+    assert job["run_secondary"] is False
+    assert job["secondary_available"] is False
+    assert job["collect_primary_hit_tables"] is True
+    assert job["build_primary_intersection_cache"] is True
+    assert job["capture_primary_hit_tables_raw"] is True
+    assert job["collect_secondary_hit_tables"] is False
+    assert job["build_secondary_intersection_cache"] is False
+    assert job["capture_secondary_hit_tables_raw"] is False
+
+
+def test_do_update_picker_refresh_reuses_current_raw_rows_without_hidden_rerun(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixture)
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=[],
+        scheduled_settle_calls=[],
+        apply_scale_factor_calls=[],
+    )
+    state = runtime_session.simulation_runtime_state
+    primary_rows = np.asarray(
+        [[1000.0, 42.5, 55.5, -8.0, 1.0, 0.0, 2.0]],
+        dtype=np.float64,
+    )
+    secondary_rows = np.asarray(
+        [[800.0, 70.5, 80.5, 8.0, 0.0, 1.0, 1.0]],
+        dtype=np.float64,
+    )
+    state.sim_miller1 = np.asarray([[1.0, 0.0, 2.0]], dtype=np.float64)
+    state.sim_intens1 = np.asarray([10.0], dtype=np.float64)
+    state.sim_miller2 = np.asarray([[0.0, 1.0, 1.0]], dtype=np.float64)
+    state.sim_intens2 = np.asarray([5.0], dtype=np.float64)
+    state.stored_primary_sim_image = np.ones((2, 2), dtype=np.float64)
+    state.stored_secondary_sim_image = np.full((2, 2), 2.0, dtype=np.float64)
+    state.stored_primary_max_positions = [primary_rows.copy()]
+    state.stored_secondary_max_positions = [secondary_rows.copy()]
+    state.stored_max_positions_local = [primary_rows.copy(), secondary_rows.copy()]
+    state.stored_intersection_cache = []
+    state.stored_primary_intersection_cache = []
+    state.stored_secondary_intersection_cache = []
+    state.stored_primary_intersection_cache_signature = ("stale-cache", "primary")
+    state.stored_secondary_intersection_cache_signature = ("stale-cache", "secondary")
+    state.stored_hit_table_signature = ("current-hit-tables",)
+    state.last_sim_signature = fixture["sim_signature"]
+    state.last_simulation_signature = fixture["sim_signature"] + (0, 0)
+    state.peak_positions = [(42.5, 55.5), (70.5, 80.5)]
+    state.peak_millers = [(1, 0, 2), (0, 1, 1)]
+    state.peak_records = [
+        {
+            "hkl": (1, 0, 2),
+            "qr": 2.0,
+            "qz": 4.0,
+            "q_group_key": ("primary", 1, 0, 2),
+            "native_col": 42.5,
+            "native_row": 55.5,
+            "display_col": 42.5,
+            "display_row": 55.5,
+        }
+    ]
+    state.selected_peak_record = None
+    state.primary_contribution_cache_signature = None
+    state.primary_source_mode = "miller"
+    state.primary_active_contribution_keys = []
+    state.primary_hit_table_cache = {}
+    state.simulation_epoch = 1
+    state.worker_ready_result = None
+    state.worker_future = None
+    state.worker_job_counter = 0
+    state.worker_error_text = None
+    runtime_session.weight2_var.set(1.0)
+    monkeypatch.setattr(runtime_session, "_should_collect_hit_tables_for_update", lambda: False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_cached_hit_tables_reusable",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(runtime_session, "lambda_", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "n2", 1.0 + 0.0j, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "build_mosaic_params",
+        lambda: {
+            "beam_x_array": np.asarray([0.0], dtype=np.float64),
+            "beam_y_array": np.asarray([0.0], dtype=np.float64),
+            "theta_array": np.asarray([0.0], dtype=np.float64),
+            "phi_array": np.asarray([0.0], dtype=np.float64),
+            "wavelength_array": np.asarray([1.0], dtype=np.float64),
+            "sample_weights": None,
+            "n2_sample_array": None,
+            "_n2_sample_array_source": None,
+            "_n2_sample_array_wavelength_snapshot": None,
+            "sigma_mosaic_deg": 0.0,
+            "gamma_mosaic_deg": 0.0,
+            "eta": 0.0,
+            "solve_q_steps": 7,
+            "solve_q_rel_tol": 1.0e-6,
+            "solve_q_mode": 2,
+            "_sampling_signature": (),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(
+            refresh_requested=True,
+            disabled_qr_sets=set(),
+            disabled_qz_sections=set(),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.geometry_runtime_state,
+        "manual_pick_armed",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "peak_selection_state",
+        SimpleNamespace(hkl_pick_armed=True, selected_hkl_target=None),
+        raising=False,
+    )
+    requested_jobs: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_async_simulation_job",
+        lambda job: requested_jobs.append(dict(job)) or "submitted",
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert len(requested_jobs) == 1
+    job = requested_jobs[0]
+    assert job["job_kind"] == "full"
+    assert job["active_peak_row_sides"] == ("primary", "secondary")
+    assert job["collect_primary_hit_tables"] is True
+    assert job["collect_secondary_hit_tables"] is True
+    assert job["build_primary_intersection_cache"] is True
+    assert job["build_secondary_intersection_cache"] is True
+    assert not (job["build_primary_intersection_cache"] and not job["collect_primary_hit_tables"])
+    assert not (
+        job["build_secondary_intersection_cache"] and not job["collect_secondary_hit_tables"]
+    )
+    assert state.stored_intersection_cache == []
 
 
 def test_do_update_routes_hidden_payload_guard_into_primary_display_helper(
@@ -12744,6 +13613,12 @@ def test_runtime_impl_gates_raw_hit_table_capture_by_job_kind() -> None:
     assert (
         'capture_secondary_raw = bool(run_secondary_enabled and job_kind_value == "full")' in block
     )
+    assert "build_intersection_cache_enabled = bool(" in block
+    assert 'build_intersection_cache_for_job and job_kind_value == "full"' in block
+    assert "(collect_hit_tables_enabled or build_intersection_cache_enabled)" in block
+    assert "build_intersection_cache_enabled and collect_primary_hit_tables" in block
+    assert "build_intersection_cache_enabled and collect_secondary_hit_tables" in block
+    assert "selection_peak_cache_needed and collect_hit_tables_enabled" not in block
     assert "run_primary_job = bool(run_primary_job and primary_weight_active)" in block
     assert (
         "secondary_available_job = bool(secondary_available and secondary_weight_active)" in block
@@ -14546,6 +15421,8 @@ def test_second_unchanged_preflight_reuses_targeted_projected_cache(monkeypatch)
     assert second_diagnostics["targeted_simulation_used"] is False
     assert second_diagnostics["full_source_rows_built_for_rebinding"] is False
     assert second_diagnostics["full_source_rows_projected_for_rebinding"] is False
+    assert second_diagnostics["unrelated_projected_row_count_for_rebinding"] == 0
+    assert second_diagnostics["unrelated_scored_row_count_for_rebinding"] == 0
     assert second_diagnostics["targeted_performance_gate"]["ok"] is True
 
 

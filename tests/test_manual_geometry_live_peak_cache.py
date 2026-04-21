@@ -938,6 +938,272 @@ def test_geometry_manual_live_peak_candidates_fail_closed_when_provenance_does_n
     assert "source_reflection_is_full" not in candidates[0]
 
 
+def test_mixed_background_manual_projection_groups_by_background() -> None:
+    projection_calls: list[tuple[int, list[str]]] = []
+    cached_entries = [
+        {
+            "label": "bg1",
+            "background_index": 1,
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+            "weight": 1.0,
+        },
+        {
+            "label": "bg0",
+            "background_index": 0,
+            "q_group_key": ("q_group", "primary", 0, 0),
+            "source_table_index": 5,
+            "source_row_index": 6,
+            "sim_col_raw": 7.0,
+            "sim_row_raw": 8.0,
+            "weight": 1.0,
+        },
+    ]
+
+    cache_data, _, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=(
+            ("sim", 7),
+            0,
+            False,
+            ("old-bg",),
+            2,
+            (
+                "('q_group', 'primary', 1, 0)",
+                "('q_group', 'primary', 0, 0)",
+            ),
+        ),
+        existing_cache_data={
+            "signature": (
+                ("sim", 7),
+                0,
+                False,
+                ("old-bg",),
+                2,
+                (
+                    "('q_group', 'primary', 1, 0)",
+                    "('q_group', 'primary', 0, 0)",
+                ),
+            ),
+            "simulated_peaks": [dict(entry) for entry in cached_entries],
+            "simulated_lookup": _build_lookup(cached_entries),
+            "grouped_candidates": _group_candidates(cached_entries),
+        },
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 7),
+            0,
+            False,
+            ("new-bg",),
+            2,
+            (
+                "('q_group', 'primary', 1, 0)",
+                "('q_group', 'primary', 0, 0)",
+            ),
+        ),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        project_peaks_for_background_view=lambda background_index, rows: (
+            projection_calls.append(
+                (
+                    int(background_index),
+                    [str(dict(entry).get("label")) for entry in rows or () if isinstance(entry, dict)],
+                )
+            )
+            or [
+                dict(
+                    entry,
+                    sim_col=float(background_index),
+                    sim_row=float(background_index) + 0.5,
+                )
+                for entry in rows or ()
+                if isinstance(entry, dict)
+            ]
+        ),
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert projection_calls == [(1, ["bg1"]), (0, ["bg0"])]
+    assert [str(entry.get("label")) for entry in cache_data["simulated_peaks"]] == ["bg1", "bg0"]
+    assert cache_data["simulated_peaks"][0]["sim_col"] == 1.0
+    assert cache_data["simulated_peaks"][1]["sim_col"] == 0.0
+    assert next_state["simulated_lookup"][_source_key(cached_entries[0])]["sim_col"] == 1.0
+
+
+def test_manual_projection_defaults_missing_background_to_current_view() -> None:
+    projection_calls: list[tuple[int, list[str]]] = []
+    cached_entries = [
+        {
+            "label": "legacy",
+            "q_group_key": ("q_group", "primary", 0, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+            "weight": 1.0,
+        },
+    ]
+    old_signature = (("sim", 7), 0, False, ("old-bg",), 1, ("('q_group', 'primary', 0, 0)",))
+    new_signature = (("sim", 7), 0, False, ("new-bg",), 1, ("('q_group', 'primary', 0, 0)",))
+
+    cache_data, _, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=old_signature,
+        existing_cache_data={
+            "signature": old_signature,
+            "simulated_peaks": [dict(entry) for entry in cached_entries],
+            "simulated_lookup": _build_lookup(cached_entries),
+            "grouped_candidates": _group_candidates(cached_entries),
+        },
+        cache_signature_fn=lambda **_kwargs: new_signature,
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        project_peaks_for_background_view=lambda background_index, rows: (
+            projection_calls.append(
+                (
+                    int(background_index),
+                    [str(dict(entry).get("label")) for entry in rows or () if isinstance(entry, dict)],
+                )
+            )
+            or [
+                dict(
+                    entry,
+                    sim_col=float(background_index),
+                    sim_row=float(background_index) + 0.5,
+                )
+                for entry in rows or ()
+                if isinstance(entry, dict)
+            ]
+        ),
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert projection_calls == [(0, ["legacy"])]
+    assert [str(entry.get("label")) for entry in cache_data["simulated_peaks"]] == ["legacy"]
+    assert cache_data["simulated_peaks"][0]["background_index"] == 0
+    assert cache_data["simulated_peaks"][0]["sim_col"] == 0.0
+    assert next_state["grouped_candidates"]
+    assert next_state["simulated_lookup"][_source_key(cached_entries[0])]["sim_col"] == 0.0
+
+
+def test_mixed_background_manual_projection_drops_missing_payload_groups() -> None:
+    projection_calls: list[tuple[int, list[str]]] = []
+    cached_entries = [
+        {
+            "label": "bg1",
+            "background_index": 1,
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+            "weight": 1.0,
+        },
+        {
+            "label": "bg0",
+            "background_index": 0,
+            "q_group_key": ("q_group", "primary", 0, 0),
+            "source_table_index": 5,
+            "source_row_index": 6,
+            "sim_col_raw": 7.0,
+            "sim_row_raw": 8.0,
+            "weight": 1.0,
+        },
+    ]
+
+    cache_data, _, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.ones((3, 3), dtype=float),
+        existing_cache_signature=(
+            ("sim", 7),
+            0,
+            False,
+            ("old-bg",),
+            2,
+            (
+                "('q_group', 'primary', 1, 0)",
+                "('q_group', 'primary', 0, 0)",
+            ),
+        ),
+        existing_cache_data={
+            "signature": (
+                ("sim", 7),
+                0,
+                False,
+                ("old-bg",),
+                2,
+                (
+                    "('q_group', 'primary', 1, 0)",
+                    "('q_group', 'primary', 0, 0)",
+                ),
+            ),
+            "simulated_peaks": [dict(entry) for entry in cached_entries],
+            "simulated_lookup": _build_lookup(cached_entries),
+            "grouped_candidates": _group_candidates(cached_entries),
+        },
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 7),
+            0,
+            False,
+            ("new-bg",),
+            2,
+            (
+                "('q_group', 'primary', 1, 0)",
+                "('q_group', 'primary', 0, 0)",
+            ),
+        ),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        project_peaks_for_background_view=lambda background_index, rows: (
+            projection_calls.append(
+                (
+                    int(background_index),
+                    [
+                        str(dict(entry).get("label"))
+                        for entry in rows or ()
+                        if isinstance(entry, dict)
+                    ],
+                )
+            )
+            or (
+                []
+                if int(background_index) == 1
+                else [
+                    dict(
+                        entry,
+                        sim_col=float(background_index),
+                        sim_row=float(background_index) + 0.5,
+                    )
+                    for entry in rows or ()
+                    if isinstance(entry, dict)
+                ]
+            )
+        ),
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert projection_calls == [(1, ["bg1"]), (0, ["bg0"])]
+    assert [str(entry.get("label")) for entry in cache_data["simulated_peaks"]] == ["bg0"]
+    assert _source_key(cached_entries[0]) not in next_state["simulated_lookup"]
+    assert next_state["simulated_lookup"][_source_key(cached_entries[1])]["sim_col"] == 0.0
+
+
 def test_geometry_manual_live_peak_candidates_restore_trust_on_revision_match() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [

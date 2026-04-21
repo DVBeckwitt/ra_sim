@@ -4,6 +4,8 @@ import datetime
 from pathlib import Path
 from ra_sim.config import get_dir
 from ra_sim.debug_controls import diffraction_debug_csv_logging_enabled
+from ra_sim.simulation.diffraction import transmit_angle_grazing
+from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
 import numpy as np
 from math import sin, cos, sqrt, pi, exp, acos
 
@@ -291,6 +293,115 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=1000):
 # -----------------------------------------------------------
 # 4) calculate_phi (no njit)
 # -----------------------------------------------------------
+def _normalized_debug_n2_sample_array(
+    wavelength_array,
+    *,
+    nominal_n2,
+    sample_count,
+    n2_sample_array_override=None,
+):
+    if n2_sample_array_override is not None:
+        try:
+            normalized_override = np.ascontiguousarray(
+                np.asarray(n2_sample_array_override, dtype=np.complex128).reshape(-1),
+                dtype=np.complex128,
+            )
+            if normalized_override.size == int(sample_count):
+                return normalized_override
+        except Exception:
+            pass
+    return _legacy_kernel_n2_sample_array_from_angstrom(
+        wavelength_array,
+        nominal_n2=nominal_n2,
+        sample_count=int(sample_count),
+    )
+
+
+def _normalize_debug_sample_inputs(
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    wavelength_array,
+    *,
+    sample_weights=None,
+    nominal_n2,
+    n2_sample_array_override=None,
+):
+    core_arrays = tuple(
+        np.ascontiguousarray(np.asarray(arr, dtype=np.float64).reshape(-1), dtype=np.float64)
+        for arr in (beam_x_array, beam_y_array, theta_array, phi_array, wavelength_array)
+    )
+    sample_count = min((arr.size for arr in core_arrays), default=0)
+    (
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        wavelength_array,
+    ) = tuple(
+        np.ascontiguousarray(arr[:sample_count], dtype=np.float64)
+        for arr in core_arrays
+    )
+
+    normalized_sample_weights = None
+    if sample_weights is not None:
+        normalized_sample_weights = np.ascontiguousarray(
+            np.asarray(sample_weights, dtype=np.float64).reshape(-1),
+            dtype=np.float64,
+        )
+        if normalized_sample_weights.size >= sample_count:
+            normalized_sample_weights = np.ascontiguousarray(
+                normalized_sample_weights[:sample_count],
+                dtype=np.float64,
+            )
+        else:
+            normalized_sample_weights = None
+
+    normalized_n2_override = None
+    if n2_sample_array_override is not None:
+        try:
+            normalized_n2_override = np.ascontiguousarray(
+                np.asarray(n2_sample_array_override, dtype=np.complex128).reshape(-1),
+                dtype=np.complex128,
+            )
+            if normalized_n2_override.size >= sample_count:
+                normalized_n2_override = np.ascontiguousarray(
+                    normalized_n2_override[:sample_count],
+                    dtype=np.complex128,
+                )
+            else:
+                normalized_n2_override = None
+        except Exception:
+            normalized_n2_override = None
+
+    n2_sample_array = _normalized_debug_n2_sample_array(
+        wavelength_array,
+        nominal_n2=nominal_n2,
+        sample_count=sample_count,
+        n2_sample_array_override=normalized_n2_override,
+    )
+    return (
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        wavelength_array,
+        normalized_sample_weights,
+        n2_sample_array,
+    )
+
+
+def _normalize_debug_pixel_size_m(pixel_size_m):
+    try:
+        pixel_size_eff = float(pixel_size_m)
+    except (TypeError, ValueError):
+        pixel_size_eff = 100e-6
+    if (not np.isfinite(pixel_size_eff)) or pixel_size_eff <= 0.0:
+        pixel_size_eff = 100e-6
+    return pixel_size_eff
+
+
 def calculate_phi(
     H, K, L, av, cv,
     wavelength_array,
@@ -311,12 +422,14 @@ def calculate_phi(
     R_z_R_y,
     R_ZY_n,
     P0, unit_x,
-    save_flag, q_data, q_count, i_peaks_index
+    save_flag, q_data, q_count, i_peaks_index,
+    pixel_size_m,
+    sample_weights,
+    n2_sample_array,
 ):
     gz0 = 2.0*pi*(L/cv)
     gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
     G   = sqrt(gr0*gr0 + gz0*gz0)
-    n2  = 1
     G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
     max_I_sign0 = -1.0
     max_x_sign0 = np.nan
@@ -361,6 +474,24 @@ def calculate_phi(
     P0_rot[0] = 0.0
 
     n_samp = beam_x_array.size
+    if n2_sample_array is None or np.asarray(n2_sample_array).reshape(-1).size != n_samp:
+        n2_sample_array = _legacy_kernel_n2_sample_array_from_angstrom(
+            wavelength_array,
+            nominal_n2=n2,
+            sample_count=n_samp,
+        )
+    else:
+        n2_sample_array = np.ascontiguousarray(
+            np.asarray(n2_sample_array, dtype=np.complex128).reshape(-1),
+            dtype=np.complex128,
+        )
+    if sample_weights is not None:
+        sample_weights = np.ascontiguousarray(
+            np.asarray(sample_weights, dtype=np.float64).reshape(-1),
+            dtype=np.float64,
+        )
+        if sample_weights.size != n_samp:
+            sample_weights = None
 
     u_ref = np.array([0.0,0.0,-1.0])
     e1_temp = np.cross(n_surf, u_ref)
@@ -388,8 +519,20 @@ def calculate_phi(
     e2_temp = np.cross(n_surf, e1_temp)
 
     for i_samp in range(n_samp):
+        sample_weight = 1.0
+        if sample_weights is not None:
+            sample_weight = sample_weights[i_samp]
+            if not np.isfinite(sample_weight) or sample_weight <= 0.0:
+                continue
+
         lam_samp = wavelength_array[i_samp]
+        if not np.isfinite(lam_samp) or lam_samp <= 0.0:
+            continue
         k_mag = 2.0*pi / lam_samp
+        n2_samp = n2_sample_array[i_samp]
+        n2_sq_real = float(np.real(n2_samp * n2_samp))
+        if not np.isfinite(n2_sq_real) or n2_sq_real < 0.0:
+            continue
 
         bx = beam_x_array[i_samp]
         by = beam_y_array[i_samp]
@@ -423,9 +566,9 @@ def calculate_phi(
         p1 = projected_incident[0]*e1_temp[0] + projected_incident[1]*e1_temp[1] + projected_incident[2]*e1_temp[2]
         p2 = projected_incident[0]*e2_temp[0] + projected_incident[1]*e2_temp[1] + projected_incident[2]*e2_temp[2]
         phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
-        th_t = acos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
+        th_t = transmit_angle_grazing(th_i_prime, n2_samp)
 
-        k_scat = k_mag*sqrt(np.real(n2)*np.real(n2))
+        k_scat = k_mag * sqrt(max(n2_sq_real, 0.0))
         k_x_scat = k_scat*cos(th_t)*sin(phi_i_prime)
         k_y_scat = k_scat*cos(th_t)*cos(phi_i_prime)
         k_z_scat = k_scat*sin(th_t)
@@ -467,15 +610,15 @@ def calculate_phi(
             x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
             y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
 
-            rpx = int(round(center[0] - y_det/100e-6))
-            cpx = int(round(center[1] + x_det/100e-6))
+            rpx = int(round(center[0] - y_det/pixel_size_m))
+            cpx = int(round(center[1] + x_det/pixel_size_m))
             if not (0 <= rpx < image_size and 0 <= cpx < image_size):
                 # Ray goes off the detector boundary
                 DEBUG_LOG.append(("intersection-detector", False, H, K, L, Qx, Qy, Qz, 0.0))
                 continue
 
             # Multiply reflection_intensity by I_Q and Debye-Waller
-            val = reflection_intensity * I_Q * \
+            val = reflection_intensity * sample_weight * I_Q * \
                   exp(-Qz*Qz * debye_x*debye_x) * \
                   exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y)
             image[rpx, cpx] += val
@@ -523,12 +666,16 @@ def process_peaks_parallel_debug(
     theta_initial_deg,
     cor_angle_deg,
     unit_x, n_detector,
-    save_flag
+    save_flag,
+    sample_weights=None,
+    pixel_size_m=100e-6,
+    n2_sample_array_override=None,
 ):
     gamma_rad = gamma_deg*(pi/180.0)
     Gamma_rad = Gamma_deg*(pi/180.0)
     chi_rad   = chi_deg*(pi/180.0)
     psi_rad   = psi_deg*(pi/180.0)
+    pixel_size_m = _normalize_debug_pixel_size_m(pixel_size_m)
 
     sigma_rad   = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)  # not used in example
@@ -594,6 +741,24 @@ def process_peaks_parallel_debug(
 
     num_peaks= miller.shape[0]
     max_solutions=2000000
+    (
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        wavelength_array,
+        sample_weights,
+        n2_sample_array,
+    ) = _normalize_debug_sample_inputs(
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        wavelength_array,
+        sample_weights=sample_weights,
+        nominal_n2=n2,
+        n2_sample_array_override=n2_sample_array_override,
+    )
 
     if save_flag==1:
         q_data= np.full((num_peaks,max_solutions,5), np.nan, dtype=np.float64)
@@ -634,7 +799,10 @@ def process_peaks_parallel_debug(
             R_ZY_n,
             P0, 
             unit_x,
-            save_flag, q_data, q_count, i_pk
+            save_flag, q_data, q_count, i_pk,
+            pixel_size_m,
+            sample_weights,
+            n2_sample_array,
         )
         max_positions[i_pk,0] = mx0
         max_positions[i_pk,1] = my0
@@ -681,6 +849,9 @@ def process_qr_rods_parallel_debug(
     n_detector,
     save_flag,
     psi_z_deg=0.0,
+    sample_weights=None,
+    pixel_size_m=100e-6,
+    n2_sample_array_override=None,
 ):
     """Wrapper to debug-process rods instead of individual reflections.
 
@@ -725,6 +896,9 @@ def process_qr_rods_parallel_debug(
         unit_x,
         n_detector,
         save_flag,
+        sample_weights=sample_weights,
+        pixel_size_m=pixel_size_m,
+        n2_sample_array_override=n2_sample_array_override,
     )
 
     return (*result, degeneracy)

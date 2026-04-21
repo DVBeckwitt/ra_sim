@@ -17,6 +17,7 @@ RA-SIM uses `config/debug.yaml` as the primary debug and logging configuration.
 Important points:
 
 - `debug.global.disable_all: true` is the master kill switch for user-facing debug/log output
+- the simulation GUI launcher can temporarily force diagnostics off or on for one run without rewriting `config/debug.yaml`
 - `debug.console.enabled` controls console debug printing
 - geometry-fit and mosaic-fit log file creation have dedicated toggles
 - optional retained caches are controlled separately from logging output

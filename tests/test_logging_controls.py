@@ -31,7 +31,11 @@ def _make_config_dir(
         },
     )
     if debug is not None:
-        _write_yaml(cfg / "debug.yaml", debug)
+        debug_payload = dict(debug)
+        debug_root = dict(debug_payload.get("debug", {}))
+        debug_root.setdefault("global", {"disable_all": False})
+        debug_payload["debug"] = debug_root
+        _write_yaml(cfg / "debug.yaml", debug_payload)
     _write_yaml(cfg / "materials.yaml", {})
     _write_yaml(cfg / "instrument.yaml", instrument or {})
     return cfg
@@ -44,13 +48,24 @@ def _reset_loader_cache() -> None:
     loader.clear_config_cache()
 
 
-def test_is_logging_disabled_accepts_preferred_and_legacy_flags() -> None:
+def test_is_logging_disabled_accepts_preferred_and_legacy_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path, debug={"debug": {"global": {"disable_all": False}}})
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
     assert is_logging_disabled({"RA_SIM_DISABLE_ALL_LOGGING": "1"})
     assert is_logging_disabled({"RA_SIM_DISABLE_LOGGING": "true"})
     assert not is_logging_disabled({})
 
 
-def test_global_logging_disable_suppresses_debug_mode(monkeypatch) -> None:
+def test_global_logging_disable_suppresses_debug_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path, debug={"debug": {"global": {"disable_all": False}}})
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
     monkeypatch.setenv("RA_SIM_DEBUG", "1")
     monkeypatch.setenv("RA_SIM_DISABLE_ALL_LOGGING", "1")
 
@@ -79,7 +94,12 @@ def test_runtime_update_trace_respects_debug_yaml(
 ) -> None:
     cfg = _make_config_dir(
         tmp_path,
-        debug={"debug": {"runtime_update_trace": {"enabled": False}}},
+        debug={
+            "debug": {
+                "global": {"disable_all": False},
+                "runtime_update_trace": {"enabled": False},
+            }
+        },
     )
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
     trace_path = tmp_path / "runtime_update_trace_20260409.log"
@@ -93,7 +113,20 @@ def test_runtime_update_trace_respects_debug_yaml(
     assert not trace_path.exists()
 
 
-def test_projection_debug_logging_respects_global_disable_aliases(monkeypatch) -> None:
+def test_projection_debug_logging_respects_global_disable_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "global": {"disable_all": False},
+                "projection_debug": {"enabled": True},
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
     monkeypatch.delenv("RA_SIM_DISABLE_ALL_LOGGING", raising=False)
     monkeypatch.delenv("RA_SIM_DISABLE_LOGGING", raising=False)
     monkeypatch.delenv("RA_SIM_DISABLE_PROJECTION_DEBUG", raising=False)
@@ -113,14 +146,24 @@ def test_projection_debug_logging_respects_debug_yaml(
 ) -> None:
     cfg = _make_config_dir(
         tmp_path,
-        debug={"debug": {"projection_debug": {"enabled": False}}},
+        debug={
+            "debug": {
+                "global": {"disable_all": False},
+                "projection_debug": {"enabled": False},
+            }
+        },
     )
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
 
     assert not projection_debug.projection_debug_logging_enabled()
 
 
-def test_intersection_cache_logging_respects_global_disable_aliases(monkeypatch) -> None:
+def test_intersection_cache_logging_respects_global_disable_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path, debug={"debug": {"global": {"disable_all": False}}})
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
     monkeypatch.delenv("RA_SIM_DISABLE_ALL_LOGGING", raising=False)
     monkeypatch.delenv("RA_SIM_DISABLE_LOGGING", raising=False)
     monkeypatch.setenv("RA_SIM_LOG_INTERSECTION_CACHE", "1")
@@ -140,7 +183,12 @@ def test_intersection_cache_logging_respects_debug_yaml(
 ) -> None:
     cfg = _make_config_dir(
         tmp_path,
-        debug={"debug": {"intersection_cache": {"enabled": False}}},
+        debug={
+            "debug": {
+                "global": {"disable_all": False},
+                "intersection_cache": {"enabled": False},
+            }
+        },
     )
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
 
@@ -159,7 +207,12 @@ def test_geometry_fit_debug_sections_respect_debug_yaml(
 ) -> None:
     cfg = _make_config_dir(
         tmp_path,
-        debug={"debug": {"geometry_fit": {"log_files": True, "extra_sections": False}}},
+        debug={
+            "debug": {
+                "global": {"disable_all": False},
+                "geometry_fit": {"log_files": True, "extra_sections": False},
+            }
+        },
         instrument={"instrument": {"fit": {"geometry": {"debug_logging": True}}}},
     )
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))

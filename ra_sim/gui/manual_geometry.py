@@ -18,6 +18,7 @@ from ra_sim.fitting.background_peak_matching import (
     _refine_peak_center as _background_refine_peak_center,
 )
 from ra_sim.gui import controllers as gui_controllers
+from ra_sim.gui import mosaic_top_selection as gui_mosaic_top
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
 from ra_sim.simulation.exact_cake_portable import (
@@ -192,9 +193,8 @@ def _canonicalize_manual_entry_branch_fields(
         return
 
     entry.pop("source_branch_index", None)
-    if (
-        not preserve_legacy_peak_when_unresolved
-        and (legacy_peak_idx in {0, 1} or legacy_peak_idx is None)
+    if not preserve_legacy_peak_when_unresolved and (
+        legacy_peak_idx in {0, 1} or legacy_peak_idx is None
     ):
         entry.pop("source_peak_index", None)
 
@@ -220,8 +220,10 @@ def _entry_has_explicit_trusted_reflection_identity(
         return False
     reflection_idx = _coerce_nonnegative_index(entry.get("source_reflection_index"))
     namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
-    return reflection_idx is not None and namespace == "full_reflection" and bool(
-        entry.get("source_reflection_is_full", False)
+    return (
+        reflection_idx is not None
+        and namespace == "full_reflection"
+        and bool(entry.get("source_reflection_is_full", False))
     )
 
 
@@ -310,9 +312,8 @@ def geometry_manual_canonicalize_live_source_entry(
     table_idx = _coerce_nonnegative_index(normalized.get("source_table_index"))
     row_idx = _coerce_nonnegative_index(normalized.get("source_row_index"))
     trust_proven = bool(provenance_signature_matches or provenance_revision_matches)
-    map_len_matches = (
-        bool(reflection_index_map)
-        and (expected_count is None or int(len(reflection_index_map)) == int(expected_count))
+    map_len_matches = bool(reflection_index_map) and (
+        expected_count is None or int(len(reflection_index_map)) == int(expected_count)
     )
     if (
         trust_proven
@@ -351,16 +352,13 @@ def refresh_geometry_manual_pair_entry(
     *,
     background_display_shape: Sequence[object] | None,
     background_display_to_native_detector_coords: (
-        Callable[[float, float], tuple[float, float] | None]
-        | None
+        Callable[[float, float], tuple[float, float] | None] | None
     ),
     caked_angles_to_background_display_coords: (
-        Callable[[float, float], tuple[float | None, float | None]]
-        | None
+        Callable[[float, float], tuple[float | None, float | None]] | None
     ) = None,
     native_detector_coords_to_caked_display_coords: (
-        Callable[[float, float], tuple[float, float] | None]
-        | None
+        Callable[[float, float], tuple[float, float] | None] | None
     ) = None,
     rotate_point_for_display: Callable[
         [float, float, tuple[int, ...], int],
@@ -837,8 +835,7 @@ def geometry_manual_preview_match_confidence(
     use_caked_space: bool,
     radial_axis: Sequence[float] | None = None,
     azimuth_axis: Sequence[float] | None = None,
-    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float]
-    | None = None,
+    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] | None = None,
 ) -> float:
     """Return the predicted match confidence for one chosen manual-placement peak."""
 
@@ -868,24 +865,16 @@ def geometry_manual_preview_match_confidence(
     )
 
     try:
-        sim_col_local = float(
-            candidate.get("sim_col_local", candidate.get("sim_col", np.nan))
-        )
-        sim_row_local = float(
-            candidate.get("sim_row_local", candidate.get("sim_row", np.nan))
-        )
+        sim_col_local = float(candidate.get("sim_col_local", candidate.get("sim_col", np.nan)))
+        sim_row_local = float(candidate.get("sim_row_local", candidate.get("sim_row", np.nan)))
     except Exception:
         return float("nan")
 
     if use_caked_space:
         radial_axis_arr = np.asarray(radial_axis, dtype=float)
         azimuth_axis_arr = np.asarray(azimuth_axis, dtype=float)
-        peak_col_local = float(
-            axis_to_image_index(float(peak_col), radial_axis_arr)
-        )
-        peak_row_local = float(
-            axis_to_image_index(float(peak_row), azimuth_axis_arr)
-        )
+        peak_col_local = float(axis_to_image_index(float(peak_col), radial_axis_arr))
+        peak_row_local = float(axis_to_image_index(float(peak_row), azimuth_axis_arr))
         if not np.isfinite(sim_col_local):
             sim_col_local = float(
                 axis_to_image_index(
@@ -978,9 +967,7 @@ def geometry_manual_preview_match_confidence(
     )
     prom_sigma = float(summit_record.get("prominence_sigma", np.nan))
     if not (
-        np.isfinite(center_col_local)
-        and np.isfinite(center_row_local)
-        and np.isfinite(prom_sigma)
+        np.isfinite(center_col_local) and np.isfinite(center_row_local) and np.isfinite(prom_sigma)
     ):
         return float("nan")
 
@@ -1032,15 +1019,11 @@ def normalize_geometry_manual_pair_entry(
         raw_x_local = entry.get(x_key)
         raw_y_local = entry.get(y_key)
         try:
-            caked_x_val = (
-                float(raw_x_local) if raw_x_local is not None else float("nan")
-            )
+            caked_x_val = float(raw_x_local) if raw_x_local is not None else float("nan")
         except Exception:
             caked_x_val = float("nan")
         try:
-            caked_y_val = (
-                float(raw_y_local) if raw_y_local is not None else float("nan")
-            )
+            caked_y_val = float(raw_y_local) if raw_y_local is not None else float("nan")
         except Exception:
             caked_y_val = float("nan")
         if np.isfinite(caked_x_val) and np.isfinite(caked_y_val):
@@ -1069,9 +1052,7 @@ def normalize_geometry_manual_pair_entry(
             pass
 
     if entry.get("source_reflection_namespace") is not None:
-        normalized["source_reflection_namespace"] = str(
-            entry.get("source_reflection_namespace")
-        )
+        normalized["source_reflection_namespace"] = str(entry.get("source_reflection_namespace"))
     if "source_reflection_is_full" in entry:
         normalized["source_reflection_is_full"] = bool(
             entry.get("source_reflection_is_full", False)
@@ -1080,9 +1061,40 @@ def normalize_geometry_manual_pair_entry(
     if entry.get("source_label") is not None:
         normalized["source_label"] = str(entry.get("source_label"))
     if "stale_caked_fields" in entry:
-        normalized["stale_caked_fields"] = bool(
-            entry.get("stale_caked_fields", False)
-        )
+        normalized["stale_caked_fields"] = bool(entry.get("stale_caked_fields", False))
+    for key in ("branch_id", "branch_source", "selection_reason"):
+        if entry.get(key) is not None:
+            normalized[key] = str(entry.get(key))
+    if entry.get("best_sample_index") is not None:
+        try:
+            normalized["best_sample_index"] = int(entry.get("best_sample_index"))
+        except Exception:
+            pass
+    if entry.get("mosaic_weight") is not None:
+        try:
+            mosaic_weight = float(entry.get("mosaic_weight"))
+        except Exception:
+            mosaic_weight = float("nan")
+        if np.isfinite(mosaic_weight):
+            normalized["mosaic_weight"] = float(mosaic_weight)
+    rank_key = entry.get("mosaic_top_rank_key")
+    if isinstance(rank_key, (tuple, list)):
+        normalized_rank: list[object] = []
+        for item in rank_key:
+            if isinstance(item, np.generic):
+                item = item.item()
+            if isinstance(item, (int, np.integer)):
+                normalized_rank.append(int(item))
+                continue
+            if isinstance(item, (float, np.floating)):
+                item_float = float(item)
+                if np.isfinite(item_float):
+                    normalized_rank.append(item_float)
+                continue
+            if isinstance(item, str):
+                normalized_rank.append(str(item))
+        if normalized_rank:
+            normalized["mosaic_top_rank_key"] = tuple(normalized_rank)
 
     raw_x = entry.get("raw_x")
     raw_y = entry.get("raw_y")
@@ -1105,15 +1117,11 @@ def normalize_geometry_manual_pair_entry(
         raw_x_local = entry.get(x_key)
         raw_y_local = entry.get(y_key)
         try:
-            detector_x_val = (
-                float(raw_x_local) if raw_x_local is not None else float("nan")
-            )
+            detector_x_val = float(raw_x_local) if raw_x_local is not None else float("nan")
         except Exception:
             detector_x_val = float("nan")
         try:
-            detector_y_val = (
-                float(raw_y_local) if raw_y_local is not None else float("nan")
-            )
+            detector_y_val = float(raw_y_local) if raw_y_local is not None else float("nan")
         except Exception:
             detector_y_val = float("nan")
         if np.isfinite(detector_x_val) and np.isfinite(detector_y_val):
@@ -1124,15 +1132,11 @@ def normalize_geometry_manual_pair_entry(
         raw_x_local = entry.get(x_key)
         raw_y_local = entry.get(y_key)
         try:
-            caked_x_val = (
-                float(raw_x_local) if raw_x_local is not None else float("nan")
-            )
+            caked_x_val = float(raw_x_local) if raw_x_local is not None else float("nan")
         except Exception:
             caked_x_val = float("nan")
         try:
-            caked_y_val = (
-                float(raw_y_local) if raw_y_local is not None else float("nan")
-            )
+            caked_y_val = float(raw_y_local) if raw_y_local is not None else float("nan")
         except Exception:
             caked_y_val = float("nan")
         if np.isfinite(caked_x_val) and np.isfinite(caked_y_val):
@@ -1147,15 +1151,11 @@ def normalize_geometry_manual_pair_entry(
         raw_x_local = entry.get(x_key)
         raw_y_local = entry.get(y_key)
         try:
-            refined_x_val = (
-                float(raw_x_local) if raw_x_local is not None else float("nan")
-            )
+            refined_x_val = float(raw_x_local) if raw_x_local is not None else float("nan")
         except Exception:
             refined_x_val = float("nan")
         try:
-            refined_y_val = (
-                float(raw_y_local) if raw_y_local is not None else float("nan")
-            )
+            refined_y_val = float(raw_y_local) if raw_y_local is not None else float("nan")
         except Exception:
             refined_y_val = float("nan")
         if np.isfinite(refined_x_val) and np.isfinite(refined_y_val):
@@ -1172,9 +1172,7 @@ def normalize_geometry_manual_pair_entry(
         )
     try:
         placement_error_px = (
-            float(placement_error_value)
-            if placement_error_value is not None
-            else float("nan")
+            float(placement_error_value) if placement_error_value is not None else float("nan")
         )
     except Exception:
         placement_error_px = float("nan")
@@ -1318,7 +1316,9 @@ def peak_maximum_near_in_image(
         if len(normalized_extent) == 4 and all(np.isfinite(value) for value in normalized_extent):
             extent = normalized_extent
 
-    def _display_axis_to_index(value: float, *, axis_start: float, axis_end: float, size: int) -> float:
+    def _display_axis_to_index(
+        value: float, *, axis_start: float, axis_end: float, size: int
+    ) -> float:
         span = float(axis_end) - float(axis_start)
         if int(size) <= 0 or not np.isfinite(span) or abs(span) <= 1.0e-12:
             return float(value)
@@ -1330,7 +1330,9 @@ def peak_maximum_near_in_image(
             )
         )
 
-    def _index_to_display_axis(index_value: float, *, axis_start: float, axis_end: float, size: int) -> float:
+    def _index_to_display_axis(
+        index_value: float, *, axis_start: float, axis_end: float, size: int
+    ) -> float:
         span = float(axis_end) - float(axis_start)
         if int(size) <= 0 or not np.isfinite(span) or abs(span) <= 1.0e-12:
             return float(index_value)
@@ -1389,6 +1391,8 @@ def peak_maximum_near_in_image(
             size=height,
         ),
     )
+
+
 def geometry_manual_apply_refined_simulated_override(
     entry: dict[str, object] | None,
     resolved_source_entry: dict[str, object] | None,
@@ -1554,12 +1558,8 @@ def update_geometry_manual_peak_record_cache(
                 normalized_source_key = None
 
     try:
-        refined_tth = (
-            float(refined_caked[0]) if refined_caked is not None else float("nan")
-        )
-        refined_phi = (
-            float(refined_caked[1]) if refined_caked is not None else float("nan")
-        )
+        refined_tth = float(refined_caked[0]) if refined_caked is not None else float("nan")
+        refined_phi = float(refined_caked[1]) if refined_caked is not None else float("nan")
     except Exception:
         refined_tth = float("nan")
         refined_phi = float("nan")
@@ -1662,9 +1662,7 @@ def update_geometry_manual_peak_record_cache(
 
     if isinstance(peak_overlay_cache, dict):
         overlay_records = peak_overlay_cache.get("records")
-        matched_overlay_indexes: list[int] = _collect_matching_indexes(
-            overlay_records
-        )
+        matched_overlay_indexes: list[int] = _collect_matching_indexes(overlay_records)
         if isinstance(overlay_records, list):
             if len(matched_overlay_indexes) == 1:
                 raw_record = overlay_records[matched_overlay_indexes[0]]
@@ -1864,11 +1862,9 @@ def geometry_manual_candidate_source_key(
 
     if not isinstance(entry, dict):
         return None
-    source_branch_index, _source_branch_source, _source_branch_reason = (
-        resolve_canonical_branch(
-            _geometry_manual_identity_resolution_entry(entry),
-            allow_legacy_peak_fallback=True,
-        )
+    source_branch_index, _source_branch_source, _source_branch_reason = resolve_canonical_branch(
+        _geometry_manual_identity_resolution_entry(entry),
+        allow_legacy_peak_fallback=True,
     )
     if source_branch_index in {0, 1}:
         source_anchor = (
@@ -2072,9 +2068,7 @@ def _geometry_manual_finite_point(
 def _geometry_manual_entry_refined_sim_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    current_view_point = _geometry_manual_entry_explicit_current_view_display_point(
-        entry
-    )
+    current_view_point = _geometry_manual_entry_explicit_current_view_display_point(entry)
     if current_view_point is not None:
         return current_view_point
 
@@ -2164,9 +2158,7 @@ def _geometry_manual_entry_detector_display_point(
         return detector_point
 
     current_view_point = _geometry_manual_entry_explicit_current_view_display_point(entry)
-    if current_view_point is None and not _geometry_manual_entry_has_stale_caked_fields(
-        entry
-    ):
+    if current_view_point is None and not _geometry_manual_entry_has_stale_caked_fields(entry):
         current_view_point = _geometry_manual_finite_point(
             entry,
             (
@@ -2235,9 +2227,7 @@ def _geometry_manual_entry_matching_current_view_point(
 def _geometry_manual_entry_display_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    current_view_point = _geometry_manual_entry_explicit_current_view_display_point(
-        entry
-    )
+    current_view_point = _geometry_manual_entry_explicit_current_view_display_point(entry)
     if current_view_point is not None:
         return current_view_point
 
@@ -2264,6 +2254,366 @@ def _geometry_manual_entry_active_view_point(
     if bool(use_caked_display):
         return _geometry_manual_entry_matching_current_view_point(entry)
     return _geometry_manual_entry_current_view_point(entry)
+
+
+def normalize_geometry_point_frame(frame: object) -> str:
+    """Return the compact frame vocabulary used by picker/provider parity."""
+
+    raw = str(frame or "").strip().lower()
+    if raw in {
+        "display",
+        "current_view_display",
+        "caked_display",
+        "detector_display",
+        "fit_detector",
+    }:
+        return "display"
+    if raw in {
+        "detector_native",
+        "native_detector",
+        "native_detector_coords",
+        "background_detector",
+    }:
+        return "detector_native"
+    if raw in {
+        "caked_2theta_phi",
+        "caked",
+        "two_theta_phi",
+        "two_theta_deg_phi_deg",
+    }:
+        return "caked_2theta_phi"
+    if raw in {"caked_qr_qz", "qr_qz", "q_space"}:
+        return "caked_qr_qz"
+    return "unknown"
+
+
+def _geometry_manual_json_value(value: object) -> object:
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_geometry_manual_json_value(item) for item in value.tolist()]
+    if isinstance(value, tuple):
+        return [_geometry_manual_json_value(item) for item in value]
+    if isinstance(value, list):
+        return [_geometry_manual_json_value(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            str(key): _geometry_manual_json_value(raw_value)
+            for key, raw_value in sorted(value.items(), key=lambda item: str(item[0]))
+            if raw_value is not None
+        }
+    if isinstance(value, (str, bool, int)) or value is None:
+        return value
+    if isinstance(value, float):
+        return float(value)
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except Exception:
+        pass
+    try:
+        numeric = float(value)  # type: ignore[arg-type]
+    except Exception:
+        return None
+    if not np.isfinite(numeric):
+        return None
+    if float(numeric).is_integer():
+        return int(numeric)
+    return float(numeric)
+
+
+def canonical_geometry_source_identity(
+    row_or_entry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Return a stable JSON source identity for saved manual geometry pairs."""
+
+    if not isinstance(row_or_entry, Mapping):
+        return {}
+    identity: dict[str, object] = {}
+    normalized_hkl = _default_normalize_hkl_key(row_or_entry.get("hkl", row_or_entry.get("label")))
+    if normalized_hkl is not None:
+        identity["normalized_hkl"] = [int(v) for v in normalized_hkl]
+
+    for key in (
+        "source_table_index",
+        "source_reflection_index",
+        "source_row_index",
+        "source_peak_index",
+        "q_group_key",
+        "source_q_group_key",
+        "branch_group_key",
+        "source_branch_index",
+        "source_label",
+        "label",
+    ):
+        value = row_or_entry.get(key)
+        if value is None:
+            continue
+        json_value = _geometry_manual_json_value(value)
+        if json_value is not None:
+            identity[key] = json_value
+    if row_or_entry.get("source_reflection_namespace") is not None:
+        identity["source_reflection_namespace"] = str(
+            row_or_entry.get("source_reflection_namespace")
+        )
+    source_reflection_is_full = row_or_entry.get("source_reflection_is_full")
+    if source_reflection_is_full is not None:
+        identity["source_reflection_is_full"] = bool(
+            source_reflection_is_full
+        )
+    return identity
+
+
+def _geometry_manual_saved_background_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[tuple[float, float] | None, str, str]:
+    if not isinstance(entry, Mapping):
+        return None, "unknown", "unknown"
+    point = _geometry_manual_finite_point(entry, (("x", "y"),))
+    if point is not None:
+        return point, "display", "manual_picker_saved"
+    point = _geometry_manual_finite_point(entry, (("display_col", "display_row"),))
+    if point is not None:
+        return point, "display", "manual_picker_cache"
+    point = _geometry_manual_finite_point(
+        entry,
+        (("background_detector_x", "background_detector_y"), ("detector_x", "detector_y")),
+    )
+    if point is not None:
+        return point, "detector_native", "manual_picker_saved"
+    point = _geometry_manual_finite_point(
+        entry,
+        (
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+        ),
+    )
+    if point is not None:
+        return point, "caked_2theta_phi", "manual_picker_saved"
+    return None, "unknown", "unknown"
+
+
+def _geometry_manual_saved_simulated_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[tuple[float, float] | None, str, str]:
+    if not isinstance(entry, Mapping):
+        return None, "unknown", "unknown"
+    point = _geometry_manual_finite_point(entry, (("refined_sim_x", "refined_sim_y"),))
+    if point is not None:
+        return point, "display", "manual_picker_saved"
+    point = _geometry_manual_finite_point(entry, (("sim_col", "sim_row"),))
+    if point is not None:
+        return point, "display", "manual_picker_cache"
+    point = _geometry_manual_finite_point(entry, (("display_col", "display_row"),))
+    if point is not None:
+        return point, "display", "manual_picker_cache"
+    point = _geometry_manual_finite_point(
+        entry,
+        (("refined_sim_native_x", "refined_sim_native_y"),),
+    )
+    if point is not None:
+        return point, "detector_native", "manual_picker_saved"
+    point = _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("two_theta_deg", "phi_deg"),
+        ),
+    )
+    if point is not None:
+        return point, "caked_2theta_phi", "manual_picker_saved"
+    return None, "unknown", "unknown"
+
+
+def _geometry_manual_point_changed(
+    before: tuple[float, float] | None,
+    after: tuple[float, float] | None,
+    *,
+    tol: float = 1.0e-6,
+) -> bool:
+    if before is None and after is None:
+        return False
+    if before is None or after is None:
+        return True
+    return bool(
+        abs(float(before[0]) - float(after[0])) > float(tol)
+        or abs(float(before[1]) - float(after[1])) > float(tol)
+    )
+
+
+def build_geometry_manual_picker_truth_pairs(
+    background_index: int,
+    saved_entries: Sequence[Mapping[str, object]] | None,
+    *,
+    refresh_pair_entry: Callable[[Mapping[str, object] | None], Mapping[str, object] | None]
+    | None = None,
+) -> list[dict[str, object]]:
+    """Build read-only manual-picker truth rows from saved manual pair entries."""
+
+    truth_pairs: list[dict[str, object]] = []
+    for pair_index, raw_entry in enumerate(saved_entries or ()):
+        if not isinstance(raw_entry, Mapping):
+            truth_pairs.append(
+                {
+                    "pair_index": int(pair_index),
+                    "background_index": int(background_index),
+                    "manual_pair_order_key": [int(background_index), int(pair_index)],
+                    "manual_picker_truth_available": False,
+                    "missing_truth_fields": ["saved_entry"],
+                }
+            )
+            continue
+        saved_entry = dict(raw_entry)
+        background_point, background_frame, background_source = (
+            _geometry_manual_saved_background_point(saved_entry)
+        )
+        simulated_point, simulated_frame, simulated_source = _geometry_manual_saved_simulated_point(
+            saved_entry
+        )
+        refreshed_entry: dict[str, object] | None = None
+        if callable(refresh_pair_entry):
+            try:
+                refreshed = refresh_pair_entry(dict(saved_entry))
+            except Exception:
+                refreshed = None
+            if isinstance(refreshed, Mapping):
+                refreshed_entry = dict(refreshed)
+
+        post_background_point = None
+        post_simulated_point = None
+        post_background_source = background_source
+        post_simulated_source = simulated_source
+        if refreshed_entry is not None:
+            post_background_point, _post_bg_frame, post_background_source = (
+                _geometry_manual_saved_background_point(refreshed_entry)
+            )
+            post_simulated_point, _post_sim_frame, post_simulated_source = (
+                _geometry_manual_saved_simulated_point(refreshed_entry)
+            )
+
+        missing_fields: list[str] = []
+        if _default_normalize_hkl_key(saved_entry.get("hkl", saved_entry.get("label"))) is None:
+            missing_fields.append("normalized_hkl")
+        if background_point is None:
+            missing_fields.append("manual_background_point")
+        if simulated_point is None:
+            missing_fields.append("manual_selected_simulated_point")
+        source_locator_available = any(
+            saved_entry.get(key) is not None
+            for key in (
+                "source_table_index",
+                "source_reflection_index",
+                "source_row_index",
+                "source_peak_index",
+                "source_label",
+            )
+        )
+        if not source_locator_available:
+            missing_fields.append("manual_picker_selected_source_identity")
+        manual_distance = None
+        if (
+            background_point is not None
+            and simulated_point is not None
+            and normalize_geometry_point_frame(background_frame)
+            == normalize_geometry_point_frame(simulated_frame)
+            and normalize_geometry_point_frame(background_frame) != "unknown"
+        ):
+            manual_distance = float(
+                np.hypot(
+                    float(simulated_point[0]) - float(background_point[0]),
+                    float(simulated_point[1]) - float(background_point[1]),
+                )
+            )
+
+        branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+            saved_entry,
+            allow_legacy_peak_fallback=True,
+        )
+        normalized_hkl = _default_normalize_hkl_key(
+            saved_entry.get("hkl", saved_entry.get("label"))
+        )
+        semantic_pair_key = {
+            "background_index": int(background_index),
+            "q_group_key": _geometry_manual_json_value(saved_entry.get("q_group_key")),
+            "branch_group_key": _geometry_manual_json_value(saved_entry.get("branch_group_key")),
+            "normalized_hkl": (
+                [int(v) for v in normalized_hkl] if normalized_hkl is not None else None
+            ),
+            "source_branch_index": int(branch_idx) if branch_idx is not None else None,
+        }
+        background_frame = normalize_geometry_point_frame(background_frame)
+        simulated_frame = normalize_geometry_point_frame(simulated_frame)
+        truth_pairs.append(
+            {
+                "pair_index": int(pair_index),
+                "background_index": int(background_index),
+                "manual_pair_order_key": [int(background_index), int(pair_index)],
+                "semantic_pair_key": semantic_pair_key,
+                "q_group_key": _geometry_manual_json_value(saved_entry.get("q_group_key")),
+                "branch_group_key": _geometry_manual_json_value(
+                    saved_entry.get("branch_group_key")
+                ),
+                "normalized_hkl": semantic_pair_key["normalized_hkl"],
+                "source_branch_index": semantic_pair_key["source_branch_index"],
+                "manual_picker_selected_source_identity_canonical": (
+                    canonical_geometry_source_identity(saved_entry)
+                ),
+                "manual_background_point": (
+                    [float(background_point[0]), float(background_point[1])]
+                    if background_point is not None
+                    else None
+                ),
+                "manual_background_frame": background_frame,
+                "manual_background_point_source": background_source,
+                "manual_selected_simulated_point": (
+                    [float(simulated_point[0]), float(simulated_point[1])]
+                    if simulated_point is not None
+                    else None
+                ),
+                "manual_selected_simulated_frame": simulated_frame,
+                "manual_simulated_point_source": simulated_source,
+                "manual_selected_to_background_distance_px": manual_distance,
+                "manual_picker_truth_available": not missing_fields,
+                "missing_truth_fields": missing_fields,
+                "manual_truth_mutated_by_refresh": bool(
+                    refreshed_entry is not None
+                    and (
+                        _geometry_manual_point_changed(
+                            background_point,
+                            post_background_point,
+                        )
+                        or _geometry_manual_point_changed(
+                            simulated_point,
+                            post_simulated_point,
+                        )
+                    )
+                ),
+                "pre_refresh_manual_background_point": (
+                    [float(background_point[0]), float(background_point[1])]
+                    if background_point is not None
+                    else None
+                ),
+                "post_refresh_manual_background_point": (
+                    [float(post_background_point[0]), float(post_background_point[1])]
+                    if post_background_point is not None
+                    else None
+                ),
+                "pre_refresh_manual_simulated_point": (
+                    [float(simulated_point[0]), float(simulated_point[1])]
+                    if simulated_point is not None
+                    else None
+                ),
+                "post_refresh_manual_simulated_point": (
+                    [float(post_simulated_point[0]), float(post_simulated_point[1])]
+                    if post_simulated_point is not None
+                    else None
+                ),
+                "post_refresh_manual_background_point_source": post_background_source,
+                "post_refresh_manual_simulated_point_source": post_simulated_source,
+            }
+        )
+    return truth_pairs
 
 
 def _geometry_manual_entry_native_point(
@@ -2328,13 +2678,9 @@ def _geometry_manual_resolve_nearest_candidate_index(
     entry: Mapping[str, object] | None,
     indexed_candidates: Sequence[tuple[int, Mapping[str, object]]],
 ) -> int | None:
-    prefer_detector_sim_for_stale_entry = _geometry_manual_entry_has_stale_caked_fields(
-        entry
-    )
+    prefer_detector_sim_for_stale_entry = _geometry_manual_entry_has_stale_caked_fields(entry)
     entry_native_hint = _geometry_manual_entry_resolver_native_hint_point(entry)
-    entry_stronger_native_hint = _geometry_manual_entry_stronger_native_hint_point(
-        entry
-    )
+    entry_stronger_native_hint = _geometry_manual_entry_stronger_native_hint_point(entry)
     native_candidate_point_getter = _geometry_manual_entry_native_point
     if entry_stronger_native_hint is not None:
         native_candidate_point_getter = _geometry_manual_entry_resolver_native_hint_point
@@ -2442,11 +2788,7 @@ def _geometry_manual_resolve_nearest_candidate_index(
                 + display_point_getter_pairs
                 + detector_point_getter_pairs
             )
-        point_getter_pairs = (
-            point_getter_pairs
-            + native_point_getter_pairs
-            + native_priority_tail
-        )
+        point_getter_pairs = point_getter_pairs + native_point_getter_pairs + native_priority_tail
     else:
         point_getter_pairs = (
             point_getter_pairs
@@ -2616,10 +2958,7 @@ def geometry_manual_resolve_source_entry_index(
                     normalize_hkl_key=normalize_hkl_key,
                 )
 
-        if (
-            len(source_key) >= 3
-            and str(source_key[0]) == "source_branch"
-        ):
+        if len(source_key) >= 3 and str(source_key[0]) == "source_branch":
             alias_matches = [
                 (idx, candidate)
                 for idx, candidate in indexed_candidates
@@ -2730,10 +3069,9 @@ def geometry_manual_source_key_matches_entry(
         if _geometry_manual_entry_has_explicit_branch_identity(entry_dict):
             return False
         try:
-            return (
-                int(entry_dict.get("source_table_index")) == int(source_key[0])
-                and int(entry_dict.get("source_row_index")) == int(source_key[1])
-            )
+            return int(entry_dict.get("source_table_index")) == int(source_key[0]) and int(
+                entry_dict.get("source_row_index")
+            ) == int(source_key[1])
         except Exception:
             return False
 
@@ -2741,10 +3079,9 @@ def geometry_manual_source_key_matches_entry(
         if _geometry_manual_entry_has_explicit_branch_identity(entry_dict):
             return False
         try:
-            return (
-                int(entry_dict.get("source_table_index")) == int(source_key[1])
-                and int(entry_dict.get("source_row_index")) == int(source_key[2])
-            )
+            return int(entry_dict.get("source_table_index")) == int(source_key[1]) and int(
+                entry_dict.get("source_row_index")
+            ) == int(source_key[2])
         except Exception:
             return False
 
@@ -2819,9 +3156,7 @@ def geometry_manual_source_entries_share_identity(
             return False
 
         left_has_trusted_reflection = _entry_has_explicit_trusted_reflection_identity(left_entry)
-        right_has_trusted_reflection = _entry_has_explicit_trusted_reflection_identity(
-            right_entry
-        )
+        right_has_trusted_reflection = _entry_has_explicit_trusted_reflection_identity(right_entry)
         if left_has_trusted_reflection and right_has_trusted_reflection:
             left_reflection_index = _coerce_nonnegative_index(
                 left_entry.get("source_reflection_index")
@@ -2872,9 +3207,7 @@ def _geometry_manual_resolve_identity_candidate_index(
         return None
 
     normalized_candidates = [
-        dict(candidate)
-        for candidate in (candidate_entries or ())
-        if isinstance(candidate, Mapping)
+        dict(candidate) for candidate in (candidate_entries or ()) if isinstance(candidate, Mapping)
     ]
     if not normalized_candidates:
         return None
@@ -2951,9 +3284,7 @@ def geometry_manual_lookup_source_entry(
                 direct_candidates,
                 normalize_hkl_key=normalize_hkl_key,
             )
-            if resolved_index is not None and 0 <= int(resolved_index) < len(
-                direct_candidates
-            ):
+            if resolved_index is not None and 0 <= int(resolved_index) < len(direct_candidates):
                 return dict(direct_candidates[int(resolved_index)])
             if len(direct_candidates) == 1:
                 return dict(direct_candidates[0])
@@ -2987,9 +3318,7 @@ def geometry_manual_lookup_source_entry(
                 legacy_candidates,
                 normalize_hkl_key=normalize_hkl_key,
             )
-            if resolved_index is not None and 0 <= int(resolved_index) < len(
-                legacy_candidates
-            ):
+            if resolved_index is not None and 0 <= int(resolved_index) < len(legacy_candidates):
                 return dict(legacy_candidates[int(resolved_index)])
             if len(legacy_candidates) == 1:
                 return dict(legacy_candidates[0])
@@ -3083,11 +3412,7 @@ def geometry_manual_prioritize_candidate_entries(
     preferred_entry = dict(entries[int(preferred_index)])
     return [
         preferred_entry,
-        *[
-            dict(entry)
-            for idx, entry in enumerate(entries)
-            if int(idx) != int(preferred_index)
-        ],
+        *[dict(entry) for idx, entry in enumerate(entries) if int(idx) != int(preferred_index)],
     ]
 
 
@@ -3190,9 +3515,7 @@ def refresh_geometry_manual_pick_session_candidates(
             tagged_candidate_requires_identity
         )
     refreshed_session["group_entries"] = list(refreshed_entries)
-    refreshed_session["target_count"] = int(
-        group_target_count_fn(group_key, refreshed_entries)
-    )
+    refreshed_session["target_count"] = int(group_target_count_fn(group_key, refreshed_entries))
     if cache_signature is not None:
         refreshed_session["cache_signature"] = cache_signature
 
@@ -3204,11 +3527,7 @@ def refresh_geometry_manual_pick_session_candidates(
         )
         if tagged_index is not None and 0 <= int(tagged_index) < len(refreshed_entries):
             tagged_candidate = dict(refreshed_entries[int(tagged_index)])
-    if (
-        allow_tagged_key_fallback
-        and tagged_candidate is None
-        and tagged_candidate_key is not None
-    ):
+    if allow_tagged_key_fallback and tagged_candidate is None and tagged_candidate_key is not None:
         tagged_candidate = next(
             (
                 dict(entry)
@@ -3495,12 +3814,8 @@ def _manual_pick_cache_table_summaries(
         summaries.append(
             {
                 "source_table_index": int(table_idx),
-                "nominal_hkl": (
-                    list(nominal_hkl) if isinstance(nominal_hkl, tuple) else None
-                ),
-                "q_group_key": _manual_pick_cache_jsonable(
-                    representative.get("q_group_key")
-                ),
+                "nominal_hkl": (list(nominal_hkl) if isinstance(nominal_hkl, tuple) else None),
+                "q_group_key": _manual_pick_cache_jsonable(representative.get("q_group_key")),
                 "qr": _manual_pick_cache_finite_float(representative.get("qr")),
                 "qz": _manual_pick_cache_finite_float(representative.get("qz")),
                 "row_count_before_grouping": int(row_count_before),
@@ -3508,9 +3823,7 @@ def _manual_pick_cache_table_summaries(
                 "dropped_nonfinite_row_count": int(dropped_nonfinite),
                 "nominal_hkl_recovery_count": int(nominal_hkl_recovery_count),
                 "merged_group_count": int(merged_group_count),
-                "representative_row_indices_kept": [
-                    int(idx) for idx in representative_rows
-                ],
+                "representative_row_indices_kept": [int(idx) for idx in representative_rows],
             }
         )
     return summaries
@@ -3632,11 +3945,18 @@ def geometry_manual_live_peak_candidates_from_records(
         native_point = _finite_point(entry, "native_col", "native_row")
         if native_point is None:
             native_point = _finite_point(entry, "sim_native_x", "sim_native_y")
+        caked_point_source: str | None = None
         caked_point = _finite_point(entry, "caked_x", "caked_y")
+        if caked_point is not None:
+            caked_point_source = "caked"
         if caked_point is None:
             caked_point = _finite_point(entry, "raw_caked_x", "raw_caked_y")
+            if caked_point is not None:
+                caked_point_source = "raw_caked"
         if caked_point is None:
             caked_point = _finite_point(entry, "two_theta_deg", "phi_deg")
+            if caked_point is not None:
+                caked_point_source = "angles"
         raw_detector_display = _finite_point(entry, "sim_col_raw", "sim_row_raw")
         legacy_sim_point = _finite_point(entry, "sim_col", "sim_row")
 
@@ -3651,8 +3971,7 @@ def geometry_manual_live_peak_candidates_from_records(
 
         if display_point is None:
             if caked_point is not None and (
-                legacy_sim_point is None
-                or _points_match(legacy_sim_point, caked_point)
+                legacy_sim_point is None or _points_match(legacy_sim_point, caked_point)
             ):
                 display_point = caked_point
             else:
@@ -3661,10 +3980,14 @@ def geometry_manual_live_peak_candidates_from_records(
             entry["display_col"] = float(display_point[0])
             entry["display_row"] = float(display_point[1])
         detector_display = raw_detector_display
-        if detector_display is None and legacy_sim_point is not None and (
-            native_point is not None
-            or caked_point is None
-            or not _points_match(legacy_sim_point, caked_point)
+        if (
+            detector_display is None
+            and legacy_sim_point is not None
+            and (
+                native_point is not None
+                or caked_point is None
+                or not _points_match(legacy_sim_point, caked_point)
+            )
         ):
             detector_display = legacy_sim_point
         if detector_display is not None:
@@ -3677,7 +4000,7 @@ def geometry_manual_live_peak_candidates_from_records(
             entry["native_row"] = float(native_point[1])
             entry["sim_native_x"] = float(native_point[0])
             entry["sim_native_y"] = float(native_point[1])
-        if caked_point is not None:
+        if caked_point is not None and (caked_point_source != "angles" or native_point is None):
             entry["caked_x"] = float(caked_point[0])
             entry["caked_y"] = float(caked_point[1])
             entry.setdefault("raw_caked_x", float(caked_point[0]))
@@ -3741,6 +4064,11 @@ def build_geometry_manual_pick_cache(
         list[dict[str, object]],
     ]
     | None = None,
+    project_peaks_for_background_view: Callable[
+        [int, Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     current_match_config: Callable[[], dict[str, object]],
     auto_match_background_context: Callable[
         [object, dict[str, object]],
@@ -3762,9 +4090,7 @@ def build_geometry_manual_pick_cache(
     cache_source = "source_snapshot_unavailable"
     cache_provenance = ["source_snapshot_unavailable"]
     stale_reason: str | None = (
-        None
-        if prefer_cache
-        else "prefer_cache disabled; rebuilding manual-pick cache."
+        None if prefer_cache else "prefer_cache disabled; rebuilding manual-pick cache."
     )
     placed_cache_sig = placed_cache_signature_fn(
         param_set=param_set,
@@ -3785,9 +4111,7 @@ def build_geometry_manual_pick_cache(
         return existing_cache_data, existing_cache_signature, existing_cache_data
 
     resolved_existing_signature = existing_cache_signature
-    if not isinstance(resolved_existing_signature, tuple) and isinstance(
-        existing_cache_data, dict
-    ):
+    if not isinstance(resolved_existing_signature, tuple) and isinstance(existing_cache_data, dict):
         cached_signature = existing_cache_data.get("signature")
         if isinstance(cached_signature, tuple):
             resolved_existing_signature = cached_signature
@@ -3813,6 +4137,7 @@ def build_geometry_manual_pick_cache(
         action: str,
         source: str,
         provenance: Sequence[str],
+        reproject: bool = True,
         stale_reason_override: str | None = None,
     ) -> bool:
         nonlocal simulated_peaks, active_simulated_peaks, grouped_candidates, simulated_lookup
@@ -3821,14 +4146,14 @@ def build_geometry_manual_pick_cache(
         normalized_rows = [
             dict(entry) for entry in (candidate_rows or ()) if isinstance(entry, Mapping)
         ]
-        if callable(project_peaks_to_current_view):
-            reprojection_rows = _filter_cached_source_rows_for_reprojection(
-                normalized_rows
-            )
+        if reproject and (
+            callable(project_peaks_for_background_view) or callable(project_peaks_to_current_view)
+        ):
+            reprojection_rows = _filter_cached_source_rows_for_reprojection(normalized_rows)
             if reprojection_rows:
                 try:
                     normalized_rows = _filter_reprojected_cache_rows(
-                        project_peaks_to_current_view(reprojection_rows)
+                        _reproject_cache_rows(reprojection_rows)
                     )
                 except Exception:
                     normalized_rows = []
@@ -3919,6 +4244,65 @@ def build_geometry_manual_pick_cache(
             filtered_rows.append(entry)
         return filtered_rows
 
+    def _reproject_cache_rows(
+        candidate_rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        normalized_rows = [
+            dict(entry) for entry in (candidate_rows or ()) if isinstance(entry, Mapping)
+        ]
+        if not normalized_rows:
+            return []
+        if callable(project_peaks_for_background_view):
+            order_key = "__ra_sim_manual_cache_projection_order__"
+            grouped_rows: dict[int, list[dict[str, object]]] = {}
+            ordered_backgrounds: list[int] = []
+            for position, raw_entry in enumerate(normalized_rows):
+                entry = dict(raw_entry)
+                raw_background_idx = entry.get("background_index", bg_index)
+                if raw_background_idx is None:
+                    raw_background_idx = bg_index
+                try:
+                    background_idx = int(raw_background_idx)
+                except Exception:
+                    background_idx = int(bg_index)
+                entry.setdefault("background_index", int(background_idx))
+                entry[order_key] = int(position)
+                if int(background_idx) not in grouped_rows:
+                    ordered_backgrounds.append(int(background_idx))
+                    grouped_rows[int(background_idx)] = []
+                grouped_rows[int(background_idx)].append(entry)
+            projected_rows: list[dict[str, object]] = []
+            for background_idx in ordered_backgrounds:
+                try:
+                    projected_for_background = project_peaks_for_background_view(
+                        int(background_idx),
+                        grouped_rows[int(background_idx)],
+                    )
+                except Exception:
+                    projected_for_background = []
+                projected_rows.extend(
+                    dict(entry)
+                    for entry in (projected_for_background or ())
+                    if isinstance(entry, Mapping)
+                )
+            sorted_rows = sorted(
+                projected_rows,
+                key=lambda entry: int(entry.get(order_key, int(1e12))),
+            )
+            cleaned_rows: list[dict[str, object]] = []
+            for raw_entry in sorted_rows:
+                entry = dict(raw_entry)
+                entry.pop(order_key, None)
+                cleaned_rows.append(entry)
+            return cleaned_rows
+        if callable(project_peaks_to_current_view):
+            return [
+                dict(entry)
+                for entry in (project_peaks_to_current_view(normalized_rows) or ())
+                if isinstance(entry, Mapping)
+            ]
+        return normalized_rows
+
     if prefer_cache and bg_index == current_bg_index:
         cached_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
@@ -3940,9 +4324,7 @@ def build_geometry_manual_pick_cache(
         else:
             stale_reason = "cached preview rows were empty."
     if prefer_cache and bg_index == current_bg_index and not simulated_peaks:
-        cached_simulated_peaks = geometry_manual_live_peak_candidates_from_records(
-            peak_records
-        )
+        cached_simulated_peaks = geometry_manual_live_peak_candidates_from_records(peak_records)
         if _apply_candidate_source(
             cached_simulated_peaks,
             action="reused",
@@ -4041,14 +4423,12 @@ def build_geometry_manual_pick_cache(
             for entry in (existing_cache_data.get("simulated_peaks", ()) or ())
             if isinstance(entry, dict)
         ]
-        cached_source_rows = _filter_cached_source_rows_for_reprojection(
-            cached_simulated_peaks
-        )
-        if cached_source_rows and callable(project_peaks_to_current_view):
+        cached_source_rows = _filter_cached_source_rows_for_reprojection(cached_simulated_peaks)
+        if cached_source_rows and (
+            callable(project_peaks_for_background_view) or callable(project_peaks_to_current_view)
+        ):
             reprojected_cached_peaks = _filter_reprojected_cache_rows(
-                project_peaks_to_current_view(
-                    cached_source_rows
-                )
+                _reproject_cache_rows(cached_source_rows)
             )
             if _apply_candidate_source(
                 reprojected_cached_peaks,
@@ -4056,13 +4436,17 @@ def build_geometry_manual_pick_cache(
                 source="existing_cache_data.simulated_peaks(reprojected)",
                 provenance=[
                     "existing_cache_data.simulated_peaks",
-                    "project_peaks_to_current_view",
+                    (
+                        "project_peaks_for_background_view"
+                        if callable(project_peaks_for_background_view)
+                        else "project_peaks_to_current_view"
+                    ),
                     "build_grouped_candidates",
                     "build_simulated_lookup",
                 ],
+                reproject=False,
                 stale_reason_override=(
-                    "background-only cache signature change; "
-                    "reprojected cached simulated peaks."
+                    "background-only cache signature change; reprojected cached simulated peaks."
                 ),
             ):
                 pass
@@ -4119,8 +4503,7 @@ def build_geometry_manual_pick_cache(
         "active_simulated_peaks": [dict(entry) for entry in active_simulated_peaks],
         "simulated_lookup": _geometry_manual_copy_lookup(simulated_lookup),
         "grouped_candidates": {
-            key: [dict(entry) for entry in entries]
-            for key, entries in grouped_candidates.items()
+            key: [dict(entry) for entry in entries] for key, entries in grouped_candidates.items()
         },
         "match_config": dict(resolved_match_cfg),
         "background_context": background_context,
@@ -4138,9 +4521,7 @@ def build_geometry_manual_pick_cache(
     }
 
     next_cache_signature = existing_cache_signature
-    next_cache_data = (
-        existing_cache_data if isinstance(existing_cache_data, dict) else {}
-    )
+    next_cache_data = existing_cache_data if isinstance(existing_cache_data, dict) else {}
     if bg_index == current_bg_index:
         next_cache_signature = cache_sig
         next_cache_data = cache_result
@@ -4174,9 +4555,7 @@ def geometry_manual_choose_group_at(
                 or abs(float(current_point[1]) - float(row)) > half_window
             ):
                 continue
-            d2 = (
-                float(current_point[0]) - float(col)
-            ) ** 2 + (
+            d2 = (float(current_point[0]) - float(col)) ** 2 + (
                 float(current_point[1]) - float(row)
             ) ** 2
             if d2 < best_d2:
@@ -4354,9 +4733,7 @@ def geometry_manual_unassigned_group_candidates(
     if not isinstance(group_entries, list) or not isinstance(pending_entries, list):
         return []
     assigned_keys = {
-        candidate_source_key(entry)
-        for entry in pending_entries
-        if isinstance(entry, dict)
+        candidate_source_key(entry) for entry in pending_entries if isinstance(entry, dict)
     }
     out: list[dict[str, object]] = []
     for raw_entry in group_entries:
@@ -4419,9 +4796,7 @@ def geometry_manual_nearest_candidate_to_point(
         )
         if current_point is None:
             continue
-        d2 = (
-            float(current_point[0]) - float(col)
-        ) ** 2 + (
+        d2 = (float(current_point[0]) - float(col)) ** 2 + (
             float(current_point[1]) - float(row)
         ) ** 2
         if d2 < best_d2:
@@ -4430,6 +4805,70 @@ def geometry_manual_nearest_candidate_to_point(
     if best_entry is None or not np.isfinite(best_d2):
         return None, float("nan")
     return best_entry, float(np.sqrt(best_d2))
+
+
+def _geometry_manual_points_match(
+    left: tuple[float, float] | None,
+    right: tuple[float, float] | None,
+    *,
+    tol: float = 1.0e-9,
+) -> bool:
+    return bool(
+        left is not None
+        and right is not None
+        and abs(float(left[0]) - float(right[0])) <= float(tol)
+        and abs(float(left[1]) - float(right[1])) <= float(tol)
+    )
+
+
+def _geometry_manual_candidate_detector_sim_point(
+    candidate: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    detector_point = _geometry_manual_entry_detector_display_point(candidate)
+    if detector_point is None:
+        return None
+    caked_point = _geometry_manual_finite_point(
+        candidate,
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("two_theta_deg", "phi_deg"),
+        ),
+    )
+    if _geometry_manual_points_match(detector_point, caked_point):
+        return None
+    return detector_point
+
+
+def _geometry_manual_candidate_native_sim_point(
+    candidate: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        candidate,
+        (
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("native_col", "native_row"),
+            ("sim_native_x", "sim_native_y"),
+            ("simulated_detector_x", "simulated_detector_y"),
+        ),
+    )
+
+
+def _geometry_manual_candidate_caked_sim_point(
+    candidate: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        candidate,
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+            ("two_theta_deg", "phi_deg"),
+        ),
+    )
 
 
 def geometry_manual_pair_entry_from_candidate(
@@ -4469,6 +4908,21 @@ def geometry_manual_pair_entry_from_candidate(
         "source_label": candidate.get("source_label"),
         "q_group_key": group_key,
     }
+    for provenance_key in (
+        "branch_id",
+        "branch_source",
+        "best_sample_index",
+        "mosaic_weight",
+        "mosaic_top_rank_key",
+        "selection_reason",
+    ):
+        if provenance_key in candidate:
+            value = candidate.get(provenance_key)
+            if isinstance(value, np.generic):
+                value = value.item()
+            elif isinstance(value, list):
+                value = tuple(value)
+            entry[provenance_key] = value
     if detector_col is not None and detector_row is not None:
         entry["detector_x"] = float(detector_col)
         entry["detector_y"] = float(detector_row)
@@ -4485,6 +4939,22 @@ def geometry_manual_pair_entry_from_candidate(
         entry["raw_caked_y"] = float(raw_caked_row)
         entry.setdefault("background_two_theta_deg", float(raw_caked_col))
         entry.setdefault("background_phi_deg", float(raw_caked_row))
+
+    simulated_detector_point = _geometry_manual_candidate_detector_sim_point(candidate)
+    if simulated_detector_point is not None:
+        entry["refined_sim_x"] = float(simulated_detector_point[0])
+        entry["refined_sim_y"] = float(simulated_detector_point[1])
+
+    simulated_native_point = _geometry_manual_candidate_native_sim_point(candidate)
+    if simulated_native_point is not None:
+        entry["refined_sim_native_x"] = float(simulated_native_point[0])
+        entry["refined_sim_native_y"] = float(simulated_native_point[1])
+
+    simulated_caked_point = _geometry_manual_candidate_caked_sim_point(candidate)
+    if simulated_caked_point is not None:
+        entry["refined_sim_caked_x"] = float(simulated_caked_point[0])
+        entry["refined_sim_caked_y"] = float(simulated_caked_point[1])
+
     if placement_error_px is not None and np.isfinite(float(placement_error_px)):
         entry["placement_error_px"] = max(0.0, float(placement_error_px))
     if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
@@ -4571,10 +5041,17 @@ def geometry_manual_refine_preview_point(
     match_simulated_peaks_to_peak_context: Callable[
         [Sequence[dict[str, object]], dict[str, object], dict[str, object]],
         tuple[Sequence[dict[str, object]], object],
-    ] | None = None,
-    peak_maximum_near_in_image_fn: Callable[[np.ndarray | None, float, float], tuple[float, float]] = peak_maximum_near_in_image,
-    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
-    caked_image_index_to_axis_fn: Callable[[float, Sequence[float] | None], float] = caked_image_index_to_axis,
+    ]
+    | None = None,
+    peak_maximum_near_in_image_fn: Callable[
+        [np.ndarray | None, float, float], tuple[float, float]
+    ] = peak_maximum_near_in_image,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
     refine_caked_peak_center_fn: Callable[
         [np.ndarray | None, Sequence[float] | None, Sequence[float] | None, float, float],
         tuple[float, float],
@@ -4730,8 +5207,12 @@ def refine_detector_pick_via_caked_background(
         tuple[Sequence[dict[str, object]], object],
     ]
     | None = None,
-    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
-    caked_image_index_to_axis_fn: Callable[[float, Sequence[float] | None], float] = caked_image_index_to_axis,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
     refine_caked_peak_center_fn: Callable[
         [np.ndarray | None, Sequence[float] | None, Sequence[float] | None, float, float],
         tuple[float, float],
@@ -4770,12 +5251,8 @@ def refine_detector_pick_via_caked_background(
     caked_candidate = None
     if isinstance(candidate, dict):
         try:
-            sim_caked_col = float(
-                candidate.get("caked_x", candidate.get("two_theta_deg", np.nan))
-            )
-            sim_caked_row = float(
-                candidate.get("caked_y", candidate.get("phi_deg", np.nan))
-            )
+            sim_caked_col = float(candidate.get("caked_x", candidate.get("two_theta_deg", np.nan)))
+            sim_caked_row = float(candidate.get("caked_y", candidate.get("phi_deg", np.nan)))
         except Exception:
             sim_caked_col = float("nan")
             sim_caked_row = float("nan")
@@ -4876,7 +5353,9 @@ def apply_geometry_manual_pick_zoom(
     pick_zoom_window_px: float,
     anchor_fraction_x: float = 0.5,
     anchor_fraction_y: float = 0.5,
-    anchor_axis_limits_fn: Callable[[float, float, float, float, float], tuple[float, float]] = geometry_manual_anchor_axis_limits,
+    anchor_axis_limits_fn: Callable[
+        [float, float, float, float, float], tuple[float, float]
+    ] = geometry_manual_anchor_axis_limits,
 ) -> bool:
     """Zoom to a fixed local window while the user is placing manual points."""
 
@@ -4982,13 +5461,21 @@ def geometry_manual_pick_preview_state(
         [float, float, Sequence[dict[str, object]] | None],
         tuple[dict[str, object] | None, float],
     ] = geometry_manual_nearest_candidate_to_point,
-    position_error_px: Callable[[float, float, float, float], float] = geometry_manual_position_error_px,
+    position_error_px: Callable[
+        [float, float, float, float], float
+    ] = geometry_manual_position_error_px,
     position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
     use_caked_space: bool,
-    caked_angles_to_background_display_coords: Callable[[float, float], tuple[float | None, float | None]] | None = None,
+    caked_angles_to_background_display_coords: Callable[
+        [float, float], tuple[float | None, float | None]
+    ]
+    | None = None,
     radial_axis: Sequence[float] | None = None,
     azimuth_axis: Sequence[float] | None = None,
-    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
+    profile_cache: Mapping[str, object] | None = None,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
 ) -> dict[str, object] | None:
     """Return preview state for one manual placement cursor position."""
 
@@ -5013,41 +5500,62 @@ def geometry_manual_pick_preview_state(
         if isinstance(built_state, dict):
             state = built_state
 
+    tagged_candidate = geometry_manual_tagged_candidate_from_session(
+        pick_session,
+        remaining_candidates,
+    )
+    seed_candidate: dict[str, object] | None = None
+    if isinstance(tagged_candidate, dict):
+        seed_candidate = dict(tagged_candidate)
+        candidate_relation = "tagged sim"
+    else:
+        if nearest_candidate_to_point is geometry_manual_nearest_candidate_to_point:
+            seed_candidate, _seed_dist = nearest_candidate_to_point(
+                float(raw_col),
+                float(raw_row),
+                remaining_candidates,
+                use_caked_display=use_caked_space,
+            )
+        else:
+            seed_candidate, _seed_dist = nearest_candidate_to_point(
+                float(raw_col),
+                float(raw_row),
+                remaining_candidates,
+            )
+        candidate_relation = "nearest sim"
+    candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
+    if isinstance(seed_candidate, dict):
+        group_key = pick_session.get("group_key") if isinstance(pick_session, dict) else None
+        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+            seed_candidate,
+            target_key=group_key,
+            profile_cache=profile_cache,
+        )
+        selected_candidate = gui_mosaic_top.select_mosaic_top_representative(
+            remaining_candidates,
+            branch_id=branch_id,
+            target_key=group_key,
+            profile_cache=profile_cache,
+        )
+        if isinstance(selected_candidate, dict):
+            candidate = selected_candidate
     refined_col, refined_row = refine_preview_point(
-        None,
+        candidate,
         float(raw_col),
         float(raw_row),
         display_background=display_background,
         cache_data=state,
     )
-    tagged_candidate = geometry_manual_tagged_candidate_from_session(
-        pick_session,
-        remaining_candidates,
-    )
-    if tagged_candidate is not None:
-        candidate = dict(tagged_candidate)
-        sim_dist = geometry_manual_candidate_distance_to_point(
+    sim_dist = (
+        geometry_manual_candidate_distance_to_point(
             float(refined_col),
             float(refined_row),
             candidate,
             use_caked_display=use_caked_space,
         )
-        candidate_relation = "tagged sim"
-    else:
-        if nearest_candidate_to_point is geometry_manual_nearest_candidate_to_point:
-            candidate, sim_dist = nearest_candidate_to_point(
-                float(refined_col),
-                float(refined_row),
-                remaining_candidates,
-                use_caked_display=use_caked_space,
-            )
-        else:
-            candidate, sim_dist = nearest_candidate_to_point(
-                float(refined_col),
-                float(refined_row),
-                remaining_candidates,
-            )
-        candidate_relation = "nearest sim"
+        if isinstance(candidate, dict)
+        else float("nan")
+    )
     delta = float(
         position_error_px(
             float(raw_col),
@@ -5088,12 +5596,8 @@ def geometry_manual_pick_preview_state(
         caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
     )
     if np.isfinite(match_confidence):
-        preview_color = geometry_manual_preview_confidence_color(
-            float(match_confidence)
-        )
-        quality_label = geometry_manual_preview_confidence_quality_label(
-            float(match_confidence)
-        )
+        preview_color = geometry_manual_preview_confidence_color(float(match_confidence))
+        quality_label = geometry_manual_preview_confidence_quality_label(float(match_confidence))
     else:
         preview_color = geometry_manual_preview_color(float(sigma_px))
         quality_label = geometry_manual_preview_quality_label(float(sigma_px))
@@ -5264,9 +5768,7 @@ def geometry_manual_session_initial_pairs_display(
                 raw_entry,
                 pending_candidates,
             )
-            if resolved_index is not None and 0 <= int(resolved_index) < len(
-                pending_candidates
-            ):
+            if resolved_index is not None and 0 <= int(resolved_index) < len(pending_candidates):
                 measured_entry = dict(pending_candidates[int(resolved_index)])
         _copy_q_values_from_sources(entry, display_entry, measured_entry)
         if isinstance(measured_entry, dict):
@@ -5354,16 +5856,88 @@ def build_geometry_manual_initial_pairs_display(
                 ),
             )
 
+        def _saved_caked_background_point(
+            candidate: Mapping[str, object] | None,
+        ) -> tuple[float, float] | None:
+            return _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("caked_x", "caked_y"),
+                    ("background_two_theta_deg", "background_phi_deg"),
+                    ("raw_caked_x", "raw_caked_y"),
+                ),
+            )
+
+        def _caked_point_matches_saved_background(
+            point: tuple[float, float] | None,
+        ) -> bool:
+            saved_background = _saved_caked_background_point(saved_entry)
+            if point is None or saved_background is None:
+                return True
+            return bool(
+                abs(float(point[0]) - float(saved_background[0]))
+                <= max(
+                    1.0,
+                    float(DEFAULT_CAKED_SEARCH_TTH_DEG),
+                )
+                and abs(float(point[1]) - float(saved_background[1]))
+                <= max(
+                    1.0,
+                    float(DEFAULT_CAKED_SEARCH_PHI_DEG),
+                )
+            )
+
         def _live_detector_display_point(
             candidate: Mapping[str, object] | None,
         ) -> tuple[float, float] | None:
             detector_point = _geometry_manual_finite_point(
                 candidate,
-                (("refined_sim_x", "refined_sim_y"),),
+                (
+                    ("refined_sim_x", "refined_sim_y"),
+                    ("sim_col_raw", "sim_row_raw"),
+                ),
             )
             if detector_point is not None:
                 return detector_point
-            return _geometry_manual_entry_detector_display_point(candidate)
+
+            legacy_sim_point = _geometry_manual_finite_point(
+                candidate,
+                (("sim_col", "sim_row"),),
+            )
+            caked_point = _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_caked_x", "refined_sim_caked_y"),
+                    ("caked_x", "caked_y"),
+                    ("raw_caked_x", "raw_caked_y"),
+                    ("two_theta_deg", "phi_deg"),
+                ),
+            )
+            if legacy_sim_point is not None and not _geometry_manual_points_match(
+                legacy_sim_point,
+                caked_point,
+            ):
+                return legacy_sim_point
+
+            detector_point = _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("x", "y"),
+                    ("simulated_x", "simulated_y"),
+                ),
+            )
+            if detector_point is not None and not _geometry_manual_points_match(
+                detector_point,
+                caked_point,
+            ):
+                return detector_point
+
+            if not _geometry_manual_entry_has_caked_evidence(candidate):
+                return _geometry_manual_finite_point(
+                    candidate,
+                    (("display_col", "display_row"),),
+                )
+            return None
 
         def _saved_native_detector_point(
             candidate: Mapping[str, object] | None,
@@ -5392,7 +5966,7 @@ def build_geometry_manual_initial_pairs_display(
             if detector_point is not None:
                 return detector_point
             if allow_detector_aliases:
-                return _geometry_manual_entry_detector_display_point(candidate)
+                return _live_detector_display_point(candidate)
             if not isinstance(candidate, Mapping):
                 return None
             overlay_candidate = dict(candidate)
@@ -5400,7 +5974,46 @@ def build_geometry_manual_initial_pairs_display(
             overlay_candidate.pop("y", None)
             overlay_candidate.pop("simulated_x", None)
             overlay_candidate.pop("simulated_y", None)
-            return _geometry_manual_entry_detector_display_point(overlay_candidate)
+            return _live_detector_display_point(overlay_candidate)
+
+        def _has_explicit_detector_display_alias(
+            candidate: Mapping[str, object] | None,
+        ) -> bool:
+            if not isinstance(candidate, Mapping):
+                return False
+            detector_point = _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_x", "refined_sim_y"),
+                    ("sim_col_raw", "sim_row_raw"),
+                ),
+            )
+            if detector_point is not None:
+                return True
+            caked_point = _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("refined_sim_caked_x", "refined_sim_caked_y"),
+                    ("caked_x", "caked_y"),
+                    ("raw_caked_x", "raw_caked_y"),
+                    ("two_theta_deg", "phi_deg"),
+                ),
+            )
+            for x_key, y_key in (
+                ("sim_col", "sim_row"),
+                ("x", "y"),
+                ("simulated_x", "simulated_y"),
+            ):
+                detector_point = _geometry_manual_finite_point(
+                    candidate,
+                    ((x_key, y_key),),
+                )
+                if detector_point is not None and not _geometry_manual_points_match(
+                    detector_point,
+                    caked_point,
+                ):
+                    return True
+            return False
 
         saved_refined_detector_point = _geometry_manual_finite_point(
             saved_entry,
@@ -5412,17 +6025,27 @@ def build_geometry_manual_initial_pairs_display(
         )
 
         if bool(use_caked_display):
+            saved_caked_point = _saved_caked_sim_point(saved_entry)
             if saved_native_detector_point is not None:
                 projected_caked_point = _live_caked_point(projected_sim_entry)
-                if projected_caked_point is not None:
+                if projected_caked_point is not None and (
+                    saved_caked_point is None
+                    or _caked_point_matches_saved_background(projected_caked_point)
+                ):
                     return projected_caked_point
             resolved_caked_point = _live_caked_point(resolved_sim_entry)
-            if resolved_caked_point is not None:
+            if resolved_caked_point is not None and (
+                saved_caked_point is None
+                or _caked_point_matches_saved_background(resolved_caked_point)
+            ):
                 return resolved_caked_point
             projected_caked_point = _live_caked_point(projected_sim_entry)
-            if projected_caked_point is not None:
+            if projected_caked_point is not None and (
+                saved_caked_point is None
+                or _caked_point_matches_saved_background(projected_caked_point)
+            ):
                 return projected_caked_point
-            return _saved_caked_sim_point(saved_entry)
+            return saved_caked_point
 
         saved_overlay_detector_point = _saved_native_overlay_detector_point(
             saved_entry,
@@ -5430,12 +6053,24 @@ def build_geometry_manual_initial_pairs_display(
         )
 
         if saved_native_detector_point is not None:
-            projected_saved_native_point = _saved_native_overlay_detector_point(
-                projected_sim_entry
-            )
+            projected_saved_native_point = _saved_native_overlay_detector_point(projected_sim_entry)
+            resolved_saved_native_point = _saved_native_overlay_detector_point(resolved_sim_entry)
+            if projected_saved_native_point is not None and not _geometry_manual_points_match(
+                projected_saved_native_point,
+                resolved_saved_native_point,
+            ):
+                return projected_saved_native_point
+            if (
+                saved_refined_detector_point is None
+                and resolved_saved_native_point is not None
+                and (
+                    _has_explicit_detector_display_alias(projected_sim_entry)
+                    or _has_explicit_detector_display_alias(resolved_sim_entry)
+                )
+            ):
+                return saved_native_detector_point
             if projected_saved_native_point is not None:
                 return projected_saved_native_point
-            resolved_saved_native_point = _saved_native_overlay_detector_point(resolved_sim_entry)
             if resolved_saved_native_point is not None:
                 return resolved_saved_native_point
             return None
@@ -5445,13 +6080,13 @@ def build_geometry_manual_initial_pairs_display(
             if projected_detector_point is not None:
                 return projected_detector_point
 
-        resolved_detector_point = _live_detector_display_point(resolved_sim_entry)
-        if resolved_detector_point is not None:
-            return resolved_detector_point
-
         projected_detector_point = _live_detector_display_point(projected_sim_entry)
         if projected_detector_point is not None:
             return projected_detector_point
+
+        resolved_detector_point = _live_detector_display_point(resolved_sim_entry)
+        if resolved_detector_point is not None:
+            return resolved_detector_point
 
         if (
             not _geometry_manual_entry_has_explicit_branch_identity(saved_entry)
@@ -5476,9 +6111,7 @@ def build_geometry_manual_initial_pairs_display(
             prefer_cache=True,
             background_index=background_index,
         )
-        simulated_lookup = _geometry_manual_copy_lookup(
-            cache_data.get("simulated_lookup", {})
-        )
+        simulated_lookup = _geometry_manual_copy_lookup(cache_data.get("simulated_lookup", {}))
     else:
         simulated_lookup: GeometryManualLookupMap = {}
     if not simulated_lookup:
@@ -5505,15 +6138,11 @@ def build_geometry_manual_initial_pairs_display(
             )
         if source_rows:
             normalized_source_rows = [
-                dict(entry)
-                for entry in source_rows
-                if isinstance(entry, Mapping)
+                dict(entry) for entry in source_rows if isinstance(entry, Mapping)
             ]
             if callable(project_peaks_to_current_view):
                 try:
-                    projected_source_rows = project_peaks_to_current_view(
-                        normalized_source_rows
-                    )
+                    projected_source_rows = project_peaks_to_current_view(normalized_source_rows)
                 except Exception:
                     projected_source_rows = normalized_source_rows
                 normalized_source_rows = [
@@ -5587,9 +6216,7 @@ def build_geometry_manual_initial_pairs_display(
                             dict(candidate),
                         )
                     )
-                ranked_detector_candidates.sort(
-                    key=lambda item: (float(item[0]), int(item[1]))
-                )
+                ranked_detector_candidates.sort(key=lambda item: (float(item[0]), int(item[1])))
                 if ranked_detector_candidates and (
                     len(ranked_detector_candidates) == 1
                     or abs(
@@ -5600,15 +6227,9 @@ def build_geometry_manual_initial_pairs_display(
                 ):
                     sim_source_entry = dict(ranked_detector_candidates[0][2])
         overlay_sim_source_entry = (
-            dict(sim_source_entry)
-            if isinstance(sim_source_entry, Mapping)
-            else None
+            dict(sim_source_entry) if isinstance(sim_source_entry, Mapping) else None
         )
-        sim_entry = (
-            dict(sim_source_entry)
-            if isinstance(sim_source_entry, Mapping)
-            else None
-        )
+        sim_entry = dict(sim_source_entry) if isinstance(sim_source_entry, Mapping) else None
         sim_entry = geometry_manual_apply_refined_simulated_override(
             entry,
             sim_entry,
@@ -5676,6 +6297,11 @@ def make_runtime_geometry_manual_cache_callbacks(
         list[dict[str, object]],
     ]
     | None = None,
+    project_peaks_for_background_view: Callable[
+        [int, Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    | None = None,
     entry_display_coords: Callable[
         [dict[str, object] | None],
         tuple[float, float] | None,
@@ -5693,8 +6319,7 @@ def make_runtime_geometry_manual_cache_callbacks(
     current_cache_signature: Callable[[], object] | object = None,
     current_cache_data: Callable[[], dict[str, object] | None] | dict[str, object] | None = None,
     source_snapshot_signature_for_background: (
-        Callable[[int, dict[str, object] | None], object]
-        | None
+        Callable[[int, dict[str, object] | None], object] | None
     ) = None,
     auto_match_background_context: Callable[
         [object, dict[str, object]],
@@ -5728,9 +6353,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             filtered_rows = filter_active_rows(normalized_rows)
         except Exception:
             filtered_rows = []
-        return [
-            dict(entry) for entry in (filtered_rows or ()) if isinstance(entry, Mapping)
-        ]
+        return [dict(entry) for entry in (filtered_rows or ()) if isinstance(entry, Mapping)]
 
     def _placed_pick_cache_signature(
         *,
@@ -5739,9 +6362,7 @@ def make_runtime_geometry_manual_cache_callbacks(
         background_image: object | None = None,
     ) -> tuple[object, ...]:
         resolved_background_index = (
-            _background_index()
-            if background_index is None
-            else int(background_index)
+            _background_index() if background_index is None else int(background_index)
         )
         if callable(source_snapshot_signature_for_background):
             source_snapshot_signature = source_snapshot_signature_for_background(
@@ -5749,16 +6370,12 @@ def make_runtime_geometry_manual_cache_callbacks(
                 param_set,
             )
         else:
-            source_snapshot_signature = _resolve_runtime_value(
-                last_simulation_signature
-            )
+            source_snapshot_signature = _resolve_runtime_value(last_simulation_signature)
         return geometry_manual_pick_placed_cache_signature(
             source_snapshot_signature=source_snapshot_signature,
             background_index=resolved_background_index,
             background_image=(
-                _background_image()
-                if background_image is None
-                else background_image
+                _background_image() if background_image is None else background_image
             ),
             use_caked_space=_manual_pick_uses_caked_space(),
         )
@@ -5786,12 +6403,8 @@ def make_runtime_geometry_manual_cache_callbacks(
         background_index: int | None = None,
         background_image: object | None = None,
     ) -> dict[str, object]:
-        bg_index = _background_index() if background_index is None else int(
-            background_index
-        )
-        background_local = (
-            _background_image() if background_image is None else background_image
-        )
+        bg_index = _background_index() if background_index is None else int(background_index)
+        background_local = _background_image() if background_image is None else background_image
         cache_data, next_signature, next_cache_data = build_geometry_manual_pick_cache(
             param_set=param_set,
             prefer_cache=prefer_cache,
@@ -5809,6 +6422,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             build_simulated_lookup=build_simulated_lookup,
             filter_active_rows=_filter_active_rows,
             project_peaks_to_current_view=project_peaks_to_current_view,
+            project_peaks_for_background_view=project_peaks_for_background_view,
             current_match_config=_current_match_config,
             auto_match_background_context=auto_match_background_context,
         )
@@ -5863,12 +6477,13 @@ def make_runtime_geometry_manual_projection_callbacks(
     pixel_size: Callable[[], object] | object = 0.0,
     caked_transform_bundle: Callable[[], object] | object = None,
     wrap_phi_range: Callable[[object], object] = lambda value: value,
-    rotate_point_for_display: Callable[[float, float, tuple[int, ...], int], tuple[float, float]] = _default_rotate_point,
+    rotate_point_for_display: Callable[
+        [float, float, tuple[int, ...], int], tuple[float, float]
+    ] = _default_rotate_point,
     display_rotate_k: int = 0,
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
     build_live_preview_simulated_peaks_from_cache: (
-        Callable[[], Sequence[dict[str, object]]]
-        | None
+        Callable[[], Sequence[dict[str, object]]] | None
     ) = None,
     ensure_peak_overlay_data: Callable[..., object] | None = None,
     miller: Callable[[], object] | object = None,
@@ -5911,8 +6526,10 @@ def make_runtime_geometry_manual_projection_callbacks(
         tuple[float | None, float | None],
     ]
     | None = None,
-    filter_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object, object]] | None = None,
-    collapse_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object]] | None = None,
+    filter_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object, object]]
+    | None = None,
+    collapse_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object]]
+    | None = None,
     merge_radius_px: float = 6.0,
 ) -> GeometryManualRuntimeProjectionCallbacks:
     """Build live manual-geometry projection callbacks around shared helpers."""
@@ -6067,9 +6684,7 @@ def make_runtime_geometry_manual_projection_callbacks(
     ) -> dict[str, object] | None:
         native_background = _resolve_runtime_value(current_background_native)
         try:
-            background_shape = tuple(
-                int(v) for v in np.asarray(native_background).shape[:2]
-            )
+            background_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
         except Exception:
             background_shape = ()
         return refresh_geometry_manual_pair_entry(
@@ -6078,12 +6693,8 @@ def make_runtime_geometry_manual_projection_callbacks(
             background_display_to_native_detector_coords=(
                 _background_display_to_native_detector_coords
             ),
-            caked_angles_to_background_display_coords=(
-                _caked_angles_to_background_display
-            ),
-            native_detector_coords_to_caked_display_coords=(
-                _native_to_caked_display_coords
-            ),
+            caked_angles_to_background_display_coords=(_caked_angles_to_background_display),
+            native_detector_coords_to_caked_display_coords=(_native_to_caked_display_coords),
             rotate_point_for_display=rotate_point_for_display,
             display_rotate_k=int(display_rotate_k),
             allow_legacy_peak_fallback=False,
@@ -6177,14 +6788,15 @@ def make_runtime_geometry_manual_projection_callbacks(
             else np.array([])
         )
         try:
-            sim_shape = (int(_resolve_runtime_value(image_size)), int(_resolve_runtime_value(image_size)))
+            sim_shape = (
+                int(_resolve_runtime_value(image_size)),
+                int(_resolve_runtime_value(image_size)),
+            )
         except Exception:
             sim_shape = (0, 0)
         try:
             native_background = _resolve_runtime_value(current_background_native)
-            background_shape = tuple(
-                int(v) for v in np.asarray(native_background).shape[:2]
-            )
+            background_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
         except Exception:
             background_shape = ()
 
@@ -6218,11 +6830,22 @@ def make_runtime_geometry_manual_projection_callbacks(
             ):
                 native_point = None
 
-            caked_point = refined_caked_point or _entry_point(entry, "caked_x", "caked_y")
+            caked_point_source: str | None = None
+            caked_point = refined_caked_point
+            if caked_point is not None:
+                caked_point_source = "refined_caked"
+            if caked_point is None:
+                caked_point = _entry_point(entry, "caked_x", "caked_y")
+                if caked_point is not None:
+                    caked_point_source = "caked"
             if caked_point is None:
                 caked_point = _entry_point(entry, "raw_caked_x", "raw_caked_y")
+                if caked_point is not None:
+                    caked_point_source = "raw_caked"
             if caked_point is None:
                 caked_point = _entry_point(entry, "two_theta_deg", "phi_deg")
+                if caked_point is not None:
+                    caked_point_source = "angles"
 
             display_detector_candidate = _entry_point(
                 entry,
@@ -6320,15 +6943,9 @@ def make_runtime_geometry_manual_projection_callbacks(
             if native_point is None and raw_detector_display is not None:
                 use_background_display_inverse = bool(
                     refined_detector_display is not None
-                    and abs(
-                        float(raw_detector_display[0])
-                        - float(refined_detector_display[0])
-                    )
+                    and abs(float(raw_detector_display[0]) - float(refined_detector_display[0]))
                     <= 1.0e-9
-                    and abs(
-                        float(raw_detector_display[1])
-                        - float(refined_detector_display[1])
-                    )
+                    and abs(float(raw_detector_display[1]) - float(refined_detector_display[1]))
                     <= 1.0e-9
                     and callable(_background_display_to_native_detector_coords)
                 )
@@ -6340,9 +6957,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                         )
                     except Exception:
                         derived_native = None
-                elif (
-                    raw_detector_display_source == "sim_col_raw"
-                    and callable(display_to_native_sim_coords)
+                elif raw_detector_display_source == "sim_col_raw" and callable(
+                    display_to_native_sim_coords
                 ):
                     try:
                         derived_native = display_to_native_sim_coords(
@@ -6389,9 +7005,8 @@ def make_runtime_geometry_manual_projection_callbacks(
                         float(projected_detector[0]),
                         float(projected_detector[1]),
                     )
-                    if (
-                        native_point is None
-                        and callable(_background_display_to_native_detector_coords)
+                    if native_point is None and callable(
+                        _background_display_to_native_detector_coords
                     ):
                         derived_native = _background_display_to_native_detector_coords(
                             float(raw_detector_display[0]),
@@ -6457,7 +7072,7 @@ def make_runtime_geometry_manual_projection_callbacks(
                 )
             ):
                 continue
-            if caked_point is not None:
+            if caked_point is not None and use_caked:
                 entry["caked_x"] = float(caked_point[0])
                 entry["caked_y"] = float(caked_point[1])
                 entry["raw_caked_x"] = float(caked_point[0])
@@ -6503,10 +7118,7 @@ def make_runtime_geometry_manual_projection_callbacks(
 
     def _copy_simulation_diag_value(value: object) -> object:
         if isinstance(value, Mapping):
-            return {
-                str(key): _copy_simulation_diag_value(item)
-                for key, item in value.items()
-            }
+            return {str(key): _copy_simulation_diag_value(item) for key, item in value.items()}
         if isinstance(value, np.ndarray):
             return _copy_simulation_diag_value(value.tolist())
         if isinstance(value, (list, tuple)):
@@ -6518,9 +7130,7 @@ def make_runtime_geometry_manual_projection_callbacks(
     def _copy_simulation_diagnostics(
         diagnostics: Mapping[str, object] | None,
     ) -> dict[str, object]:
-        copied = _copy_simulation_diag_value(
-            diagnostics if diagnostics is not None else {}
-        )
+        copied = _copy_simulation_diag_value(diagnostics if diagnostics is not None else {})
         return copied if isinstance(copied, dict) else {}
 
     def _set_last_simulation_diagnostics(
@@ -6568,6 +7178,24 @@ def make_runtime_geometry_manual_projection_callbacks(
         except Exception:
             return []
 
+    def _visible_simulated_peak_entries(
+        simulated_peaks: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        filtered_entries = _mapping_entry_list(simulated_peaks)
+        if callable(filter_simulated_peaks):
+            filtered_result = filter_simulated_peaks(filtered_entries)
+            if isinstance(filtered_result, tuple) and filtered_result:
+                filtered_entries = _mapping_entry_list(filtered_result[0])
+        collapsed_entries = list(filtered_entries)
+        if callable(collapse_simulated_peaks):
+            collapsed_result = collapse_simulated_peaks(
+                filtered_entries,
+                merge_radius_px=float(merge_radius_px),
+            )
+            if isinstance(collapsed_result, tuple) and collapsed_result:
+                collapsed_entries = _mapping_entry_list(collapsed_result[0])
+        return _mapping_entry_list(collapsed_entries)
+
     def _missing_required_param_keys(
         params_local: Mapping[str, object],
     ) -> list[str]:
@@ -6595,9 +7223,7 @@ def make_runtime_geometry_manual_projection_callbacks(
                     missing.append(key)
                     continue
                 try:
-                    coords_ok = np.isfinite(float(value[0])) and np.isfinite(
-                        float(value[1])
-                    )
+                    coords_ok = np.isfinite(float(value[0])) and np.isfinite(float(value[1]))
                 except Exception:
                     coords_ok = False
                 if not coords_ok:
@@ -6624,9 +7250,7 @@ def make_runtime_geometry_manual_projection_callbacks(
             "theta_array": _array_count(mosaic_params.get("theta_array")),
             "phi_array": _array_count(mosaic_params.get("phi_array")),
             "wavelength_array": _array_count(mosaic_params.get("wavelength_array")),
-            "wavelength_i_array": _array_count(
-                mosaic_params.get("wavelength_i_array")
-            ),
+            "wavelength_i_array": _array_count(mosaic_params.get("wavelength_i_array")),
             "sample_weights": _array_count(mosaic_params.get("sample_weights")),
         }
         missing = [
@@ -6669,12 +7293,14 @@ def make_runtime_geometry_manual_projection_callbacks(
                     pass
                 cached_peaks = _cached_preview_peaks()
             if cached_peaks:
-                projected_cached_peaks = _project_peaks_to_current_view(cached_peaks)
+                visible_cached_peaks = _visible_simulated_peak_entries(cached_peaks)
+                projected_cached_peaks = _project_peaks_to_current_view(visible_cached_peaks)
                 _set_last_simulation_diagnostics(
                     source="cache",
                     requested_prefer_cache=bool(prefer_cache),
                     status="cache_hit",
                     raw_peak_count=int(len(cached_peaks)),
+                    visible_peak_count=int(len(visible_cached_peaks)),
                     projected_peak_count=int(len(projected_cached_peaks)),
                 )
                 return projected_cached_peaks
@@ -6720,21 +7346,7 @@ def make_runtime_geometry_manual_projection_callbacks(
                 )
             return dict(grouped)
 
-        filtered_entries = list(simulated_peaks or [])
-        if callable(filter_simulated_peaks):
-            filtered_result = filter_simulated_peaks(simulated_peaks)
-            if isinstance(filtered_result, tuple) and filtered_result:
-                filtered_entries = list(filtered_result[0] or [])
-        collapsed_entries = list(filtered_entries)
-        if callable(collapse_simulated_peaks):
-            collapsed_result = collapse_simulated_peaks(
-                filtered_entries,
-                merge_radius_px=float(merge_radius_px),
-            )
-            if isinstance(collapsed_result, tuple) and collapsed_result:
-                collapsed_entries = list(collapsed_result[0] or [])
-
-        return _group_entries(collapsed_entries)
+        return _group_entries(_visible_simulated_peak_entries(simulated_peaks))
 
     def _simulated_lookup(
         simulated_peaks: Sequence[dict[str, object]] | None,
@@ -6758,15 +7370,11 @@ def make_runtime_geometry_manual_projection_callbacks(
         current_background_image=_current_background_image,
         entry_display_coords=_entry_display_coords,
         refresh_entry_geometry=_refresh_entry_geometry,
-        caked_angles_to_background_display_coords=(
-            _caked_angles_to_background_display
-        ),
+        caked_angles_to_background_display_coords=(_caked_angles_to_background_display),
         background_display_to_native_detector_coords=(
             _background_display_to_native_detector_coords
         ),
-        native_detector_coords_to_caked_display_coords=(
-            _native_to_caked_display_coords
-        ),
+        native_detector_coords_to_caked_display_coords=(_native_to_caked_display_coords),
         project_peaks_to_current_view=_project_peaks_to_current_view,
         simulated_peaks_for_params=_simulated_peaks_for_params,
         last_simulation_diagnostics=_last_simulation_diagnostics,
@@ -6825,8 +7433,12 @@ def render_current_geometry_manual_pairs(
             pick_session,
             current_background_index=current_background_index,
         ):
-            pending_entries = pick_session.get("pending_entries", []) if isinstance(pick_session, dict) else []
-            target_count = pick_session.get("target_count") if isinstance(pick_session, dict) else None
+            pending_entries = (
+                pick_session.get("pending_entries", []) if isinstance(pick_session, dict) else []
+            )
+            target_count = (
+                pick_session.get("target_count") if isinstance(pick_session, dict) else None
+            )
             q_label = str(
                 pick_session.get(
                     "q_label",
@@ -6840,9 +7452,7 @@ def render_current_geometry_manual_pairs(
                 total_count = int(target_count)
             except Exception:
                 total_count = len(
-                    pick_session.get("group_entries", [])
-                    if isinstance(pick_session, dict)
-                    else []
+                    pick_session.get("group_entries", []) if isinstance(pick_session, dict) else []
                 )
             remaining_candidates = geometry_manual_unassigned_group_candidates(
                 pick_session,
@@ -6896,7 +7506,8 @@ def make_runtime_geometry_manual_callbacks(
     restore_view: Callable[..., None],
     clear_preview_artists: Callable[..., None],
     push_undo_state: Callable[[], None] | None = None,
-    listed_q_group_entries: Callable[[], Sequence[dict[str, object]]] | Sequence[dict[str, object]] = (),
+    listed_q_group_entries: Callable[[], Sequence[dict[str, object]]]
+    | Sequence[dict[str, object]] = (),
     format_q_group_line: Callable[[dict[str, object]], str] | None = None,
     use_caked_space: Callable[[], object] | object = False,
     pick_search_window_px: float,
@@ -6926,7 +7537,9 @@ def make_runtime_geometry_manual_callbacks(
         tuple[float | None, float | None],
     ]
     | None = None,
-    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
     last_caked_radial_values: Callable[[], object] | object = (),
     last_caked_azimuth_values: Callable[[], object] | object = (),
     background_display_to_native_detector_coords: Callable[
@@ -6942,6 +7555,7 @@ def make_runtime_geometry_manual_callbacks(
     show_preview: Callable[..., None] | None = None,
     refresh_pick_session: Callable[[dict[str, object] | None], dict[str, object] | None]
     | None = None,
+    profile_cache: Callable[[], Mapping[str, object] | None] | Mapping[str, object] | None = None,
 ) -> GeometryManualRuntimeCallbacks:
     """Build live manual-geometry callbacks around the shared helper surface."""
 
@@ -6968,6 +7582,10 @@ def make_runtime_geometry_manual_callbacks(
 
     def _use_caked_space() -> bool:
         return bool(_resolve_runtime_value(use_caked_space))
+
+    def _profile_cache() -> Mapping[str, object] | None:
+        cache = _resolve_runtime_value(profile_cache)
+        return cache if isinstance(cache, Mapping) else None
 
     def _render_current_pairs(*, update_status: bool = False) -> bool:
         return render_current_geometry_manual_pairs(
@@ -7010,6 +7628,7 @@ def make_runtime_geometry_manual_callbacks(
             caked_search_tth_deg=float(caked_search_tth_deg),
             caked_search_phi_deg=float(caked_search_phi_deg),
             find_peak_record_for_click_fn=find_peak_record_for_click,
+            profile_cache=_profile_cache(),
         )
         if callable(set_suppress_drag_press_once):
             set_suppress_drag_press_once(bool(suppress_drag))
@@ -7035,9 +7654,7 @@ def make_runtime_geometry_manual_callbacks(
             set_status_text=set_status_text,
             push_undo_state_fn=push_undo_state,
             use_caked_space=_use_caked_space(),
-            caked_angles_to_background_display_coords=(
-                caked_angles_to_background_display_coords
-            ),
+            caked_angles_to_background_display_coords=(caked_angles_to_background_display_coords),
             background_display_to_native_detector_coords=(
                 background_display_to_native_detector_coords
             ),
@@ -7045,6 +7662,7 @@ def make_runtime_geometry_manual_callbacks(
             position_error_px=position_error_px,
             position_sigma_px=position_sigma_px,
             refine_saved_pair_entry_fn=refine_saved_pair_entry,
+            profile_cache=_profile_cache(),
         )
         return bool(handled)
 
@@ -7066,9 +7684,7 @@ def make_runtime_geometry_manual_callbacks(
             position_error_px=position_error_px,
             position_sigma_px=position_sigma_px,
             use_caked_space=_use_caked_space(),
-            caked_angles_to_background_display_coords=(
-                caked_angles_to_background_display_coords
-            ),
+            caked_angles_to_background_display_coords=(caked_angles_to_background_display_coords),
             radial_axis=np.asarray(
                 _resolve_runtime_value(last_caked_radial_values),
                 dtype=float,
@@ -7077,6 +7693,7 @@ def make_runtime_geometry_manual_callbacks(
                 _resolve_runtime_value(last_caked_azimuth_values),
                 dtype=float,
             ),
+            profile_cache=_profile_cache(),
             caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
         )
         if preview_state is None:
@@ -7151,16 +7768,16 @@ def geometry_manual_pick_button_label(
         pick_session,
         current_background_index=current_background_index,
     ):
-        pending_entries = pick_session.get("pending_entries", []) if isinstance(pick_session, dict) else []
+        pending_entries = (
+            pick_session.get("pending_entries", []) if isinstance(pick_session, dict) else []
+        )
         target_count = pick_session.get("target_count") if isinstance(pick_session, dict) else None
         if isinstance(pending_entries, list):
             try:
                 total_count = int(target_count)
             except Exception:
                 total_count = len(
-                    pick_session.get("group_entries", [])
-                    if isinstance(pick_session, dict)
-                    else []
+                    pick_session.get("group_entries", []) if isinstance(pick_session, dict) else []
                 )
             label += f" <placing {len(pending_entries)}/{max(0, total_count)}>"
     return label
@@ -7175,7 +7792,9 @@ def geometry_manual_toggle_selection_at(
     display_background: object | None,
     get_cache_data: Callable[..., dict[str, object]],
     pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
-    set_pairs_for_index_fn: Callable[[int, Sequence[dict[str, object]] | None], Sequence[dict[str, object]]],
+    set_pairs_for_index_fn: Callable[
+        [int, Sequence[dict[str, object]] | None], Sequence[dict[str, object]]
+    ],
     set_pick_session_fn: Callable[[dict[str, object]], None],
     restore_view_fn: Callable[..., None],
     clear_preview_artists_fn: Callable[..., None],
@@ -7183,9 +7802,12 @@ def geometry_manual_toggle_selection_at(
     update_button_label_fn: Callable[[], None],
     set_status_text: Callable[[str], None] | None = None,
     push_undo_state_fn: Callable[[], None] | None = None,
-    listed_q_group_entries: Callable[[], Sequence[dict[str, object]]] | Sequence[dict[str, object]] = (),
+    listed_q_group_entries: Callable[[], Sequence[dict[str, object]]]
+    | Sequence[dict[str, object]] = (),
     format_q_group_line: Callable[[dict[str, object]], str] | None = None,
-    choose_group_at_fn: Callable[..., tuple[tuple[object, ...] | None, list[dict[str, object]], float]] = geometry_manual_choose_group_at,
+    choose_group_at_fn: Callable[
+        ..., tuple[tuple[object, ...] | None, list[dict[str, object]], float]
+    ] = geometry_manual_choose_group_at,
     nearest_candidate_to_point_fn: Callable[
         [float, float, Sequence[dict[str, object]] | None],
         tuple[dict[str, object] | None, float],
@@ -7207,6 +7829,7 @@ def geometry_manual_toggle_selection_at(
     pick_search_window_px: float,
     caked_search_tth_deg: float = DEFAULT_CAKED_SEARCH_TTH_DEG,
     caked_search_phi_deg: float = DEFAULT_CAKED_SEARCH_PHI_DEG,
+    profile_cache: Mapping[str, object] | None = None,
 ) -> tuple[bool, dict[str, object], bool]:
     """Select one manual Qr/Qz group and arm background-point placement."""
 
@@ -7267,9 +7890,7 @@ def geometry_manual_toggle_selection_at(
             )
             if isinstance(shared_group_entries_raw, Sequence):
                 shared_group_entries = [
-                    dict(entry)
-                    for entry in shared_group_entries_raw
-                    if isinstance(entry, dict)
+                    dict(entry) for entry in shared_group_entries_raw if isinstance(entry, dict)
                 ]
                 if shared_group_entries:
                     best_group_key = shared_group_key
@@ -7279,13 +7900,10 @@ def geometry_manual_toggle_selection_at(
                         shared_peak_record,
                         shared_group_entries,
                     )
-                    if (
-                        matched_index is not None
-                        and 0 <= int(matched_index) < len(shared_group_entries)
+                    if matched_index is not None and 0 <= int(matched_index) < len(
+                        shared_group_entries
                     ):
-                        shared_tagged_candidate = dict(
-                            shared_group_entries[int(matched_index)]
-                        )
+                        shared_tagged_candidate = dict(shared_group_entries[int(matched_index)])
                         shared_seed_dist = float(shared_peak_dist)
 
     if best_group_key is None:
@@ -7329,7 +7947,9 @@ def geometry_manual_toggle_selection_at(
             )
         return True, {}, False
 
-    q_entries = listed_q_group_entries() if callable(listed_q_group_entries) else listed_q_group_entries
+    q_entries = (
+        listed_q_group_entries() if callable(listed_q_group_entries) else listed_q_group_entries
+    )
     q_entry = next(
         (
             entry
@@ -7347,31 +7967,51 @@ def geometry_manual_toggle_selection_at(
         best_group_key,
         best_group_entries,
     )
+    seed_candidate: dict[str, object] | None = None
+    seed_dist = float("nan")
     if isinstance(shared_tagged_candidate, dict):
-        tagged_candidate = dict(shared_tagged_candidate)
-        tagged_dist = (
-            float(shared_seed_dist)
-            if np.isfinite(float(shared_seed_dist))
-            else geometry_manual_candidate_distance_to_point(
-                float(col),
-                float(row),
-                tagged_candidate,
-                use_caked_display=use_caked_space,
-            )
-        )
+        seed_candidate = dict(shared_tagged_candidate)
+        seed_dist = float(shared_seed_dist)
     elif nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
-        tagged_candidate, tagged_dist = nearest_candidate_to_point_fn(
+        seed_candidate, seed_dist = nearest_candidate_to_point_fn(
             float(col),
             float(row),
             best_group_entries,
             use_caked_display=use_caked_space,
         )
     else:
-        tagged_candidate, tagged_dist = nearest_candidate_to_point_fn(
+        seed_candidate, seed_dist = nearest_candidate_to_point_fn(
             float(col),
             float(row),
             best_group_entries,
         )
+    tagged_candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
+    if isinstance(seed_candidate, dict):
+        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+            seed_candidate,
+            target_key=best_group_key,
+            profile_cache=profile_cache,
+        )
+        selected_candidate = gui_mosaic_top.select_mosaic_top_representative(
+            best_group_entries,
+            branch_id=branch_id,
+            target_key=best_group_key,
+            profile_cache=profile_cache,
+        )
+        if isinstance(selected_candidate, dict):
+            tagged_candidate = selected_candidate
+    tagged_dist = (
+        geometry_manual_candidate_distance_to_point(
+            float(col),
+            float(row),
+            tagged_candidate,
+            use_caked_display=use_caked_space,
+        )
+        if isinstance(tagged_candidate, dict)
+        else float("nan")
+    )
+    if not np.isfinite(float(tagged_dist)) and np.isfinite(float(seed_dist)):
+        tagged_dist = float(seed_dist)
     tagged_group_entries = geometry_manual_prioritize_candidate_entries(
         best_group_entries,
         tagged_candidate,
@@ -7379,9 +8019,7 @@ def geometry_manual_toggle_selection_at(
     )
     tagged_candidate_key = candidate_source_key(tagged_candidate)
     tagged_label = (
-        str(tagged_candidate.get("label", ""))
-        if isinstance(tagged_candidate, dict)
-        else ""
+        str(tagged_candidate.get("label", "")) if isinstance(tagged_candidate, dict) else ""
     )
     next_session = {
         "background_index": int(current_background_index),
@@ -7413,7 +8051,8 @@ def geometry_manual_toggle_selection_at(
         seed_dist = (
             float(shared_seed_dist)
             if np.isfinite(float(shared_seed_dist))
-            else tagged_dist if np.isfinite(tagged_dist)
+            else tagged_dist
+            if np.isfinite(tagged_dist)
             else best_dist
         )
         set_status_text(
@@ -7438,7 +8077,9 @@ def geometry_manual_place_selection_at(
     display_background: object | None,
     get_cache_data: Callable[..., dict[str, object]],
     refine_preview_point: Callable[..., tuple[float, float]],
-    set_pairs_for_index_fn: Callable[[int, Sequence[dict[str, object]] | None], Sequence[dict[str, object]]],
+    set_pairs_for_index_fn: Callable[
+        [int, Sequence[dict[str, object]] | None], Sequence[dict[str, object]]
+    ],
     set_pick_session_fn: Callable[[dict[str, object]], None],
     clear_preview_artists_fn: Callable[..., None],
     restore_view_fn: Callable[..., None],
@@ -7465,14 +8106,19 @@ def geometry_manual_place_selection_at(
         [float, float, Sequence[dict[str, object]] | None],
         tuple[dict[str, object] | None, float],
     ] = geometry_manual_nearest_candidate_to_point,
-    pair_entry_from_candidate_fn: Callable[..., dict[str, object] | None] = geometry_manual_pair_entry_from_candidate,
-    position_error_px: Callable[[float, float, float, float], float] = geometry_manual_position_error_px,
+    pair_entry_from_candidate_fn: Callable[
+        ..., dict[str, object] | None
+    ] = geometry_manual_pair_entry_from_candidate,
+    position_error_px: Callable[
+        [float, float, float, float], float
+    ] = geometry_manual_position_error_px,
     position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
     refine_saved_pair_entry_fn: Callable[
         [dict[str, object], dict[str, object] | None],
         dict[str, object] | None,
     ]
     | None = None,
+    profile_cache: Mapping[str, object] | None = None,
 ) -> tuple[bool, dict[str, object]]:
     """Record the next manual background point for the active Qr/Qz pick session."""
 
@@ -7500,52 +8146,64 @@ def geometry_manual_place_selection_at(
         render_current_pairs_fn(update_status=False)
         update_button_label_fn()
         if callable(set_status_text):
-            set_status_text(
-                "Manual geometry picking had no remaining simulated peaks to place."
-            )
+            set_status_text("Manual geometry picking had no remaining simulated peaks to place.")
         return False, {}
 
     cache_data = get_cache_data(background_image=display_background)
-    peak_col, peak_row = refine_preview_point(
-        None,
-        float(col),
-        float(row),
-        display_background=display_background,
-        cache_data=cache_data,
-    )
     tagged_candidate = geometry_manual_tagged_candidate_from_session(
         pick_session,
         remaining_candidates,
         candidate_source_key=candidate_source_key,
     )
-    if tagged_candidate is not None:
-        candidate = tagged_candidate
-        candidate_dist = geometry_manual_candidate_distance_to_point(
-            float(peak_col),
-            float(peak_row),
-            candidate,
-            use_caked_display=use_caked_space,
-        )
-    else:
+    seed_candidate = tagged_candidate
+    if seed_candidate is None:
         if nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
-            candidate, candidate_dist = nearest_candidate_to_point_fn(
-                float(peak_col),
-                float(peak_row),
+            seed_candidate, _seed_dist = nearest_candidate_to_point_fn(
+                float(col),
+                float(row),
                 remaining_candidates,
                 use_caked_display=use_caked_space,
             )
         else:
-            candidate, candidate_dist = nearest_candidate_to_point_fn(
-                float(peak_col),
-                float(peak_row),
+            seed_candidate, _seed_dist = nearest_candidate_to_point_fn(
+                float(col),
+                float(row),
                 remaining_candidates,
             )
+    candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
+    if isinstance(seed_candidate, dict):
+        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+            seed_candidate,
+            target_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+            profile_cache=profile_cache,
+        )
+        selected_candidate = gui_mosaic_top.select_mosaic_top_representative(
+            remaining_candidates,
+            branch_id=branch_id,
+            target_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+            profile_cache=profile_cache,
+        )
+        if isinstance(selected_candidate, dict):
+            candidate = selected_candidate
     if candidate is None:
         if callable(set_status_text):
             set_status_text(
                 "Manual geometry picking could not find an unassigned simulated peak for that background point."
             )
         return False, current_session
+    peak_col, peak_row = refine_preview_point(
+        candidate,
+        float(col),
+        float(row),
+        display_background=display_background,
+        cache_data=cache_data,
+    )
+    candidate_dist = geometry_manual_candidate_distance_to_point(
+        float(peak_col),
+        float(peak_row),
+        candidate,
+        use_caked_display=use_caked_space,
+    )
 
     pair_kwargs: dict[str, object] = {
         "peak_col": float(peak_col),
@@ -7617,9 +8275,8 @@ def geometry_manual_place_selection_at(
     ):
         detector_col = float(detector_anchor[0])
         detector_row = float(detector_anchor[1])
-    elif (
-        np.isfinite(float(pair_kwargs["peak_col"]))
-        and np.isfinite(float(pair_kwargs["peak_row"]))
+    elif np.isfinite(float(pair_kwargs["peak_col"])) and np.isfinite(
+        float(pair_kwargs["peak_row"])
     ):
         detector_col = float(pair_kwargs["peak_col"])
         detector_row = float(pair_kwargs["peak_row"])
@@ -7632,25 +8289,13 @@ def geometry_manual_place_selection_at(
         detector_row=detector_row,
         raw_col=float(pair_kwargs["raw_col"]),
         raw_row=float(pair_kwargs["raw_row"]),
-        caked_col=(
-            float(pair_kwargs["caked_col"])
-            if "caked_col" in pair_kwargs
-            else None
-        ),
-        caked_row=(
-            float(pair_kwargs["caked_row"])
-            if "caked_row" in pair_kwargs
-            else None
-        ),
+        caked_col=(float(pair_kwargs["caked_col"]) if "caked_col" in pair_kwargs else None),
+        caked_row=(float(pair_kwargs["caked_row"]) if "caked_row" in pair_kwargs else None),
         raw_caked_col=(
-            float(pair_kwargs["raw_caked_col"])
-            if "raw_caked_col" in pair_kwargs
-            else None
+            float(pair_kwargs["raw_caked_col"]) if "raw_caked_col" in pair_kwargs else None
         ),
         raw_caked_row=(
-            float(pair_kwargs["raw_caked_row"])
-            if "raw_caked_row" in pair_kwargs
-            else None
+            float(pair_kwargs["raw_caked_row"]) if "raw_caked_row" in pair_kwargs else None
         ),
         placement_error_px=float(placement_error_px_value),
         sigma_px=float(sigma_px_value),
@@ -7687,7 +8332,9 @@ def geometry_manual_place_selection_at(
         total_count = 0
     if total_count <= 0:
         group_entries = next_session.get("group_entries", [])
-        total_count = len(group_entries) if isinstance(group_entries, list) else len(pending_entries)
+        total_count = (
+            len(group_entries) if isinstance(group_entries, list) else len(pending_entries)
+        )
     placed_count = len(pending_entries)
     q_label = str(
         next_session.get(
@@ -7786,7 +8433,8 @@ def match_geometry_manual_group_to_background(
     auto_match_background_context: Callable[
         [np.ndarray, dict[str, object]],
         tuple[dict[str, object], dict[str, object]],
-    ] | None = None,
+    ]
+    | None = None,
     match_simulated_peaks_to_peak_context: Callable[
         [Sequence[dict[str, object]], dict[str, object], dict[str, object]],
         tuple[Sequence[dict[str, object]], object],
@@ -7817,7 +8465,9 @@ def match_geometry_manual_group_to_background(
 
     match_cfg = dict(state.get("match_config", {})) if isinstance(state, dict) else {}
     background_context = state.get("background_context") if isinstance(state, dict) else None
-    if not isinstance(background_context, dict) or not bool(background_context.get("img_valid", False)):
+    if not isinstance(background_context, dict) or not bool(
+        background_context.get("img_valid", False)
+    ):
         if not callable(auto_match_background_context):
             return {}
         try:
@@ -7919,7 +8569,9 @@ def caked_angles_to_background_display_coords(
         tuple[float | None, float | None],
     ]
     | None = None,
-    rotate_point_for_display: Callable[[float, float, tuple[int, ...], int], tuple[float, float]] = _default_rotate_point,
+    rotate_point_for_display: Callable[
+        [float, float, tuple[int, ...], int], tuple[float, float]
+    ] = _default_rotate_point,
     display_rotate_k: int = 0,
 ) -> tuple[float | None, float | None]:
     """Back-project one caked-space point to the displayed detector background.
@@ -7932,10 +8584,7 @@ def caked_angles_to_background_display_coords(
     reconstructed detector intensities remain in detector-count space.
     """
 
-    if (
-        native_background is None
-        or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg))
-    ):
+    if native_background is None or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg)):
         return None, None
 
     native_shape = tuple(int(v) for v in native_background.shape[:2])
@@ -8012,9 +8661,7 @@ def caked_angles_to_background_display_coords(
             float(two_theta_deg),
             float(phi_deg),
             transform_bundle=(
-                transform_bundle
-                if isinstance(transform_bundle, CakeTransformBundle)
-                else None
+                transform_bundle if isinstance(transform_bundle, CakeTransformBundle) else None
             ),
         )
     except Exception:
@@ -8142,9 +8789,7 @@ def should_collect_hit_tables_for_update(
             )
         except Exception:
             has_manual_geometry_overlay = False
-        manual_geometry_overlay_requested = bool(
-            manual_pick_armed or has_manual_geometry_overlay
-        )
+        manual_geometry_overlay_requested = bool(manual_pick_armed or has_manual_geometry_overlay)
 
     return bool(
         hkl_pick_armed
@@ -8297,16 +8942,42 @@ def geometry_manual_pair_entry_to_jsonable(
                 continue
 
     if normalized.get("source_reflection_namespace") is not None:
-        row["source_reflection_namespace"] = str(
-            normalized.get("source_reflection_namespace")
-        )
+        row["source_reflection_namespace"] = str(normalized.get("source_reflection_namespace"))
     if "source_reflection_is_full" in normalized:
-        row["source_reflection_is_full"] = bool(
-            normalized.get("source_reflection_is_full", False)
-        )
+        row["source_reflection_is_full"] = bool(normalized.get("source_reflection_is_full", False))
 
     if normalized.get("source_label") is not None:
         row["source_label"] = str(normalized.get("source_label"))
+
+    for key in ("branch_id", "branch_source", "selection_reason"):
+        if normalized.get(key) is not None:
+            row[key] = str(normalized.get(key))
+    if normalized.get("best_sample_index") is not None:
+        try:
+            row["best_sample_index"] = int(normalized.get("best_sample_index"))
+        except Exception:
+            pass
+    if normalized.get("mosaic_weight") is not None:
+        try:
+            mosaic_weight = float(normalized.get("mosaic_weight"))
+        except Exception:
+            mosaic_weight = float("nan")
+        if np.isfinite(mosaic_weight):
+            row["mosaic_weight"] = float(mosaic_weight)
+    rank_key = normalized.get("mosaic_top_rank_key")
+    if isinstance(rank_key, (tuple, list)):
+        serialized_rank: list[object] = []
+        for item in rank_key:
+            if isinstance(item, np.generic):
+                item = item.item()
+            if isinstance(item, int):
+                serialized_rank.append(int(item))
+            elif isinstance(item, float) and np.isfinite(float(item)):
+                serialized_rank.append(float(item))
+            elif isinstance(item, str):
+                serialized_rank.append(str(item))
+        if serialized_rank:
+            row["mosaic_top_rank_key"] = serialized_rank
 
     return row
 
@@ -8380,11 +9051,7 @@ def geometry_manual_pairs_export_rows(
     """Return saved manual placements as portable per-background rows."""
 
     background_indices: set[int] = set()
-    raw_keys = (
-        pairs_by_background.keys()
-        if isinstance(pairs_by_background, Mapping)
-        else ()
-    )
+    raw_keys = pairs_by_background.keys() if isinstance(pairs_by_background, Mapping) else ()
     for raw_idx in raw_keys:
         try:
             background_indices.add(int(raw_idx))
@@ -8396,8 +9063,7 @@ def geometry_manual_pairs_export_rows(
         entries = [
             serialized
             for serialized in (
-                pair_entry_to_jsonable(entry)
-                for entry in pairs_for_index(int(background_idx))
+                pair_entry_to_jsonable(entry) for entry in pairs_for_index(int(background_idx))
             )
             if serialized is not None
         ]
@@ -8436,10 +9102,7 @@ def collect_geometry_manual_pairs_snapshot(
         background_index = 0
 
     return {
-        "background_files": [
-            str(Path(str(path)).expanduser())
-            for path in osc_files
-        ],
+        "background_files": [str(Path(str(path)).expanduser()) for path in osc_files],
         "current_background_index": int(background_index),
         "manual_pairs": list(manual_pair_rows),
     }
@@ -8493,9 +9156,7 @@ def apply_geometry_manual_pairs_rows(
             continue
 
         target_index = None
-        normalized_path = normalized_background_path_for_compare(
-            raw_row.get("background_path")
-        )
+        normalized_path = normalized_background_path_for_compare(raw_row.get("background_path"))
         if normalized_path is not None:
             target_index = exact_path_lookup.get(normalized_path)
         if target_index is None:
@@ -8509,10 +9170,7 @@ def apply_geometry_manual_pairs_rows(
                 fallback_index = int(raw_row.get("background_index"))
             except Exception:
                 fallback_index = None
-            if (
-                fallback_index is not None
-                and 0 <= fallback_index < len(osc_files)
-            ):
+            if fallback_index is not None and 0 <= fallback_index < len(osc_files):
                 target_index = int(fallback_index)
 
         if target_index is None:
@@ -8524,8 +9182,7 @@ def apply_geometry_manual_pairs_rows(
         imported_entries = [
             restored
             for restored in (
-                pair_entry_from_jsonable(entry)
-                for entry in raw_row.get("entries", [])
+                pair_entry_from_jsonable(entry) for entry in raw_row.get("entries", [])
             )
             if restored is not None
         ]
@@ -8535,11 +9192,7 @@ def apply_geometry_manual_pairs_rows(
             pair_count += len(imported_entries)
 
     replace_pairs_by_background(
-        {
-            int(idx): list(entries)
-            for idx, entries in imported_map.items()
-            if entries
-        }
+        {int(idx): list(entries) for idx, entries in imported_map.items() if entries}
     )
     clear_preview_artists(redraw=False)
     cancel_pick_session(restore_view=True, redraw=False)
@@ -8578,23 +9231,19 @@ def apply_geometry_manual_pairs_snapshot(
             saved_paths_norm = [
                 path_norm
                 for path_norm in (
-                    normalized_background_path_for_compare(path)
-                    for path in background_paths
+                    normalized_background_path_for_compare(path) for path in background_paths
                 )
                 if path_norm is not None
             ]
             current_paths_norm = [
                 path_norm
                 for path_norm in (
-                    normalized_background_path_for_compare(path)
-                    for path in osc_files
+                    normalized_background_path_for_compare(path) for path in osc_files
                 )
                 if path_norm is not None
             ]
             if saved_paths_norm != current_paths_norm:
-                missing_paths = [
-                    path for path in background_paths if not Path(path).is_file()
-                ]
+                missing_paths = [path for path in background_paths if not Path(path).is_file()]
                 if not missing_paths:
                     try:
                         if callable(load_background_files):
@@ -8618,9 +9267,7 @@ def apply_geometry_manual_pairs_snapshot(
     if callable(schedule_update):
         schedule_update()
 
-    message = (
-        f"Imported {imported_pairs} manual placement(s) across {imported_backgrounds} background(s)."
-    )
+    message = f"Imported {imported_pairs} manual placement(s) across {imported_backgrounds} background(s)."
     if warnings:
         message += " Warnings: " + "; ".join(warnings[:4])
         if len(warnings) > 4:
@@ -8648,15 +9295,9 @@ def export_geometry_manual_pairs(
         return None
 
     initial_dir_value = (
-        str(Path(initial_dir).expanduser())
-        if initial_dir is not None
-        else str(Path.cwd())
+        str(Path(initial_dir).expanduser()) if initial_dir is not None else str(Path.cwd())
     )
-    stamp = (
-        str(stamp_factory()).strip()
-        if callable(stamp_factory)
-        else ""
-    )
+    stamp = str(stamp_factory()).strip() if callable(stamp_factory) else ""
     initial_file = "ra_sim_geometry_placements.json"
     if stamp:
         initial_file = f"ra_sim_geometry_placements_{stamp}.json"
@@ -8701,9 +9342,7 @@ def import_geometry_manual_pairs(
     """Run the manual-placement import dialog workflow."""
 
     initial_dir_value = (
-        str(Path(initial_dir).expanduser())
-        if initial_dir is not None
-        else str(Path.cwd())
+        str(Path(initial_dir).expanduser()) if initial_dir is not None else str(Path.cwd())
     )
     file_path = askopenfilename(
         title="Import Geometry Placements",
@@ -8731,8 +9370,7 @@ def import_geometry_manual_pairs(
             ensure_geometry_fit_caked_view()
         except Exception as exc:
             message += (
-                " Warning: imported placements but could not switch to 2D caked view "
-                f"({exc})."
+                f" Warning: imported placements but could not switch to 2D caked view ({exc})."
             )
 
     if callable(set_status_text):

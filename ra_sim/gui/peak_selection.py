@@ -14,9 +14,15 @@ from ra_sim.simulation.intersection_cache_schema import (
 )
 from ra_sim.simulation.diffraction import get_process_peaks_runtime_kwargs
 from ra_sim.debug_controls import retain_optional_cache
+from ra_sim.utils.calculations import (
+    _n2_wavelength_snapshot_from_angstrom,
+    _normalize_n2_source_meta,
+    resolve_index_of_refraction_array,
+    source_branch_index_from_phi_deg,
+)
 from . import views as gui_views
 from . import manual_geometry as gui_manual_geometry
-from ra_sim.utils.calculations import source_branch_index_from_phi_deg
+from . import mosaic_top_selection as gui_mosaic_top
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,7 @@ _SPECULAR_VIEW_DEFAULT_SAMPLE_HEIGHT_M = 0.08
 _SPECULAR_VIEW_DEFAULT_DETECTOR_DISTANCE_M = 0.075
 _SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M = 100e-6
 _PEAK_CLICK_INDEX_CELL_SIZE_PX = 50.0
+_REFINED_SIMULATION_SIGNATURE_KEY = "_refined_simulation_signature"
 
 
 def _retain_peak_overlay_cache() -> bool:
@@ -131,13 +138,16 @@ class SelectedPeakRuntimeBindings:
     set_status_text: Callable[[str], None] | None = None
     draw_idle: Callable[[], None] | None = None
     display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None
-    detector_display_to_native_detector_coords: Callable[
-        [float, float], tuple[float, float] | None
-    ] | None = None
+    detector_display_to_native_detector_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None
     native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None
-    native_detector_coords_to_detector_display_coords: Callable[
-        [float, float], tuple[float, float] | None
-    ] | None = None
+    native_detector_coords_to_detector_display_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None
+    caked_angles_to_detector_display_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None
     hkl_pick_simulation_points_factory: Callable[[], object] | None = None
     simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None
     deactivate_conflicting_modes: Callable[[], None] | None = None
@@ -251,11 +261,7 @@ def build_selected_peak_canvas_pick_config(
 ) -> SelectedPeakCanvasPickConfig:
     """Build one validated selected-peak canvas-pick config."""
 
-    normalized_shape = (
-        tuple(int(v) for v in image_shape)
-        if image_shape is not None
-        else None
-    )
+    normalized_shape = tuple(int(v) for v in image_shape) if image_shape is not None else None
     return SelectedPeakCanvasPickConfig(
         image_size=int(image_size),
         primary_a=float(primary_a),
@@ -874,11 +880,7 @@ def degenerate_hkls_for_qr(
     """Return all integer HKLs that share the same Qr rod and nearest L."""
 
     source_miller = source_miller_for_label(simulation_runtime_state, source_label)
-    if (
-        source_miller.ndim != 2
-        or source_miller.shape[1] < 3
-        or source_miller.shape[0] == 0
-    ):
+    if source_miller.ndim != 2 or source_miller.shape[1] < 3 or source_miller.shape[0] == 0:
         return []
 
     finite = (
@@ -901,9 +903,7 @@ def degenerate_hkls_for_qr(
         rod_mask = m_vals == m_target
         if not np.any(rod_mask):
             return []
-        nearest_l = int(
-            l_vals[rod_mask][np.argmin(np.abs(l_vals[rod_mask] - int(l)))]
-        )
+        nearest_l = int(l_vals[rod_mask][np.argmin(np.abs(l_vals[rod_mask] - int(l)))])
         mask = rod_mask & (l_vals == nearest_l)
 
     out: list[tuple[int, int, int]] = []
@@ -979,9 +979,7 @@ def build_selected_peak_status_text(
     """Build the GUI status text for one selected Bragg peak."""
 
     shown_deg = deg_hkls[:12]
-    deg_text = ", ".join(
-        format_hkl_triplet(hv, kv, lv) for hv, kv, lv in shown_deg
-    )
+    deg_text = ", ".join(format_hkl_triplet(hv, kv, lv) for hv, kv, lv in shown_deg)
     if len(deg_hkls) > len(shown_deg):
         deg_text += f", ... (+{len(deg_hkls) - len(shown_deg)} more)"
     qr_text = f"  Qr={qr_val:.4f} A^-1" if np.isfinite(qr_val) else ""
@@ -1005,9 +1003,7 @@ def brightest_hit_native_from_table(
     if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 3:
         return None
 
-    finite_mask = (
-        np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
-    )
+    finite_mask = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
     if not np.any(finite_mask):
         return None
 
@@ -1028,6 +1024,74 @@ def simulate_ideal_hkl_native_center(
 ) -> tuple[float, float] | None:
     """Simulate one idealized HKL and return its native detector center."""
 
+    def _resolve_probe_n2_sample_array_override(
+        profile_cache: Mapping[str, object],
+        wavelength_arr: np.ndarray,
+    ) -> np.ndarray | None:
+        wavelength_arr = _n2_wavelength_snapshot_from_angstrom(wavelength_arr)
+        if wavelength_arr.size == 0:
+            return None
+
+        cached_probe_n2_fallback = None
+        cached_n2 = profile_cache.get("n2_sample_array")
+        if cached_n2 is not None:
+            try:
+                normalized_cached_n2 = np.ascontiguousarray(
+                    np.asarray(cached_n2, dtype=np.complex128).reshape(-1),
+                    dtype=np.complex128,
+                )
+            except Exception:
+                normalized_cached_n2 = None
+            if normalized_cached_n2 is None:
+                pass
+            elif normalized_cached_n2.size == wavelength_arr.size:
+                cached_wavelength_snapshot = profile_cache.get(
+                    "_n2_sample_array_wavelength_snapshot"
+                )
+                if cached_wavelength_snapshot is None:
+                    return normalized_cached_n2
+                try:
+                    normalized_cached_wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(
+                        cached_wavelength_snapshot
+                    )
+                except Exception:
+                    normalized_cached_wavelength_snapshot = None
+                if normalized_cached_wavelength_snapshot is not None and (
+                    normalized_cached_wavelength_snapshot.size == wavelength_arr.size
+                    and np.array_equal(
+                        normalized_cached_wavelength_snapshot,
+                        wavelength_arr,
+                        equal_nan=True,
+                    )
+                ):
+                    return normalized_cached_n2
+                if normalized_cached_wavelength_snapshot is None:
+                    # Keep a valid cached array when metadata is malformed; only replace it
+                    # if we can successfully rebuild from the authoritative source.
+                    cached_probe_n2_fallback = normalized_cached_n2
+
+        source_meta = _normalize_n2_source_meta(profile_cache.get("_n2_sample_array_source"))
+        if source_meta is None or source_meta[0] != "cif_path":
+            return cached_probe_n2_fallback
+
+        try:
+            return np.ascontiguousarray(
+                np.asarray(
+                    resolve_index_of_refraction_array(
+                        wavelength_arr * 1.0e-10,
+                        cif_path=str(source_meta[1]),
+                    ),
+                    dtype=np.complex128,
+                ).reshape(-1),
+                dtype=np.complex128,
+            )
+        except Exception:
+            return cached_probe_n2_fallback
+
+    profile_cache = getattr(simulation_runtime_state, "profile_cache", {})
+    if not isinstance(profile_cache, Mapping):
+        profile_cache = {}
+
     def _run_single(
         beam_x: np.ndarray,
         beam_y: np.ndarray,
@@ -1036,6 +1100,7 @@ def simulate_ideal_hkl_native_center(
         wavelength_arr: np.ndarray,
         *,
         sample_weights_arr: np.ndarray | None = None,
+        n2_sample_array_override: np.ndarray | None = None,
     ) -> tuple[float, float] | None:
         image_buf = np.zeros(
             (int(config.image_size), int(config.image_size)),
@@ -1086,6 +1151,7 @@ def simulate_ideal_hkl_native_center(
                 solve_q_rel_tol=float(config.solve_q_rel_tol),
                 solve_q_mode=int(config.solve_q_mode),
                 sample_weights=sample_weights_arr,
+                n2_sample_array_override=n2_sample_array_override,
                 **get_process_peaks_runtime_kwargs(),
             )
         except Exception:
@@ -1101,31 +1167,35 @@ def simulate_ideal_hkl_native_center(
         np.array([0.0], dtype=np.float64),
         np.array([0.0], dtype=np.float64),
         np.array([float(config.wavelength)], dtype=np.float64),
+        n2_sample_array_override=_resolve_probe_n2_sample_array_override(
+            profile_cache,
+            np.array([float(config.wavelength)], dtype=np.float64),
+        ),
     )
     if strict_center is not None:
         return strict_center
 
     beam_x = np.asarray(
-        simulation_runtime_state.profile_cache.get("beam_x_array", []),
+        profile_cache.get("beam_x_array", []),
         dtype=np.float64,
     ).ravel()
     beam_y = np.asarray(
-        simulation_runtime_state.profile_cache.get("beam_y_array", []),
+        profile_cache.get("beam_y_array", []),
         dtype=np.float64,
     ).ravel()
     theta_arr = np.asarray(
-        simulation_runtime_state.profile_cache.get("theta_array", []),
+        profile_cache.get("theta_array", []),
         dtype=np.float64,
     ).ravel()
     phi_arr = np.asarray(
-        simulation_runtime_state.profile_cache.get("phi_array", []),
+        profile_cache.get("phi_array", []),
         dtype=np.float64,
     ).ravel()
     wavelength_arr = np.asarray(
-        simulation_runtime_state.profile_cache.get("wavelength_array", []),
+        profile_cache.get("wavelength_array", []),
         dtype=np.float64,
     ).ravel()
-    sample_weights_arr = simulation_runtime_state.profile_cache.get("sample_weights")
+    sample_weights_arr = profile_cache.get("sample_weights")
     if sample_weights_arr is not None:
         sample_weights_arr = np.asarray(sample_weights_arr, dtype=np.float64).ravel()
 
@@ -1148,6 +1218,10 @@ def simulate_ideal_hkl_native_center(
         phi_arr,
         wavelength_arr,
         sample_weights_arr=sample_weights_arr,
+        n2_sample_array_override=_resolve_probe_n2_sample_array_override(
+            profile_cache,
+            wavelength_arr,
+        ),
     )
 
 
@@ -1342,9 +1416,7 @@ def _peak_overlay_intersection_entries(
     """Return intersection-cache tables with resolved source metadata."""
 
     entries: list[tuple[np.ndarray, float, float, str, str]] = []
-    live_caked_cache_current = _peak_overlay_live_caked_cache_is_current(
-        simulation_runtime_state
-    )
+    live_caked_cache_current = _peak_overlay_live_caked_cache_is_current(simulation_runtime_state)
 
     if bool(show_caked):
         if live_caked_cache_current:
@@ -1635,8 +1707,7 @@ def ensure_runtime_peak_overlay_data(
             list(simulation_runtime_state.peak_overlay_cache.get("intensities", ()))
         )
         simulation_runtime_state.peak_records.extend(
-            dict(rec)
-            for rec in simulation_runtime_state.peak_overlay_cache.get("records", ())
+            dict(rec) for rec in simulation_runtime_state.peak_overlay_cache.get("records", ())
         )
         return True
 
@@ -1679,11 +1750,7 @@ def ensure_runtime_peak_overlay_data(
                     hkl_raw = (float(row[6]), float(row[7]), float(row[8]))
                 except Exception:
                     continue
-                if not (
-                    np.isfinite(cx)
-                    and np.isfinite(cy)
-                    and np.isfinite(intensity)
-                ):
+                if not (np.isfinite(cx) and np.isfinite(cy) and np.isfinite(intensity)):
                     continue
 
                 caked_coords = None
@@ -1755,14 +1822,14 @@ def ensure_runtime_peak_overlay_data(
                 except Exception:
                     continue
                 hkl = tuple(int(np.rint(val)) for val in hkl_raw)
-                m_val = float(hkl_raw[0] * hkl_raw[0] + hkl_raw[0] * hkl_raw[1] + hkl_raw[1] * hkl_raw[1])
+                m_val = float(
+                    hkl_raw[0] * hkl_raw[0] + hkl_raw[0] * hkl_raw[1] + hkl_raw[1] * hkl_raw[1]
+                )
                 qr_val = float(qr_hint)
                 if not np.isfinite(qr_val):
                     qr_val = (
                         (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
-                        if float(av_used) > 0.0
-                        and np.isfinite(float(av_used))
-                        and m_val >= 0.0
+                        if float(av_used) > 0.0 and np.isfinite(float(av_used)) and m_val >= 0.0
                         else float("nan")
                     )
                 q_group_key, _, qz_meta = reflection_q_group_metadata(
@@ -1787,9 +1854,8 @@ def ensure_runtime_peak_overlay_data(
                     str(source_label),
                     source_reflection_indices_local,
                 )
-                if (
-                    source_table_index is not None
-                    and 0 <= int(source_table_index) < len(source_reflection_indices)
+                if source_table_index is not None and 0 <= int(source_table_index) < len(
+                    source_reflection_indices
                 ):
                     try:
                         source_reflection_index = int(
@@ -1848,6 +1914,11 @@ def ensure_runtime_peak_overlay_data(
                 )
                 if record is None:
                     continue
+                record = gui_mosaic_top.annotate_selection_metadata(
+                    record,
+                    target_key=q_group_key,
+                    profile_cache=_runtime_profile_cache(simulation_runtime_state),
+                )
                 simulation_runtime_state.peak_records.append(record)
 
         if retain_cache:
@@ -1946,24 +2017,140 @@ def _finite_record_pair(
     return float(col), float(row)
 
 
+def _record_caked_pairs(record: Mapping[str, object] | None) -> list[tuple[float, float]]:
+    """Return finite caked-coordinate pairs carried by one peak record."""
+
+    if not isinstance(record, Mapping):
+        return []
+    pairs: list[tuple[float, float]] = []
+    for x_key, y_key in (
+        ("caked_x", "caked_y"),
+        ("raw_caked_x", "raw_caked_y"),
+        ("two_theta_deg", "phi_deg"),
+        ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ("background_two_theta_deg", "background_phi_deg"),
+        ("simulated_two_theta_deg", "simulated_phi_deg"),
+    ):
+        point = _finite_record_pair(record, x_key, y_key)
+        if point is not None:
+            pairs.append(point)
+    return pairs
+
+
+def _point_matches_any(
+    point: tuple[float, float] | None,
+    candidates: Sequence[tuple[float, float]],
+    *,
+    tol: float = 1.0e-9,
+) -> bool:
+    if point is None:
+        return False
+    return any(
+        abs(float(point[0]) - float(candidate[0])) <= float(tol)
+        and abs(float(point[1]) - float(candidate[1])) <= float(tol)
+        for candidate in candidates
+    )
+
+
+def _record_detector_display_pair(
+    record: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    """Return detector-display coordinates without falling back to caked axes."""
+
+    if not isinstance(record, Mapping):
+        return None
+    for x_key, y_key in (
+        ("refined_detector_display_col", "refined_detector_display_row"),
+        ("detector_display_col", "detector_display_row"),
+    ):
+        point = _finite_record_pair(record, x_key, y_key)
+        if point is not None:
+            return point
+
+    caked_pairs = _record_caked_pairs(record)
+    for x_key, y_key in (
+        ("display_col", "display_row"),
+        ("sim_col_raw", "sim_row_raw"),
+        ("sim_col", "sim_row"),
+        ("x", "y"),
+        ("simulated_x", "simulated_y"),
+    ):
+        point = _finite_record_pair(record, x_key, y_key)
+        if point is None or _point_matches_any(point, caked_pairs):
+            continue
+        return point
+    return None
+
+
 def _record_display_pair(
     record: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
     """Return the active-view display point carried by a cached peak record."""
 
-    for x_key, y_key in (
-        ("display_col", "display_row"),
-        ("selected_display_col", "selected_display_row"),
-        ("sim_col", "sim_row"),
-        ("sim_col_raw", "sim_row_raw"),
-        ("caked_x", "caked_y"),
-        ("raw_caked_x", "raw_caked_y"),
-        ("two_theta_deg", "phi_deg"),
-    ):
-        point = _finite_record_pair(record, x_key, y_key)
-        if point is not None:
-            return point
-    return None
+    return _record_detector_display_pair(record)
+
+
+def _record_matches_hkl_target(
+    record: Mapping[str, object] | None,
+    target: Sequence[int],
+) -> bool:
+    hkl = _record_hkl_triplet(record)
+    if hkl is None or len(target) < 3:
+        return False
+    return tuple(int(v) for v in hkl) == tuple(int(target[idx]) for idx in range(3))
+
+
+def _record_has_caked_refinement(record: Mapping[str, object] | None) -> bool:
+    if not isinstance(record, Mapping):
+        return False
+    if str(record.get("refined_by", "")) == "caked_peak_center":
+        return True
+    return bool(
+        _finite_record_pair(record, "refined_sim_caked_x", "refined_sim_caked_y") is not None
+        and _record_detector_display_pair(record) is not None
+    )
+
+
+def _simulation_signature_matches(left: object, right: object) -> bool:
+    if left is right:
+        return True
+    try:
+        result = left == right
+    except Exception:
+        return False
+    if isinstance(result, np.ndarray):
+        try:
+            return bool(np.all(result))
+        except Exception:
+            return False
+    try:
+        return bool(result)
+    except Exception:
+        return False
+
+
+def _record_refinement_signature_matches(
+    record: Mapping[str, object] | None,
+    simulation_runtime_state,
+) -> bool:
+    current_signature = getattr(
+        simulation_runtime_state,
+        "last_simulation_signature",
+        None,
+    )
+    if not isinstance(record, Mapping):
+        return False
+    if current_signature is None:
+        return (
+            _REFINED_SIMULATION_SIGNATURE_KEY not in record
+            or record.get(_REFINED_SIMULATION_SIGNATURE_KEY) is None
+        )
+    if _REFINED_SIMULATION_SIGNATURE_KEY not in record:
+        return False
+    return _simulation_signature_matches(
+        record.get(_REFINED_SIMULATION_SIGNATURE_KEY),
+        current_signature,
+    )
 
 
 def _record_native_pair(
@@ -1997,9 +2184,7 @@ def _record_hkl_triplet(
 
     if not isinstance(record, Mapping):
         return None
-    return _normalize_record_hkl(record.get("hkl")) or _normalize_record_hkl(
-        record.get("hkl_raw")
-    )
+    return _normalize_record_hkl(record.get("hkl")) or _normalize_record_hkl(record.get("hkl_raw"))
 
 
 def _peak_record_for_index(
@@ -2094,6 +2279,8 @@ def _simulation_point_active_view_pair(
 
     if not isinstance(record, Mapping):
         return None
+    if not bool(use_caked_display):
+        return _record_detector_display_pair(record)
     try:
         point = gui_manual_geometry._geometry_manual_entry_active_view_point(
             record,
@@ -2109,22 +2296,196 @@ def _simulation_point_active_view_pair(
             return None
         if np.isfinite(col) and np.isfinite(row):
             return float(col), float(row)
-    if bool(use_caked_display):
-        try:
-            if gui_manual_geometry._geometry_manual_entry_has_stale_caked_fields(record):
-                return None
-        except Exception:
-            pass
-        return (
-            _finite_record_pair(record, "caked_x", "caked_y")
-            or _finite_record_pair(record, "raw_caked_x", "raw_caked_y")
-            or _finite_record_pair(record, "two_theta_deg", "phi_deg")
-        )
-    return _finite_record_pair(record, "sim_col", "sim_row") or _finite_record_pair(
-        record,
-        "display_col",
-        "display_row",
+    try:
+        if gui_manual_geometry._geometry_manual_entry_has_stale_caked_fields(record):
+            return None
+    except Exception:
+        pass
+    return (
+        _finite_record_pair(record, "caked_x", "caked_y")
+        or _finite_record_pair(record, "raw_caked_x", "raw_caked_y")
+        or _finite_record_pair(record, "two_theta_deg", "phi_deg")
     )
+
+
+def _runtime_profile_cache(simulation_runtime_state) -> Mapping[str, object] | None:
+    profile_cache = getattr(simulation_runtime_state, "profile_cache", None)
+    return profile_cache if isinstance(profile_cache, Mapping) else None
+
+
+def _peak_candidate_for_index(
+    simulation_runtime_state,
+    idx: int,
+    *,
+    target_key: object = None,
+) -> dict[str, object] | None:
+    record = _peak_record_for_index(simulation_runtime_state, int(idx))
+    if not isinstance(record, dict):
+        record = {}
+    hkl = _peak_hkl_for_index(simulation_runtime_state, int(idx), record)
+    if hkl is not None:
+        record.setdefault("hkl", hkl)
+    display = _peak_display_pair_for_index(simulation_runtime_state, int(idx), record)
+    if display is not None:
+        record.setdefault("display_col", float(display[0]))
+        record.setdefault("display_row", float(display[1]))
+    try:
+        intensity = float(simulation_runtime_state.peak_intensities[int(idx)])
+    except Exception:
+        intensity = float("nan")
+    if np.isfinite(intensity):
+        record.setdefault("intensity", float(intensity))
+    record["_peak_index"] = int(idx)
+    record.pop("mosaic_top_rank_key", None)
+    return gui_mosaic_top.annotate_selection_metadata(
+        record,
+        target_key=target_key,
+        profile_cache=_runtime_profile_cache(simulation_runtime_state),
+    )
+
+
+def _selected_peak_index_from_representative(
+    simulation_runtime_state,
+    representative: Mapping[str, object],
+) -> int:
+    try:
+        idx = int(representative.get("_peak_index"))
+    except Exception:
+        idx = -1
+    if idx >= 0:
+        return int(idx)
+    resolved = _peak_record_index_for_simulation_point(
+        simulation_runtime_state,
+        representative,
+    )
+    return -1 if resolved is None else int(resolved)
+
+
+def _select_mosaic_top_peak_record(
+    simulation_runtime_state,
+    indices: Sequence[int],
+    *,
+    branch_id: str | None = None,
+    target_key: object = None,
+) -> tuple[int, dict[str, object] | None]:
+    candidates: list[dict[str, object]] = []
+    for idx in indices:
+        candidate = _peak_candidate_for_index(
+            simulation_runtime_state,
+            int(idx),
+            target_key=target_key,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    representative = gui_mosaic_top.select_mosaic_top_representative(
+        candidates,
+        branch_id=branch_id,
+        target_key=target_key,
+        profile_cache=_runtime_profile_cache(simulation_runtime_state),
+    )
+    if representative is None:
+        return -1, None
+    return _selected_peak_index_from_representative(
+        simulation_runtime_state,
+        representative,
+    ), representative
+
+
+def _refine_selected_hkl_caked_record(
+    simulation_runtime_state,
+    record: Mapping[str, object] | None,
+    *,
+    caked_angles_to_detector_display_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
+    detector_display_to_native_detector_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
+) -> tuple[dict[str, object] | None, tuple[float, float] | None]:
+    if not isinstance(record, Mapping):
+        return None, None
+    selected = dict(record)
+    seed = _simulation_point_active_view_pair(selected, use_caked_display=True)
+    if seed is None:
+        return selected, None
+    raw_two_theta = float(seed[0])
+    raw_phi = float(seed[1])
+    selected.setdefault("raw_caked_x", raw_two_theta)
+    selected.setdefault("raw_caked_y", raw_phi)
+    selected["pre_refine_two_theta_deg"] = raw_two_theta
+    selected["pre_refine_phi_deg"] = raw_phi
+    image = getattr(simulation_runtime_state, "last_caked_image_unscaled", None)
+    radial = getattr(simulation_runtime_state, "last_caked_radial_values", None)
+    azimuth = getattr(simulation_runtime_state, "last_caked_azimuth_values", None)
+    refined_two_theta, refined_phi = gui_manual_geometry.refine_caked_peak_center(
+        image,
+        radial,
+        azimuth,
+        raw_two_theta,
+        raw_phi,
+    )
+    selected["caked_x"] = float(refined_two_theta)
+    selected["caked_y"] = float(refined_phi)
+    selected["two_theta_deg"] = float(refined_two_theta)
+    selected["phi_deg"] = float(refined_phi)
+    selected["selected_display_col"] = float(refined_two_theta)
+    selected["selected_display_row"] = float(refined_phi)
+    selected["refined_by"] = "caked_peak_center"
+    selected[_REFINED_SIMULATION_SIGNATURE_KEY] = getattr(
+        simulation_runtime_state,
+        "last_simulation_signature",
+        None,
+    )
+
+    if callable(caked_angles_to_detector_display_coords):
+        try:
+            detector_display = caked_angles_to_detector_display_coords(
+                float(refined_two_theta),
+                float(refined_phi),
+            )
+        except Exception:
+            detector_display = None
+        if (
+            isinstance(detector_display, tuple)
+            and len(detector_display) >= 2
+            and np.isfinite(float(detector_display[0]))
+            and np.isfinite(float(detector_display[1]))
+        ):
+            detector_col = float(detector_display[0])
+            detector_row = float(detector_display[1])
+            selected["display_col"] = detector_col
+            selected["display_row"] = detector_row
+            selected["sim_col"] = detector_col
+            selected["sim_row"] = detector_row
+            selected["sim_col_raw"] = detector_col
+            selected["sim_row_raw"] = detector_row
+            selected["refined_detector_display_col"] = detector_col
+            selected["refined_detector_display_row"] = detector_row
+            selected["refined_detector_projection_source"] = "caked_angles"
+
+            if callable(detector_display_to_native_detector_coords):
+                try:
+                    native_point = detector_display_to_native_detector_coords(
+                        detector_col,
+                        detector_row,
+                    )
+                except Exception:
+                    native_point = None
+                if (
+                    isinstance(native_point, tuple)
+                    and len(native_point) >= 2
+                    and np.isfinite(float(native_point[0]))
+                    and np.isfinite(float(native_point[1]))
+                ):
+                    native_col = float(native_point[0])
+                    native_row = float(native_point[1])
+                    selected["native_col"] = native_col
+                    selected["native_row"] = native_row
+                    selected["sim_native_x"] = native_col
+                    selected["sim_native_y"] = native_row
+                    selected["detector_x"] = native_col
+                    selected["detector_y"] = native_row
+                    selected["background_detector_x"] = native_col
+                    selected["background_detector_y"] = native_row
+    return selected, (float(refined_two_theta), float(refined_phi))
 
 
 def _build_simulation_point_click_index(
@@ -2370,9 +2731,7 @@ def _nearest_indexed_simulation_point(
     best_idx: int | None = None
     best_d2 = float("inf")
     half_window = (
-        max(0.0, float(max_axis_distance_px))
-        if max_axis_distance_px is not None
-        else None
+        max(0.0, float(max_axis_distance_px)) if max_axis_distance_px is not None else None
     )
     for raw_idx in candidate_indices or ():
         try:
@@ -2397,14 +2756,14 @@ def _nearest_indexed_simulation_point(
             continue
         dx = px - float(click_col)
         dy = py - float(click_row)
-        if apply_window and half_window is not None and (
-            abs(dx) > half_window or abs(dy) > half_window
+        if (
+            apply_window
+            and half_window is not None
+            and (abs(dx) > half_window or abs(dy) > half_window)
         ):
             continue
         d2 = dx * dx + dy * dy
-        if d2 < best_d2 or (
-            d2 == best_d2 and (best_idx is None or int(idx) < int(best_idx))
-        ):
+        if d2 < best_d2 or (d2 == best_d2 and (best_idx is None or int(idx) < int(best_idx))):
             best_idx = int(idx)
             best_d2 = float(d2)
     return best_idx, best_d2
@@ -2450,9 +2809,11 @@ def _peak_record_index_for_simulation_point(
                 return int(idx)
             else:
                 try:
-                    same_identity = gui_manual_geometry.geometry_manual_source_entries_share_identity(
-                        candidate_dict,
-                        record_dict,
+                    same_identity = (
+                        gui_manual_geometry.geometry_manual_source_entries_share_identity(
+                            candidate_dict,
+                            record_dict,
+                        )
                     )
                 except Exception:
                     same_identity = False
@@ -2792,9 +3153,7 @@ def _restore_peak_overlay_lists_from_cached_records(
 
     cache = getattr(simulation_runtime_state, "peak_overlay_cache", None)
     cache_restored_from_gui_state = (
-        bool(cache.get("restored_from_gui_state", False))
-        if isinstance(cache, Mapping)
-        else False
+        bool(cache.get("restored_from_gui_state", False)) if isinstance(cache, Mapping) else False
     )
     restored_view_sig = cache.get("restored_view_sig") if isinstance(cache, Mapping) else None
     frozen_display_fallback_allowed = bool(
@@ -2887,8 +3246,7 @@ def _restore_peak_overlay_lists_from_cached_records(
                         )
                     )
                     if active_view_point is None or (
-                        abs(float(legacy_detector_point[0]) - float(active_view_point[0]))
-                        > 1.0e-9
+                        abs(float(legacy_detector_point[0]) - float(active_view_point[0])) > 1.0e-9
                         or abs(float(legacy_detector_point[1]) - float(active_view_point[1]))
                         > 1.0e-9
                     ):
@@ -2975,9 +3333,7 @@ def _restore_peak_overlay_lists_from_cached_records(
                 "intensities": list(restored_intensities),
                 "records": [dict(record) for record in restored_records],
                 "restored_view_sig": view_sig,
-                "click_spatial_index": _build_peak_click_spatial_index(
-                    restored_positions
-                ),
+                "click_spatial_index": _build_peak_click_spatial_index(restored_positions),
                 "peak_positions_filtered": cache_filtered,
                 "restored_from_gui_state": cache_restored_from_gui_state,
             }
@@ -3071,7 +3427,9 @@ def select_peak_by_index(
 ) -> bool:
     """Select one simulated peak by cached index and update GUI state."""
 
-    selected_record_override = dict(record_override) if isinstance(record_override, Mapping) else None
+    selected_record_override = (
+        dict(record_override) if isinstance(record_override, Mapping) else None
+    )
     if idx < 0 or idx >= len(simulation_runtime_state.peak_positions):
         if selected_record_override is None:
             return False
@@ -3184,6 +3542,10 @@ def select_peak_by_hkl(
     caked_view_enabled: bool = False,
     sync_hkl_vars: bool = True,
     silent_if_missing: bool = False,
+    caked_angles_to_detector_display_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
+    detector_display_to_native_detector_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
 ) -> bool:
     """Select the simulated peak matching one requested integer HKL."""
 
@@ -3191,10 +3553,7 @@ def select_peak_by_hkl(
     target = (int(h), int(k), int(l))
 
     if not simulation_runtime_state.peak_positions:
-        if (
-            not silent_if_missing
-            and simulation_runtime_state.unscaled_image is not None
-        ):
+        if not silent_if_missing and simulation_runtime_state.unscaled_image is not None:
             schedule_update()
         if not silent_if_missing:
             set_status_text("Preparing simulated peak map... try again after update.")
@@ -3211,8 +3570,7 @@ def select_peak_by_hkl(
     matches = [
         idx
         for idx in range(len(simulation_runtime_state.peak_positions))
-        if _visible_peak_index(idx)
-        and _peak_hkl_for_index(simulation_runtime_state, idx) == target
+        if _visible_peak_index(idx) and _peak_hkl_for_index(simulation_runtime_state, idx) == target
     ]
 
     if not matches:
@@ -3240,16 +3598,29 @@ def select_peak_by_hkl(
         simulation_runtime_state.selected_peak_record = None
         return False
 
-    def _score(idx_value: int) -> float:
-        val = _peak_intensity_for_index(simulation_runtime_state, int(idx_value))
-        return float(val) if np.isfinite(val) else float("-inf")
-
-    best_idx = max(matches, key=_score)
+    best_idx, selected_record = _select_mosaic_top_peak_record(
+        simulation_runtime_state,
+        matches,
+        target_key=("hkl",) + target,
+    )
+    if selected_record is None:
+        return False
     selected_display = _peak_display_pair_for_index(
         simulation_runtime_state,
         int(best_idx),
+        record_override=selected_record,
         use_caked_display=bool(caked_view_enabled),
     )
+    record_override = selected_record
+    if bool(caked_view_enabled):
+        record_override, refined_display = _refine_selected_hkl_caked_record(
+            simulation_runtime_state,
+            selected_record,
+            caked_angles_to_detector_display_coords=(caked_angles_to_detector_display_coords),
+            detector_display_to_native_detector_coords=(detector_display_to_native_detector_coords),
+        )
+        if refined_display is not None:
+            selected_display = refined_display
     return select_peak_by_index(
         simulation_runtime_state,
         peak_selection_state,
@@ -3262,6 +3633,7 @@ def select_peak_by_hkl(
         draw_idle=draw_idle,
         prefix="Selected peak",
         selected_display=selected_display,
+        record_override=record_override,
         sync_hkl_vars=sync_hkl_vars,
     )
 
@@ -3300,6 +3672,10 @@ def select_peak_from_hkl_controls(
     draw_idle: Any,
     caked_view_enabled: bool = False,
     tcl_error_types: tuple[type[BaseException], ...] = (),
+    caked_angles_to_detector_display_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
+    detector_display_to_native_detector_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
 ) -> bool:
     """Select one peak from the HKL lookup entry controls."""
 
@@ -3330,6 +3706,8 @@ def select_peak_from_hkl_controls(
         caked_view_enabled=bool(caked_view_enabled),
         sync_hkl_vars=True,
         silent_if_missing=False,
+        caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
+        detector_display_to_native_detector_coords=detector_display_to_native_detector_coords,
     )
 
 
@@ -3372,16 +3750,10 @@ def toggle_hkl_pick_mode(
         set_status_text("Run a simulation first.")
         return
 
-    if (
-        not ensure_peak_overlay_data(force=False)
-        or not simulation_runtime_state.peak_positions
-    ):
+    if not ensure_peak_overlay_data(force=False) or not simulation_runtime_state.peak_positions:
         set_pick_mode(
             True,
-            message=(
-                "Preparing simulated peak map for HKL picking... "
-                "wait for the next update."
-            ),
+            message=("Preparing simulated peak map for HKL picking... wait for the next update."),
         )
         schedule_update()
         return
@@ -3426,17 +3798,19 @@ def _nearest_peak_index_for_click(
                 continue
             if not (np.isfinite(px) and np.isfinite(py)) or px < 0.0:
                 continue
-            if apply_window and max_axis_distance_px is not None and (
-                abs(px - float(click_col)) > float(max_axis_distance_px)
-                or abs(py - float(click_row)) > float(max_axis_distance_px)
+            if (
+                apply_window
+                and max_axis_distance_px is not None
+                and (
+                    abs(px - float(click_col)) > float(max_axis_distance_px)
+                    or abs(py - float(click_row)) > float(max_axis_distance_px)
+                )
             ):
                 continue
             d2 = (px - float(click_col)) ** 2 + (py - float(click_row)) ** 2
             val = _peak_intensity_for_index(simulation_runtime_state, int(i))
             score_val = float(val) if np.isfinite(val) else float("-inf")
-            if d2 < best_d2 - 1e-9 or (
-                abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val
-            ):
+            if d2 < best_d2 - 1e-9 or (abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val):
                 best_i = int(i)
                 best_d2 = float(d2)
                 best_i_val = float(score_val)
@@ -3489,7 +3863,10 @@ def find_peak_record_for_canvas_click(
         False,
     )
     fallback_valid = False
-    if bool(getattr(simulation_runtime_state, "peak_positions_filtered", False)) and simulation_runtime_state.peak_positions:
+    if (
+        bool(getattr(simulation_runtime_state, "peak_positions_filtered", False))
+        and simulation_runtime_state.peak_positions
+    ):
         best_i, best_d2, within_window = _nearest_peak_index_for_click(
             simulation_runtime_state,
             float(click_col),
@@ -3624,6 +4001,8 @@ def select_peak_from_canvas_click(
     set_status_text: Any,
     caked_view_enabled: bool = False,
     detector_display_to_native_detector_coords: Any = None,
+    caked_angles_to_detector_display_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
     simulation_point_candidates: object = None,
 ) -> bool:
     """Select the nearest visible peak from one detector or caked-view click."""
@@ -3653,11 +4032,82 @@ def select_peak_from_canvas_click(
         )
         return False
 
+    target_hkl = _record_hkl_triplet(peak_record)
+    if target_hkl is not None:
+        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+            peak_record,
+            target_key=("hkl",) + target_hkl,
+            profile_cache=_runtime_profile_cache(simulation_runtime_state),
+        )
+        payload_candidates = _simulation_point_candidates_from_payload(simulation_point_candidates)
+        if payload_candidates:
+            candidate_records: list[dict[str, object]] = []
+            for raw_candidate in payload_candidates:
+                if not isinstance(raw_candidate, Mapping):
+                    continue
+                if _record_hkl_triplet(raw_candidate) != target_hkl:
+                    continue
+                candidate = dict(raw_candidate)
+                resolved_idx = _peak_record_index_for_simulation_point(
+                    simulation_runtime_state,
+                    candidate,
+                )
+                if resolved_idx is not None:
+                    candidate["_peak_index"] = int(resolved_idx)
+                candidate_records.append(
+                    gui_mosaic_top.annotate_selection_metadata(
+                        candidate,
+                        target_key=("hkl",) + target_hkl,
+                        profile_cache=_runtime_profile_cache(simulation_runtime_state),
+                    )
+                )
+            selected_candidate = gui_mosaic_top.select_mosaic_top_representative(
+                candidate_records,
+                branch_id=branch_id,
+                target_key=("hkl",) + target_hkl,
+                profile_cache=_runtime_profile_cache(simulation_runtime_state),
+            )
+            if isinstance(selected_candidate, dict):
+                peak_record = selected_candidate
+                best_i = _selected_peak_index_from_representative(
+                    simulation_runtime_state,
+                    selected_candidate,
+                )
+        else:
+            branch_matches = [
+                idx
+                for idx in range(len(simulation_runtime_state.peak_positions))
+                if _peak_hkl_for_index(simulation_runtime_state, idx) == target_hkl
+            ]
+            if len(branch_matches) > 1:
+                selected_idx, selected_record = _select_mosaic_top_peak_record(
+                    simulation_runtime_state,
+                    branch_matches,
+                    branch_id=branch_id,
+                    target_key=("hkl",) + target_hkl,
+                )
+                if isinstance(selected_record, dict):
+                    peak_record = selected_record
+                    best_i = int(selected_idx)
+
     selected_native = _record_native_pair(peak_record)
-    selected_display = _simulation_point_active_view_pair(
-        peak_record,
-        use_caked_display=True,
-    ) if bool(caked_view_enabled) else _record_display_pair(peak_record)
+    selected_display = (
+        _simulation_point_active_view_pair(
+            peak_record,
+            use_caked_display=True,
+        )
+        if bool(caked_view_enabled)
+        else _record_display_pair(peak_record)
+    )
+    if bool(caked_view_enabled):
+        peak_record, refined_display = _refine_selected_hkl_caked_record(
+            simulation_runtime_state,
+            peak_record,
+            caked_angles_to_detector_display_coords=(caked_angles_to_detector_display_coords),
+            detector_display_to_native_detector_coords=(detector_display_to_native_detector_coords),
+        )
+        if refined_display is not None:
+            selected_display = refined_display
     if bool(caked_view_enabled):
         clicked_native_for_record = (
             (float(selected_native[0]), float(selected_native[1]))
@@ -3852,8 +4302,7 @@ def _decompose_specular_sample_pose(
 ) -> tuple[float, float, float, float]:
     theta_i_deg = float(np.clip(_finite_float(config.theta_initial_deg, 0.0), 0.0, 90.0))
     residual = _nearest_rotation_matrix(
-        _ra_sample_rotation_matrix(config)
-        @ _rotation_x_matrix(-np.deg2rad(theta_i_deg))
+        _ra_sample_rotation_matrix(config) @ _rotation_x_matrix(-np.deg2rad(theta_i_deg))
     )
     alpha_rad = float(np.arcsin(np.clip(residual[1, 0], -1.0, 1.0)))
     cos_alpha = float(np.cos(alpha_rad))
@@ -3981,9 +4430,7 @@ def open_selected_peak_intersection_figure(
     del n2
     selected_peak = simulation_runtime_state.selected_peak_record
     if not isinstance(selected_peak, Mapping):
-        set_status_text(
-            "Select a Bragg peak first (arm Pick HKL on Image or use HKL controls)."
-        )
+        set_status_text("Select a Bragg peak first (arm Pick HKL on Image or use HKL controls).")
         return False
 
     if launch_specular_visualizer is None:
@@ -4124,9 +4571,7 @@ def toggle_runtime_hkl_pick_mode(bindings: SelectedPeakRuntimeBindings) -> None:
     toggle_hkl_pick_mode(
         bindings.simulation_runtime_state,
         bindings.peak_selection_state,
-        caked_view_enabled=bool(
-            _resolve_runtime_value(bindings.caked_view_enabled_factory)
-        ),
+        caked_view_enabled=bool(_resolve_runtime_value(bindings.caked_view_enabled_factory)),
         ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
         schedule_update=(
             bindings.schedule_update if callable(bindings.schedule_update) else lambda: None
@@ -4173,7 +4618,60 @@ def select_peak_by_hkl_runtime(
         caked_view_enabled=bool(caked_view_enabled),
         sync_hkl_vars=sync_hkl_vars,
         silent_if_missing=silent_if_missing,
+        caked_angles_to_detector_display_coords=(bindings.caked_angles_to_detector_display_coords),
+        detector_display_to_native_detector_coords=(
+            bindings.detector_display_to_native_detector_coords
+        ),
     )
+
+
+def _reselect_runtime_refined_detector_record(
+    bindings: SelectedPeakRuntimeBindings,
+    target: Sequence[int],
+) -> bool:
+    """Keep a caked-refined simulation record selected when returning to detector view."""
+
+    if _runtime_bool(bindings.caked_view_enabled_factory, False):
+        return False
+    if len(target) < 3:
+        return False
+    record = getattr(bindings.simulation_runtime_state, "selected_peak_record", None)
+    if not (
+        isinstance(record, Mapping)
+        and _record_matches_hkl_target(record, target)
+        and _record_has_caked_refinement(record)
+        and _record_refinement_signature_matches(record, bindings.simulation_runtime_state)
+    ):
+        return False
+    detector_point = _record_detector_display_pair(record)
+    if detector_point is None:
+        return False
+    detector_col, detector_row = float(detector_point[0]), float(detector_point[1])
+    if not (np.isfinite(detector_col) and np.isfinite(detector_row)):
+        return False
+
+    marker = bindings.selected_peak_marker
+    if marker is None:
+        return False
+    marker.set_data([detector_col], [detector_row])
+    marker.set_visible(True)
+
+    selected_record = dict(record)
+    selected_record["display_col"] = detector_col
+    selected_record["display_row"] = detector_row
+    selected_record["sim_col"] = detector_col
+    selected_record["sim_row"] = detector_row
+    selected_record["sim_col_raw"] = detector_col
+    selected_record["sim_row_raw"] = detector_row
+    bindings.simulation_runtime_state.selected_peak_record = selected_record
+    bindings.peak_selection_state.selected_hkl_target = (
+        int(target[0]),
+        int(target[1]),
+        int(target[2]),
+    )
+    _sync_runtime_peak_selection_state(bindings)
+    _runtime_draw_idle(bindings)
+    return True
 
 
 def reselect_runtime_selected_peak(bindings: SelectedPeakRuntimeBindings) -> bool:
@@ -4182,6 +4680,8 @@ def reselect_runtime_selected_peak(bindings: SelectedPeakRuntimeBindings) -> boo
     target = getattr(bindings.peak_selection_state, "selected_hkl_target", None)
     if target is None or len(target) < 3:
         return False
+    if _reselect_runtime_refined_detector_record(bindings, target):
+        return True
     return select_peak_by_hkl_runtime(
         bindings,
         int(target[0]),
@@ -4214,6 +4714,10 @@ def select_peak_from_runtime_hkl_controls(
         draw_idle=lambda: _runtime_draw_idle(bindings),
         caked_view_enabled=_runtime_bool(bindings.caked_view_enabled_factory, False),
         tcl_error_types=tuple(bindings.tcl_error_types or ()),
+        caked_angles_to_detector_display_coords=(bindings.caked_angles_to_detector_display_coords),
+        detector_display_to_native_detector_coords=(
+            bindings.detector_display_to_native_detector_coords
+        ),
     )
 
 
@@ -4305,6 +4809,7 @@ def select_peak_from_runtime_canvas_click(
         detector_display_to_native_detector_coords=(
             bindings.detector_display_to_native_detector_coords
         ),
+        caked_angles_to_detector_display_coords=(bindings.caked_angles_to_detector_display_coords),
         simulation_point_candidates=simulation_point_candidates,
     )
 
@@ -4347,13 +4852,15 @@ def make_runtime_peak_selection_bindings_factory(
     set_status_text_factory: object = None,
     draw_idle_factory: object = None,
     display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None,
-    detector_display_to_native_detector_coords: Callable[
-        [float, float], tuple[float, float] | None
-    ] | None = None,
+    detector_display_to_native_detector_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
     native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None,
     native_detector_coords_to_detector_display_coords: Callable[
         [float, float], tuple[float, float] | None
-    ] | None = None,
+    ]
+    | None = None,
+    caked_angles_to_detector_display_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
     hkl_pick_simulation_points_factory: Callable[[], object] | None = None,
     simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None,
     deactivate_conflicting_modes_factory: object = None,
@@ -4379,21 +4886,18 @@ def make_runtime_peak_selection_bindings_factory(
             set_status_text=_resolve_runtime_value(set_status_text_factory),
             draw_idle=_resolve_runtime_value(draw_idle_factory),
             display_to_native_sim_coords=display_to_native_sim_coords,
-            detector_display_to_native_detector_coords=(
-                detector_display_to_native_detector_coords
-            ),
+            detector_display_to_native_detector_coords=(detector_display_to_native_detector_coords),
             native_sim_to_display_coords=native_sim_to_display_coords,
             native_detector_coords_to_detector_display_coords=(
                 native_detector_coords_to_detector_display_coords
             ),
+            caked_angles_to_detector_display_coords=(caked_angles_to_detector_display_coords),
             hkl_pick_simulation_points_factory=hkl_pick_simulation_points_factory,
             simulate_ideal_hkl_native_center=simulate_ideal_hkl_native_center,
             deactivate_conflicting_modes=_resolve_runtime_value(
                 deactivate_conflicting_modes_factory
             ),
-            on_hkl_pick_mode_changed=_resolve_runtime_value(
-                on_hkl_pick_mode_changed_factory
-            ),
+            on_hkl_pick_mode_changed=_resolve_runtime_value(on_hkl_pick_mode_changed_factory),
             n2=n2,
             tcl_error_types=tuple(tcl_error_types or ()),
         )

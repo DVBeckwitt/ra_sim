@@ -271,30 +271,28 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
         min_separation_px=2.0,
         image_shape_factory=lambda: live["image_shape"],
     )
-    intersection_factory = (
-        peak_selection.make_runtime_selected_peak_intersection_config_factory(
-            image_size=512,
-            center_col_factory=lambda: live["center_col"],
-            center_row_factory=lambda: live["center_row"],
-            distance_cor_to_detector_factory=lambda: live["distance"],
-            gamma_deg_factory=lambda: live["gamma"],
-            Gamma_deg_factory=lambda: live["Gamma"],
-            chi_deg_factory=lambda: live["chi"],
-            psi_deg_factory=lambda: live["psi"],
-            psi_z_deg_factory=lambda: live["psi_z"],
-            zs_factory=lambda: live["zs"],
-            zb_factory=lambda: live["zb"],
-            theta_initial_deg_factory=lambda: live["theta_initial"],
-            cor_angle_deg_factory=lambda: live["cor_angle"],
-            sigma_mosaic_deg_factory=lambda: live["sigma_mosaic"],
-            gamma_mosaic_deg_factory=lambda: live["gamma_mosaic"],
-            eta_factory=lambda: live["eta"],
-            sample_width_m_factory=lambda: live["sample_width"],
-            sample_length_m_factory=lambda: live["sample_length"],
-            pixel_size_m_factory=lambda: live["pixel_size_m"],
-            wavelength_angstrom_factory=lambda: live["wavelength_angstrom"],
-            solve_q_values_factory=lambda: live["solve_q"],
-        )
+    intersection_factory = peak_selection.make_runtime_selected_peak_intersection_config_factory(
+        image_size=512,
+        center_col_factory=lambda: live["center_col"],
+        center_row_factory=lambda: live["center_row"],
+        distance_cor_to_detector_factory=lambda: live["distance"],
+        gamma_deg_factory=lambda: live["gamma"],
+        Gamma_deg_factory=lambda: live["Gamma"],
+        chi_deg_factory=lambda: live["chi"],
+        psi_deg_factory=lambda: live["psi"],
+        psi_z_deg_factory=lambda: live["psi_z"],
+        zs_factory=lambda: live["zs"],
+        zb_factory=lambda: live["zb"],
+        theta_initial_deg_factory=lambda: live["theta_initial"],
+        cor_angle_deg_factory=lambda: live["cor_angle"],
+        sigma_mosaic_deg_factory=lambda: live["sigma_mosaic"],
+        gamma_mosaic_deg_factory=lambda: live["gamma_mosaic"],
+        eta_factory=lambda: live["eta"],
+        sample_width_m_factory=lambda: live["sample_width"],
+        sample_length_m_factory=lambda: live["sample_length"],
+        pixel_size_m_factory=lambda: live["pixel_size_m"],
+        wavelength_angstrom_factory=lambda: live["wavelength_angstrom"],
+        solve_q_values_factory=lambda: live["solve_q"],
     )
 
     canvas_cfg = canvas_factory()
@@ -422,14 +420,12 @@ def test_peak_selection_runtime_config_factory_bundle_delegates_to_helper_factor
     monkeypatch.setattr(
         peak_selection,
         "make_runtime_selected_peak_intersection_config_factory",
-        lambda **kwargs: calls.append(("intersection", kwargs))
-        or "intersection-factory",
+        lambda **kwargs: calls.append(("intersection", kwargs)) or "intersection-factory",
     )
     monkeypatch.setattr(
         peak_selection,
         "make_runtime_selected_peak_ideal_center_factory",
-        lambda **kwargs: calls.append(("ideal_center", kwargs))
-        or "ideal-center-factory",
+        lambda **kwargs: calls.append(("ideal_center", kwargs)) or "ideal-center-factory",
     )
 
     bundle = peak_selection.make_runtime_selected_peak_config_factories(
@@ -498,13 +494,15 @@ def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
     monkeypatch.setattr(
         peak_selection,
         "ensure_runtime_peak_overlay_data",
-        lambda runtime_state, **kwargs: captured.update(
-            {
-                "runtime_state": runtime_state,
-                "kwargs": kwargs,
-            }
-        )
-        or True,
+        lambda runtime_state, **kwargs: (
+            captured.update(
+                {
+                    "runtime_state": runtime_state,
+                    "kwargs": kwargs,
+                }
+            )
+            or True
+        ),
     )
 
     callback = peak_selection.make_runtime_peak_overlay_data_callback(
@@ -536,7 +534,9 @@ def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
     assert captured["kwargs"]["max_hits_per_reflection"]() == 3
 
 
-def test_peak_selection_runtime_peak_overlay_data_prefers_detector_display_projection_for_detector_view() -> None:
+def test_peak_selection_runtime_peak_overlay_data_prefers_detector_display_projection_for_detector_view() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         last_simulation_signature=("sig",),
         stored_primary_intersection_cache=[
@@ -581,8 +581,44 @@ def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cach
         stored_primary_intersection_cache=[
             np.asarray(
                 [
-                    [np.nan, np.nan, 10.0, 20.0, 8.0, 0.125, 1.0, 0.0, 2.0, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 0.0, 1.0],
-                    [np.nan, np.nan, 11.0, 21.0, 5.0, 0.25, 2.0, 0.0, 3.0, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 1.0, 1.0],
+                    [
+                        np.nan,
+                        np.nan,
+                        10.0,
+                        20.0,
+                        8.0,
+                        0.125,
+                        1.0,
+                        0.0,
+                        2.0,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        0.0,
+                        0.0,
+                        1.0,
+                    ],
+                    [
+                        np.nan,
+                        np.nan,
+                        11.0,
+                        21.0,
+                        5.0,
+                        0.25,
+                        2.0,
+                        0.0,
+                        3.0,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        0.0,
+                        1.0,
+                        1.0,
+                    ],
                 ],
                 dtype=float,
             )
@@ -695,7 +731,27 @@ def test_peak_selection_runtime_peak_overlay_cache_can_be_disabled(
         last_simulation_signature=("sig",),
         stored_primary_intersection_cache=[
             np.asarray(
-                [[np.nan, np.nan, 10.0, 20.0, 8.0, 0.125, 1.0, 0.0, 2.0, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 0.0, 1.0]],
+                [
+                    [
+                        np.nan,
+                        np.nan,
+                        10.0,
+                        20.0,
+                        8.0,
+                        0.125,
+                        1.0,
+                        0.0,
+                        2.0,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        0.0,
+                        0.0,
+                        1.0,
+                    ]
+                ],
                 dtype=float,
             )
         ],
@@ -1021,9 +1077,7 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_live_caked_cache_over_
     assert runtime_state.peak_records[0]["cv"] == 6.0
 
 
-def test_peak_selection_runtime_peak_overlay_data_ignores_stale_caked_source_signature() -> (
-    None
-):
+def test_peak_selection_runtime_peak_overlay_data_ignores_stale_caked_source_signature() -> None:
     bundle = object()
     detector_cache = [
         np.asarray(
@@ -1148,7 +1202,9 @@ def test_peak_selection_runtime_peak_overlay_data_ignores_stale_caked_cache() ->
     assert runtime_state.peak_records == []
 
 
-def test_peak_selection_runtime_peak_overlay_data_requires_current_caked_cache_after_bundle_change() -> None:
+def test_peak_selection_runtime_peak_overlay_data_requires_current_caked_cache_after_bundle_change() -> (
+    None
+):
     bundle_a = object()
     bundle_b = object()
     detector_cache = [
@@ -1326,7 +1382,9 @@ def test_peak_selection_runtime_peak_overlay_data_uses_restored_gui_state_cache(
     assert runtime_state.peak_overlay_cache["click_spatial_index"] is not None
 
 
-def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_cache_for_caked_view() -> None:
+def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_cache_for_caked_view() -> (
+    None
+):
     record = {
         "display_col": 110.0,
         "display_row": 220.0,
@@ -1386,7 +1444,9 @@ def test_peak_selection_runtime_peak_overlay_data_reprojects_restored_gui_state_
     assert runtime_state.peak_overlay_cache["positions"] == [(30.25, -57.5)]
 
 
-def test_peak_selection_runtime_peak_overlay_data_keeps_detector_coords_when_restoring_caked_cache() -> None:
+def test_peak_selection_runtime_peak_overlay_data_keeps_detector_coords_when_restoring_caked_cache() -> (
+    None
+):
     record = {
         "display_col": 110.0,
         "display_row": 220.0,
@@ -1556,7 +1616,9 @@ def test_peak_selection_runtime_peak_overlay_data_preserves_frozen_caked_restore
     assert "sim_row_raw" not in runtime_state.peak_records[0]
 
 
-def test_restore_peak_overlay_lists_does_not_revive_legacy_sim_for_restored_gui_state_caked_rows() -> None:
+def test_restore_peak_overlay_lists_does_not_revive_legacy_sim_for_restored_gui_state_caked_rows() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [
@@ -1629,7 +1691,9 @@ def test_restore_peak_overlay_lists_rejects_frozen_display_for_mismatched_restor
     assert runtime_state.peak_records == []
 
 
-def test_restore_peak_overlay_lists_rejects_frozen_display_without_restored_view_signature_for_legacy_detector_imports() -> None:
+def test_restore_peak_overlay_lists_rejects_frozen_display_without_restored_view_signature_for_legacy_detector_imports() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [
@@ -1660,7 +1724,9 @@ def test_restore_peak_overlay_lists_rejects_frozen_display_without_restored_view
     assert runtime_state.peak_records == []
 
 
-def test_restore_peak_overlay_lists_rejects_frozen_display_with_none_restored_view_signature_for_legacy_detector_imports() -> None:
+def test_restore_peak_overlay_lists_rejects_frozen_display_with_none_restored_view_signature_for_legacy_detector_imports() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [
@@ -1692,7 +1758,9 @@ def test_restore_peak_overlay_lists_rejects_frozen_display_with_none_restored_vi
     assert runtime_state.peak_records == []
 
 
-def test_restore_peak_overlay_lists_rejects_frozen_caked_restore_without_restored_view_signature_for_legacy_detector_imports() -> None:
+def test_restore_peak_overlay_lists_rejects_frozen_caked_restore_without_restored_view_signature_for_legacy_detector_imports() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [
@@ -1723,7 +1791,9 @@ def test_restore_peak_overlay_lists_rejects_frozen_caked_restore_without_restore
     assert runtime_state.peak_records == []
 
 
-def test_peak_selection_runtime_peak_overlay_data_preserves_imported_cache_flag_when_restore_yields_no_rows() -> None:
+def test_peak_selection_runtime_peak_overlay_data_preserves_imported_cache_flag_when_restore_yields_no_rows() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_overlay_cache={
             "records": [{"display_col": 10.0, "display_row": 20.0, "intensity": 5.0}],
@@ -1776,6 +1846,7 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
                 "lattice_a": args[3],
                 "lattice_c": args[4],
                 "optics_mode": kwargs["optics_mode"],
+                "n2_sample_array_override": kwargs.get("n2_sample_array_override"),
             }
         )
         return None, [np.array([[5.0, 12.5, 23.5]], dtype=float)]
@@ -1795,20 +1866,28 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
             "lattice_a": 4.5,
             "lattice_c": 6.5,
             "optics_mode": 2,
+            "n2_sample_array_override": None,
         }
     ]
 
+    cached_n2 = np.array([0.95 + 0.01j, 0.96 + 0.02j], dtype=np.complex128)
     runtime_state.profile_cache = {
         "beam_x_array": [0.3, 0.1],
         "beam_y_array": [0.4, 0.2],
         "theta_array": [0.8, 0.2],
         "phi_array": [0.7, 0.1],
         "wavelength_array": [1.55, 1.56],
+        "n2_sample_array": cached_n2.copy(),
     }
     fallback_calls = []
 
     def fake_process_fallback(*args, **kwargs):
-        fallback_calls.append(int(np.asarray(args[16], dtype=float).size))
+        fallback_calls.append(
+            {
+                "sample_count": int(np.asarray(args[16], dtype=float).size),
+                "n2_sample_array_override": kwargs.get("n2_sample_array_override"),
+            }
+        )
         if len(fallback_calls) == 1:
             return None, []
         return None, [np.array([[1.0, 44.0, 55.0]], dtype=float)]
@@ -1823,7 +1902,363 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
         process_peaks_parallel=fake_process_fallback,
     )
     assert fallback_center == (44.0, 55.0)
-    assert fallback_calls == [1, 2]
+    assert fallback_calls[0]["sample_count"] == 1
+    assert fallback_calls[0]["n2_sample_array_override"] is None
+    assert fallback_calls[1]["sample_count"] == 2
+    np.testing.assert_array_equal(
+        fallback_calls[1]["n2_sample_array_override"],
+        cached_n2,
+    )
+
+
+def test_simulate_ideal_hkl_native_center_recomputes_strict_probe_n2_from_cif_source(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": np.array([0.9 + 0.01j, 0.8 + 0.02j], dtype=np.complex128),
+            "_n2_sample_array_source": ("cif_path", str(tmp_path / "optics.cif")),
+        }
+    )
+    expected_n2 = np.array([0.97 + 0.03j], dtype=np.complex128)
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda wavelength_m, *, cif_path: (
+            np.testing.assert_allclose(wavelength_m, [1.54e-10]) or expected_n2.copy()
+        ),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    np.testing.assert_array_equal(captured[0], expected_n2)
+
+
+def test_simulate_ideal_hkl_native_center_recomputes_stale_same_size_probe_n2(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": np.array([0.9 + 0.01j], dtype=np.complex128),
+            "_n2_sample_array_source": ("cif_path", str(tmp_path / "optics.cif")),
+            "_n2_sample_array_wavelength_snapshot": np.array([1.23], dtype=np.float64),
+        }
+    )
+    expected_n2 = np.array([0.97 + 0.03j], dtype=np.complex128)
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda wavelength_m, *, cif_path: (
+            np.testing.assert_allclose(wavelength_m, [1.54e-10]) or expected_n2.copy()
+        ),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    np.testing.assert_array_equal(captured[0], expected_n2)
+
+
+def test_simulate_ideal_hkl_native_center_drops_stale_same_size_probe_n2_without_source(
+    monkeypatch,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": np.array([0.9 + 0.01j], dtype=np.complex128),
+            "_n2_sample_array_wavelength_snapshot": np.array([1.23], dtype=np.float64),
+        }
+    )
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source recompute should not run without source metadata")
+        ),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    assert captured[0] is None
+
+
+def test_simulate_ideal_hkl_native_center_drops_stale_same_size_probe_n2_when_cif_recompute_breaks(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": np.array([0.9 + 0.01j], dtype=np.complex128),
+            "_n2_sample_array_source": ("cif_path", str(tmp_path / "missing.cif")),
+            "_n2_sample_array_wavelength_snapshot": np.array([1.23], dtype=np.float64),
+        }
+    )
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("missing cif")),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    assert captured[0] is None
+
+
+def test_simulate_ideal_hkl_native_center_keeps_cached_n2_when_snapshot_is_malformed(
+    monkeypatch,
+) -> None:
+    cached_n2 = np.array([0.91 + 0.01j], dtype=np.complex128)
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": cached_n2.copy(),
+            "_n2_sample_array_wavelength_snapshot": ["bad-snapshot"],
+        }
+    )
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source recompute should not run without source metadata")
+        ),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    np.testing.assert_array_equal(captured[0], cached_n2)
+
+
+def test_simulate_ideal_hkl_native_center_keeps_cached_n2_when_malformed_snapshot_and_cif_recompute_breaks(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    cached_n2 = np.array([0.91 + 0.01j], dtype=np.complex128)
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": cached_n2.copy(),
+            "_n2_sample_array_source": ("cif_path", str(tmp_path / "missing.cif")),
+            "_n2_sample_array_wavelength_snapshot": ["bad-snapshot"],
+        }
+    )
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("missing cif")),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    np.testing.assert_array_equal(captured[0], cached_n2)
+
+
+def test_simulate_ideal_hkl_native_center_recomputes_after_malformed_cached_n2(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": ["bad-cache"],
+            "_n2_sample_array_source": ("cif_path", str(tmp_path / "optics.cif")),
+        }
+    )
+    expected_n2 = np.array([0.97 + 0.03j], dtype=np.complex128)
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda wavelength_m, *, cif_path: (
+            np.testing.assert_allclose(wavelength_m, [1.54e-10]) or expected_n2.copy()
+        ),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    np.testing.assert_array_equal(captured[0], expected_n2)
+
+
+def test_simulate_ideal_hkl_native_center_ignores_malformed_probe_metadata_without_source(
+    monkeypatch,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": ["bad-cache"],
+            "_n2_sample_array_wavelength_snapshot": ["bad-snapshot"],
+        }
+    )
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source recompute should not run without source metadata")
+        ),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    assert captured[0] is None
+
+
+def test_simulate_ideal_hkl_native_center_ignores_broken_cif_recompute(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_state = state.SimulationRuntimeState(
+        profile_cache={
+            "n2_sample_array": ["bad-cache"],
+            "_n2_sample_array_source": ("cif_path", str(tmp_path / "missing.cif")),
+        }
+    )
+    captured: list[np.ndarray | None] = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "resolve_index_of_refraction_array",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("missing cif")),
+    )
+
+    def fake_process(*_args, **kwargs):
+        captured.append(kwargs.get("n2_sample_array_override"))
+        return None, [np.array([[5.0, 8.0, 9.0]], dtype=float)]
+
+    center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process,
+    )
+
+    assert center == (8.0, 9.0)
+    assert len(captured) == 1
+    assert captured[0] is None
 
 
 def test_peak_selection_degenerate_hkls_and_qr_helpers_use_source_tables() -> None:
@@ -1924,7 +2359,6 @@ def test_select_peak_by_index_updates_state_marker_lookup_and_status() -> None:
     assert "Qr=" in status_messages[-1]
     assert synced == [True]
     assert drawn == [True]
-
 
 
 def test_select_peak_by_index_prefers_record_override_over_parallel_arrays() -> None:
@@ -2192,7 +2626,9 @@ def test_select_peak_by_hkl_uses_caked_coordinates_when_enabled() -> None:
     assert "HKL=(1 0 10)" in status_messages[-1]
 
 
-def test_select_peak_by_hkl_caked_view_falls_back_to_peak_positions_when_caked_fields_missing() -> None:
+def test_select_peak_by_hkl_caked_view_falls_back_to_peak_positions_when_caked_fields_missing() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(33.0, -44.0)],
         peak_millers=[(1, 0, 10)],
@@ -2287,6 +2723,56 @@ def test_select_peak_by_hkl_caked_view_ignores_stale_caked_fields() -> None:
     assert marker.data == ([33.0], [-44.0])
     assert runtime_state.selected_peak_record["selected_display_col"] == 33.0
     assert runtime_state.selected_peak_record["selected_display_row"] == -44.0
+
+
+def test_detector_display_pair_keeps_selected_detector_display_with_caked_fields() -> None:
+    record = {
+        "hkl": (1, 0, 10),
+        "display_col": 4.0,
+        "display_row": 5.0,
+        "selected_display_col": 4.0,
+        "selected_display_row": 5.0,
+        "sim_col": 4.0,
+        "sim_row": 5.0,
+        "sim_col_raw": 4.0,
+        "sim_row_raw": 5.0,
+        "caked_x": 10.2,
+        "caked_y": 0.3,
+    }
+
+    assert peak_selection._record_display_pair(record) == (4.0, 5.0)
+    assert peak_selection._simulation_point_active_view_pair(
+        record,
+        use_caked_display=False,
+    ) == (4.0, 5.0)
+    assert peak_selection._simulation_point_active_view_pair(
+        record,
+        use_caked_display=True,
+    ) == (10.2, 0.3)
+
+    collision_record = {
+        "hkl": (1, 0, 10),
+        "refined_detector_display_col": 10.2,
+        "refined_detector_display_row": 0.3,
+        "display_col": 10.2,
+        "display_row": 0.3,
+        "selected_display_col": 10.2,
+        "selected_display_row": 0.3,
+        "sim_col": 10.2,
+        "sim_row": 0.3,
+        "sim_col_raw": 10.2,
+        "sim_row_raw": 0.3,
+        "caked_x": 10.2,
+        "caked_y": 0.3,
+        "two_theta_deg": 10.2,
+        "phi_deg": 0.3,
+    }
+
+    assert peak_selection._record_display_pair(collision_record) == (10.2, 0.3)
+    assert peak_selection._simulation_point_active_view_pair(
+        collision_record,
+        use_caked_display=False,
+    ) == (10.2, 0.3)
 
 
 def test_select_peak_by_hkl_uses_rod_fallback_and_missing_path() -> None:
@@ -2915,7 +3401,9 @@ def test_select_peak_from_canvas_click_prefers_qr_picker_simulation_points() -> 
         native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
         simulate_ideal_hkl_native_center=lambda *_args: None,
         select_peak_by_index=lambda idx, **kwargs: select_calls.append((idx, kwargs)) or True,
-        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append((bool(enabled), message)),
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
         sync_peak_selection_state=lambda: sync_calls.append(True),
         set_status_text=lambda _text: None,
         simulation_point_candidates=[candidate],
@@ -3140,9 +3628,7 @@ def test_find_peak_record_for_canvas_click_falls_back_to_peak_positions_when_can
     assert within_window is True
 
 
-def test_find_peak_record_for_canvas_click_prefers_in_window_caked_candidate_payload() -> (
-    None
-):
+def test_find_peak_record_for_canvas_click_prefers_in_window_caked_candidate_payload() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(11.0, -11.0)],
         peak_millers=[(9, 9, 9)],
@@ -3338,15 +3824,13 @@ def test_nearest_simulation_point_preserves_original_candidate_order_on_ties() -
     ]
     payload = peak_selection.build_hkl_pick_simulation_point_payload(candidates)
 
-    idx, peak_record, best_dist, within_window = (
-        peak_selection._nearest_simulation_point_for_click(
-            state.SimulationRuntimeState(peak_records=[]),
-            50.0,
-            10.0,
-            candidate_records=payload,
-            max_axis_distance_px=15.0,
-            use_caked_display=False,
-        )
+    idx, peak_record, best_dist, within_window = peak_selection._nearest_simulation_point_for_click(
+        state.SimulationRuntimeState(peak_records=[]),
+        50.0,
+        10.0,
+        candidate_records=payload,
+        max_axis_distance_px=15.0,
+        use_caked_display=False,
     )
 
     assert idx == -1
@@ -3356,7 +3840,9 @@ def test_nearest_simulation_point_preserves_original_candidate_order_on_ties() -
     assert within_window is True
 
 
-def test_peak_record_index_for_simulation_point_ignores_branch_namespace_source_peak_index() -> None:
+def test_peak_record_index_for_simulation_point_ignores_branch_namespace_source_peak_index() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
@@ -3513,7 +3999,9 @@ def test_peak_record_index_for_simulation_point_prefers_exact_source_key() -> No
     assert idx == 1
 
 
-def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cache_for_same_view() -> None:
+def test_peak_selection_runtime_peak_overlay_data_reuses_restored_gui_state_cache_for_same_view() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(stored_sim_image=None)
     runtime_state.peak_overlay_cache.update(
         {
@@ -3710,7 +4198,9 @@ def test_resolve_peak_record_display_coords_prefers_explicit_caked_coords() -> N
     assert projector_calls == []
 
 
-def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_when_allowed_in_caked_view() -> None:
+def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_when_allowed_in_caked_view() -> (
+    None
+):
     display_point = peak_selection._resolve_peak_record_display_coords(
         {
             "display_col": 9.5,
@@ -3725,7 +4215,9 @@ def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_when_al
     assert display_point == (9.5, 11.5)
 
 
-def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_in_detector_view_without_caked_markers() -> None:
+def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_in_detector_view_without_caked_markers() -> (
+    None
+):
     display_point = peak_selection._resolve_peak_record_display_coords(
         {
             "display_col": 9.5,
@@ -3740,7 +4232,9 @@ def test_resolve_peak_record_display_coords_uses_frozen_display_fallback_in_dete
     assert display_point == (9.5, 11.5)
 
 
-def test_resolve_peak_record_display_coords_rejects_frozen_display_fallback_in_detector_view_for_caked_rows() -> None:
+def test_resolve_peak_record_display_coords_rejects_frozen_display_fallback_in_detector_view_for_caked_rows() -> (
+    None
+):
     display_point = peak_selection._resolve_peak_record_display_coords(
         {
             "display_col": 9.5,
@@ -3782,7 +4276,9 @@ def test_select_peak_from_canvas_click_uses_detector_display_inverse_in_detector
         ),
         native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
         simulate_ideal_hkl_native_center=lambda *_args: None,
-        select_peak_by_index=lambda idx, **kwargs: picked_calls.append({"idx": idx, **kwargs}) or True,
+        select_peak_by_index=lambda idx, **kwargs: (
+            picked_calls.append({"idx": idx, **kwargs}) or True
+        ),
         set_pick_mode=lambda *_args, **_kwargs: None,
         sync_peak_selection_state=lambda: None,
         set_status_text=lambda _text: None,
@@ -3798,7 +4294,9 @@ def test_select_peak_from_canvas_click_uses_detector_display_inverse_in_detector
     assert picked_calls[0]["clicked_native"] == (112.0, 222.0)
 
 
-def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_returns_none_without_sim_inverse() -> None:
+def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_returns_none_without_sim_inverse() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(12.0, 22.0)],
         peak_millers=[(1, 0, 2)],
@@ -3822,7 +4320,9 @@ def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_return
         display_to_native_sim_coords=None,
         native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
         simulate_ideal_hkl_native_center=lambda *_args: None,
-        select_peak_by_index=lambda idx, **kwargs: picked_calls.append({"idx": idx, **kwargs}) or True,
+        select_peak_by_index=lambda idx, **kwargs: (
+            picked_calls.append({"idx": idx, **kwargs}) or True
+        ),
         set_pick_mode=lambda *_args, **_kwargs: None,
         sync_peak_selection_state=lambda: None,
         set_status_text=status_messages.append,
@@ -3838,7 +4338,9 @@ def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_return
     assert status_messages == []
 
 
-def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_returns_non_finite_without_sim_inverse() -> None:
+def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_returns_non_finite_without_sim_inverse() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(12.0, 22.0)],
         peak_millers=[(1, 0, 2)],
@@ -3862,14 +4364,15 @@ def test_select_peak_from_canvas_click_rejects_detector_view_when_inverse_return
         display_to_native_sim_coords=None,
         native_sim_to_display_coords=lambda col, row, image_shape: (float(col), float(row)),
         simulate_ideal_hkl_native_center=lambda *_args: None,
-        select_peak_by_index=lambda idx, **kwargs: picked_calls.append({"idx": idx, **kwargs}) or True,
+        select_peak_by_index=lambda idx, **kwargs: (
+            picked_calls.append({"idx": idx, **kwargs}) or True
+        ),
         set_pick_mode=lambda *_args, **_kwargs: None,
         sync_peak_selection_state=lambda: None,
         set_status_text=status_messages.append,
         caked_view_enabled=False,
         detector_display_to_native_detector_coords=lambda col, row: (
-            detector_inverse_calls.append((float(col), float(row)))
-            or (float("nan"), float("nan"))
+            detector_inverse_calls.append((float(col), float(row))) or (float("nan"), float("nan"))
         ),
     )
 
@@ -4172,8 +4675,42 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
     caked_cache = [
         np.asarray(
             [
-                [np.nan, np.nan, 300.0, 300.0, 9.0, 0.375, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 60.0],
-                [np.nan, np.nan, 50.0, 60.0, 8.0, 0.125, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 200.0, 210.0],
+                [
+                    np.nan,
+                    np.nan,
+                    300.0,
+                    300.0,
+                    9.0,
+                    0.375,
+                    0.0,
+                    0.0,
+                    3.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    50.0,
+                    60.0,
+                ],
+                [
+                    np.nan,
+                    np.nan,
+                    50.0,
+                    60.0,
+                    8.0,
+                    0.125,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    200.0,
+                    210.0,
+                ],
             ],
             dtype=float,
         )
@@ -4633,10 +5170,9 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
     monkeypatch.setattr(
         peak_selection,
         "select_peak_from_runtime_canvas_click",
-        lambda bindings_arg, click_col, click_row: callback_calls.append(
-            ("click_cb", bindings_arg, click_col, click_row)
-        )
-        or False,
+        lambda bindings_arg, click_col, click_row: (
+            callback_calls.append(("click_cb", bindings_arg, click_col, click_row)) or False
+        ),
     )
     monkeypatch.setattr(
         peak_selection,
@@ -4770,9 +5306,7 @@ def test_select_peak_from_runtime_canvas_click_allows_detector_inverse_without_s
         peak_selection,
         "select_peak_from_canvas_click",
         lambda runtime_state_arg, peak_state_arg, click_col, click_row, **kwargs: (
-            calls.append(
-                (runtime_state_arg, peak_state_arg, click_col, click_row, kwargs)
-            ),
+            calls.append((runtime_state_arg, peak_state_arg, click_col, click_row, kwargs)),
             True,
         )[-1],
     )
@@ -4944,6 +5478,573 @@ def test_find_peak_record_from_runtime_canvas_click_uses_qr_payload_in_detector_
     assert tuple(captured["simulation_point_candidates"]["candidates"])[0]["hkl"] == (1, 0, 10)
     assert captured["max_axis_distance_px"] == 7.0
 
+
+def test_select_peak_by_hkl_prefers_mosaic_top_candidate_over_brighter_duplicate() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 10.0), (20.0, 20.0)],
+        peak_millers=[(1, 0, 2), (1, 0, 2)],
+        peak_intensities=[999.0, 1.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 2),
+                "display_col": 10.0,
+                "display_row": 10.0,
+                "branch_id": "+x",
+                "branch_source": "generated",
+                "mosaic_weight": 0.1,
+                "theta_offset": 0.05,
+                "phi_offset": 0.05,
+                "best_sample_index": 3,
+                "source_row_index": 30,
+                "intensity": 999.0,
+            },
+            {
+                "hkl": (1, 0, 2),
+                "display_col": 20.0,
+                "display_row": 20.0,
+                "branch_id": "+x",
+                "branch_source": "generated",
+                "mosaic_weight": 0.9,
+                "theta_offset": 0.0,
+                "phi_offset": 0.0,
+                "best_sample_index": 0,
+                "source_row_index": 31,
+                "intensity": 1.0,
+            },
+        ],
+    )
+    marker = _FakeMarker()
+    peak_state = state.PeakSelectionState()
+    hkl_state = SimpleNamespace(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+
+    assert peak_selection.select_peak_by_hkl(
+        runtime_state,
+        peak_state,
+        hkl_state,
+        marker,
+        1,
+        0,
+        2,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        draw_idle=lambda: None,
+    )
+
+    assert marker.data == ([20.0], [20.0])
+    assert runtime_state.selected_peak_record["best_sample_index"] == 0
+    assert runtime_state.selected_peak_record["source_row_index"] == 31
+    assert runtime_state.selected_peak_record["selection_reason"] == "mosaic_top_per_branch"
+
+
+def test_select_peak_by_hkl_uses_profile_cache_mosaic_weight_and_signed_x_branch() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 10.0), (20.0, 20.0)],
+        peak_millers=[(1, 0, 2), (1, 0, 2)],
+        peak_intensities=[999.0, 1.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 2),
+                "display_col": 10.0,
+                "display_row": 10.0,
+                "best_sample_index": 0,
+                "source_branch_index": 0,
+                "source_row_index": 30,
+                "intensity": 999.0,
+            },
+            {
+                "hkl": (1, 0, 2),
+                "display_col": 20.0,
+                "display_row": 20.0,
+                "best_sample_index": 1,
+                "source_branch_index": 1,
+                "source_row_index": 31,
+                "intensity": 1.0,
+            },
+        ],
+    )
+    runtime_state.profile_cache = {
+        "beam_x_array": np.asarray([0.5, 0.5], dtype=float),
+        "sample_weights": np.asarray([0.1, 0.9], dtype=float),
+    }
+    marker = _FakeMarker()
+    peak_state = state.PeakSelectionState()
+    hkl_state = SimpleNamespace(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+
+    assert peak_selection.select_peak_by_hkl(
+        runtime_state,
+        peak_state,
+        hkl_state,
+        marker,
+        1,
+        0,
+        2,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        draw_idle=lambda: None,
+    )
+
+    selected = runtime_state.selected_peak_record
+    assert marker.data == ([20.0], [20.0])
+    assert selected["source_row_index"] == 31
+    assert selected["branch_id"] == "+x"
+    assert selected["branch_source"] == "generated"
+    assert selected["mosaic_weight"] == 0.9
+    assert selected["selection_reason"] == "mosaic_top_per_branch"
+
+
+def test_canvas_hkl_pick_uses_clicked_branch_then_mosaic_top_candidate() -> None:
+    records = [
+        {
+            "hkl": (1, 0, 2),
+            "display_col": 10.0,
+            "display_row": 10.0,
+            "native_col": 10.0,
+            "native_row": 10.0,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "mosaic_weight": 0.1,
+            "best_sample_index": 3,
+            "source_row_index": 30,
+        },
+        {
+            "hkl": (1, 0, 2),
+            "display_col": 20.0,
+            "display_row": 20.0,
+            "native_col": 20.0,
+            "native_row": 20.0,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "mosaic_weight": 0.9,
+            "best_sample_index": 0,
+            "source_row_index": 31,
+        },
+        {
+            "hkl": (1, 0, 2),
+            "display_col": 10.2,
+            "display_row": 10.2,
+            "native_col": 10.2,
+            "native_row": 10.2,
+            "branch_id": "-x",
+            "branch_source": "generated",
+            "mosaic_weight": 9.0,
+            "best_sample_index": 1,
+            "source_row_index": 41,
+        },
+    ]
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(r["display_col"], r["display_row"]) for r in records],
+        peak_millers=[(1, 0, 2)] * 3,
+        peak_intensities=[5.0, 1.0, 100.0],
+        peak_records=records,
+        peak_positions_filtered=True,
+    )
+    captured: dict[str, object] = {}
+
+    assert peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        state.PeakSelectionState(),
+        10.05,
+        10.05,
+        config=peak_selection.build_selected_peak_canvas_pick_config(
+            image_size=64,
+            primary_a=5.0,
+            primary_c=7.0,
+            max_distance_px=15.0,
+            min_separation_px=0.0,
+            image_shape=(64, 64),
+        ),
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args, **_kwargs: None,
+        select_peak_by_index=lambda idx, **kwargs: captured.update({"idx": idx, **kwargs}) or True,
+        set_pick_mode=lambda _enabled: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+    )
+
+    selected = captured["record_override"]
+    assert selected["branch_id"] == "+x"
+    assert selected["best_sample_index"] == 0
+    assert selected["source_row_index"] == 31
+    assert captured["selected_display"] == (20.0, 20.0)
+
+
+def test_select_peak_by_hkl_caked_view_refines_to_local_caked_peak_top() -> None:
+    radial = np.linspace(0.0, 30.0, 301)
+    azimuth = np.linspace(-5.0, 5.0, 201)
+    image = np.zeros((azimuth.size, radial.size), dtype=float)
+    peak_col = int(np.argmin(np.abs(radial - 10.2)))
+    peak_row = int(np.argmin(np.abs(azimuth - 0.3)))
+    decoy_col = int(np.argmin(np.abs(radial - 25.0)))
+    decoy_row = int(np.argmin(np.abs(azimuth - 0.0)))
+    image[peak_row, peak_col] = 10.0
+    image[decoy_row, decoy_col] = 1000.0
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 0.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[1.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 2),
+                "caked_x": 10.0,
+                "caked_y": 0.0,
+                "branch_id": "+x",
+                "branch_source": "generated",
+                "mosaic_weight": 1.0,
+                "best_sample_index": 0,
+                "source_row_index": 31,
+            }
+        ],
+        last_caked_image_unscaled=image,
+        last_caked_radial_values=radial,
+        last_caked_azimuth_values=azimuth,
+    )
+    marker = _FakeMarker()
+    hkl_state = SimpleNamespace(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+
+    assert peak_selection.select_peak_by_hkl(
+        runtime_state,
+        state.PeakSelectionState(),
+        hkl_state,
+        marker,
+        1,
+        0,
+        2,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        draw_idle=lambda: None,
+        caked_view_enabled=True,
+    )
+
+    rec = runtime_state.selected_peak_record
+    assert rec["pre_refine_two_theta_deg"] == pytest.approx(10.0)
+    assert rec["pre_refine_phi_deg"] == pytest.approx(0.0)
+    assert rec["two_theta_deg"] == pytest.approx(10.2, abs=0.12)
+    assert rec["phi_deg"] == pytest.approx(0.3, abs=0.12)
+    assert marker.data[0][0] == pytest.approx(rec["two_theta_deg"], abs=0.12)
+    assert marker.data[1][0] == pytest.approx(rec["phi_deg"], abs=0.12)
+    assert rec["source_row_index"] == 31
+    assert rec["best_sample_index"] == 0
+
+
+def test_hkl_caked_refinement_updates_detector_from_refined_angles() -> None:
+    radial = np.linspace(0.0, 30.0, 301)
+    azimuth = np.linspace(-5.0, 5.0, 201)
+    image = np.zeros((azimuth.size, radial.size), dtype=float)
+    image[
+        int(np.argmin(np.abs(azimuth - 0.3))),
+        int(np.argmin(np.abs(radial - 10.2))),
+    ] = 10.0
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 0.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[1.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 2),
+                "caked_x": 10.0,
+                "caked_y": 0.0,
+                "branch_id": "+x",
+                "branch_source": "generated",
+                "mosaic_weight": 1.0,
+                "best_sample_index": 0,
+                "source_row_index": 31,
+            }
+        ],
+        last_caked_image_unscaled=image,
+        last_caked_radial_values=radial,
+        last_caked_azimuth_values=azimuth,
+    )
+    marker = _FakeMarker()
+    hkl_state = SimpleNamespace(
+        selected_h_var=_FakeVar(),
+        selected_k_var=_FakeVar(),
+        selected_l_var=_FakeVar(),
+    )
+    projection_calls: list[tuple[float, float]] = []
+    native_calls: list[tuple[float, float]] = []
+
+    def _project_refined(two_theta: float, phi: float):
+        projection_calls.append((float(two_theta), float(phi)))
+        return float(two_theta) + 100.0, float(phi) + 200.0
+
+    def _display_to_native(col: float, row: float):
+        native_calls.append((float(col), float(row)))
+        return float(col) + 1000.0, float(row) + 2000.0
+
+    assert peak_selection.select_peak_by_hkl(
+        runtime_state,
+        state.PeakSelectionState(),
+        hkl_state,
+        marker,
+        1,
+        0,
+        2,
+        primary_a=5.0,
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+        draw_idle=lambda: None,
+        caked_view_enabled=True,
+        caked_angles_to_detector_display_coords=_project_refined,
+        detector_display_to_native_detector_coords=_display_to_native,
+    )
+
+    rec = runtime_state.selected_peak_record
+    assert projection_calls
+    assert projection_calls[0][0] == pytest.approx(rec["two_theta_deg"])
+    assert projection_calls[0][1] == pytest.approx(rec["phi_deg"])
+    assert native_calls == [
+        (
+            pytest.approx(rec["refined_detector_display_col"]),
+            pytest.approx(rec["refined_detector_display_row"]),
+        )
+    ]
+    assert rec["display_col"] == pytest.approx(rec["two_theta_deg"] + 100.0)
+    assert rec["display_row"] == pytest.approx(rec["phi_deg"] + 200.0)
+    assert rec["native_col"] == pytest.approx(rec["display_col"] + 1000.0)
+    assert rec["native_row"] == pytest.approx(rec["display_row"] + 2000.0)
+    assert rec["_refined_simulation_signature"] is None
+    assert marker.data[0][0] == pytest.approx(rec["two_theta_deg"], abs=0.12)
+    assert marker.data[1][0] == pytest.approx(rec["phi_deg"], abs=0.12)
+
+
+def test_reselect_runtime_refined_detector_record_keeps_matching_signature() -> None:
+    signature = ("sig", "refined")
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=signature,
+        selected_peak_record={
+            "hkl": (1, 0, 2),
+            "refined_by": "caked_peak_center",
+            "_refined_simulation_signature": signature,
+            "refined_sim_caked_x": 10.2,
+            "refined_sim_caked_y": 0.3,
+            "caked_x": 10.2,
+            "caked_y": 0.3,
+            "refined_detector_display_col": 7.0,
+            "refined_detector_display_row": 8.0,
+        },
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 0, 2))
+    marker = _FakeMarker()
+    events: list[str] = []
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=lambda *, force=False: True,
+        sync_peak_selection_state=lambda: events.append("sync"),
+        draw_idle=lambda: events.append("draw"),
+    )
+
+    assert peak_selection._reselect_runtime_refined_detector_record(
+        bindings,
+        (1, 0, 2),
+    )
+    assert marker.data == ([7.0], [8.0])
+    assert marker.visible is True
+    assert runtime_state.selected_peak_record["display_col"] == 7.0
+    assert runtime_state.selected_peak_record["display_row"] == 8.0
+    assert events == ["sync", "draw"]
+
+
+def test_reselect_runtime_refined_detector_record_rejects_unstamped_current_signature() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("sig", "current"),
+        selected_peak_record={
+            "hkl": (1, 0, 2),
+            "refined_by": "caked_peak_center",
+            "refined_sim_caked_x": 10.2,
+            "refined_sim_caked_y": 0.3,
+            "caked_x": 10.2,
+            "caked_y": 0.3,
+            "refined_detector_display_col": 7.0,
+            "refined_detector_display_row": 8.0,
+        },
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 0, 2))
+    marker = _FakeMarker()
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=lambda *, force=False: True,
+    )
+
+    assert not peak_selection._reselect_runtime_refined_detector_record(
+        bindings,
+        (1, 0, 2),
+    )
+    assert marker.data is None
+
+
+def test_reselect_runtime_refined_detector_record_rejects_old_stamp_when_signature_cleared() -> (
+    None
+):
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=None,
+        selected_peak_record={
+            "hkl": (1, 0, 2),
+            "refined_by": "caked_peak_center",
+            "_refined_simulation_signature": ("sig", "old"),
+            "refined_sim_caked_x": 10.2,
+            "refined_sim_caked_y": 0.3,
+            "caked_x": 10.2,
+            "caked_y": 0.3,
+            "refined_detector_display_col": 7.0,
+            "refined_detector_display_row": 8.0,
+        },
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 0, 2))
+    marker = _FakeMarker()
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=lambda *, force=False: True,
+    )
+
+    assert not peak_selection._reselect_runtime_refined_detector_record(
+        bindings,
+        (1, 0, 2),
+    )
+    assert marker.data is None
+
+
+def test_reselect_runtime_refined_detector_record_keeps_none_stamp_without_current_signature() -> (
+    None
+):
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=None,
+        selected_peak_record={
+            "hkl": (1, 0, 2),
+            "refined_by": "caked_peak_center",
+            "_refined_simulation_signature": None,
+            "refined_sim_caked_x": 10.2,
+            "refined_sim_caked_y": 0.3,
+            "caked_x": 10.2,
+            "caked_y": 0.3,
+            "refined_detector_display_col": 7.0,
+            "refined_detector_display_row": 8.0,
+        },
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 0, 2))
+    marker = _FakeMarker()
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=lambda *, force=False: True,
+    )
+
+    assert peak_selection._reselect_runtime_refined_detector_record(
+        bindings,
+        (1, 0, 2),
+    )
+    assert marker.data == ([7.0], [8.0])
+
+
+def test_refresh_runtime_selected_peak_after_signature_change_uses_current_overlay_record() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("sig", "current"),
+        peak_positions=[(8.0, 9.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[3.0],
+        peak_records=[
+            {
+                "hkl": (1, 0, 2),
+                "display_col": 8.0,
+                "display_row": 9.0,
+                "native_col": 18.0,
+                "native_row": 19.0,
+            }
+        ],
+        selected_peak_record={
+            "hkl": (1, 0, 2),
+            "refined_by": "caked_peak_center",
+            "_refined_simulation_signature": ("sig", "stale"),
+            "refined_sim_caked_x": 10.2,
+            "refined_sim_caked_y": 0.3,
+            "caked_x": 10.2,
+            "caked_y": 0.3,
+            "refined_detector_display_col": 1.0,
+            "refined_detector_display_row": 2.0,
+            "display_col": 1.0,
+            "display_row": 2.0,
+        },
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 0, 2))
+    events: list[object] = []
+    marker = _FakeMarker()
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=lambda *, force=False: events.append(("ensure", force)) or True,
+        draw_idle=lambda: events.append(("draw", None)),
+    )
+
+    assert peak_selection.refresh_runtime_selected_peak_after_simulation_update(
+        bindings,
+        live_geometry_preview_enabled=False,
+    )
+
+    assert events == [("ensure", False), ("ensure", False), ("draw", None)]
+    assert marker.data == ([8.0], [9.0])
+    assert runtime_state.selected_peak_record["display_col"] == 8.0
+    assert runtime_state.selected_peak_record["display_row"] == 9.0
+    assert "_refined_simulation_signature" not in runtime_state.selected_peak_record
+
+
 def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_state() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_positions=[(1.0, 2.0)],
@@ -5065,16 +6166,14 @@ def test_make_runtime_peak_selection_maintenance_callbacks_uses_fresh_bindings(
         peak_selection,
         "refresh_runtime_selected_peak_after_simulation_update",
         lambda bindings, *, live_geometry_preview_enabled: (
-            callback_calls.append(("refresh", bindings, live_geometry_preview_enabled))
-            or True
+            callback_calls.append(("refresh", bindings, live_geometry_preview_enabled)) or True
         ),
     )
     monkeypatch.setattr(
         peak_selection,
         "apply_runtime_restored_selected_hkl_target",
         lambda bindings, selected_hkl_target: (
-            callback_calls.append(("restore", bindings, selected_hkl_target))
-            or (1, 2, 3)
+            callback_calls.append(("restore", bindings, selected_hkl_target)) or (1, 2, 3)
         ),
     )
 
@@ -5082,9 +6181,7 @@ def test_make_runtime_peak_selection_maintenance_callbacks_uses_fresh_bindings(
         versions["count"] += 1
         return f"bindings-{versions['count']}"
 
-    callbacks = peak_selection.make_runtime_peak_selection_maintenance_callbacks(
-        build_bindings
-    )
+    callbacks = peak_selection.make_runtime_peak_selection_maintenance_callbacks(build_bindings)
 
     assert callbacks.refresh_after_simulation_update(True) is True
     assert callbacks.apply_restored_selected_hkl_target([1, 2, 3]) == (1, 2, 3)

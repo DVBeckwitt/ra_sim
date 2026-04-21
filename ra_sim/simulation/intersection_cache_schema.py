@@ -73,11 +73,7 @@ class IntersectionCacheSchema:
 
     @property
     def hit_row_width(self) -> int:
-        return (
-            HIT_ROW_WITH_PROVENANCE_WIDTH
-            if self.has_provenance
-            else BASE_HIT_ROW_WIDTH
-        )
+        return HIT_ROW_WITH_PROVENANCE_WIDTH if self.has_provenance else BASE_HIT_ROW_WIDTH
 
 
 def _schema_from_width(width: int) -> IntersectionCacheSchema:
@@ -140,11 +136,7 @@ def empty_caked_cache_table(*, legacy: bool = False) -> np.ndarray:
 def empty_hit_table(*, with_provenance: bool = False) -> np.ndarray:
     """Return canonical empty hit-row table."""
 
-    width = (
-        HIT_ROW_WITH_PROVENANCE_WIDTH
-        if with_provenance
-        else BASE_HIT_ROW_WIDTH
-    )
+    width = HIT_ROW_WITH_PROVENANCE_WIDTH if with_provenance else BASE_HIT_ROW_WIDTH
     return np.empty((0, width), dtype=np.float64)
 
 
@@ -168,6 +160,21 @@ def coerce_float64_table(
     if arr.ndim != 2:
         return np.empty((0, empty_width), dtype=np.float64)
     return np.array(arr, dtype=np.float64, copy=True)
+
+
+def coerce_intersection_cache_table(
+    table: object,
+    *,
+    allow_abbreviated_detector_cache: bool = False,
+) -> np.ndarray:
+    """Return a detached supported cache table or canonical detector-cache empty."""
+
+    arr = coerce_float64_table(table, empty_width=CURRENT_DETECTOR_CACHE_WIDTH)
+    if classify_intersection_cache_table(arr).is_valid:
+        return arr
+    if allow_abbreviated_detector_cache and arr.ndim == 2 and arr.shape[1] == (CACHE_COL_L + 1):
+        return arr
+    return empty_detector_cache_table()
 
 
 def classify_intersection_cache_table(table: object) -> IntersectionCacheSchema:
@@ -320,6 +327,7 @@ __all__ = [
     "cache_table_to_hit_table",
     "classify_intersection_cache_table",
     "coerce_float64_table",
+    "coerce_intersection_cache_table",
     "empty_caked_cache_table",
     "empty_detector_cache_table",
     "empty_hit_table",

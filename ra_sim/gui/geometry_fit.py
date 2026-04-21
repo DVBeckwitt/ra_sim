@@ -14207,9 +14207,11 @@ def _write_geometry_fit_trace_file(
 _GEOMETRY_FIT_PROVIDER_IDENTITY_KEYS = (
     "normalized_hkl",
     "source_table_index",
+    "resolved_table_index",
     "source_reflection_index",
     "source_row_index",
     "source_peak_index",
+    "resolved_peak_index",
     "q_group_key",
     "source_q_group_key",
     "branch_group_key",
@@ -14218,6 +14220,8 @@ _GEOMETRY_FIT_PROVIDER_IDENTITY_KEYS = (
     "label",
     "source_reflection_namespace",
     "source_reflection_is_full",
+    "source_table_index_namespace",
+    "resolved_table_index_namespace",
 )
 
 
@@ -14308,6 +14312,84 @@ def _geometry_fit_full_source_hkl_matches(
     return tuple(measured_hkl) == tuple(source_hkl)
 
 
+def _geometry_fit_solver_miller_hkl(
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+    index: int | None,
+) -> tuple[int, int, int] | None:
+    if index is None:
+        return None
+    try:
+        miller = np.asarray(solver_inputs.miller)
+        if int(index) < 0 or int(index) >= int(miller.shape[0]):
+            return None
+        return tuple(int(v) for v in miller[int(index)][:3])
+    except Exception:
+        return None
+
+
+def _geometry_fit_local_source_hkl_is_compatible(
+    row: Mapping[str, object],
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+) -> tuple[bool, str | None]:
+    hkl = _geometry_fit_normalized_hkl(row.get("hkl"))
+    if hkl is None:
+        return False, "missing_provider_hkl"
+    for key in ("source_table_index", "resolved_table_index"):
+        namespace = str(row.get(f"{key}_namespace", "") or "").strip().lower()
+        if namespace not in {"full", "full_reflection", "miller", "full_hit_table"}:
+            continue
+        table_idx = _geometry_fit_coerce_nonnegative_index(row.get(key))
+        if table_idx is None:
+            continue
+        source_hkl = _geometry_fit_solver_miller_hkl(solver_inputs, table_idx)
+        if source_hkl is None:
+            continue
+        if tuple(source_hkl) != tuple(hkl):
+            return False, f"{key}_hkl_mismatch"
+        return True, None
+    return True, None
+
+
+def _geometry_fit_optimizer_row_has_local_source(row: Mapping[str, object]) -> bool:
+    table_idx = _geometry_fit_coerce_nonnegative_index(row.get("source_table_index"))
+    if table_idx is None:
+        table_idx = _geometry_fit_coerce_nonnegative_index(
+            row.get("resolved_table_index")
+        )
+    if table_idx is None:
+        return False
+    if _geometry_fit_normalized_hkl(row.get("hkl")) is None:
+        return False
+    branch_idx = _geometry_fit_coerce_nonnegative_index(row.get("source_branch_index"))
+    peak_idx = _geometry_fit_coerce_nonnegative_index(row.get("source_peak_index"))
+    row_idx = _geometry_fit_coerce_nonnegative_index(row.get("source_row_index"))
+    return bool(branch_idx in {0, 1} or peak_idx in {0, 1} or row_idx is not None)
+
+
+def _geometry_fit_optimizer_fixed_source_kind(
+    row: Mapping[str, object],
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+    *,
+    provider_owned: bool,
+) -> tuple[str | None, list[str]]:
+    if _geometry_fit_optimizer_row_has_full_source(row):
+        if _geometry_fit_full_source_hkl_matches(row, solver_inputs):
+            return "provider_fixed_source", []
+        if not _geometry_fit_optimizer_row_has_local_source(row):
+            return None, ["provider_full_reflection_hkl_mismatch"]
+    if not provider_owned:
+        return None, ["missing_provider_source_identity"]
+    if not _geometry_fit_optimizer_row_has_local_source(row):
+        return None, ["missing_provider_local_source_identity"]
+    compatible, reason = _geometry_fit_local_source_hkl_is_compatible(
+        row,
+        solver_inputs,
+    )
+    if not compatible:
+        return None, [str(reason or "provider_local_source_hkl_mismatch")]
+    return "provider_fixed_source_local", []
+
+
 def _geometry_fit_optimizer_identity_matches(
     identity: Mapping[str, object],
     row: Mapping[str, object],
@@ -14392,6 +14474,18 @@ def _build_geometry_fit_optimizer_request_rows(
             "fallback_reason",
             "optimizer_request_fallback_row",
             "optimizer_request_fallback_reason",
+            "optimizer_request_has_fixed_source",
+            "resolved_table_index",
+            "resolved_peak_index",
+            "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
+            "source_table_index",
+            "source_table_index_namespace",
+            "source_row_index",
+            "source_branch_index",
+            "source_peak_index",
+            "resolved_table_index_namespace",
         ):
             row.pop(stale_key, None)
         if identity:
@@ -14402,6 +14496,9 @@ def _build_geometry_fit_optimizer_request_rows(
             if hkl is not None:
                 row["hkl"] = tuple(int(value) for value in hkl)
                 row["label"] = str(row.get("label") or f"{hkl[0]},{hkl[1]},{hkl[2]}")
+        if point is not None:
+            row["x"] = float(point[0])
+            row["y"] = float(point[1])
         row["optimizer_request_pair_index"] = int(pair_index)
         row["optimizer_request_source"] = "provider_pair"
         row["provider_selected_source_identity_canonical"] = copy.deepcopy(identity)
@@ -14419,10 +14516,16 @@ def _build_geometry_fit_optimizer_request_rows(
             fallback_reasons.append("provider_rebinding_fallback")
         if not identity:
             fallback_reasons.append("missing_provider_source_identity")
-        if identity and not _geometry_fit_optimizer_row_has_full_source(row):
-            fallback_reasons.append("missing_provider_full_reflection_identity")
-        elif identity and not _geometry_fit_full_source_hkl_matches(row, solver_inputs):
-            fallback_reasons.append("provider_full_reflection_hkl_mismatch")
+        fixed_source_kind: str | None = None
+        if identity:
+            fixed_source_kind, fixed_source_reasons = (
+                _geometry_fit_optimizer_fixed_source_kind(
+                    row,
+                    solver_inputs,
+                    provider_owned=True,
+                )
+            )
+            fallback_reasons.extend(fixed_source_reasons)
 
         if fallback_reasons:
             row["fit_source_resolution_kind"] = "provider_fixed_source_unavailable"
@@ -14432,7 +14535,9 @@ def _build_geometry_fit_optimizer_request_rows(
             fixed_source_resolution_fallback_count += 1
             missing_fixed_source_count += 1
         else:
-            row["fit_source_resolution_kind"] = "provider_fixed_source"
+            row["fit_source_resolution_kind"] = str(
+                fixed_source_kind or "provider_fixed_source"
+            )
             row["optimizer_request_fallback_row"] = False
             row["optimizer_request_has_fixed_source"] = True
             fixed_source_pair_count += 1
@@ -14447,8 +14552,14 @@ def _build_geometry_fit_optimizer_request_rows(
                 "fallback_reason": row.get("optimizer_request_fallback_reason"),
                 "hkl": row.get("hkl"),
                 "source_reflection_index": row.get("source_reflection_index"),
+                "source_table_index": row.get("source_table_index"),
+                "source_row_index": row.get("source_row_index"),
                 "source_branch_index": row.get("source_branch_index"),
                 "source_peak_index": row.get("source_peak_index"),
+                "fit_source_resolution_kind": row.get("fit_source_resolution_kind"),
+                "optimizer_request_has_fixed_source": bool(
+                    row.get("optimizer_request_has_fixed_source", False)
+                ),
             }
         )
 

@@ -645,9 +645,7 @@ class GeometryQGroupState:
     cached_entries: list[dict[str, object]] = field(default_factory=list)
     disabled_qr_sets: set[tuple[str, int]] = field(default_factory=set)
     disabled_qz_sections: set[tuple[str, int, int]] = field(default_factory=set)
-    pending_legacy_disabled_qz_sections: set[tuple[str, int, int]] = field(
-        default_factory=set
-    )
+    pending_legacy_disabled_qz_sections: set[tuple[str, int, int]] = field(default_factory=set)
     mask_revision: int = 0
     refresh_requested: bool = False
 
@@ -1001,7 +999,9 @@ class SimulationRuntimeState:
     stored_primary_peak_table_lattice: Any = None
     stored_secondary_peak_table_lattice: Any = None
     stored_primary_intersection_cache: list[Any] | None = None
+    stored_primary_intersection_cache_signature: object = None
     stored_secondary_intersection_cache: list[Any] | None = None
+    stored_secondary_intersection_cache_signature: object = None
     primary_contribution_cache_signature: object = None
     primary_active_contribution_keys: list[object] = field(default_factory=list)
     primary_hit_table_cache: dict[object, np.ndarray] = field(default_factory=dict)

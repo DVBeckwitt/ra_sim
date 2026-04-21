@@ -725,6 +725,14 @@ def _rung_passed(report: Mapping[str, object]) -> bool:
     for entry in report.get("parameter_deltas", []) or []:
         if isinstance(entry, Mapping) and not bool(entry.get("within_bounds", True)):
             return False
+    if bool(report.get("least_squares_called", False)):
+        return False
+    if bool(report.get("optimizer_solve_called", False)):
+        return False
+    if "objective_dry_run_residual_finite" in report and not bool(
+        report.get("objective_dry_run_residual_finite", False)
+    ):
+        return False
     return True
 
 
@@ -851,6 +859,10 @@ def _request_only_report(
         "stage_timing_s": {},
         "parameter_deltas": [],
         "optimizer_called": False,
+        "objective_eval_called": False,
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
+        "objective_dry_run_residual_finite": False,
     }
     for key in STRICT_POINT_SUMMARY_KEYS:
         report[key] = 0
@@ -885,11 +897,21 @@ def run_objective_dry_run(
             extra={
                 "fallback_guard_failures": request_fallback_failures,
                 "least_squares_probe_records": [],
+                "objective_eval_called": False,
+                "least_squares_called": False,
+                "optimizer_solve_called": False,
+                "objective_dry_run_residual_finite": False,
             },
         )
         _write_json(output_path, report)
         return report
     result, records = _run_with_probe_least_squares(request, mode="dry_run")
+    residual_finite = any(
+        bool(record.get("finite", False))
+        and math.isfinite(_metric_float(record.get("residual_norm", np.nan)))
+        for record in records
+        if isinstance(record, Mapping)
+    )
     report = _result_report(
         request=request,
         result=result,
@@ -897,7 +919,13 @@ def run_objective_dry_run(
         rung_name="objective_dry_run",
         started_at=started,
         status="ok",
-        extra={"least_squares_probe_records": records},
+        extra={
+            "least_squares_probe_records": records,
+            "objective_eval_called": bool(records),
+            "least_squares_called": False,
+            "optimizer_solve_called": False,
+            "objective_dry_run_residual_finite": bool(residual_finite),
+        },
     )
     fallback_failures = _strict_no_fallback_failures(report)
     if fallback_failures:

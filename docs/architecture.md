@@ -7,6 +7,7 @@ implementation-level detail from the canonical reference.
 See also:
 
 - [docs index](index.md)
+- [Architecture decisions](adr/index.md)
 - [GUI workflow](gui-workflow.md)
 - [Debug and cache guide](debug-and-cache.md)
 - [Canonical reference code map](simulation_and_fitting.md#code-map)
@@ -49,6 +50,7 @@ Typical flow:
 ## Docs Strategy
 
 - Use this page for package routing and edit targeting.
+- Use [Architecture decisions](adr/index.md) for stable design boundaries.
 - Use [gui-workflow.md](gui-workflow.md) for operator flow.
 - Use [debug-and-cache.md](debug-and-cache.md) for debug/log behavior.
 - Use [simulation_and_fitting.md](simulation_and_fitting.md) when you need exact defaults, equations, or function-level mapping.

@@ -10,21 +10,40 @@ from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.simulation.diffraction import intersection_cache_to_hit_tables
 from ra_sim.simulation.intersection_cache_schema import (
-    CURRENT_DETECTOR_CACHE_WIDTH,
-    coerce_float64_table,
+    coerce_intersection_cache_table,
     empty_hit_table,
 )
 
 
-def copy_intersection_cache_tables(cache: object) -> list[np.ndarray]:
+def _iter_table_payload(payload: object) -> list[object]:
+    if payload is None:
+        return []
+    if isinstance(payload, (str, bytes, Mapping)):
+        return []
+    if isinstance(payload, np.ndarray):
+        arr = np.asarray(payload)
+        if arr.ndim == 2:
+            return [arr]
+        if arr.ndim == 3:
+            return [arr[idx] for idx in range(arr.shape[0])]
+        return []
+    try:
+        return list(payload)
+    except Exception:
+        return []
+
+
+def copy_intersection_cache_tables(
+    cache: object,
+    *,
+    allow_abbreviated_detector_cache: bool = False,
+) -> list[np.ndarray]:
     copied: list[np.ndarray] = []
-    if not isinstance(cache, (list, tuple)):
-        return copied
-    for table in cache:
+    for table in _iter_table_payload(cache):
         copied.append(
-            coerce_float64_table(
+            coerce_intersection_cache_table(
                 table,
-                empty_width=CURRENT_DETECTOR_CACHE_WIDTH,
+                allow_abbreviated_detector_cache=allow_abbreviated_detector_cache,
             )
         )
     return copied
@@ -32,13 +51,16 @@ def copy_intersection_cache_tables(cache: object) -> list[np.ndarray]:
 
 def copy_hit_tables(hit_tables: object) -> list[np.ndarray]:
     copied: list[np.ndarray] = []
-    if not isinstance(hit_tables, (list, tuple)):
-        return copied
-    for table in hit_tables:
+    for table in _iter_table_payload(hit_tables):
         try:
-            copied.append(np.asarray(table, dtype=np.float64).copy())
+            arr = np.asarray(table, dtype=np.float64)
         except Exception:
             copied.append(empty_hit_table())
+            continue
+        if arr.ndim != 2:
+            copied.append(empty_hit_table())
+            continue
+        copied.append(arr.copy())
     return copied
 
 
@@ -86,6 +108,7 @@ def reset_combined_simulation_artifacts(
     simulation_runtime_state.stored_source_reflection_indices_local = None
     simulation_runtime_state.stored_peak_table_lattice = None
     simulation_runtime_state.stored_sim_image = None
+    simulation_runtime_state.stored_intersection_cache = None
 
 
 def store_primary_cache_payload(

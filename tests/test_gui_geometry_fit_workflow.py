@@ -2997,25 +2997,34 @@ def _minimal_new4_ladder_context(ladder):
     }
 
 
-def _new4_ladder_provider_identity_pair(index: int, *, full_source: bool = True):
+def _new4_ladder_provider_identity_pair(
+    index: int,
+    *,
+    full_source: bool = True,
+    missing_identity: bool = False,
+):
     hkl = (int(index), 0, 1)
-    identity = {
-        "normalized_hkl": list(hkl),
-        "source_table_index": int(index),
-        "source_row_index": 0,
-        "source_peak_index": int(index % 2),
-        "source_branch_index": int(index % 2),
-        "source_label": "primary",
-        "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
-    }
-    if full_source:
+    identity = {}
+    if not missing_identity:
         identity.update(
             {
-                "source_reflection_index": int(index),
-                "source_reflection_namespace": "full_reflection",
-                "source_reflection_is_full": True,
+                "normalized_hkl": list(hkl),
+                "source_table_index": int(index),
+                "source_row_index": 0,
+                "source_peak_index": int(index % 2),
+                "source_branch_index": int(index % 2),
+                "source_label": "primary",
+                "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
             }
         )
+        if full_source:
+            identity.update(
+                {
+                    "source_reflection_index": int(index),
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                }
+            )
     provider_pair = {
         "pair_index": int(index),
         "provider_pair_index": int(index),
@@ -3042,7 +3051,11 @@ def _new4_ladder_provider_identity_pair(index: int, *, full_source: bool = True)
     return provider_pair, manual_pair, measured_row
 
 
-def _new4_ladder_context_with_provider_rows(*, full_source: bool):
+def _new4_ladder_context_with_provider_rows(
+    *,
+    full_source: bool,
+    missing_identity: bool = False,
+):
     base_prepared_run, _postprocess_config = _make_prepared_run(
         joint_background_mode=False
     )
@@ -3054,6 +3067,7 @@ def _new4_ladder_context_with_provider_rows(*, full_source: bool):
         provider_pair, manual_pair, measured_row = _new4_ladder_provider_identity_pair(
             index,
             full_source=full_source,
+            missing_identity=missing_identity,
         )
         provider_pairs.append(provider_pair)
         manual_pairs.append(manual_pair)
@@ -3324,7 +3338,10 @@ def test_new4_ladder_objective_dry_run_rejects_fallback_rows(
     tmp_path,
 ) -> None:
     ladder = _load_new4_ladder_module()
-    context = _new4_ladder_context_with_provider_rows(full_source=False)
+    context = _new4_ladder_context_with_provider_rows(
+        full_source=False,
+        missing_identity=True,
+    )
 
     def _should_not_probe(*_args, **_kwargs):
         raise AssertionError("objective probe should not run for fallback request")
@@ -3342,14 +3359,20 @@ def test_new4_ladder_objective_dry_run_rejects_fallback_rows(
     assert report["fallback_row_count"] == 7
     assert report["fixed_source_resolution_fallback_count"] == 7
     assert report["missing_fixed_source_count"] == 7
+    assert report["objective_eval_called"] is False
+    assert report["least_squares_called"] is False
+    assert report["optimizer_solve_called"] is False
+    assert report["objective_dry_run_residual_finite"] is False
 
 
+@pytest.mark.parametrize("full_source", [True, False])
 def test_new4_ladder_objective_dry_run_preserves_provider_fixed_rows(
     monkeypatch,
     tmp_path,
+    full_source,
 ) -> None:
     ladder = _load_new4_ladder_module()
-    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    context = _new4_ladder_context_with_provider_rows(full_source=full_source)
     captured: dict[str, object] = {}
 
     def _fake_probe(request, *, mode):
@@ -3401,14 +3424,71 @@ def test_new4_ladder_objective_dry_run_preserves_provider_fixed_rows(
     assert report["fixed_source_resolution_fallback_count"] == 0
     assert report["provider_to_optimizer_identity_match"] is True
     assert report["provider_to_optimizer_point_match"] is True
+    assert report["objective_eval_called"] is True
+    assert report["least_squares_called"] is False
+    assert report["optimizer_solve_called"] is False
+    assert report["objective_dry_run_residual_finite"] is True
     for index, row in enumerate(request_rows):
         identity = provider_pairs[index]["selected_source_identity_canonical"]
         assert row["hkl"] == tuple(identity["normalized_hkl"])
-        assert row["source_reflection_index"] == identity["source_reflection_index"]
-        assert row["source_reflection_namespace"] == "full_reflection"
+        if full_source:
+            assert row["source_reflection_index"] == identity["source_reflection_index"]
+            assert row["source_reflection_namespace"] == "full_reflection"
+            assert row["fit_source_resolution_kind"] == "provider_fixed_source"
+        else:
+            assert "source_reflection_index" not in row
+            assert "source_reflection_namespace" not in row
+            assert row["fit_source_resolution_kind"] == "provider_fixed_source_local"
+            assert row["source_table_index"] == identity["source_table_index"]
         assert row["source_peak_index"] == identity["source_peak_index"]
         assert row["x"] == pytest.approx(10.0 + index)
         assert row["y"] == pytest.approx(20.0 + index)
+
+
+def test_optimizer_request_preserves_local_provider_source_identity() -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=False)
+
+    request = ladder.build_solver_request(context, ["center_x"], max_nfev=20)
+    summary = dict(request.refinement_config["optimizer_request_handoff_summary"])
+    request_rows = list(request.dataset_specs[0]["measured_peaks"])
+
+    assert summary["optimizer_request_pair_count"] == 7
+    assert summary["fixed_source_pair_count"] == 7
+    assert summary["fallback_row_count"] == 0
+    assert summary["fixed_source_resolution_fallback_count"] == 0
+    assert summary["missing_fixed_source_count"] == 0
+    assert summary["provider_to_optimizer_identity_match"] is True
+    assert summary["provider_to_optimizer_point_match"] is True
+    for index, row in enumerate(request_rows):
+        assert row["fit_source_resolution_kind"] == "provider_fixed_source_local"
+        assert row["optimizer_request_has_fixed_source"] is True
+        assert row["optimizer_request_fallback_row"] is False
+        assert "source_reflection_index" not in row
+        assert row["source_table_index"] == index
+        assert row["source_peak_index"] == index % 2
+
+
+def test_optimizer_request_rejects_inconsistent_local_provider_source() -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=False)
+    identity = context["prepared_run"].current_dataset["provider_pairs"][0][
+        "selected_source_identity_canonical"
+    ]
+    identity["source_table_index"] = 1
+    identity["source_table_index_namespace"] = "full_reflection"
+
+    request = ladder.build_solver_request(context, ["center_x"], max_nfev=20)
+    summary = dict(request.refinement_config["optimizer_request_handoff_summary"])
+    first_row = request.dataset_specs[0]["measured_peaks"][0]
+
+    assert summary["fixed_source_pair_count"] == 6
+    assert summary["fallback_row_count"] == 1
+    assert summary["missing_fixed_source_count"] == 1
+    assert first_row["optimizer_request_fallback_row"] is True
+    assert "source_table_index_hkl_mismatch" in first_row[
+        "optimizer_request_fallback_reason"
+    ]
 
 
 def test_new4_ladder_does_not_start_solve_if_objective_uses_fallback(
@@ -3416,7 +3496,10 @@ def test_new4_ladder_does_not_start_solve_if_objective_uses_fallback(
     tmp_path,
 ) -> None:
     ladder = _load_new4_ladder_module()
-    context = _new4_ladder_context_with_provider_rows(full_source=False)
+    context = _new4_ladder_context_with_provider_rows(
+        full_source=False,
+        missing_identity=True,
+    )
     called = {"least_squares": False}
 
     def _raising_least_squares(*_args, **_kwargs):
@@ -3433,6 +3516,42 @@ def test_new4_ladder_does_not_start_solve_if_objective_uses_fallback(
     assert report["status"] == "failed"
     assert report["failure_reason"] == "optimizer_request_used_fallback_rows"
     assert called["least_squares"] is False
+    assert report["objective_eval_called"] is False
+    assert report["least_squares_called"] is False
+
+
+def test_new4_rung1_direct_objective_dry_run_green_or_fail_before_solve(
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    repo_root = Path(__file__).resolve().parents[1]
+    state_path = repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+
+    context = ladder._capture_solver_context(state_path, 0)
+    report = ladder.run_objective_dry_run(
+        context,
+        output_path=tmp_path / "rung_01_objective_dry_run.json",
+        max_nfev=20,
+    )
+
+    assert report["status"] == "ok"
+    assert report["pass"] is True
+    assert report["provider_pair_count"] == 7
+    assert report["dataset_pair_count"] == 7
+    assert report["optimizer_request_pair_count"] == 7
+    assert report["fixed_source_pair_count"] == 7
+    assert report["fallback_row_count"] == 0
+    assert report["fixed_source_resolution_fallback_count"] == 0
+    assert report["missing_fixed_source_count"] == 0
+    assert report["provider_to_optimizer_identity_match"] is True
+    assert report["provider_to_optimizer_point_match"] is True
+    assert report["objective_eval_called"] is True
+    assert report["least_squares_called"] is False
+    assert report["optimizer_solve_called"] is False
+    assert report["objective_dry_run_residual_finite"] is True
+    assert report["matched_pair_count"] == 7
+    assert report["missing_pair_count"] == 0
+    assert report["branch_mismatch_count"] == 0
 
 
 def test_build_geometry_manual_fit_dataset_skips_cached_candidate_with_missing_hkl() -> None:

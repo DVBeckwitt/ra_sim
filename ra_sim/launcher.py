@@ -91,6 +91,7 @@ def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
 
     try:
         with temporary_startup_debug_override(debug_override):
+            start_run_bundle(entrypoint="launcher:simulation")
             gui_main(
                 write_excel_flag=write_excel_flag,
                 startup_mode="simulation",
@@ -259,7 +260,7 @@ def main(argv: list[str] | None = None) -> None:
     if startup_mode == "prompt":
         startup_mode = gui_bootstrap.quick_startup_mode_dialog()
 
-    if startup_mode is not None:
+    if startup_mode is not None and startup_mode != "simulation":
         start_run_bundle(entrypoint=f"launcher:{startup_mode}")
     pending_exc_info: tuple[object, object, object] | None = None
     try:

@@ -13,6 +13,7 @@ def test_typecheck_targets_include_refactored_modules() -> None:
     assert "ra_sim/gui/runtime_primary_cache.py" in targets
     assert "ra_sim/config/loader.py" in targets
     assert "ra_sim/dev.py" in targets
+    assert "ra_sim/dev_doctor.py" in targets
 
 
 def test_format_targets_cover_large_split_frontier() -> None:
@@ -22,6 +23,8 @@ def test_format_targets_cover_large_split_frontier() -> None:
     assert "ra_sim/gui/_runtime/runtime_session.py" in targets
     assert "ra_sim/fitting/optimization_mosaic_profiles.py" in targets
     assert "ra_sim/gui/_runtime/primary_cache_helpers.py" in targets
+    assert "ra_sim/dev_doctor.py" in targets
+    assert "tests/test_dev_doctor.py" in targets
 
 
 def test_pip_install_command_variants_keep_group_then_extra_fallback() -> None:
@@ -55,12 +58,53 @@ def test_pytest_tiers_map_to_expected_markers() -> None:
     ]
 
 
+def test_pytest_coverage_fast_command_keeps_optional_coverage_out_of_check(
+    monkeypatch,
+) -> None:
+    command = dev.pytest_coverage_fast_command()
+
+    assert command[0:3] == [dev.sys.executable, "-m", "pytest"]
+    assert command[-5:] == [
+        "-m",
+        dev.FAST_MARKER,
+        "--cov=ra_sim",
+        "--cov-report=term-missing:skip-covered",
+        "--cov-report=xml",
+    ]
+
+    captured: list[list[str]] = []
+
+    def _capture(commands, *, cwd):
+        captured.extend([list(command) for command in commands])
+        return 0
+
+    monkeypatch.setattr(dev, "_run_all", _capture)
+
+    assert dev.check() == 0
+    flattened = [part for command in captured for part in command]
+    assert "--cov=ra_sim" not in flattened
+    assert ["-m", "build"] not in [command[-2:] for command in captured]
+
+
+def test_build_command_uses_module_entrypoint() -> None:
+    assert dev.build_command() == [dev.sys.executable, "-m", "build"]
+
+
 def test_parser_exposes_format_and_hook_commands() -> None:
     parser = dev.build_parser()
 
-    for command in ("format", "format-check", "hooks"):
+    for command in ("format", "format-check", "hooks", "test-coverage-fast", "build"):
         args = parser.parse_args([command])
         assert args.command == command
+
+
+def test_parser_exposes_doctor_strict_mode() -> None:
+    parser = dev.build_parser()
+
+    args = parser.parse_args(["doctor", "--strict"])
+
+    assert args.command == "doctor"
+    assert args.strict is True
 
 
 def test_subprocess_env_defaults_to_user_cache_dirs(

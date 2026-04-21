@@ -7362,6 +7362,7 @@ def _initialize_runtime_controls_block_09() -> None:
             native_detector_coords_to_detector_display_coords=(
                 _native_detector_coords_to_live_bundle_detector_coords
             ),
+            caked_angles_to_detector_display_coords=(_caked_angles_to_background_display_coords),
             hkl_pick_simulation_points_factory=(_hkl_pick_simulation_points_from_qr_picker_cache),
             detector_display_to_native_detector_coords=(
                 _background_display_to_native_detector_coords
@@ -7568,6 +7569,7 @@ def _initialize_runtime_controls_block_10() -> None:
             ),
             show_preview=_show_geometry_manual_preview,
             refresh_pick_session=_refresh_geometry_manual_pick_session,
+            profile_cache=lambda: simulation_runtime_state.profile_cache,
         )
     )
     geometry_manual_runtime = geometry_manual_workflow.runtime
@@ -10687,6 +10689,33 @@ def _worker_job_key(payload: object) -> tuple[object, int, str]:
     )
 
 
+def _selection_cache_refresh_active_sides(payload: object) -> tuple[str, ...]:
+    if not isinstance(payload, dict) or str(payload.get("job_kind", "full")) != "full":
+        return ()
+    active_sides = _normalized_active_peak_row_sides(payload.get("active_peak_row_sides", ()))
+    if not active_sides:
+        return ()
+    has_active_side_build = False
+    for side in active_sides:
+        if bool(payload.get(f"build_{side}_intersection_cache", False)) or bool(
+            payload.get(f"{side}_intersection_cache_built", False)
+        ):
+            has_active_side_build = True
+            break
+    return active_sides if has_active_side_build else ()
+
+
+def _selection_cache_refresh_job_matches(existing: object, requested: object) -> bool:
+    if not isinstance(existing, dict) or not isinstance(requested, dict):
+        return False
+    requested_sides = _selection_cache_refresh_active_sides(requested)
+    if not requested_sides:
+        return False
+    if _selection_cache_refresh_active_sides(existing) != requested_sides:
+        return False
+    return _worker_job_key(existing) == _worker_job_key(requested)
+
+
 def _hit_table_state_present_for_run_sides(
     *,
     run_primary: bool,
@@ -13093,6 +13122,7 @@ def _poll_async_simulation_job() -> None:
 
 def _request_async_simulation_job(job: dict[str, object]) -> str:
     requested_key = _worker_job_key(job)
+    requested_selection_cache_refresh = bool(_selection_cache_refresh_active_sides(job))
     _append_job_queue_trace(
         "job_requested",
         lane="simulation",
@@ -13101,7 +13131,11 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
         queued_job=simulation_runtime_state.worker_queued_job,
     )
     ready_result = simulation_runtime_state.worker_ready_result
-    if _worker_job_key(ready_result) == requested_key:
+    if (
+        _selection_cache_refresh_job_matches(ready_result, job)
+        if requested_selection_cache_refresh
+        else _worker_job_key(ready_result) == requested_key
+    ):
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
         return "ready"
@@ -13119,19 +13153,31 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
         )
         simulation_runtime_state.worker_ready_result = None
 
-    if _worker_job_key(simulation_runtime_state.worker_active_job) == requested_key:
+    if (
+        _selection_cache_refresh_job_matches(simulation_runtime_state.worker_active_job, job)
+        if requested_selection_cache_refresh
+        else _worker_job_key(simulation_runtime_state.worker_active_job) == requested_key
+    ):
         simulation_runtime_state.update_phase = "computing"
         _refresh_run_status_bar()
         return "running"
 
-    if _worker_job_key(simulation_runtime_state.worker_queued_job) == requested_key:
+    if (
+        _selection_cache_refresh_job_matches(simulation_runtime_state.worker_queued_job, job)
+        if requested_selection_cache_refresh
+        else _worker_job_key(simulation_runtime_state.worker_queued_job) == requested_key
+    ):
         _append_job_queue_trace(
             "job_queued",
             lane="simulation",
             job=simulation_runtime_state.worker_queued_job,
             active_job=simulation_runtime_state.worker_active_job,
             queued_job=simulation_runtime_state.worker_queued_job,
-            reason="already_queued",
+            reason=(
+                "selection_cache_refresh_already_queued"
+                if requested_selection_cache_refresh
+                else "already_queued"
+            ),
         )
         simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
@@ -15248,27 +15294,13 @@ def do_update():
             for side in active_selection_sides
         )
     )
-    stored_hit_rows_current = bool(
-        hit_tables_reusable
-        and _hit_table_state_present_for_run_sides(
-            run_primary=primary_run_available,
-            run_secondary=secondary_run_available,
-        )
-    )
-    stored_picker_rows_available = bool(
-        selection_cache_current
-        or stored_hit_rows_current
-        or len(getattr(simulation_runtime_state, "peak_records", ()) or ()) > 0
-    )
     selection_cache_refresh_needed = bool(
-        selection_peak_cache_needed and not stored_picker_rows_available
+        selection_peak_cache_needed and active_selection_sides and not selection_cache_current
     )
     collect_hit_tables_for_job = bool(
         (collect_hit_tables_requested and not hit_tables_reusable) or selection_cache_refresh_needed
     )
-    build_intersection_cache_for_job = bool(
-        selection_peak_cache_needed and collect_hit_tables_for_job
-    )
+    build_intersection_cache_for_job = bool(selection_cache_refresh_needed)
 
     _set_update_trace_stage("simulation_signature")
     new_sim_image_sig = _simulation_signature_base(optics_mode_component=int(optics_mode_flag))
@@ -15407,7 +15439,7 @@ def do_update():
         capture_primary_raw = bool(run_primary_job and job_kind_value in {"full", "primary_fill"})
         capture_secondary_raw = bool(run_secondary_enabled and job_kind_value == "full")
         build_intersection_cache_enabled = bool(
-            job_kind_value == "full" and selection_peak_cache_needed and collect_hit_tables_enabled
+            build_intersection_cache_for_job and job_kind_value == "full"
         )
         collect_primary_hit_tables = bool(
             (collect_hit_tables_enabled or build_intersection_cache_enabled) and run_primary_job
@@ -15417,10 +15449,10 @@ def do_update():
             and run_secondary_enabled
         )
         build_primary_intersection_cache = bool(
-            build_intersection_cache_enabled and run_primary_job
+            build_intersection_cache_enabled and collect_primary_hit_tables
         )
         build_secondary_intersection_cache = bool(
-            build_intersection_cache_enabled and run_secondary_enabled
+            build_intersection_cache_enabled and collect_secondary_hit_tables
         )
         return {
             "job_kind": job_kind_value,

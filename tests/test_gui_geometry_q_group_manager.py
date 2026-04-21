@@ -81,26 +81,22 @@ def test_geometry_q_group_manager_geometry_metadata_helpers() -> None:
         )
         == key
     )
-    missing_key, missing_qr, missing_qz = (
-        geometry_q_group_manager.reflection_q_group_metadata(
-            (1.0, 0.0, 1.25),
-            source_label="primary",
-            a_value=3.0,
-            c_value=6.0,
-        )
+    missing_key, missing_qr, missing_qz = geometry_q_group_manager.reflection_q_group_metadata(
+        (1.0, 0.0, 1.25),
+        source_label="primary",
+        a_value=3.0,
+        c_value=6.0,
     )
     assert missing_key is None
     assert np.isnan(missing_qr)
     assert np.isnan(missing_qz)
 
-    nominal_key, nominal_qr, nominal_qz = (
-        geometry_q_group_manager.reflection_q_group_metadata(
-            (1.0, 0.0, 1.25),
-            source_label="primary",
-            a_value=3.0,
-            c_value=6.0,
-            allow_nominal_hkl_indices=True,
-        )
+    nominal_key, nominal_qr, nominal_qz = geometry_q_group_manager.reflection_q_group_metadata(
+        (1.0, 0.0, 1.25),
+        source_label="primary",
+        a_value=3.0,
+        c_value=6.0,
+        allow_nominal_hkl_indices=True,
     )
     assert nominal_key == ("q_group", "primary", 1, 1)
     assert np.isclose(nominal_qr, (2.0 * np.pi / 3.0) * np.sqrt(4.0 / 3.0))
@@ -409,6 +405,7 @@ def test_geometry_q_group_manager_aggregates_peak_centers_from_max_positions() -
 
 def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
     captured = {}
+    n2_override = np.asarray([0.8 + 0.01j, 0.7 + 0.02j], dtype=np.complex128)
 
     def _build_mosaic(params):
         captured["params"] = dict(params)
@@ -417,6 +414,7 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
             "beam_y_array": np.asarray([3.0, 4.0], dtype=float),
             "theta_array": np.asarray([5.0, 6.0], dtype=float),
             "phi_array": np.asarray([7.0, 8.0], dtype=float),
+            "n2_sample_array": n2_override,
             "sigma_mosaic_deg": 0.1,
             "gamma_mosaic_deg": 0.2,
             "eta": 0.3,
@@ -480,6 +478,10 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
     assert captured["kwargs"]["optics_mode"] == 2
     assert captured["kwargs"]["solve_q_steps"] == 123
     assert captured["kwargs"]["solve_q_mode"] == 1
+    np.testing.assert_array_equal(
+        captured["kwargs"]["n2_sample_array_override"],
+        n2_override,
+    )
 
     centers = geometry_q_group_manager.simulate_geometry_fit_peak_centers(
         miller_array,
@@ -488,9 +490,7 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
         param_set,
         build_geometry_fit_central_mosaic_params=_build_mosaic,
         process_peaks_parallel=_process_peaks_parallel,
-        hit_tables_to_max_positions=lambda _tables: [
-            [9.0, 1.0, 2.0, 4.0, 6.0, 7.0]
-        ],
+        hit_tables_to_max_positions=lambda _tables: [[9.0, 1.0, 2.0, 4.0, 6.0, 7.0]],
         default_solve_q_steps=123,
         default_solve_q_rel_tol=2.5e-4,
         default_solve_q_mode=1,
@@ -530,6 +530,194 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
     assert preview_peaks[0]["sim_row"] == 34.8
     assert preview_peaks[0]["source_label"] == "primary"
     assert preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
+
+
+def test_simulate_geometry_fit_hit_tables_drops_wrong_length_n2_override() -> None:
+    captured = {}
+
+    def _build_mosaic(_params):
+        return {
+            "beam_x_array": np.asarray([1.0, 2.0], dtype=float),
+            "beam_y_array": np.asarray([3.0, 4.0], dtype=float),
+            "theta_array": np.asarray([5.0, 6.0], dtype=float),
+            "phi_array": np.asarray([7.0, 8.0], dtype=float),
+            "n2_sample_array": np.asarray([1.0 + 0.0j], dtype=np.complex128),
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return (
+            np.zeros((32, 32), dtype=float),
+            [
+                np.asarray(
+                    [
+                        [10.0, 1.2, 2.8, 0.0, 1.0, 0.0, 0.0],
+                    ],
+                    dtype=float,
+                )
+            ],
+        )
+
+    geometry_q_group_manager.simulate_geometry_fit_hit_tables(
+        np.asarray([[1.0, 0.0, 0.0]], dtype=float),
+        np.asarray([5.0], dtype=float),
+        32,
+        {
+            "a": 3.0,
+            "c": 5.0,
+            "lambda": 1.54,
+            "corto_detector": 100.0,
+            "gamma": 1.0,
+            "Gamma": 2.0,
+            "chi": 3.0,
+            "psi": 4.0,
+            "psi_z": 5.0,
+            "zs": 6.0,
+            "zb": 7.0,
+            "n2": "n2",
+            "debye_x": 0.1,
+            "debye_y": 0.2,
+            "center": (11.0, 12.0),
+            "theta_initial": 8.0,
+            "cor_angle": 9.0,
+            "optics_mode": 2,
+        },
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    assert captured["kwargs"].get("n2_sample_array_override") is None
+
+
+def test_simulate_geometry_fit_hit_tables_drops_malformed_n2_override() -> None:
+    captured = {}
+
+    def _build_mosaic(_params):
+        return {
+            "beam_x_array": np.asarray([1.0, 2.0], dtype=float),
+            "beam_y_array": np.asarray([3.0, 4.0], dtype=float),
+            "theta_array": np.asarray([5.0, 6.0], dtype=float),
+            "phi_array": np.asarray([7.0, 8.0], dtype=float),
+            "n2_sample_array": ["bad", "override"],
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return (
+            np.zeros((32, 32), dtype=float),
+            [
+                np.asarray(
+                    [
+                        [10.0, 1.2, 2.8, 0.0, 1.0, 0.0, 0.0],
+                    ],
+                    dtype=float,
+                )
+            ],
+        )
+
+    geometry_q_group_manager.simulate_geometry_fit_hit_tables(
+        np.asarray([[1.0, 0.0, 0.0]], dtype=float),
+        np.asarray([5.0], dtype=float),
+        32,
+        {
+            "a": 3.0,
+            "c": 5.0,
+            "lambda": 1.54,
+            "corto_detector": 100.0,
+            "gamma": 1.0,
+            "Gamma": 2.0,
+            "chi": 3.0,
+            "psi": 4.0,
+            "psi_z": 5.0,
+            "zs": 6.0,
+            "zb": 7.0,
+            "n2": "n2",
+            "debye_x": 0.1,
+            "debye_y": 0.2,
+            "center": (11.0, 12.0),
+            "theta_initial": 8.0,
+            "cor_angle": 9.0,
+            "optics_mode": 2,
+        },
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    assert captured["kwargs"].get("n2_sample_array_override") is None
+
+
+def test_simulate_geometry_fit_hit_tables_records_diagnostics_for_missing_beam_x_array() -> None:
+    called = False
+
+    def _build_mosaic(_params):
+        return {
+            "beam_y_array": np.asarray([3.0, 4.0], dtype=float),
+            "theta_array": np.asarray([5.0, 6.0], dtype=float),
+            "phi_array": np.asarray([7.0, 8.0], dtype=float),
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("process_peaks_parallel should not be reached")
+
+    with pytest.raises(KeyError):
+        geometry_q_group_manager.simulate_geometry_fit_hit_tables(
+            np.asarray([[1.0, 0.0, 0.0]], dtype=float),
+            np.asarray([5.0], dtype=float),
+            32,
+            {
+                "a": 3.0,
+                "c": 5.0,
+                "lambda": 1.54,
+                "corto_detector": 100.0,
+                "gamma": 1.0,
+                "Gamma": 2.0,
+                "chi": 3.0,
+                "psi": 4.0,
+                "psi_z": 5.0,
+                "zs": 6.0,
+                "zb": 7.0,
+                "n2": "n2",
+                "debye_x": 0.1,
+                "debye_y": 0.2,
+                "center": (11.0, 12.0),
+                "theta_initial": 8.0,
+                "cor_angle": 9.0,
+                "optics_mode": 2,
+            },
+            build_geometry_fit_central_mosaic_params=_build_mosaic,
+            process_peaks_parallel=_process_peaks_parallel,
+            default_solve_q_steps=123,
+            default_solve_q_rel_tol=2.5e-4,
+            default_solve_q_mode=1,
+        )
+
+    diagnostics = geometry_q_group_manager._function_last_diagnostics(
+        geometry_q_group_manager.simulate_geometry_fit_hit_tables
+    )
+
+    assert called is False
+    assert diagnostics["stage"] == "simulate_hit_tables"
+    assert diagnostics["status"] == "process_peaks_parallel_exception"
+    assert diagnostics["exception_type"] == "KeyError"
 
 
 def test_simulate_geometry_fit_hit_tables_marks_empty_target_filter_unused() -> None:
@@ -596,9 +784,7 @@ def test_simulate_geometry_fit_hit_tables_marks_empty_target_filter_unused() -> 
     assert hit_tables == []
     assert diagnostics["targeted_simulation_supported"] is True
     assert diagnostics["targeted_simulation_used"] is False
-    assert diagnostics["targeted_simulation_fallback_reason"] == (
-        "targeted_hkl_filter_empty"
-    )
+    assert diagnostics["targeted_simulation_fallback_reason"] == ("targeted_hkl_filter_empty")
 
 
 def test_simulate_geometry_fit_preview_style_peaks_respects_lattice_and_provenance() -> None:
@@ -692,14 +878,16 @@ def test_geometry_q_group_manager_runtime_simulation_callback_bundle_uses_live_v
     monkeypatch.setattr(
         geometry_q_group_manager,
         "simulate_geometry_fit_peak_centers",
-        lambda *args, **kwargs: calls.append(("peak_centers", args, kwargs))
-        or [{"hkl": (1, 0, 0)}],
+        lambda *args, **kwargs: (
+            calls.append(("peak_centers", args, kwargs)) or [{"hkl": (1, 0, 0)}]
+        ),
     )
     monkeypatch.setattr(
         geometry_q_group_manager,
         "simulate_geometry_fit_preview_style_peaks",
-        lambda *args, **kwargs: calls.append(("preview_style", args, kwargs))
-        or [{"hkl": (1, 0, 1)}],
+        lambda *args, **kwargs: (
+            calls.append(("preview_style", args, kwargs)) or [{"hkl": (1, 0, 1)}]
+        ),
     )
 
     bundle = geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
@@ -1017,9 +1205,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     preview_state = state.GeometryPreviewState()
     q_group_state = state.GeometryQGroupState(
         disabled_qz_sections={("primary", 1, 0)},
-        cached_entries=[
-            _entry(("q_group", "primary", 1, 0), peak_count=2, total_intensity=10.0)
-        ],
+        cached_entries=[_entry(("q_group", "primary", 1, 0), peak_count=2, total_intensity=10.0)],
     )
     live = {
         "primary_a": 7.0,
@@ -1031,44 +1217,41 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     monkeypatch.setattr(
         geometry_q_group_manager,
         "filter_geometry_fit_simulated_peaks",
-        lambda *args, **kwargs: calls.append(("filter_peaks", args, kwargs))
-        or ([{"filtered": True}], 1, 2),
+        lambda *args, **kwargs: (
+            calls.append(("filter_peaks", args, kwargs)) or ([{"filtered": True}], 1, 2)
+        ),
     )
     monkeypatch.setattr(
         geometry_q_group_manager,
         "collapse_geometry_fit_simulated_peaks",
-        lambda *args, **kwargs: calls.append(("collapse_peaks", args, kwargs))
-        or ([{"collapsed": True}], 3),
+        lambda *args, **kwargs: (
+            calls.append(("collapse_peaks", args, kwargs)) or ([{"collapsed": True}], 3)
+        ),
     )
     monkeypatch.setattr(
         geometry_q_group_manager,
         "build_geometry_q_group_entries",
-        lambda *args, **kwargs: calls.append(("build_entries", args, kwargs))
-        or [{"entry": True}],
+        lambda *args, **kwargs: calls.append(("build_entries", args, kwargs)) or [{"entry": True}],
     )
     monkeypatch.setattr(
         geometry_q_group_manager,
         "build_geometry_q_group_export_rows",
-        lambda *args, **kwargs: calls.append(("export_rows", args, kwargs))
-        or [{"row": True}],
+        lambda *args, **kwargs: calls.append(("export_rows", args, kwargs)) or [{"row": True}],
     )
     monkeypatch.setattr(
         geometry_q_group_manager.gui_controllers,
         "clone_geometry_q_group_entries",
-        lambda entries: calls.append(("clone_entries", (entries,), {}))
-        or [{"cloned": True}],
+        lambda entries: calls.append(("clone_entries", (entries,), {})) or [{"cloned": True}],
     )
     monkeypatch.setattr(
         geometry_q_group_manager,
         "build_geometry_q_group_window_status_text",
-        lambda *args, **kwargs: calls.append(("window_status", args, kwargs))
-        or "status-text",
+        lambda *args, **kwargs: calls.append(("window_status", args, kwargs)) or "status-text",
     )
     monkeypatch.setattr(
         geometry_q_group_manager,
         "build_geometry_preview_exclude_button_label",
-        lambda *args, **kwargs: calls.append(("button_label", args, kwargs))
-        or "button-label",
+        lambda *args, **kwargs: calls.append(("button_label", args, kwargs)) or "button-label",
     )
 
     bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
@@ -1118,9 +1301,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         "source_table_index": 0,
         "source_row_index": 1,
     }
-    preview_state.excluded_keys = {
-        ("peak", "primary", 0, 1, 1, 0, 0)
-    }
+    preview_state.excluded_keys = {("peak", "primary", 0, 1, 1, 0, 0)}
     assert bundle.live_preview_match_key(preview_entry) == (
         "peak",
         "primary",
@@ -1136,11 +1317,9 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         [{"hkl": (2, 0, 0)}],
         1,
     )
-    filtered_pairs, preview_stats, excluded_total = (
-        bundle.apply_live_preview_match_exclusions(
-            [preview_entry, {"hkl": (2, 0, 0), "distance_px": 3.0}],
-            {"search_radius_px": 18.0},
-        )
+    filtered_pairs, preview_stats, excluded_total = bundle.apply_live_preview_match_exclusions(
+        [preview_entry, {"hkl": (2, 0, 0), "distance_px": 3.0}],
+        {"search_radius_px": 18.0},
     )
     assert filtered_pairs == [{"hkl": (2, 0, 0), "distance_px": 3.0}]
     assert preview_stats["excluded_count"] == 1
@@ -1154,11 +1333,13 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "q_group_state": q_group_state,
         },
     ) in calls
-    assert (
-        "collapse_peaks",
-        ([{"seed": True}],),
-        {"merge_radius_px": 4.5},
-    ) in calls
+    assert any(
+        name == "collapse_peaks"
+        and args == ([{"seed": True}],)
+        and kwargs.get("merge_radius_px") == 4.5
+        and "profile_cache" in kwargs
+        for name, args, kwargs in calls
+    )
     assert (
         "build_entries",
         (None,),
@@ -1244,7 +1425,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "q_group_key": ("q_group", "primary", 2, 0),
             "caked_x": 31.25,
             "caked_y": -56.5,
-        }
+        },
     ]
     live["primary_a"] = 11.0
     live["primary_c"] = 13.0
@@ -1313,8 +1494,10 @@ def test_geometry_q_group_manager_seeds_peak_records_from_overlay_builder(
     monkeypatch.setattr(
         geometry_q_group_manager,
         "build_geometry_q_group_entries",
-        lambda *args, **kwargs: build_entries_calls.append(dict(kwargs))
-        or [{"records": list(kwargs.get("peak_records", ()) or ())}],
+        lambda *args, **kwargs: (
+            build_entries_calls.append(dict(kwargs))
+            or [{"records": list(kwargs.get("peak_records", ()) or ())}]
+        ),
     )
 
     bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
@@ -1419,7 +1602,9 @@ def test_geometry_q_group_manager_rebuilds_stale_peak_records_from_overlay_build
     assert entries[0]["key"] == ("q_group", "primary", 1, 0)
 
 
-def test_geometry_q_group_manager_rebuilds_detector_display_coords_from_detector_projection() -> None:
+def test_geometry_q_group_manager_rebuilds_detector_display_coords_from_detector_projection() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
@@ -1586,7 +1771,9 @@ def test_geometry_q_group_manager_filters_stale_rows_from_mixed_peak_records() -
     assert entries[0]["total_intensity"] == 7.0
 
 
-def test_geometry_q_group_manager_peak_record_fallback_restores_trusted_provenance_for_matching_snapshot() -> None:
+def test_geometry_q_group_manager_peak_record_fallback_restores_trusted_provenance_for_matching_snapshot() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
@@ -1654,7 +1841,9 @@ def test_geometry_q_group_manager_peak_record_fallback_restores_trusted_provenan
     assert bundle.last_live_preview_cache_metadata()["active_signature_matches"] is True
 
 
-def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_nominal_cache_grouping() -> None:
+def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_nominal_cache_grouping() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
@@ -1675,7 +1864,27 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_nominal_cac
         stored_sim_image=np.zeros((32, 32), dtype=float),
         stored_primary_intersection_cache=[
             np.asarray(
-                [[1.1, 1.2, 10.2, 20.8, 12.0, 0.0, 1.0, 0.0, 1.29, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 0.0, 0.0]],
+                [
+                    [
+                        1.1,
+                        1.2,
+                        10.2,
+                        20.8,
+                        12.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                        1.29,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ]
+                ],
                 dtype=float,
             )
         ],
@@ -1706,7 +1915,9 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_nominal_cac
     assert entries[0]["key"] == ("q_group", "primary", 1, 1)
 
 
-def test_geometry_q_group_manager_build_entries_snapshot_uses_intersection_cache_when_peak_records_empty() -> None:
+def test_geometry_q_group_manager_build_entries_snapshot_uses_intersection_cache_when_peak_records_empty() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[],
         stored_max_positions_local=[
@@ -1719,7 +1930,27 @@ def test_geometry_q_group_manager_build_entries_snapshot_uses_intersection_cache
         stored_sim_image=np.zeros((32, 32), dtype=float),
         stored_primary_intersection_cache=[
             np.asarray(
-                [[1.1, 1.2, 10.2, 20.8, 12.0, 0.0, 1.0, 0.0, 1.29, np.nan, np.nan, np.nan, np.nan, np.nan, 0.0, 0.0, 0.0]],
+                [
+                    [
+                        1.1,
+                        1.2,
+                        10.2,
+                        20.8,
+                        12.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                        1.29,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ]
+                ],
                 dtype=float,
             )
         ],
@@ -1744,7 +1975,9 @@ def test_geometry_q_group_manager_build_entries_snapshot_uses_intersection_cache
     assert entries[0]["peak_count"] == 1
 
 
-def test_geometry_q_group_manager_build_entries_snapshot_falls_back_when_stored_hit_tables_empty_list() -> None:
+def test_geometry_q_group_manager_build_entries_snapshot_falls_back_when_stored_hit_tables_empty_list() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
@@ -1833,7 +2066,9 @@ def test_geometry_q_group_manager_build_entries_snapshot_prefers_valid_stored_hi
     assert entries[0]["peak_count"] == 1
 
 
-def test_geometry_q_group_manager_build_entries_snapshot_falls_back_when_stored_hit_tables_are_empty_arrays() -> None:
+def test_geometry_q_group_manager_build_entries_snapshot_falls_back_when_stored_hit_tables_are_empty_arrays() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
@@ -1956,7 +2191,9 @@ def test_geometry_q_group_manager_build_entries_snapshot_falls_back_from_empty_c
     ]
 
 
-def test_geometry_q_group_manager_caked_preview_uses_stored_hit_tables_without_peak_records() -> None:
+def test_geometry_q_group_manager_caked_preview_uses_stored_hit_tables_without_peak_records() -> (
+    None
+):
     runtime_state = state.SimulationRuntimeState(
         peak_records=[],
         stored_max_positions_local=[
@@ -2076,7 +2313,9 @@ def test_geometry_q_group_manager_source_row_content_signature_ignores_view_fiel
     )
 
 
-def test_geometry_q_group_manager_build_entries_snapshot_invalidates_on_q_group_content_signature_change() -> None:
+def test_geometry_q_group_manager_build_entries_snapshot_invalidates_on_q_group_content_signature_change() -> (
+    None
+):
     first_hit_tables = [
         np.asarray(
             [[12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.0]],
@@ -2131,9 +2370,7 @@ def test_geometry_q_group_manager_build_entries_snapshot_is_view_independent() -
         stored_peak_table_lattice=[(3.0, 5.0, "primary")],
         stored_hit_table_signature=("sig", 1),
         stored_q_group_content_signature=(
-            geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
-                hit_tables
-            )
+            geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(hit_tables)
         ),
     )
     detector_bundle = _make_runtime_q_group_bundle(
@@ -2160,12 +2397,8 @@ def test_geometry_q_group_manager_build_entries_snapshot_is_view_independent() -
     caked_entries = caked_bundle.build_entries_snapshot()
     caked_signature = runtime_state.geometry_q_group_entries_cache_signature
 
-    assert [entry["key"] for entry in detector_entries] == [
-        ("q_group", "primary", 1, 1)
-    ]
-    assert [entry["key"] for entry in caked_entries] == [
-        ("q_group", "primary", 1, 1)
-    ]
+    assert [entry["key"] for entry in detector_entries] == [("q_group", "primary", 1, 1)]
+    assert [entry["key"] for entry in caked_entries] == [("q_group", "primary", 1, 1)]
     assert detector_signature == caked_signature
 
 
@@ -2181,9 +2414,7 @@ def test_geometry_q_group_manager_build_entries_snapshot_invalidates_on_lattice_
         stored_max_positions_local=hit_tables,
         stored_hit_table_signature=("sig", 2),
         stored_q_group_content_signature=(
-            geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
-                hit_tables
-            )
+            geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(hit_tables)
         ),
     )
     bundle = _make_runtime_q_group_bundle(
@@ -2241,9 +2472,7 @@ def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
         "distance_px": 4.0,
         "confidence": 0.4,
     }
-    excluded_key = geometry_q_group_manager.live_geometry_preview_match_key(
-        excluded_entry
-    )
+    excluded_key = geometry_q_group_manager.live_geometry_preview_match_key(excluded_entry)
     preview_state = state.GeometryPreviewState(excluded_keys={excluded_key})
     preview_state.overlay.pairs = [dict(excluded_entry)]
 
@@ -2304,11 +2533,9 @@ def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
         is True
     )
 
-    filtered, excluded_count = (
-        geometry_q_group_manager.filter_live_geometry_preview_matches(
-            preview_state,
-            [excluded_entry, indexed_entry, coord_entry, "bad"],
-        )
+    filtered, excluded_count = geometry_q_group_manager.filter_live_geometry_preview_matches(
+        preview_state,
+        [excluded_entry, indexed_entry, coord_entry, "bad"],
     )
     assert filtered == [indexed_entry, coord_entry]
     assert excluded_count == 1
@@ -2403,9 +2630,7 @@ def test_geometry_q_group_manager_live_preview_exclusions_keep_legacy_aliases() 
 def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "primary", 1, 1)
-    q_group_state = state.GeometryQGroupState(
-        disabled_qz_sections={("primary", 1, 1)}
-    )
+    q_group_state = state.GeometryQGroupState(disabled_qz_sections={("primary", 1, 1)})
     filtered, excluded_count, total_groups = (
         geometry_q_group_manager.filter_geometry_fit_simulated_peaks(
             [
@@ -2427,60 +2652,226 @@ def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exc
 def test_geometry_q_group_manager_collapses_degenerate_simulated_peaks() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 3, 0)
-    collapsed, collapsed_count = (
-        geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
-            [
-                {
-                    "q_group_key": key1,
-                    "hkl": (1, 0, 0),
-                    "label": "1,0,0",
-                    "sim_col": 10.0,
-                    "sim_row": 10.0,
-                    "weight": 2.0,
-                    "source_peak_index": 5,
-                },
-                {
-                    "q_group_key": key1,
-                    "hkl": (0, 1, 0),
-                    "label": "0,1,0",
-                    "sim_col": 11.0,
-                    "sim_row": 12.0,
-                    "weight": 3.0,
-                    "source_peak_index": 1,
-                },
-                {
-                    "q_group_key": key1,
-                    "hkl": (1, 0, 1),
-                    "label": "1,0,1",
-                    "sim_col": 30.0,
-                    "sim_row": 30.0,
-                    "weight": 0.0,
-                    "source_peak_index": 7,
-                },
-                {
-                    "q_group_key": key2,
-                    "hkl": (1, 1, 0),
-                    "label": "1,1,0",
-                    "sim_col": 50.0,
-                    "sim_row": 50.0,
-                    "weight": 4.0,
-                    "source_peak_index": 0,
-                },
-            ],
-            merge_radius_px=3.0,
-        )
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
+        [
+            {
+                "q_group_key": key1,
+                "hkl": (1, 0, 0),
+                "label": "1,0,0",
+                "sim_col": 10.0,
+                "sim_row": 10.0,
+                "weight": 2.0,
+                "source_peak_index": 5,
+            },
+            {
+                "q_group_key": key1,
+                "hkl": (0, 1, 0),
+                "label": "0,1,0",
+                "sim_col": 11.0,
+                "sim_row": 12.0,
+                "weight": 3.0,
+                "source_peak_index": 1,
+            },
+            {
+                "q_group_key": key1,
+                "hkl": (1, 0, 1),
+                "label": "1,0,1",
+                "sim_col": 30.0,
+                "sim_row": 30.0,
+                "weight": 0.0,
+                "source_peak_index": 7,
+            },
+            {
+                "q_group_key": key2,
+                "hkl": (1, 1, 0),
+                "label": "1,1,0",
+                "sim_col": 50.0,
+                "sim_row": 50.0,
+                "weight": 4.0,
+                "source_peak_index": 0,
+            },
+        ],
+        merge_radius_px=3.0,
     )
 
-    assert collapsed_count == 1
-    assert [entry["q_group_key"] for entry in collapsed] == [key1, key1, key2]
-    assert collapsed[0]["source_peak_index"] == 1
-    assert collapsed[0]["weight"] == 5.0
-    assert collapsed[0]["degenerate_count"] == 2
-    assert collapsed[0]["degenerate_hkls"] == [(1, 0, 0), (0, 1, 0)]
-    assert collapsed[1]["weight"] == 1.0
-    assert collapsed[1]["degenerate_count"] == 1
-    assert collapsed[1]["degenerate_hkls"] == [(1, 0, 1)]
-    assert collapsed[2]["weight"] == 4.0
+    assert collapsed_count == 2
+    assert [entry["q_group_key"] for entry in collapsed] == [key1, key2]
+    assert collapsed[0]["source_peak_index"] == 5
+    assert collapsed[0]["weight"] == 6.0
+    assert collapsed[0]["degenerate_count"] == 3
+    assert collapsed[0]["degenerate_hkls"] == [(1, 0, 0), (0, 1, 0), (1, 0, 1)]
+    assert collapsed[0]["selection_reason"] == "mosaic_top_per_branch"
+    assert collapsed[1]["weight"] == 4.0
+
+
+def test_collapse_geometry_fit_simulated_peaks_prefers_mosaic_top_per_branch() -> None:
+    key = ("q_group", "primary", 1, 0)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "hkl": (1, 0, 0),
+            "sim_col": 10.0,
+            "sim_row": 10.0,
+            "weight": 99.0,
+            "mosaic_weight": 0.1,
+            "best_sample_index": 3,
+            "source_row_index": 30,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "hkl": (1, 0, 0),
+            "sim_col": 11.0,
+            "sim_row": 10.0,
+            "weight": 1.0,
+            "mosaic_weight": 0.9,
+            "best_sample_index": 0,
+            "source_row_index": 31,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "-x",
+            "branch_source": "generated",
+            "hkl": (0, 1, 0),
+            "sim_col": 20.0,
+            "sim_row": 20.0,
+            "weight": 88.0,
+            "mosaic_weight": 0.2,
+            "best_sample_index": 4,
+            "source_row_index": 40,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "-x",
+            "branch_source": "generated",
+            "hkl": (0, 1, 0),
+            "sim_col": 21.0,
+            "sim_row": 20.0,
+            "weight": 1.0,
+            "mosaic_weight": 0.8,
+            "best_sample_index": 1,
+            "source_row_index": 41,
+        },
+    ]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
+        raw_entries,
+        merge_radius_px=100.0,
+    )
+
+    assert len(raw_entries) == 4
+    assert all("mosaic_top_rank_key" not in entry for entry in raw_entries)
+    assert collapsed_count == 2
+    by_branch = {entry["branch_id"]: entry for entry in collapsed}
+    assert set(by_branch) == {"+x", "-x"}
+    assert by_branch["+x"]["best_sample_index"] == 0
+    assert by_branch["+x"]["source_row_index"] == 31
+    assert by_branch["-x"]["best_sample_index"] == 1
+    assert by_branch["-x"]["source_row_index"] == 41
+    assert all(entry["selection_reason"] == "mosaic_top_per_branch" for entry in collapsed)
+    assert all(isinstance(entry["mosaic_top_rank_key"], tuple) for entry in collapsed)
+
+
+def test_collapse_geometry_fit_simulated_peaks_uses_profile_cache_branch_before_unknown() -> None:
+    key = ("q_group", "primary", 1, 0)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "hkl": (1, 0, 0),
+            "sim_col": 10.0,
+            "sim_row": 10.0,
+            "weight": 99.0,
+            "best_sample_index": 0,
+            "source_row_index": 30,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (1, 0, 0),
+            "sim_col": 11.0,
+            "sim_row": 10.0,
+            "weight": 1.0,
+            "best_sample_index": 1,
+            "source_row_index": 31,
+        },
+    ]
+    profile_cache = {
+        "beam_x_array": np.asarray([-0.5, 0.5], dtype=float),
+        "sample_weights": np.asarray([0.2, 0.9], dtype=float),
+    }
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
+        raw_entries,
+        merge_radius_px=100.0,
+        profile_cache=profile_cache,
+    )
+
+    assert all("branch_id" not in entry for entry in raw_entries)
+    assert all("mosaic_top_rank_key" not in entry for entry in raw_entries)
+    assert collapsed_count == 0
+    by_branch = {entry["branch_id"]: entry for entry in collapsed}
+    assert set(by_branch) == {"-x", "+x"}
+    assert by_branch["-x"]["source_row_index"] == 30
+    assert by_branch["-x"]["branch_source"] == "generated"
+    assert by_branch["-x"]["mosaic_weight"] == 0.2
+    assert by_branch["+x"]["source_row_index"] == 31
+    assert by_branch["+x"]["branch_source"] == "generated"
+    assert by_branch["+x"]["mosaic_weight"] == 0.9
+
+
+def test_build_geometry_fit_simulated_peaks_uses_profile_cache_branch_and_mosaic() -> None:
+    rows = [
+        np.asarray([10.0, 1.0, 2.0, 45.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float),
+        np.asarray([20.0, 3.0, 4.0, 45.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0], dtype=float),
+    ]
+    profile_cache = {
+        "beam_x_array": np.asarray([-0.5, 0.5], dtype=float),
+        "beam_y_array": np.asarray([0.05, 0.15], dtype=float),
+        "theta_array": np.asarray([0.01, 0.02], dtype=float),
+        "phi_array": np.asarray([0.03, 0.04], dtype=float),
+        "wavelength_array": np.asarray([1.54, 1.55], dtype=float),
+        "sample_weights": np.asarray([0.25, 0.75], dtype=float),
+    }
+
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        [np.asarray(rows, dtype=float)],
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        profile_cache=profile_cache,
+    )
+
+    by_sample = {entry["best_sample_index"]: entry for entry in peaks}
+    assert by_sample[0]["branch_id"] == "-x"
+    assert by_sample[1]["branch_id"] == "+x"
+    assert by_sample[0]["source_branch_index"] == 1
+    assert by_sample[1]["source_branch_index"] == 1
+    assert by_sample[0]["mosaic_weight"] == 0.25
+    assert by_sample[1]["mosaic_weight"] == 0.75
+    assert by_sample[0]["beam_x_offset"] == -0.5
+    assert by_sample[1]["beam_y_offset"] == 0.15
+    assert by_sample[0]["theta_offset"] == 0.01
+    assert by_sample[1]["phi_offset"] == 0.04
+    assert by_sample[1]["wavelength_offset"] == 1.55
+
+
+def test_build_geometry_fit_simulated_peaks_reannotates_after_mirrored_branch_repair() -> None:
+    rows = [
+        np.asarray([10.0, 1.0, 2.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float),
+        np.asarray([10.0, 50.0, 2.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0], dtype=float),
+    ]
+
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        [np.asarray(rows, dtype=float)],
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+    )
+
+    assert {entry["source_branch_index"] for entry in peaks} == {0, 1}
+    branch_ids = {entry["branch_id"] for entry in peaks}
+    assert len(branch_ids) == 2
+    assert all(str(branch_id).startswith("unknown:") for branch_id in branch_ids)
 
 
 def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None:
@@ -2492,12 +2883,10 @@ def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None
         cached_entries=[
             _entry(key1, peak_count=2, total_intensity=10.0),
             _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
-        ]
+        ],
     )
 
-    line = geometry_q_group_manager.format_geometry_q_group_line(
-        q_group_state.cached_entries[0]
-    )
+    line = geometry_q_group_manager.format_geometry_q_group_line(q_group_state.cached_entries[0])
     status = geometry_q_group_manager.build_geometry_q_group_window_status_text(
         preview_state=preview_state,
         q_group_state=q_group_state,
@@ -2712,8 +3101,7 @@ def test_geometry_q_group_manager_runtime_live_preview_simulated_peak_resolution
         refresh_live_geometry_preview=lambda: None,
         has_cached_hit_tables=True,
         build_live_preview_simulated_peaks_from_cache=lambda: (
-            preferred_cache_calls.append("cache")
-            or [{"source": "cache"}]
+            preferred_cache_calls.append("cache") or [{"source": "cache"}]
         ),
         simulate_preview_style_peaks=lambda miller, intensities, image_size, params: (
             preferred_sim_calls.append(
@@ -3092,25 +3480,23 @@ def test_geometry_q_group_manager_runtime_live_preview_match_result_application(
         excluded_q_group_count=lambda: 2,
     )
 
-    applied = (
-        geometry_q_group_manager.apply_runtime_live_geometry_preview_match_results(
-            bindings,
-            signature=("sig", 4),
-            matched_pairs=[{"x": 1.0, "y": 2.0, "sim_x": 0.5, "sim_y": 1.5}],
-            match_stats={
-                "simulated_count": 4,
-                "search_radius_px": 18.0,
-                "mean_match_distance_px": 6.0,
-                "p90_match_distance_px": 9.0,
-            },
-            preview_auto_match_cfg={"max_display_markers": 6},
-            auto_match_attempts=[{"radius": 18.0}],
-            min_matches=3,
-            q_group_total=5,
-            excluded_q_peaks=1,
-            collapsed_deg_preview=2,
-            update_status=False,
-        )
+    applied = geometry_q_group_manager.apply_runtime_live_geometry_preview_match_results(
+        bindings,
+        signature=("sig", 4),
+        matched_pairs=[{"x": 1.0, "y": 2.0, "sim_x": 0.5, "sim_y": 1.5}],
+        match_stats={
+            "simulated_count": 4,
+            "search_radius_px": 18.0,
+            "mean_match_distance_px": 6.0,
+            "p90_match_distance_px": 9.0,
+        },
+        preview_auto_match_cfg={"max_display_markers": 6},
+        auto_match_attempts=[{"radius": 18.0}],
+        min_matches=3,
+        q_group_total=5,
+        excluded_q_peaks=1,
+        collapsed_deg_preview=2,
+        update_status=False,
     )
 
     assert applied is True
@@ -3217,7 +3603,7 @@ def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
         cached_entries=[
             _entry(key1, peak_count=2, total_intensity=10.0),
             _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
-        ]
+        ],
     )
 
     export_rows = geometry_q_group_manager.build_geometry_q_group_export_rows(
@@ -3229,9 +3615,7 @@ def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
         q_group_state=q_group_state,
         saved_at="2026-03-26T12:00:00",
     )
-    saved_state, error = geometry_q_group_manager.load_geometry_q_group_saved_state(
-        payload
-    )
+    saved_state, error = geometry_q_group_manager.load_geometry_q_group_saved_state(payload)
 
     assert error is None
     assert payload["included_count"] == 1
@@ -3292,19 +3676,17 @@ def test_geometry_q_group_manager_checkbox_side_effects_update_status() -> None:
     )
     events = []
 
-    changed = (
-        geometry_q_group_manager.apply_geometry_q_group_checkbox_change_with_side_effects(
-            preview_state=preview_state,
-            q_group_state=q_group_state,
-            group_key=key1,
-            row_var=_FakeVar(False),
-            invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
-            update_geometry_preview_exclude_button_label=lambda: events.append("label"),
-            update_geometry_q_group_window_status=lambda: events.append("status"),
-            live_geometry_preview_enabled=lambda: False,
-            refresh_live_geometry_preview=lambda: events.append("refresh_live"),
-            set_status_text=lambda text: events.append(text),
-        )
+    changed = geometry_q_group_manager.apply_geometry_q_group_checkbox_change_with_side_effects(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        group_key=key1,
+        row_var=_FakeVar(False),
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        update_geometry_q_group_window_status=lambda: events.append("status"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: events.append("refresh_live"),
+        set_status_text=lambda text: events.append(text),
     )
 
     assert changed is True
@@ -3322,22 +3704,16 @@ def test_geometry_q_group_manager_bulk_enable_side_effects_cover_empty_and_live_
     empty_state = state.GeometryQGroupState()
     empty_messages = []
 
-    changed = (
-        geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
-            preview_state=preview_state,
-            q_group_state=empty_state,
-            enabled=False,
-            invalidate_geometry_manual_pick_cache=lambda: empty_messages.append(
-                "invalidate"
-            ),
-            update_geometry_preview_exclude_button_label=lambda: empty_messages.append(
-                "label"
-            ),
-            refresh_geometry_q_group_window=lambda: empty_messages.append("refresh"),
-            live_geometry_preview_enabled=lambda: False,
-            refresh_live_geometry_preview=lambda: empty_messages.append("live"),
-            set_status_text=lambda text: empty_messages.append(text),
-        )
+    changed = geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
+        preview_state=preview_state,
+        q_group_state=empty_state,
+        enabled=False,
+        invalidate_geometry_manual_pick_cache=lambda: empty_messages.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: empty_messages.append("label"),
+        refresh_geometry_q_group_window=lambda: empty_messages.append("refresh"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: empty_messages.append("live"),
+        set_status_text=lambda text: empty_messages.append(text),
     )
 
     assert changed is False
@@ -3355,18 +3731,16 @@ def test_geometry_q_group_manager_bulk_enable_side_effects_cover_empty_and_live_
     )
     events = []
 
-    changed = (
-        geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
-            preview_state=preview_state,
-            q_group_state=q_group_state,
-            enabled=False,
-            invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
-            update_geometry_preview_exclude_button_label=lambda: events.append("label"),
-            refresh_geometry_q_group_window=lambda: events.append("refresh"),
-            live_geometry_preview_enabled=lambda: True,
-            refresh_live_geometry_preview=lambda: events.append("live"),
-            set_status_text=lambda text: events.append(text),
-        )
+    changed = geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        enabled=False,
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        refresh_geometry_q_group_window=lambda: events.append("refresh"),
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: events.append("live"),
+        set_status_text=lambda text: events.append(text),
     )
 
     assert changed is True
@@ -3399,27 +3773,21 @@ def test_geometry_q_group_manager_request_update_side_effects_marks_refresh() ->
 def test_geometry_q_group_manager_snapshot_replace_side_effects_trim_exclusions() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)
-    preview_state = state.GeometryPreviewState(
-        excluded_q_groups={key1, ("q_group", "stale", 9, 9)}
-    )
+    preview_state = state.GeometryPreviewState(excluded_q_groups={key1, ("q_group", "stale", 9, 9)})
     q_group_state = state.GeometryQGroupState(
         disabled_qz_sections={("primary", 1, 0), ("stale", 9, 9)}
     )
     events = []
 
-    entries = (
-        geometry_q_group_manager.replace_geometry_q_group_entries_snapshot_with_side_effects(
-            preview_state=preview_state,
-            q_group_state=q_group_state,
-            entries=[
-                _entry(key1, peak_count=2, total_intensity=10.0),
-                _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
-            ],
-            invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
-            update_geometry_preview_exclude_button_label=lambda: events.append(
-                "label"
-            ),
-        )
+    entries = geometry_q_group_manager.replace_geometry_q_group_entries_snapshot_with_side_effects(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        entries=[
+            _entry(key1, peak_count=2, total_intensity=10.0),
+            _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
+        ],
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
     )
 
     assert [entry["key"] for entry in entries] == [key1, key2]
@@ -3497,9 +3865,7 @@ def test_geometry_q_group_manager_preview_exclusion_toggle_and_clear_helpers() -
     geometry_q_group_manager.clear_live_geometry_preview_exclusions_with_side_effects(
         preview_state=preview_state,
         invalidate_geometry_manual_pick_cache=lambda: clear_events.append("invalidate"),
-        update_geometry_preview_exclude_button_label=lambda: clear_events.append(
-            "label"
-        ),
+        update_geometry_preview_exclude_button_label=lambda: clear_events.append("label"),
         refresh_geometry_q_group_window=lambda: clear_events.append("refresh"),
         live_geometry_preview_enabled=lambda: False,
         refresh_live_geometry_preview=lambda: clear_events.append("live"),
@@ -3853,9 +4219,7 @@ def test_geometry_q_group_manager_runtime_preview_exclude_mode_helper_updates_hk
     monkeypatch.setattr(
         geometry_q_group_manager.gui_controllers,
         "set_geometry_preview_exclude_mode",
-        lambda state_value, enabled: (
-            events.append(("mode", state_value, enabled)) or True
-        ),
+        lambda state_value, enabled: events.append(("mode", state_value, enabled)) or True,
     )
 
     bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
@@ -3923,9 +4287,7 @@ def test_geometry_q_group_manager_runtime_snapshot_capture_refreshes_open_window
         ],
     )
 
-    entries = geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
-        bindings
-    )
+    entries = geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(bindings)
 
     assert [entry["key"] for entry in entries] == [key1]
     assert q_group_state.cached_entries == entries
@@ -3974,7 +4336,9 @@ def test_geometry_q_group_manager_preview_exclusion_open_reports_status(
     )
 
 
-def test_geometry_q_group_manager_live_preview_toggle_helper_covers_disabled_scheduled_and_refreshed_paths() -> None:
+def test_geometry_q_group_manager_live_preview_toggle_helper_covers_disabled_scheduled_and_refreshed_paths() -> (
+    None
+):
     disabled_events = []
 
     refreshed = geometry_q_group_manager.toggle_live_geometry_preview_with_side_effects(
@@ -4021,8 +4385,7 @@ def test_geometry_q_group_manager_live_preview_toggle_helper_covers_disabled_sch
         update_running=False,
         has_cached_hit_tables=True,
         schedule_update=lambda: failed_refresh_events.append("schedule"),
-        refresh_live_geometry_preview=lambda: failed_refresh_events.append("refresh")
-        or False,
+        refresh_live_geometry_preview=lambda: failed_refresh_events.append("refresh") or False,
         set_status_text=lambda text: failed_refresh_events.append(text),
     )
 
@@ -4055,7 +4418,7 @@ def test_geometry_q_group_manager_save_dialog_workflow_writes_payload_and_report
         cached_entries=[
             _entry(key1, peak_count=2, total_intensity=10.0),
             _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
-        ]
+        ],
     )
     captured = {}
     messages = []
@@ -4070,9 +4433,7 @@ def test_geometry_q_group_manager_save_dialog_workflow_writes_payload_and_report
         file_dialog_dir="C:/dialogs",
         asksaveasfilename=_asksaveasfilename,
         set_status_text=lambda text: messages.append(text),
-        save_payload=lambda path, payload: captured.update(
-            {"path": path, "payload": payload}
-        ),
+        save_payload=lambda path, payload: captured.update({"path": path, "payload": payload}),
         now=lambda: datetime(2026, 3, 26, 12, 34, 56),
     )
 
@@ -4103,9 +4464,7 @@ def test_geometry_q_group_manager_load_dialog_workflow_applies_state_and_refresh
             {"key": ["q_group", "primary", 1, 0], "included": True},
             {"key": ["q_group", "secondary", 2, 1], "included": False},
         ],
-        q_group_state=state.GeometryQGroupState(
-            disabled_qz_sections={("secondary", 2, 1)}
-        ),
+        q_group_state=state.GeometryQGroupState(disabled_qz_sections={("secondary", 2, 1)}),
         saved_at="2026-03-26T12:00:00",
     )
 

@@ -384,7 +384,10 @@ def quick_simulation_debug_override_dialog() -> str | None:
     ).pack(anchor="w", padx=18, pady=(18, 4))
     tk.Label(
         panel,
-        text="This changes only the current run and does not write config files.",
+        text=(
+            "Normal startup keeps diagnostics off. "
+            "Debug mode is optional for this run and does not write config files."
+        ),
         font=("Segoe UI", 10),
         fg="#475569",
         bg="#ffffff",
@@ -396,9 +399,16 @@ def quick_simulation_debug_override_dialog() -> str | None:
 
     button_specs = [
         (
-            "Use Saved Debug Settings",
+            "Start Normally (Diagnostics Off)",
             "#2563eb",
             "#1d4ed8",
+            "Force all diagnostic logging off for this run without changing saved files.",
+            "disable_all",
+        ),
+        (
+            "Use Saved Debug Settings",
+            "#475569",
+            "#334155",
             "Run with the current YAML and environment configuration.",
             "inherit",
         ),
@@ -408,13 +418,6 @@ def quick_simulation_debug_override_dialog() -> str | None:
             "#0f5f59",
             "Force all debug controls on for this run, even if config files disable them.",
             "enable_all",
-        ),
-        (
-            "Disable All Debug",
-            "#b45309",
-            "#92400e",
-            "Force all debug logging off for this run without changing saved files.",
-            "disable_all",
         ),
     ]
     first_button = None
@@ -449,7 +452,7 @@ def quick_simulation_debug_override_dialog() -> str | None:
     footer.pack(fill="x", padx=18, pady=(0, 16))
     tk.Label(
         footer,
-        text="Keyboard: Enter = Saved Settings, D = Debug, 0 = Disable All, Esc = Cancel",
+        text="Keyboard: Enter = Normal Start, S = Saved Settings, D = Debug, 0 = Diagnostics Off, Esc = Cancel",
         font=("Segoe UI", 8),
         fg="#64748b",
         bg="#ffffff",
@@ -471,7 +474,9 @@ def quick_simulation_debug_override_dialog() -> str | None:
     ).pack(side="right")
 
     dialog.bind("<Escape>", lambda _event: _set_mode(None))
-    dialog.bind("<Return>", lambda _event: _set_mode("inherit"))
+    dialog.bind("<Return>", lambda _event: _set_mode("disable_all"))
+    dialog.bind("s", lambda _event: _set_mode("inherit"))
+    dialog.bind("S", lambda _event: _set_mode("inherit"))
     dialog.bind("d", lambda _event: _set_mode("enable_all"))
     dialog.bind("D", lambda _event: _set_mode("enable_all"))
     dialog.bind("0", lambda _event: _set_mode("disable_all"))
@@ -1055,9 +1060,9 @@ def build_runtime_selected_peak_bootstrap(
         [float, float], tuple[float, float] | None
     ]
     | None = None,
-    detector_display_to_native_detector_coords: Callable[
-        [float, float], tuple[float, float] | None
-    ]
+    detector_display_to_native_detector_coords: Callable[[float, float], tuple[float, float] | None]
+    | None = None,
+    caked_angles_to_detector_display_coords: Callable[[float, float], tuple[float, float] | None]
     | None = None,
     hkl_pick_simulation_points_factory: Callable[[], object] | None = None,
     reflection_q_group_metadata: Callable[..., object] | None = None,
@@ -1149,13 +1154,12 @@ def build_runtime_selected_peak_bootstrap(
         "set_status_text_factory": set_status_text_factory,
         "draw_idle_factory": draw_idle_factory,
         "display_to_native_sim_coords": display_to_native_sim_coords,
-        "detector_display_to_native_detector_coords": (
-            detector_display_to_native_detector_coords
-        ),
+        "detector_display_to_native_detector_coords": (detector_display_to_native_detector_coords),
         "native_sim_to_display_coords": native_sim_to_display_coords,
         "native_detector_coords_to_detector_display_coords": (
             native_detector_coords_to_detector_display_coords
         ),
+        "caked_angles_to_detector_display_coords": (caked_angles_to_detector_display_coords),
         "simulate_ideal_hkl_native_center": config_factories.ideal_center,
         "deactivate_conflicting_modes_factory": deactivate_conflicting_modes_factory,
         "on_hkl_pick_mode_changed_factory": on_hkl_pick_mode_changed_factory,
@@ -1166,9 +1170,7 @@ def build_runtime_selected_peak_bootstrap(
         runtime_bootstrap_kwargs["hkl_pick_simulation_points_factory"] = (
             hkl_pick_simulation_points_factory
         )
-    runtime_bootstrap = build_runtime_peak_selection_bootstrap(
-        **runtime_bootstrap_kwargs
-    )
+    runtime_bootstrap = build_runtime_peak_selection_bootstrap(**runtime_bootstrap_kwargs)
     return PeakSelectionRuntimeBootstrap(
         bindings_factory=runtime_bootstrap.bindings_factory,
         callbacks=runtime_bootstrap.callbacks,

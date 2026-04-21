@@ -134,6 +134,7 @@ def test_copy_intersection_cache_tables_preserves_supported_schema_widths() -> N
             np.empty((0, 16), dtype=np.float64),
             np.empty((0, 17), dtype=np.float64),
             np.empty((0, 19), dtype=np.float64),
+            np.ones((1, 7), dtype=np.float64),
             object(),
         ]
     )
@@ -145,6 +146,7 @@ def test_copy_intersection_cache_tables_preserves_supported_schema_widths() -> N
         (0, 19),
     ]
     assert copied[4].shape == (0, 17)
+    assert copied[5].shape == (0, 17)
 
 
 def test_resolve_incremental_sf_prune_action_only_requests_missing_added_keys() -> None:

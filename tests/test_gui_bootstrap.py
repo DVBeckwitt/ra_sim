@@ -107,6 +107,202 @@ def test_quick_simulation_debug_override_dialog_requires_tkinter(monkeypatch) ->
         bootstrap.quick_simulation_debug_override_dialog()
 
 
+def test_quick_simulation_debug_override_dialog_defaults_to_diagnostics_off(
+    monkeypatch,
+) -> None:
+    focused_buttons: list[str] = []
+
+    class _FakeWidget:
+        def __init__(self, *args, **kwargs) -> None:
+            self.text = str(kwargs.get("text", ""))
+
+        def pack(self, *args, **kwargs) -> None:
+            return None
+
+        def focus_set(self) -> None:
+            focused_buttons.append(self.text)
+
+    class _FakeDialog:
+        def __init__(self) -> None:
+            self._bindings: dict[str, object] = {}
+
+        def title(self, _value: str) -> None:
+            return None
+
+        def configure(self, **_kwargs) -> None:
+            return None
+
+        def resizable(self, *_args) -> None:
+            return None
+
+        def attributes(self, *_args) -> None:
+            return None
+
+        def bind(self, key: str, callback) -> None:
+            self._bindings[str(key)] = callback
+
+        def protocol(self, *_args) -> None:
+            return None
+
+        def update_idletasks(self) -> None:
+            return None
+
+        def winfo_width(self) -> int:
+            return 520
+
+        def winfo_height(self) -> int:
+            return 360
+
+        def winfo_screenwidth(self) -> int:
+            return 1440
+
+        def winfo_screenheight(self) -> int:
+            return 900
+
+        def geometry(self, _spec: str) -> None:
+            return None
+
+        def destroy(self) -> None:
+            return None
+
+        def mainloop(self) -> None:
+            self._bindings["<Return>"](None)
+
+    fake_dialog = _FakeDialog()
+    fake_tk = ModuleType("tkinter")
+    fake_tk.Tk = lambda: fake_dialog
+    fake_tk.Frame = lambda *args, **kwargs: _FakeWidget(*args, **kwargs)
+    fake_tk.Label = lambda *args, **kwargs: _FakeWidget(*args, **kwargs)
+    fake_tk.Button = lambda *args, **kwargs: _FakeWidget(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bootstrap.install_prereqs,
+        "require_tkinter_modules",
+        lambda entrypoint_label: SimpleNamespace(
+            tk=fake_tk,
+            ttk=ModuleType("tkinter.ttk"),
+        ),
+    )
+    monkeypatch.setattr(
+        bootstrap.window_affinity,
+        "capture_launch_window_context",
+        lambda: "launch-context",
+    )
+    monkeypatch.setattr(
+        bootstrap.window_affinity,
+        "apply_window_launch_context",
+        lambda *args, **kwargs: True,
+    )
+
+    mode = bootstrap.quick_simulation_debug_override_dialog()
+
+    assert mode == "disable_all"
+    assert focused_buttons == ["Start Normally (Diagnostics Off)"]
+
+
+@pytest.mark.parametrize(
+    ("pressed_key", "expected_mode"),
+    [
+        ("s", "inherit"),
+        ("S", "inherit"),
+        ("d", "enable_all"),
+        ("D", "enable_all"),
+        ("0", "disable_all"),
+        ("<Escape>", None),
+    ],
+)
+def test_quick_simulation_debug_override_dialog_keyboard_shortcuts(
+    monkeypatch,
+    pressed_key: str,
+    expected_mode: str | None,
+) -> None:
+    class _FakeWidget:
+        def __init__(self, *args, **kwargs) -> None:
+            self.text = str(kwargs.get("text", ""))
+
+        def pack(self, *args, **kwargs) -> None:
+            return None
+
+        def focus_set(self) -> None:
+            return None
+
+    class _FakeDialog:
+        def __init__(self) -> None:
+            self._bindings: dict[str, object] = {}
+
+        def title(self, _value: str) -> None:
+            return None
+
+        def configure(self, **_kwargs) -> None:
+            return None
+
+        def resizable(self, *_args) -> None:
+            return None
+
+        def attributes(self, *_args) -> None:
+            return None
+
+        def bind(self, key: str, callback) -> None:
+            self._bindings[str(key)] = callback
+
+        def protocol(self, *_args) -> None:
+            return None
+
+        def update_idletasks(self) -> None:
+            return None
+
+        def winfo_width(self) -> int:
+            return 520
+
+        def winfo_height(self) -> int:
+            return 360
+
+        def winfo_screenwidth(self) -> int:
+            return 1440
+
+        def winfo_screenheight(self) -> int:
+            return 900
+
+        def geometry(self, _spec: str) -> None:
+            return None
+
+        def destroy(self) -> None:
+            return None
+
+        def mainloop(self) -> None:
+            self._bindings[pressed_key](None)
+
+    fake_dialog = _FakeDialog()
+    fake_tk = ModuleType("tkinter")
+    fake_tk.Tk = lambda: fake_dialog
+    fake_tk.Frame = lambda *args, **kwargs: _FakeWidget(*args, **kwargs)
+    fake_tk.Label = lambda *args, **kwargs: _FakeWidget(*args, **kwargs)
+    fake_tk.Button = lambda *args, **kwargs: _FakeWidget(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bootstrap.install_prereqs,
+        "require_tkinter_modules",
+        lambda entrypoint_label: SimpleNamespace(
+            tk=fake_tk,
+            ttk=ModuleType("tkinter.ttk"),
+        ),
+    )
+    monkeypatch.setattr(
+        bootstrap.window_affinity,
+        "capture_launch_window_context",
+        lambda: "launch-context",
+    )
+    monkeypatch.setattr(
+        bootstrap.window_affinity,
+        "apply_window_launch_context",
+        lambda *args, **kwargs: True,
+    )
+
+    mode = bootstrap.quick_simulation_debug_override_dialog()
+
+    assert mode == expected_mode
+
+
 def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None:
     events: list[object] = []
 

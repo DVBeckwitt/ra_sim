@@ -311,7 +311,11 @@ def test_repo_debug_defaults_disable_console_but_leave_outputs_enabled() -> None
     assert debug["debug"]["console"]["enabled"] is False
     assert debug["debug"]["runtime_update_trace"]["enabled"] is True
     assert debug["debug"]["geometry_fit"]["log_files"] is True
+    assert debug["debug"]["geometry_fit"]["extra_sections"] is True
     assert debug["debug"]["mosaic_fit"]["log_files"] is True
+    assert debug["debug"]["projection_debug"]["enabled"] is True
+    assert debug["debug"]["diffraction_debug_csv"]["enabled"] is True
+    assert debug["debug"]["intersection_cache"]["enabled"] is True
     assert debug["debug"]["cache"]["default_retention"] == "auto"
     assert debug["debug"]["cache"]["families"]["primary_contribution"] == "auto"
     assert debug["debug"]["cache"]["families"]["diffraction_last_intersection"] == "never"

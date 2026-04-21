@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from ra_sim import cli
+from ra_sim.debug_controls import finalize_run_bundle, reset_run_bundle_state
 from ra_sim.gui import runtime as gui_runtime
 from ra_sim import launcher
 
@@ -98,7 +99,6 @@ def test_root_launcher_force_exits_after_flagged_gui_close(monkeypatch) -> None:
     launcher.main(["gui"])
 
     assert calls == [
-        ("bundle", "launcher:simulation"),
         ("launch", "simulation", None, None),
         ("finalize",),
         ("flush", "stdout"),
@@ -142,11 +142,7 @@ def test_root_launcher_force_exit_survives_finalize_failure(monkeypatch) -> None
 
     launcher.main(["gui"])
 
-    assert calls[0:3] == [
-        ("bundle", "launcher:simulation"),
-        ("launch", "simulation", None, None),
-        ("finalize",),
-    ]
+    assert calls[0:2] == [("launch", "simulation", None, None), ("finalize",)]
     assert ("flush", "stdout") in calls
     assert ("flush", "stderr") in calls
     assert ("exit", 0) in calls
@@ -195,11 +191,7 @@ def test_root_launcher_force_exit_runs_on_simulation_startup_error(monkeypatch) 
         launcher.main(["gui"])
 
     assert excinfo.value.code == 1
-    assert calls[0:3] == [
-        ("bundle", "launcher:simulation"),
-        ("launch", "simulation", None, None),
-        ("write", "stderr", "gui boom"),
-    ]
+    assert calls[0:2] == [("launch", "simulation", None, None), ("write", "stderr", "gui boom")]
     assert ("finalize",) in calls
     assert ("flush", "stdout") in calls
     assert ("flush", "stderr") in calls
@@ -244,10 +236,7 @@ def test_root_launcher_force_exit_prints_traceback_for_unexpected_startup_error(
         launcher.main(["gui"])
 
     assert excinfo.value.code == 1
-    assert calls[0:2] == [
-        ("bundle", "launcher:simulation"),
-        ("launch", "simulation", None, None),
-    ]
+    assert calls[0:1] == [("launch", "simulation", None, None)]
     assert ("finalize",) in calls
     assert ("flush", "stdout") in calls
     assert ("flush", "stderr") in calls
@@ -342,6 +331,11 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
         yield
 
     monkeypatch.setattr(launcher, "temporary_startup_debug_override", _fake_debug_override)
+    monkeypatch.setattr(
+        launcher,
+        "start_run_bundle",
+        lambda *, entrypoint: calls.append(("bundle", entrypoint)),
+    )
 
     def _fake_gui_main(
         *,
@@ -361,6 +355,7 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
             "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)",
         ),
         ("debug-override", "inherit"),
+        ("bundle", "launcher:simulation"),
         ("launch", False, "simulation", None),
     ]
 
@@ -391,6 +386,41 @@ def test_launch_simulation_gui_cancelled_before_runtime_start(monkeypatch) -> No
             "preflight",
             "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)",
         ),
+    ]
+
+
+def test_launch_simulation_gui_disable_all_keeps_run_bundle_off(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+    reset_run_bundle_state()
+
+    monkeypatch.setattr(
+        launcher.install_prereqs,
+        "require_tkinter",
+        lambda entrypoint_label: calls.append(("preflight", entrypoint_label)),
+    )
+    monkeypatch.setattr(
+        launcher.gui_bootstrap,
+        "quick_simulation_debug_override_dialog",
+        lambda: "disable_all",
+    )
+    monkeypatch.setattr(
+        gui_runtime,
+        "main",
+        lambda **kwargs: calls.append(("launch", kwargs)),
+    )
+
+    try:
+        launcher.launch_simulation_gui()
+        assert finalize_run_bundle() is None
+    finally:
+        reset_run_bundle_state()
+
+    assert calls == [
+        (
+            "preflight",
+            "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)",
+        ),
+        ("launch", {"write_excel_flag": None, "startup_mode": "simulation"}),
     ]
 
 

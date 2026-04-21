@@ -179,12 +179,8 @@ def _candidate_multiset(entries):
                 "candidate_source_key": _source_key(raw_entry),
                 "hkl": hkl_value,
                 "source_reflection_index": raw_entry.get("source_reflection_index"),
-                "source_reflection_namespace": raw_entry.get(
-                    "source_reflection_namespace"
-                ),
-                "source_reflection_is_full": raw_entry.get(
-                    "source_reflection_is_full"
-                ),
+                "source_reflection_namespace": raw_entry.get("source_reflection_namespace"),
+                "source_reflection_is_full": raw_entry.get("source_reflection_is_full"),
                 "source_branch_index": raw_entry.get("source_branch_index"),
                 "source_peak_index": raw_entry.get("source_peak_index"),
             }
@@ -243,10 +239,13 @@ def test_manual_pair_store_keeps_backgrounds_separate() -> None:
     assert len(_pairs_for_index(pairs_by_background, 1)) == 1
     assert _group_count(pairs_by_background, 0) == 1
     assert _group_count(pairs_by_background, 1) == 1
-    assert _pairs_for_index(pairs_by_background, 0)[0]["hkl"] != _pairs_for_index(
-        pairs_by_background,
-        1,
-    )[0]["hkl"]
+    assert (
+        _pairs_for_index(pairs_by_background, 0)[0]["hkl"]
+        != _pairs_for_index(
+            pairs_by_background,
+            1,
+        )[0]["hkl"]
+    )
 
 
 def test_peak_maximum_near_in_image_returns_local_brightest_pixel() -> None:
@@ -288,10 +287,8 @@ def test_refine_caked_peak_center_finds_ridge_crest() -> None:
     radial = np.linspace(10.0, 20.0, 201)
     azimuth = np.linspace(-30.0, 30.0, 301)
     radial_grid, azimuth_grid = np.meshgrid(radial, azimuth)
-    image = (
-        2.0
-        + 6.0 * np.exp(-0.5 * ((radial_grid - 15.2) / 0.22) ** 2)
-        * np.exp(-0.5 * ((azimuth_grid - 7.5) / 4.2) ** 2)
+    image = 2.0 + 6.0 * np.exp(-0.5 * ((radial_grid - 15.2) / 0.22) ** 2) * np.exp(
+        -0.5 * ((azimuth_grid - 7.5) / 4.2) ** 2
     )
 
     refined_tth, refined_phi = mg.refine_caked_peak_center(image, radial, azimuth, 14.7, 11.0)
@@ -323,7 +320,9 @@ def test_geometry_manual_candidate_source_key_prefers_source_indices() -> None:
     assert mg.geometry_manual_candidate_source_key({"label": "left peak"}) == ("label", "left peak")
 
 
-def test_geometry_manual_lookup_source_entry_does_not_alias_table_and_reflection_branch_keys() -> None:
+def test_geometry_manual_lookup_source_entry_does_not_alias_table_and_reflection_branch_keys() -> (
+    None
+):
     legacy_saved_entry = {
         "label": "right",
         "hkl": (-1, 0, 5),
@@ -383,10 +382,13 @@ def test_geometry_manual_tagged_candidate_from_session_returns_matching_entry() 
 
     assert tagged is not None
     assert tagged["label"] == "right"
-    assert mg.geometry_manual_tagged_candidate_from_session(
-        {"tagged_candidate_key": ("source", 9, 9)},
-        candidate_entries,
-    ) is None
+    assert (
+        mg.geometry_manual_tagged_candidate_from_session(
+            {"tagged_candidate_key": ("source", 9, 9)},
+            candidate_entries,
+        )
+        is None
+    )
 
 
 def test_geometry_manual_tagged_candidate_from_session_prefers_tagged_entry_identity() -> None:
@@ -423,7 +425,9 @@ def test_geometry_manual_tagged_candidate_from_session_prefers_tagged_entry_iden
     assert tagged["source_row_index"] == 3
 
 
-def test_geometry_manual_tagged_candidate_from_session_returns_none_when_stored_tagged_candidate_misses_identity() -> None:
+def test_geometry_manual_tagged_candidate_from_session_returns_none_when_stored_tagged_candidate_misses_identity() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "other-right",
@@ -461,7 +465,9 @@ def test_geometry_manual_tagged_candidate_from_session_returns_none_when_stored_
     assert tagged is None
 
 
-def test_geometry_manual_tagged_candidate_from_session_returns_none_for_nonbranch_same_key_identity_miss() -> None:
+def test_geometry_manual_tagged_candidate_from_session_returns_none_for_nonbranch_same_key_identity_miss() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "other-right",
@@ -493,7 +499,9 @@ def test_geometry_manual_tagged_candidate_from_session_returns_none_for_nonbranc
     assert tagged is None
 
 
-def test_geometry_manual_tagged_candidate_from_session_returns_none_after_cleared_identity_locked_snapshot() -> None:
+def test_geometry_manual_tagged_candidate_from_session_returns_none_after_cleared_identity_locked_snapshot() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "other-right",
@@ -520,7 +528,9 @@ def test_geometry_manual_tagged_candidate_from_session_returns_none_after_cleare
     assert tagged is None
 
 
-def test_geometry_manual_resolve_source_entry_index_disambiguates_nonbranch_same_key_candidates() -> None:
+def test_geometry_manual_resolve_source_entry_index_disambiguates_nonbranch_same_key_candidates() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "other-right",
@@ -588,7 +598,9 @@ def test_geometry_manual_lookup_source_entry_disambiguates_nonbranch_same_key_bu
     assert resolved["hkl"] == (-1, 0, 5)
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_caked_match_over_detector_refined_coords() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_caked_match_over_detector_refined_coords() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -633,7 +645,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_caked_match_over_det
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_current_view_display_over_saved_xy() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_current_view_display_over_saved_xy() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -674,7 +688,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_current_view_display
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_legacy_caked_candidate_for_current_view_display() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_legacy_caked_candidate_for_current_view_display() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -713,7 +729,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_legacy_caked_candida
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints_over_current_view_display_when_both_exist() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints_over_current_view_display_when_both_exist() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -750,7 +768,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_saved_native_hints_over_current_view_display_when_both_exist() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_saved_native_hints_over_current_view_display_when_both_exist() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -787,7 +807,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_saved_native_hints_o
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_stronger_native_hints_over_saved_detector_hints() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_stronger_native_hints_over_saved_detector_hints() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -826,7 +848,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_stronger_native_hint
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_hints_over_saved_detector_hints() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_hints_over_saved_detector_hints() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -865,7 +889,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_h
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_hints_over_saved_detector_hints_for_mixed_candidates() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_hints_over_saved_detector_hints_for_mixed_candidates() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -908,7 +934,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_simulated_detector_h
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_keeps_detector_hint_priority_for_detector_only_entries_with_mixed_candidates() -> None:
+def test_geometry_manual_resolve_source_entry_index_keeps_detector_hint_priority_for_detector_only_entries_with_mixed_candidates() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -949,7 +977,9 @@ def test_geometry_manual_resolve_source_entry_index_keeps_detector_hint_priority
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_stronger_native_hint_tie_before_saved_detector_hints() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_stronger_native_hint_tie_before_saved_detector_hints() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -992,7 +1022,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_simulated_detector_hint_tie_before_saved_detector_hints() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_simulated_detector_hint_tie_before_saved_detector_hints() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1035,7 +1067,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_mixed_candidate_simulated_detector_hint_tie_before_weaker_detector_anchor() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_mixed_candidate_simulated_detector_hint_tie_before_weaker_detector_anchor() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1082,7 +1116,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_detector_hint_native_tie() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_detector_hint_native_tie() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1123,7 +1159,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_native_hint_tie() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to_break_native_hint_tie() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1164,7 +1202,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_current_view_display_to
     assert resolved_index == 0
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_detector_xy_aliases_when_display_is_stale() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_detector_xy_aliases_when_display_is_stale() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1202,7 +1242,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_detector_xy_aliases_whe
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_saved_xy_when_current_view_display_is_missing() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_saved_xy_when_current_view_display_is_missing() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1237,7 +1279,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_saved_xy_when_current_v
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_legacy_background_detector_candidates() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_legacy_background_detector_candidates() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1272,7 +1316,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_lega
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_native_candidates() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_native_candidates() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1307,7 +1353,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_nati
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_sim_native_candidates() -> None:
+def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_sim_native_candidates() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1342,7 +1390,9 @@ def test_geometry_manual_resolve_source_entry_index_uses_detector_hints_for_sim_
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_detector_hints_over_legacy_background_detector_hints() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_detector_hints_over_legacy_background_detector_hints() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1379,7 +1429,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_detector_hints_over_
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints_over_saved_xy_detector_display() -> None:
+def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints_over_saved_xy_detector_display() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1422,7 +1474,9 @@ def test_geometry_manual_resolve_source_entry_index_prefers_saved_detector_hints
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_falls_back_to_legacy_background_detector_hints() -> None:
+def test_geometry_manual_resolve_source_entry_index_falls_back_to_legacy_background_detector_hints() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1457,7 +1511,9 @@ def test_geometry_manual_resolve_source_entry_index_falls_back_to_legacy_backgro
     assert resolved_index == 1
 
 
-def test_geometry_manual_resolve_source_entry_index_does_not_use_raw_display_clicks_as_native_detector_hints() -> None:
+def test_geometry_manual_resolve_source_entry_index_does_not_use_raw_display_clicks_as_native_detector_hints() -> (
+    None
+):
     candidate_entries = [
         {
             "label": "target",
@@ -1576,14 +1632,20 @@ def test_geometry_manual_anchor_axis_limits_preserves_click_fraction() -> None:
 
 
 def test_geometry_manual_group_target_count_uses_single_bg_peak_for_00l() -> None:
-    assert mg.geometry_manual_group_target_count(
-        ("q_group", "primary", 0, 3),
-        [{"hkl": (0, 0, 3), "label": "0,0,3"}, {"hkl": (0, 0, 3), "label": "0,0,3"}],
-    ) == 1
-    assert mg.geometry_manual_group_target_count(
-        ("q_group", "primary", 1, 2),
-        [{"hkl": (1, 0, 2), "label": "1,0,2"}, {"hkl": (-1, 0, 2), "label": "-1,0,2"}],
-    ) == 2
+    assert (
+        mg.geometry_manual_group_target_count(
+            ("q_group", "primary", 0, 3),
+            [{"hkl": (0, 0, 3), "label": "0,0,3"}, {"hkl": (0, 0, 3), "label": "0,0,3"}],
+        )
+        == 1
+    )
+    assert (
+        mg.geometry_manual_group_target_count(
+            ("q_group", "primary", 1, 2),
+            [{"hkl": (1, 0, 2), "label": "1,0,2"}, {"hkl": (-1, 0, 2), "label": "-1,0,2"}],
+        )
+        == 2
+    )
 
 
 def test_geometry_manual_prioritize_candidate_entries_moves_preferred_entry_first() -> None:
@@ -1625,7 +1687,10 @@ def test_geometry_manual_nearest_candidate_to_point_selects_closest_simulated_pe
     candidate, dist = mg.geometry_manual_nearest_candidate_to_point(
         28.0,
         15.5,
-        [{"label": "left", "sim_col": 12.0, "sim_row": 15.0}, {"label": "right", "sim_col": 30.0, "sim_row": 16.0}],
+        [
+            {"label": "left", "sim_col": 12.0, "sim_row": 15.0},
+            {"label": "right", "sim_col": 30.0, "sim_row": 16.0},
+        ],
     )
 
     assert isinstance(candidate, dict)
@@ -1740,6 +1805,225 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> N
     assert entry["qz"] == -2.345678901234
 
 
+def test_geometry_manual_pair_entry_from_candidate_preserves_simulated_anchor_separately_from_caked_background() -> (
+    None
+):
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "-1,0,5",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "display_col": 30.25,
+            "display_row": -57.5,
+            "sim_col_raw": 190.0,
+            "sim_row_raw": 96.0,
+            "native_col": 189.5,
+            "native_row": 95.5,
+            "caked_x": 30.25,
+            "caked_y": -57.5,
+        },
+        102.5,
+        213.2,
+        group_key=("q_group", "primary", 1, 5),
+        detector_col=101.5,
+        detector_row=211.2,
+        raw_col=102.0,
+        raw_row=213.0,
+        caked_col=13.2,
+        caked_row=2.5,
+        raw_caked_col=13.0,
+        raw_caked_row=2.0,
+    )
+
+    assert entry is not None
+    assert entry["x"] == 102.5
+    assert entry["y"] == 213.2
+    assert entry["caked_x"] == 13.2
+    assert entry["caked_y"] == 2.5
+    assert entry["refined_sim_x"] == 190.0
+    assert entry["refined_sim_y"] == 96.0
+    assert entry["refined_sim_native_x"] == 189.5
+    assert entry["refined_sim_native_y"] == 95.5
+    assert entry["refined_sim_caked_x"] == 30.25
+    assert entry["refined_sim_caked_y"] == -57.5
+
+
+def test_geometry_manual_pair_json_roundtrip_preserves_selection_provenance() -> None:
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "1,0,2",
+            "hkl": (1, 0, 2),
+            "source_table_index": 3,
+            "source_row_index": 8,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "best_sample_index": 4,
+            "mosaic_weight": 0.75,
+            "mosaic_top_rank_key": (0, 0, -0.75, 1.0e300, 0.0, 0.0, -5.0, 2),
+            "selection_reason": "mosaic_top_per_branch",
+        },
+        120.0,
+        240.0,
+        group_key=("q_group", "primary", 1, 2),
+    )
+    assert entry is not None
+
+    serialized = mg.geometry_manual_pair_entry_to_jsonable(entry)
+    restored = mg.geometry_manual_pair_entry_from_jsonable(serialized)
+
+    assert serialized["branch_id"] == "+x"
+    assert serialized["branch_source"] == "generated"
+    assert serialized["best_sample_index"] == 4
+    assert serialized["mosaic_weight"] == 0.75
+    assert serialized["selection_reason"] == "mosaic_top_per_branch"
+    assert serialized["mosaic_top_rank_key"] == [
+        0,
+        0,
+        -0.75,
+        1.0e300,
+        0.0,
+        0.0,
+        -5.0,
+        2,
+    ]
+    assert restored["branch_id"] == "+x"
+    assert restored["branch_source"] == "generated"
+    assert restored["best_sample_index"] == 4
+    assert restored["mosaic_weight"] == 0.75
+    assert restored["mosaic_top_rank_key"] == tuple(serialized["mosaic_top_rank_key"])
+
+
+def test_caked_manual_pair_redraws_in_detector_view_from_saved_simulated_anchor_without_live_lookup() -> (
+    None
+):
+    saved_pair = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "-1,0,5",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "display_col": 30.25,
+            "display_row": -57.5,
+            "sim_col_raw": 190.0,
+            "sim_row_raw": 96.0,
+            "native_col": 189.5,
+            "native_row": 95.5,
+            "caked_x": 30.25,
+            "caked_y": -57.5,
+        },
+        102.5,
+        213.2,
+        group_key=("q_group", "primary", 1, 5),
+        detector_col=101.5,
+        detector_row=211.2,
+        raw_col=102.0,
+        raw_row=213.0,
+        caked_col=13.2,
+        caked_row=2.5,
+        raw_caked_col=13.0,
+        raw_caked_row=2.0,
+    )
+    assert saved_pair is not None
+
+    detector_measured, detector_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+    caked_measured, caked_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (
+            float(entry["caked_x"]),
+            float(entry["caked_y"]),
+        ),
+    )
+
+    assert detector_measured[0]["caked_x"] == 13.2
+    assert caked_measured[0]["x"] == 102.5
+    assert detector_pairs == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (102.5, 213.2),
+            "sim_display": (190.0, 96.0),
+        }
+    ]
+    assert caked_pairs == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "bg_display": (13.2, 2.5),
+            "sim_display": (30.25, -57.5),
+        }
+    ]
+
+
+def test_geometry_manual_pair_entry_from_candidate_rejects_caked_alias_as_detector_anchor() -> None:
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "-1,0,5",
+            "hkl": (-1, 0, 5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "display_col": 30.25,
+            "display_row": -57.5,
+            "sim_col": 30.25,
+            "sim_row": -57.5,
+            "caked_x": 30.25,
+            "caked_y": -57.5,
+        },
+        102.5,
+        213.2,
+        group_key=("q_group", "primary", 1, 5),
+        detector_col=101.5,
+        detector_row=211.2,
+        caked_col=13.2,
+        caked_row=2.5,
+    )
+
+    assert entry is not None
+    assert "refined_sim_x" not in entry
+    assert "refined_sim_y" not in entry
+    assert entry["refined_sim_caked_x"] == 30.25
+    assert entry["refined_sim_caked_y"] == -57.5
+
+
 def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_state() -> None:
     events: list[tuple[object, ...]] = []
     status_texts: list[str] = []
@@ -1754,11 +2038,9 @@ def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_s
             [{"saved": int(index)}],
         ),
         session_initial_pairs_display=lambda: [{"pending": True}],
-        clear_geometry_pick_artists=lambda *args, **kwargs: events.append(
-            ("clear", args, kwargs)
-        ),
-        draw_initial_geometry_pairs_overlay=lambda pairs, *, max_display_markers: (
-            events.append(("draw", list(pairs), int(max_display_markers)))
+        clear_geometry_pick_artists=lambda *args, **kwargs: events.append(("clear", args, kwargs)),
+        draw_initial_geometry_pairs_overlay=lambda pairs, *, max_display_markers: events.append(
+            ("draw", list(pairs), int(max_display_markers))
         ),
         update_button_label=lambda: events.append(("button",)),
         set_background_file_status_text=lambda: events.append(("background-status",)),
@@ -1784,9 +2066,7 @@ def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_s
         ("button",),
         ("background-status",),
     ]
-    assert status_texts == [
-        "Current background has 1 saved manual points across 1 Qr/Qz groups."
-    ]
+    assert status_texts == ["Current background has 1 saved manual points across 1 Qr/Qz groups."]
 
 
 def test_make_runtime_geometry_manual_callbacks_refresh_pick_session_before_delegate() -> None:
@@ -2034,8 +2314,7 @@ def test_native_detector_coords_to_caked_display_coords_uses_bundle_frame_adapte
         mg,
         "_detector_pixel_to_caked_bin",
         lambda live_bundle, col, row: (
-            projector_calls.append((live_bundle, float(col), float(row)))
-            or (12.6, 169.2)
+            projector_calls.append((live_bundle, float(col), float(row))) or (12.6, 169.2)
         ),
     )
 
@@ -2075,8 +2354,7 @@ def test_native_detector_coords_to_caked_display_coords_uses_explicit_transform_
         mg,
         "_detector_pixel_to_caked_bin",
         lambda live_bundle, col, row: (
-            projector_calls.append((live_bundle, float(col), float(row)))
-            or (14.2, -11.5)
+            projector_calls.append((live_bundle, float(col), float(row))) or (14.2, -11.5)
         ),
     )
 
@@ -2144,7 +2422,9 @@ def test_caked_angles_to_background_display_coords_returns_none_without_native_b
 def test_caked_angles_to_background_display_coords_returns_none_when_inverse_lut_unavailable(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(mg, "_caked_point_to_detector_pixel", lambda *_args, **_kwargs: (None, None))
+    monkeypatch.setattr(
+        mg, "_caked_point_to_detector_pixel", lambda *_args, **_kwargs: (None, None)
+    )
 
     result = mg.caked_angles_to_background_display_coords(
         12.0,
@@ -2243,7 +2523,9 @@ def test_caked_angles_to_background_display_coords_prefers_bundle_frame_display_
     assert backend_inverse_calls == []
 
 
-def test_geometry_manual_apply_refined_simulated_override_keeps_detector_coords_in_caked_view() -> None:
+def test_geometry_manual_apply_refined_simulated_override_keeps_detector_coords_in_caked_view() -> (
+    None
+):
     refined = mg.geometry_manual_apply_refined_simulated_override(
         {
             "refined_sim_x": 30.0,
@@ -2283,7 +2565,9 @@ def test_geometry_manual_apply_refined_simulated_override_keeps_detector_coords_
     assert refined["phi_deg"] == 2.0
 
 
-def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_display_when_not_caked() -> None:
+def test_geometry_manual_apply_refined_simulated_override_keeps_detector_view_display_when_not_caked() -> (
+    None
+):
     refined = mg.geometry_manual_apply_refined_simulated_override(
         {
             "refined_sim_x": 30.0,
@@ -2333,7 +2617,9 @@ def test_detector_to_caked_to_detector_round_trips_through_same_transform_bundle
     monkeypatch,
 ) -> None:
     image, bundle = _real_transform_bundle()
-    conflicting_ai = _ai_with_live_bundle(_dummy_transform_bundle(detector_shape=bundle.detector_shape))
+    conflicting_ai = _ai_with_live_bundle(
+        _dummy_transform_bundle(detector_shape=bundle.detector_shape)
+    )
     forward_calls: list[object] = []
     inverse_calls: list[object] = []
     real_forward = mg._detector_pixel_to_caked_bin
@@ -2409,7 +2695,9 @@ def test_caked_to_detector_to_caked_round_trips_through_same_transform_bundle(
     monkeypatch,
 ) -> None:
     image, bundle = _real_transform_bundle()
-    conflicting_ai = _ai_with_live_bundle(_dummy_transform_bundle(detector_shape=bundle.detector_shape))
+    conflicting_ai = _ai_with_live_bundle(
+        _dummy_transform_bundle(detector_shape=bundle.detector_shape)
+    )
     forward_calls: list[object] = []
     inverse_calls: list[object] = []
     real_forward = mg._detector_pixel_to_caked_bin
@@ -2679,7 +2967,9 @@ def test_geometry_manual_pair_from_jsonable_accepts_legacy_stale_caked_field() -
     assert restored["stale_caked_fields"] is True
 
 
-def test_geometry_manual_pair_from_jsonable_migrates_legacy_source_peak_alias_only_on_load() -> None:
+def test_geometry_manual_pair_from_jsonable_migrates_legacy_source_peak_alias_only_on_load() -> (
+    None
+):
     raw_entry = {
         "label": "1,0,2",
         "hkl": [1, 0, 2],
@@ -2699,7 +2989,9 @@ def test_geometry_manual_pair_from_jsonable_migrates_legacy_source_peak_alias_on
     assert restored["source_peak_index"] == 1
 
 
-def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_phi_is_deadbanded() -> None:
+def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_phi_is_deadbanded() -> (
+    None
+):
     raw_entry = {
         "label": "1,0,2",
         "hkl": [1, 0, 2],
@@ -2721,7 +3013,9 @@ def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_phi_is
     assert restored["source_peak_index"] == 1
 
 
-def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_caked_phi_is_deadbanded() -> None:
+def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_caked_phi_is_deadbanded() -> (
+    None
+):
     raw_entry = {
         "label": "1,0,2",
         "hkl": [1, 0, 2],
@@ -2745,7 +3039,9 @@ def test_geometry_manual_pair_from_jsonable_uses_legacy_branch_alias_when_caked_
     assert restored["source_peak_index"] == 1
 
 
-def test_refresh_geometry_manual_pair_entry_prefers_native_coords_over_stale_display_aliases() -> None:
+def test_refresh_geometry_manual_pair_entry_prefers_native_coords_over_stale_display_aliases() -> (
+    None
+):
     background_shape = (100, 200)
     native_point = (20.0, 10.0)
     stale_display = (90.0, 20.0)
@@ -2799,7 +3095,9 @@ def test_refresh_geometry_manual_pair_entry_prefers_native_coords_over_stale_dis
     assert refreshed["sim_row_raw"] == expected_display[1]
 
 
-def test_refresh_geometry_manual_pair_entry_accepts_projected_detector_rows_without_measured_xy() -> None:
+def test_refresh_geometry_manual_pair_entry_accepts_projected_detector_rows_without_measured_xy() -> (
+    None
+):
     background_shape = (100, 200)
     native_point = (20.0, 10.0)
     detector_display = mg._default_rotate_point(
@@ -2850,9 +3148,7 @@ def test_geometry_manual_pairs_export_rows_include_background_metadata() -> None
         pairs_by_background={1: [{"label": "1,0,0", "x": 2.0, "y": 3.0}]},
         osc_files=["bg_0.osc", "bg_1.osc"],
         pairs_for_index=lambda idx: (
-            [{"label": "1,0,0", "x": 2.0, "y": 3.0}]
-            if int(idx) == 1
-            else []
+            [{"label": "1,0,0", "x": 2.0, "y": 3.0}] if int(idx) == 1 else []
         ),
     )
 
@@ -2894,9 +3190,7 @@ def test_apply_geometry_manual_pairs_rows_replaces_state_and_refreshes_callbacks
         ],
         osc_files=["bg_0.osc", "bg_1.osc"],
         pairs_for_index=lambda idx: (
-            [{"label": "keep", "x": 9.0, "y": 10.0}]
-            if int(idx) == 0
-            else []
+            [{"label": "keep", "x": 9.0, "y": 10.0}] if int(idx) == 0 else []
         ),
         replace_pairs_by_background=lambda mapping: replaced.update(mapping),
         clear_preview_artists=lambda **kwargs: calls.append(("clear", kwargs)),
@@ -2936,9 +3230,7 @@ def test_apply_geometry_manual_pairs_snapshot_reloads_backgrounds_before_apply(
             "manual_pairs": [{"background_index": 1, "entries": []}],
         },
         osc_files=["current_0.osc", "current_1.osc"],
-        load_background_files=(
-            lambda paths, index: calls.append(("load", (list(paths), index)))
-        ),
+        load_background_files=(lambda paths, index: calls.append(("load", (list(paths), index)))),
         apply_pairs_rows=(
             lambda rows, replace_existing=True: (
                 calls.append(("apply", (list(rows), replace_existing))) or (1, 2, [])
@@ -2967,19 +3259,13 @@ def test_export_geometry_manual_pairs_runs_dialog_and_save_callback(tmp_path) ->
     result = mg.export_geometry_manual_pairs(
         osc_files=["bg_0.osc"],
         pairs_for_index=lambda idx: (
-            [{"label": "1,0,0", "x": 1.0, "y": 2.0}]
-            if int(idx) == 0
-            else []
+            [{"label": "1,0,0", "x": 1.0, "y": 2.0}] if int(idx) == 0 else []
         ),
         collect_snapshot=lambda: {"manual_pairs": [{"background_index": 0}]},
         initial_dir=tmp_path,
-        asksaveasfilename=(
-            lambda **kwargs: calls.append(("dialog", kwargs)) or str(save_path)
-        ),
+        asksaveasfilename=(lambda **kwargs: calls.append(("dialog", kwargs)) or str(save_path)),
         save_file=(
-            lambda path, payload, metadata=None: calls.append(
-                ("save", (path, payload, metadata))
-            )
+            lambda path, payload, metadata=None: calls.append(("save", (path, payload, metadata)))
         ),
         set_status_text=statuses.append,
         stamp_factory=lambda: "20260328_140000",
@@ -3258,7 +3544,9 @@ def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> 
     assert peak_overlay_cache["click_spatial_index"] is None
 
 
-def test_geometry_manual_live_peak_candidates_do_not_promote_display_to_detector_coords_when_native_available() -> None:
+def test_geometry_manual_live_peak_candidates_do_not_promote_display_to_detector_coords_when_native_available() -> (
+    None
+):
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
             {
@@ -3337,7 +3625,9 @@ def test_update_geometry_manual_peak_record_cache_updates_only_matching_mirrored
     assert peak_overlay_cache["click_spatial_index"] is None
 
 
-def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_current_record() -> None:
+def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_current_record() -> (
+    None
+):
     legacy_saved_entry = {
         "label": "right",
         "hkl": (-1, 0, 5),
@@ -3398,7 +3688,9 @@ def test_update_geometry_manual_peak_record_cache_matches_legacy_branch_key_to_c
     assert peak_overlay_cache["positions"] == [(181.0, 95.0), (191.0, 97.0)]
 
 
-def test_geometry_manual_source_key_matches_entry_does_not_alias_table_and_reflection_branch_keys() -> None:
+def test_geometry_manual_source_key_matches_entry_does_not_alias_table_and_reflection_branch_keys() -> (
+    None
+):
     legacy_saved_entry = {
         "source_table_index": 9,
         "source_row_index": 0,
@@ -3422,7 +3714,9 @@ def test_geometry_manual_source_key_matches_entry_does_not_alias_table_and_refle
     )
 
 
-def test_geometry_manual_source_entries_share_identity_rejects_branchless_same_row_siblings_with_different_hkl() -> None:
+def test_geometry_manual_source_entries_share_identity_rejects_branchless_same_row_siblings_with_different_hkl() -> (
+    None
+):
     left_entry = {
         "source_table_index": 9,
         "source_row_index": 0,
@@ -3439,7 +3733,9 @@ def test_geometry_manual_source_entries_share_identity_rejects_branchless_same_r
     assert mg.geometry_manual_source_entries_share_identity(left_entry, right_entry) is False
 
 
-def test_geometry_manual_source_entries_share_identity_rejects_untrusted_same_branch_siblings() -> None:
+def test_geometry_manual_source_entries_share_identity_rejects_untrusted_same_branch_siblings() -> (
+    None
+):
     left_entry = {
         "source_table_index": 9,
         "source_row_index": 2,
@@ -3460,7 +3756,9 @@ def test_geometry_manual_source_entries_share_identity_rejects_untrusted_same_br
     assert mg.geometry_manual_source_entries_share_identity(left_entry, right_entry) is False
 
 
-def test_update_geometry_manual_peak_record_cache_source_entry_does_not_fan_out_across_branchless_same_row_siblings() -> None:
+def test_update_geometry_manual_peak_record_cache_source_entry_does_not_fan_out_across_branchless_same_row_siblings() -> (
+    None
+):
     source_entry = {
         "source_table_index": 9,
         "source_row_index": 0,
@@ -3511,7 +3809,9 @@ def test_update_geometry_manual_peak_record_cache_source_entry_does_not_fan_out_
     assert peak_overlay_cache["positions"] == [(182.0, 94.0), (190.0, 96.0)]
 
 
-def test_update_geometry_manual_peak_record_cache_source_entry_falls_back_to_row_key_when_identity_is_inconclusive() -> None:
+def test_update_geometry_manual_peak_record_cache_source_entry_falls_back_to_row_key_when_identity_is_inconclusive() -> (
+    None
+):
     source_entry = {
         "source_table_index": 9,
         "source_row_index": 0,
@@ -3550,7 +3850,9 @@ def test_update_geometry_manual_peak_record_cache_source_entry_falls_back_to_row
     assert peak_overlay_cache["click_spatial_index"] is None
 
 
-def test_update_geometry_manual_peak_record_cache_source_entry_only_updates_row_key_unique_matches() -> None:
+def test_update_geometry_manual_peak_record_cache_source_entry_only_updates_row_key_unique_matches() -> (
+    None
+):
     source_entry = {
         "source_table_index": 9,
         "source_row_index": 0,
@@ -3598,7 +3900,9 @@ def test_update_geometry_manual_peak_record_cache_source_entry_only_updates_row_
     assert peak_overlay_cache["click_spatial_index"] == {"position_count": 2}
 
 
-def test_update_geometry_manual_peak_record_cache_skips_branchless_row_key_for_mirrored_branches() -> None:
+def test_update_geometry_manual_peak_record_cache_skips_branchless_row_key_for_mirrored_branches() -> (
+    None
+):
     legacy_saved_entry = {
         "source_table_index": 9,
         "source_row_index": 0,
@@ -3737,12 +4041,8 @@ def test_geometry_manual_pick_preview_state_builds_status_message() -> None:
     assert preview["refined_row"] == 14.0
     assert preview["delta"] > 0.0
     assert preview["sigma_px"] > preview["delta"]
-    assert preview["preview_color"] == mg.geometry_manual_preview_color(
-        preview["sigma_px"]
-    )
-    assert preview["quality_label"] == mg.geometry_manual_preview_quality_label(
-        preview["sigma_px"]
-    )
+    assert preview["preview_color"] == mg.geometry_manual_preview_color(preview["sigma_px"])
+    assert preview["quality_label"] == mg.geometry_manual_preview_quality_label(preview["sigma_px"])
     assert "test group" in preview["message"]
     assert "nearest sim [right]" in preview["message"]
     assert f"quality={preview['quality_label']}" in preview["message"]
@@ -3790,6 +4090,127 @@ def test_geometry_manual_pick_preview_state_prefers_tagged_candidate() -> None:
     assert "tagged sim [left]" in preview["message"]
 
 
+def test_geometry_manual_pick_preview_state_refines_with_mosaic_top_context() -> None:
+    key = ("q_group", "primary", 1, 2)
+    clicked_seed = {
+        "label": "near",
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+        "branch_id": "+x",
+        "branch_source": "generated",
+        "mosaic_weight": 0.1,
+        "best_sample_index": 3,
+        "source_table_index": 1,
+        "source_row_index": 30,
+    }
+    selected_ray = {
+        "label": "top",
+        "sim_col": 35.0,
+        "sim_row": 30.0,
+        "branch_id": "+x",
+        "branch_source": "generated",
+        "mosaic_weight": 0.9,
+        "best_sample_index": 0,
+        "source_table_index": 1,
+        "source_row_index": 31,
+    }
+    seen: dict[str, object] = {}
+
+    def _refine_preview_point(source_entry, raw_col, raw_row, **_kwargs):
+        seen["source_entry"] = dict(source_entry) if source_entry else None
+        return float(raw_col) + 0.2, float(raw_row) + 0.4
+
+    preview = mg.geometry_manual_pick_preview_state(
+        10.0,
+        20.0,
+        pick_session={
+            "group_key": key,
+            "q_label": "test group",
+            "group_entries": [dict(clicked_seed), dict(selected_ray)],
+            "background_index": 0,
+            "tagged_candidate_key": _source_key(clicked_seed),
+        },
+        current_background_index=0,
+        force=True,
+        remaining_candidates=[dict(clicked_seed), dict(selected_ray)],
+        display_background=np.zeros((8, 8), dtype=float),
+        refine_preview_point=_refine_preview_point,
+        preview_due=lambda *_args, **_kwargs: True,
+        use_caked_space=False,
+    )
+
+    assert preview is not None
+    assert seen["source_entry"] is not None
+    assert seen["source_entry"]["source_row_index"] == 31
+    assert preview["candidate"]["source_row_index"] == 31
+    assert preview["candidate"]["selection_reason"] == "mosaic_top_per_branch"
+
+
+def test_geometry_manual_pick_preview_state_uses_profile_cache_mosaic_top() -> None:
+    key = ("q_group", "primary", 1, 2)
+    clicked_seed = {
+        "label": "near",
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+        "best_sample_index": 0,
+        "source_table_index": 1,
+        "source_row_index": 30,
+    }
+    selected_ray = {
+        "label": "top",
+        "sim_col": 35.0,
+        "sim_row": 30.0,
+        "best_sample_index": 1,
+        "source_table_index": 1,
+        "source_row_index": 31,
+    }
+    other_branch = {
+        "label": "other",
+        "sim_col": 10.0,
+        "sim_row": 20.2,
+        "best_sample_index": 2,
+        "source_table_index": 1,
+        "source_row_index": 41,
+    }
+    profile_cache = {
+        "beam_x_array": np.asarray([0.5, 0.5, -0.5], dtype=float),
+        "sample_weights": np.asarray([0.1, 0.9, 9.0], dtype=float),
+    }
+    seen: dict[str, object] = {}
+
+    def _refine_preview_point(source_entry, raw_col, raw_row, **_kwargs):
+        seen["source_entry"] = dict(source_entry) if source_entry else None
+        return float(raw_col), float(raw_row)
+
+    entries = [dict(clicked_seed), dict(selected_ray), dict(other_branch)]
+    preview = mg.geometry_manual_pick_preview_state(
+        10.0,
+        20.0,
+        pick_session={
+            "group_key": key,
+            "q_label": "test group",
+            "group_entries": [dict(entry) for entry in entries],
+            "background_index": 0,
+            "tagged_candidate_key": _source_key(clicked_seed),
+        },
+        current_background_index=0,
+        force=True,
+        remaining_candidates=entries,
+        display_background=np.zeros((8, 8), dtype=float),
+        refine_preview_point=_refine_preview_point,
+        preview_due=lambda *_args, **_kwargs: True,
+        use_caked_space=False,
+        profile_cache=profile_cache,
+    )
+
+    assert preview is not None
+    assert all("mosaic_weight" not in entry for entry in entries)
+    assert seen["source_entry"]["source_row_index"] == 31
+    assert seen["source_entry"]["branch_id"] == "+x"
+    assert seen["source_entry"]["mosaic_weight"] == 0.9
+    assert preview["candidate"]["source_row_index"] == 31
+
+
 def test_geometry_manual_pick_preview_state_colors_from_match_confidence() -> None:
     background = np.zeros((33, 33), dtype=float)
     background[10, 10] = 1000.0
@@ -3826,9 +4247,7 @@ def test_geometry_manual_pick_preview_state_colors_from_match_confidence() -> No
     assert preview["preview_color"] == mg.geometry_manual_preview_confidence_color(
         preview["match_confidence"]
     )
-    assert preview["preview_color"] != mg.geometry_manual_preview_color(
-        preview["sigma_px"]
-    )
+    assert preview["preview_color"] != mg.geometry_manual_preview_color(preview["sigma_px"])
     assert "confidence=" in preview["message"]
 
 
@@ -3898,7 +4317,9 @@ def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_point
     assert entries[0]["qz"] == 2.3456789012
 
 
-def test_geometry_manual_session_initial_pairs_display_projects_active_sim_display_geometry() -> None:
+def test_geometry_manual_session_initial_pairs_display_projects_active_sim_display_geometry() -> (
+    None
+):
     session = {
         "group_key": ("q_group", "primary", 1, 0),
         "group_entries": [
@@ -3954,7 +4375,9 @@ def test_geometry_manual_session_initial_pairs_display_projects_active_sim_displ
     assert entries[0]["qz"] == 4.75
 
 
-def test_geometry_manual_session_initial_pairs_display_keeps_detector_sim_pixel_over_background_rotation() -> None:
+def test_geometry_manual_session_initial_pairs_display_keeps_detector_sim_pixel_over_background_rotation() -> (
+    None
+):
     background_shape = (100, 200)
     native_point = (20.0, 10.0)
     background_rotated_point = mg._default_rotate_point(
@@ -4062,7 +4485,9 @@ def test_geometry_manual_session_initial_pairs_display_refreshes_projected_detec
     assert entries[0]["sim_display"] == detector_display
 
 
-def test_geometry_manual_session_initial_pairs_display_refreshes_caked_view_when_projection_has_no_caked_coords() -> None:
+def test_geometry_manual_session_initial_pairs_display_refreshes_caked_view_when_projection_has_no_caked_coords() -> (
+    None
+):
     session = {
         "group_key": ("q_group", "primary", 1, 0),
         "group_entries": [
@@ -4085,8 +4510,7 @@ def test_geometry_manual_session_initial_pairs_display_refreshes_caked_view_when
         current_background_index=0,
         use_caked_display=True,
         project_peaks_to_current_view=lambda entries: [
-            projection_calls.append(dict(entry)) or dict(entry)
-            for entry in entries or []
+            projection_calls.append(dict(entry)) or dict(entry) for entry in entries or []
         ],
         refresh_entry_geometry=lambda entry: (
             refresh_calls.append(dict(entry or {}))
@@ -4138,9 +4562,7 @@ def test_geometry_manual_session_initial_pairs_display_ignores_refresh_errors() 
     entries = mg.geometry_manual_session_initial_pairs_display(
         session,
         current_background_index=0,
-        refresh_entry_geometry=lambda _entry: (_ for _ in ()).throw(
-            RuntimeError("refresh failed")
-        ),
+        refresh_entry_geometry=lambda _entry: (_ for _ in ()).throw(RuntimeError("refresh failed")),
         entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
     )
 
@@ -4151,7 +4573,9 @@ def test_geometry_manual_session_initial_pairs_display_ignores_refresh_errors() 
     assert entries[0]["qz"] == 2.0
 
 
-def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_legacy_group_rows() -> None:
+def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_legacy_group_rows() -> (
+    None
+):
     session = {
         "group_key": ("q_group", "primary", 1, 5),
         "group_entries": [
@@ -4187,7 +4611,9 @@ def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_leg
     assert entries[0]["sim_display"] == (30.25, -57.5)
 
 
-def test_geometry_manual_session_initial_pairs_display_resolves_colliding_pending_branch_entries() -> None:
+def test_geometry_manual_session_initial_pairs_display_resolves_colliding_pending_branch_entries() -> (
+    None
+):
     session = {
         "group_key": ("q_group", "primary", 1, 5),
         "group_entries": [
@@ -4237,7 +4663,9 @@ def test_geometry_manual_session_initial_pairs_display_resolves_colliding_pendin
     assert entries[0]["bg_display"] == (19.0, 21.0)
 
 
-def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_nonbranch_snapshot_by_key() -> None:
+def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_nonbranch_snapshot_by_key() -> (
+    None
+):
     session = {
         "group_key": ("q_group", "primary", 1, 2),
         "group_entries": [
@@ -4309,7 +4737,9 @@ def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_nonbran
     assert refreshed["pending_entries"][0]["source_row_index"] == 3
 
 
-def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_under_permutation() -> None:
+def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_under_permutation() -> (
+    None
+):
     group_key = ("q_group", "primary", 1, 2)
     tagged_candidate = {
         "label": "right",
@@ -4362,16 +4792,16 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_tagged_identity_u
         assert refreshed["target_count"] == 2
         assert refreshed["tagged_candidate_key"] == ("source_branch", 9, 1)
         assert refreshed["tagged_candidate"]["source_reflection_index"] == 9
-        assert refreshed["tagged_candidate"]["source_reflection_namespace"] == (
-            "full_reflection"
-        )
+        assert refreshed["tagged_candidate"]["source_reflection_namespace"] == ("full_reflection")
         assert refreshed["tagged_candidate"]["source_reflection_is_full"] is True
         assert refreshed["tagged_candidate"]["source_branch_index"] == 1
         assert refreshed["group_entries"][0]["source_reflection_index"] == 9
         assert refreshed["group_entries"][0]["source_branch_index"] == 1
 
 
-def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_identity_under_permutation() -> None:
+def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_identity_under_permutation() -> (
+    None
+):
     group_key = ("q_group", "primary", 1, 5)
     tagged_candidate = {
         "label": "target-right",
@@ -4421,7 +4851,9 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_legacy_tagged_ide
         assert refreshed["tagged_candidate"]["source_row_index"] == 3
 
 
-def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_stored_tagged_candidate_by_key() -> None:
+def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_stored_tagged_candidate_by_key() -> (
+    None
+):
     group_key = ("q_group", "primary", 1, 5)
     left_candidate = {
         "label": "left",
@@ -4474,7 +4906,9 @@ def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing
     assert "tagged_candidate" not in refreshed
 
 
-def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_nonbranch_stored_tagged_candidate_by_key() -> None:
+def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing_nonbranch_stored_tagged_candidate_by_key() -> (
+    None
+):
     group_key = ("q_group", "primary", 1, 5)
     left_candidate = {
         "label": "left",
@@ -4521,7 +4955,9 @@ def test_refresh_geometry_manual_pick_session_candidates_does_not_rebind_missing
     assert "tagged_candidate" not in refreshed
 
 
-def test_refresh_geometry_manual_pick_session_candidates_keeps_cleared_identity_lock_on_second_refresh() -> None:
+def test_refresh_geometry_manual_pick_session_candidates_keeps_cleared_identity_lock_on_second_refresh() -> (
+    None
+):
     group_key = ("q_group", "primary", 1, 5)
     left_candidate = {
         "label": "left",
@@ -4576,7 +5012,9 @@ def test_refresh_geometry_manual_pick_session_candidates_keeps_cleared_identity_
     assert "tagged_candidate" not in second
 
 
-def test_refresh_geometry_manual_pick_session_candidates_preserves_legacy_key_only_fallback() -> None:
+def test_refresh_geometry_manual_pick_session_candidates_preserves_legacy_key_only_fallback() -> (
+    None
+):
     group_key = ("q_group", "primary", 1, 5)
     left_candidate = {
         "label": "left",
@@ -4634,7 +5072,9 @@ def test_cancel_geometry_manual_pick_session_clears_session_and_triggers_callbac
         current_background_index=0,
         restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
         clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
-        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(
+            ("render", kwargs.get("update_status"))
+        ),
         update_button_label_fn=lambda: calls.append(("button", None)),
         set_status_text=lambda text: calls.append(("status", text)),
         message="done",
@@ -4661,7 +5101,9 @@ def test_cancel_geometry_manual_pick_session_skips_restore_in_detector_mode() ->
         current_background_index=0,
         restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
         clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
-        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(
+            ("render", kwargs.get("update_status"))
+        ),
         update_button_label_fn=lambda: calls.append(("button", None)),
         set_status_text=lambda text: calls.append(("status", text)),
         message="done",
@@ -4680,7 +5122,10 @@ def test_match_geometry_manual_group_to_background_builds_source_lookup() -> Non
     matches = mg.match_geometry_manual_group_to_background(
         [{"label": "1,0,0", "source_table_index": 3, "source_row_index": 8}],
         background_image=np.zeros((8, 8), dtype=float),
-        cache_data={"match_config": {"search_radius_px": 12.0}, "background_context": {"img_valid": True}},
+        cache_data={
+            "match_config": {"search_radius_px": 12.0},
+            "background_context": {"img_valid": True},
+        },
         match_simulated_peaks_to_peak_context=lambda entries, _context, _cfg: (
             [
                 {
@@ -4795,7 +5240,9 @@ def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty(
     assert next_state is existing_cache_data
 
 
-def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cache_is_preferred() -> None:
+def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cache_is_preferred() -> (
+    None
+):
     forwarded_prefer_cache: list[bool] = []
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
@@ -4886,7 +5333,9 @@ def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cac
     }
 
 
-def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_cached_groups_are_empty() -> None:
+def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_cached_groups_are_empty() -> (
+    None
+):
     forwarded_prefer_cache: list[bool] = []
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
@@ -4904,13 +5353,13 @@ def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_
                 []
                 if prefer_cache
                 else [
-                {
-                    "q_group_key": ("q_group", "primary", 1, 0),
-                    "source_table_index": 1,
-                    "source_row_index": 2,
-                    "sim_col": 3.0,
-                    "sim_row": 4.0,
-                }
+                    {
+                        "q_group_key": ("q_group", "primary", 1, 0),
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                        "sim_col": 3.0,
+                        "sim_row": 4.0,
+                    }
                 ]
             )
         ),
@@ -4944,7 +5393,9 @@ def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_
     ] == [2]
 
 
-def test_build_geometry_manual_pick_cache_reprojects_existing_rows_when_only_background_state_changes() -> None:
+def test_build_geometry_manual_pick_cache_reprojects_existing_rows_when_only_background_state_changes() -> (
+    None
+):
     forwarded_prefer_cache: list[bool] = []
     cached_entry = {
         "q_group_key": ("q_group", "primary", 1, 0),
@@ -4981,9 +5432,7 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_when_only_bac
             ),
             "simulated_peaks": [dict(cached_entry)],
             "simulated_lookup": {(1, 2): dict(cached_entry)},
-            "grouped_candidates": {
-                ("q_group", "primary", 1, 0): [dict(cached_entry)]
-            },
+            "grouped_candidates": {("q_group", "primary", 1, 0): [dict(cached_entry)]},
         },
         cache_signature_fn=lambda **_kwargs: (
             ("sim", 7),
@@ -5122,9 +5571,7 @@ def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_raw_co
             ),
             "simulated_peaks": [dict(cached_entry)],
             "simulated_lookup": {(1, 2): dict(cached_entry)},
-            "grouped_candidates": {
-                ("q_group", "primary", 1, 0): [dict(cached_entry)]
-            },
+            "grouped_candidates": {("q_group", "primary", 1, 0): [dict(cached_entry)]},
         },
         cache_signature_fn=lambda **_kwargs: (
             ("sim", 7),
@@ -5160,15 +5607,15 @@ def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_raw_co
     assert next_sig[3] == ("new-bg",)
     assert next_state["grouped_candidates"] == {}
     assert cache_data["cache_metadata"]["cache_action"] == "rebuilt"
-    assert cache_data["cache_metadata"]["cache_source"] == (
-        "source_snapshot_unavailable"
-    )
+    assert cache_data["cache_metadata"]["cache_source"] == ("source_snapshot_unavailable")
     assert cache_data["cache_metadata"]["stale_reason"] == (
         "background-only cache signature change; cached simulated peaks could not be reprojected."
     )
 
 
-def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_valid_caked_projection() -> None:
+def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_valid_caked_projection() -> (
+    None
+):
     forwarded_prefer_cache: list[bool] = []
     cached_entry = {
         "q_group_key": ("q_group", "primary", 1, 0),
@@ -5205,9 +5652,7 @@ def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_valid_
             ),
             "simulated_peaks": [dict(cached_entry)],
             "simulated_lookup": {(1, 2): dict(cached_entry)},
-            "grouped_candidates": {
-                ("q_group", "primary", 1, 0): [dict(cached_entry)]
-            },
+            "grouped_candidates": {("q_group", "primary", 1, 0): [dict(cached_entry)]},
         },
         cache_signature_fn=lambda **_kwargs: (
             ("sim", 7),
@@ -5250,15 +5695,15 @@ def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_valid_
     assert next_sig[3] == ("new-bg",)
     assert next_state["grouped_candidates"] == {}
     assert cache_data["cache_metadata"]["cache_action"] == "rebuilt"
-    assert cache_data["cache_metadata"]["cache_source"] == (
-        "source_snapshot_unavailable"
-    )
+    assert cache_data["cache_metadata"]["cache_source"] == ("source_snapshot_unavailable")
     assert cache_data["cache_metadata"]["stale_reason"] == (
         "background-only cache signature change; cached simulated peaks could not be reprojected."
     )
 
 
-def test_build_geometry_manual_pick_cache_rebuilds_before_reusing_existing_groups_on_background_churn() -> None:
+def test_build_geometry_manual_pick_cache_rebuilds_before_reusing_existing_groups_on_background_churn() -> (
+    None
+):
     forwarded_prefer_cache: list[bool] = []
     stale_entry = {
         "q_group_key": ("q_group", "primary", 1, 0),
@@ -5302,9 +5747,7 @@ def test_build_geometry_manual_pick_cache_rebuilds_before_reusing_existing_group
             ),
             "simulated_peaks": [dict(stale_entry)],
             "simulated_lookup": {(1, 2): dict(stale_entry)},
-            "grouped_candidates": {
-                ("q_group", "primary", 1, 0): [dict(stale_entry)]
-            },
+            "grouped_candidates": {("q_group", "primary", 1, 0): [dict(stale_entry)]},
             "cache_metadata": {"cache_source": "peak_records"},
         },
         cache_signature_fn=lambda **_kwargs: (
@@ -5338,16 +5781,13 @@ def test_build_geometry_manual_pick_cache_rebuilds_before_reusing_existing_group
     assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
     assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 30.0
     assert cache_data["simulated_lookup"][(1, 2)]["sim_row"] == 40.0
-    assert cache_data["simulated_lookup"][(1, 2)]["candidate_source"] == (
-        "fresh_rebuild"
+    assert cache_data["simulated_lookup"][(1, 2)]["candidate_source"] == ("fresh_rebuild")
+    assert (
+        cache_data["grouped_candidates"][("q_group", "primary", 1, 0)][0]["candidate_source"]
+        == "fresh_rebuild"
     )
-    assert cache_data["grouped_candidates"][("q_group", "primary", 1, 0)][0][
-        "candidate_source"
-    ] == "fresh_rebuild"
     assert next_sig[3] == ("new-bg",)
-    assert next_state["simulated_lookup"][(1, 2)]["candidate_source"] == (
-        "fresh_rebuild"
-    )
+    assert next_state["simulated_lookup"][(1, 2)]["candidate_source"] == ("fresh_rebuild")
     assert cache_data["cache_metadata"]["cache_action"] == "rebuilt"
     assert cache_data["cache_metadata"]["cache_source"] == (
         "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
@@ -5591,7 +6031,9 @@ def test_build_geometry_manual_initial_pairs_display_uses_detector_xy_only_looku
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_detector_xy_lookup_rows_when_they_only_match_caked_view() -> None:
+def test_build_geometry_manual_initial_pairs_display_rejects_detector_xy_lookup_rows_when_they_only_match_caked_view() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -5643,7 +6085,9 @@ def test_build_geometry_manual_initial_pairs_display_rejects_detector_xy_lookup_
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_stale_caked_display() -> None:
+def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_stale_caked_display() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -5698,7 +6142,9 @@ def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_s
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_detector_xy_when_caked_present() -> None:
+def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_detector_xy_when_caked_present() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -5753,7 +6199,9 @@ def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_d
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers() -> None:
+def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -5804,7 +6252,9 @@ def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers_for_non_native_saved_pairs() -> None:
+def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers_for_non_native_saved_pairs() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -5853,7 +6303,9 @@ def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_with_caked_markers() -> None:
+def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_with_caked_markers() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -5905,7 +6357,9 @@ def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_native_saved_pairs() -> None:
+def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_native_saved_pairs() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -5957,7 +6411,9 @@ def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coo
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_non_native_saved_pairs() -> None:
+def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_non_native_saved_pairs() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -6058,7 +6514,9 @@ def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_look
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_rejects_simulation_native_lookup_rows_when_they_only_match_caked_view() -> None:
+def test_build_geometry_manual_initial_pairs_display_rejects_simulation_native_lookup_rows_when_they_only_match_caked_view() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -6110,7 +6568,9 @@ def test_build_geometry_manual_initial_pairs_display_rejects_simulation_native_l
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_lookup_rows_for_non_native_saved_pairs() -> None:
+def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_lookup_rows_for_non_native_saved_pairs() -> (
+    None
+):
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -6159,7 +6619,9 @@ def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_look
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_detector_view() -> None:
+def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_detector_view() -> (
+    None
+):
     saved_pair = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -6227,7 +6689,9 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_detector_sim_with_caked_fields() -> None:
+def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_detector_sim_with_caked_fields() -> (
+    None
+):
     saved_pair = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -6299,7 +6763,9 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_detector_
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_prefers_live_detector_candidate_over_saved_display_only_overlay() -> None:
+def test_build_geometry_manual_initial_pairs_display_prefers_live_detector_candidate_over_saved_display_only_overlay() -> (
+    None
+):
     saved_pair = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -6357,7 +6823,9 @@ def test_build_geometry_manual_initial_pairs_display_prefers_live_detector_candi
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_matches_legacy_branch_entry_to_current_lookup() -> None:
+def test_build_geometry_manual_initial_pairs_display_matches_legacy_branch_entry_to_current_lookup() -> (
+    None
+):
     saved_pair = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -6423,7 +6891,9 @@ def test_build_geometry_manual_initial_pairs_display_matches_legacy_branch_entry
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_matches_branchless_legacy_entry_by_hkl() -> None:
+def test_build_geometry_manual_initial_pairs_display_matches_branchless_legacy_entry_by_hkl() -> (
+    None
+):
     saved_pair = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -6491,7 +6961,9 @@ def test_build_geometry_manual_initial_pairs_display_matches_branchless_legacy_e
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_for_branchless_legacy_entry() -> None:
+def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_for_branchless_legacy_entry() -> (
+    None
+):
     saved_pair = {
         "label": "",
         "x": 190.0,
@@ -6561,7 +7033,9 @@ def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_
     }
 
 
-def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for_branchless_legacy_entry() -> None:
+def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for_branchless_legacy_entry() -> (
+    None
+):
     saved_pair = {
         "label": "",
         "x": 190.0,
@@ -6627,7 +7101,9 @@ def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for
     }
 
 
-def test_build_geometry_manual_initial_pairs_display_skips_ambiguous_branchless_legacy_entry() -> None:
+def test_build_geometry_manual_initial_pairs_display_skips_ambiguous_branchless_legacy_entry() -> (
+    None
+):
     saved_pair = {
         "label": "",
         "x": 185.5,
@@ -6688,7 +7164,9 @@ def test_build_geometry_manual_initial_pairs_display_skips_ambiguous_branchless_
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_caked_view() -> None:
+def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_caked_view() -> (
+    None
+):
     saved_pair = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -6763,7 +7241,9 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
     ]
 
 
-def test_build_geometry_manual_initial_pairs_display_preserves_canonical_pair_between_detector_and_caked_views() -> None:
+def test_build_geometry_manual_initial_pairs_display_preserves_canonical_pair_between_detector_and_caked_views() -> (
+    None
+):
     saved_pair = {
         "pair_id": "bg0:pair0",
         "label": "-1,0,5",
@@ -6903,11 +7383,13 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
             for entry in entries or ()
         },
         entry_display_coords=lambda entry: (
-            float(entry["x"]),
-            float(entry["y"]),
-        )
-        if isinstance(entry, dict)
-        else None,
+            (
+                float(entry["x"]),
+                float(entry["y"]),
+            )
+            if isinstance(entry, dict)
+            else None
+        ),
         auto_match_background_context=lambda image, cfg: (
             {**dict(cfg), "search_radius_px": 22.0},
             {"image_shape": np.asarray(image).shape},
@@ -6938,7 +7420,9 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
     ]
 
 
-def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_filter_raises() -> None:
+def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_filter_raises() -> (
+    None
+):
     cache_state = {"signature": None, "data": {}}
 
     def _replace_cache_state(signature, data) -> None:
@@ -6973,9 +7457,7 @@ def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_fil
             }
         ],
         build_grouped_candidates=lambda entries: (
-            {
-                ("q_group", "primary", 1, 2): [dict(entry) for entry in entries or ()]
-            }
+            {("q_group", "primary", 1, 2): [dict(entry) for entry in entries or ()]}
             if list(entries or ())
             else {}
         ),
@@ -6987,11 +7469,13 @@ def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_fil
             for entry in entries or ()
         },
         entry_display_coords=lambda entry: (
-            float(entry["x"]),
-            float(entry["y"]),
-        )
-        if isinstance(entry, dict) and "x" in entry and "y" in entry
-        else None,
+            (
+                float(entry["x"]),
+                float(entry["y"]),
+            )
+            if isinstance(entry, dict) and "x" in entry and "y" in entry
+            else None
+        ),
     )
 
     cache_data = callbacks.get_pick_cache(param_set={"a": 2.0}, prefer_cache=False)
@@ -7002,7 +7486,9 @@ def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_fil
     assert cache_data["simulated_lookup"] == {}
 
 
-def test_build_geometry_manual_pick_cache_mask_refresh_fails_closed_when_mask_filter_raises() -> None:
+def test_build_geometry_manual_pick_cache_mask_refresh_fails_closed_when_mask_filter_raises() -> (
+    None
+):
     placed_signature = ("placed", 1)
     existing_cache = {
         "placed_signature": placed_signature,
@@ -7033,9 +7519,7 @@ def test_build_geometry_manual_pick_cache_mask_refresh_fails_closed_when_mask_fi
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
         peak_records=[],
         build_grouped_candidates=lambda entries: (
-            {
-                ("q_group", "primary", 1, 2): [dict(entry) for entry in entries or ()]
-            }
+            {("q_group", "primary", 1, 2): [dict(entry) for entry in entries or ()]}
             if list(entries or ())
             else {}
         ),
@@ -7111,7 +7595,9 @@ def test_build_geometry_manual_initial_pairs_display_fails_closed_when_mask_filt
     ]
 
 
-def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when_other_sources_are_empty() -> None:
+def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when_other_sources_are_empty() -> (
+    None
+):
     cache_state = {"signature": None, "data": {}}
     set_sessions: list[dict[str, object]] = []
     status_messages: list[str] = []
@@ -7483,7 +7969,9 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
     ]
 
 
-def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_caked_overlays() -> None:
+def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_caked_overlays() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: True,
         last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
@@ -7532,7 +8020,9 @@ def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_cak
     assert "native_row" not in projected_entry
 
 
-def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_detector_overlays() -> None:
+def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_detector_overlays() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
@@ -7659,7 +8149,9 @@ def test_geometry_manual_entry_detector_display_point_rejects_caked_trust_only_s
     )
 
 
-def test_geometry_manual_entry_detector_display_point_uses_explicit_detector_coords_for_caked_entries() -> None:
+def test_geometry_manual_entry_detector_display_point_uses_explicit_detector_coords_for_caked_entries() -> (
+    None
+):
     assert (
         mg._geometry_manual_entry_detector_display_point(
             {
@@ -7738,7 +8230,9 @@ def test_geometry_manual_entry_detector_display_point_rejects_caked_alias_detect
     )
 
 
-def test_geometry_manual_entry_detector_display_point_accepts_detector_aliases_when_caked_fields_are_stale() -> None:
+def test_geometry_manual_entry_detector_display_point_accepts_detector_aliases_when_caked_fields_are_stale() -> (
+    None
+):
     assert mg._geometry_manual_entry_detector_display_point(
         {
             "source_reflection_index": 203,
@@ -7765,7 +8259,9 @@ def test_geometry_manual_entry_detector_display_point_accepts_detector_aliases_w
     ) == (102.0, 202.0)
 
 
-def test_geometry_manual_entry_detector_display_point_uses_branch_aware_detector_sim_with_caked_fields() -> None:
+def test_geometry_manual_entry_detector_display_point_uses_branch_aware_detector_sim_with_caked_fields() -> (
+    None
+):
     assert mg._geometry_manual_entry_detector_display_point(
         {
             "source_reflection_index": 203,
@@ -7781,7 +8277,9 @@ def test_geometry_manual_entry_detector_display_point_uses_branch_aware_detector
     ) == (190.0, 96.0)
 
 
-def test_geometry_manual_entry_detector_display_point_rejects_trusted_caked_live_source_sim_coords_without_explicit_detector_fields() -> None:
+def test_geometry_manual_entry_detector_display_point_rejects_trusted_caked_live_source_sim_coords_without_explicit_detector_fields() -> (
+    None
+):
     assert (
         mg._geometry_manual_entry_detector_display_point(
             {
@@ -7798,7 +8296,9 @@ def test_geometry_manual_entry_detector_display_point_rejects_trusted_caked_live
     )
 
 
-def test_geometry_manual_entry_detector_display_point_rejects_source_row_identity_when_branch_only_comes_from_caked_fields() -> None:
+def test_geometry_manual_entry_detector_display_point_rejects_source_row_identity_when_branch_only_comes_from_caked_fields() -> (
+    None
+):
     assert (
         mg._geometry_manual_entry_detector_display_point(
             {
@@ -7814,7 +8314,9 @@ def test_geometry_manual_entry_detector_display_point_rejects_source_row_identit
     )
 
 
-def test_project_peaks_to_current_view_rejects_trusted_caked_legacy_sim_without_explicit_detector_fields() -> None:
+def test_project_peaks_to_current_view_rejects_trusted_caked_legacy_sim_without_explicit_detector_fields() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: True,
         last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
@@ -7867,7 +8369,9 @@ def test_project_peaks_to_current_view_rejects_trusted_caked_legacy_sim_without_
     assert "sim_row_raw" not in projected_entry
 
 
-def test_project_peaks_to_current_view_recomputes_detector_display_from_native_background_frame() -> None:
+def test_project_peaks_to_current_view_recomputes_detector_display_from_native_background_frame() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
@@ -7877,10 +8381,8 @@ def test_project_peaks_to_current_view_recomputes_detector_display_from_native_b
         current_background_native=lambda: np.ones((5, 5), dtype=float),
         image_size=lambda: 5,
         display_rotate_k=3,
-        display_to_native_sim_coords=lambda col, row, _shape: (
-            (_ for _ in ()).throw(
-                AssertionError("native coordinates should be used directly")
-            )
+        display_to_native_sim_coords=lambda col, row, _shape: (_ for _ in ()).throw(
+            AssertionError("native coordinates should be used directly")
         ),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
             AssertionError("detector angular maps should not be used")
@@ -7929,7 +8431,9 @@ def test_project_peaks_to_current_view_recomputes_detector_display_from_native_b
     assert "caked_y" not in projected_entry
 
 
-def test_project_peaks_to_current_view_uses_refined_detector_display_background_frame_when_native_is_stale() -> None:
+def test_project_peaks_to_current_view_uses_refined_detector_display_background_frame_when_native_is_stale() -> (
+    None
+):
     refined_native = (2.0, 1.0)
     refined_display = mg._default_rotate_point(
         float(refined_native[0]),
@@ -7946,10 +8450,8 @@ def test_project_peaks_to_current_view_uses_refined_detector_display_background_
         current_background_native=lambda: np.ones((5, 5), dtype=float),
         image_size=lambda: 5,
         display_rotate_k=3,
-        display_to_native_sim_coords=lambda *_args, **_kwargs: (
-            (_ for _ in ()).throw(
-                AssertionError("refined detector display should use background inverse")
-            )
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("refined detector display should use background inverse")
         ),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
             AssertionError("detector angular maps should not be used")
@@ -8000,7 +8502,9 @@ def test_project_peaks_to_current_view_uses_refined_detector_display_background_
     assert projected_entry["display_row"] == float(refined_display[1])
 
 
-def test_project_peaks_to_current_view_keeps_refined_detector_display_on_non_square_background() -> None:
+def test_project_peaks_to_current_view_keeps_refined_detector_display_on_non_square_background() -> (
+    None
+):
     background_shape = (3, 5)
     refined_native = (2.0, 1.0)
     refined_display = mg._default_rotate_point(
@@ -8018,10 +8522,8 @@ def test_project_peaks_to_current_view_keeps_refined_detector_display_on_non_squ
         current_background_native=lambda: np.ones(background_shape, dtype=float),
         image_size=lambda: 9,
         display_rotate_k=3,
-        display_to_native_sim_coords=lambda *_args, **_kwargs: (
-            (_ for _ in ()).throw(
-                AssertionError("non-square refined detector display should use background inverse")
-            )
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("non-square refined detector display should use background inverse")
         ),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
             AssertionError("detector angular maps should not be used")
@@ -8149,10 +8651,8 @@ def test_project_peaks_to_current_view_recomputes_caked_angles_from_native_detec
         ai=lambda: object(),
         caked_transform_bundle=lambda: bundle,
         image_size=lambda: 8,
-        display_to_native_sim_coords=lambda col, row, _shape: (
-            (_ for _ in ()).throw(
-                AssertionError("native coordinates should be used directly")
-            )
+        display_to_native_sim_coords=lambda col, row, _shape: (_ for _ in ()).throw(
+            AssertionError("native coordinates should be used directly")
         ),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
             AssertionError("detector angular maps should not be used")
@@ -8259,7 +8759,9 @@ def test_make_runtime_geometry_manual_projection_callbacks_clears_stale_caked_fi
     assert projected == []
 
 
-def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_back_when_filter_removes_every_group() -> None:
+def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_back_when_filter_removes_every_group() -> (
+    None
+):
     filter_calls: list[int] = []
     collapse_calls: list[int] = []
 
@@ -8493,7 +8995,9 @@ def test_make_runtime_geometry_manual_projection_callbacks_keep_detector_points_
     )
 
 
-def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_live_preview_peaks() -> None:
+def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_live_preview_peaks() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: None,
@@ -8556,7 +9060,9 @@ def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_liv
     assert diagnostics["status"] == "cache_hit"
 
 
-def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstraps_peak_overlay_cache() -> None:
+def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_bootstraps_peak_overlay_cache() -> (
+    None
+):
     ensured: list[bool] = []
     cached_peaks: list[dict[str, object]] = []
 
@@ -8715,7 +9221,9 @@ def test_geometry_manual_toggle_selection_at_starts_session() -> None:
         set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
         restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
         clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
-        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(
+            ("render", kwargs.get("update_status"))
+        ),
         update_button_label_fn=lambda: calls.append(("button", None)),
         set_status_text=status_messages.append,
         listed_q_group_entries=lambda: [{"key": group_key}],
@@ -8776,7 +9284,9 @@ def test_geometry_manual_toggle_selection_at_starts_two_peak_session_for_non_00l
         set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
         restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
         clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
-        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(
+            ("render", kwargs.get("update_status"))
+        ),
         update_button_label_fn=lambda: calls.append(("button", None)),
         set_status_text=status_messages.append,
         listed_q_group_entries=lambda: [{"key": group_key}],
@@ -8923,16 +9433,16 @@ def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_perm
     for session in (forward, reversed_order):
         assert session["tagged_candidate_key"] == ("source_branch", 9, 1)
         assert session["tagged_candidate"]["source_reflection_index"] == 9
-        assert session["tagged_candidate"]["source_reflection_namespace"] == (
-            "full_reflection"
-        )
+        assert session["tagged_candidate"]["source_reflection_namespace"] == ("full_reflection")
         assert session["tagged_candidate"]["source_reflection_is_full"] is True
         assert session["tagged_candidate"]["source_branch_index"] == 1
         assert session["group_entries"][0]["source_reflection_index"] == 9
         assert session["group_entries"][0]["source_branch_index"] == 1
 
 
-def test_geometry_manual_toggle_selection_at_prefers_shared_peak_finder_group_when_window_choose_misses() -> None:
+def test_geometry_manual_toggle_selection_at_prefers_shared_peak_finder_group_when_window_choose_misses() -> (
+    None
+):
     set_sessions: list[dict[str, object]] = []
     status_messages: list[str] = []
     shared_search_limits: list[float] = []
@@ -9248,11 +9758,15 @@ def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
         display_background=np.zeros((8, 8), dtype=float),
         get_cache_data=lambda **_kwargs: {},
         refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
-        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(list(entries or [])) or list(entries or []),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
         set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
         clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
         restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
-        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(
+            ("render", kwargs.get("update_status"))
+        ),
         update_button_label_fn=lambda: calls.append(("button", None)),
         set_status_text=status_messages.append,
         push_undo_state_fn=lambda: calls.append(("undo", None)),
@@ -9302,8 +9816,9 @@ def test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callba
         display_background=np.zeros((8, 8), dtype=float),
         get_cache_data=lambda **_kwargs: {},
         refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
-        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(list(entries or []))
-        or list(entries or []),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
         set_pick_session_fn=lambda _session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
         restore_view_fn=lambda **_kwargs: None,
@@ -9389,6 +9904,353 @@ def test_geometry_manual_place_selection_at_uses_tagged_candidate_first() -> Non
     assert set_sessions[-1]["pending_entries"][0]["source_row_index"] == 2
 
 
+def test_geometry_manual_select_q_group_at_tags_mosaic_top_candidate_for_clicked_branch() -> None:
+    key = ("q_group", "primary", 1, 0)
+    entries = [
+        {
+            "label": "near-low",
+            "hkl": (1, 0, 0),
+            "sim_col": 10.0,
+            "sim_row": 10.0,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "mosaic_weight": 0.1,
+            "best_sample_index": 3,
+            "source_row_index": 30,
+        },
+        {
+            "label": "top",
+            "hkl": (1, 0, 0),
+            "sim_col": 14.0,
+            "sim_row": 10.0,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "mosaic_weight": 0.9,
+            "best_sample_index": 0,
+            "source_row_index": 31,
+        },
+        {
+            "label": "other-branch",
+            "hkl": (1, 0, 0),
+            "sim_col": 10.2,
+            "sim_row": 10.2,
+            "branch_id": "-x",
+            "branch_source": "generated",
+            "mosaic_weight": 9.0,
+            "best_sample_index": 1,
+            "source_row_index": 41,
+        },
+    ]
+    sessions: list[dict[str, object]] = []
+
+    handled, session, armed = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        10.0,
+        pick_session=None,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {"grouped_candidates": {key: entries}},
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries_arg: list(entries_arg or []),
+        set_pick_session_fn=lambda value: sessions.append(dict(value)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        listed_q_group_entries=lambda: [{"key": key}],
+        format_q_group_line=lambda _entry: "selected group",
+        choose_group_at_fn=lambda *_args, **_kwargs: (key, [dict(e) for e in entries], 0.0),
+        use_caked_space=False,
+        pick_search_window_px=20.0,
+    )
+
+    assert handled is True
+    assert armed is True
+    assert session["tagged_candidate"]["label"] == "top"
+    assert session["tagged_candidate"]["branch_id"] == "+x"
+    assert session["tagged_candidate"]["best_sample_index"] == 0
+    assert sessions[-1]["tagged_candidate"]["source_row_index"] == 31
+
+
+def test_geometry_manual_select_q_group_at_uses_profile_cache_sample_weights() -> None:
+    key = ("q_group", "primary", 1, 0)
+    entries = [
+        {
+            "label": "near-low",
+            "hkl": (1, 0, 0),
+            "sim_col": 10.0,
+            "sim_row": 10.0,
+            "best_sample_index": 0,
+            "source_row_index": 30,
+        },
+        {
+            "label": "top",
+            "hkl": (1, 0, 0),
+            "sim_col": 14.0,
+            "sim_row": 10.0,
+            "best_sample_index": 1,
+            "source_row_index": 31,
+        },
+        {
+            "label": "other-branch",
+            "hkl": (1, 0, 0),
+            "sim_col": 10.2,
+            "sim_row": 10.2,
+            "best_sample_index": 2,
+            "source_row_index": 41,
+        },
+    ]
+    profile_cache = {
+        "beam_x_array": np.asarray([0.5, 0.5, -0.5], dtype=float),
+        "sample_weights": np.asarray([0.1, 0.9, 9.0], dtype=float),
+    }
+
+    handled, session, armed = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        10.0,
+        pick_session=None,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {"grouped_candidates": {key: entries}},
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries_arg: list(entries_arg or []),
+        set_pick_session_fn=lambda _value: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        listed_q_group_entries=lambda: [{"key": key}],
+        format_q_group_line=lambda _entry: "selected group",
+        choose_group_at_fn=lambda *_args, **_kwargs: (key, [dict(e) for e in entries], 0.0),
+        use_caked_space=False,
+        pick_search_window_px=20.0,
+        profile_cache=profile_cache,
+    )
+
+    assert handled is True
+    assert armed is True
+    assert all("mosaic_weight" not in entry for entry in entries)
+    assert session["tagged_candidate"]["label"] == "top"
+    assert session["tagged_candidate"]["branch_id"] == "+x"
+    assert session["tagged_candidate"]["mosaic_weight"] == 0.9
+    assert session["tagged_candidate"]["source_row_index"] == 31
+
+
+def test_geometry_manual_place_selection_at_refines_with_tagged_candidate_context() -> None:
+    selected_ray = {
+        "label": "tagged",
+        "hkl": (1, 0, 0),
+        "sim_col": 10.0,
+        "sim_row": 10.0,
+        "branch_id": "+x",
+        "branch_source": "generated",
+        "mosaic_weight": 0.9,
+        "best_sample_index": 0,
+        "source_table_index": 1,
+        "source_row_index": 31,
+    }
+    seen: dict[str, object] = {}
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    def _refine_preview_point(source_entry, raw_col, raw_row, **_kwargs):
+        seen["source_entry"] = dict(source_entry) if source_entry else None
+        return float(raw_col) + 0.2, float(raw_row) + 0.4
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        5.0,
+        6.0,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "group_entries": [dict(selected_ray)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "tagged_candidate": dict(selected_ray),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=_refine_preview_point,
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert seen["source_entry"] is not None
+    assert seen["source_entry"]["source_row_index"] == 31
+    pair = saved_entry_sets[-1][0]
+    assert pair["raw_x"] == 5.0
+    assert pair["raw_y"] == 6.0
+    assert pair["x"] == 5.2
+    assert pair["y"] == 6.4
+    assert pair["source_row_index"] == 31
+    assert pair["best_sample_index"] == 0
+    assert pair["mosaic_weight"] == 0.9
+
+
+def test_geometry_manual_place_selection_at_uses_profile_cache_representative() -> None:
+    key = ("q_group", "primary", 1, 0)
+    candidates = [
+        {
+            "label": "near-low",
+            "hkl": (1, 0, 0),
+            "sim_col": 10.0,
+            "sim_row": 10.0,
+            "best_sample_index": 0,
+            "source_table_index": 1,
+            "source_row_index": 30,
+        },
+        {
+            "label": "top",
+            "hkl": (1, 0, 0),
+            "sim_col": 14.0,
+            "sim_row": 10.0,
+            "best_sample_index": 1,
+            "source_table_index": 1,
+            "source_row_index": 31,
+        },
+    ]
+    profile_cache = {
+        "beam_x_array": np.asarray([0.5, 0.5], dtype=float),
+        "sample_weights": np.asarray([0.1, 0.9], dtype=float),
+    }
+    seen: dict[str, object] = {}
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    def _refine_preview_point(source_entry, raw_col, raw_row, **_kwargs):
+        seen["source_entry"] = dict(source_entry)
+        return float(raw_col), float(raw_row)
+
+    handled, _next_session = mg.geometry_manual_place_selection_at(
+        10.0,
+        10.0,
+        pick_session={
+            "group_key": key,
+            "group_entries": [dict(entry) for entry in candidates],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=_refine_preview_point,
+        set_pairs_for_index_fn=lambda _idx, rows: (
+            saved_entry_sets.append(list(rows or [])) or list(rows or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (float(col), float(row)),
+        profile_cache=profile_cache,
+    )
+
+    assert handled is True
+    assert seen["source_entry"]["label"] == "top"
+    assert seen["source_entry"]["branch_id"] == "+x"
+    assert seen["source_entry"]["mosaic_weight"] == 0.9
+    assert saved_entry_sets[-1][0]["source_row_index"] == 31
+    assert saved_entry_sets[-1][0]["mosaic_weight"] == 0.9
+
+
+def test_geometry_manual_place_selection_at_caked_background_refines_to_peak_top() -> None:
+    radial = np.linspace(0.0, 30.0, 301)
+    azimuth = np.linspace(-5.0, 5.0, 201)
+    image = np.zeros((azimuth.size, radial.size), dtype=float)
+    peak_col = int(np.argmin(np.abs(radial - 10.2)))
+    peak_row = int(np.argmin(np.abs(azimuth - 0.3)))
+    decoy_col = int(np.argmin(np.abs(radial - 25.0)))
+    decoy_row = int(np.argmin(np.abs(azimuth - 0.0)))
+    image[peak_row, peak_col] = 10.0
+    image[decoy_row, decoy_col] = 1000.0
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    candidate = {
+        "label": "seed",
+        "hkl": (1, 0, 0),
+        "caked_x": 10.0,
+        "caked_y": 0.0,
+        "branch_id": "+x",
+        "branch_source": "generated",
+        "mosaic_weight": 1.0,
+        "best_sample_index": 0,
+        "source_table_index": 1,
+        "source_row_index": 31,
+    }
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        10.0,
+        0.0,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "group_entries": [dict(candidate)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "tagged_candidate": dict(candidate),
+        },
+        current_background_index=0,
+        display_background=image,
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda source_entry, raw_col, raw_row, **kwargs: (
+            mg.geometry_manual_refine_preview_point(
+                source_entry,
+                raw_col,
+                raw_row,
+                use_caked_space=True,
+                radial_axis=radial,
+                azimuth_axis=azimuth,
+                **kwargs,
+            )
+        ),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda tth, phi: (
+            float(tth) * 10.0,
+            float(phi) * 10.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    pair = saved_entry_sets[-1][0]
+    assert pair["raw_caked_x"] == 10.0
+    assert pair["raw_caked_y"] == 0.0
+    assert np.isclose(pair["caked_x"], 10.2, atol=0.12)
+    assert np.isclose(pair["caked_y"], 0.3, atol=0.12)
+    assert pair["detector_x"] == pair["x"]
+    assert pair["detector_y"] == pair["y"]
+    assert pair["source_row_index"] == 31
+    assert pair["best_sample_index"] == 0
+
+
 def test_geometry_manual_place_selection_at_back_projects_caked_pick_to_detector_space() -> None:
     set_sessions: list[dict[str, object]] = []
     saved_entry_sets: list[list[dict[str, object]]] = []
@@ -9426,11 +10288,15 @@ def test_geometry_manual_place_selection_at_back_projects_caked_pick_to_detector
         display_background=np.zeros((8, 8), dtype=float),
         get_cache_data=lambda **_kwargs: {},
         refine_preview_point=lambda *_args, **_kwargs: (13.2, 2.5),
-        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(list(entries or [])) or list(entries or []),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
         set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
         clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
         restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
-        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(
+            ("render", kwargs.get("update_status"))
+        ),
         update_button_label_fn=lambda: calls.append(("button", None)),
         set_status_text=status_messages.append,
         push_undo_state_fn=lambda: calls.append(("undo", None)),
@@ -9512,7 +10378,9 @@ def test_geometry_manual_refine_preview_point_is_repeatable_with_peak_context_se
     ]
 
 
-def test_build_geometry_manual_pick_cache_matches_active_group_multiset_for_cache_and_rebuild() -> None:
+def test_build_geometry_manual_pick_cache_matches_active_group_multiset_for_cache_and_rebuild() -> (
+    None
+):
     active_group_key = ("q_group", "primary", 1, 5)
     cached_rows = [
         {
@@ -9651,7 +10519,9 @@ def test_geometry_manual_choose_group_at_prefers_caked_coords_in_caked_view() ->
     assert dist < 1.0
 
 
-def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_projection() -> None:
+def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_projection() -> (
+    None
+):
     candidate = {
         "label": "-1,0,5",
         "hkl": (-1, 0, 5),
@@ -9690,10 +10560,9 @@ def test_geometry_manual_place_selection_at_repeats_same_trusted_pair_for_caked_
             display_background=np.zeros((8, 8), dtype=float),
             get_cache_data=lambda **_kwargs: {},
             refine_preview_point=lambda *_args, **_kwargs: (13.2, 2.5),
-            set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(
-                list(entries or [])
-            )
-            or list(entries or []),
+            set_pairs_for_index_fn=lambda _idx, entries: (
+                saved_entry_sets.append(list(entries or [])) or list(entries or [])
+            ),
             set_pick_session_fn=lambda _session: None,
             clear_preview_artists_fn=lambda **_kwargs: None,
             restore_view_fn=lambda **_kwargs: None,
@@ -9789,10 +10658,9 @@ def test_geometry_manual_place_selection_at_prefers_caked_nearest_candidate_in_c
         display_background=np.zeros((8, 8), dtype=float),
         get_cache_data=lambda **_kwargs: {},
         refine_preview_point=lambda *_args, **_kwargs: (13.1, 2.2),
-        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(
-            list(entries or [])
-        )
-        or list(entries or []),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
         set_pick_session_fn=lambda _session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
         restore_view_fn=lambda **_kwargs: None,
@@ -9870,10 +10738,9 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         display_background=np.zeros((8, 8), dtype=float),
         get_cache_data=lambda **_kwargs: {},
         refine_preview_point=lambda *_args, **_kwargs: (182.0, 138.0),
-        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(
-            list(entries or [])
-        )
-        or list(entries or []),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append(list(entries or [])) or list(entries or [])
+        ),
         set_pick_session_fn=lambda _session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
         restore_view_fn=lambda **_kwargs: None,

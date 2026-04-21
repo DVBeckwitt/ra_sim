@@ -2518,9 +2518,46 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
         if isinstance(dataset.get("simulation_diagnostics"), Mapping)
         else {}
     )
-    if isinstance(simulation_diagnostics.get("targeted_performance_gate"), Mapping):
-        result["targeted_performance_gate"] = dict(
-            simulation_diagnostics.get("targeted_performance_gate", {})
+    required_manual_fit_targets = (
+        gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            saved_entries,
+            background_index=int(background_index),
+        )
+    )
+    required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
+        required_manual_fit_targets
+    )
+    result["targeted_performance_gate_required"] = bool(required_branch_group_keys)
+    targeted_gate_defaults = {
+        "preflight_mode": "full",
+        "targeted_preflight_enabled": False,
+        "targeted_simulation_supported": False,
+        "targeted_simulation_used": False,
+        "targeted_cache_hit": False,
+        "full_fresh_simulation_fallback_used": False,
+        "targeted_simulation_fallback_reason": None,
+        "required_hkl_branch_group_count": int(len(required_branch_group_keys)),
+        "source_rows_projected_for_rebinding": 0,
+        "candidate_rows_scored_for_background_distance": 0,
+        "unrelated_projected_row_count_for_rebinding": 0,
+        "unrelated_scored_row_count_for_rebinding": 0,
+        "full_source_rows_built_for_rebinding": False,
+        "full_source_rows_projected_for_rebinding": False,
+    }
+    raw_targeted_gate = simulation_diagnostics.get("targeted_performance_gate")
+    if isinstance(raw_targeted_gate, Mapping):
+        targeted_gate_payload = dict(targeted_gate_defaults)
+        targeted_gate_payload.update(dict(raw_targeted_gate))
+        result["targeted_performance_gate"] = (
+            gui_geometry_fit._geometry_fit_targeted_performance_gate_payload(
+                targeted_gate_payload
+            )
+        )
+    elif required_branch_group_keys:
+        result["targeted_performance_gate"] = (
+            gui_geometry_fit._geometry_fit_targeted_performance_gate_payload(
+                targeted_gate_defaults
+            )
         )
     try:
         group_cache = _build_group_cache(
@@ -2560,6 +2597,52 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
     result["group_cache"] = group_cache
     result["saved_entries"] = saved_entries
     result["raw_saved_entries"] = raw_saved_entries
+    result["point_provider_report"] = dict(
+        dataset.get("point_provider_report", {})
+        if isinstance(dataset.get("point_provider_report"), Mapping)
+        else {}
+    )
+    return result
+
+
+def _run_point_provider_report_only(
+    state_path: Path,
+    background_index: int,
+    *,
+    optimizer_guard_state: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    payload = load_gui_state_file(state_path)
+    saved_state = dict(payload["state"])
+    saved_entries = _saved_entries_for_background(
+        saved_state,
+        background_index=int(background_index),
+    )
+    dataset = gui_geometry_fit.build_geometry_fit_saved_state_point_provider_dataset(
+        int(background_index),
+        saved_entries,
+    )
+    report = gui_geometry_fit.build_geometry_fit_point_provider_report(
+        dataset,
+        optimizer_guard_state=optimizer_guard_state,
+    )
+    result = dict(report)
+    result["classification"] = (
+        "point_provider_parity_ok"
+        if bool(report.get("ok", False))
+        else "point_provider_parity_failed"
+    )
+    result["state_path"] = str(state_path)
+    result["saved_pair_count"] = int(len(saved_entries))
+    result["point_provider_report_only"] = True
+    result["provider_only_saved_state_dataset"] = True
+    result["headless_preflight_called"] = False
+    result["optimizer_path_entered"] = bool(
+        result.get("optimizer_path_entered", False)
+    )
+    result["optimizer_entrypoints_called"] = list(
+        result.get("optimizer_entrypoints_called", []) or []
+    )
+    result["point_provider_report"] = report
     return result
 
 
@@ -3782,9 +3865,13 @@ def _run_fresh_all_contract_validation(
         if isinstance(context.get("targeted_performance_gate"), Mapping)
         else {}
     )
+    targeted_performance_gate_required = bool(
+        context.get("targeted_performance_gate_required", False)
+    )
     targeted_performance_gate_ok = bool(
-        not targeted_performance_gate
-        or bool(targeted_performance_gate.get("ok", False))
+        targeted_performance_gate.get("ok", False)
+        if (targeted_performance_gate_required or targeted_performance_gate)
+        else True
     )
     isolated_rebind_ok = bool(
         processed_manual_entry_count > 0
@@ -3805,6 +3892,7 @@ def _run_fresh_all_contract_validation(
     result["background_distance_gate_ok"] = background_distance_gate_ok
     if targeted_performance_gate:
         result["targeted_performance_gate"] = targeted_performance_gate
+    result["targeted_performance_gate_required"] = targeted_performance_gate_required
     result["deprecated_aliases_present"] = True
     result["candidate_distance_px"] = list(result["background_distance_px"])
     result["candidate_distances_all_finite"] = bool(
@@ -4300,6 +4388,11 @@ def main() -> int:
         "--report-path",
         help="Optional path to write the JSON report produced by this command.",
     )
+    parser.add_argument(
+        "--point-provider-report-only",
+        action="store_true",
+        help="Build only the point-provider parity report and exit before optimizer.",
+    )
     args = parser.parse_args()
 
     resolved_state_path = Path(args.state).expanduser().resolve()
@@ -4317,7 +4410,12 @@ def main() -> int:
         parser.error(
             "--export-fresh-state requires --mode fresh, --mode fresh-all, or --mode full."
         )
-    if effective_mode == "fresh":
+    if bool(getattr(args, "point_provider_report_only", False)):
+        result = _run_point_provider_report_only(
+            resolved_state_path,
+            background_index=int(args.background_index),
+        )
+    elif effective_mode == "fresh":
         result = _run_fresh_contract_validation(
             resolved_state_path,
             background_index=int(args.background_index),
@@ -4356,6 +4454,23 @@ def main() -> int:
     if report_path is not None:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(rendered + "\n", encoding="utf-8")
+        point_provider_report = result.get("point_provider_report")
+        if isinstance(point_provider_report, Mapping) and not bool(
+            result.get("point_provider_report_only", False)
+        ):
+            point_provider_report_path = (
+                report_path.parent / "geometry_fit_point_provider_report.json"
+            )
+            point_provider_report_path.write_text(
+                json.dumps(
+                    point_provider_report,
+                    indent=2,
+                    sort_keys=True,
+                    default=str,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         print(
             json.dumps(
                 {
