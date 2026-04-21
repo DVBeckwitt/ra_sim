@@ -2442,6 +2442,116 @@ def test_resolve_fixed_source_matches_keeps_distinct_branches(monkeypatch) -> No
     assert [item[1] for item in resolved] == [(2.0, 2.0), (8.0, 8.0)]
 
 
+def _provider_local_singleton_entry(**overrides: object) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "hkl": (2, 0, 0),
+        "label": "2,0,0",
+        "x": 4.0,
+        "y": 4.0,
+        "source_table_index": 99,
+        "original_source_table_index": 99,
+        "resolved_table_index": 0,
+        "source_row_index": 24,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "resolved_peak_index": 1,
+        "fit_source_resolution_kind": "provider_fixed_source_local",
+        "optimizer_request_source": "provider_pair",
+        "optimizer_request_has_fixed_source": True,
+        "optimizer_request_fallback_row": False,
+        "provider_local_subset_provenance": True,
+        "provider_local_subset_assignment": "provider_local_duplicate_hkl_branch",
+        "provider_selected_source_identity_canonical": {
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+            "source_peak_index": 1,
+        },
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_resolve_fixed_source_matches_rescues_provider_local_singleton_row() -> None:
+    entry = _provider_local_singleton_entry(q_group_key=("q", 2))
+    hit_tables = [
+        np.asarray([[1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert len(resolved) == 1
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_kind"] == "fixed_source"
+    assert diag["resolution_reason"] == "provider_local_singleton_resolved_table"
+    assert diag["stale_source_row_index"] == 24
+    assert diag["source_row_count"] == 1
+    assert diag["resolved_sim_hkl"] == (2, 0, 0)
+    assert diag["provider_local_subset_provenance"] is True
+
+
+def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives() -> None:
+    base_hit_row = [1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]
+    cases = [
+        (
+            _provider_local_singleton_entry(),
+            [np.empty((0, 7), dtype=np.float64)],
+            "zero_row",
+        ),
+        (
+            _provider_local_singleton_entry(),
+            [
+                np.asarray(
+                    [
+                        base_hit_row,
+                        [1.0, 5.0, 5.0, -12.0, 2.0, 0.0, 0.0],
+                    ],
+                    dtype=np.float64,
+                )
+            ],
+            "multi_row",
+        ),
+        (
+            _provider_local_singleton_entry(),
+            [np.asarray([[1.0, 4.0, 4.0, -10.0, 3.0, 0.0, 0.0]], dtype=np.float64)],
+            "hkl_mismatch",
+        ),
+        (
+            _provider_local_singleton_entry(
+                provider_local_subset_assignment="provider_local_unique_hkl"
+            ),
+            [np.asarray([base_hit_row], dtype=np.float64)],
+            "branch_mismatch_without_branch_provenance",
+        ),
+        (
+            _provider_local_singleton_entry(provider_local_subset_provenance=False),
+            [np.asarray([base_hit_row], dtype=np.float64)],
+            "no_provider_local_provenance",
+        ),
+        (
+            _provider_local_singleton_entry(
+                fit_source_resolution_kind="source_row",
+                provider_local_subset_provenance=False,
+            ),
+            [np.asarray([base_hit_row], dtype=np.float64)],
+            "ordinary_stale_non_provider",
+        ),
+    ]
+
+    for entry, hit_tables, _case_name in cases:
+        resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+            [entry],
+            hit_tables,
+        )
+
+        assert resolved == []
+        assert fallback_entries == [entry]
+        assert resolution_lookup[id(entry)]["resolution_kind"] == "hkl_fallback"
+
+
 def test_geometry_fit_correspondence_simulated_point_prefers_branch_identity() -> None:
     correspondence = {
         "source_reflection_index": 0,

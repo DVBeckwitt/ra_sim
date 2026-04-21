@@ -39,14 +39,14 @@ Detector-view Qr/Qz hit-table rows now use the simulated detector display frame
 for click targets; the background detector adapter applies only to explicitly
 tagged background/native-detector rows. Caked selection and caked-to-detector
 conversion remain locked by regression tests.
-Optimizer validation stops at bounded ladder rung 1 when the request would use
-fallback rows;
-solve rungs wait until objective dry-run reports zero fallback and zero missing
-fixed-source rows. The bridge currently copies provider identity into the
-optimizer request and fails before `least_squares` when fixed-source fields are
-incomplete. The old full quality baseline runner remains blocked until the
-ladder finds a stable parameter set. The old `new2` and `new3` saved-state gates
-are retired.
+Optimizer validation has a green `new4` rung 1 objective dry-run checkpoint:
+the provider/dataset/optimizer request all carry seven fixed-source rows, the
+objective resolver resolves all seven without HKL fallback, the provider
+identity and point handoff match exactly, the dry-run residual is finite, and
+`least_squares`/solve are not called. Solve rungs, sensitivity scan, and the old
+full quality baseline runner remain blocked until a separate solve-rung project
+starts from this checkpoint. The old `new2` and `new3` saved-state gates are
+retired.
 
 ## Known bugs
 

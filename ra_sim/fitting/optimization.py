@@ -2894,6 +2894,10 @@ def _prepare_reflection_subset(
                 remapped_entry.pop("source_table_index", None)
         elif int(entry_index) in local_fixed_reflection_indices:
             local_reflection_idx = local_fixed_reflection_indices[int(entry_index)]
+            hkl_key = _entry_hkl_key(entry)
+            duplicate_hkl_count = (
+                len(hkl_to_reflection_indices.get(hkl_key, [])) if hkl_key is not None else 0
+            )
             source_table_idx = _coerce_index(entry.get("source_table_index"))
             if source_table_idx is None:
                 source_table_idx = _coerce_index(entry.get("resolved_table_index"))
@@ -2906,6 +2910,15 @@ def _prepare_reflection_subset(
                 remapped_entry.pop("resolved_table_index", None)
             if "source_table_index" in entry and source_table_idx is not None:
                 remapped_entry["source_table_index"] = int(source_table_idx)
+            remapped_entry["provider_local_subset_provenance"] = True
+            remapped_entry["provider_local_subset_assignment"] = (
+                "provider_local_duplicate_hkl_branch"
+                if int(duplicate_hkl_count) > 1
+                else "provider_local_unique_hkl"
+            )
+            remapped_entry["provider_local_subset_original_reflection_index"] = int(
+                local_reflection_idx
+            )
             row_idx = _coerce_index(entry.get("source_row_index"))
             if row_idx is not None:
                 remapped_entry["source_row_index"] = int(row_idx)
@@ -10637,6 +10650,98 @@ def _resolve_fixed_source_matches(
             seam="_resolve_fixed_source_matches",
         )
 
+    def _provider_local_subset_provenance(entry: Mapping[str, object]) -> bool:
+        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+        if fit_kind != "provider_fixed_source_local":
+            return False
+        if bool(entry.get("optimizer_request_fallback_row", False)):
+            return False
+        if not bool(entry.get("optimizer_request_has_fixed_source", False)):
+            return False
+        source_marker = str(entry.get("optimizer_request_source", "") or "").strip()
+        canonical_identity = entry.get("provider_selected_source_identity_canonical")
+        if source_marker != "provider_pair" and not isinstance(canonical_identity, Mapping):
+            return False
+        if _nonnegative_index(entry.get("resolved_table_index")) is None:
+            return False
+        if _normalized_hkl_key(entry.get("hkl")) is None:
+            return False
+        if not bool(entry.get("provider_local_subset_provenance", False)):
+            return False
+        assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
+        return assignment.startswith("provider_local_")
+
+    def _provider_local_singleton_row(
+        entry: Mapping[str, object],
+        row_records: Sequence[Mapping[str, object]],
+        *,
+        row_reason: str,
+    ) -> Tuple[Optional[np.ndarray], Optional[Dict[str, object]]]:
+        if str(row_reason) != "source_row_out_of_range":
+            return None, None
+        if not _provider_local_subset_provenance(entry):
+            return None, None
+        if len(row_records) != 1:
+            return None, None
+        row_record = row_records[0]
+        try:
+            row = np.asarray(row_record.get("row"), dtype=float).reshape(-1)
+        except Exception:
+            return None, None
+        if row.shape[0] < 7:
+            return None, None
+        try:
+            sim_col = float(row[1])
+            sim_row = float(row[2])
+            sim_hkl = tuple(int(round(float(v))) for v in row[4:7])
+        except Exception:
+            return None, None
+        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+            return None, None
+        measured_hkl_key = _normalized_hkl_key(entry.get("hkl"))
+        if measured_hkl_key is None or tuple(sim_hkl) != tuple(measured_hkl_key):
+            return None, None
+        assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
+        branch_provenance = assignment in {
+            "provider_local_duplicate_hkl_branch",
+            "provider_local_duplicate_hkl_group",
+        }
+        requested_branch = _nonnegative_index(entry.get("source_branch_index"))
+        requested_peak = _nonnegative_index(entry.get("source_peak_index"))
+        row_branch = source_branch_index_from_phi_deg(row[3])
+        requested_branch_values = {
+            int(value) for value in (requested_branch, requested_peak) if value in {0, 1}
+        }
+        if (
+            requested_branch_values
+            and row_branch in {0, 1}
+            and int(row_branch) not in requested_branch_values
+            and not branch_provenance
+        ):
+            return None, None
+        if (
+            entry.get("q_group_key") is not None or entry.get("branch_group_key") is not None
+        ) and not branch_provenance:
+            return None, None
+        resolved_peak_idx = _nonnegative_index(entry.get("resolved_peak_index"))
+        if resolved_peak_idx is None:
+            resolved_peak_idx = _measured_source_peak_index(entry)
+        stale_row_idx = _nonnegative_index(entry.get("source_row_index"))
+        payload = {
+            "resolution_kind": "fixed_source",
+            "resolution_reason": "provider_local_singleton_resolved_table",
+            "resolved_table_index": entry.get("resolved_table_index"),
+            "resolved_peak_index": (
+                int(resolved_peak_idx) if resolved_peak_idx in {0, 1} else None
+            ),
+            "stale_source_row_index": (int(stale_row_idx) if stale_row_idx is not None else None),
+            "source_row_count": 1,
+            "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
+            "provider_local_subset_provenance": True,
+            "provider_local_subset_assignment": str(assignment),
+        }
+        return np.asarray(row[:7], dtype=float), payload
+
     for match_input_index, entry in enumerate(measured_entries):
         overlay_match_index = _overlay_index(entry, match_input_index)
         base_diag = {
@@ -10711,6 +10816,8 @@ def _resolve_fixed_source_matches(
         sim_col = float("nan")
         sim_row = float("nan")
         sim_hkl: Tuple[int, int, int] | None = None
+        resolved_diag_reason = "resolved"
+        resolved_diag_extra: Dict[str, object] = {}
         if source_peak_key is not None:
             peak_idx = int(source_peak_key[1])
             peak_row, peak_reason = _branch_representative_row(
@@ -10812,6 +10919,28 @@ def _resolve_fixed_source_matches(
             row_idx = int(source_row_key[1])
             row_record, row_reason = _resolve_source_row_record(row_records, row_idx)
             if row_record is None:
+                singleton_row, singleton_payload = _provider_local_singleton_row(
+                    entry,
+                    row_records,
+                    row_reason=str(row_reason),
+                )
+                if singleton_row is not None and singleton_payload is not None:
+                    row_record = {"row": singleton_row}
+                    resolved_diag_reason = str(singleton_payload["resolution_reason"])
+                    resolved_diag_extra = dict(singleton_payload)
+                else:
+                    _store_resolution_diag(
+                        entry,
+                        {
+                            **base_diag,
+                            "resolution_kind": "hkl_fallback",
+                            "resolution_reason": str(row_reason),
+                            "source_row_count": int(len(row_records)),
+                        },
+                    )
+                    fallback_entries.append(entry)
+                    continue
+            if row_record is None:
                 _store_resolution_diag(
                     entry,
                     {
@@ -10888,8 +11017,9 @@ def _resolve_fixed_source_matches(
             entry,
             {
                 **base_diag,
+                **resolved_diag_extra,
                 "resolution_kind": "fixed_source",
-                "resolution_reason": "resolved",
+                "resolution_reason": resolved_diag_reason,
                 "sim_x": float(sim_col),
                 "sim_y": float(sim_row),
                 "sim_hkl": tuple(int(v) for v in sim_hkl or (0, 0, 0)),
@@ -17990,6 +18120,16 @@ def fit_geometry_parameters(
         except Exception:
             start_unweighted_peak_max = float("nan")
         start_missing_pair_count = int(start_acceptance_metrics.get("missing_pair_count", 0) or 0)
+        start_match_radius_exceeded_count = int(
+            start_acceptance_metrics.get("match_radius_exceeded_count", 0)
+        )
+        start_outside_radius_count = int(
+            start_acceptance_metrics.get(
+                "outside_radius_count",
+                start_match_radius_exceeded_count,
+            )
+        )
+        start_branch_mismatch_count = int(start_acceptance_metrics.get("branch_mismatch_count", 0))
         start_total_fixed_pair_count = int(
             start_acceptance_metrics.get(
                 "total_fixed_pair_count",
@@ -18022,18 +18162,9 @@ def fit_geometry_parameters(
                 "all_resolved_fixed_correspondences",
             )
         )
-        summary["start_match_radius_exceeded_count"] = int(
-            start_acceptance_metrics.get("match_radius_exceeded_count", 0)
-        )
-        summary["start_outside_radius_count"] = int(
-            start_acceptance_metrics.get(
-                "outside_radius_count",
-                start_acceptance_metrics.get("match_radius_exceeded_count", 0),
-            )
-        )
-        summary["start_branch_mismatch_count"] = int(
-            start_acceptance_metrics.get("branch_mismatch_count", 0)
-        )
+        summary["start_match_radius_exceeded_count"] = int(start_match_radius_exceeded_count)
+        summary["start_outside_radius_count"] = int(start_outside_radius_count)
+        summary["start_branch_mismatch_count"] = int(start_branch_mismatch_count)
         summary["start_missing_pair_count"] = int(start_missing_pair_count)
         summary["start_total_fixed_pair_count"] = int(start_total_fixed_pair_count)
         summary["start_resolved_fixed_matched_pair_count"] = int(
