@@ -28,6 +28,9 @@ Bug/error status: fixed. The stale cache rerun helper and stale staged index
 state were removed from this patch scope. Forward and QR simulations now share
 the single-pass cache behavior.
 
+Tracking status: fixed. The archive tracking item is now listed in
+`docs/tracking/index.md` for repo-local visibility.
+
 Regression status: clean. The patch preserves public hit-table behavior and
 keeps explicit `best_sample_indices_out` forwarding when callers provide a
 buffer.
