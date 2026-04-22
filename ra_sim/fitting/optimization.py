@@ -4844,6 +4844,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
                 "fallback_entry_count": 0,
                 "matched_pair_count": 0,
                 "missing_pair_count": 0,
+                "branch_mismatch_count": 0,
                 "simulated_reflection_count": int(dataset_ctx.subset.miller.shape[0]),
                 "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
                 "subset_reduced": bool(dataset_ctx.subset.reduced),
@@ -4932,6 +4933,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
     anisotropic_sigma_count = 0
     fixed_source_resolved_count = 0
     fallback_entry_count = 0
+    branch_mismatch_count = 0
 
     def _add_diag(entry: Mapping[str, object], payload: Dict[str, object]) -> None:
         if not collect_diagnostics:
@@ -5052,12 +5054,26 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
         penalty_weight *= float(weight_fields.get("priority_weight", 1.0))
         missing_penalty = float(missing_pair_penalty) * penalty_weight
-        simulated_point, simulated_reason = _geometry_fit_correspondence_simulated_point(
+        simulated_point, resolution_payload = _resolve_geometry_fit_correspondence(
             entry,
             hit_tables=hit_tables,
             max_positions=maxpos,
             trusted_full_reflection_local_index_map=full_reflection_local_index_map,
         )
+        simulated_reason = str(
+            resolution_payload.get("resolution_reason", "missing_source_peak_index")
+        )
+        source_branch_index = _nonnegative_index(entry.get("source_branch_index"))
+        resolved_peak_index = _nonnegative_index(
+            resolution_payload.get("resolved_peak_index")
+        )
+        branch_mismatch = bool(
+            source_branch_index is not None
+            and resolved_peak_index is not None
+            and int(source_branch_index) != int(resolved_peak_index)
+        )
+        if branch_mismatch:
+            branch_mismatch_count += 1
 
         pair_dist = float("nan")
         if simulated_point is not None:
@@ -5100,6 +5116,18 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
                         "measured_radius_px": _point_radius_px(measured_point),
                         "simulated_radius_px": _point_radius_px(simulated_point),
                         "correspondence_resolution_reason": str(simulated_reason),
+                        "source_branch_index": (
+                            int(source_branch_index)
+                            if source_branch_index is not None
+                            else None
+                        ),
+                        "resolved_peak_index": (
+                            int(resolved_peak_index)
+                            if resolved_peak_index is not None
+                            else None
+                        ),
+                        "branch_mismatch": bool(branch_mismatch),
+                        "branch_mismatch_count": int(bool(branch_mismatch)),
                         **weight_fields,
                     },
                 )
@@ -5147,6 +5175,14 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
                 ),
                 "resolution_reason": str(reason),
                 "correspondence_resolution_reason": str(simulated_reason),
+                "source_branch_index": (
+                    int(source_branch_index) if source_branch_index is not None else None
+                ),
+                "resolved_peak_index": (
+                    int(resolved_peak_index) if resolved_peak_index is not None else None
+                ),
+                "branch_mismatch": bool(branch_mismatch),
+                "branch_mismatch_count": int(bool(branch_mismatch)),
                 **weight_fields,
             },
         )
@@ -5161,6 +5197,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
         "fallback_entry_count": int(fallback_entry_count),
         "matched_pair_count": int(matched_pair_count),
         "missing_pair_count": int(missing_pairs),
+        "branch_mismatch_count": int(branch_mismatch_count),
         "simulated_reflection_count": int(fit_miller.shape[0]),
         "total_reflection_count": int(dataset_ctx.subset.total_reflection_count),
         "fixed_source_reflection_count": int(dataset_ctx.subset.fixed_source_reflection_count),
@@ -11593,12 +11630,17 @@ def _resolve_geometry_fit_correspondence(
         return None, _payload("source_row_parse_failed", table_idx=table_idx)
     if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
         return None, _payload("invalid_source_row_point", table_idx=table_idx)
+    try:
+        resolved_row_branch = source_branch_index_from_phi_deg(float(row[3]))
+    except Exception:
+        resolved_row_branch = None
     return (
         float(sim_col),
         float(sim_row),
     ), _payload(
         "resolved_source_row",
         table_idx=table_idx,
+        peak_idx=resolved_row_branch,
         sim_hkl=_branch_sim_hkl(row, fallback=correspondence.get("hkl")),
         extra={
             "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
@@ -13817,6 +13859,7 @@ def fit_geometry_parameters(
             "fallback_entry_count": 0,
             "matched_pair_count": 0,
             "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
             "simulated_reflection_count": 0,
             "total_reflection_count": 0,
             "fixed_source_reflection_count": 0,
@@ -14067,6 +14110,7 @@ def fit_geometry_parameters(
                     "fallback_entry_count": 0,
                     "matched_pair_count": 0,
                     "missing_pair_count": 0,
+                    "branch_mismatch_count": 0,
                     "simulated_reflection_count": 0,
                     "total_reflection_count": 0,
                     "fixed_source_reflection_count": 0,
@@ -14100,6 +14144,7 @@ def fit_geometry_parameters(
             "fallback_entry_count": 0,
             "matched_pair_count": 0,
             "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
             "simulated_reflection_count": 0,
             "total_reflection_count": 0,
             "fixed_source_reflection_count": 0,
@@ -14168,6 +14213,7 @@ def fit_geometry_parameters(
                 "fallback_entry_count",
                 "matched_pair_count",
                 "missing_pair_count",
+                "branch_mismatch_count",
                 "simulated_reflection_count",
                 "total_reflection_count",
                 "fixed_source_reflection_count",
@@ -14396,6 +14442,7 @@ def fit_geometry_parameters(
                     "fallback_entry_count": 0,
                     "matched_pair_count": 0,
                     "missing_pair_count": 0,
+                    "branch_mismatch_count": 0,
                     "simulated_reflection_count": 0,
                     "total_reflection_count": 0,
                     "fixed_source_reflection_count": 0,
@@ -14465,6 +14512,7 @@ def fit_geometry_parameters(
                 "fallback_entry_count",
                 "matched_pair_count",
                 "missing_pair_count",
+                "branch_mismatch_count",
                 "simulated_reflection_count",
                 "total_reflection_count",
                 "fixed_source_reflection_count",
@@ -14554,6 +14602,32 @@ def fit_geometry_parameters(
             if not str(key).startswith("_")
         }
 
+    def _point_match_live_payload(
+        local: Mapping[str, object],
+        point_match_summary: Mapping[str, object] | None,
+    ) -> Dict[str, object]:
+        live_cache_records: List[Dict[str, object]] = []
+        if isinstance(point_match_summary, Mapping):
+            for record in point_match_summary.get("_live_cache_records", ()) or ():
+                if isinstance(record, Mapping):
+                    live_cache_records.append(dict(record))
+        return {
+            "params": {
+                str(key): value
+                for key, value in local.items()
+                if str(key)
+                not in {
+                    "mosaic_params",
+                    "uv1",
+                    "uv2",
+                }
+            },
+            "point_match_summary": _public_point_match_summary(point_match_summary),
+            "live_cache_records": live_cache_records,
+            "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
+            "manual_point_fit_mode": bool(manual_point_fit_mode),
+        }
+
     last_live_update_payload: Dict[str, object] | None = None
 
     def _collect_seed_debug_summary(x_trial: Sequence[float]) -> Dict[str, object]:
@@ -14601,27 +14675,7 @@ def fit_geometry_parameters(
             local,
             collect_diagnostics=False,
         )
-        live_cache_records = []
-        if isinstance(point_match_summary, Mapping):
-            for record in point_match_summary.get("_live_cache_records", ()) or ():
-                if isinstance(record, Mapping):
-                    live_cache_records.append(dict(record))
-        last_live_update_payload = {
-            "params": {
-                str(key): value
-                for key, value in local.items()
-                if str(key)
-                not in {
-                    "mosaic_params",
-                    "uv1",
-                    "uv2",
-                }
-            },
-            "point_match_summary": _public_point_match_summary(point_match_summary),
-            "live_cache_records": live_cache_records,
-            "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
-            "manual_point_fit_mode": bool(manual_point_fit_mode),
-        }
+        last_live_update_payload = _point_match_live_payload(local, point_match_summary)
         prior_residual = _parameter_prior_residuals(x)
         if prior_residual.size:
             if residual_arr.size:
@@ -16205,6 +16259,7 @@ def fit_geometry_parameters(
             residual_arr: np.ndarray,
             *,
             eval_count: int,
+            point_match_summary: Mapping[str, object] | None = None,
         ) -> None:
             if not manual_fail_fast_enabled or residual_callable is not None:
                 return
@@ -16218,14 +16273,19 @@ def fit_geometry_parameters(
                 return
             progress_state["manual_fail_fast_last_probe_eval"] = int(eval_count)
 
-            local_trial = _apply_trial_params(np.asarray(x_trial, dtype=float))
-            _, _, point_match_summary = point_match_evaluator(
-                local_trial,
-                collect_diagnostics=False,
-            )
-            probe_summary = (
-                dict(point_match_summary) if isinstance(point_match_summary, Mapping) else {}
-            )
+            if isinstance(point_match_summary, Mapping):
+                probe_summary = dict(point_match_summary)
+            else:
+                local_trial = _apply_trial_params(np.asarray(x_trial, dtype=float))
+                _, _, point_match_summary = point_match_evaluator(
+                    local_trial,
+                    collect_diagnostics=False,
+                )
+                probe_summary = (
+                    dict(point_match_summary)
+                    if isinstance(point_match_summary, Mapping)
+                    else {}
+                )
             try:
                 matched_pair_count = int(probe_summary.get("matched_pair_count", 0))
             except Exception:
@@ -16341,10 +16401,17 @@ def fit_geometry_parameters(
                 except Exception:
                     pass
 
+            current_point_match_summary = None
+            if isinstance(last_live_update_payload, Mapping) and isinstance(
+                last_live_update_payload.get("point_match_summary"),
+                Mapping,
+            ):
+                current_point_match_summary = last_live_update_payload["point_match_summary"]
             _maybe_abort_manual_point_fit(
                 np.asarray(x_trial, dtype=float),
                 residual_arr,
                 eval_count=eval_count,
+                point_match_summary=current_point_match_summary,
             )
 
             last_emit_eval = int(progress_state.get("last_emit_eval", 0))
@@ -16437,15 +16504,20 @@ def fit_geometry_parameters(
         names: Optional[Sequence[str]] = None,
         base_params: Optional[Mapping[str, object]] = None,
     ) -> np.ndarray:
+        nonlocal last_live_update_payload
         local = _apply_trial_params(
             theta_trial,
             names=names,
             base_params=base_params,
         )
         if point_match_mode:
-            residual_arr, _, _ = point_match_evaluator(
+            residual_arr, _, point_match_summary = point_match_evaluator(
                 local,
                 collect_diagnostics=False,
+            )
+            last_live_update_payload = _point_match_live_payload(
+                local,
+                point_match_summary,
             )
             return np.asarray(residual_arr, dtype=float)
 
@@ -16563,6 +16635,7 @@ def fit_geometry_parameters(
             residual_arr: np.ndarray,
             *,
             eval_count: int,
+            point_match_summary: Mapping[str, object] | None = None,
         ) -> None:
             if not manual_fail_fast_enabled:
                 return
@@ -16577,14 +16650,23 @@ def fit_geometry_parameters(
             progress_state["manual_fail_fast_last_probe_eval"] = int(eval_count)
 
             x_trial = _physical_from_u(specs, np.asarray(u_trial, dtype=float))
-            local_trial = _apply_trial_params(x_trial)
-            _, _, point_match_summary = point_match_evaluator(
-                local_trial,
-                collect_diagnostics=False,
-            )
-            probe_summary = (
-                dict(point_match_summary) if isinstance(point_match_summary, Mapping) else {}
-            )
+            if isinstance(point_match_summary, Mapping):
+                probe_summary = dict(point_match_summary)
+            else:
+                local_trial = _apply_trial_params(
+                    x_trial,
+                    names=[spec.name for spec in specs],
+                    base_params=base_params,
+                )
+                _, _, point_match_summary = point_match_evaluator(
+                    local_trial,
+                    collect_diagnostics=False,
+                )
+                probe_summary = (
+                    dict(point_match_summary)
+                    if isinstance(point_match_summary, Mapping)
+                    else {}
+                )
             try:
                 matched_pair_count = int(probe_summary.get("matched_pair_count", 0))
             except Exception:
@@ -16648,8 +16730,9 @@ def fit_geometry_parameters(
             )
 
         def _tracked_solver_residual(u_trial: np.ndarray) -> np.ndarray:
+            u_trial_arr = np.asarray(u_trial, dtype=float)
             residual_arr = _residual_u(
-                np.asarray(u_trial, dtype=float),
+                u_trial_arr,
                 specs=specs,
                 include_priors=include_priors,
                 base_params=base_params,
@@ -16674,10 +16757,41 @@ def fit_geometry_parameters(
                 progress_state["best_cost_seen"] = float(current_cost)
                 progress_state["best_weighted_rms_px"] = float(current_weighted_rms)
 
+            if point_match_mode and callable(live_update_callback):
+                x_trial = _physical_from_u(specs, u_trial_arr)
+                live_payload = (
+                    dict(last_live_update_payload)
+                    if isinstance(last_live_update_payload, Mapping)
+                    else {}
+                )
+                live_payload.update(
+                    {
+                        "evaluation_count": int(eval_count),
+                        "current_cost": float(current_cost),
+                        "best_cost": float(progress_state.get("best_cost_seen", np.nan)),
+                        "weighted_rms_px": float(current_weighted_rms),
+                        "improved": bool(improved),
+                        "var_names": [str(spec.name) for spec in specs],
+                        "x_trial": np.asarray(x_trial, dtype=float).tolist(),
+                        "u_trial": u_trial_arr.tolist(),
+                    }
+                )
+                try:
+                    live_update_callback(live_payload)
+                except Exception:
+                    pass
+
+            current_point_match_summary = None
+            if isinstance(last_live_update_payload, Mapping) and isinstance(
+                last_live_update_payload.get("point_match_summary"),
+                Mapping,
+            ):
+                current_point_match_summary = last_live_update_payload["point_match_summary"]
             _maybe_abort_manual_point_fit_u(
-                np.asarray(u_trial, dtype=float),
+                u_trial_arr,
                 residual_arr,
                 eval_count=eval_count,
+                point_match_summary=current_point_match_summary,
             )
 
             last_emit_eval = int(progress_state.get("last_emit_eval", 0))

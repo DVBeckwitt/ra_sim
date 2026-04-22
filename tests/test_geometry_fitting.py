@@ -4240,6 +4240,112 @@ def test_fit_geometry_parameters_pixel_path_keeps_fixed_source_row_assignments(
     assert {int(entry["overlay_match_index"]) for entry in result.point_match_diagnostics} == {3, 7}
 
 
+def test_fixed_correspondence_summary_reports_real_branch_mismatch(monkeypatch):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [
+                    [1.0, 4.0, 4.0, -1.0, 1.0, 0.0, 0.0],
+                    [1.0, 8.0, 8.0, 1.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 12
+    local = _base_params(image_size, optics_mode=1)
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="d0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+    )
+    base_correspondence = {
+        "hkl": (1, 0, 0),
+        "measured_x": 4.0,
+        "measured_y": 4.0,
+        "resolution_kind": "fixed_source",
+        "frozen_locator_kind": "local_branch",
+        "frozen_table_namespace": "current_full_local",
+        "frozen_table_index": 0,
+        "frozen_branch_index": 0,
+    }
+
+    _residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_fixed_correspondences(
+        local,
+        dataset_ctx,
+        [dict(base_correspondence, source_branch_index=1)],
+        image_size=image_size,
+        weighted_matching=False,
+        solver_f_scale=1.0,
+        missing_pair_penalty=10.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert summary["matched_pair_count"] == 1
+    assert summary["branch_mismatch_count"] == 1
+    assert diagnostics[0]["source_branch_index"] == 1
+    assert diagnostics[0]["resolved_peak_index"] == 0
+    assert diagnostics[0]["branch_mismatch"] is True
+
+    row_correspondence = dict(
+        base_correspondence,
+        frozen_locator_kind="local_row",
+        frozen_row_index=0,
+    )
+    _residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_fixed_correspondences(
+        local,
+        dataset_ctx,
+        [dict(row_correspondence, source_branch_index=1)],
+        image_size=image_size,
+        weighted_matching=False,
+        solver_f_scale=1.0,
+        missing_pair_penalty=10.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert summary["matched_pair_count"] == 1
+    assert summary["branch_mismatch_count"] == 1
+    assert diagnostics[0]["correspondence_resolution_reason"] == "resolved_source_row"
+    assert diagnostics[0]["source_branch_index"] == 1
+    assert diagnostics[0]["resolved_peak_index"] == 0
+    assert diagnostics[0]["branch_mismatch"] is True
+
+    _residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_fixed_correspondences(
+        local,
+        dataset_ctx,
+        [dict(base_correspondence, source_branch_index=0)],
+        image_size=image_size,
+        weighted_matching=False,
+        solver_f_scale=1.0,
+        missing_pair_penalty=10.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert summary["matched_pair_count"] == 1
+    assert summary["branch_mismatch_count"] == 0
+    assert diagnostics[0]["branch_mismatch"] is False
+
+
 def test_fit_geometry_parameters_pixel_path_probes_out_of_flat_start_region(
     monkeypatch,
 ):
@@ -7710,3 +7816,67 @@ def test_fit_geometry_parameters_emits_normalized_multistart_status_updates(
     )
     assert any("identity seed" in msg and "cost=" in msg for msg in status_messages)
     assert any("complete" in msg and "metric=angle" in msg for msg in status_messages)
+
+
+def test_fit_geometry_parameters_u_solver_live_update_reuses_point_summary(
+    monkeypatch,
+):
+    calls = {"process": 0}
+    live_updates: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        calls["process"] += 1
+        return _fake_process_peaks(*args, **kwargs)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        before = int(calls["process"])
+        fun = np.asarray(residual_fn(x), dtype=float)
+        assert int(calls["process"]) == before + 1
+        return opt.OptimizeResult(
+            x=x,
+            fun=fun,
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        refinement_config={
+            "solver": {"restarts": 0, "weighted_matching": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+        },
+        live_update_callback=lambda payload: live_updates.append(dict(payload)),
+    )
+
+    assert result.success
+    assert live_updates
+    assert any("u_trial" in payload for payload in live_updates)
+    assert any(
+        int(payload.get("point_match_summary", {}).get("matched_pair_count", 0)) == 1
+        for payload in live_updates
+    )
+    assert any(
+        int(payload.get("point_match_summary", {}).get("branch_mismatch_count", -1)) == 0
+        for payload in live_updates
+    )

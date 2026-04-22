@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import hashlib
+import subprocess
+import sys
 import time
 from dataclasses import replace
 import numpy as np
@@ -9,7 +11,12 @@ import pytest
 from types import SimpleNamespace
 
 from ra_sim.fitting import optimization as opt
-from ra_sim.gui import geometry_fit, geometry_overlay, manual_geometry
+from ra_sim.gui import (
+    geometry_fit,
+    geometry_fit_coordinate_diagnostics as coord_diag,
+    geometry_overlay,
+    manual_geometry,
+)
 from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 
 
@@ -1199,6 +1206,32 @@ def _load_new4_ladder_module():
     return module
 
 
+def _required_new4_local_headless_paths(state_path: Path) -> list[Path]:
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state = payload.get("state", {}) if isinstance(payload, dict) else {}
+    files = state.get("files", {}) if isinstance(state, dict) else {}
+    if not isinstance(files, dict):
+        return []
+
+    paths: list[Path] = []
+    background_files = files.get("background_files", [])
+    if isinstance(background_files, list):
+        paths.extend(Path(str(path)) for path in background_files if path)
+    for key in ("primary_cif_path", "secondary_cif_path"):
+        path = files.get(key)
+        if path:
+            paths.append(Path(str(path)))
+    return paths
+
+
+def _missing_new4_local_headless_paths(state_path: Path) -> list[Path]:
+    return [
+        path
+        for path in _required_new4_local_headless_paths(state_path)
+        if not path.exists()
+    ]
+
+
 def _write_probe_state(
     tmp_path,
     *,
@@ -2035,6 +2068,660 @@ def _build_saved_state_point_provider_report_dataset():
             }
         ],
     )
+
+
+def _coordinate_visual_capture():
+    return {
+        "visual_truth_available": True,
+        "plotting_metadata": {"image_shape": [100, 100], "y_axis_inverted": True},
+        "pairs": [
+            {
+                "pair_index": 0,
+                "pair_id": "pair-a",
+                "hkl": [0, 0, 1],
+                "source_branch_index": 0,
+                "q_group_key": ["q", "a"],
+                "visual_background_point": [10.0, 20.0],
+                "visual_background_frame": "display",
+                "visual_simulated_point": [14.0, 25.0],
+                "visual_simulated_frame": "display",
+            },
+            {
+                "pair_index": 1,
+                "pair_id": "pair-b",
+                "hkl": [0, 0, 2],
+                "source_branch_index": 1,
+                "q_group_key": ["q", "b"],
+                "visual_background_point": [30.0, 40.0],
+                "visual_background_frame": "display",
+                "visual_simulated_point": [36.0, 48.0],
+                "visual_simulated_frame": "display",
+            },
+        ],
+    }
+
+
+def _coordinate_surface_rows(
+    *,
+    background_offset=(0.0, 0.0),
+    simulated_offset=(0.0, 0.0),
+    frame="display",
+    order=(0, 1),
+    xy_swap=False,
+    y_flip_height=None,
+):
+    rows = []
+    visual_pairs = _coordinate_visual_capture()["pairs"]
+    for source_idx, visual in enumerate([visual_pairs[idx] for idx in order]):
+        bg = list(visual["visual_background_point"])
+        sim = list(visual["visual_simulated_point"])
+        if xy_swap:
+            bg = [bg[1], bg[0]]
+            sim = [sim[1], sim[0]]
+        if y_flip_height is not None:
+            bg = [bg[0], float(y_flip_height) - bg[1]]
+            sim = [sim[0], float(y_flip_height) - sim[1]]
+        bg = [bg[0] + float(background_offset[0]), bg[1] + float(background_offset[1])]
+        sim = [sim[0] + float(simulated_offset[0]), sim[1] + float(simulated_offset[1])]
+        rows.append(
+            {
+                "pair_index": int(source_idx),
+                "pair_id": visual["pair_id"],
+                "hkl": visual["hkl"],
+                "source_branch_index": visual["source_branch_index"],
+                "q_group_key": visual["q_group_key"],
+                "background_point": bg,
+                "background_frame": frame,
+                "simulated_point": sim,
+                "simulated_frame": frame,
+            }
+        )
+    return rows
+
+
+def _all_coordinate_surfaces(**surface_overrides):
+    exact_rows = _coordinate_surface_rows()
+    surfaces = {
+        "provider_pairs": [dict(row) for row in exact_rows],
+        "manual_point_pairs": [dict(row) for row in exact_rows],
+        "initial_pairs_display": [dict(row) for row in exact_rows],
+        "measured_for_fit": [dict(row) for row in exact_rows],
+        'spec["measured_peaks"]': [dict(row) for row in exact_rows],
+    }
+    surfaces.update(surface_overrides)
+    return surfaces
+
+
+def test_visual_backend_parity_detects_exact_match() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(),
+    )
+
+    assert report["ok"] is True
+    assert report["classification"] == "visual_backend_parity_ok"
+
+
+def test_visual_backend_parity_detects_provider_mismatch() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(
+            provider_pairs=_coordinate_surface_rows(background_offset=(2.0, 0.0)),
+        ),
+    )
+
+    assert report["first_mismatching_surface"] == "provider_pairs"
+    assert report["recommended_fix_location"] == "provider_pair_construction"
+
+
+def test_visual_backend_parity_detects_dataset_mismatch() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(
+            manual_point_pairs=_coordinate_surface_rows(simulated_offset=(0.0, 3.0)),
+        ),
+    )
+
+    assert report["first_mismatching_surface"] == "manual_point_pairs"
+    assert report["recommended_fix_location"] == "build_geometry_manual_fit_dataset"
+
+
+def test_visual_backend_parity_detects_optimizer_request_mismatch() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(
+            **{
+                "optimizer_request.measured_peaks": _coordinate_surface_rows(
+                    background_offset=(0.0, -2.0)
+                )
+            }
+        ),
+    )
+
+    assert report["first_mismatching_surface"] == "optimizer_request.measured_peaks"
+    assert report["recommended_fix_location"] == "GeometryFitSolverRequest_construction"
+
+
+def test_coordinate_diagnostic_detects_optimizer_request_mismatch() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(
+            **{
+                "optimizer_request.measured_peaks": _coordinate_surface_rows(
+                    background_offset=(0.0, -2.0)
+                )
+            }
+        ),
+    )
+
+    assert report["first_mismatching_surface"] == "optimizer_request.measured_peaks"
+    assert report["recommended_fix_location"] == "GeometryFitSolverRequest_construction"
+    assert report["optimizer_request_compared"] is True
+    assert report["optimizer_request_visual_parity_ok"] is False
+
+
+def test_visual_backend_parity_detects_optimizer_request_pair_order_mismatch() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(
+            **{
+                "optimizer_request.measured_peaks": _coordinate_surface_rows(
+                    order=(1, 0)
+                )
+            }
+        ),
+    )
+
+    request_result = report["surface_results"]["optimizer_request.measured_peaks"]
+    assert request_result["ordered_pairs_match"] is False
+    assert request_result["unordered_pairs_match"] is True
+    assert report["first_mismatching_surface"] == "optimizer_request.measured_peaks"
+    assert report["recommended_fix_location"] == "GeometryFitSolverRequest_construction"
+
+
+def test_coordinate_transform_diagnosis_detects_xy_swap() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(provider_pairs=_coordinate_surface_rows(xy_swap=True)),
+    )
+
+    best = report["best_transform_by_surface"]["provider_pairs"]
+    assert best["best_transform_name"] in {"swap_axes", "row_col_swap"}
+    assert best["transform_name"] == best["best_transform_name"]
+    assert report["classification"] == "axis_swap_detected"
+
+
+def test_coordinate_transform_diagnosis_detects_y_flip() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(
+            provider_pairs=_coordinate_surface_rows(y_flip_height=100.0),
+        ),
+    )
+
+    best = report["best_transform_by_surface"]["provider_pairs"]
+    assert best["best_transform_name"] in {"flip_y", "top_left_vs_bottom_left_origin"}
+    assert best["transform_name"] == best["best_transform_name"]
+    assert report["classification"] == "origin_flip_detected"
+
+
+def test_coordinate_transform_diagnosis_detects_constant_translation() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(
+            provider_pairs=_coordinate_surface_rows(
+                background_offset=(5.0, -3.0),
+                simulated_offset=(5.0, -3.0),
+            ),
+        ),
+    )
+
+    assert report["classification"] == "constant_translation_detected"
+    assert (
+        report["best_transform_by_surface"]["provider_pairs"]["best_transform_name"]
+        == "constant_translation"
+    )
+
+
+def test_coordinate_transform_schema_contains_best_transform_name() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(provider_pairs=_coordinate_surface_rows(xy_swap=True)),
+    )
+
+    best = report["best_transform_by_surface"]["provider_pairs"]
+    assert "best_transform_name" in best
+    assert best["best_transform_name"] == best["transform_name"]
+
+
+def test_visual_backend_parity_detects_pair_order_mismatch() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(provider_pairs=_coordinate_surface_rows(order=(1, 0))),
+    )
+
+    provider_result = report["surface_results"]["provider_pairs"]
+    assert provider_result["ordered_pairs_match"] is False
+    assert provider_result["unordered_pairs_match"] is True
+    assert report["first_mismatching_surface"] == "provider_pairs"
+    assert report["classification"] == "pair_order_mismatch"
+    assert (
+        report["best_transform_by_surface"]["provider_pairs"]["classification"]
+        == "not_scored_pair_order_mismatch"
+    )
+    assert report["best_transform_by_surface"]["provider_pairs"]["best_transform_name"] is None
+    assert report["best_transform_by_surface"]["provider_pairs"]["transform_name"] is None
+
+
+def test_visual_backend_parity_detects_frame_mismatch() -> None:
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        _all_coordinate_surfaces(provider_pairs=_coordinate_surface_rows(frame="detector_native")),
+    )
+
+    provider_result = report["surface_results"]["provider_pairs"]
+    assert provider_result["frame_mismatch_count"] > 0
+    assert provider_result["passes_visual_parity"] is False
+    assert report["classification"] == "frame_mismatch_detected"
+
+
+def test_visual_backend_parity_fails_missing_required_surface() -> None:
+    surfaces = _all_coordinate_surfaces()
+    surfaces.pop("measured_for_fit")
+
+    report = coord_diag.build_coordinate_parity_diagnosis(
+        _coordinate_visual_capture(),
+        surfaces,
+    )
+
+    assert report["ok"] is False
+    assert report["missing_required_surfaces"] == ["measured_for_fit"]
+    assert report["surface_results"]["measured_for_fit"]["available"] is False
+    assert report["first_mismatching_surface"] == "measured_for_fit"
+    assert report["recommended_fix_location"] == "measured_for_fit_construction"
+
+
+def test_visual_capture_is_not_backend_reconstruction() -> None:
+    visual_records = [
+        {
+            "pair_index": 0,
+            "pair_id": "pair-a",
+            "hkl": [0, 0, 1],
+            "source_branch_index": 0,
+            "q_group_key": ["q", "a"],
+            "bg_display": [10.0, 20.0],
+            "sim_display": [14.0, 25.0],
+        }
+    ]
+    nonsense_provider_rows = [
+        {
+            "pair_index": 0,
+            "pair_id": "pair-a",
+            "background_point": [999.0, 999.0],
+            "simulated_point": [1000.0, 1000.0],
+        }
+    ]
+
+    capture = coord_diag.collect_geometry_visual_pair_positions(visual_records)
+
+    assert nonsense_provider_rows[0]["background_point"] == [999.0, 999.0]
+    assert capture["visual_truth_available"] is True
+    assert capture["pairs"][0]["visual_background_point"] == [10.0, 20.0]
+    assert capture["pairs"][0]["visual_simulated_point"] == [14.0, 25.0]
+
+
+def test_new4_visual_capture_path_uses_manual_render_wrapper_not_saved_builder(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def _fail_saved_builder(*_args, **_kwargs):
+        raise AssertionError("saved-field visual builder must not be used")
+
+    monkeypatch.setattr(
+        coord_diag,
+        "build_visual_overlay_records_from_saved_entries",
+        _fail_saved_builder,
+    )
+
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+    )
+
+    assert report["visual_truth_available"] is True
+    assert report["visual_capture_path_confirmed"] is True
+    assert "render_current_geometry_manual_pairs" in report["visual_capture_path"]
+
+
+def test_diagnostic_does_not_call_optimizer(monkeypatch, tmp_path) -> None:
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("optimizer must not run")
+
+    monkeypatch.setattr(geometry_fit, "solve_geometry_fit_request", _fail)
+    monkeypatch.setattr(opt, "least_squares", _fail)
+
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+    )
+
+    assert report["optimizer_called"] is False
+    assert report["least_squares_called"] is False
+
+
+def _new4_visual_rows_for_optimizer_request() -> list[dict[str, object]]:
+    state = coord_diag.load_gui_state_payload(
+        Path("artifacts/geometry_fit_gui_states/new4.json")
+    )
+    entries = coord_diag.saved_entries_for_background(state, background_index=0)
+    overlay = coord_diag.capture_manual_geometry_overlay_input_from_render_path(
+        entries,
+        background_index=0,
+    )
+    visual = coord_diag.collect_geometry_visual_pair_positions(
+        overlay["pairs"],
+        max_display_markers=int(overlay["max_display_markers"]),
+    )
+    rows = []
+    for pair in visual["pairs"]:
+        rows.append(
+            {
+                "pair_index": pair["pair_index"],
+                "pair_id": pair["pair_id"],
+                "hkl": pair["hkl"],
+                "source_branch_index": pair["source_branch_index"],
+                "q_group_key": pair["q_group_key"],
+                "x": pair["visual_background_point"][0],
+                "y": pair["visual_background_point"][1],
+                "simulated_point": pair["visual_simulated_point"],
+                "background_frame": pair["visual_background_frame"],
+                "simulated_frame": pair["visual_simulated_frame"],
+            }
+        )
+    return rows
+
+
+def test_coordinate_diagnostic_compares_optimizer_request_when_available(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    rows = _new4_visual_rows_for_optimizer_request()
+
+    def _fake_capture(*, state_path, background_index):
+        del state_path, background_index
+        return {
+            "rows": rows,
+            "optimizer_entrypoints_called": [],
+            "optimizer_request_missing_fields": [],
+            "optimizer_request_missing_fields_by_row": [],
+            "optimizer_request_capture_error": None,
+        }
+
+    monkeypatch.setattr(
+        coord_diag,
+        "capture_optimizer_request_rows_from_solver_request",
+        _fake_capture,
+    )
+
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+        include_optimizer_request=True,
+    )
+
+    assert report["optimizer_request_compared"] is True
+    assert report["optimizer_request_pair_count"] == 7
+    assert report["optimizer_request_visual_parity_ok"] is True
+    assert report["optimizer_called"] is False
+    assert report["least_squares_called"] is False
+    assert report["optimizer_entrypoints_called"] == []
+    assert report["state_hash_unchanged"] is True
+
+
+def test_coordinate_diagnostic_optimizer_request_capture_failure_is_incomplete_not_frame_mismatch(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    capture_error = "Failed to capture headless execution setup context."
+
+    def _fake_capture(*, state_path, background_index):
+        del state_path, background_index
+        return {
+            "rows": [],
+            "optimizer_entrypoints_called": [],
+            "optimizer_request_missing_fields": [],
+            "optimizer_request_missing_fields_by_row": [],
+            "optimizer_request_capture_error": capture_error,
+        }
+
+    monkeypatch.setattr(
+        coord_diag,
+        "capture_optimizer_request_rows_from_solver_request",
+        _fake_capture,
+    )
+
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+        include_optimizer_request=True,
+    )
+
+    assert report["ok"] is False
+    assert (
+        report["classification"]
+        == "diagnostic_incomplete_optimizer_request_unavailable"
+    )
+    assert report["optimizer_request_compared"] is False
+    assert report["optimizer_request_pair_count"] == 0
+    assert report["optimizer_request_visual_parity_ok"] is False
+    assert (
+        report["optimizer_request_unavailable_reason"]
+        == "solver_request_capture_failed"
+    )
+    assert report["optimizer_request_capture_error"] == capture_error
+    assert report["first_mismatching_surface"] is None
+    assert report["recommended_fix_location"] == "optimizer_request_capture"
+    assert "optimizer_request.measured_peaks" not in report["surfaces_compared"]
+    assert "optimizer_request.measured_peaks" not in report["surface_results"]
+    assert all(
+        result.get("frame_mismatch_count", 0) == 0
+        for result in report["surface_results"].values()
+    )
+
+
+def test_coordinate_diagnostic_without_optimizer_request_still_ok_for_dataset_surfaces(
+    tmp_path,
+) -> None:
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+        include_optimizer_request=False,
+    )
+
+    assert report["ok"] is True
+    assert report["classification"] == "visual_backend_parity_ok"
+    assert report["optimizer_request_compared"] is False
+    assert report["optimizer_request_unavailable_reason"] == "not_requested"
+    assert "optimizer_request.measured_peaks" not in report["surfaces_compared"]
+
+
+def test_coordinate_diagnostic_optimizer_request_path_does_not_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("solve path must not run")
+
+    monkeypatch.setattr(opt, "least_squares", _fail)
+    monkeypatch.setattr(geometry_fit, "solve_geometry_fit_request", _fail)
+
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+        include_optimizer_request=True,
+    )
+
+    assert report["optimizer_called"] is False
+    assert report["least_squares_called"] is False
+    assert report["optimizer_entrypoints_called"] == []
+    assert report["state_hash_unchanged"] is True
+
+
+def test_new4_diagnostic_rung_absent_does_not_fail_optimizer_optional(tmp_path) -> None:
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+        rung_report_path=tmp_path / "missing_rung_01_objective_dry_run.json",
+    )
+
+    assert report["optimizer_request_compared"] is False
+    assert report["optimizer_request_unavailable_reason"] == "not_requested"
+    assert "optimizer_request.measured_peaks" not in report["surfaces_compared"]
+
+
+def test_new4_diagnostic_rung_lacks_coordinates_reports_reason(tmp_path) -> None:
+    rung_path = tmp_path / "rung_01_objective_dry_run.json"
+    rung_path.write_text(
+        json.dumps(
+            {
+                "optimizer_request_pair_handoff": [
+                    {"pair_index": 0, "hkl": [0, 0, 3]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+        rung_report_path=rung_path,
+    )
+
+    assert report["optimizer_request_compared"] is False
+    assert report["optimizer_request_unavailable_reason"] == "not_requested"
+
+
+def test_new4_diagnostic_rung_rows_do_not_compare_without_optimizer_flag(
+    tmp_path,
+) -> None:
+    state = coord_diag.load_gui_state_payload(
+        Path("artifacts/geometry_fit_gui_states/new4.json")
+    )
+    entries = coord_diag.saved_entries_for_background(state, background_index=0)
+    overlay = coord_diag.capture_manual_geometry_overlay_input_from_render_path(
+        entries,
+        background_index=0,
+    )
+    visual = coord_diag.collect_geometry_visual_pair_positions(
+        overlay["pairs"],
+        max_display_markers=int(overlay["max_display_markers"]),
+    )
+    rows = []
+    for pair in visual["pairs"]:
+        rows.append(
+            {
+                "pair_index": pair["pair_index"],
+                "pair_id": pair["pair_id"],
+                "hkl": pair["hkl"],
+                "source_branch_index": pair["source_branch_index"],
+                "q_group_key": pair["q_group_key"],
+                "x": pair["visual_background_point"][0],
+                "y": pair["visual_background_point"][1],
+                "simulated_point": pair["visual_simulated_point"],
+            }
+        )
+    rung_path = tmp_path / "rung_01_objective_dry_run.json"
+    rung_path.write_text(
+        json.dumps({"optimizer_request_measured_peaks": rows}),
+        encoding="utf-8",
+    )
+
+    report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
+        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        provider_report_path=Path(
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
+        ),
+        background_index=0,
+        output_dir=tmp_path / "new4",
+        rung_report_path=rung_path,
+    )
+
+    assert report["optimizer_request_compared"] is False
+    assert "optimizer_request.measured_peaks" not in report["surfaces_compared"]
+
+
+def test_new4_visual_backend_coordinate_report_writes_files(tmp_path) -> None:
+    script = Path("scripts/debug/diagnose_new4_visual_backend_coordinates.py")
+    output_dir = tmp_path / "new4"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--state",
+            "artifacts/geometry_fit_gui_states/new4.json",
+            "--provider-report",
+            "artifacts/geometry_fit_gui_states/new4_point_provider_report.json",
+            "--background-index",
+            "0",
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    json_path = output_dir / "coordinate_transform_diagnosis.json"
+    csv_path = output_dir / "coordinate_transform_pairs.csv"
+    overlay_path = output_dir / "coordinate_transform_overlay.png"
+    vectors_path = output_dir / "coordinate_transform_vectors.png"
+
+    for path in (json_path, csv_path, overlay_path, vectors_path):
+        assert path.exists()
+        assert path.stat().st_size > 0
+
+    report = json.loads(json_path.read_text(encoding="utf-8"))
+    assert set(coord_diag.REQUIRED_SURFACES).issubset(set(report["surfaces_compared"]))
+    assert report["optimizer_request_compared"] is False
+    assert report["pairs"]
+    first_pair = report["pairs"][0]
+    assert "visual_background_point" in first_pair
+    assert "visual_simulated_point" in first_pair
+    assert first_pair["surfaces"]
 
 
 def test_canonical_geometry_source_identity_normalizes_tuple_and_list_fields() -> None:
@@ -3139,37 +3826,16 @@ def _install_fast_new4_ladder_stubs(monkeypatch, ladder):
 
     def _sensitivity(_context, *, output_path, max_nfev, **kwargs):
         del _context, max_nfev, kwargs
-        payload = {
-            "rung": 2,
-            "rung_name": "sensitivity_scan",
-            "status": "ok",
-            "pass": True,
-            "residual_probe_called": True,
-            "least_squares_called": False,
-            "optimizer_solve_called": False,
-            "active_parameters": ["center_x", "center_y"],
-            "near_zero_parameters": [],
-            "unsafe_parameters": [],
-        }
+        payload = _green_rung2_report(active_params=("center_x", "center_y"))
+        payload["active_parameters"] = list(payload["active_params"])
+        payload["near_zero_parameters"] = []
+        payload["unsafe_parameters"] = []
         ladder._write_json(output_path, payload)
         return payload
 
     def _solver_rung(*, active_names, output_path, rung, rung_name, **_kwargs):
-        payload = {
-            "rung": rung,
-            "rung_name": rung_name,
-            "status": "ok",
-            "pass": True,
-            "active_params": list(active_names),
-            "candidate_param_names": list(active_names),
-            "matched_pair_count": 7,
-            "missing_pair_count": 0,
-            "branch_mismatch_count": 0,
-            "before_rms_px": 1.0,
-            "after_rms_px": 1.0,
-            "before_max_error_px": 2.0,
-            "after_max_error_px": 2.0,
-        }
+        payload = _green_one_param_report(active_names)
+        payload.update({"rung": rung, "rung_name": rung_name})
         ladder._write_json(output_path, payload)
         return payload
 
@@ -3206,6 +3872,7 @@ def _sensitivity_eval(
     step_applied: float = 0.1,
     clipped: bool = False,
     point_summary: dict[str, object] | None = None,
+    include_point_summary: bool = True,
 ) -> dict[str, object]:
     payload = {
         "label": label,
@@ -3217,8 +3884,9 @@ def _sensitivity_eval(
         "finite": bool(finite),
         "step_applied": float(step_applied),
         "clipped": bool(clipped),
-        "point_match_summary": point_summary or _sensitivity_point_summary(),
     }
+    if include_point_summary:
+        payload["point_match_summary"] = point_summary or _sensitivity_point_summary()
     return payload
 
 
@@ -3290,10 +3958,14 @@ def _green_rung1_report() -> dict[str, object]:
         "status": "ok",
         "pass": True,
         "provider_pair_count": 7,
+        "dataset_pair_count": 7,
+        "optimizer_request_pair_count": 7,
         "fixed_source_pair_count": 7,
         "fallback_row_count": 0,
         "fixed_source_resolution_fallback_count": 0,
         "missing_fixed_source_count": 0,
+        "provider_to_optimizer_identity_match": True,
+        "provider_to_optimizer_point_match": True,
         "fallback_entry_count": 0,
         "matched_pair_count": 7,
         "missing_pair_count": 0,
@@ -3302,6 +3974,132 @@ def _green_rung1_report() -> dict[str, object]:
         "least_squares_called": False,
         "optimizer_solve_called": False,
     }
+
+
+def _green_rung2_report(
+    *,
+    active_params=("center_x",),
+    near_zero_params=(),
+    non_finite_params=(),
+    unsafe_params=(),
+) -> dict[str, object]:
+    active = [str(name) for name in active_params]
+    entries = [
+        {
+            "param_name": name,
+            "name": name,
+            "status": "active",
+            "classification": "active",
+            "provider_pair_count": 7,
+            "dataset_pair_count": 7,
+            "optimizer_request_pair_count": 7,
+            "fixed_source_pair_count": 7,
+            "fallback_row_count": 0,
+            "fixed_source_resolution_fallback_count": 0,
+            "missing_fixed_source_count": 0,
+            "fixed_source_resolved_count": 7,
+            "fallback_entry_count": 0,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "provider_to_optimizer_identity_match": True,
+            "provider_to_optimizer_point_match": True,
+        }
+        for name in active
+    ]
+    return {
+        "rung": 2,
+        "rung_name": "sensitivity_scan",
+        "status": "ok",
+        "pass": True,
+        "provider_pair_count": 7,
+        "dataset_pair_count": 7,
+        "optimizer_request_pair_count": 7,
+        "fixed_source_pair_count": 7,
+        "fallback_row_count": 0,
+        "fixed_source_resolution_fallback_count": 0,
+        "missing_fixed_source_count": 0,
+        "fixed_source_resolved_count": 7,
+        "fallback_entry_count": 0,
+        "matched_pair_count": 7,
+        "missing_pair_count": 0,
+        "branch_mismatch_count": 0,
+        "provider_to_optimizer_identity_match": True,
+        "provider_to_optimizer_point_match": True,
+        "residual_probe_called": True,
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
+        "active_params": active,
+        "near_zero_params": [str(name) for name in near_zero_params],
+        "non_finite_params": [str(name) for name in non_finite_params],
+        "unsafe_params": [str(name) for name in unsafe_params],
+        "active_param_count": len(active),
+        "near_zero_param_count": len(near_zero_params),
+        "non_finite_param_count": len(non_finite_params),
+        "unsafe_param_count": len(unsafe_params),
+        "state_hash_unchanged": True,
+        "params": entries,
+    }
+
+
+def _green_one_param_report(active_names, *, fallback_row_count=0) -> dict[str, object]:
+    name = str(active_names[0])
+    return {
+        "rung": 3,
+        "rung_name": f"one_param_{name}",
+        "status": "ok",
+        "pass": True,
+        "param_name": name,
+        "active_params": [name],
+        "var_names": [name],
+        "candidate_param_names": [name],
+        "before_rms_px": 10.0,
+        "after_rms_px": 9.9,
+        "before_max_error_px": 20.0,
+        "after_max_error_px": 19.5,
+        "parameter_deltas": [
+            {
+                "name": name,
+                "start": 1.0,
+                "final": 1.1,
+                "delta": 0.1,
+                "lower": 0.0,
+                "upper": 2.0,
+                "within_bounds": True,
+            }
+        ],
+        "nfev": 3,
+        "elapsed_seconds": 0.1,
+        "elapsed_s": 0.1,
+        "timeout_seconds": 120.0,
+        "timeout_s": 120.0,
+        "rejection_reason": "",
+        "fixed_source_pair_count": 7,
+        "fallback_row_count": int(fallback_row_count),
+        "fixed_source_resolution_fallback_count": 0,
+        "missing_fixed_source_count": 0,
+        "fixed_source_resolved_count": 7,
+        "fallback_entry_count": 0,
+        "matched_pair_count": 7,
+        "missing_pair_count": 0,
+        "branch_mismatch_count": 0,
+        "provider_to_optimizer_identity_match": True,
+        "provider_to_optimizer_point_match": True,
+        "least_squares_called": True,
+        "optimizer_solve_called": True,
+        "point_match_summary": {},
+    }
+
+
+def _install_green_provider_guard(monkeypatch, ladder, calls=None) -> None:
+    def _green_guard(*, output_path, **_kwargs):
+        if calls is not None:
+            calls.append(str(output_path))
+        payload = _green_new4_ladder_provider_payload()
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "run_provider_guard", _green_guard)
 
 
 def test_new4_ladder_runs_provider_guard_before_optimizer(monkeypatch, tmp_path) -> None:
@@ -3477,6 +4275,148 @@ def test_new4_ladder_aborts_before_sensitivity_when_rung1_not_green(
     assert not (tmp_path / "rung1_fail" / "rung_02_sensitivity_scan.json").exists()
 
 
+def test_new4_ladder_sensitivity_direct_call_aborts_on_bad_rung1(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    output_path = tmp_path / "rung_02_sensitivity_scan.json"
+    bad_rung1 = dict(_green_rung1_report())
+    bad_rung1.update(
+        {
+            "status": "fail",
+            "pass": False,
+            "provider_pair_count": "bad",
+            "provider_to_optimizer_identity_match": "false",
+            "provider_to_optimizer_point_match": "false",
+            "fallback_row_count": 1,
+            "fixed_source_resolution_fallback_count": 1,
+        }
+    )
+
+    def _probe_boundary(*_args, **_kwargs):
+        raise AssertionError("sensitivity probe must not run after bad rung 1")
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _probe_boundary)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=output_path,
+        max_nfev=20,
+        rung_1_report=bad_rung1,
+        state_path=state_path,
+    )
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert report == written
+    assert report["status"] == "aborted"
+    assert report["pass"] is False
+    assert report["reason"] == "rung_1_not_green"
+    assert "rung_1_status_not_ok" in report["rung_1_failures"]
+    assert "provider_pair_count_-999999_expected_7" in report["rung_1_failures"]
+    assert (
+        "provider_to_optimizer_identity_match_false_expected_True"
+        in report["rung_1_failures"]
+    )
+    assert (
+        "provider_to_optimizer_point_match_false_expected_True"
+        in report["rung_1_failures"]
+    )
+    assert report["provider_pair_count"] == 0
+    assert report["provider_to_optimizer_identity_match"] is False
+    assert report["provider_to_optimizer_point_match"] is False
+    assert report["residual_probe_called"] is False
+    assert report["least_squares_called"] is False
+    assert report["optimizer_solve_called"] is False
+    assert report["params"] == []
+
+
+def test_new4_ladder_sensitivity_rejects_stale_green_rung1(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    output_path = tmp_path / "rung_02_sensitivity_scan.json"
+    stale_rung1 = dict(_green_rung1_report())
+    for key in (
+        "dataset_pair_count",
+        "optimizer_request_pair_count",
+        "provider_to_optimizer_identity_match",
+        "provider_to_optimizer_point_match",
+    ):
+        stale_rung1.pop(key)
+
+    def _probe_boundary(*_args, **_kwargs):
+        raise AssertionError("sensitivity probe must not run after stale rung 1")
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _probe_boundary)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=output_path,
+        max_nfev=20,
+        rung_1_report=stale_rung1,
+    )
+
+    assert report["status"] == "aborted"
+    assert report["reason"] == "rung_1_not_green"
+    assert "dataset_pair_count_-999999_expected_7" in report["rung_1_failures"]
+    assert (
+        "optimizer_request_pair_count_-999999_expected_7"
+        in report["rung_1_failures"]
+    )
+    assert (
+        "provider_to_optimizer_identity_match_None_expected_True"
+        in report["rung_1_failures"]
+    )
+    assert (
+        "provider_to_optimizer_point_match_None_expected_True"
+        in report["rung_1_failures"]
+    )
+    assert report["residual_probe_called"] is False
+
+
+def test_new4_local_headless_path_helper_reports_missing_required_paths(
+    tmp_path,
+) -> None:
+    existing_background = tmp_path / "existing.osc"
+    missing_background = tmp_path / "missing.osc"
+    missing_cif = tmp_path / "missing.cif"
+    state_path = tmp_path / "new4.json"
+    existing_background.write_text("placeholder", encoding="utf-8")
+    state_path.write_text(
+        json.dumps(
+            {
+                "state": {
+                    "files": {
+                        "background_files": [
+                            str(existing_background),
+                            str(missing_background),
+                        ],
+                        "primary_cif_path": str(missing_cif),
+                        "secondary_cif_path": None,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _required_new4_local_headless_paths(state_path) == [
+        existing_background,
+        missing_background,
+        missing_cif,
+    ]
+    assert _missing_new4_local_headless_paths(state_path) == [
+        missing_background,
+        missing_cif,
+    ]
+
+
 def test_new4_ladder_sensitivity_real_new4_cli_smoke(
     monkeypatch,
     tmp_path,
@@ -3485,6 +4425,12 @@ def test_new4_ladder_sensitivity_real_new4_cli_smoke(
     state_path = Path("artifacts/geometry_fit_gui_states/new4.json")
     if not state_path.exists():
         pytest.skip("new4 artifact is not present")
+    missing_paths = _missing_new4_local_headless_paths(state_path)
+    if missing_paths:
+        pytest.skip(
+            "new4 local headless data paths are unavailable: "
+            + ", ".join(str(path) for path in missing_paths)
+        )
     output_root = tmp_path / "ladder"
     monkeypatch.setattr(ladder, "_run_stamp", lambda: "cli_sensitivity_smoke")
 
@@ -3525,6 +4471,20 @@ def test_new4_ladder_sensitivity_real_new4_cli_smoke(
     assert rung2["residual_probe_called"] is True
     assert rung2["least_squares_called"] is False
     assert rung2["optimizer_solve_called"] is False
+    assert rung2["status"] == "ok"
+    for param in rung2["params"]:
+        for direction in ("base_eval", "plus_eval", "minus_eval"):
+            eval_report = param[direction]
+            if not bool(eval_report["moved"]):
+                assert eval_report["counter_source"] == "not_evaluated"
+                continue
+            assert eval_report["counter_source"] == "point_match_summary"
+            assert eval_report["fixed_source_clean"] is True
+            assert eval_report["fixed_source_pair_count"] == 7
+            assert eval_report["fallback_entry_count"] == 0
+            assert eval_report["matched_pair_count"] == 7
+            assert eval_report["missing_pair_count"] == 0
+            assert eval_report["branch_mismatch_count"] == 0
 
 
 def test_new4_ladder_sensitivity_does_not_call_real_least_squares(
@@ -3647,7 +4607,48 @@ def test_new4_ladder_sensitivity_reports_fixed_source_counter_breaks(
                 assert key in eval_report
 
 
-def test_new4_ladder_sensitivity_eval_counters_fall_back_to_request_summary() -> None:
+def test_new4_ladder_sensitivity_missing_probe_summary_marks_param_unsafe(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    record = _sensitivity_probe_record(plus_delta=1.0, minus_delta=0.5)
+    del record["evals"][1]["point_match_summary"]
+    records = {
+        "center_x": record,
+        "center_y": _sensitivity_probe_record(plus_delta=1.0, minus_delta=0.5),
+        "theta_initial": _sensitivity_probe_record(plus_delta=0.0, minus_delta=0.0),
+    }
+
+    def _fake_probe(request, *, mode):
+        assert mode == "sensitivity"
+        return SimpleNamespace(), [records[request.var_names[0]]]
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=tmp_path / "rung_02_sensitivity_scan.json",
+        max_nfev=20,
+        rung_1_report=_green_rung1_report(),
+        state_path=state_path,
+    )
+    by_name = {entry["param_name"]: entry for entry in report["params"]}
+
+    assert by_name["center_x"]["status"] == "unsafe"
+    assert by_name["center_x"]["plus_eval"]["counter_source"] == "missing"
+    assert by_name["center_x"]["plus_eval"]["fixed_source_clean"] is False
+    assert (
+        "plus_missing_point_match_summary"
+        in by_name["center_x"]["unsafe_reasons"]
+    )
+    assert by_name["center_y"]["status"] == "active"
+
+
+def test_new4_ladder_sensitivity_eval_counters_require_point_summary() -> None:
     ladder = _load_new4_ladder_module()
 
     summary = ladder._sensitivity_eval_summary(
@@ -3667,13 +4668,61 @@ def test_new4_ladder_sensitivity_eval_counters_fall_back_to_request_summary() ->
         },
     )
 
-    assert summary["counter_source"] == "request_summary"
-    assert summary["fixed_source_pair_count"] == 7
-    assert summary["fallback_entry_count"] == 0
-    assert summary["matched_pair_count"] == 7
-    assert summary["missing_pair_count"] == 0
-    assert summary["branch_mismatch_count"] == 0
-    assert summary["fixed_source_clean"] is True
+    assert summary["counter_source"] == "missing"
+    assert summary["fixed_source_pair_count"] == -1
+    assert summary["fallback_entry_count"] == -1
+    assert summary["matched_pair_count"] == -1
+    assert summary["missing_pair_count"] == -1
+    assert summary["branch_mismatch_count"] == -1
+    assert summary["fixed_source_clean"] is False
+    assert summary["fixed_source_failures"] == ["missing_point_match_summary"]
+
+    dirty = ladder._sensitivity_eval_summary(
+        {
+            "label": "plus",
+            "moved": True,
+            "finite": True,
+            "delta_norm": 1.0,
+            "step_applied": 0.5,
+            "point_match_summary": {
+                "fixed_source_resolved_count": None,
+                "fallback_entry_count": 0,
+                "matched_pair_count": "seven",
+                "missing_pair_count": 0,
+                "branch_mismatch_count": float("nan"),
+            },
+        },
+        request_summary={
+            "fixed_source_pair_count": 7,
+            "fallback_row_count": 0,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+        },
+    )
+
+    assert dirty["counter_source"] == "missing"
+    assert dirty["fixed_source_pair_count"] == -1
+    assert dirty["matched_pair_count"] == -1
+    assert dirty["branch_mismatch_count"] == -1
+    assert dirty["fixed_source_clean"] is False
+    assert "fixed_source_pair_count_-1_expected_7" in dirty["fixed_source_failures"]
+    assert "matched_pair_count_-1_expected_7" in dirty["fixed_source_failures"]
+    assert "branch_mismatch_count_-1_expected_0" in dirty["fixed_source_failures"]
+
+    clipped = ladder._sensitivity_eval_summary(
+        {
+            "label": "minus",
+            "moved": False,
+            "clipped": True,
+            "step_applied": 0.0,
+        },
+        request_summary={},
+    )
+
+    assert clipped["counter_source"] == "not_evaluated"
+    assert clipped["fixed_source_clean"] is True
+    assert clipped["fixed_source_failures"] == []
 
 
 def test_new4_ladder_sensitivity_probe_uses_fresh_base_vector() -> None:
@@ -3792,6 +4841,7 @@ def test_new4_ladder_sensitivity_status_uses_applied_step_and_no_move_unsafe(
 
     assert by_name["center_x"]["plus_clipped"] is True
     assert by_name["center_x"]["minus_eval"]["moved"] is False
+    assert by_name["center_x"]["minus_eval"]["counter_source"] == "not_evaluated"
     assert by_name["center_x"]["sensitivity_norm"] == pytest.approx(8.0)
     assert by_name["center_y"]["status"] == "unsafe"
     assert "no_valid_movement" in by_name["center_y"]["unsafe_reasons"]
@@ -3937,12 +4987,1204 @@ def test_new4_ladder_one_param_rung_uses_candidate_param_names(monkeypatch) -> N
     assert request.candidate_param_names == ["gamma"]
 
 
+def test_new4_ladder_one_param_parser_accepts_max_rung() -> None:
+    ladder = _load_new4_ladder_module()
+    parser = ladder.build_arg_parser()
+
+    args = parser.parse_args(
+        [
+            "--state",
+            "new4.json",
+            "--background-index",
+            "0",
+            "--output-root",
+            "out",
+            "--max-rung",
+            "one-param",
+            "--one-param-filter",
+            "a",
+        ]
+    )
+
+    assert args.max_rung == "one-param"
+    assert args.one_param_filter == "a"
+
+
+def _run_one_param_with_sensitivity_payload(
+    monkeypatch,
+    tmp_path,
+    payload: dict[str, object],
+    *,
+    timestamp: str = "dirty_sensitivity",
+) -> tuple[dict[str, object], Path]:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+
+    def _sensitivity(_context, *, output_path, max_nfev, **_kwargs):
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "run_sensitivity_scan", _sensitivity)
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("solve must not run")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp=timestamp,
+    )
+    return result, tmp_path / timestamp
+
+
+@pytest.mark.parametrize(
+    ("field", "dirty_value"),
+    [
+        ("fallback_row_count", 1),
+        ("fixed_source_resolution_fallback_count", 1),
+        ("missing_fixed_source_count", 1),
+        ("fixed_source_resolved_count", 6),
+        ("provider_to_optimizer_identity_match", False),
+        ("provider_to_optimizer_point_match", False),
+    ],
+)
+def test_new4_ladder_one_param_blocks_dirty_rung2_top_level_contract(
+    monkeypatch,
+    tmp_path,
+    field,
+    dirty_value,
+) -> None:
+    payload = _green_rung2_report(active_params=("center_x",))
+    payload[field] = dirty_value
+
+    result, run_dir = _run_one_param_with_sensitivity_payload(
+        monkeypatch,
+        tmp_path,
+        payload,
+        timestamp=f"dirty_{field}",
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "sensitivity_not_green"
+    assert field in " ".join(result["rung_2_failures"])
+    assert not [
+        path
+        for path in run_dir.glob("rung_03_one_param_*.json")
+        if path.name != "rung_03_one_param_summary.json"
+    ]
+
+
+def test_new4_ladder_one_param_blocks_dirty_rung2_active_eval_contract(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    payload = _green_rung2_report(active_params=("center_x",))
+    payload["params"][0]["fallback_row_count"] = 1
+
+    result, run_dir = _run_one_param_with_sensitivity_payload(
+        monkeypatch,
+        tmp_path,
+        payload,
+        timestamp="dirty_active_eval",
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "sensitivity_not_green"
+    assert "center_x_fallback_row_count_1_expected_0" in result["rung_2_failures"]
+    assert not [
+        path
+        for path in run_dir.glob("rung_03_one_param_*.json")
+        if path.name != "rung_03_one_param_summary.json"
+    ]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "fixed_source_resolved_count",
+        "fallback_row_count",
+        "provider_to_optimizer_point_match",
+    ],
+)
+def test_new4_ladder_one_param_blocks_missing_rung2_active_eval_contract(
+    monkeypatch,
+    tmp_path,
+    field,
+) -> None:
+    payload = _green_rung2_report(active_params=("center_x",))
+    payload["params"][0].pop(field)
+
+    result, run_dir = _run_one_param_with_sensitivity_payload(
+        monkeypatch,
+        tmp_path,
+        payload,
+        timestamp=f"missing_active_eval_{field}",
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "sensitivity_not_green"
+    assert field in " ".join(result["rung_2_failures"])
+    assert not [
+        path
+        for path in run_dir.glob("rung_03_one_param_*.json")
+        if path.name != "rung_03_one_param_summary.json"
+    ]
+
+
+@pytest.mark.parametrize("scope", ["top_level", "active_eval"])
+def test_new4_ladder_one_param_blocks_bool_rung2_counter_values(
+    monkeypatch,
+    tmp_path,
+    scope,
+) -> None:
+    payload = _green_rung2_report(active_params=("center_x",))
+    if scope == "top_level":
+        payload["fallback_row_count"] = False
+    else:
+        payload["params"][0]["fallback_row_count"] = False
+
+    result, run_dir = _run_one_param_with_sensitivity_payload(
+        monkeypatch,
+        tmp_path,
+        payload,
+        timestamp=f"bool_counter_{scope}",
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "sensitivity_not_green"
+    assert "fallback_row_count_-999999_expected_0" in " ".join(result["rung_2_failures"])
+    assert not [
+        path
+        for path in run_dir.glob("rung_03_one_param_*.json")
+        if path.name != "rung_03_one_param_summary.json"
+    ]
+
+
+def test_new4_ladder_one_param_does_not_use_stale_sensitivity_by_default(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    stale = tmp_path / "stale_sensitivity.json"
+    stale.write_text(
+        json.dumps(_green_rung2_report(active_params=("center_y",))),
+        encoding="utf-8",
+    )
+    attempted: list[str] = []
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+
+    def _fresh_sensitivity(_context, *, output_path, max_nfev, **_kwargs):
+        payload = _green_rung2_report(active_params=("center_x",))
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.extend(active_names)
+        payload = _green_one_param_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "run_sensitivity_scan", _fresh_sensitivity)
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="fresh_one_param",
+    )
+
+    assert attempted == ["center_x"]
+    assert result["active_params_from_sensitivity"] == ["center_x"]
+    assert "center_y" not in result["attempted_params"]
+    assert stale.exists()
+
+
+def test_new4_ladder_one_param_uses_only_active_sensitivity_params(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    attempted: list[str] = []
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+
+    def _sensitivity(_context, *, output_path, max_nfev, **_kwargs):
+        payload = _green_rung2_report(
+            active_params=("center_x", "center_y", "gamma"),
+            near_zero_params=("center_y",),
+            non_finite_params=("gamma",),
+        )
+        ladder._write_json(output_path, payload)
+        return payload
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.extend(active_names)
+        payload = _green_one_param_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "run_sensitivity_scan", _sensitivity)
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="active_only",
+    )
+
+    assert attempted == ["center_x"]
+    assert result["attempted_params"] == ["center_x"]
+    assert sorted(result["skipped_params"]) == ["center_y", "gamma"]
+
+
+def test_new4_ladder_one_param_filter_only_attempts_selected_param(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    attempted: list[str] = []
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=("chi", "a", "c")),
+            )
+            or _green_rung2_report(active_params=("chi", "a", "c"))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.extend(active_names)
+        payload = _green_one_param_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        one_param_filter="a",
+        timestamp="filter_a",
+    )
+
+    assert attempted == ["a"]
+    assert result["attempted_params"] == ["a"]
+    assert result["filtered_params"] == ["chi", "c"]
+    assert result["failed_params"] == []
+    run_dir = tmp_path / "filter_a"
+    assert (run_dir / "rung_03_one_param_a.json").exists()
+    assert not list(run_dir.glob("rung_04_*.json"))
+    assert not list(run_dir.glob("rung_05_*.json"))
+    assert not list(run_dir.glob("rung_06_*.json"))
+
+
+def test_new4_ladder_one_param_filter_inactive_fails_before_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(output_path, _green_rung2_report(active_params=("chi", "c")))
+            or _green_rung2_report(active_params=("chi", "c"))
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("solve must not run")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        one_param_filter="a",
+        timestamp="filter_inactive",
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "filtered_param_not_active"
+    assert result["attempted_params"] == []
+    assert result["filtered_params"] == ["chi", "c"]
+    run_dir = tmp_path / "filter_inactive"
+    assert not [
+        path
+        for path in run_dir.glob("rung_03_one_param_*.json")
+        if path.name != "rung_03_one_param_summary.json"
+    ]
+
+
+def test_new4_ladder_one_param_sets_candidate_param_names_singleton(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    seen: list[tuple[list[str], list[str]]] = []
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=("center_x", "center_y")),
+            )
+            or _green_rung2_report(active_params=("center_x", "center_y"))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = _green_one_param_report(active_names)
+        seen.append((list(payload["var_names"]), list(payload["candidate_param_names"])))
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="singleton",
+    )
+
+    assert seen == [(["center_x"], ["center_x"]), (["center_y"], ["center_y"])]
+
+
+def test_new4_ladder_one_param_no_active_params_fails_before_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(output_path, _green_rung2_report(active_params=()))
+            or _green_rung2_report(active_params=())
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("solve must not run")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="no_active",
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "no_active_params"
+    assert result["attempted_params"] == []
+
+
+def test_new4_ladder_one_param_does_not_run_when_sensitivity_not_green(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+
+    def _bad_sensitivity(_context, *, output_path, max_nfev, **_kwargs):
+        payload = _green_rung2_report(active_params=("center_x",))
+        payload.update({"status": "fail", "pass": False})
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "run_sensitivity_scan", _bad_sensitivity)
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("solve must not run")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="sensitivity_fail",
+    )
+    run_dir = tmp_path / "sensitivity_fail"
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "sensitivity_not_green"
+    assert not [
+        path
+        for path in run_dir.glob("rung_03_one_param_*.json")
+        if path.name != "rung_03_one_param_summary.json"
+    ]
+
+
+def test_new4_ladder_one_param_fails_on_fallback_rows(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(output_path, _green_rung2_report(active_params=("center_x",)))
+            or _green_rung2_report(active_params=("center_x",))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = _green_one_param_report(active_names, fallback_row_count=1)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="fallback_rows",
+    )
+    report = json.loads(
+        (tmp_path / "fallback_rows" / "rung_03_one_param_center_x.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert report["status"] == "failed"
+    assert report["failure_reason"] == "fixed_source_or_pair_integrity_lost"
+    assert result["failure_reason"] == "no_one_param_solve_passed"
+    assert result["any_pair_loss"] is True
+    assert result["all_passing_fixed_source_counters_clean"] is False
+    assert not list((tmp_path / "fallback_rows").glob("rung_04_*.json"))
+
+
+def test_new4_ladder_one_param_clean_top_level_counters_without_point_summary_ok(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(output_path, _green_rung2_report(active_params=("center_x",)))
+            or _green_rung2_report(active_params=("center_x",))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = _green_one_param_report(active_names)
+        payload["point_match_summary"] = {}
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="clean_no_point_summary",
+    )
+    report = json.loads(
+        (
+            tmp_path
+            / "clean_no_point_summary"
+            / "rung_03_one_param_center_x.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert result["status"] == "ok"
+    assert result["any_pair_loss"] is False
+    assert report["fixed_source_counters_clean_at_last_heartbeat"] is True
+    assert report["fixed_source_counter_failures_at_last_heartbeat"] == []
+
+
+def test_new4_ladder_one_param_all_active_fail_summary(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=("center_x", "center_y")),
+            )
+            or _green_rung2_report(active_params=("center_x", "center_y"))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = _green_one_param_report(active_names)
+        payload["after_rms_px"] = 11.0
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="all_fail",
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "no_one_param_solve_passed"
+    assert result["failed_params"] == ["center_x", "center_y"]
+
+
+def test_new4_ladder_one_param_partial_success_exposes_failures(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=("center_x", "center_y", "gamma")),
+            )
+            or _green_rung2_report(active_params=("center_x", "center_y", "gamma"))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        name = active_names[0]
+        if name == "center_y":
+            payload = _green_one_param_report(active_names)
+            payload["after_max_error_px"] = 25.0
+        elif name == "gamma":
+            payload = {
+                "rung": 3,
+                "rung_name": "one_param_gamma",
+                "status": "timeout",
+                "active_params": ["gamma"],
+                "var_names": ["gamma"],
+                "candidate_param_names": ["gamma"],
+                "elapsed_s": 0.01,
+                "timeout_s": 0.01,
+                "dirty_timeout_abort": False,
+            }
+        else:
+            payload = _green_one_param_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="partial",
+    )
+
+    assert result["status"] == "ok_with_failures"
+    assert result["passed_params"] == ["center_x"]
+    assert result["failed_params"] == ["center_y"]
+    assert result["timed_out_params"] == ["gamma"]
+    assert result["any_timeout"] is True
+    assert result["all_passing_fixed_source_counters_clean"] is True
+
+
+def test_new4_ladder_one_param_clean_timeout_continues_to_next_param(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    attempted: list[str] = []
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=("center_x", "center_y")),
+            )
+            or _green_rung2_report(active_params=("center_x", "center_y"))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        name = active_names[0]
+        attempted.append(name)
+        if name == "center_x":
+            payload = {
+                "rung": 3,
+                "rung_name": "one_param_center_x",
+                "status": "timeout",
+                "active_params": ["center_x"],
+                "var_names": ["center_x"],
+                "candidate_param_names": ["center_x"],
+                "elapsed_s": 0.01,
+                "timeout_s": 0.01,
+                "dirty_timeout_abort": False,
+            }
+        else:
+            payload = _green_one_param_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="clean_timeout_continue",
+    )
+
+    assert attempted == ["center_x", "center_y"]
+    assert result["status"] == "ok_with_failures"
+    assert result["timed_out_params"] == ["center_x"]
+    assert result["passed_params"] == ["center_y"]
+    assert result["all_fixed_source_counters_clean"] is False
+    assert result["all_passing_fixed_source_counters_clean"] is True
+
+
+def test_new4_ladder_one_param_each_param_uses_same_base_state(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    seen_hashes: list[str] = []
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=("center_x", "center_y")),
+            )
+            or _green_rung2_report(active_params=("center_x", "center_y"))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, state_hash_before, **_kwargs):
+        seen_hashes.append(state_hash_before)
+        payload = _green_one_param_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="same_base",
+    )
+
+    assert len(set(seen_hashes)) == 1
+    assert result["state_hash_unchanged"] is True
+
+
+def test_new4_ladder_one_param_dirty_timeout_aborts_remaining(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    attempted: list[str] = []
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=("center_x", "center_y", "gamma")),
+            )
+            or _green_rung2_report(active_params=("center_x", "center_y", "gamma"))
+        ),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.extend(active_names)
+        payload = {
+            "rung": 3,
+            "rung_name": "one_param_center_x",
+            "status": "timeout",
+            "active_params": list(active_names),
+            "var_names": list(active_names),
+            "candidate_param_names": list(active_names),
+            "elapsed_s": 0.01,
+            "timeout_s": 0.01,
+            "dirty_timeout_abort": True,
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="dirty_timeout",
+    )
+
+    assert attempted == ["center_x"]
+    assert result["dirty_timeout_abort"] is True
+    assert result["status"] == "failed"
+    assert result["skipped_params"] == ["center_y", "gamma"]
+
+
+def test_new4_ladder_one_param_provider_guard_after(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    guard_calls: list[str] = []
+    _install_green_provider_guard(monkeypatch, ladder, calls=guard_calls)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(output_path, _green_rung2_report(active_params=("center_x",)))
+            or _green_rung2_report(active_params=("center_x",))
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda *, active_names, output_path, **_kwargs: (
+            ladder._write_json(output_path, _green_one_param_report(active_names))
+            or _green_one_param_report(active_names)
+        ),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="one-param",
+        timestamp="provider_after_one_param",
+    )
+
+    assert result["provider_guard_after_ok"] is True
+    assert any("provider_guard_after" in call for call in guard_calls)
+
+
+def _finalized_timeout_report(ladder, tmp_path, **overrides):
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    state_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
+    payload = {
+        "rung": 3,
+        "rung_name": "one_param_a",
+        "status": "timeout",
+        "active_params": ["a"],
+        "var_names": ["a"],
+        "candidate_param_names": ["a"],
+        "elapsed_s": 120.0,
+        "timeout_s": 120.0,
+        "last_nfev": 2,
+        "last_residual_norm": 12.0,
+        "last_rms_px": 5.0,
+        "last_max_error_px": 8.0,
+        "last_parameter_value": 4.2,
+        "current_bounds": {"lower": 3.0, "upper": 5.0},
+        "last_point_match_summary": _sensitivity_point_summary(),
+        "fixed_source_counters_clean_at_last_heartbeat": True,
+        "fixed_source_counter_failures_at_last_heartbeat": [],
+        "fixed_source_counters_dirty_seen": False,
+        "fixed_source_counter_failures_seen": [],
+        "child_process_killed_cleanly": True,
+        "dirty_timeout_abort": False,
+        "state_sha256_before": state_hash,
+        "state_sha256_after": state_hash,
+    }
+    payload.update(overrides)
+    return ladder._finalize_one_param_report(
+        payload,
+        param_name="a",
+        state_path=state_path,
+        state_hash_before=state_hash,
+        timeout_seconds=float(payload.get("timeout_s", 120.0)),
+    )
+
+
+def test_new4_ladder_timeout_with_nfev_progress_classifies_slow(tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+
+    report = _finalized_timeout_report(ladder, tmp_path)
+
+    assert report["diagnosis_classification"] == "slow_needs_separate_strategy"
+    assert report["failure_reason"] == "timeout"
+
+
+def test_new4_ladder_timeout_without_nfev_progress_classifies_hang(tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+
+    report = _finalized_timeout_report(ladder, tmp_path, last_nfev=0)
+
+    assert report["diagnosis_classification"] == "hang_solver_pathology"
+
+
+def test_new4_ladder_dirty_fixed_source_heartbeat_classifies_integrity_loss(
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+
+    report = _finalized_timeout_report(
+        ladder,
+        tmp_path,
+        fixed_source_counters_clean_at_last_heartbeat=False,
+        fixed_source_counter_failures_at_last_heartbeat=["missing_pair_count_1_expected_0"],
+        fixed_source_counters_dirty_seen=True,
+        fixed_source_counter_failures_seen=["missing_pair_count_1_expected_0"],
+    )
+
+    assert report["diagnosis_classification"] == "fixed_source_or_pair_integrity_lost"
+    assert report["failure_reason"] == "fixed_source_or_pair_integrity_lost"
+
+
+def test_new4_ladder_dirty_child_kill_aborts_variant_runner(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    calls: list[str] = []
+
+    def _run_ladder(*, timestamp, **_kwargs):
+        calls.append(str(timestamp))
+        return {
+            "status": "failed",
+            "reports": [
+                {
+                    "rung": 3,
+                    "param_name": "a",
+                    "status": "timeout",
+                    "dirty_timeout_abort": True,
+                    "diagnosis_classification": "hang_solver_pathology",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(ladder, "run_ladder", _run_ladder)
+
+    result = ladder.run_one_param_diagnosis_variants(
+        state_path=tmp_path / "new4.json",
+        background_index=0,
+        output_root=tmp_path / "variants",
+        one_param_filter="a",
+    )
+
+    assert calls == ["a_nfev5_t120"]
+    assert result["failure_reason"] == "dirty_timeout_abort"
+
+
 def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> None:
     ladder = _load_new4_ladder_module()
     state_path = tmp_path / "new4.json"
     state_path.write_text('{"state": {}}\n', encoding="utf-8")
 
-    def _sleeping_worker(**_kwargs):
+    def _sleeping_worker(**kwargs):
+        ladder._heartbeat_write(
+            kwargs["heartbeat_path"],
+            {
+                "status": "running",
+                "last_nfev": 2,
+                "nfev": 2,
+                "last_residual_norm": 12.0,
+                "last_rms_px": 5.0,
+                "last_max_error_px": 8.0,
+                "last_parameter_value": 4.2,
+                "current_bounds": {"lower": 3.0, "upper": 5.0},
+                "last_point_match_summary": _sensitivity_point_summary(),
+                "fixed_source_counters_clean_at_last_heartbeat": True,
+                "fixed_source_counter_failures_at_last_heartbeat": [],
+                "heartbeat_count": 1,
+                "last_heartbeat_elapsed_s": 0.01,
+                "residual_eval_trace": [
+                    {
+                        "eval_count": 2,
+                        "nfev": 2,
+                        "elapsed_s": 0.01,
+                        "residual_norm": 12.0,
+                        "rms_px": 5.0,
+                        "max_error_px": 8.0,
+                        "parameter_name": "gamma",
+                        "parameter_value": 4.2,
+                        "bounds": {"lower": 3.0, "upper": 5.0},
+                        "point_match_summary": _sensitivity_point_summary(),
+                        "fixed_source_counters_clean": True,
+                        "fixed_source_counter_failures": [],
+                    }
+                ],
+            },
+        )
         time.sleep(0.2)
         return {"status": "ok", "pass": True}
 
@@ -3965,6 +6207,59 @@ def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> Non
     assert written["status"] == "timeout"
     assert written["active_params"] == ["gamma"]
     assert written["candidate_param_names"] == ["gamma"]
+    assert "elapsed_s" in written
+    assert written["timeout_s"] == 0.01
+    for key in (
+        "before_rms_px",
+        "after_rms_px",
+        "before_max_error_px",
+        "after_max_error_px",
+        "parameter_before",
+        "parameter_after",
+        "parameter_delta",
+        "parameter_bounds",
+        "residuals_finite",
+        "provider_pair_count",
+        "dataset_pair_count",
+        "optimizer_request_pair_count",
+        "fixed_source_pair_count",
+        "fallback_row_count",
+        "fixed_source_resolution_fallback_count",
+        "missing_fixed_source_count",
+        "fixed_source_resolved_count",
+        "fallback_entry_count",
+        "matched_pair_count",
+        "missing_pair_count",
+        "branch_mismatch_count",
+        "provider_to_optimizer_identity_match",
+        "provider_to_optimizer_point_match",
+        "least_squares_called",
+        "optimizer_solve_called",
+        "state_sha256_before",
+        "state_sha256_after",
+        "state_hash_unchanged",
+        "failure_reason",
+        "last_nfev",
+        "last_residual_norm",
+        "last_rms_px",
+        "last_max_error_px",
+        "last_parameter_value",
+        "current_bounds",
+        "last_point_match_summary",
+        "last_heartbeat_elapsed_s",
+        "heartbeat_count",
+        "fixed_source_counters_clean_at_last_heartbeat",
+        "fixed_source_counter_failures_at_last_heartbeat",
+        "child_process_killed_cleanly",
+        "dirty_timeout_abort",
+        "diagnosis_classification",
+    ):
+        assert key in written
+    assert written["failure_reason"] == "timeout"
+    assert written["last_nfev"] == 2
+    assert written["last_residual_norm"] == 12.0
+    assert written["last_point_match_summary"]["matched_pair_count"] == 7
+    assert written["heartbeat_count"] == 1
 
 
 def test_new4_ladder_does_not_mutate_new4_state(monkeypatch, tmp_path) -> None:

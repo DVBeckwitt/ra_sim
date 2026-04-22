@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-21
+Last updated: 2026-04-22
 
 ## Summary
 
@@ -69,7 +69,31 @@ Rung 2 sensitivity scan is now implemented as a residual-probe-only ladder stop
 behind `--max-rung sensitivity`. It requires the rung 1 green counters first,
 hashes `new4.json` before and after, reports fixed-source counters for each
 plus/minus residual probe, distinguishes patched residual probing from real
-`least_squares`, and writes no center/solve rung artifacts.
+`least_squares`, and writes no center/solve rung artifacts. The rung 2 review
+hardening is closed: direct function calls now fail closed when rung 1 is not
+green, and per-eval counters must come from live point-match summaries rather
+than request-level fallback. The adjacent review bugs are also closed:
+malformed rung 1 reports cannot make the aborted rung 2 report raise, `None`,
+NaN, or non-numeric per-eval counters are dirty instead of zero, and
+fixed-correspondence branch mismatch counts are measured from resolver payloads
+instead of being hard-coded. Abort reports now also preserve strict boolean
+semantics, so malformed truthy strings cannot be reported as provider identity
+or point-match success.
+
+Rung 3 one-parameter solves are now implemented behind `--max-rung one-param`.
+The ladder runs fresh same-run rungs 0/1/2, reads current-run
+`rung_02_sensitivity_scan.json` `active_params`, runs singleton solve requests
+only, writes one JSON per attempted parameter plus a summary, and stops before
+any center, paired, block, full, feature, or baseline rung. The 2026-04-21 real
+run completed with partial success: eight active parameters passed, `a` timed
+out cleanly, passing parameters preserved fixed-source counters, `new4.json`
+was unchanged, and the provider-only guard remained green after the run. This
+is not full geometric fitter validation. Rung 3 review hardening is also
+closed: Rung 3 cannot start from dirty or malformed Rung 2 top-level or
+per-active fixed-source counters, boolean counter payloads are rejected as
+malformed counters, timeout reports emit the full one-param schema with partial
+values or nulls, and clean one-param reports without heartbeat summaries fall
+back to their top-level counters instead of being misclassified as pair loss.
 
 ## Current State
 
@@ -99,6 +123,11 @@ plus/minus residual probe, distinguishes patched residual probing from real
   `matched_pair_count == 7`, `missing_pair_count == 0`,
   `branch_mismatch_count == 0`, `least_squares_called == false`, and
   `optimizer_solve_called == false`.
+- Coordinate parity is closed through the optimizer request as of 2026-04-22:
+  visual truth, provider pairs, manual point pairs, initial display pairs,
+  `measured_for_fit`, `spec["measured_peaks"]`, and
+  `GeometryFitSolverRequest.measured_peaks` all match for seven `new4` pairs
+  without `least_squares`, solver entrypoints, or `new4.json` mutation.
 - The dataset-to-optimizer bridge copies provider canonical identity and
   measured-point fields into the optimizer request, and the optimizer
   subset/resolver preserves provider-local fixed-source rows through objective
@@ -146,17 +175,54 @@ plus/minus residual probe, distinguishes patched residual probing from real
   after rung 1 reports 7 fixed rows, zero fallback/missing rows, a finite dry
   residual, and no `least_squares` or optimizer solve call. It reports active,
   near-zero, non-finite, and unsafe parameters without mutating `new4.json`.
-  The current real `new4` scan reports 9 active parameters, 4 near-zero
-  parameters, 0 non-finite parameters, 0 unsafe parameters, and no center/solve
-  rung artifacts.
-- Solve rungs remain disabled operationally until a separate one-parameter solve
-  project starts from the green rung 2 checkpoint.
+  Direct `run_sensitivity_scan` calls now abort before probing if rung 1 is
+  missing or not green. Each moved base/plus/minus residual eval must carry a
+  live `point_match_summary`; missing or dirty counters make the parameter
+  unsafe. Fixed-correspondence summaries now report real branch mismatch counts
+  from the resolved branch. The 2026-04-21 real `new4` scan at
+  `artifacts/geometry_fit_ladder/new4/20260421_183827` reports rung 1 green,
+  rung 2 `status == "ok"`, 9 active parameters, 4 near-zero parameters, 0
+  non-finite parameters, 0 unsafe parameters, `state_hash_unchanged == true`,
+  and no center/solve rung artifacts. Abort-report booleans are strict
+  `is True` checks, so malformed string values remain failed in both
+  `rung_1_failures` and the aborted report body.
+- Rung 3 one-parameter solve run
+  `artifacts/geometry_fit_ladder/new4/20260421_193603` used the current-run
+  rung 2 active list only: `chi`, `cor_angle`, `theta_initial`,
+  `corto_detector`, `zs`, `zb`, `a`, `c`, and `psi_z`. Rung 2 was green with 9
+  active, 4 near-zero, 0 non-finite, and 0 unsafe parameters. Rung 3 summary
+  status is `ok_with_failures`: passed params are `chi`, `cor_angle`,
+  `theta_initial`, `corto_detector`, `zs`, `zb`, `c`, and `psi_z`; failed params
+  are none; timed-out params are `a`; skipped params are none.
+- Every passing one-param solve reported `least_squares_called == true`,
+  `optimizer_solve_called == true`, 7 fixed-source pairs, 0 fallback rows, 0
+  fixed-source resolution fallback, 0 missing fixed source, 7 resolved fixed
+  sources, 0 fallback entries, 7 matched pairs, 0 missing pairs, 0 branch
+  mismatches, provider identity/point match true, and
+  `state_hash_unchanged == true`. `a` wrote a timeout partial JSON after
+  120.09 seconds and the ladder continued cleanly.
+- Rung 3 best single parameter by RMS and max error was `corto_detector`
+  (`after_rms_px == 704.4849611916295`,
+  `after_max_error_px == 1243.9093211467562`). Summary flags:
+  `any_timeout == true`, `any_pair_loss == false`,
+  `any_branch_mismatch == false`, `any_no_matched_peak_rejection == false`,
+  `state_hash_unchanged == true`, and `provider_guard_after_ok == true`.
+- Rung 3 review findings are closed in the ladder/test blast zone. The
+  one-param entry gate now requires the full fixed-source/provider contract at
+  both the Rung 2 top level and each active parameter entry, missing or boolean
+  counter fields fail as `sensitivity_not_green`, timeout partial JSON keeps
+  all required report fields present, clean top-level one-param reports no
+  longer become false pair-loss failures when heartbeat/point-summary data is
+  absent, and all-active metric failures keep
+  `failure_reason == "no_one_param_solve_passed"`.
 
 ## Next Actions
 
-- Treat rung 2 sensitivity as complete. Start a separate one-parameter solve
-  project from the most stable sensitive parameter. Do not run solve, center
-  fit, or baseline as part of the rung 2 patch.
+- Treat rung 3 one-parameter solves as partial-success complete. Next
+  recommended rung is a separate bounded follow-up that either retries or
+  diagnoses the `a` timeout, then designs the next solve rung from the passing
+  singleton set only. Do not run center, paired, block, full, feature, baseline,
+  or parameter tuning inside this completed rung 3 scope.
 - Keep provider logic closed unless the provider-only parity gate regresses.
 - Keep Qr/Qz branch seed behavior closed unless raw-cache preview, manual
   toggle, refresh, or place setup regresses to either every raw ray or one
@@ -293,6 +359,65 @@ python scripts/debug/run_new4_geometry_fit_ladder.py `
   --max-nfev 20 `
   --timeout-seconds 120
 ```
+
+Rung 2 review hardening validation, 2026-04-21:
+
+- `py_compile`: passed for manual geometry, GUI fitting, optimization, preflight
+  validator, and ladder script.
+- Point-provider parity tests: 28 passed.
+- Provider-only `new4` report before and after scan:
+  `classification == "point_provider_parity_ok"`.
+- Fixed-source/provider-local/resolver/live-update tests: 12 passed.
+- Direct real rung 1 dry-run test: passed.
+- Rung 2 sensitivity tests: 15 passed.
+- Real `new4 --max-rung sensitivity`: passed, wrote only rung 0/1/2 JSON,
+  `status == "ok"`, `residual_probe_called == true`,
+  `least_squares_called == false`, `optimizer_solve_called == false`,
+  `state_hash_unchanged == true`, 9 active, 4 near-zero, 0 non-finite, 0 unsafe,
+  and every moved eval used `counter_source == "point_match_summary"` with clean
+  fixed-source counters.
+
+Rung 3 one-parameter validation, 2026-04-21:
+
+- `py_compile`: passed for manual geometry, GUI fitting, optimization, preflight
+  validator, and ladder script.
+- Point-provider parity tests: 28 passed.
+- Provider-only `new4` report before and after Rung 3:
+  `classification == "point_provider_parity_ok"`.
+- Fixed-source/provider-local/resolver tests: 11 passed.
+- Direct real rung 1 dry-run test: passed.
+- Real `new4 --max-rung sensitivity`:
+  `artifacts/geometry_fit_ladder/new4/20260421_193458`, status `pass`, current
+  rung 2 `status == "ok"`, 9 active, 4 near-zero, 0 non-finite, 0 unsafe,
+  `least_squares_called == false`, `optimizer_solve_called == false`.
+- Real `new4 --max-rung one-param --max-nfev 20 --timeout-seconds 120`:
+  `artifacts/geometry_fit_ladder/new4/20260421_193603`, status
+  `ok_with_failures`, attempted only current-run active params, passed
+  `chi`, `cor_angle`, `theta_initial`, `corto_detector`, `zs`, `zb`, `c`, and
+  `psi_z`, timed out `a`, no failed params, no skipped params, no pair loss,
+  no branch mismatch, no no-matched-pair rejection, `new4.json` unchanged, and
+  provider guard after green.
+
+Rung 3 review hardening validation, 2026-04-22:
+
+- Focused one-param/review suite passed with 30 tests: stale sensitivity
+  default avoidance, no-active abort, strict Rung 2 dirty/missing/bool counter
+  gates, singleton `candidate_param_names`/`var_names`, same base state per
+  param, schema-complete timeout partial JSON, clean timeout continuation,
+  dirty timeout abort, fallback-row failure, all-fail summary reason,
+  partial-success visibility, provider guard after one-param, and clean
+  top-level report fallback when heartbeat/point-summary data is absent.
+
+Coordinate parity closure, 2026-04-22:
+
+- Focused coordinate diagnostic tests: 9 passed.
+- `scripts/debug/diagnose_new4_visual_backend_coordinates.py
+  --include-optimizer-request` reports `ok == true`,
+  `classification == "visual_backend_parity_ok"`,
+  `optimizer_request_compared == true`, `optimizer_request_pair_count == 7`,
+  `optimizer_request_visual_parity_ok == true`, no first mismatching surface,
+  `optimizer_called == false`, `least_squares_called == false`,
+  `optimizer_entrypoints_called == []`, and `state_hash_unchanged == true`.
 
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.

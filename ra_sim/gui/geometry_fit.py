@@ -14465,7 +14465,7 @@ def _build_geometry_fit_optimizer_request_rows(
         )
         manual_pair = manual_pairs[pair_index] if pair_index < len(manual_pairs) else {}
         identity = _geometry_fit_source_identity_from_pair(provider_pair, manual_pair)
-        point = _geometry_fit_optimizer_point_from_pair(manual_pair, provider_pair)
+        point = _geometry_fit_optimizer_point_from_pair(provider_pair, manual_pair)
         row = copy.deepcopy(dict(measured_row))
         for stale_key in (
             "fit_source_resolution_kind",

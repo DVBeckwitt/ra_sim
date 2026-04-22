@@ -21,7 +21,7 @@ gates are green.
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-21 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
+| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 validate `new4.json` point-provider parity before optimizer execution. The
@@ -49,9 +49,28 @@ instead of becoming silent HKL-like rematches. Rung 2 sensitivity scan now stops
 after provider guard, rung 1 dry-run, and residual probing only; it writes no
 center/solve artifacts, preserves `new4.json`, and reports 9 active parameters,
 4 near-zero parameters, and 0 unsafe/non-finite parameters on the current real
-`new4` run. Solve rungs and the old full quality baseline runner remain blocked
-until a separate solve-rung project starts from this checkpoint. The old `new2`
-and `new3` saved-state gates are retired.
+`new4` run. Review hardening now gates direct sensitivity calls on green rung 1
+and requires live per-eval point-match summaries for fixed-source counters, with
+missing or dirty counters marked unsafe instead of falling back to request-level
+counts. The adjacent abort-report and synthetic branch-mismatch review findings
+are fixed: malformed rung 1 payloads still write aborted rung 2 reports, and
+fixed-correspondence summaries measure resolver branch mismatches instead of
+hard-coding zero. Abort-report provider identity/point-match booleans now use
+strict `is True` semantics, so malformed truthy strings cannot be reported as
+green. Coordinate parity is closed through
+`GeometryFitSolverRequest.measured_peaks`: the explicit optimizer-request
+diagnostic compares all seven `new4` pairs without `least_squares`, solver
+entrypoints, or saved-state mutation.
+Rung 3 one-parameter solves are complete as a bounded partial-success rung:
+only current-run Rung 2 `active_params` were attempted, eight singleton solves
+passed, `a` timed out cleanly, passing params preserved all fixed-source
+counters, `new4.json` stayed unchanged, and provider parity remained green
+afterward. Rung 3 review hardening is closed: dirty, missing, or boolean Rung 2
+counter payloads fail before one-param starts; timeout partial reports keep the
+full schema; and clean top-level one-param reports without heartbeat summaries
+are not false pair-loss failures. Center, paired, block, full, feature,
+baseline, and tuning rungs remain blocked until the next bounded solve-rung
+project starts. The old `new2` and `new3` saved-state gates are retired.
 
 ## Known bugs
 
