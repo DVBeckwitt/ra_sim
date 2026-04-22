@@ -6455,7 +6455,6 @@ def test_run_simulation_generation_job_collects_raw_peak_rows_for_both_run_sides
 
     def _fake_simulate_request(request):
         a_value = float(request.geometry.av)
-        request.best_sample_indices_out = np.empty((0,), dtype=np.int64)
         simulate_calls.append(
             (
                 bool(request.collect_hit_tables),
@@ -6532,6 +6531,8 @@ def test_run_simulation_generation_job_collects_raw_peak_rows_for_both_run_sides
     assert result["secondary_raw_rows_fresh"] is True
     assert result["primary_intersection_cache_built"] is False
     assert result["secondary_intersection_cache_built"] is False
+    assert np.asarray(result["primary_best_sample_indices"]).size == 0
+    assert np.asarray(result["secondary_best_sample_indices"]).size == 0
     assert result["primary_max_positions"] == [
         {
             "side": "primary",
@@ -6548,6 +6549,113 @@ def test_run_simulation_generation_job_collects_raw_peak_rows_for_both_run_sides
             "q_group_key": ("secondary", 1, 0, 0),
             "display_col": 7.0,
             "display_row": 8.0,
+        }
+    ]
+
+
+def test_run_simulation_generation_job_collects_qr_raw_rows_without_best_sample_buffer(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    projection_debug = importlib.import_module("ra_sim.simulation.projection_debug")
+    simulate_calls: list[tuple[bool, bool]] = []
+
+    monkeypatch.setattr(
+        projection_debug,
+        "start_projection_debug_session",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        projection_debug,
+        "finalize_projection_debug_session",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _fake_simulate_qr_rods_request(_data, request):
+        simulate_calls.append(
+            (
+                bool(request.collect_hit_tables),
+                bool(request.build_intersection_cache),
+            )
+        )
+        return SimpleNamespace(
+            image=np.full((4, 4), 5.0, dtype=np.float64),
+            hit_tables=[
+                {
+                    "side": "primary",
+                    "hkl": (1, 0, 0),
+                    "q_group_key": ("primary", 1, 0, 0),
+                    "display_col": 5.0,
+                    "display_row": 6.0,
+                }
+            ],
+            intersection_cache=[],
+            used_python_runner=False,
+        )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulate_request",
+        lambda *_args, **_kwargs: pytest.fail("miller runner should stay unused"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulate_qr_rods_request",
+        _fake_simulate_qr_rods_request,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_copy_hit_tables",
+        lambda tables: [dict(entry) for entry in tables],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_copy_intersection_cache_tables",
+        lambda tables: list(tables),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_peak_table_payload",
+        lambda intersection_cache, legacy_hit_tables: (
+            list(intersection_cache) if intersection_cache else list(legacy_hit_tables)
+        ),
+        raising=False,
+    )
+
+    job = _make_runtime_simulation_generation_job(
+        run_primary=True,
+        run_secondary=False,
+        collect_hit_tables=False,
+        collect_primary_hit_tables=False,
+        capture_primary_hit_tables_raw=True,
+    )
+    job["primary_data"] = {
+        1: {
+            "hk": (1, 0),
+            "L": np.asarray([0.0], dtype=np.float64),
+            "I": np.asarray([10.0], dtype=np.float64),
+            "deg": 1,
+        }
+    }
+    job["primary_source_mode"] = "qr"
+
+    result = runtime_session._run_simulation_generation_job(job)
+
+    assert simulate_calls == [(True, False)]
+    assert result["primary_raw_rows_fresh"] is True
+    assert result["primary_intersection_cache_built"] is False
+    assert np.asarray(result["primary_best_sample_indices"]).size == 0
+    assert result["primary_max_positions"] == [
+        {
+            "side": "primary",
+            "hkl": (1, 0, 0),
+            "q_group_key": ("primary", 1, 0, 0),
+            "display_col": 5.0,
+            "display_row": 6.0,
         }
     ]
 
@@ -13806,6 +13914,64 @@ def test_runtime_impl_source_cache_build_ready_no_longer_inlines_caked_store() -
     assert '"source_cache_caked_view_timeout"' in source
 
 
+def test_runtime_logged_cache_loaders_disabled_skip_disk_lookup(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "intersection_cache_logging_enabled",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache_metadata",
+        lambda: pytest.fail("disabled logged cache should not scan disk metadata"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache",
+        lambda: pytest.fail("disabled logged cache should not scan disk tables"),
+        raising=False,
+    )
+
+    metadata_loader, cache_loader = runtime_session._geometry_fit_logged_intersection_cache_loaders()
+
+    assert metadata_loader is None
+    assert cache_loader is None
+
+
+def test_runtime_logged_cache_loaders_enabled_return_disk_loaders(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    metadata_loader = object()
+    cache_loader = object()
+
+    monkeypatch.setattr(
+        runtime_session,
+        "intersection_cache_logging_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache_metadata",
+        metadata_loader,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache",
+        cache_loader,
+        raising=False,
+    )
+
+    assert runtime_session._geometry_fit_logged_intersection_cache_loaders() == (
+        metadata_loader,
+        cache_loader,
+    )
+
+
 def test_runtime_session_source_cache_caked_failure_does_not_hide_row_cache_success(
     monkeypatch,
 ) -> None:
@@ -14014,6 +14180,12 @@ def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_t
     job["live_rows_by_background"] = {0: []}
     dataset_calls: list[int] = []
 
+    monkeypatch.setattr(
+        runtime_session,
+        "intersection_cache_logging_enabled",
+        lambda: True,
+        raising=False,
+    )
     monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
     monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
     monkeypatch.setattr(

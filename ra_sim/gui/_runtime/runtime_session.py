@@ -234,6 +234,7 @@ from ra_sim.gui.diffuse_cif_toggle import (
     export_algebraic_ht_txt,
 )
 from ra_sim.debug_controls import (
+    intersection_cache_logging_enabled,
     mosaic_fit_log_files_enabled,
     retain_optional_cache,
     runtime_update_trace_logging_enabled as _runtime_update_trace_logging_enabled,
@@ -12791,6 +12792,14 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             exit_projection_mode=str(job.get("exit_projection_mode", "internal")),
         )
 
+    def copy_best_sample_indices(buffer) -> np.ndarray:
+        if buffer is None:
+            return np.empty((0,), dtype=np.int64)
+        try:
+            return np.asarray(buffer, dtype=np.int64).reshape(-1).copy()
+        except Exception:
+            return np.empty((0,), dtype=np.int64)
+
     def run_one(
         data,
         intens_arr,
@@ -12834,7 +12843,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 result.image,
                 _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
                 _copy_intersection_cache_tables(result.intersection_cache),
-                np.asarray(request.best_sample_indices_out, dtype=np.int64).copy(),
+                copy_best_sample_indices(request.best_sample_indices_out),
                 result.used_python_runner,
                 request_collect_hit_tables,
                 request_build_intersection_cache,
@@ -12877,7 +12886,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             result.image,
             _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
             _copy_intersection_cache_tables(result.intersection_cache),
-            np.asarray(request.best_sample_indices_out, dtype=np.int64).copy(),
+            copy_best_sample_indices(request.best_sample_indices_out),
             result.used_python_runner,
             request_collect_hit_tables,
             request_build_intersection_cache,
@@ -19514,6 +19523,21 @@ def _geometry_fit_background_label(background_index: int) -> str:
     return f"background {int(background_index) + 1}"
 
 
+def _geometry_fit_logged_intersection_cache_loaders() -> tuple[
+    Callable[..., object] | None, Callable[..., object] | None
+]:
+    try:
+        enabled = bool(intersection_cache_logging_enabled())
+    except Exception:
+        enabled = False
+    if not enabled:
+        return None, None
+    return (
+        load_most_recent_logged_intersection_cache_metadata,
+        load_most_recent_logged_intersection_cache,
+    )
+
+
 def _commit_geometry_manual_source_row_rebuild_result(
     rebuild_result: gui_geometry_fit.GeometryFitSourceRowRebuildResult,
     *,
@@ -19790,6 +19814,9 @@ def _geometry_manual_rebuild_source_rows_for_background(
             }
         return live_rows
 
+    logged_cache_metadata_loader, logged_cache_loader = (
+        _geometry_fit_logged_intersection_cache_loaders()
+    )
     rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
         background_index=int(background_idx),
         background_label=background_label,
@@ -19805,10 +19832,8 @@ def _geometry_manual_rebuild_source_rows_for_background(
         projection_payload=projection_payload,
         get_memory_intersection_cache=get_last_intersection_cache,
         memory_cache_signature=simulation_runtime_state.last_simulation_signature,
-        load_logged_intersection_cache_metadata=(
-            lambda: load_most_recent_logged_intersection_cache_metadata()
-        ),
-        load_logged_intersection_cache=(lambda: load_most_recent_logged_intersection_cache()),
+        load_logged_intersection_cache_metadata=logged_cache_metadata_loader,
+        load_logged_intersection_cache=logged_cache_loader,
         logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
         build_source_rows_from_hit_tables=_build_source_rows_for_rebuild,
         simulate_hit_tables=(
@@ -30281,6 +30306,9 @@ def _run_async_geometry_fit_worker_job(
                 job_data.setdefault("projection_payload_by_background", {})[int(background_idx)] = (
                     gui_geometry_fit._geometry_fit_cache_jsonable(projection_payload)
                 )
+        logged_cache_metadata_loader, logged_cache_loader = (
+            _geometry_fit_logged_intersection_cache_loaders()
+        )
         rebuild_result = gui_geometry_fit.rebuild_geometry_fit_source_rows(
             background_index=int(background_idx),
             background_label=str(background_label),
@@ -30306,10 +30334,8 @@ def _run_async_geometry_fit_worker_job(
                 )
             ),
             memory_cache_signature=job_data.get("memory_intersection_cache_signature"),
-            load_logged_intersection_cache_metadata=(
-                load_most_recent_logged_intersection_cache_metadata
-            ),
-            load_logged_intersection_cache=load_most_recent_logged_intersection_cache,
+            load_logged_intersection_cache_metadata=logged_cache_metadata_loader,
+            load_logged_intersection_cache=logged_cache_loader,
             logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
             build_source_rows_from_hit_tables=(
                 lambda source_tables, **kwargs: _build_source_rows_for_rebuild(

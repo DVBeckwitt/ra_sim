@@ -347,6 +347,40 @@ def test_rematerialize_primary_artifacts_matches_full_simulation_artifacts() -> 
         assert np.allclose(rebuilt, expected)
 
 
+def test_rematerialize_primary_artifacts_treats_bad_best_sample_indices_as_missing(
+    monkeypatch,
+) -> None:
+    seen_best_sample_indices: list[np.ndarray] = []
+
+    def fake_build_intersection_cache(*_args, **kwargs):
+        seen_best_sample_indices.append(
+            np.asarray(kwargs["best_sample_indices_out"], dtype=np.int64).copy()
+        )
+        return []
+
+    monkeypatch.setattr(
+        runtime_primary_cache,
+        "build_intersection_cache",
+        fake_build_intersection_cache,
+    )
+
+    payload = runtime_primary_cache.rematerialize_primary_artifacts(
+        primary_hit_table_cache={
+            0: np.asarray([[1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0]], dtype=np.float64)
+        },
+        primary_best_sample_index_cache={0: None},
+        active_keys=[0],
+        image_size=4,
+        a_primary=4.0,
+        c_primary=7.0,
+    )
+
+    assert len(payload["raw_hit_tables"]) == 1
+    assert len(payload["peak_tables"]) == 1
+    assert len(seen_best_sample_indices) == 1
+    assert np.array_equal(seen_best_sample_indices[0], np.asarray([-1], dtype=np.int64))
+
+
 def test_copy_hit_tables_returns_independent_arrays() -> None:
     original = [np.array([[1.0, 2.0, 3.0]], dtype=np.float64)]
 

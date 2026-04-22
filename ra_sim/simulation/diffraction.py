@@ -6337,6 +6337,41 @@ def load_logged_intersection_cache_metadata(
     return metadata
 
 
+def _recent_intersection_cache_log_dirs_by_name(
+    root: str | Path,
+    *,
+    limit: int | None = None,
+) -> list[Path]:
+    """Return newest timestamp-named cache dirs without stat-sorting the log tree."""
+
+    import heapq
+
+    resolved_root = Path(root).expanduser()
+    max_dirs = max(1, int(limit)) if limit is not None else None
+    candidates: list[tuple[str, str]] = []
+    try:
+        with os.scandir(resolved_root) as entries:
+            for entry in entries:
+                name = str(entry.name)
+                if not name.startswith("intersection_cache_"):
+                    continue
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                item = (name, entry.path)
+                if max_dirs is None:
+                    candidates.append(item)
+                elif len(candidates) < max_dirs:
+                    heapq.heappush(candidates, item)
+                else:
+                    heapq.heappushpop(candidates, item)
+    except Exception:
+        return []
+    return [Path(path) for _name, path in sorted(candidates, reverse=True)]
+
+
 def load_most_recent_logged_intersection_cache(
     log_root: str | Path | None = None,
 ) -> tuple[list[np.ndarray], dict[str, object]]:
@@ -6346,16 +6381,8 @@ def load_most_recent_logged_intersection_cache(
         root = _resolve_intersection_cache_log_root() / "intersection_cache"
     else:
         root = Path(log_root).expanduser()
-    try:
-        log_dirs = sorted(
-            (path for path in root.glob("intersection_cache_*") if path.is_dir()),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-    except Exception:
-        return [], {}
 
-    for log_dir in log_dirs:
+    for log_dir in _recent_intersection_cache_log_dirs_by_name(root):
         cache_tables, metadata = load_logged_intersection_cache(log_dir)
         if cache_tables:
             metadata = dict(metadata)
@@ -6373,16 +6400,8 @@ def load_most_recent_logged_intersection_cache_metadata(
         root = _resolve_intersection_cache_log_root() / "intersection_cache"
     else:
         root = Path(log_root).expanduser()
-    try:
-        log_dirs = sorted(
-            (path for path in root.glob("intersection_cache_*") if path.is_dir()),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-    except Exception:
-        return {}
 
-    for log_dir in log_dirs:
+    for log_dir in _recent_intersection_cache_log_dirs_by_name(root):
         metadata = load_logged_intersection_cache_metadata(log_dir)
         if metadata:
             metadata.setdefault("log_dir", str(log_dir))

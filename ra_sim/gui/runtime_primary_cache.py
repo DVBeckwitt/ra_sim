@@ -272,6 +272,18 @@ def rasterize_hit_tables_to_image(
     return image
 
 
+def _cached_best_sample_index(
+    primary_best_sample_index_cache: Mapping[object, int] | None,
+    key: object,
+) -> int:
+    if not isinstance(primary_best_sample_index_cache, Mapping):
+        return -1
+    try:
+        return int(primary_best_sample_index_cache.get(key, -1))
+    except Exception:
+        return -1
+
+
 def rematerialize_primary_artifacts(
     *,
     primary_hit_table_cache: Mapping[object, np.ndarray],
@@ -296,9 +308,7 @@ def rematerialize_primary_artifacts(
     ]
     best_sample_indices = np.asarray(
         [
-            int(primary_best_sample_index_cache.get(key, -1))
-            if isinstance(primary_best_sample_index_cache, Mapping)
-            else -1
+            _cached_best_sample_index(primary_best_sample_index_cache, key)
             for key in active_keys
             if key in primary_hit_table_cache
         ],

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -156,7 +157,9 @@ def test_process_peaks_parallel_debug_skips_nonpositive_sample_weights(monkeypat
 
     assert solve_q_calls == []
     assert np.count_nonzero(image_out) == 0
-    np.testing.assert_allclose(max_positions[0], [-1.0, np.nan, np.nan, -1.0, np.nan, np.nan], equal_nan=True)
+    np.testing.assert_allclose(
+        max_positions[0], [-1.0, np.nan, np.nan, -1.0, np.nan, np.nan], equal_nan=True
+    )
 
 
 def test_process_peaks_parallel_debug_clamps_mismatched_core_sample_arrays(monkeypatch):
@@ -574,7 +577,9 @@ def test_process_peaks_parallel_prefers_explicit_n2_override(monkeypatch):
         )
 
     monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute_sample_terms)
-    monkeypatch.setattr(diffraction, "_calculate_phi_from_precomputed", fake_calculate_phi_precomputed)
+    monkeypatch.setattr(
+        diffraction, "_calculate_phi_from_precomputed", fake_calculate_phi_precomputed
+    )
 
     override = np.array([1.0 + 0.1j, 1.0 + 0.2j], dtype=np.complex128)
     diffraction.process_peaks_parallel.py_func(
@@ -907,6 +912,102 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     assert reloaded_metadata["log_dir"] == str(log_dir)
 
 
+def test_load_most_recent_logged_intersection_cache_metadata_avoids_dir_stat_sort(
+    tmp_path,
+    monkeypatch,
+):
+    log_root = tmp_path / "intersection_cache"
+    older_dir = log_root / "intersection_cache_20260422_000000_000000"
+    newer_dir = log_root / "intersection_cache_20260422_000001_000000"
+    older_dir.mkdir(parents=True)
+    newer_dir.mkdir(parents=True)
+    (older_dir / "meta.json").write_text(json.dumps({"created_at": "older"}), encoding="utf-8")
+    (newer_dir / "meta.json").write_text(json.dumps({"created_at": "newer"}), encoding="utf-8")
+    real_stat = Path.stat
+
+    def fail_log_dir_stat(path, *args, **kwargs):
+        if path.parent == log_root and path.name.startswith("intersection_cache_"):
+            raise AssertionError("loader should not stat-sort every cache directory")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_log_dir_stat)
+
+    metadata = diffraction.load_most_recent_logged_intersection_cache_metadata(log_root=log_root)
+
+    assert metadata["created_at"] == "newer"
+    assert metadata["log_dir"] == str(newer_dir)
+
+
+def test_load_most_recent_logged_intersection_cache_avoids_dir_stat_sort(
+    tmp_path,
+    monkeypatch,
+):
+    log_root = tmp_path / "intersection_cache"
+    older_dir = log_root / "intersection_cache_20260422_000000_000000"
+    newer_dir = log_root / "intersection_cache_20260422_000001_000000"
+    older_dir.mkdir(parents=True)
+    newer_dir.mkdir(parents=True)
+    (older_dir / "meta.json").write_text(
+        json.dumps({"table_files": ["table_0000.npy"]}),
+        encoding="utf-8",
+    )
+    (newer_dir / "meta.json").write_text(
+        json.dumps({"table_files": ["table_0000.npy"]}),
+        encoding="utf-8",
+    )
+    np.save(older_dir / "table_0000.npy", np.asarray([[1.0, 2.0]], dtype=np.float64))
+    np.save(newer_dir / "table_0000.npy", np.asarray([[3.0, 4.0]], dtype=np.float64))
+    real_stat = Path.stat
+
+    def fail_log_dir_stat(path, *args, **kwargs):
+        if path.parent == log_root and path.name.startswith("intersection_cache_"):
+            raise AssertionError("loader should not stat-sort every cache directory")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_log_dir_stat)
+
+    cache, metadata = diffraction.load_most_recent_logged_intersection_cache(log_root=log_root)
+
+    assert metadata["log_dir"] == str(newer_dir)
+    assert len(cache) == 1
+    np.testing.assert_allclose(cache[0], np.asarray([[3.0, 4.0]], dtype=np.float64))
+
+
+def test_load_most_recent_logged_intersection_cache_scans_past_empty_recent_dirs(
+    tmp_path,
+    monkeypatch,
+):
+    log_root = tmp_path / "intersection_cache"
+    valid_dir = log_root / "intersection_cache_20260422_000000_000000"
+    valid_dir.mkdir(parents=True)
+    (valid_dir / "meta.json").write_text(
+        json.dumps({"table_files": ["table_0000.npy"]}),
+        encoding="utf-8",
+    )
+    np.save(valid_dir / "table_0000.npy", np.asarray([[1.0, 2.0]], dtype=np.float64))
+    for index in range(1, 40):
+        empty_dir = log_root / f"intersection_cache_20260422_0000{index:02d}_000000"
+        empty_dir.mkdir(parents=True)
+        (empty_dir / "meta.json").write_text(
+            json.dumps({"table_files": ["missing.npy"]}),
+            encoding="utf-8",
+        )
+    real_stat = Path.stat
+
+    def fail_log_dir_stat(path, *args, **kwargs):
+        if path.parent == log_root and path.name.startswith("intersection_cache_"):
+            raise AssertionError("loader should not stat-sort every cache directory")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_log_dir_stat)
+
+    cache, metadata = diffraction.load_most_recent_logged_intersection_cache(log_root=log_root)
+
+    assert metadata["log_dir"] == str(valid_dir)
+    assert len(cache) == 1
+    np.testing.assert_allclose(cache[0], np.asarray([[1.0, 2.0]], dtype=np.float64))
+
+
 def test_precompute_sample_terms_rejects_hits_outside_finite_sample_bounds(monkeypatch):
     monkeypatch.setattr(
         diffraction,
@@ -1200,9 +1301,7 @@ def test_intersect_infinite_line_plane_allows_negative_t():
     p_plane = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     n_plane = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
-    ix, iy, iz, valid = diffraction.intersect_infinite_line_plane(
-        p0, k_vec, p_plane, n_plane
-    )
+    ix, iy, iz, valid = diffraction.intersect_infinite_line_plane(p0, k_vec, p_plane, n_plane)
     assert valid
     np.testing.assert_allclose([ix, iy, iz], [0.0, 1.0, 0.0], atol=1e-12, rtol=0.0)
 
@@ -1214,8 +1313,6 @@ def test_intersect_infinite_line_plane_parallel_projects_to_plane():
     p_plane = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     n_plane = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
-    ix, iy, iz, valid = diffraction.intersect_infinite_line_plane(
-        p0, k_vec, p_plane, n_plane
-    )
+    ix, iy, iz, valid = diffraction.intersect_infinite_line_plane(p0, k_vec, p_plane, n_plane)
     assert valid
     np.testing.assert_allclose([ix, iy, iz], [2.0, 1.0, -3.0], atol=1e-12, rtol=0.0)

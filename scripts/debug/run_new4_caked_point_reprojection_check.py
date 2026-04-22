@@ -1039,16 +1039,20 @@ def run_new4_caked_point_reprojection_check(
             context = {}
     if not bool(context.get("ok", False)):
         full_recake_attempted = int(guard.call_count) > 0
-        status = "fail" if full_recake_attempted else "skip"
         state_hash_after = _state_sha256(state_path)
+        state_hash_unchanged = bool(state_hash_before == state_hash_after)
+        provider_before_ok = bool(provider_before.get("ok", False))
+        failures = []
+        if not provider_before_ok:
+            failures.append("provider_guard_before_ok")
+        if full_recake_attempted:
+            failures.append("full_background_recake_not_called")
+        if not state_hash_unchanged:
+            failures.append("new4_state_hash_unchanged")
         report = {
-            "status": status,
+            "status": "fail" if failures else "skip",
             "classification": "validation_context_unavailable",
-            "failures": (
-                ["full_background_recake_not_called"]
-                if full_recake_attempted
-                else []
-            ),
+            "failures": failures,
             "guard_error": guard_error,
             "background_index": int(background_index),
             "provider_pair_count": _provider_pair_count(provider_before),
@@ -1059,10 +1063,10 @@ def run_new4_caked_point_reprojection_check(
             "full_background_recake_call_count": int(guard.call_count),
             "point_only_reprojection_called": False,
             "point_only_reprojection_call_count": 0,
-            "provider_guard_before_ok": bool(provider_before.get("ok", False)),
+            "provider_guard_before_ok": provider_before_ok,
             "provider_guard_after_ok": False,
             "provider_guard_ok": False,
-            "new4_state_hash_unchanged": bool(state_hash_before == state_hash_after),
+            "new4_state_hash_unchanged": state_hash_unchanged,
             "state_hash_before": state_hash_before,
             "state_hash_after": state_hash_after,
             "context_ok": False,

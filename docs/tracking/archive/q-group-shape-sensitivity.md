@@ -10,9 +10,9 @@ Last updated: 2026-04-22
 ## Summary
 
 Extended the Qr/Qz peak sensitivity export from refined peak maxima to branch
-center-of-mass and shape metrics. Ray-cloud COM is the default metric; refined
-max remains available with `--metric refined_max`, and image-ROI COM is
-available with `--metric image_roi_com` or `--metric all`.
+center-of-mass and shape metrics. Refined-max remains the default metric;
+ray-cloud COM and image-ROI COM are opt-in metrics available with `--metric
+ray_cloud_com`, `--metric image_roi_com`, or `--metric all`.
 
 ## Current state
 

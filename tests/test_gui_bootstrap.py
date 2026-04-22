@@ -1027,6 +1027,7 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
                 "detector_display_to_native_detector_coords": "detector-native-coords",
                 "native_sim_to_display_coords": "display-coords",
                 "native_detector_coords_to_detector_display_coords": "detector-display-coords",
+                "caked_angles_to_detector_display_coords": None,
                 "simulate_ideal_hkl_native_center": "ideal-center",
                 "deactivate_conflicting_modes_factory": "deactivate-modes",
                 "on_hkl_pick_mode_changed_factory": None,

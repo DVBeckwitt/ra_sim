@@ -23228,11 +23228,48 @@ def test_new4_caked_point_reprojection_context_error_reports_state_hash_change(
         run_id="mutated_missing_context",
     )
 
-    assert report["status"] == "skip"
+    assert report["status"] == "fail"
     assert report["classification"] == "validation_context_unavailable"
     assert report["new4_state_hash_unchanged"] is False
     assert report["state_hash_before"] != report["state_hash_after"]
     assert report["full_background_recake_called"] is False
+    assert "new4_state_hash_unchanged" in report["failures"]
+
+
+def test_new4_caked_point_reprojection_context_error_fails_provider_before_guard(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_run_point_provider_report_only",
+        lambda *_args, **_kwargs: {"ok": False, "manual_point_pair_count": 7},
+    )
+    monkeypatch.setattr(
+        module.preflight,
+        "_prepare_validation_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileNotFoundError("missing local New4 image")
+        ),
+    )
+
+    report = module.run_new4_caked_point_reprojection_check(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "new4",
+        run_id="missing_context_bad_provider",
+    )
+
+    assert report["status"] == "fail"
+    assert report["classification"] == "validation_context_unavailable"
+    assert report["provider_guard_before_ok"] is False
+    assert report["new4_state_hash_unchanged"] is True
+    assert report["full_background_recake_called"] is False
+    assert report["failures"] == ["provider_guard_before_ok"]
 
 
 def test_new4_caked_point_reprojection_context_error_skips_without_recake(

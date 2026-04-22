@@ -51,6 +51,19 @@ desktop.ini
 ra_sim/simulation/output.png
 scripts/debug/simulation.npz
 
+# Generated diagnostic artifacts
+/artifacts/geometry_fit_coordinate_diagnostics/
+/artifacts/geometry_fit_gui_states/new4_point_provider_report_after*.json
+/artifacts/geometry_fit_ladder/new4/20*/
+/artifacts/geometry_fit_ladder/new4/codex_provider_*.json
+/artifacts/geometry_fit_ladder/new4/rung5_blocks_*.log
+/artifacts/geometry_fit_ladder/new4_verify*/
+/artifacts/geometry_fit_ladder/new4_a_diagnose/
+/artifacts/geometry_fit_ladder/new4_debug_blocks*/
+/artifacts/geometry_fit_ladder/new4_debug_pairs/
+/artifacts/q_group_peak_sensitivity/
+/artifacts/q_group_peak_sensitivity.zip
+
 # Accidental root-level probe files with random 8-char names
 /[0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_]
 
