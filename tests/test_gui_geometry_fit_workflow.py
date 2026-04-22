@@ -1,9 +1,11 @@
 import importlib.util
 import json
 import hashlib
+import os
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 import numpy as np
 from pathlib import Path, PurePosixPath
@@ -1921,6 +1923,81 @@ def test_build_geometry_manual_fit_dataset_rebinds_nonlegacy_stale_source_by_bac
     assert measured_entry["source_reflection_index"] == 204
     assert measured_entry["source_branch_index"] == 1
     assert diag["strict_resolved"] is False
+    assert diag["fit_resolved"] is True
+    assert diag["fit_resolution_kind"] == "q_group_fallback"
+    assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
+    assert diag["selected_live_simulated_current_view_point"] == (1003.0, 998.0)
+    assert diag["selected_to_background_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
+
+
+def test_build_geometry_manual_fit_dataset_prefers_nearest_candidate_over_existing_cached_identity() -> None:
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "x": 1000.0,
+            "y": 1000.0,
+            "refined_sim_x": 2500.0,
+            "refined_sim_y": 2500.0,
+        }
+    ]
+    simulated_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 1,
+            "source_reflection_index": 203,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 2504.0,
+            "sim_row": 2497.0,
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_table_index": 2,
+            "source_reflection_index": 204,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 5),
+            "sim_col": 1003.0,
+            "sim_row": 998.0,
+        },
+    ]
+    manual_dataset_bindings = _make_legacy_dense_manual_dataset_bindings(
+        saved_entries=saved_entries,
+        simulated_rows=simulated_rows,
+        refresh_pairs=False,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["resolved_source_pair_count"] == 1
+    measured_entry = dataset["measured_for_fit"][0]
+    initial_entry = dataset["initial_pairs_display"][0]
+    diag = dataset["source_resolution_diagnostics"][0]
+    assert measured_entry["source_reflection_index"] == 204
+    assert initial_entry["source_reflection_index"] == 204
+    assert diag["strict_resolved"] is True
     assert diag["fit_resolved"] is True
     assert diag["fit_resolution_kind"] == "q_group_fallback"
     assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
@@ -4057,6 +4134,9 @@ def _green_one_param_report(active_names, *, fallback_row_count=0) -> dict[str, 
         "after_rms_px": 9.9,
         "before_max_error_px": 20.0,
         "after_max_error_px": 19.5,
+        "residuals_finite": True,
+        "residual_norm": 12.0,
+        "last_residual_norm": 12.0,
         "parameter_deltas": [
             {
                 "name": name,
@@ -4091,6 +4171,132 @@ def _green_one_param_report(active_names, *, fallback_row_count=0) -> dict[str, 
     }
 
 
+def _hash_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _green_pair_report(
+    active_names,
+    *,
+    status="ok",
+    fallback_row_count=0,
+    after_rms_px=9.8,
+    after_max_error_px=19.0,
+    dirty_timeout_abort=False,
+) -> dict[str, object]:
+    names = [str(name) for name in active_names]
+    return {
+        "rung": 4,
+        "rung_name": "pair_" + "_".join(names),
+        "status": str(status),
+        "pass": str(status) in {"ok", "pass"},
+        "active_params": names,
+        "var_names": names,
+        "candidate_param_names": names,
+        "effective_var_names_seen_by_solver": names,
+        "before_rms_px": 10.0,
+        "after_rms_px": float(after_rms_px),
+        "before_max_error_px": 20.0,
+        "after_max_error_px": float(after_max_error_px),
+        "residuals_finite": True,
+        "residual_norm": 12.0,
+        "last_residual_norm": 12.0,
+        "parameter_deltas": [
+            {
+                "name": name,
+                "start": float(index + 1),
+                "final": float(index + 1) + 0.1,
+                "delta": 0.1,
+                "lower": 0.0,
+                "upper": 20.0,
+                "within_bounds": True,
+            }
+            for index, name in enumerate(names)
+        ],
+        "nfev": 3,
+        "elapsed_seconds": 0.1,
+        "elapsed_s": 0.1,
+        "timeout_seconds": 120.0,
+        "timeout_s": 120.0,
+        "rejection_reason": "",
+        "fixed_source_pair_count": 7,
+        "fallback_row_count": int(fallback_row_count),
+        "fixed_source_resolution_fallback_count": 0,
+        "missing_fixed_source_count": 0,
+        "fixed_source_resolved_count": 7,
+        "fallback_entry_count": 0,
+        "matched_pair_count": 7,
+        "missing_pair_count": 0,
+        "branch_mismatch_count": 0,
+        "provider_to_optimizer_identity_match": True,
+        "provider_to_optimizer_point_match": True,
+        "least_squares_called": True,
+        "optimizer_solve_called": True,
+        "real_solve_called": True,
+        "dirty_timeout_abort": bool(dirty_timeout_abort),
+        "point_match_summary": {},
+    }
+
+
+def _write_pair_evidence(
+    ladder,
+    tmp_path,
+    state_path,
+    *,
+    passed_params=("chi", "cor_angle", "theta_initial", "corto_detector", "zs", "zb", "c"),
+    include_diagnosis=True,
+    caked_status="pass",
+) -> tuple[Path, Path | None, Path]:
+    state_hash = _hash_file(state_path)
+    one_param_summary = {
+        "status": "ok",
+        "state_path": str(state_path.resolve()),
+        "background_index": 0,
+        "state_sha256_before": state_hash,
+        "state_sha256_after": state_hash,
+        "state_hash_unchanged": True,
+        "provider_guard_after_ok": True,
+        "dirty_timeout_abort": False,
+        "passed_params": [str(name) for name in passed_params],
+    }
+    one_param_path = tmp_path / "rung_03_one_param_summary.json"
+    ladder._write_json(one_param_path, one_param_summary)
+
+    diagnosis_path: Path | None = None
+    if include_diagnosis:
+        diagnosis = {
+            "status": "ok",
+            "one_param_filter": "a",
+            "state_path": str(state_path.resolve()),
+            "background_index": 0,
+            "state_sha256_before": state_hash,
+            "state_sha256_after": state_hash,
+            "state_hash_unchanged": True,
+            "dirty_timeout_abort": False,
+            "diagnosis_classification": "usable",
+        }
+        diagnosis_path = tmp_path / "variant_summary.json"
+        ladder._write_json(diagnosis_path, diagnosis)
+
+    caked = {
+        "status": str(caked_status),
+        "background_index": 0,
+        "state_hash_before": state_hash,
+        "state_hash_after": state_hash,
+        "point_count": 7,
+        "exact_projector_available": True,
+        "theta_projector_signature_changed": True,
+        "distance_projector_signature_changed": True,
+        "full_background_recake_call_count": 0,
+        "provider_guard_before_ok": True,
+        "provider_guard_after_ok": True,
+        "new4_state_hash_unchanged": True,
+    }
+    caked_path = tmp_path / "rung_03b_caked_point_reprojection.json"
+    ladder._write_json(caked_path, caked)
+    return one_param_path, diagnosis_path, caked_path
+
+
 def _install_green_provider_guard(monkeypatch, ladder, calls=None) -> None:
     def _green_guard(*, output_path, **_kwargs):
         if calls is not None:
@@ -4100,6 +4306,13 @@ def _install_green_provider_guard(monkeypatch, ladder, calls=None) -> None:
         return payload
 
     monkeypatch.setattr(ladder, "run_provider_guard", _green_guard)
+    if hasattr(ladder, "_run_provider_guard_report"):
+        def _green_guard_report(*, rung_name="provider_guard_after", **_kwargs):
+            if calls is not None:
+                calls.append(str(rung_name))
+            return _green_new4_ladder_provider_payload()
+
+        monkeypatch.setattr(ladder, "_run_provider_guard_report", _green_guard_report)
 
 
 def test_new4_ladder_runs_provider_guard_before_optimizer(monkeypatch, tmp_path) -> None:
@@ -4154,6 +4367,24 @@ def test_new4_ladder_parser_accepts_sensitivity_max_rung() -> None:
     )
 
     assert args.max_rung == "sensitivity"
+    assert args.use_subprocess is False
+    assert args.diagnostic_logging is False
+
+    diagnostic_args = parser.parse_args(
+        [
+            "--state",
+            "new4.json",
+            "--background-index",
+            "0",
+            "--output-root",
+            "out",
+            "--use-subprocess",
+            "--diagnostic-logging",
+        ]
+    )
+
+    assert diagnostic_args.use_subprocess is True
+    assert diagnostic_args.diagnostic_logging is True
 
 
 def test_new4_ladder_sensitivity_max_rung_stops_before_solve(
@@ -5008,6 +5239,1463 @@ def test_new4_ladder_one_param_parser_accepts_max_rung() -> None:
 
     assert args.max_rung == "one-param"
     assert args.one_param_filter == "a"
+
+
+def test_new4_ladder_pair_parser_accepts_evidence_inputs() -> None:
+    ladder = _load_new4_ladder_module()
+    parser = ladder.build_arg_parser()
+
+    args = parser.parse_args(
+        [
+            "--state",
+            "new4.json",
+            "--background-index",
+            "0",
+            "--output-root",
+            "out",
+            "--max-rung",
+            "pairs",
+            "--one-param-summary",
+            "one.json",
+            "--one-param-diagnosis-summary",
+            "diag.json",
+            "--caked-point-reprojection-report",
+            "caked.json",
+        ]
+    )
+    pair_args = parser.parse_args(
+        [
+            "--state",
+            "new4.json",
+            "--background-index",
+            "0",
+            "--output-root",
+            "out",
+            "--max-rung",
+            "pair",
+        ]
+    )
+
+    assert args.max_rung == "pairs"
+    assert args.one_param_summary == "one.json"
+    assert args.one_param_diagnosis_summary == "diag.json"
+    assert args.caked_point_reprojection_report == "caked.json"
+    assert pair_args.max_rung == "pair"
+
+
+def _install_pair_rung_common_stubs(
+    monkeypatch,
+    ladder,
+    *,
+    active_params,
+) -> None:
+    _install_green_provider_guard(monkeypatch, ladder)
+    monkeypatch.setattr(
+        ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: _minimal_new4_ladder_context(ladder),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_objective_dry_run",
+        lambda _context, *, output_path, max_nfev: (
+            ladder._write_json(output_path, _green_rung1_report())
+            or _green_rung1_report()
+        ),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "run_sensitivity_scan",
+        lambda _context, *, output_path, max_nfev, **_kwargs: (
+            ladder._write_json(
+                output_path,
+                _green_rung2_report(active_params=tuple(active_params)),
+            )
+            or _green_rung2_report(active_params=tuple(active_params))
+        ),
+    )
+
+
+def test_new4_ladder_pair_rung_runs_allowed_pairs_and_stops_before_blocks(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    active = ("a", "c", "chi", "cor_angle", "theta_initial", "corto_detector", "zs", "zb")
+    _install_pair_rung_common_stubs(monkeypatch, ladder, active_params=active)
+    attempted: list[list[str]] = []
+    seen_hashes: list[str] = []
+
+    def _solver(*, active_names, output_path, state_hash_before, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        seen_hashes.append(str(state_hash_before))
+        assert _kwargs["use_subprocess"] is False
+        assert _kwargs["diagnostic_logging"] is False
+        assert _kwargs["dirty_timeout_on_timeout"] is True
+        assert _kwargs["context"]["prepared_run"] is not None
+        payload = _green_pair_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="pairs",
+        one_param_summary=one_param_path,
+        one_param_diagnosis_summary=diagnosis_path,
+        caked_point_reprojection_report=caked_path,
+    )
+    run_dir = tmp_path / "pairs"
+    pair_report = json.loads((run_dir / "rung_04_pair_a_c.json").read_text())
+
+    assert result["status"] == "ok"
+    assert attempted == [
+        ["a", "c"],
+        ["chi", "cor_angle"],
+        ["theta_initial", "cor_angle"],
+        ["corto_detector", "theta_initial"],
+        ["zs", "zb"],
+    ]
+    assert len(set(seen_hashes)) == 1
+    assert result["skipped_pairs"] == []
+    assert result["provider_guard_after_ok"] is True
+    assert result["state_hash_unchanged"] is True
+    assert result["passed_pairs"][0]["pair"] == ["a", "c"]
+    assert result["stable_pairs"] == result["passed_pairs"]
+    assert result["best_pair_by_rms"]["pair"] == ["a", "c"]
+    assert result["recommended_next_blocks"]
+    assert pair_report["candidate_param_names"] == ["a", "c"]
+    assert pair_report["var_names"] == ["a", "c"]
+    assert pair_report["effective_var_names_seen_by_solver"] == ["a", "c"]
+    assert pair_report["base_parameter_values"] == {"a": 4.1, "c": 28.0}
+    assert not list(run_dir.glob("rung_05_*.json"))
+    assert not list(run_dir.glob("rung_06_*.json"))
+
+
+def test_new4_ladder_pair_rung_accepts_bounded_solver_status_when_contract_passes(
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+
+    finalized = ladder._finalize_pair_report(
+        _green_pair_report(["a", "c"], status="failed"),
+        pair_name="a_c",
+        pair=["a", "c"],
+        state_path=state_path,
+        state_hash_before=state_hash,
+        timeout_seconds=120.0,
+        base_parameter_values={"a": 4.1, "c": 28.0},
+    )
+
+    assert finalized["status"] == "ok"
+    assert finalized["pass"] is True
+    assert finalized["failure_reason"] is None
+    assert finalized["pair_guard_failures"] == []
+
+
+def test_new4_ladder_pair_rung_skips_params_not_allowed_by_singletons(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("chi", "cor_angle", "c"),
+        include_diagnosis=False,
+    )
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("a", "c", "chi", "cor_angle", "theta_initial", "corto_detector", "zs", "zb"),
+    )
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        payload = _green_pair_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="pair_skip",
+        one_param_summary=one_param_path,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert attempted == [["chi", "cor_angle"]]
+    assert result["status"] == "ok"
+    assert result["allowed_params"] == ["c", "chi", "cor_angle"]
+    assert {item["pair_name"] for item in result["skipped_pairs"]} == {
+        "a_c",
+        "theta_initial_cor_angle",
+        "corto_detector_theta_initial",
+        "zs_zb",
+    }
+    assert {
+        item["skip_reason"] for item in result["skipped_pairs"]
+    } == {"param_not_allowed_by_singleton_evidence"}
+
+
+def test_new4_ladder_pair_rung_rejects_stale_one_param_summary(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    stale = json.loads(one_param_path.read_text(encoding="utf-8"))
+    stale["state_sha256_before"] = "stale"
+    ladder._write_json(one_param_path, stale)
+    _install_pair_rung_common_stubs(monkeypatch, ladder, active_params=("a", "c"))
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("pair solve must not run")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="stale_summary",
+        one_param_summary=one_param_path,
+        one_param_diagnosis_summary=diagnosis_path,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "pair_evidence_not_current"
+    assert "one_param:state_sha256_before_not_current" in result["evidence_failures"]
+    assert (tmp_path / "stale_summary" / "rung_04_pair_summary.json").exists()
+
+
+def test_new4_ladder_pair_rung_requires_caked_guard_for_theta_distance(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("theta_initial", "cor_angle"),
+        include_diagnosis=False,
+        caked_status="fail",
+    )
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("theta pair must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="caked_fail",
+        one_param_summary=one_param_path,
+        caked_point_reprojection_report=caked_path,
+    )
+    pair_report = json.loads(
+        (tmp_path / "caked_fail" / "rung_04_pair_theta_initial_cor_angle.json").read_text()
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "no_pair_solve_passed"
+    assert pair_report["status"] == "failed"
+    assert pair_report["failure_reason"] == "caked_point_reprojection_guard_failed"
+    assert "status_not_pass" in pair_report["pair_guard_failures"]
+
+
+def test_new4_ladder_pair_rung_rejects_caked_report_without_hashes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("theta_initial", "cor_angle"),
+        include_diagnosis=False,
+    )
+    caked = json.loads(caked_path.read_text())
+    caked.pop("state_hash_before")
+    caked.pop("state_hash_after")
+    ladder._write_json(caked_path, caked)
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("theta pair must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="caked_missing_hash",
+        one_param_summary=one_param_path,
+        caked_point_reprojection_report=caked_path,
+    )
+    pair_report = json.loads(
+        (tmp_path / "caked_missing_hash" / "rung_04_pair_theta_initial_cor_angle.json").read_text()
+    )
+
+    assert result["status"] == "failed"
+    assert pair_report["failure_reason"] == "caked_point_reprojection_guard_failed"
+    assert "state_hash_before_missing" in pair_report["pair_guard_failures"]
+    assert "state_hash_after_missing" in pair_report["pair_guard_failures"]
+
+
+def test_new4_ladder_pair_rung_rejects_caked_report_without_background_index(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("theta_initial", "cor_angle"),
+        include_diagnosis=False,
+    )
+    caked = json.loads(caked_path.read_text())
+    caked.pop("background_index")
+    ladder._write_json(caked_path, caked)
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("theta pair must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="caked_missing_background",
+        one_param_summary=one_param_path,
+        caked_point_reprojection_report=caked_path,
+    )
+    pair_report = json.loads(
+        (
+            tmp_path
+            / "caked_missing_background"
+            / "rung_04_pair_theta_initial_cor_angle.json"
+        ).read_text()
+    )
+
+    assert result["status"] == "failed"
+    assert pair_report["failure_reason"] == "caked_point_reprojection_guard_failed"
+    assert "background_index_missing" in pair_report["pair_guard_failures"]
+
+
+def test_new4_ladder_pair_rung_rejects_caked_report_wrong_background_index(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("theta_initial", "cor_angle"),
+        include_diagnosis=False,
+    )
+    caked = json.loads(caked_path.read_text())
+    caked["background_index"] = 1
+    ladder._write_json(caked_path, caked)
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("theta pair must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="caked_wrong_background",
+        one_param_summary=one_param_path,
+        caked_point_reprojection_report=caked_path,
+    )
+    pair_report = json.loads(
+        (
+            tmp_path
+            / "caked_wrong_background"
+            / "rung_04_pair_theta_initial_cor_angle.json"
+        ).read_text()
+    )
+
+    assert result["status"] == "failed"
+    assert pair_report["failure_reason"] == "caked_point_reprojection_guard_failed"
+    assert "background_index_mismatch" in pair_report["pair_guard_failures"]
+
+
+def test_new4_ladder_pair_rung_dirty_timeout_aborts_remaining(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("c", "chi", "cor_angle"),
+    )
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("a", "c", "chi", "cor_angle"),
+    )
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        payload = {
+            "rung": 4,
+            "rung_name": "pair_a_c",
+            "status": "timeout",
+            "active_params": list(active_names),
+            "var_names": list(active_names),
+            "candidate_param_names": list(active_names),
+            "effective_var_names_seen_by_solver": list(active_names),
+            "dirty_timeout_abort": True,
+            "elapsed_s": 0.01,
+            "timeout_s": 0.01,
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="dirty_pair_timeout",
+        one_param_summary=one_param_path,
+        one_param_diagnosis_summary=diagnosis_path,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert attempted == [["a", "c"]]
+    assert result["status"] == "failed"
+    assert result["timed_out_pairs"] == [{"pair_name": "a_c", "pair": ["a", "c"]}]
+    assert {
+        (item["pair_name"], item["skip_reason"])
+        for item in result["skipped_pairs"]
+    } >= {
+        ("chi_cor_angle", "dirty_timeout_abort"),
+        ("theta_initial_cor_angle", "param_not_allowed_by_singleton_evidence"),
+    }
+    assert result["provider_guard_after_ok"] is False
+
+
+def test_new4_ladder_pair_rung_dirty_counter_timeout_aborts_remaining(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("c", "chi", "cor_angle"),
+    )
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("a", "c", "chi", "cor_angle"),
+    )
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        payload = {
+            "rung": 4,
+            "rung_name": "pair_a_c",
+            "status": "timeout",
+            "active_params": list(active_names),
+            "var_names": list(active_names),
+            "candidate_param_names": list(active_names),
+            "effective_var_names_seen_by_solver": list(active_names),
+            "dirty_timeout_abort": False,
+            "fixed_source_counters_dirty_seen": True,
+            "fixed_source_counters_clean_at_last_heartbeat": False,
+            "fixed_source_counter_failures_at_last_heartbeat": ["fallback_row_count=1"],
+            "elapsed_s": 0.01,
+            "timeout_s": 0.01,
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="dirty_counter_pair_timeout",
+        one_param_summary=one_param_path,
+        one_param_diagnosis_summary=diagnosis_path,
+        caked_point_reprojection_report=caked_path,
+    )
+    pair_report = json.loads(
+        (tmp_path / "dirty_counter_pair_timeout" / "rung_04_pair_a_c.json").read_text()
+    )
+
+    assert attempted == [["a", "c"]]
+    assert pair_report["failure_reason"] == "fixed_source_or_pair_integrity_lost"
+    assert result["status"] == "failed"
+    assert {
+        (item["pair_name"], item["skip_reason"])
+        for item in result["skipped_pairs"]
+    } >= {("chi_cor_angle", "fixed_source_or_pair_integrity_lost")}
+    assert result["provider_guard_after_ok"] is False
+
+
+def test_new4_ladder_pair_rung_fallback_rows_fail_integrity(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=("c",),
+    )
+    _install_pair_rung_common_stubs(monkeypatch, ladder, active_params=("a", "c"))
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = _green_pair_report(active_names, fallback_row_count=1)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="pair_fallback",
+        one_param_summary=one_param_path,
+        one_param_diagnosis_summary=diagnosis_path,
+        caked_point_reprojection_report=caked_path,
+    )
+    pair_report = json.loads(
+        (tmp_path / "pair_fallback" / "rung_04_pair_a_c.json").read_text()
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "no_pair_solve_passed"
+    assert result["any_pair_loss"] is True
+    assert pair_report["failure_reason"] == "fixed_source_or_pair_integrity_lost"
+
+
+@pytest.mark.parametrize(
+    ("a_c_passes", "expected_extensions"),
+    [
+        (False, []),
+        (True, [["c", "psi_z"], ["a", "psi_z"]]),
+    ],
+)
+def test_new4_ladder_pair_rung_psi_extensions_require_a_c_pass(
+    monkeypatch,
+    tmp_path,
+    a_c_passes,
+    expected_extensions,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    active = (
+        "a",
+        "c",
+        "psi_z",
+        "chi",
+        "cor_angle",
+        "theta_initial",
+        "corto_detector",
+        "zs",
+        "zb",
+    )
+    one_param_path, diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=active,
+    )
+    _install_pair_rung_common_stubs(monkeypatch, ladder, active_params=active)
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        names = [str(name) for name in active_names]
+        attempted.append(names)
+        payload = _green_pair_report(
+            names,
+            fallback_row_count=0 if names != ["a", "c"] or a_c_passes else 1,
+        )
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    ladder._run_pair_stage(
+        state_path=state_path,
+        background_index=0,
+        run_dir=tmp_path / f"psi_extensions_{a_c_passes}",
+        context=_minimal_new4_ladder_context(ladder),
+        sensitivity=_green_rung2_report(active_params=active),
+        reports=[],
+        state_hash_before=_hash_file(state_path),
+        max_nfev=20,
+        timeout_seconds=120.0,
+        one_param_summary_path=one_param_path,
+        one_param_diagnosis_summary_path=diagnosis_path,
+        caked_point_reprojection_report_path=caked_path,
+        include_psi_extension_pairs=True,
+    )
+
+    assert [item for item in attempted if "psi_z" in item] == expected_extensions
+
+
+def test_new4_ladder_block_parser_accepts_block_aliases_and_pair_summary() -> None:
+    ladder = _load_new4_ladder_module()
+    parser = ladder.build_arg_parser()
+
+    block_args = parser.parse_args(
+        [
+            "--state",
+            "new4.json",
+            "--background-index",
+            "0",
+            "--output-root",
+            "out",
+            "--max-rung",
+            "block",
+            "--pair-summary",
+            "pairs.json",
+        ]
+    )
+    blocks_args = parser.parse_args(
+        [
+            "--state",
+            "new4.json",
+            "--background-index",
+            "0",
+            "--output-root",
+            "out",
+            "--max-rung",
+            "blocks",
+        ]
+    )
+
+    assert block_args.max_rung == "block"
+    assert block_args.pair_summary == "pairs.json"
+    assert blocks_args.max_rung == "blocks"
+
+
+def _write_block_pair_summary(
+    ladder,
+    tmp_path,
+    state_path,
+    *,
+    passed_pairs,
+    status="ok",
+    stale_hash=False,
+) -> Path:
+    state_hash = _hash_file(state_path)
+    summary = {
+        "rung": 4,
+        "rung_name": "pair_summary",
+        "status": str(status),
+        "state_path": str(state_path.resolve()),
+        "background_index": 0,
+        "state_sha256_before": "stale" if stale_hash else state_hash,
+        "state_sha256_after": state_hash,
+        "state_hash_unchanged": not stale_hash,
+        "provider_guard_after_ok": True,
+        "passed_pairs": [
+            {"pair_name": "_".join(pair), "pair": [str(name) for name in pair]}
+            for pair in passed_pairs
+        ],
+        "stable_pairs": [
+            {"pair_name": "_".join(pair), "pair": [str(name) for name in pair]}
+            for pair in passed_pairs
+        ],
+    }
+    path = tmp_path / "rung_04_pair_summary.json"
+    ladder._write_json(path, summary)
+    return path
+
+
+def _install_block_rung_common_stubs(monkeypatch, ladder, *, active_params) -> None:
+    _install_pair_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=tuple(active_params),
+    )
+
+
+def _green_block_report(
+    active_names,
+    *,
+    status="ok",
+    fallback_row_count=0,
+    after_rms_px=9.8,
+    after_max_error_px=19.0,
+    dirty_timeout_abort=False,
+    effective_names=None,
+) -> dict[str, object]:
+    payload = _green_pair_report(
+        active_names,
+        status=status,
+        fallback_row_count=fallback_row_count,
+        after_rms_px=after_rms_px,
+        after_max_error_px=after_max_error_px,
+        dirty_timeout_abort=dirty_timeout_abort,
+    )
+    names = [str(name) for name in active_names]
+    payload.update(
+        {
+            "rung": 5,
+            "rung_name": "block_" + "_".join(names),
+            "active_params": names,
+            "var_names": names,
+            "candidate_param_names": names,
+            "effective_var_names_seen_by_solver": (
+                [str(name) for name in effective_names]
+                if effective_names is not None
+                else names
+            ),
+        }
+    )
+    return payload
+
+
+def test_new4_ladder_block_rung_runs_dependency_backed_blocks_not_a_c(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(
+            ("a", "c"),
+            ("a", "psi_z"),
+            ("chi", "cor_angle"),
+            ("theta_initial", "cor_angle"),
+            ("corto_detector", "theta_initial"),
+            ("zs", "zb"),
+        ),
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=(
+            "a",
+            "c",
+            "psi_z",
+            "chi",
+            "cor_angle",
+            "theta_initial",
+            "corto_detector",
+            "zs",
+            "zb",
+        ),
+    )
+    attempted: list[list[str]] = []
+    seen_hashes: list[str] = []
+
+    def _solver(*, active_names, output_path, state_hash_before, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        seen_hashes.append(str(state_hash_before))
+        payload = _green_block_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="blocks",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+    run_dir = tmp_path / "blocks"
+    first_report = json.loads(
+        (
+            run_dir / "rung_05_block_corto_detector_theta_initial_cor_angle.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert result["status"] == "ok"
+    assert attempted == [
+        ["corto_detector", "theta_initial", "cor_angle"],
+        ["chi", "cor_angle", "theta_initial"],
+        ["corto_detector", "theta_initial", "zs", "zb"],
+        ["a", "c", "psi_z"],
+    ]
+    assert ["a", "c"] not in attempted
+    assert not (run_dir / "rung_05_block_a_c.json").exists()
+    assert len(set(seen_hashes)) == 1
+    assert first_report["candidate_param_names"] == [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+    ]
+    assert first_report["var_names"] == first_report["candidate_param_names"]
+    assert (
+        first_report["effective_var_names_seen_by_solver"]
+        == first_report["candidate_param_names"]
+    )
+    assert first_report["provider_guard_after_ok"] is True
+    assert result["state_hash_unchanged"] is True
+    assert result["passed_blocks"]
+    assert result["recommended_next_full_candidate"] is not None
+    assert not list(run_dir.glob("rung_06_*.json"))
+    assert not list(run_dir.glob("*full*"))
+    assert not list(run_dir.glob("*feature*"))
+    assert not list(run_dir.glob("*baseline*"))
+
+
+def test_new4_ladder_block_default_builds_same_run_evidence(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=(
+            "a",
+            "c",
+            "psi_z",
+            "chi",
+            "cor_angle",
+            "theta_initial",
+            "corto_detector",
+            "zs",
+            "zb",
+        ),
+    )
+    calls: list[str] = []
+
+    def _one_param_stage(
+        *,
+        run_dir,
+        state_path,
+        background_index,
+        state_hash_before,
+        reports,
+        **_kwargs,
+    ):
+        calls.append("one_param")
+        summary = {
+            "status": "ok",
+            "state_path": str(Path(state_path).resolve()),
+            "background_index": int(background_index),
+            "state_sha256_before": state_hash_before,
+            "state_sha256_after": state_hash_before,
+            "state_hash_unchanged": True,
+            "provider_guard_after_ok": True,
+            "dirty_timeout_abort": False,
+            "passed_params": [
+                "a",
+                "c",
+                "psi_z",
+                "chi",
+                "cor_angle",
+                "theta_initial",
+                "corto_detector",
+                "zs",
+                "zb",
+            ],
+        }
+        ladder._write_json(Path(run_dir) / "rung_03_one_param_summary.json", summary)
+        reports.append(summary)
+        return summary
+
+    def _caked_guard(*, output_root, run_id, state_path, background_index):
+        calls.append("caked")
+        state_hash = _hash_file(Path(state_path))
+        report = {
+            "status": "pass",
+            "background_index": int(background_index),
+            "state_hash_before": state_hash,
+            "state_hash_after": state_hash,
+            "point_count": 7,
+            "exact_projector_available": True,
+            "theta_projector_signature_changed": True,
+            "distance_projector_signature_changed": True,
+            "full_background_recake_call_count": 0,
+            "provider_guard_before_ok": True,
+            "provider_guard_after_ok": True,
+            "new4_state_hash_unchanged": True,
+        }
+        report_path = Path(output_root) / str(run_id) / "rung_03b_caked_point_reprojection.json"
+        ladder._write_json(report_path, report)
+        report["report_path"] = str(report_path)
+        return report
+
+    def _pair_stage(
+        *,
+        run_dir,
+        state_path,
+        include_psi_extension_pairs,
+        caked_point_reprojection_report_path,
+        **_kwargs,
+    ):
+        calls.append("pairs")
+        assert include_psi_extension_pairs is True
+        assert caked_point_reprojection_report_path is not None
+        return json.loads(
+            _write_block_pair_summary(
+                ladder,
+                Path(run_dir),
+                Path(state_path),
+                passed_pairs=(
+                    ("a", "c"),
+                    ("c", "psi_z"),
+                    ("chi", "cor_angle"),
+                    ("theta_initial", "cor_angle"),
+                    ("corto_detector", "theta_initial"),
+                    ("zs", "zb"),
+                ),
+            ).read_text(encoding="utf-8")
+        )
+
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        payload = _green_block_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_one_param_stage", _one_param_stage)
+    monkeypatch.setattr(ladder, "_run_caked_point_reprojection_guard", _caked_guard)
+    monkeypatch.setattr(ladder, "_run_pair_stage", _pair_stage)
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="default_blocks",
+    )
+
+    assert calls == ["one_param", "caked", "pairs"]
+    assert result["status"] == "ok"
+    assert attempted[-1] == ["a", "c", "psi_z"]
+    assert (tmp_path / "default_blocks" / "rung_05_block_summary.json").exists()
+
+
+def test_new4_ladder_block_missing_dependency_skips_not_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("corto_detector", "theta_initial"),),
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("block solve must not run")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="missing_dep",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+    block_report = json.loads(
+        (
+            tmp_path
+            / "missing_dep"
+            / "rung_05_block_corto_detector_theta_initial_cor_angle.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert block_report["status"] == "skipped"
+    assert block_report["skip_reason"] == "missing_pair_evidence"
+    assert result["failed_blocks"] == []
+    assert result["skipped_blocks"]
+    assert result["failure_reason"] == "no_block_solve_passed"
+
+
+def test_new4_ladder_block_rejects_stale_pair_summary_before_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("corto_detector", "theta_initial"), ("theta_initial", "cor_angle")),
+        stale_hash=True,
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("stale evidence must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="stale_pair_summary",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "pair_evidence_not_current"
+    assert "pair:state_sha256_before_not_current" in result["evidence_failures"]
+    assert not [
+        path
+        for path in (tmp_path / "stale_pair_summary").glob("rung_05_block_*.json")
+        if path.name != "rung_05_block_summary.json"
+    ]
+
+
+def test_new4_ladder_block_stale_caked_report_blocks_theta_before_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        caked_status="fail",
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("corto_detector", "theta_initial"), ("theta_initial", "cor_angle")),
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("caked failure must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="stale_caked_block",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+    block_report = json.loads(
+        (
+            tmp_path
+            / "stale_caked_block"
+            / "rung_05_block_corto_detector_theta_initial_cor_angle.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert block_report["status"] == "failed"
+    assert block_report["failure_reason"] == "caked_point_reprojection_guard_failed"
+    assert "status_not_pass" in block_report["block_guard_failures"]
+    assert result["failed_blocks"] == [
+        {
+            "block_name": "corto_detector_theta_initial_cor_angle",
+            "block": ["corto_detector", "theta_initial", "cor_angle"],
+        }
+    ]
+
+
+def test_new4_ladder_block_effective_var_names_must_match_request(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("a", "c"), ("a", "psi_z")),
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("a", "c", "psi_z"),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = _green_block_report(active_names, effective_names=["a", "c"])
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="bad_effective_names",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+    block_report = json.loads(
+        (
+            tmp_path / "bad_effective_names" / "rung_05_block_a_c_psi_z.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert block_report["status"] == "failed"
+    assert block_report["failure_reason"] == "solve_flag_guard_failed"
+    assert "effective_var_names_seen_by_solver_not_block" in block_report["block_guard_failures"]
+    assert result["failure_reason"] == "no_block_solve_passed"
+
+
+def test_new4_ladder_block_fallback_rows_fail_integrity(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("a", "c"), ("a", "psi_z")),
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("a", "c", "psi_z"),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = _green_block_report(active_names, fallback_row_count=1)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="block_fallback",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+    block_report = json.loads(
+        (tmp_path / "block_fallback" / "rung_05_block_a_c_psi_z.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert block_report["status"] == "failed"
+    assert block_report["failure_reason"] == "fixed_source_or_pair_integrity_lost"
+    assert result["failure_reason"] == "no_block_solve_passed"
+
+
+def test_new4_ladder_block_timeout_writes_partial_json(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("a", "c"), ("a", "psi_z")),
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("a", "c", "psi_z"),
+    )
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        payload = {
+            "rung": 5,
+            "rung_name": "block_a_c_psi_z",
+            "status": "timeout",
+            "active_params": list(active_names),
+            "var_names": list(active_names),
+            "candidate_param_names": list(active_names),
+            "effective_var_names_seen_by_solver": list(active_names),
+            "dirty_timeout_abort": False,
+            "last_nfev": 2,
+            "last_residual_norm": 12.0,
+            "last_rms_px": 9.9,
+            "last_max_error_px": 19.9,
+            "elapsed_s": 0.01,
+            "timeout_s": 0.01,
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="block_timeout",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+    block_report = json.loads(
+        (tmp_path / "block_timeout" / "rung_05_block_a_c_psi_z.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert block_report["status"] == "timeout"
+    assert block_report["failure_reason"] == "timeout"
+    assert block_report["last_nfev"] == 2
+    assert result["timed_out_blocks"] == [{"block_name": "a_c_psi_z", "block": ["a", "c", "psi_z"]}]
+    assert result["failure_reason"] == "no_block_solve_passed"
+
+
+def test_new4_ladder_block_dirty_timeout_aborts_remaining(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(
+            ("a", "c"),
+            ("a", "psi_z"),
+            ("chi", "cor_angle"),
+            ("theta_initial", "cor_angle"),
+            ("corto_detector", "theta_initial"),
+            ("zs", "zb"),
+        ),
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=(
+            "a",
+            "c",
+            "psi_z",
+            "chi",
+            "cor_angle",
+            "theta_initial",
+            "corto_detector",
+            "zs",
+            "zb",
+        ),
+    )
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        payload = {
+            "rung": 5,
+            "rung_name": "block_corto_detector_theta_initial_cor_angle",
+            "status": "timeout",
+            "active_params": list(active_names),
+            "var_names": list(active_names),
+            "candidate_param_names": list(active_names),
+            "effective_var_names_seen_by_solver": list(active_names),
+            "dirty_timeout_abort": True,
+            "elapsed_s": 0.01,
+            "timeout_s": 0.01,
+        }
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="dirty_block_timeout",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert attempted == [["corto_detector", "theta_initial", "cor_angle"]]
+    assert result["dirty_timeout_abort"] is True
+    assert result["timed_out_blocks"] == [
+        {
+            "block_name": "corto_detector_theta_initial_cor_angle",
+            "block": ["corto_detector", "theta_initial", "cor_angle"],
+        }
+    ]
+    assert {
+        (item["block_name"], tuple(item["block"]))
+        for item in result["skipped_blocks"]
+    } >= {
+        ("chi_cor_angle_theta_initial", ("chi", "cor_angle", "theta_initial")),
+        ("a_c_psi_z", ("a", "c", "psi_z")),
+    }
 
 
 def _run_one_param_with_sensitivity_payload(
@@ -6145,6 +7833,141 @@ def test_new4_ladder_dirty_child_kill_aborts_variant_runner(monkeypatch, tmp_pat
     assert result["failure_reason"] == "dirty_timeout_abort"
 
 
+def test_new4_ladder_one_param_inactive_filter_aborts_variant_runner(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    calls: list[str] = []
+
+    def _run_ladder(*, timestamp, **_kwargs):
+        calls.append(str(timestamp))
+        return {
+            "status": "failed",
+            "failure_reason": "filtered_param_not_active",
+            "reports": [],
+        }
+
+    monkeypatch.setattr(ladder, "run_ladder", _run_ladder)
+
+    result = ladder.run_one_param_diagnosis_variants(
+        state_path=tmp_path / "new4.json",
+        background_index=0,
+        output_root=tmp_path / "variants",
+        one_param_filter="a",
+    )
+
+    written = json.loads((tmp_path / "variants" / "variant_summary.json").read_text())
+    assert calls == ["a_nfev5_t120"]
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "filtered_param_not_active"
+    assert written["failure_reason"] == "filtered_param_not_active"
+
+
+def test_new4_ladder_one_param_no_solve_guard_failure_aborts_variant_runner(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    calls: list[str] = []
+
+    def _run_ladder(*, timestamp, **_kwargs):
+        calls.append(str(timestamp))
+        return {
+            "status": "aborted",
+            "reason": "provider_guard_failed",
+            "reports": [],
+        }
+
+    monkeypatch.setattr(ladder, "run_ladder", _run_ladder)
+
+    result = ladder.run_one_param_diagnosis_variants(
+        state_path=tmp_path / "new4.json",
+        background_index=0,
+        output_root=tmp_path / "variants",
+        one_param_filter="a",
+    )
+
+    assert calls == ["a_nfev5_t120"]
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "provider_guard_failed"
+
+
+def test_new4_ladder_one_param_nonfinite_result_residual_not_usable(tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    point_summary = {
+        **_sensitivity_point_summary(),
+        "unweighted_peak_rms_px": 5.0,
+        "unweighted_peak_max_px": 8.0,
+    }
+    request_rows = [
+        {
+            "optimizer_request_has_fixed_source": True,
+            "source_table_index": index,
+            "source_peak_index": index,
+        }
+        for index in range(7)
+    ]
+    request = SimpleNamespace(
+        var_names=["a"],
+        candidate_param_names=["a"],
+        params={"a": 4.1},
+        dataset_specs=[{"measured_peaks": request_rows}],
+        measured_peaks=[],
+        refinement_config={
+            "bounds": {"a": (3.0, 5.0)},
+            "optimizer_request_handoff_summary": {
+                "provider_pair_count": 7,
+                "dataset_pair_count": 7,
+                "provider_to_optimizer_identity_match": True,
+                "provider_to_optimizer_point_match": True,
+            },
+        },
+    )
+    result = SimpleNamespace(
+        fun=np.asarray([1.0, np.nan], dtype=float),
+        point_match_summary=point_summary,
+        rms_px=5.0,
+        x=np.asarray([4.2], dtype=float),
+        nfev=3,
+        success=True,
+        message="ok",
+    )
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    state_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
+
+    report = ladder._result_report(
+        request=request,
+        result=result,
+        rung=3,
+        rung_name="one_param_a",
+        started_at=0.0,
+        before_summary={**point_summary, "unweighted_peak_rms_px": 6.0},
+        extra={
+            "least_squares_called": True,
+            "optimizer_solve_called": True,
+            "real_solve_called": True,
+            "state_sha256_before": state_hash,
+            "state_sha256_after": state_hash,
+            "state_hash_unchanged": True,
+        },
+    )
+    finalized = ladder._finalize_one_param_report(
+        report,
+        param_name="a",
+        state_path=state_path,
+        state_hash_before=state_hash,
+        timeout_seconds=120.0,
+    )
+
+    assert report["residuals_finite"] is False
+    assert not np.isfinite(report["last_residual_norm"])
+    assert finalized["status"] == "failed"
+    assert finalized["failure_reason"] == "non_finite_residual"
+    assert finalized["diagnosis_classification"] != "usable"
+
+
 def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> None:
     ladder = _load_new4_ladder_module()
     state_path = tmp_path / "new4.json"
@@ -6260,6 +8083,56 @@ def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> Non
     assert written["last_residual_norm"] == 12.0
     assert written["last_point_match_summary"]["matched_pair_count"] == 7
     assert written["heartbeat_count"] == 1
+
+
+def test_new4_ladder_warm_solver_passes_context_to_worker(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    context = {"prepared_run": object()}
+    seen: dict[str, object] = {}
+
+    def _worker(**kwargs):
+        seen.update(kwargs)
+        payload = {
+            "rung": 4,
+            "rung_name": "pair_a_c",
+            "status": "ok",
+            "pass": True,
+            "active_params": ["a", "c"],
+            "candidate_param_names": ["a", "c"],
+            "phase_timing_s": {"capture_solver_context_s": 0.0},
+            "first_residual_elapsed_s": 0.01,
+            "solver_context_reused": True,
+            "diagnostic_logging": True,
+        }
+        ladder._write_json(kwargs["output_path"], payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_worker_solve_once", _worker)
+
+    report = ladder._run_solver_rung_with_timeout(
+        state_path=state_path,
+        background_index=0,
+        active_names=["a", "c"],
+        output_path=tmp_path / "rung_04_pair_a_c.json",
+        max_nfev=20,
+        timeout_seconds=1.0,
+        rung=4,
+        rung_name="pair_a_c",
+        use_subprocess=False,
+        context=context,
+        diagnostic_logging=True,
+    )
+
+    assert seen["context"] is context
+    assert seen["diagnostic_logging"] is True
+    assert report["solver_context_reused"] is True
+    assert report["phase_timing_s"]["capture_solver_context_s"] == 0.0
+    assert report["first_residual_elapsed_s"] == 0.01
 
 
 def test_new4_ladder_does_not_mutate_new4_state(monkeypatch, tmp_path) -> None:
@@ -11368,15 +13241,15 @@ def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_cak
         orientation_cfg={},
     )
 
-    assert dataset["initial_pairs_display"][0]["bg_display"] == (30.0, 40.0)
-    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 40.0
-    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == 60.0
-    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 40.0
-    assert dataset["measured_for_fit"][0]["background_phi_deg"] == 60.0
-    assert dataset["measured_for_fit"][0]["background_detector_x"] == 30.0
-    assert dataset["measured_for_fit"][0]["background_detector_y"] == 40.0
-    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 40.0
-    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == 60.0
+    assert dataset["initial_pairs_display"][0]["bg_display"] == (13.0, -56.0)
+    assert dataset["initial_pairs_display"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["initial_pairs_display"][0]["background_phi_deg"] == -36.0
+    assert dataset["measured_for_fit"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["measured_for_fit"][0]["background_phi_deg"] == -36.0
+    assert dataset["measured_for_fit"][0]["background_detector_x"] == 13.0
+    assert dataset["measured_for_fit"][0]["background_detector_y"] == -56.0
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == 23.0
+    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == -36.0
 
 
 def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> None:
@@ -16632,7 +18505,13 @@ def test_solve_geometry_fit_request_forwards_status_callback_when_supported() ->
             "var_names": ["gamma", "a"],
             "pixel_tol": float("inf"),
             "experimental_image": None,
-            "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
+            "dataset_specs": [
+                {
+                    "dataset_index": 0,
+                    "theta_initial": 3.0,
+                    "measured_peaks": [{"x": 1.0, "y": 2.0}],
+                }
+            ],
             "refinement_config": {
                 "bounds": {"gamma": [0.0, 1.0]},
                 "use_numba": False,
@@ -20337,6 +22216,13 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
                     "dataset_index": 0,
                     "theta_initial": 3.0,
                     "fit_run_id": "20260328_120000",
+                    "measured_peaks": [
+                        {
+                            "x": 1.0,
+                            "y": 2.0,
+                            "fit_run_id": "20260328_120000",
+                        }
+                    ],
                 }
             ],
             "refinement_config": {
@@ -20841,6 +22727,455 @@ def test_geometry_fit_caked_roi_angle_point_uses_canonical_angles_only() -> None
             "caked_y": 160.0,
         }
     ) is None
+
+
+def _load_new4_caked_reprojection_module():
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "debug"
+        / "run_new4_caked_point_reprojection_check.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "run_new4_caked_point_reprojection_check",
+        module_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _make_caked_point_reprojection_context(
+    *,
+    projector_kind="exact_caked_bundle",
+    reported_input_frame=None,
+    reported_source="fit_space_projector_native_detector",
+    include_projector=True,
+    include_bindings=False,
+):
+    projector_calls = []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        theta = float(local_params.get("theta_initial", 0.0))
+        distance = float(local_params.get("corto_detector", 0.0))
+        projector_calls.append(
+            {
+                "anchor_kind": str(anchor_kind),
+                "input_frame": str(input_frame),
+                "cols": cols_arr.tolist(),
+                "rows": rows_arr.tolist(),
+                "theta_initial": theta,
+                "corto_detector": distance,
+            }
+        )
+        return {
+            "two_theta_deg": cols_arr * 0.01 + theta * 0.5 + distance * 0.001,
+            "phi_deg": rows_arr * 0.01 + theta * 0.05 + distance * 0.0002,
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(
+                input_frame if reported_input_frame is None else reported_input_frame
+            ),
+            "fit_space_projector_kind": str(projector_kind),
+            "cake_bundle_signature": f"sig-theta-{theta:.8f}-dist-{distance:.8f}",
+            "fit_space_local_params_signature": (
+                f"lp-theta-{theta:.8f}-dist-{distance:.8f}"
+            ),
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": "identity_native_detector",
+            "native_frame_conversion_count": 0,
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+            "caked_projection_source": str(reported_source),
+        }
+
+    entries = []
+    provider_pairs = []
+    for index in range(7):
+        point = [100.0 + index, 200.0 + 2.0 * index]
+        hkl = [index, 0, index + 1]
+        q_group_key = ["q_group", "primary", index, index + 1]
+        entries.append(
+            {
+                "detector_x": point[0],
+                "detector_y": point[1],
+                "hkl": hkl,
+                "q_group_key": q_group_key,
+                "source_branch_index": 0,
+                "caked_x": -999999.0,
+                "caked_y": 999999.0,
+                "raw_caked_x": -888888.0,
+                "raw_caked_y": 888888.0,
+                "background_two_theta_deg": -777777.0,
+                "background_phi_deg": 777777.0,
+                "refined_sim_caked_x": -666666.0,
+                "refined_sim_caked_y": 666666.0,
+            }
+        )
+        provider_pairs.append(
+            {
+                "pair_index": index,
+                "normalized_hkl": hkl,
+                "q_group_key": q_group_key,
+                "source_branch_index": 0,
+            }
+        )
+    context = {
+        "params": {
+            "theta_initial": 2.0,
+            "corto_detector": 100.0,
+            "center": [10.0, 10.0],
+            "pixel_size": 0.1,
+        },
+        "saved_entries": entries,
+        "dataset": {
+            "spec": {
+                "fit_space_projector_kind": str(projector_kind),
+            }
+        },
+        "geometry_runtime_cfg": {
+            "bounds": {
+                "theta_initial": [-10.0, 10.0],
+                "corto_detector": [10.0, 200.0],
+            }
+        },
+    }
+    if include_projector:
+        context["dataset"]["spec"]["fit_space_projector"] = projector
+    if include_bindings:
+        context["bindings"] = object()
+    provider_report = {
+        "ok": True,
+        "manual_point_pair_count": 7,
+        "pairs": provider_pairs,
+    }
+    return context, provider_report, projector_calls
+
+
+def _run_stub_caked_point_reprojection(tmp_path, **context_kwargs):
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+    provider_after_factory = context_kwargs.pop("provider_after_factory", None)
+    context, provider_report, projector_calls = _make_caked_point_reprojection_context(
+        **context_kwargs
+    )
+    report = module.run_caked_point_reprojection_probe_from_context(
+        state_path=state_path,
+        background_index=0,
+        context=context,
+        provider_before_report=provider_report,
+        provider_after_factory=(
+            provider_after_factory
+            if provider_after_factory is not None
+            else lambda: dict(provider_report)
+        ),
+        run_dir=tmp_path / "new4_run",
+    )
+    return report, projector_calls, module
+
+
+def test_caked_point_reprojection_recomputes_when_theta_changes(tmp_path) -> None:
+    report, projector_calls, _module = _run_stub_caked_point_reprojection(tmp_path)
+
+    assert report["status"] == "pass"
+    assert report["point_only_reprojection_called"] is True
+    assert len(projector_calls) == 3
+    assert all(call["input_frame"] == "native_detector" for call in projector_calls)
+    assert report["theta_projector_signature_changed"] is True
+    assert report["any_theta_point_shifted"] is True
+    assert report["theta_two_theta_changed"] is True
+    assert report["all_theta_reprojected_points_finite"] is True
+    assert report["exact_projector_available"] is True
+    assert report["all_exact_projector_used"] is True
+    assert report["all_projection_projector_kinds_exact"] is True
+    assert report["all_projection_signatures_present"] is True
+    assert report["all_projection_input_frames_native"] is True
+    assert report["all_projection_sources_native"] is True
+    assert report["stale_alias_guard_installed"] is True
+    assert report["stale_caked_field_read_count"] == 0
+    assert report["full_background_recake_called"] is False
+    assert report["full_background_recake_call_count"] == 0
+    assert all(pair["stale_caked_fields_used"] is False for pair in report["pairs"])
+
+
+def test_caked_point_reprojection_recomputes_when_corto_detector_changes(tmp_path) -> None:
+    report, _projector_calls, _module = _run_stub_caked_point_reprojection(tmp_path)
+
+    assert report["status"] == "pass"
+    assert report["distance_projector_signature_changed"] is True
+    assert report["any_distance_point_shifted"] is True
+    assert report["all_distance_reprojected_points_finite"] is True
+    assert report["full_background_recake_called"] is False
+    assert report["full_background_recake_call_count"] == 0
+
+
+def test_caked_point_reprojection_uses_detector_pixel_path(tmp_path) -> None:
+    report, projector_calls, _module = _run_stub_caked_point_reprojection(tmp_path)
+
+    first_pair = report["pairs"][0]
+    expected_base = [100.0 * 0.01 + 2.0 * 0.5 + 100.0 * 0.001, 200.0 * 0.01 + 2.0 * 0.05 + 100.0 * 0.0002]
+    assert first_pair["base_caked_point"] == pytest.approx(expected_base)
+    assert first_pair["base_caked_point"][0] != pytest.approx(-777777.0)
+    assert first_pair["stale_caked_fields_present"] is True
+    assert first_pair["stale_caked_fields_used"] is False
+    assert first_pair["projection_input_frame"] == "native_detector"
+    assert first_pair["caked_projection_source"] == "fit_space_projector_native_detector"
+    assert first_pair["exact_projector_used"] is True
+    assert projector_calls[0]["cols"] == pytest.approx([100.0 + i for i in range(7)])
+    assert projector_calls[0]["rows"] == pytest.approx([200.0 + 2.0 * i for i in range(7)])
+
+
+def test_caked_point_reprojection_does_not_recake_background_image(tmp_path) -> None:
+    report, _projector_calls, _module = _run_stub_caked_point_reprojection(tmp_path)
+
+    assert report["status"] == "pass"
+    assert report["full_recake_guard_installed"] is True
+    assert report["full_background_recake_called"] is False
+    assert report["full_background_recake_call_count"] == 0
+    assert report["point_only_reprojection_call_count"] == 3
+
+
+def test_caked_point_reprojection_fails_without_exact_projector(tmp_path) -> None:
+    report, _projector_calls, _module = _run_stub_caked_point_reprojection(
+        tmp_path,
+        projector_kind="approximate_projector",
+    )
+
+    assert report["status"] == "fail"
+    assert report["exact_projector_available"] is False
+    assert report["all_exact_projector_used"] is False
+    assert report["all_projection_projector_kinds_exact"] is False
+    assert "exact_projector_available" in report["failures"]
+
+
+def test_caked_point_reprojection_fails_on_wrong_projector_input_frame(tmp_path) -> None:
+    report, _projector_calls, _module = _run_stub_caked_point_reprojection(
+        tmp_path,
+        reported_input_frame="fit_detector",
+    )
+
+    assert report["status"] == "fail"
+    assert report["all_projection_input_frames_native"] is False
+    assert "all_projection_input_frames_native" in report["failures"]
+    assert report["projection_metadata"]["base"]["projection_input_frame"] == "fit_detector"
+
+
+def test_caked_point_reprojection_fails_on_wrong_projection_source(tmp_path) -> None:
+    report, _projector_calls, _module = _run_stub_caked_point_reprojection(
+        tmp_path,
+        reported_source="stale_caked_alias",
+    )
+
+    assert report["status"] == "fail"
+    assert report["all_projection_sources_native"] is False
+    assert "all_projection_sources_native" in report["failures"]
+    assert report["projection_metadata"]["base"]["caked_projection_source"] == "stale_caked_alias"
+
+
+def test_caked_point_reprojection_stale_alias_guard_blocks_reads(tmp_path) -> None:
+    module = _load_new4_caked_reprojection_module()
+    guard = module.StaleAliasAccessGuard()
+    wrapped = guard.wrap_entries([{"detector_x": 1.0, "detector_y": 2.0, "caked_x": -1.0}])[0]
+
+    assert "caked_x" in wrapped
+    with pytest.raises(RuntimeError, match="stale caked alias read forbidden"):
+        wrapped.get("caked_x")
+    assert guard.read_count == 1
+
+    report, _projector_calls, _module = _run_stub_caked_point_reprojection(tmp_path)
+    assert report["status"] == "pass"
+    assert report["stale_alias_guard_installed"] is True
+    assert report["stale_caked_field_read_count"] == 0
+
+
+def test_caked_point_reprojection_provider_after_recake_attempt_fails(tmp_path) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+    context, provider_report, _projector_calls = _make_caked_point_reprojection_context()
+
+    def provider_after_factory():
+        module.exact_cake_portable.convert_image_to_angle_space()
+        return dict(provider_report)
+
+    report = module.run_caked_point_reprojection_probe_from_context(
+        state_path=state_path,
+        background_index=0,
+        context=context,
+        provider_before_report=provider_report,
+        provider_after_factory=provider_after_factory,
+        run_dir=tmp_path / "new4_run",
+    )
+
+    assert report["status"] == "fail"
+    assert report["full_background_recake_called"] is True
+    assert report["full_background_recake_call_count"] == 1
+    assert "full_background_recake_not_called" in report["failures"]
+
+
+def test_caked_point_reprojection_projector_recovery_recake_attempt_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+    context, provider_report, _projector_calls = _make_caked_point_reprojection_context(
+        include_projector=False,
+        include_bindings=True,
+    )
+
+    def build_dataset_with_forbidden_recake(*_args, **_kwargs):
+        module.exact_cake_portable.convert_image_to_angle_space()
+        return {}
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_build_single_background_dataset",
+        build_dataset_with_forbidden_recake,
+    )
+
+    report = module.run_caked_point_reprojection_probe_from_context(
+        state_path=state_path,
+        background_index=0,
+        context=context,
+        provider_before_report=provider_report,
+        provider_after_factory=lambda: dict(provider_report),
+        run_dir=tmp_path / "new4_run",
+    )
+
+    assert report["status"] == "fail"
+    assert report["full_background_recake_called"] is True
+    assert report["full_background_recake_call_count"] == 1
+    assert "full_background_recake_not_called" in report["failures"]
+
+
+def test_new4_caked_point_reprojection_context_recake_attempt_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_run_point_provider_report_only",
+        lambda *_args, **_kwargs: {"ok": True, "manual_point_pair_count": 7},
+    )
+
+    def prepare_context_with_forbidden_recake(*_args, **_kwargs):
+        module.exact_cake_portable.convert_image_to_angle_space()
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_prepare_validation_context",
+        prepare_context_with_forbidden_recake,
+    )
+
+    report = module.run_new4_caked_point_reprojection_check(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "new4",
+        run_id="recake_context",
+    )
+
+    assert report["status"] == "fail"
+    assert report["full_recake_guard_installed"] is True
+    assert report["full_background_recake_called"] is True
+    assert report["full_background_recake_call_count"] == 1
+    assert "full_background_recake_not_called" in report["failures"]
+
+
+def test_new4_caked_point_reprojection_context_error_skips_without_recake(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_run_point_provider_report_only",
+        lambda *_args, **_kwargs: {"ok": True, "manual_point_pair_count": 7},
+    )
+    monkeypatch.setattr(
+        module.preflight,
+        "_prepare_validation_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileNotFoundError("missing local New4 image")
+        ),
+    )
+
+    report = module.run_new4_caked_point_reprojection_check(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "new4",
+        run_id="missing_context",
+    )
+
+    assert report["status"] == "skip"
+    assert report["classification"] == "validation_context_unavailable"
+    assert report["failures"] == []
+    assert report["full_background_recake_called"] is False
+    assert report["full_background_recake_call_count"] == 0
+    assert report["guard_error"].startswith("FileNotFoundError:")
+
+
+def test_new4_caked_point_reprojection_report(tmp_path) -> None:
+    if os.environ.get("RA_SIM_RUN_NEW4_CAKED_POINT_SMOKE") != "1":
+        pytest.skip("real New4 caked point smoke is opt-in")
+    state_path = (
+        Path(__file__).resolve().parents[1]
+        / "artifacts"
+        / "geometry_fit_gui_states"
+        / "new4.json"
+    )
+    if not state_path.is_file():
+        pytest.skip("new4 saved state unavailable")
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    manual_pairs = payload.get("state", {}).get("geometry", {}).get("manual_pairs", [])
+    background_paths = [
+        Path(str(pair.get("background_path")))
+        for pair in manual_pairs
+        if isinstance(pair, Mapping) and pair.get("background_path")
+    ]
+    missing_paths = [path for path in background_paths if not path.is_file()]
+    if missing_paths:
+        pytest.skip("local New4 image path unavailable")
+
+    module = _load_new4_caked_reprojection_module()
+    report = module.run_new4_caked_point_reprojection_check(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "new4",
+        run_id="smoke",
+    )
+
+    assert report["status"] == "pass"
+    assert report["point_count"] == 7
+    assert report["provider_guard_before_ok"] is True
+    assert report["provider_guard_after_ok"] is True
+    assert report["new4_state_hash_unchanged"] is True
+    assert report["exact_projector_available"] is True
+    assert report["all_exact_projector_used"] is True
+    assert report["all_projection_input_frames_native"] is True
+    assert report["all_projection_sources_native"] is True
+    assert report["full_background_recake_called"] is False
+    for pair in report["pairs"]:
+        assert pair["projection_input_frame"] == "native_detector"
+        assert pair["caked_projection_source"] == "fit_space_projector_native_detector"
+        assert pair["exact_projector_used"] is True
+        assert pair["stale_caked_fields_used"] is False
+        assert np.all(np.isfinite(pair["base_caked_point"]))
+        assert np.all(np.isfinite(pair["theta_perturbed_caked_point"]))
+        assert np.all(np.isfinite(pair["distance_perturbed_caked_point"]))
 
 
 def test_geometry_fit_canonical_live_source_entry_ignores_source_peak_mirror() -> None:

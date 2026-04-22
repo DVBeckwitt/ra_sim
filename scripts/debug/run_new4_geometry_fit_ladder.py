@@ -8,6 +8,7 @@ change saved GUI state.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import copy
 import hashlib
 import json
@@ -26,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from ra_sim import debug_controls
 from ra_sim.fitting import optimization as opt
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.io.data_loading import load_gui_state_file
@@ -129,6 +131,43 @@ FEATURE_RUNS = [
     "identifiability_features",
 ]
 
+RUNG4_DEFAULT_PAIRS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("a_c", ("a", "c")),
+    ("chi_cor_angle", ("chi", "cor_angle")),
+    ("theta_initial_cor_angle", ("theta_initial", "cor_angle")),
+    ("corto_detector_theta_initial", ("corto_detector", "theta_initial")),
+    ("zs_zb", ("zs", "zb")),
+)
+RUNG4_PSI_EXTENSION_PAIRS: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("c_psi_z", ("c", "psi_z")),
+    ("a_psi_z", ("a", "psi_z")),
+)
+RUNG5_BLOCKS: tuple[tuple[str, tuple[str, ...], tuple[tuple[str, str], ...]], ...] = (
+    (
+        "corto_detector_theta_initial_cor_angle",
+        ("corto_detector", "theta_initial", "cor_angle"),
+        (("corto_detector", "theta_initial"), ("theta_initial", "cor_angle")),
+    ),
+    (
+        "chi_cor_angle_theta_initial",
+        ("chi", "cor_angle", "theta_initial"),
+        (("chi", "cor_angle"), ("theta_initial", "cor_angle")),
+    ),
+    (
+        "corto_detector_theta_initial_zs_zb",
+        ("corto_detector", "theta_initial", "zs", "zb"),
+        (("corto_detector", "theta_initial"), ("zs", "zb")),
+    ),
+    (
+        "a_c_psi_z",
+        ("a", "c", "psi_z"),
+        (("a", "c"),),
+    ),
+)
+CAKED_REPROJECTION_REQUIRED_PARAMS = {"theta_initial", "theta_offset", "corto_detector"}
+PAIR_RMS_TOLERANCE_PX = 0.25
+PAIR_MAX_ERROR_TOLERANCE_PX = 1.0
+
 
 def _jsonable(value: object) -> object:
     if isinstance(value, Mapping):
@@ -160,11 +199,63 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
     )
 
 
+def _payload_sha256(payload: Mapping[str, object]) -> str:
+    encoded = json.dumps(_jsonable(dict(payload)), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _provider_report_evidence_hash(payload: Mapping[str, object]) -> str:
+    stable = {
+        str(key): value
+        for key, value in dict(payload).items()
+        if str(key) not in {"elapsed_seconds"}
+    }
+    return _payload_sha256(stable)
+
+
 def _read_json(path: Path) -> dict[str, object]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+@contextmanager
+def _solver_debug_logging_scope(enabled: bool):
+    """Disable expensive diagnostic file logging around normal warm solver probes."""
+
+    if bool(enabled):
+        yield
+        return
+
+    previous_disable = os.environ.get("RA_SIM_DISABLE_LOGGING")
+    previous_disable_all = os.environ.get("RA_SIM_DISABLE_ALL_LOGGING")
+    previous_intersection = os.environ.get("RA_SIM_LOG_INTERSECTION_CACHE")
+    os.environ["RA_SIM_DISABLE_LOGGING"] = "1"
+    os.environ["RA_SIM_DISABLE_ALL_LOGGING"] = "1"
+    os.environ["RA_SIM_LOG_INTERSECTION_CACHE"] = "0"
+    try:
+        with debug_controls.temporary_startup_debug_override("disable_all"):
+            yield
+    finally:
+        for key, value in (
+            ("RA_SIM_DISABLE_LOGGING", previous_disable),
+            ("RA_SIM_DISABLE_ALL_LOGGING", previous_disable_all),
+            ("RA_SIM_LOG_INTERSECTION_CACHE", previous_intersection),
+        ):
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _same_resolved_path(left: object, right: Path) -> bool:
+    if not left:
+        return False
+    try:
+        return Path(str(left)).expanduser().resolve() == Path(right).expanduser().resolve()
+    except Exception:
+        return False
 
 
 def _state_sha256(path: Path) -> str:
@@ -228,6 +319,30 @@ def run_provider_guard(
     }
     _write_json(output_path, payload)
     return payload
+
+
+def _run_provider_guard_report(
+    *,
+    state_path: Path,
+    background_index: int,
+    rung: int,
+    rung_name: str,
+) -> dict[str, object]:
+    started = time.monotonic()
+    report = preflight_probe._run_point_provider_report_only(
+        Path(state_path),
+        background_index=int(background_index),
+    )
+    failures = _provider_guard_failures(report)
+    return {
+        **dict(report),
+        "rung": int(rung),
+        "rung_name": str(rung_name),
+        "status": "pass" if not failures else "fail",
+        "provider_guard_ok": not failures,
+        "provider_guard_failures": failures,
+        "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
+    }
 
 
 def _load_saved_state_for_background(state_path: Path, background_index: int) -> dict[str, object]:
@@ -683,6 +798,13 @@ def _residual_norm_from_cost(value: object) -> float:
     return float("nan")
 
 
+def _finite_residual_norm(value: object) -> tuple[float, bool]:
+    residual_arr = np.asarray(value, dtype=float).reshape(-1)
+    if residual_arr.size == 0 or not bool(np.all(np.isfinite(residual_arr))):
+        return float("nan"), False
+    return float(np.linalg.norm(residual_arr)), True
+
+
 def _current_bounds_for_param(
     request: gui_geometry_fit.GeometryFitSolverRequest,
     param_name: str,
@@ -773,11 +895,18 @@ def _diagnosis_classification(report: Mapping[str, object]) -> str | None:
     if _one_param_integrity_failures(report):
         return "fixed_source_or_pair_integrity_lost"
     residual_finite = bool(report.get("residuals_finite", False))
+    last_residual = _metric_float(report.get("last_residual_norm", report.get("residual_norm", np.nan)))
     after_rms = _metric_float(report.get("after_rms_px", report.get("last_rms_px", np.nan)))
     after_max = _metric_float(
         report.get("after_max_error_px", report.get("last_max_error_px", np.nan))
     )
-    if status in {"ok", "pass"} and residual_finite and math.isfinite(after_rms) and math.isfinite(after_max):
+    if (
+        status in {"ok", "pass"}
+        and residual_finite
+        and math.isfinite(last_residual)
+        and math.isfinite(after_rms)
+        and math.isfinite(after_max)
+    ):
         return "usable"
     return None
 
@@ -875,11 +1004,7 @@ def _result_report(
     extra: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     point_summary = _point_match_summary(result)
-    residual_arr = np.asarray(getattr(result, "fun", []), dtype=float).reshape(-1)
-    finite_residual = residual_arr[np.isfinite(residual_arr)]
-    residual_norm = (
-        float(np.linalg.norm(finite_residual)) if finite_residual.size else float("nan")
-    )
+    residual_norm, residuals_finite = _finite_residual_norm(getattr(result, "fun", []))
     after_rms = _summary_rms(point_summary)
     if not math.isfinite(after_rms):
         after_rms = _metric_float(getattr(result, "rms_px", np.nan))
@@ -934,8 +1059,11 @@ def _result_report(
     if isinstance(extra, Mapping):
         report.update(dict(extra))
     report["residuals_finite"] = bool(
-        math.isfinite(_metric_float(report.get("before_rms_px", np.nan)))
+        residuals_finite
+        and math.isfinite(_metric_float(report.get("before_rms_px", np.nan)))
         and math.isfinite(_metric_float(report.get("after_rms_px", np.nan)))
+        and math.isfinite(_metric_float(report.get("before_max_error_px", np.nan)))
+        and math.isfinite(_metric_float(report.get("after_max_error_px", np.nan)))
     )
     _apply_single_param_fields(report)
     _apply_one_param_diagnostic_aliases(report)
@@ -1046,11 +1174,19 @@ def _fixed_source_contract_failures(
 
 def _one_param_metric_failures(report: Mapping[str, object]) -> list[str]:
     failures: list[str] = []
+    residual_norm = _metric_float(
+        report.get("last_residual_norm", report.get("residual_norm", np.nan))
+    )
     before_rms = _metric_float(report.get("before_rms_px", np.nan))
     after_rms = _metric_float(report.get("after_rms_px", np.nan))
     before_max = _metric_float(report.get("before_max_error_px", np.nan))
     after_max = _metric_float(report.get("after_max_error_px", np.nan))
-    if not math.isfinite(before_rms) or not math.isfinite(after_rms):
+    if (
+        not bool(report.get("residuals_finite", False))
+        or not math.isfinite(residual_norm)
+        or not math.isfinite(before_rms)
+        or not math.isfinite(after_rms)
+    ):
         failures.append("non_finite_residual")
     if not math.isfinite(before_max) or not math.isfinite(after_max):
         failures.append("non_finite_max_error")
@@ -2052,8 +2188,16 @@ def _worker_solve_once(
     rung: int,
     rung_name: str,
     feature: str | None = None,
+    context: Mapping[str, object] | None = None,
+    diagnostic_logging: bool = False,
 ) -> dict[str, object]:
     started = time.monotonic()
+    phase_timing_s: dict[str, float] = {}
+    context_reused = context is not None
+
+    def _record_phase(name: str, phase_started: float) -> None:
+        phase_timing_s[name] = float(max(0.0, time.monotonic() - phase_started))
+
     state_hash_before = _state_sha256(Path(state_path))
     _heartbeat_write(
         heartbeat_path,
@@ -2063,18 +2207,36 @@ def _worker_solve_once(
             "rung_name": str(rung_name),
             "active_params": [str(name) for name in active_names],
             "state_sha256_before": state_hash_before,
+            "solver_context_reused": bool(context_reused),
+            "diagnostic_logging": bool(diagnostic_logging),
         },
     )
-    context = _capture_solver_context(Path(state_path), int(background_index))
-    request = build_solver_request(
-        context,
-        active_names,
-        max_nfev=int(max_nfev),
-        feature=feature,
-    )
+    phase_started = time.monotonic()
+    if context is None:
+        with _solver_debug_logging_scope(diagnostic_logging):
+            context = _capture_solver_context(Path(state_path), int(background_index))
+    _record_phase("capture_solver_context_s", phase_started)
+
+    phase_started = time.monotonic()
+    with _solver_debug_logging_scope(diagnostic_logging):
+        request = build_solver_request(
+            context,
+            active_names,
+            max_nfev=int(max_nfev),
+            feature=feature,
+        )
+    _record_phase("build_solver_request_s", phase_started)
+    phase_started = time.monotonic()
     request_summary = _request_handoff_summary(request)
+    request_summary["requested_var_names"] = [str(name) for name in request.var_names]
+    request_summary["requested_candidate_param_names"] = (
+        [str(name) for name in request.candidate_param_names]
+        if request.candidate_param_names is not None
+        else []
+    )
     _heartbeat_write(heartbeat_path, request_summary)
     request_fallback_failures = _strict_no_fallback_failures(request_summary)
+    _record_phase("request_handoff_guard_s", phase_started)
     if request_fallback_failures:
         report = _request_only_report(
             request=request,
@@ -2086,12 +2248,18 @@ def _worker_solve_once(
             extra={
                 "feature": feature,
                 "fallback_guard_failures": request_fallback_failures,
+                "phase_timing_s": dict(phase_timing_s),
+                "solver_context_reused": bool(context_reused),
+                "diagnostic_logging": bool(diagnostic_logging),
             },
         )
         _write_json(output_path, report)
         _heartbeat_write(heartbeat_path, {"status": str(report.get("status", "")), "done": True})
         return report
-    before_result, _records = _run_with_probe_least_squares(request, mode="dry_run")
+    phase_started = time.monotonic()
+    with _solver_debug_logging_scope(diagnostic_logging):
+        before_result, _records = _run_with_probe_least_squares(request, mode="dry_run")
+    _record_phase("dry_run_s", phase_started)
     before_summary = _point_match_summary(before_result)
     param_name = str(active_names[0]) if len(active_names) == 1 else ""
     current_bounds = _current_bounds_for_param(request, param_name) if param_name else None
@@ -2163,6 +2331,8 @@ def _worker_solve_once(
             "fixed_source_counters_clean": bool(clean),
             "fixed_source_counter_failures": failures,
         }
+        if heartbeat_count == 1:
+            phase_timing_s["first_residual_elapsed_s"] = float(trace_entry["elapsed_s"])
         residual_eval_trace.append(trace_entry)
         _heartbeat_write(
             heartbeat_path,
@@ -2189,11 +2359,19 @@ def _worker_solve_once(
                 "fixed_source_counter_failures_seen": list(
                     fixed_source_counter_failures_seen
                 ),
+                "phase_timing_s": dict(phase_timing_s),
+                "first_residual_elapsed_s": phase_timing_s.get(
+                    "first_residual_elapsed_s"
+                ),
+                "solver_context_reused": bool(context_reused),
+                "diagnostic_logging": bool(diagnostic_logging),
             },
         )
 
     least_squares_called = False
     optimizer_solve_called = False
+    effective_var_names_seen_by_solver: list[str] = []
+    effective_candidate_param_names_seen_by_solver: list[str] = []
     try:
         original_least_squares = opt.least_squares
 
@@ -2203,16 +2381,49 @@ def _worker_solve_once(
             _heartbeat_write(heartbeat_path, {"least_squares_called": True})
             return original_least_squares(*args, **kwargs)
 
+        def _counted_solve_fit(*args, **kwargs):
+            nonlocal optimizer_solve_called
+            nonlocal effective_var_names_seen_by_solver
+            nonlocal effective_candidate_param_names_seen_by_solver
+            optimizer_solve_called = True
+            try:
+                effective_var_names_seen_by_solver = [
+                    str(name) for name in (args[5] if len(args) > 5 else [])
+                ]
+            except Exception:
+                effective_var_names_seen_by_solver = []
+            try:
+                effective_candidate_param_names_seen_by_solver = [
+                    str(name)
+                    for name in kwargs.get("candidate_param_names", []) or []
+                ]
+            except Exception:
+                effective_candidate_param_names_seen_by_solver = []
+            _heartbeat_write(
+                heartbeat_path,
+                {
+                    "optimizer_solve_called": True,
+                    "effective_var_names_seen_by_solver": list(
+                        effective_var_names_seen_by_solver
+                    ),
+                    "effective_candidate_param_names_seen_by_solver": list(
+                        effective_candidate_param_names_seen_by_solver
+                    ),
+                },
+            )
+            return opt.fit_geometry_parameters(*args, **kwargs)
+
         opt.least_squares = _counted_least_squares
         try:
-            optimizer_solve_called = True
-            _heartbeat_write(heartbeat_path, {"optimizer_solve_called": True})
-            result = gui_geometry_fit.solve_geometry_fit_request(
-                request,
-                solve_fit=opt.fit_geometry_parameters,
-                status_callback=_status_callback,
-                live_update_callback=_live_update,
-            )
+            phase_started = time.monotonic()
+            with _solver_debug_logging_scope(diagnostic_logging):
+                result = gui_geometry_fit.solve_geometry_fit_request(
+                    request,
+                    solve_fit=_counted_solve_fit,
+                    status_callback=_status_callback,
+                    live_update_callback=_live_update,
+                )
+            _record_phase("solve_geometry_fit_request_s", phase_started)
         finally:
             opt.least_squares = original_least_squares
         state_hash_after = _state_sha256(Path(state_path))
@@ -2229,6 +2440,12 @@ def _worker_solve_once(
                 "least_squares_called": bool(least_squares_called),
                 "optimizer_solve_called": bool(optimizer_solve_called),
                 "real_solve_called": bool(optimizer_solve_called),
+                "effective_var_names_seen_by_solver": list(
+                    effective_var_names_seen_by_solver
+                ),
+                "effective_candidate_param_names_seen_by_solver": list(
+                    effective_candidate_param_names_seen_by_solver
+                ),
                 "state_sha256_before": state_hash_before,
                 "state_sha256_after": state_hash_after,
                 "state_hash_unchanged": state_hash_before == state_hash_after,
@@ -2242,6 +2459,12 @@ def _worker_solve_once(
                 ),
                 "dirty_timeout_abort": False,
                 "child_process_killed_cleanly": None,
+                "phase_timing_s": dict(phase_timing_s),
+                "first_residual_elapsed_s": phase_timing_s.get(
+                    "first_residual_elapsed_s"
+                ),
+                "solver_context_reused": bool(context_reused),
+                "diagnostic_logging": bool(diagnostic_logging),
             },
         )
     except Exception as exc:
@@ -2261,6 +2484,12 @@ def _worker_solve_once(
             "least_squares_called": bool(least_squares_called),
             "optimizer_solve_called": bool(optimizer_solve_called),
             "real_solve_called": bool(optimizer_solve_called),
+            "effective_var_names_seen_by_solver": list(
+                effective_var_names_seen_by_solver
+            ),
+            "effective_candidate_param_names_seen_by_solver": list(
+                effective_candidate_param_names_seen_by_solver
+            ),
             "state_sha256_before": state_hash_before,
             "state_sha256_after": state_hash_after,
             "state_hash_unchanged": state_hash_before == state_hash_after,
@@ -2272,10 +2501,24 @@ def _worker_solve_once(
             ),
             "dirty_timeout_abort": False,
             "child_process_killed_cleanly": None,
+            "phase_timing_s": dict(phase_timing_s),
+            "first_residual_elapsed_s": phase_timing_s.get(
+                "first_residual_elapsed_s"
+            ),
+            "solver_context_reused": bool(context_reused),
+            "diagnostic_logging": bool(diagnostic_logging),
         }
         report.update(request_summary)
         _apply_single_param_fields(report)
         _apply_one_param_diagnostic_aliases(report)
+    report["phase_timing_s"] = dict(phase_timing_s)
+    report["first_residual_elapsed_s"] = phase_timing_s.get("first_residual_elapsed_s")
+    report["solver_context_reused"] = bool(context_reused)
+    report["diagnostic_logging"] = bool(diagnostic_logging)
+    phase_started = time.monotonic()
+    _write_json(output_path, report)
+    _record_phase("report_write_s", phase_started)
+    report["phase_timing_s"] = dict(phase_timing_s)
     _write_json(output_path, report)
     _heartbeat_write(heartbeat_path, {"status": str(report.get("status", "")), "done": True})
     return report
@@ -2292,6 +2535,7 @@ def _solver_worker_command(
     rung: int,
     rung_name: str,
     feature: str | None = None,
+    diagnostic_logging: bool = False,
 ) -> list[str]:
     cmd = [
         sys.executable,
@@ -2316,6 +2560,8 @@ def _solver_worker_command(
     ]
     if feature:
         cmd.extend(["--feature", str(feature)])
+    if bool(diagnostic_logging):
+        cmd.append("--diagnostic-logging")
     return cmd
 
 
@@ -2413,6 +2659,12 @@ def _timeout_report(
         "real_solve_called": bool(
             heartbeat.get("real_solve_called", heartbeat.get("optimizer_solve_called", False))
         ),
+        "effective_var_names_seen_by_solver": _as_str_list(
+            heartbeat.get("effective_var_names_seen_by_solver")
+        ),
+        "effective_candidate_param_names_seen_by_solver": _as_str_list(
+            heartbeat.get("effective_candidate_param_names_seen_by_solver")
+        ),
         "dirty_timeout_abort": bool(dirty_timeout_abort),
         "child_process_killed_cleanly": child_process_killed_cleanly,
         "fixed_source_counters_clean_at_last_heartbeat": bool(
@@ -2431,6 +2683,14 @@ def _timeout_report(
         "state_sha256_after": hash_after or None,
         "state_hash_unchanged": bool(hash_before and hash_after and hash_before == hash_after),
         "feature": feature,
+        "phase_timing_s": (
+            dict(heartbeat.get("phase_timing_s", {}))
+            if isinstance(heartbeat.get("phase_timing_s", {}), Mapping)
+            else {}
+        ),
+        "first_residual_elapsed_s": heartbeat.get("first_residual_elapsed_s"),
+        "solver_context_reused": bool(heartbeat.get("solver_context_reused", False)),
+        "diagnostic_logging": bool(heartbeat.get("diagnostic_logging", False)),
     }
     counter_aliases = {
         "fixed_source_pair_count": (
@@ -2450,7 +2710,7 @@ def _timeout_report(
     return report
 
 
-def _run_threaded_worker_for_tests(
+def _run_in_process_worker_with_timeout(
     *,
     worker: Callable[[], dict[str, object] | None],
     output_path: Path,
@@ -2496,6 +2756,9 @@ def _run_solver_rung_with_timeout(
     feature: str | None = None,
     state_hash_before: str | None = None,
     use_subprocess: bool = True,
+    context: Mapping[str, object] | None = None,
+    diagnostic_logging: bool = False,
+    dirty_timeout_on_timeout: bool = False,
 ) -> dict[str, object]:
     started = time.monotonic()
     heartbeat_path = output_path.with_suffix(".heartbeat.json")
@@ -2521,7 +2784,15 @@ def _run_solver_rung_with_timeout(
         )
 
     if not use_subprocess:
-        return _run_threaded_worker_for_tests(
+        timeout_report_factory = (
+            lambda: _make_timeout_report(
+                dirty_timeout_abort=bool(dirty_timeout_on_timeout),
+                child_process_killed_cleanly=(
+                    False if bool(dirty_timeout_on_timeout) else None
+                ),
+            )
+        )
+        return _run_in_process_worker_with_timeout(
             worker=lambda: _worker_solve_once(
                 state_path=state_path,
                 background_index=int(background_index),
@@ -2532,9 +2803,11 @@ def _run_solver_rung_with_timeout(
                 rung=int(rung),
                 rung_name=str(rung_name),
                 feature=feature,
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
             ),
             output_path=output_path,
-            timeout_report_factory=_make_timeout_report,
+            timeout_report_factory=timeout_report_factory,
             timeout_seconds=float(timeout_seconds),
         )
 
@@ -2548,9 +2821,14 @@ def _run_solver_rung_with_timeout(
         rung=int(rung),
         rung_name=str(rung_name),
         feature=feature,
+        diagnostic_logging=bool(diagnostic_logging),
     )
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
+    if not bool(diagnostic_logging):
+        env["RA_SIM_DISABLE_LOGGING"] = "1"
+        env["RA_SIM_DISABLE_ALL_LOGGING"] = "1"
+        env["RA_SIM_LOG_INTERSECTION_CACHE"] = "0"
     process = subprocess.Popen(
         cmd,
         cwd=str(REPO_ROOT),
@@ -2636,6 +2914,8 @@ def _finalize_one_param_report(
     finalized["state_hash_unchanged"] = (
         finalized["state_sha256_before"] == finalized["state_sha256_after"]
     )
+    finalized["state_hash_before"] = finalized["state_sha256_before"]
+    finalized["state_hash_after"] = finalized["state_sha256_after"]
     _apply_single_param_fields(finalized)
     _apply_one_param_diagnostic_aliases(finalized)
     for key in (
@@ -2810,6 +3090,8 @@ def _one_param_summary(
     *,
     run_dir: Path,
     sensitivity_report_path: Path,
+    state_path: Path | None = None,
+    background_index: int | None = None,
     sensitivity: Mapping[str, object],
     active_params: Sequence[str],
     attempted_reports: Sequence[Mapping[str, object]],
@@ -2913,6 +3195,8 @@ def _one_param_summary(
         "status": status,
         "failure_reason": failure_reason,
         "run_dir": str(run_dir),
+        "state_path": str(Path(state_path).expanduser().resolve()) if state_path else None,
+        "background_index": int(background_index) if background_index is not None else None,
         "sensitivity_report_path": str(sensitivity_report_path),
         "active_params_from_sensitivity": list(active_params),
         "attempted_params": attempted_params,
@@ -2983,6 +3267,8 @@ def _run_one_param_stage(
     max_nfev: int,
     timeout_seconds: float,
     one_param_filter: str | None = None,
+    use_subprocess: bool = False,
+    diagnostic_logging: bool = False,
 ) -> dict[str, object]:
     raw_active_params = _as_str_list(sensitivity.get("active_params"))
     filter_name = str(one_param_filter or "").strip()
@@ -2992,6 +3278,8 @@ def _run_one_param_stage(
         summary = _one_param_summary(
             run_dir=run_dir,
             sensitivity_report_path=sensitivity_report_path,
+            state_path=state_path,
+            background_index=int(background_index),
             sensitivity=sensitivity,
             active_params=raw_active_params,
             attempted_reports=[],
@@ -3015,6 +3303,8 @@ def _run_one_param_stage(
             summary = _one_param_summary(
                 run_dir=run_dir,
                 sensitivity_report_path=sensitivity_report_path,
+                state_path=state_path,
+                background_index=int(background_index),
                 sensitivity=sensitivity,
                 active_params=raw_active_params,
                 attempted_reports=[],
@@ -3036,6 +3326,8 @@ def _run_one_param_stage(
         summary = _one_param_summary(
             run_dir=run_dir,
             sensitivity_report_path=sensitivity_report_path,
+            state_path=state_path,
+            background_index=int(background_index),
             sensitivity=sensitivity,
             active_params=raw_active_params,
             attempted_reports=[],
@@ -3064,6 +3356,10 @@ def _run_one_param_stage(
             rung=3,
             rung_name=f"one_param_{name}",
             state_hash_before=state_hash_before,
+            use_subprocess=bool(use_subprocess),
+            context=context,
+            diagnostic_logging=bool(diagnostic_logging),
+            dirty_timeout_on_timeout=not bool(use_subprocess),
         )
         report = _finalize_one_param_report(
             report,
@@ -3082,17 +3378,20 @@ def _run_one_param_stage(
 
     provider_after: dict[str, object] | None = None
     if not dirty_timeout_abort:
-        provider_after = run_provider_guard(
-            state_path=state_path,
-            background_index=int(background_index),
-            output_path=_rung_path(run_dir, 3, "provider_guard_after"),
-        )
+        with _solver_debug_logging_scope(diagnostic_logging):
+            provider_after = run_provider_guard(
+                state_path=state_path,
+                background_index=int(background_index),
+                output_path=_rung_path(run_dir, 3, "provider_guard_after"),
+            )
         reports.append(provider_after)
 
     state_hash_after = _state_sha256(state_path)
     summary = _one_param_summary(
         run_dir=run_dir,
         sensitivity_report_path=sensitivity_report_path,
+        state_path=state_path,
+        background_index=int(background_index),
         sensitivity=sensitivity,
         active_params=raw_active_params,
         attempted_reports=one_param_reports,
@@ -3123,6 +3422,1528 @@ def _groups_for_pair_rungs(passed_params: Sequence[str], theta_name: str) -> lis
         ("a_c_psi_z", ["a", "c", "psi_z"]),
     ]
     return [(name, params) for name, params in candidates if all(param in passed for param in params)]
+
+
+def _state_hash_evidence_failures(
+    report: Mapping[str, object],
+    *,
+    current_hash: str,
+    before_key: str = "state_sha256_before",
+    after_key: str = "state_sha256_after",
+    unchanged_key: str = "state_hash_unchanged",
+) -> list[str]:
+    failures: list[str] = []
+    before = str(report.get(before_key) or "")
+    after = str(report.get(after_key) or "")
+    if before != str(current_hash):
+        failures.append(f"{before_key}_not_current")
+    if after != str(current_hash):
+        failures.append(f"{after_key}_not_current")
+    if bool(report.get(unchanged_key, False)) is not True:
+        failures.append(f"{unchanged_key}_not_true")
+    return failures
+
+
+def _run_input_evidence_failures(
+    report: Mapping[str, object],
+    *,
+    state_path: Path,
+    background_index: int,
+) -> list[str]:
+    failures: list[str] = []
+    if not _same_resolved_path(report.get("state_path"), state_path):
+        failures.append("state_path_mismatch")
+    if _safe_int(report.get("background_index"), default=-999999) != int(background_index):
+        failures.append("background_index_mismatch")
+    return failures
+
+
+def _load_required_json(path: Path | None, missing_reason: str) -> tuple[dict[str, object], list[str]]:
+    if path is None:
+        return {}, [missing_reason]
+    report = _read_json(Path(path).expanduser().resolve())
+    if not report:
+        return {}, [f"{missing_reason}_unreadable"]
+    return report, []
+
+
+def _validate_one_param_summary_evidence(
+    summary_path: Path | None,
+    *,
+    state_path: Path,
+    background_index: int,
+    current_hash: str,
+) -> tuple[dict[str, object], list[str]]:
+    summary, failures = _load_required_json(summary_path, "missing_one_param_summary")
+    if failures:
+        return summary, failures
+    failures.extend(
+        _state_hash_evidence_failures(summary, current_hash=current_hash)
+    )
+    failures.extend(
+        _run_input_evidence_failures(
+            summary,
+            state_path=state_path,
+            background_index=int(background_index),
+        )
+    )
+    if bool(summary.get("provider_guard_after_ok", False)) is not True:
+        failures.append("provider_guard_after_not_green")
+    if bool(summary.get("dirty_timeout_abort", False)):
+        failures.append("dirty_timeout_abort")
+    if not _as_str_list(summary.get("passed_params")):
+        failures.append("no_passed_singleton_params")
+    return summary, failures
+
+
+def _validate_one_param_diagnosis_evidence(
+    diagnosis_path: Path | None,
+    *,
+    state_path: Path,
+    background_index: int,
+    current_hash: str,
+    current_active_params: Sequence[str],
+) -> tuple[dict[str, object], list[str], bool]:
+    if diagnosis_path is None:
+        return {}, [], False
+    summary = _read_json(Path(diagnosis_path).expanduser().resolve())
+    if not summary:
+        return {}, ["one_param_diagnosis_summary_unreadable"], False
+    failures: list[str] = []
+    final_report = _single_attempt_report(summary)
+    hash_owner = summary if summary.get("state_sha256_before") else final_report
+    failures.extend(
+        _state_hash_evidence_failures(hash_owner, current_hash=current_hash)
+    )
+    path_owner = summary if summary.get("state_path") else final_report
+    failures.extend(
+        _run_input_evidence_failures(
+            path_owner,
+            state_path=state_path,
+            background_index=int(background_index),
+        )
+    )
+    if "a" not in set(str(name) for name in current_active_params):
+        failures.append("a_not_active_in_current_rung2")
+    if str(summary.get("status", "")) != "ok":
+        failures.append("one_param_diagnosis_status_not_ok")
+    diagnosis = str(
+        summary.get("diagnosis_classification")
+        or final_report.get("diagnosis_classification")
+        or ""
+    )
+    if diagnosis != "usable":
+        failures.append("a_diagnosis_not_usable")
+    if bool(summary.get("dirty_timeout_abort", final_report.get("dirty_timeout_abort", False))):
+        failures.append("dirty_timeout_abort")
+    usable = not failures
+    return summary, failures, usable
+
+
+def _caked_reprojection_guard_failures(
+    report: Mapping[str, object],
+    *,
+    current_hash: str,
+    background_index: int,
+) -> list[str]:
+    failures: list[str] = []
+    expected = {
+        "status": "pass",
+        "point_count": EXPECTED_PROVIDER_PAIR_COUNT,
+        "exact_projector_available": True,
+        "theta_projector_signature_changed": True,
+        "distance_projector_signature_changed": True,
+        "full_background_recake_call_count": 0,
+        "provider_guard_before_ok": True,
+        "provider_guard_after_ok": True,
+        "new4_state_hash_unchanged": True,
+    }
+    for key, expected_value in expected.items():
+        actual = report.get(key)
+        if key in {"point_count", "full_background_recake_call_count"}:
+            if _safe_int(actual, default=-999999) != int(expected_value):
+                failures.append(f"{key}_not_{expected_value}")
+        elif actual != expected_value:
+            failures.append(f"{key}_not_{expected_value}")
+    if "background_index" not in report:
+        failures.append("background_index_missing")
+    elif _safe_int(report.get("background_index"), default=-999999) != int(background_index):
+        failures.append("background_index_mismatch")
+    before = str(report.get("state_hash_before") or report.get("state_sha256_before") or "")
+    after = str(report.get("state_hash_after") or report.get("state_sha256_after") or "")
+    if not before:
+        failures.append("state_hash_before_missing")
+    elif before != str(current_hash):
+        failures.append("state_hash_before_not_current")
+    if not after:
+        failures.append("state_hash_after_missing")
+    elif after != str(current_hash):
+        failures.append("state_hash_after_not_current")
+    return failures
+
+
+def _pair_requires_caked_reprojection(pair: Sequence[str]) -> bool:
+    return bool(set(str(name) for name in pair) & CAKED_REPROJECTION_REQUIRED_PARAMS)
+
+
+def _base_parameter_values_for_pair(
+    context: Mapping[str, object],
+    pair: Sequence[str],
+) -> dict[str, object]:
+    prepared_run = context.get("prepared_run")
+    params = getattr(prepared_run, "fit_params", {}) if prepared_run is not None else {}
+    if not isinstance(params, Mapping):
+        params = {}
+    return {str(name): params.get(str(name)) for name in pair}
+
+
+def _parameter_maps_from_deltas(
+    report: Mapping[str, object],
+    pair: Sequence[str],
+    base_parameter_values: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]:
+    before = {str(name): base_parameter_values.get(str(name)) for name in pair}
+    after: dict[str, object] = {str(name): None for name in pair}
+    delta: dict[str, object] = {str(name): None for name in pair}
+    bounds: dict[str, object] = {str(name): None for name in pair}
+    for entry in _as_mapping_list(report.get("parameter_deltas")):
+        name = str(entry.get("name", ""))
+        if name not in before:
+            continue
+        before[name] = entry.get("start")
+        after[name] = entry.get("final")
+        delta[name] = entry.get("delta")
+        bounds[name] = {
+            "lower": entry.get("lower"),
+            "upper": entry.get("upper"),
+        }
+    return before, after, delta, bounds
+
+
+def _pair_metric_failures(report: Mapping[str, object]) -> list[str]:
+    failures: list[str] = []
+    residual_norm = _metric_float(
+        report.get("last_residual_norm", report.get("residual_norm", np.nan))
+    )
+    before_rms = _metric_float(report.get("before_rms_px", np.nan))
+    after_rms = _metric_float(report.get("after_rms_px", np.nan))
+    before_max = _metric_float(report.get("before_max_error_px", np.nan))
+    after_max = _metric_float(report.get("after_max_error_px", np.nan))
+    if (
+        not bool(report.get("residuals_finite", False))
+        or not math.isfinite(residual_norm)
+        or not math.isfinite(before_rms)
+        or not math.isfinite(after_rms)
+    ):
+        failures.append("non_finite_residual")
+    if not math.isfinite(before_max) or not math.isfinite(after_max):
+        failures.append("non_finite_max_error")
+    if after_rms > before_rms + PAIR_RMS_TOLERANCE_PX:
+        failures.append("rms_regressed")
+    if after_max > before_max + PAIR_MAX_ERROR_TOLERANCE_PX:
+        failures.append("max_error_regressed")
+    rejection_text = json.dumps(
+        _jsonable(
+            {
+                "rejection_reason": report.get("rejection_reason"),
+                "rejection_reasons": report.get("rejection_reasons"),
+            }
+        ),
+        sort_keys=True,
+    )
+    if NO_MATCH_REJECTION in rejection_text:
+        failures.append("no_matched_peak_rejection")
+    return failures
+
+
+def _pair_timeout_integrity_dirty(report: Mapping[str, object]) -> bool:
+    if bool(report.get("fixed_source_counters_dirty_seen", False)):
+        return True
+    failures = _as_str_list(report.get("fixed_source_counter_failures_at_last_heartbeat"))
+    if failures and bool(report.get("fixed_source_counters_clean_at_last_heartbeat", True)) is not True:
+        return True
+    return False
+
+
+def _finalize_pair_report(
+    report: Mapping[str, object],
+    *,
+    pair_name: str,
+    pair: Sequence[str],
+    state_path: Path,
+    state_hash_before: str,
+    timeout_seconds: float,
+    base_parameter_values: Mapping[str, object],
+) -> dict[str, object]:
+    names = [str(name) for name in pair]
+    finalized = dict(report)
+    finalized.setdefault("rung", 4)
+    finalized.setdefault("rung_name", f"pair_{pair_name}")
+    finalized["pair_name"] = str(pair_name)
+    finalized["pair"] = list(names)
+    finalized["active_params"] = list(names)
+    finalized["var_names"] = _as_str_list(finalized.get("var_names")) or list(names)
+    finalized["candidate_param_names"] = _as_str_list(
+        finalized.get("candidate_param_names")
+    )
+    finalized["effective_var_names_seen_by_solver"] = _as_str_list(
+        finalized.get("effective_var_names_seen_by_solver")
+    )
+    finalized.setdefault("elapsed_s", finalized.get("elapsed_seconds", 0.0))
+    finalized.setdefault("elapsed_seconds", finalized.get("elapsed_s", 0.0))
+    finalized["timeout_s"] = float(timeout_seconds)
+    finalized.setdefault("timeout_seconds", float(timeout_seconds))
+    finalized["state_sha256_before"] = str(
+        finalized.get("state_sha256_before") or state_hash_before
+    )
+    finalized["state_sha256_after"] = str(
+        finalized.get("state_sha256_after") or _state_sha256(Path(state_path))
+    )
+    finalized["state_hash_unchanged"] = (
+        finalized["state_sha256_before"] == finalized["state_sha256_after"]
+    )
+    finalized["base_parameter_values"] = dict(base_parameter_values)
+    before, after, delta, bounds = _parameter_maps_from_deltas(
+        finalized,
+        names,
+        base_parameter_values,
+    )
+    finalized["parameter_before"] = before
+    finalized["parameter_after"] = after
+    finalized["parameter_delta"] = delta
+    finalized["parameter_bounds"] = bounds
+    finalized.setdefault("point_match_summary", {})
+    finalized.setdefault(
+        "last_point_match_summary",
+        finalized.get("point_match_summary") if finalized.get("point_match_summary") else None,
+    )
+    finalized.setdefault("dirty_timeout_abort", False)
+    for key in RUNG2_FIXED_SOURCE_COUNTS:
+        finalized.setdefault(key, None)
+    for key in PROVIDER_MATCH_BOOLS:
+        finalized.setdefault(key, None)
+
+    if str(finalized.get("status", "")) == "timeout":
+        finalized["pass"] = False
+        if bool(finalized.get("dirty_timeout_abort", False)):
+            finalized["failure_reason"] = "dirty_timeout_abort"
+        elif _pair_timeout_integrity_dirty(finalized):
+            finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+        else:
+            finalized["failure_reason"] = "timeout"
+        finalized["pair_guard_failures"] = [str(finalized["failure_reason"])]
+        return finalized
+
+    integrity_failures = _fixed_source_contract_failures(
+        finalized,
+        expected_counts=ONE_PARAM_FIXED_SOURCE_COUNTS,
+        required_bool_keys=PROVIDER_MATCH_BOOLS,
+    )
+    metric_failures = _pair_metric_failures(finalized)
+    solve_flag_failures: list[str] = []
+    if bool(finalized.get("least_squares_called", False)) is not True:
+        solve_flag_failures.append("least_squares_not_called")
+    if not (
+        bool(finalized.get("optimizer_solve_called", False))
+        or bool(finalized.get("real_solve_called", False))
+    ):
+        solve_flag_failures.append("optimizer_solve_not_called")
+    if finalized.get("candidate_param_names") != list(names):
+        solve_flag_failures.append("candidate_param_names_not_pair")
+    if finalized.get("var_names") != list(names):
+        solve_flag_failures.append("var_names_not_pair")
+    if finalized.get("effective_var_names_seen_by_solver") != list(names):
+        solve_flag_failures.append("effective_var_names_seen_by_solver_not_pair")
+    if bool(finalized.get("state_hash_unchanged", False)) is not True:
+        solve_flag_failures.append("state_hash_changed")
+
+    guard_failures = integrity_failures + metric_failures + solve_flag_failures
+    finalized["pair_guard_failures"] = guard_failures
+    if not guard_failures:
+        finalized["status"] = "ok"
+        finalized["pass"] = True
+        finalized["failure_reason"] = None
+        return finalized
+
+    finalized["status"] = "failed"
+    finalized["pass"] = False
+    if integrity_failures:
+        finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+    elif "no_matched_peak_rejection" in metric_failures:
+        finalized["failure_reason"] = "no_matched_peak_rejection"
+    elif any(reason.startswith("non_finite") for reason in metric_failures):
+        finalized["failure_reason"] = "non_finite_residual"
+    elif metric_failures:
+        finalized["failure_reason"] = "metric_guard_failed"
+    elif solve_flag_failures:
+        finalized["failure_reason"] = "solve_flag_guard_failed"
+    else:
+        finalized.setdefault("failure_reason", "pair_solve_failed")
+    return finalized
+
+
+def _pair_ref(report: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "pair_name": str(report.get("pair_name", "")),
+        "pair": [str(name) for name in report.get("pair", []) or []],
+    }
+
+
+def _best_pair(
+    reports: Sequence[Mapping[str, object]],
+    metric_key: str,
+) -> dict[str, object] | None:
+    best_report: Mapping[str, object] | None = None
+    best_value = float("inf")
+    for report in reports:
+        if bool(report.get("pass", False)) is not True:
+            continue
+        value = _metric_float(report.get(metric_key, np.nan))
+        if math.isfinite(value) and value < best_value:
+            best_value = value
+            best_report = report
+    if best_report is None:
+        return None
+    payload = _pair_ref(best_report)
+    payload[metric_key] = best_value
+    return payload
+
+
+def _pair_summary(
+    *,
+    run_dir: Path,
+    state_path: Path,
+    background_index: int,
+    sensitivity: Mapping[str, object],
+    allowed_params: Sequence[str],
+    skipped_pairs: Sequence[Mapping[str, object]],
+    pair_reports: Sequence[Mapping[str, object]],
+    state_hash_before: str,
+    state_hash_after: str,
+    provider_after: Mapping[str, object] | None,
+    evidence_failures: Sequence[str] = (),
+    reports: Sequence[Mapping[str, object]] | None = None,
+    provider_report_hash: str | None = None,
+) -> dict[str, object]:
+    attempted_pairs = [_pair_ref(report) for report in pair_reports]
+    passed_reports = [report for report in pair_reports if bool(report.get("pass", False))]
+    failed_reports = [
+        report for report in pair_reports if str(report.get("status", "")) == "failed"
+    ]
+    timed_out_reports = [
+        report for report in pair_reports if str(report.get("status", "")) == "timeout"
+    ]
+    improved_reports: list[Mapping[str, object]] = []
+    neutral_reports: list[Mapping[str, object]] = []
+    for report in passed_reports:
+        before_rms = _metric_float(report.get("before_rms_px", np.nan))
+        after_rms = _metric_float(report.get("after_rms_px", np.nan))
+        before_max = _metric_float(report.get("before_max_error_px", np.nan))
+        after_max = _metric_float(report.get("after_max_error_px", np.nan))
+        improved = (
+            math.isfinite(before_rms)
+            and math.isfinite(after_rms)
+            and after_rms < before_rms - PAIR_RMS_TOLERANCE_PX
+        ) or (
+            math.isfinite(before_max)
+            and math.isfinite(after_max)
+            and after_max < before_max - PAIR_MAX_ERROR_TOLERANCE_PX
+        )
+        if improved:
+            improved_reports.append(report)
+        else:
+            neutral_reports.append(report)
+    provider_guard_after_ok = (
+        bool(provider_after.get("provider_guard_ok", False))
+        and str(provider_after.get("classification", "")) == "point_provider_parity_ok"
+        if isinstance(provider_after, Mapping)
+        else False
+    )
+    state_hash_unchanged = state_hash_before == state_hash_after
+    if evidence_failures:
+        status = "failed"
+        failure_reason = "pair_evidence_not_current"
+    elif not passed_reports:
+        status = "failed"
+        failure_reason = "no_pair_solve_passed"
+    elif provider_guard_after_ok is not True:
+        status = "failed"
+        failure_reason = "provider_guard_after_failed"
+    elif state_hash_unchanged is not True:
+        status = "failed"
+        failure_reason = "state_hash_changed"
+    elif failed_reports or timed_out_reports:
+        status = "ok_with_failures"
+        failure_reason = None
+    else:
+        status = "ok"
+        failure_reason = None
+    stable_pairs = [_pair_ref(report) for report in passed_reports]
+    recommended_next_blocks = [
+        {
+            "block_name": f"{ref['pair_name']}_block",
+            "params": ref["pair"],
+            "source_pair": ref["pair_name"],
+        }
+        for ref in stable_pairs
+    ]
+    summary = {
+        "rung": 4,
+        "rung_name": "pair_summary",
+        "status": status,
+        "failure_reason": failure_reason,
+        "run_dir": str(run_dir),
+        "run_id": Path(run_dir).name,
+        "timestamp": Path(run_dir).name,
+        "state_path": str(Path(state_path).expanduser().resolve()),
+        "background_index": int(background_index),
+        "provider_report_hash": str(provider_report_hash or ""),
+        "active_params_from_sensitivity": _as_str_list(sensitivity.get("active_params")),
+        "allowed_params": [str(name) for name in allowed_params],
+        "attempted_pairs": attempted_pairs,
+        "skipped_pairs": [dict(item) for item in skipped_pairs],
+        "passed_pairs": [_pair_ref(report) for report in passed_reports],
+        "stable_pairs": stable_pairs,
+        "improved_pairs": [_pair_ref(report) for report in improved_reports],
+        "neutral_pairs": [_pair_ref(report) for report in neutral_reports],
+        "failed_pairs": [_pair_ref(report) for report in failed_reports],
+        "timed_out_pairs": [_pair_ref(report) for report in timed_out_reports],
+        "best_pair_by_rms": _best_pair(pair_reports, "after_rms_px"),
+        "best_pair_by_max_error": _best_pair(pair_reports, "after_max_error_px"),
+        "recommended_next_blocks": recommended_next_blocks,
+        "any_pair_loss": any(
+            str(report.get("failure_reason", "")) == "fixed_source_or_pair_integrity_lost"
+            for report in pair_reports
+        ),
+        "any_branch_mismatch": any(
+            _safe_int(report.get("branch_mismatch_count", 0), default=0) != 0
+            for report in pair_reports
+        ),
+        "any_timeout": bool(timed_out_reports),
+        "any_no_matched_peak_rejection": any(
+            str(report.get("failure_reason", "")) == "no_matched_peak_rejection"
+            for report in pair_reports
+        ),
+        "provider_guard_after_ok": bool(provider_guard_after_ok),
+        "provider_guard_after": dict(provider_after or {}),
+        "state_sha256_before": state_hash_before,
+        "state_sha256_after": state_hash_after,
+        "state_hash_unchanged": bool(state_hash_unchanged),
+        "evidence_failures": [str(item) for item in evidence_failures],
+        "reports": list(reports or []),
+    }
+    return summary
+
+
+def _run_pair_stage(
+    *,
+    state_path: Path,
+    background_index: int,
+    run_dir: Path,
+    context: Mapping[str, object],
+    sensitivity: Mapping[str, object],
+    reports: list[dict[str, object]],
+    state_hash_before: str,
+    max_nfev: int,
+    timeout_seconds: float,
+    one_param_summary_path: Path | None = None,
+    one_param_diagnosis_summary_path: Path | None = None,
+    caked_point_reprojection_report_path: Path | None = None,
+    include_psi_extension_pairs: bool = False,
+    provider_report_hash: str | None = None,
+    use_subprocess: bool = False,
+    diagnostic_logging: bool = False,
+) -> dict[str, object]:
+    current_active_params, _skipped = _active_params_from_sensitivity(sensitivity, context)
+    evidence_failures: list[str] = []
+    one_param_summary, one_param_failures = _validate_one_param_summary_evidence(
+        one_param_summary_path,
+        state_path=state_path,
+        background_index=int(background_index),
+        current_hash=state_hash_before,
+    )
+    evidence_failures.extend(f"one_param:{failure}" for failure in one_param_failures)
+    diagnosis_summary, diagnosis_failures, a_usable = _validate_one_param_diagnosis_evidence(
+        one_param_diagnosis_summary_path,
+        state_path=state_path,
+        background_index=int(background_index),
+        current_hash=state_hash_before,
+        current_active_params=current_active_params,
+    )
+    evidence_failures.extend(
+        f"one_param_diagnosis:{failure}" for failure in diagnosis_failures
+    )
+    allowed_params = [
+        name
+        for name in current_active_params
+        if name in set(_as_str_list(one_param_summary.get("passed_params")))
+    ]
+    if a_usable and "a" in current_active_params and "a" not in allowed_params:
+        allowed_params.append("a")
+
+    if evidence_failures:
+        state_hash_after = _state_sha256(state_path)
+        summary = _pair_summary(
+            run_dir=run_dir,
+            state_path=state_path,
+            background_index=int(background_index),
+            sensitivity=sensitivity,
+            allowed_params=allowed_params,
+            skipped_pairs=[],
+            pair_reports=[],
+            state_hash_before=state_hash_before,
+            state_hash_after=state_hash_after,
+            provider_after=None,
+            evidence_failures=evidence_failures,
+            reports=reports,
+            provider_report_hash=provider_report_hash,
+        )
+        summary["one_param_summary"] = one_param_summary
+        summary["one_param_diagnosis_summary"] = diagnosis_summary
+        summary["report_path"] = str(run_dir / "rung_04_pair_summary.json")
+        _write_json(run_dir / "rung_04_pair_summary.json", summary)
+        return summary
+
+    caked_report = (
+        _read_json(Path(caked_point_reprojection_report_path).expanduser().resolve())
+        if caked_point_reprojection_report_path is not None
+        else {}
+    )
+    caked_failures = (
+        _caked_reprojection_guard_failures(
+            caked_report,
+            current_hash=state_hash_before,
+            background_index=int(background_index),
+        )
+        if caked_report
+        else ["missing_caked_point_reprojection_report"]
+    )
+
+    allowed_set = set(allowed_params)
+    skipped_pairs: list[dict[str, object]] = []
+    runnable_pairs: list[tuple[str, list[str]]] = []
+    for pair_name, raw_pair in RUNG4_DEFAULT_PAIRS:
+        pair = [str(name) for name in raw_pair]
+        missing = [name for name in pair if name not in allowed_set]
+        if missing:
+            skipped_pairs.append(
+                {
+                    "pair_name": pair_name,
+                    "pair": pair,
+                    "skip_reason": "param_not_allowed_by_singleton_evidence",
+                    "missing_params": missing,
+                }
+            )
+            continue
+        runnable_pairs.append((pair_name, pair))
+
+    pair_reports: list[dict[str, object]] = []
+    dirty_abort = False
+    abort_reason = ""
+    extension_pairs_added = False
+    index = 0
+    while True:
+        if index >= len(runnable_pairs):
+            a_c_passed = any(
+                bool(report.get("pass", False))
+                and _pair_key(_as_str_list(report.get("pair"))) == _pair_key(("a", "c"))
+                for report in pair_reports
+            )
+            if (
+                include_psi_extension_pairs
+                and not extension_pairs_added
+                and not dirty_abort
+                and not abort_reason
+                and a_c_passed
+                and {"a", "c", "psi_z"}.issubset(allowed_set)
+            ):
+                runnable_pairs.extend(
+                    (pair_name, [str(name) for name in raw_pair])
+                    for pair_name, raw_pair in RUNG4_PSI_EXTENSION_PAIRS
+                )
+                extension_pairs_added = True
+                continue
+            break
+
+        pair_name, pair = runnable_pairs[index]
+        current_hash = _state_sha256(state_path)
+        if current_hash != state_hash_before:
+            abort_reason = "state_hash_changed_before_pair"
+            skipped_pairs.extend(
+                {
+                    "pair_name": skipped_name,
+                    "pair": list(skipped_pair),
+                    "skip_reason": abort_reason,
+                }
+                for skipped_name, skipped_pair in runnable_pairs[index:]
+            )
+            break
+        output_path = _rung_path(run_dir, 4, f"pair_{pair_name}")
+        base_parameter_values = _base_parameter_values_for_pair(context, pair)
+        if _pair_requires_caked_reprojection(pair) and caked_failures:
+            report = {
+                "rung": 4,
+                "rung_name": f"pair_{pair_name}",
+                "pair_name": pair_name,
+                "pair": list(pair),
+                "status": "failed",
+                "pass": False,
+                "failure_reason": "caked_point_reprojection_guard_failed",
+                "pair_guard_failures": list(caked_failures),
+                "active_params": list(pair),
+                "var_names": list(pair),
+                "candidate_param_names": list(pair),
+                "effective_var_names_seen_by_solver": [],
+                "least_squares_called": False,
+                "optimizer_solve_called": False,
+                "real_solve_called": False,
+                "base_parameter_values": base_parameter_values,
+                "state_sha256_before": state_hash_before,
+                "state_sha256_after": _state_sha256(state_path),
+                "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
+                "caked_point_reprojection_report_path": (
+                    str(Path(caked_point_reprojection_report_path).expanduser().resolve())
+                    if caked_point_reprojection_report_path is not None
+                    else None
+                ),
+            }
+            _write_json(output_path, report)
+            reports.append(report)
+            pair_reports.append(report)
+            continue
+
+        report = _run_solver_rung_with_timeout(
+            state_path=state_path,
+            background_index=int(background_index),
+            active_names=pair,
+            output_path=output_path,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            rung=4,
+            rung_name=f"pair_{pair_name}",
+            state_hash_before=state_hash_before,
+            use_subprocess=bool(use_subprocess),
+            context=context,
+            diagnostic_logging=bool(diagnostic_logging),
+            dirty_timeout_on_timeout=not bool(use_subprocess),
+        )
+        report = _finalize_pair_report(
+            report,
+            pair_name=pair_name,
+            pair=pair,
+            state_path=state_path,
+            state_hash_before=state_hash_before,
+            timeout_seconds=float(timeout_seconds),
+            base_parameter_values=base_parameter_values,
+        )
+        _write_json(output_path, report)
+        reports.append(report)
+        pair_reports.append(report)
+        timeout_integrity_dirty = (
+            str(report.get("status", "")) == "timeout"
+            and _pair_timeout_integrity_dirty(report)
+        )
+        if bool(report.get("dirty_timeout_abort", False)) or timeout_integrity_dirty:
+            dirty_abort = True
+            abort_reason = (
+                "dirty_timeout_abort"
+                if bool(report.get("dirty_timeout_abort", False))
+                else "fixed_source_or_pair_integrity_lost"
+            )
+            skipped_pairs.extend(
+                {
+                    "pair_name": skipped_name,
+                    "pair": list(skipped_pair),
+                    "skip_reason": abort_reason,
+                }
+                for skipped_name, skipped_pair in runnable_pairs[index + 1 :]
+            )
+            break
+        if bool(report.get("state_hash_unchanged", False)) is not True:
+            abort_reason = "state_hash_changed_after_pair"
+            skipped_pairs.extend(
+                {
+                    "pair_name": skipped_name,
+                    "pair": list(skipped_pair),
+                    "skip_reason": abort_reason,
+                }
+                for skipped_name, skipped_pair in runnable_pairs[index + 1 :]
+            )
+            break
+        index += 1
+
+    provider_after: dict[str, object] | None = None
+    if not dirty_abort:
+        with _solver_debug_logging_scope(diagnostic_logging):
+            provider_after = run_provider_guard(
+                state_path=state_path,
+                background_index=int(background_index),
+                output_path=_rung_path(run_dir, 4, "provider_guard_after"),
+            )
+        reports.append(provider_after)
+
+    state_hash_after = _state_sha256(state_path)
+    summary = _pair_summary(
+        run_dir=run_dir,
+        state_path=state_path,
+        background_index=int(background_index),
+        sensitivity=sensitivity,
+        allowed_params=allowed_params,
+        skipped_pairs=skipped_pairs,
+        pair_reports=pair_reports,
+        state_hash_before=state_hash_before,
+        state_hash_after=state_hash_after,
+        provider_after=provider_after,
+        evidence_failures=([abort_reason] if abort_reason and not pair_reports else []),
+        reports=reports,
+        provider_report_hash=provider_report_hash,
+    )
+    summary["one_param_summary_path"] = (
+        str(Path(one_param_summary_path).expanduser().resolve())
+        if one_param_summary_path is not None
+        else None
+    )
+    summary["one_param_diagnosis_summary_path"] = (
+        str(Path(one_param_diagnosis_summary_path).expanduser().resolve())
+        if one_param_diagnosis_summary_path is not None
+        else None
+    )
+    summary["caked_point_reprojection_report_path"] = (
+        str(Path(caked_point_reprojection_report_path).expanduser().resolve())
+        if caked_point_reprojection_report_path is not None
+        else None
+    )
+    summary["report_path"] = str(run_dir / "rung_04_pair_summary.json")
+    _write_json(run_dir / "rung_04_pair_summary.json", summary)
+    return summary
+
+
+def _run_caked_point_reprojection_guard(
+    *,
+    state_path: Path,
+    background_index: int,
+    output_root: Path,
+    run_id: str,
+) -> dict[str, object]:
+    from scripts.debug.run_new4_caked_point_reprojection_check import (
+        run_new4_caked_point_reprojection_check,
+    )
+
+    return run_new4_caked_point_reprojection_check(
+        state_path=Path(state_path),
+        background_index=int(background_index),
+        output_root=Path(output_root),
+        run_id=str(run_id),
+    )
+
+
+def _pair_key(pair: Sequence[object]) -> frozenset[str]:
+    return frozenset(str(name) for name in pair)
+
+
+def _passed_pair_keys(pair_summary: Mapping[str, object]) -> set[frozenset[str]]:
+    keys: set[frozenset[str]] = set()
+    for raw_ref in pair_summary.get("passed_pairs", []) or []:
+        if not isinstance(raw_ref, Mapping):
+            continue
+        pair = _as_str_list(raw_ref.get("pair"))
+        if pair:
+            keys.add(_pair_key(pair))
+    return keys
+
+
+def _validate_pair_summary_evidence(
+    summary_path: Path | None,
+    *,
+    state_path: Path,
+    background_index: int,
+    current_hash: str,
+    current_provider_report_hash: str,
+    current_run_id: str,
+) -> tuple[dict[str, object], list[str]]:
+    summary, failures = _load_required_json(summary_path, "missing_pair_summary")
+    if failures:
+        return summary, failures
+    failures.extend(
+        _state_hash_evidence_failures(summary, current_hash=current_hash)
+    )
+    failures.extend(
+        _run_input_evidence_failures(
+            summary,
+            state_path=state_path,
+            background_index=int(background_index),
+        )
+    )
+    if str(summary.get("status", "")) not in {"ok", "ok_with_failures"}:
+        failures.append("pair_summary_status_not_usable")
+    if not _passed_pair_keys(summary):
+        failures.append("no_passed_pair_evidence")
+    provider_hash = str(summary.get("provider_report_hash") or "")
+    if provider_hash and provider_hash != str(current_provider_report_hash):
+        failures.append("provider_report_hash_not_current")
+    for key in ("run_id", "timestamp"):
+        value = str(summary.get(key) or "")
+        if value and value != str(current_run_id):
+            failures.append(f"{key}_not_current")
+    return summary, failures
+
+
+def _block_requires_caked_reprojection(block: Sequence[str]) -> bool:
+    return bool(set(str(name) for name in block) & CAKED_REPROJECTION_REQUIRED_PARAMS)
+
+
+def _block_dependency_missing(
+    block_name: str,
+    dependencies: Sequence[Sequence[str]],
+    passed_pairs: set[frozenset[str]],
+) -> list[list[str]]:
+    missing = [
+        [str(name) for name in pair]
+        for pair in dependencies
+        if _pair_key(pair) not in passed_pairs
+    ]
+    if block_name == "a_c_psi_z":
+        psi_pair_ok = (
+            _pair_key(("a", "psi_z")) in passed_pairs
+            or _pair_key(("c", "psi_z")) in passed_pairs
+        )
+        if not psi_pair_ok:
+            missing.append(["a", "psi_z"])
+            missing.append(["c", "psi_z"])
+    return missing
+
+
+def _block_ref(report: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "block_name": str(report.get("block_name", "")),
+        "block": [str(name) for name in report.get("block", []) or []],
+    }
+
+
+def _best_block(
+    reports: Sequence[Mapping[str, object]],
+    metric_key: str,
+) -> dict[str, object] | None:
+    best_report: Mapping[str, object] | None = None
+    best_value = float("inf")
+    for report in reports:
+        if bool(report.get("pass", False)) is not True:
+            continue
+        value = _metric_float(report.get(metric_key, np.nan))
+        if math.isfinite(value) and value < best_value:
+            best_value = value
+            best_report = report
+    if best_report is None:
+        return None
+    payload = _block_ref(best_report)
+    payload[metric_key] = best_value
+    return payload
+
+
+def _finalize_block_report(
+    report: Mapping[str, object],
+    *,
+    block_name: str,
+    block: Sequence[str],
+    state_path: Path,
+    state_hash_before: str,
+    timeout_seconds: float,
+    base_parameter_values: Mapping[str, object],
+    provider_after: Mapping[str, object] | None,
+) -> dict[str, object]:
+    names = [str(name) for name in block]
+    finalized = dict(report)
+    finalized.setdefault("rung", 5)
+    finalized.setdefault("rung_name", f"block_{block_name}")
+    finalized["block_name"] = str(block_name)
+    finalized["block"] = list(names)
+    finalized["active_params"] = list(names)
+    finalized["var_names"] = _as_str_list(finalized.get("var_names")) or list(names)
+    finalized["candidate_param_names"] = _as_str_list(
+        finalized.get("candidate_param_names")
+    )
+    finalized["effective_var_names_seen_by_solver"] = _as_str_list(
+        finalized.get("effective_var_names_seen_by_solver")
+    )
+    finalized.setdefault("elapsed_s", finalized.get("elapsed_seconds", 0.0))
+    finalized.setdefault("elapsed_seconds", finalized.get("elapsed_s", 0.0))
+    finalized["timeout_s"] = float(timeout_seconds)
+    finalized.setdefault("timeout_seconds", float(timeout_seconds))
+    finalized["state_sha256_before"] = str(
+        finalized.get("state_sha256_before") or state_hash_before
+    )
+    finalized["state_sha256_after"] = str(
+        finalized.get("state_sha256_after") or _state_sha256(Path(state_path))
+    )
+    finalized["state_hash_unchanged"] = (
+        finalized["state_sha256_before"] == finalized["state_sha256_after"]
+    )
+    finalized["base_parameter_values"] = dict(base_parameter_values)
+    before, after, delta, bounds = _parameter_maps_from_deltas(
+        finalized,
+        names,
+        base_parameter_values,
+    )
+    finalized["parameter_before"] = before
+    finalized["parameter_after"] = after
+    finalized["parameter_delta"] = delta
+    finalized["parameter_bounds"] = bounds
+    finalized.setdefault("point_match_summary", {})
+    finalized.setdefault(
+        "last_point_match_summary",
+        finalized.get("point_match_summary") if finalized.get("point_match_summary") else None,
+    )
+    finalized.setdefault("dirty_timeout_abort", False)
+    provider_after_payload = dict(provider_after or {})
+    provider_after_ok = (
+        bool(provider_after_payload.get("provider_guard_ok", False))
+        and str(provider_after_payload.get("classification", "")) == "point_provider_parity_ok"
+    )
+    finalized["provider_guard_after_ok"] = bool(provider_after_ok)
+    finalized["provider_guard_after"] = provider_after_payload
+    for key in RUNG2_FIXED_SOURCE_COUNTS:
+        finalized.setdefault(key, None)
+    for key in PROVIDER_MATCH_BOOLS:
+        finalized.setdefault(key, None)
+
+    if str(finalized.get("status", "")) == "timeout":
+        finalized["pass"] = False
+        if bool(finalized.get("dirty_timeout_abort", False)):
+            finalized["failure_reason"] = "dirty_timeout_abort"
+        elif _pair_timeout_integrity_dirty(finalized):
+            finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+        else:
+            finalized["failure_reason"] = "timeout"
+        finalized["block_guard_failures"] = [str(finalized["failure_reason"])]
+        return finalized
+
+    integrity_failures = _fixed_source_contract_failures(
+        finalized,
+        expected_counts=ONE_PARAM_FIXED_SOURCE_COUNTS,
+        required_bool_keys=PROVIDER_MATCH_BOOLS,
+    )
+    metric_failures = _pair_metric_failures(finalized)
+    solve_flag_failures: list[str] = []
+    if bool(finalized.get("least_squares_called", False)) is not True:
+        solve_flag_failures.append("least_squares_not_called")
+    if not (
+        bool(finalized.get("optimizer_solve_called", False))
+        or bool(finalized.get("real_solve_called", False))
+    ):
+        solve_flag_failures.append("optimizer_solve_not_called")
+    if finalized.get("candidate_param_names") != list(names):
+        solve_flag_failures.append("candidate_param_names_not_block")
+    if finalized.get("var_names") != list(names):
+        solve_flag_failures.append("var_names_not_block")
+    if finalized.get("effective_var_names_seen_by_solver") != list(names):
+        solve_flag_failures.append("effective_var_names_seen_by_solver_not_block")
+    if bool(finalized.get("state_hash_unchanged", False)) is not True:
+        solve_flag_failures.append("state_hash_changed")
+    if provider_after_ok is not True:
+        solve_flag_failures.append("provider_guard_after_failed")
+
+    guard_failures = integrity_failures + metric_failures + solve_flag_failures
+    finalized["block_guard_failures"] = guard_failures
+    if not guard_failures:
+        finalized["status"] = "ok"
+        finalized["pass"] = True
+        finalized["failure_reason"] = None
+        return finalized
+
+    finalized["status"] = "failed"
+    finalized["pass"] = False
+    if integrity_failures:
+        finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+    elif "no_matched_peak_rejection" in metric_failures:
+        finalized["failure_reason"] = "no_matched_peak_rejection"
+    elif any(reason.startswith("non_finite") for reason in metric_failures):
+        finalized["failure_reason"] = "non_finite_residual"
+    elif metric_failures:
+        finalized["failure_reason"] = "metric_guard_failed"
+    elif solve_flag_failures:
+        finalized["failure_reason"] = "solve_flag_guard_failed"
+    else:
+        finalized.setdefault("failure_reason", "block_solve_failed")
+    return finalized
+
+
+def _block_summary(
+    *,
+    run_dir: Path,
+    state_path: Path,
+    background_index: int,
+    pair_summary: Mapping[str, object],
+    block_reports: Sequence[Mapping[str, object]],
+    state_hash_before: str,
+    state_hash_after: str,
+    evidence_failures: Sequence[str] = (),
+    reports: Sequence[Mapping[str, object]] | None = None,
+    provider_report_hash: str | None = None,
+) -> dict[str, object]:
+    passed_reports = [report for report in block_reports if bool(report.get("pass", False))]
+    skipped_reports = [
+        report for report in block_reports if str(report.get("status", "")) == "skipped"
+    ]
+    failed_reports = [
+        report for report in block_reports if str(report.get("status", "")) == "failed"
+    ]
+    timed_out_reports = [
+        report for report in block_reports if str(report.get("status", "")) == "timeout"
+    ]
+    attempted_reports = [
+        report for report in block_reports if str(report.get("status", "")) != "skipped"
+    ]
+    improved_reports: list[Mapping[str, object]] = []
+    neutral_reports: list[Mapping[str, object]] = []
+    for report in passed_reports:
+        before_rms = _metric_float(report.get("before_rms_px", np.nan))
+        after_rms = _metric_float(report.get("after_rms_px", np.nan))
+        before_max = _metric_float(report.get("before_max_error_px", np.nan))
+        after_max = _metric_float(report.get("after_max_error_px", np.nan))
+        improved = (
+            math.isfinite(before_rms)
+            and math.isfinite(after_rms)
+            and after_rms < before_rms - PAIR_RMS_TOLERANCE_PX
+        ) or (
+            math.isfinite(before_max)
+            and math.isfinite(after_max)
+            and after_max < before_max - PAIR_MAX_ERROR_TOLERANCE_PX
+        )
+        if improved:
+            improved_reports.append(report)
+        else:
+            neutral_reports.append(report)
+
+    if evidence_failures:
+        status = "failed"
+        failure_reason = "pair_evidence_not_current"
+    elif not passed_reports:
+        status = "failed"
+        failure_reason = "no_block_solve_passed"
+    elif failed_reports or timed_out_reports:
+        status = "ok_with_failures"
+        failure_reason = None
+    else:
+        status = "ok"
+        failure_reason = None
+    best_by_rms = _best_block(block_reports, "after_rms_px")
+    recommended_next_full_candidate = dict(best_by_rms) if best_by_rms else None
+    summary = {
+        "rung": 5,
+        "rung_name": "block_summary",
+        "status": status,
+        "failure_reason": failure_reason,
+        "run_dir": str(run_dir),
+        "run_id": Path(run_dir).name,
+        "timestamp": Path(run_dir).name,
+        "state_path": str(Path(state_path).expanduser().resolve()),
+        "background_index": int(background_index),
+        "provider_report_hash": str(provider_report_hash or ""),
+        "pair_summary_path": pair_summary.get("report_path"),
+        "pair_summary_status": pair_summary.get("status"),
+        "attempted_blocks": [_block_ref(report) for report in attempted_reports],
+        "passed_blocks": [_block_ref(report) for report in passed_reports],
+        "failed_blocks": [_block_ref(report) for report in failed_reports],
+        "skipped_blocks": [_block_ref(report) for report in skipped_reports],
+        "timed_out_blocks": [_block_ref(report) for report in timed_out_reports],
+        "best_block_by_rms": best_by_rms,
+        "best_block_by_max_error": _best_block(block_reports, "after_max_error_px"),
+        "improved_blocks": [_block_ref(report) for report in improved_reports],
+        "neutral_blocks": [_block_ref(report) for report in neutral_reports],
+        "recommended_next_blocks": [_block_ref(report) for report in passed_reports],
+        "recommended_next_full_candidate": recommended_next_full_candidate,
+        "full_fitter_validated": False,
+        "state_sha256_before": state_hash_before,
+        "state_sha256_after": state_hash_after,
+        "state_hash_before": state_hash_before,
+        "state_hash_after": state_hash_after,
+        "state_hash_unchanged": bool(state_hash_before == state_hash_after),
+        "evidence_failures": [str(item) for item in evidence_failures],
+        "reports": list(reports or []),
+    }
+    return summary
+
+
+def _write_skipped_block_report(
+    *,
+    output_path: Path,
+    block_name: str,
+    block: Sequence[str],
+    missing_pairs: Sequence[Sequence[str]],
+    state_hash_before: str,
+    state_path: Path,
+) -> dict[str, object]:
+    report = {
+        "rung": 5,
+        "rung_name": f"block_{block_name}",
+        "block_name": str(block_name),
+        "block": [str(name) for name in block],
+        "status": "skipped",
+        "pass": False,
+        "skip_reason": "missing_pair_evidence",
+        "missing_pair_evidence": [[str(name) for name in pair] for pair in missing_pairs],
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
+        "real_solve_called": False,
+        "state_sha256_before": state_hash_before,
+        "state_sha256_after": _state_sha256(state_path),
+        "state_hash_before": state_hash_before,
+        "state_hash_after": _state_sha256(state_path),
+        "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
+    }
+    _write_json(output_path, report)
+    return report
+
+
+def _write_caked_failed_block_report(
+    *,
+    output_path: Path,
+    block_name: str,
+    block: Sequence[str],
+    caked_failures: Sequence[str],
+    caked_report_path: Path | None,
+    state_hash_before: str,
+    state_path: Path,
+    base_parameter_values: Mapping[str, object],
+) -> dict[str, object]:
+    report = {
+        "rung": 5,
+        "rung_name": f"block_{block_name}",
+        "block_name": str(block_name),
+        "block": [str(name) for name in block],
+        "status": "failed",
+        "pass": False,
+        "failure_reason": "caked_point_reprojection_guard_failed",
+        "block_guard_failures": [str(item) for item in caked_failures],
+        "active_params": [str(name) for name in block],
+        "var_names": [str(name) for name in block],
+        "candidate_param_names": [str(name) for name in block],
+        "effective_var_names_seen_by_solver": [],
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
+        "real_solve_called": False,
+        "base_parameter_values": dict(base_parameter_values),
+        "state_sha256_before": state_hash_before,
+        "state_sha256_after": _state_sha256(state_path),
+        "state_hash_before": state_hash_before,
+        "state_hash_after": _state_sha256(state_path),
+        "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
+        "caked_point_reprojection_report_path": (
+            str(Path(caked_report_path).expanduser().resolve())
+            if caked_report_path is not None
+            else None
+        ),
+    }
+    _write_json(output_path, report)
+    return report
+
+
+def _run_block_stage(
+    *,
+    state_path: Path,
+    background_index: int,
+    run_dir: Path,
+    context: Mapping[str, object],
+    sensitivity: Mapping[str, object],
+    reports: list[dict[str, object]],
+    state_hash_before: str,
+    max_nfev: int,
+    timeout_seconds: float,
+    sensitivity_report_path: Path,
+    provider_report_hash: str,
+    pair_summary_path: Path | None = None,
+    one_param_summary_path: Path | None = None,
+    one_param_diagnosis_summary_path: Path | None = None,
+    caked_point_reprojection_report_path: Path | None = None,
+    use_subprocess: bool = False,
+    diagnostic_logging: bool = False,
+) -> dict[str, object]:
+    caked_report_path = caked_point_reprojection_report_path
+    pair_summary: dict[str, object]
+    evidence_failures: list[str] = []
+
+    if pair_summary_path is not None:
+        pair_summary, pair_failures = _validate_pair_summary_evidence(
+            pair_summary_path,
+            state_path=state_path,
+            background_index=int(background_index),
+            current_hash=state_hash_before,
+            current_provider_report_hash=provider_report_hash,
+            current_run_id=Path(run_dir).name,
+        )
+        evidence_failures.extend(f"pair:{failure}" for failure in pair_failures)
+    else:
+        one_param_summary = _run_one_param_stage(
+            state_path=state_path,
+            background_index=int(background_index),
+            run_dir=run_dir,
+            context=context,
+            sensitivity=sensitivity,
+            sensitivity_report_path=sensitivity_report_path,
+            reports=reports,
+            state_hash_before=state_hash_before,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
+        )
+        one_param_summary_path = run_dir / "rung_03_one_param_summary.json"
+        current_active_params, _skipped = _active_params_from_sensitivity(sensitivity, context)
+        if (
+            "a" in set(current_active_params)
+            and "a" not in set(_as_str_list(one_param_summary.get("passed_params")))
+        ):
+            diagnosis = run_one_param_diagnosis_variants(
+                state_path=state_path,
+                background_index=int(background_index),
+                output_root=run_dir / "rung_03a_a_diagnosis",
+                one_param_filter="a",
+                use_subprocess=bool(use_subprocess),
+                diagnostic_logging=bool(diagnostic_logging),
+            )
+            reports.append(diagnosis)
+            one_param_diagnosis_summary_path = (
+                run_dir / "rung_03a_a_diagnosis" / "variant_summary.json"
+            )
+        elif one_param_diagnosis_summary_path is None:
+            one_param_diagnosis_summary_path = None
+
+        with _solver_debug_logging_scope(diagnostic_logging):
+            caked_report = _run_caked_point_reprojection_guard(
+                state_path=state_path,
+                background_index=int(background_index),
+                output_root=run_dir,
+                run_id="rung_03b_caked_point_reprojection",
+            )
+        reports.append(caked_report)
+        report_path = caked_report.get("report_path")
+        if report_path:
+            caked_report_path = Path(str(report_path))
+
+        pair_summary = _run_pair_stage(
+            state_path=state_path,
+            background_index=int(background_index),
+            run_dir=run_dir,
+            context=context,
+            sensitivity=sensitivity,
+            reports=reports,
+            state_hash_before=state_hash_before,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            one_param_summary_path=one_param_summary_path,
+            one_param_diagnosis_summary_path=one_param_diagnosis_summary_path,
+            caked_point_reprojection_report_path=caked_report_path,
+            include_psi_extension_pairs=True,
+            provider_report_hash=provider_report_hash,
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
+        )
+
+    if caked_report_path is None:
+        raw_caked_path = pair_summary.get("caked_point_reprojection_report_path")
+        if raw_caked_path:
+            caked_report_path = Path(str(raw_caked_path))
+    caked_report = (
+        _read_json(Path(caked_report_path).expanduser().resolve())
+        if caked_report_path is not None
+        else {}
+    )
+    caked_failures = (
+        _caked_reprojection_guard_failures(
+            caked_report,
+            current_hash=state_hash_before,
+            background_index=int(background_index),
+        )
+        if caked_report
+        else ["missing_caked_point_reprojection_report"]
+    )
+
+    if evidence_failures:
+        state_hash_after = _state_sha256(state_path)
+        summary = _block_summary(
+            run_dir=run_dir,
+            state_path=state_path,
+            background_index=int(background_index),
+            pair_summary=pair_summary,
+            block_reports=[],
+            state_hash_before=state_hash_before,
+            state_hash_after=state_hash_after,
+            evidence_failures=evidence_failures,
+            reports=reports,
+            provider_report_hash=provider_report_hash,
+        )
+        summary["report_path"] = str(run_dir / "rung_05_block_summary.json")
+        _write_json(run_dir / "rung_05_block_summary.json", summary)
+        return summary
+
+    passed_pairs = _passed_pair_keys(pair_summary)
+    block_reports: list[dict[str, object]] = []
+    dirty_abort = False
+    for index, (block_name, raw_block, dependencies) in enumerate(RUNG5_BLOCKS):
+        block = [str(name) for name in raw_block]
+        output_path = _rung_path(run_dir, 5, f"block_{block_name}")
+        missing_pairs = _block_dependency_missing(block_name, dependencies, passed_pairs)
+        if missing_pairs:
+            report = _write_skipped_block_report(
+                output_path=output_path,
+                block_name=block_name,
+                block=block,
+                missing_pairs=missing_pairs,
+                state_hash_before=state_hash_before,
+                state_path=state_path,
+            )
+            reports.append(report)
+            block_reports.append(report)
+            continue
+
+        current_hash = _state_sha256(state_path)
+        if current_hash != state_hash_before:
+            for skipped_name, skipped_block, _deps in RUNG5_BLOCKS[index:]:
+                report = {
+                    "rung": 5,
+                    "rung_name": f"block_{skipped_name}",
+                    "block_name": str(skipped_name),
+                    "block": [str(name) for name in skipped_block],
+                    "status": "skipped",
+                    "pass": False,
+                    "skip_reason": "state_hash_changed_before_block",
+                    "state_sha256_before": state_hash_before,
+                    "state_sha256_after": current_hash,
+                    "state_hash_before": state_hash_before,
+                    "state_hash_after": current_hash,
+                    "state_hash_unchanged": False,
+                }
+                _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), report)
+                reports.append(report)
+                block_reports.append(report)
+            break
+
+        base_parameter_values = _base_parameter_values_for_pair(context, block)
+        if _block_requires_caked_reprojection(block) and caked_failures:
+            report = _write_caked_failed_block_report(
+                output_path=output_path,
+                block_name=block_name,
+                block=block,
+                caked_failures=caked_failures,
+                caked_report_path=caked_report_path,
+                state_hash_before=state_hash_before,
+                state_path=state_path,
+                base_parameter_values=base_parameter_values,
+            )
+            reports.append(report)
+            block_reports.append(report)
+            continue
+
+        report = _run_solver_rung_with_timeout(
+            state_path=state_path,
+            background_index=int(background_index),
+            active_names=block,
+            output_path=output_path,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            rung=5,
+            rung_name=f"block_{block_name}",
+            state_hash_before=state_hash_before,
+            use_subprocess=bool(use_subprocess),
+            context=context,
+            diagnostic_logging=bool(diagnostic_logging),
+            dirty_timeout_on_timeout=not bool(use_subprocess),
+        )
+        provider_after: dict[str, object] | None = None
+        if not bool(report.get("dirty_timeout_abort", False)):
+            with _solver_debug_logging_scope(diagnostic_logging):
+                provider_after = _run_provider_guard_report(
+                    state_path=state_path,
+                    background_index=int(background_index),
+                    rung=5,
+                    rung_name=f"block_{block_name}_provider_guard_after",
+                )
+        report = _finalize_block_report(
+            report,
+            block_name=block_name,
+            block=block,
+            state_path=state_path,
+            state_hash_before=state_hash_before,
+            timeout_seconds=float(timeout_seconds),
+            base_parameter_values=base_parameter_values,
+            provider_after=provider_after,
+        )
+        _write_json(output_path, report)
+        reports.append(report)
+        block_reports.append(report)
+        timeout_integrity_dirty = (
+            str(report.get("status", "")) == "timeout"
+            and _pair_timeout_integrity_dirty(report)
+        )
+        if bool(report.get("dirty_timeout_abort", False)) or timeout_integrity_dirty:
+            dirty_abort = True
+            skip_reason = (
+                "dirty_timeout_abort"
+                if bool(report.get("dirty_timeout_abort", False))
+                else "fixed_source_or_pair_integrity_lost"
+            )
+            for skipped_name, skipped_block, _deps in RUNG5_BLOCKS[index + 1 :]:
+                skipped_report = {
+                    "rung": 5,
+                    "rung_name": f"block_{skipped_name}",
+                    "block_name": str(skipped_name),
+                    "block": [str(name) for name in skipped_block],
+                    "status": "skipped",
+                    "pass": False,
+                    "skip_reason": skip_reason,
+                    "state_sha256_before": state_hash_before,
+                    "state_sha256_after": _state_sha256(state_path),
+                    "state_hash_before": state_hash_before,
+                    "state_hash_after": _state_sha256(state_path),
+                    "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
+                }
+                _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), skipped_report)
+                reports.append(skipped_report)
+                block_reports.append(skipped_report)
+            break
+        if bool(report.get("state_hash_unchanged", False)) is not True:
+            for skipped_name, skipped_block, _deps in RUNG5_BLOCKS[index + 1 :]:
+                skipped_report = {
+                    "rung": 5,
+                    "rung_name": f"block_{skipped_name}",
+                    "block_name": str(skipped_name),
+                    "block": [str(name) for name in skipped_block],
+                    "status": "skipped",
+                    "pass": False,
+                    "skip_reason": "state_hash_changed_after_block",
+                    "state_sha256_before": state_hash_before,
+                    "state_sha256_after": _state_sha256(state_path),
+                    "state_hash_before": state_hash_before,
+                    "state_hash_after": _state_sha256(state_path),
+                    "state_hash_unchanged": False,
+                }
+                _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), skipped_report)
+                reports.append(skipped_report)
+                block_reports.append(skipped_report)
+            break
+
+    state_hash_after = _state_sha256(state_path)
+    summary = _block_summary(
+        run_dir=run_dir,
+        state_path=state_path,
+        background_index=int(background_index),
+        pair_summary=pair_summary,
+        block_reports=block_reports,
+        state_hash_before=state_hash_before,
+        state_hash_after=state_hash_after,
+        evidence_failures=[],
+        reports=reports,
+        provider_report_hash=provider_report_hash,
+    )
+    summary["dirty_timeout_abort"] = bool(dirty_abort)
+    summary["caked_point_reprojection_report_path"] = (
+        str(Path(caked_report_path).expanduser().resolve())
+        if caked_report_path is not None
+        else None
+    )
+    summary["report_path"] = str(run_dir / "rung_05_block_summary.json")
+    _write_json(run_dir / "rung_05_block_summary.json", summary)
+    return summary
 
 
 def _groups_for_cumulative_rungs(passed_params: Sequence[str], theta_name: str) -> list[tuple[str, list[str]]]:
@@ -3157,6 +4978,12 @@ def run_ladder(
     timestamp: str | None = None,
     sensitivity_report: Path | None = None,
     one_param_filter: str | None = None,
+    one_param_summary: Path | None = None,
+    one_param_diagnosis_summary: Path | None = None,
+    caked_point_reprojection_report: Path | None = None,
+    pair_summary: Path | None = None,
+    use_subprocess: bool = False,
+    diagnostic_logging: bool = False,
 ) -> dict[str, object]:
     state_path = Path(state_path).expanduser().resolve()
     output_root = Path(output_root).expanduser().resolve()
@@ -3165,11 +4992,13 @@ def run_ladder(
     state_hash_before = _state_sha256(state_path)
     reports: list[dict[str, object]] = []
 
-    provider_report = run_provider_guard(
-        state_path=state_path,
-        background_index=int(background_index),
-        output_path=_rung_path(run_dir, 0, "provider_guard"),
-    )
+    with _solver_debug_logging_scope(diagnostic_logging):
+        provider_report = run_provider_guard(
+            state_path=state_path,
+            background_index=int(background_index),
+            output_path=_rung_path(run_dir, 0, "provider_guard"),
+        )
+    provider_report_hash = _provider_report_evidence_hash(provider_report)
     reports.append(provider_report)
     if not bool(provider_report.get("provider_guard_ok", False)):
         result = {
@@ -3183,12 +5012,14 @@ def run_ladder(
         _write_json(run_dir / "ladder_summary.json", result)
         return result
 
-    context = _capture_solver_context(state_path, int(background_index))
-    dry_report = run_objective_dry_run(
-        context,
-        output_path=_rung_path(run_dir, 1, "objective_dry_run"),
-        max_nfev=int(max_nfev),
-    )
+    with _solver_debug_logging_scope(diagnostic_logging):
+        context = _capture_solver_context(state_path, int(background_index))
+    with _solver_debug_logging_scope(diagnostic_logging):
+        dry_report = run_objective_dry_run(
+            context,
+            output_path=_rung_path(run_dir, 1, "objective_dry_run"),
+            max_nfev=int(max_nfev),
+        )
     reports.append(dry_report)
     rung1_failures = _rung1_green_failures(dry_report)
     if rung1_failures:
@@ -3197,7 +5028,8 @@ def run_ladder(
             "reason": "objective_dry_run_failed",
             "failure_reason": (
                 "sensitivity_not_green"
-                if str(max_rung).strip().lower() == "one-param"
+                if str(max_rung).strip().lower()
+                in {"one-param", "pair", "pairs", "block", "blocks"}
                 else "objective_dry_run_failed"
             ),
             "rung_1_failures": rung1_failures,
@@ -3221,14 +5053,15 @@ def run_ladder(
         )
         _write_json(sensitivity_output_path, sensitivity)
     else:
-        sensitivity = run_sensitivity_scan(
-            context,
-            output_path=sensitivity_output_path,
-            max_nfev=int(max_nfev),
-            rung_1_report=dry_report,
-            state_path=state_path,
-            state_hash_before=state_hash_before,
-        )
+        with _solver_debug_logging_scope(diagnostic_logging):
+            sensitivity = run_sensitivity_scan(
+                context,
+                output_path=sensitivity_output_path,
+                max_nfev=int(max_nfev),
+                rung_1_report=dry_report,
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+            )
     reports.append(sensitivity)
     if not bool(sensitivity.get("pass", False)):
         if max_rung_name == "one-param":
@@ -3244,6 +5077,8 @@ def run_ladder(
                 max_nfev=int(max_nfev),
                 timeout_seconds=float(timeout_seconds),
                 one_param_filter=one_param_filter,
+                use_subprocess=bool(use_subprocess),
+                diagnostic_logging=bool(diagnostic_logging),
             )
             _write_json(run_dir / "ladder_summary.json", result)
             return result
@@ -3287,6 +5122,52 @@ def run_ladder(
             max_nfev=int(max_nfev),
             timeout_seconds=float(timeout_seconds),
             one_param_filter=one_param_filter,
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
+        )
+        _write_json(run_dir / "ladder_summary.json", result)
+        return result
+
+    if max_rung_name in {"block", "blocks"}:
+        result = _run_block_stage(
+            state_path=state_path,
+            background_index=int(background_index),
+            run_dir=run_dir,
+            context=context,
+            sensitivity=sensitivity,
+            reports=reports,
+            state_hash_before=state_hash_before,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            sensitivity_report_path=sensitivity_output_path,
+            provider_report_hash=provider_report_hash,
+            pair_summary_path=pair_summary,
+            one_param_summary_path=one_param_summary,
+            one_param_diagnosis_summary_path=one_param_diagnosis_summary,
+            caked_point_reprojection_report_path=caked_point_reprojection_report,
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
+        )
+        _write_json(run_dir / "ladder_summary.json", result)
+        return result
+
+    if max_rung_name in {"pair", "pairs"}:
+        result = _run_pair_stage(
+            state_path=state_path,
+            background_index=int(background_index),
+            run_dir=run_dir,
+            context=context,
+            sensitivity=sensitivity,
+            reports=reports,
+            state_hash_before=state_hash_before,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            one_param_summary_path=one_param_summary,
+            one_param_diagnosis_summary_path=one_param_diagnosis_summary,
+            caked_point_reprojection_report_path=caked_point_reprojection_report,
+            provider_report_hash=provider_report_hash,
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
         )
         _write_json(run_dir / "ladder_summary.json", result)
         return result
@@ -3307,6 +5188,11 @@ def run_ladder(
             timeout_seconds=float(timeout_seconds),
             rung=3,
             rung_name=f"one_param_{name}",
+            state_hash_before=state_hash_before,
+            use_subprocess=bool(use_subprocess),
+            context=context,
+            diagnostic_logging=bool(diagnostic_logging),
+            dirty_timeout_on_timeout=not bool(use_subprocess),
         )
         reports.append(report)
         one_param_reports.append(report)
@@ -3340,6 +5226,11 @@ def run_ladder(
             timeout_seconds=float(timeout_seconds),
             rung=4,
             rung_name=f"pair_{group_name}",
+            state_hash_before=state_hash_before,
+            use_subprocess=bool(use_subprocess),
+            context=context,
+            diagnostic_logging=bool(diagnostic_logging),
+            dirty_timeout_on_timeout=not bool(use_subprocess),
         )
         reports.append(report)
         if not bool(report.get("pass", False)):
@@ -3367,6 +5258,11 @@ def run_ladder(
                 timeout_seconds=float(timeout_seconds),
                 rung=5,
                 rung_name=f"block_{group_name}",
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
             )
             reports.append(report)
             if not bool(report.get("pass", False)):
@@ -3395,6 +5291,11 @@ def run_ladder(
                 rung=6,
                 rung_name=f"feature_{feature}",
                 feature=feature,
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
             )
             reports.append(report)
             if not bool(report.get("pass", False)):
@@ -3456,13 +5357,49 @@ def _single_attempt_report(result: Mapping[str, object]) -> Mapping[str, object]
     return result
 
 
+def _variant_stop_reason(
+    result: Mapping[str, object],
+    single_report: Mapping[str, object],
+) -> str | None:
+    if bool(single_report.get("dirty_timeout_abort", False)):
+        return "dirty_timeout_abort"
+    if str(single_report.get("diagnosis_classification", "")) == (
+        "fixed_source_or_pair_integrity_lost"
+    ):
+        return "fixed_source_or_pair_integrity_lost"
+    result_reason = str(result.get("failure_reason") or result.get("reason") or "")
+    single_reason = str(
+        single_report.get("failure_reason") or single_report.get("reason") or ""
+    )
+    reason = result_reason or single_reason
+    if reason in {
+        "filtered_param_not_active",
+        "sensitivity_not_green",
+        "provider_guard_failed",
+        "objective_dry_run_failed",
+        "no_active_params",
+    }:
+        return reason
+    if (
+        not single_report.get("param_name")
+        and str(result.get("status", single_report.get("status", "")))
+        in {"failed", "aborted"}
+    ):
+        return reason or str(result.get("status") or single_report.get("status"))
+    return None
+
+
 def run_one_param_diagnosis_variants(
     *,
     state_path: Path,
     background_index: int,
     output_root: Path,
     one_param_filter: str = "a",
+    use_subprocess: bool = False,
+    diagnostic_logging: bool = False,
 ) -> dict[str, object]:
+    state_path = Path(state_path).expanduser().resolve()
+    state_hash_before = _state_sha256(state_path) if state_path.is_file() else ""
     output_root = Path(output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     reports: list[dict[str, object]] = []
@@ -3483,23 +5420,35 @@ def run_one_param_diagnosis_variants(
             max_nfev=int(max_nfev),
             timestamp=label,
             one_param_filter=str(one_param_filter),
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
         )
         reports.append(result)
         attempted_variants.append(label)
         single_report = _single_attempt_report(result)
-        if bool(single_report.get("dirty_timeout_abort", False)):
-            stopped_reason = "dirty_timeout_abort"
-            break
-        if str(single_report.get("diagnosis_classification", "")) == (
-            "fixed_source_or_pair_integrity_lost"
-        ):
-            stopped_reason = "fixed_source_or_pair_integrity_lost"
+        stopped_reason = _variant_stop_reason(result, single_report)
+        if stopped_reason:
             break
     final_report = _single_attempt_report(reports[-1]) if reports else {}
+    state_hash_after = _state_sha256(state_path) if state_path.is_file() else ""
     summary = {
-        "status": "failed" if stopped_reason in {"dirty_timeout_abort", "fixed_source_or_pair_integrity_lost"} else "ok",
+        "status": (
+            "failed"
+            if stopped_reason
+            and stopped_reason != "variant_c_conditions_not_met"
+            else "ok"
+        ),
         "failure_reason": stopped_reason,
         "one_param_filter": str(one_param_filter),
+        "state_path": str(state_path),
+        "background_index": int(background_index),
+        "state_sha256_before": str(final_report.get("state_sha256_before") or state_hash_before),
+        "state_sha256_after": str(final_report.get("state_sha256_after") or state_hash_after),
+        "state_hash_unchanged": bool(
+            str(final_report.get("state_sha256_before") or state_hash_before)
+            == str(final_report.get("state_sha256_after") or state_hash_after)
+        ),
+        "dirty_timeout_abort": bool(final_report.get("dirty_timeout_abort", False)),
         "attempted_variants": attempted_variants,
         "diagnosis_classification": final_report.get("diagnosis_classification"),
         "reports": reports,
@@ -3520,6 +5469,7 @@ def _worker_main(args: argparse.Namespace) -> int:
         rung=int(args.rung_number),
         rung_name=str(args.rung_name),
         feature=args.feature,
+        diagnostic_logging=bool(getattr(args, "diagnostic_logging", False)),
     )
     return 0
 
@@ -3533,7 +5483,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", help="Root directory for ladder artifacts.")
     parser.add_argument(
         "--max-rung",
-        choices=("sensitivity", "one-param", "center", "full", "features"),
+        choices=(
+            "sensitivity",
+            "one-param",
+            "pair",
+            "pairs",
+            "block",
+            "blocks",
+            "center",
+            "full",
+            "features",
+        ),
         default="center",
     )
     parser.add_argument(
@@ -3545,12 +5505,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Run only this current-run active parameter when --max-rung=one-param.",
     )
     parser.add_argument(
+        "--one-param-summary",
+        help="Current Rung 3 one-param summary JSON for pair rungs.",
+    )
+    parser.add_argument(
+        "--one-param-diagnosis-summary",
+        help="Current Rung 3A one-param diagnosis variant summary JSON for pair rungs.",
+    )
+    parser.add_argument(
+        "--caked-point-reprojection-report",
+        help="Fresh Rung 3B caked-point reprojection JSON required for theta/distance pairs.",
+    )
+    parser.add_argument(
+        "--pair-summary",
+        help="Debug-only Rung 4 pair summary JSON override for block rungs.",
+    )
+    parser.add_argument(
         "--run-one-param-variants",
         action="store_true",
         help="Run the bounded A/B/C one-param diagnostic sequence.",
     )
     parser.add_argument("--timeout-seconds", type=float, default=120.0)
     parser.add_argument("--max-nfev", type=int, default=20)
+    parser.add_argument(
+        "--use-subprocess",
+        action="store_true",
+        help="Run each solve rung in a separate cold worker process.",
+    )
+    parser.add_argument(
+        "--diagnostic-logging",
+        action="store_true",
+        help="Keep debug and intersection-cache logging enabled during solver probes.",
+    )
     parser.add_argument("--_worker-solve", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--output-json", help=argparse.SUPPRESS)
     parser.add_argument("--heartbeat-json", help=argparse.SUPPRESS)
@@ -3574,6 +5560,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             background_index=int(args.background_index),
             output_root=Path(args.output_root),
             one_param_filter=str(args.one_param_filter or "a"),
+            use_subprocess=bool(args.use_subprocess),
+            diagnostic_logging=bool(args.diagnostic_logging),
         )
     else:
         result = run_ladder(
@@ -3585,6 +5573,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_nfev=int(args.max_nfev),
             sensitivity_report=Path(args.sensitivity_report) if args.sensitivity_report else None,
             one_param_filter=str(args.one_param_filter or "") or None,
+            one_param_summary=(
+                Path(args.one_param_summary) if args.one_param_summary else None
+            ),
+            one_param_diagnosis_summary=(
+                Path(args.one_param_diagnosis_summary)
+                if args.one_param_diagnosis_summary
+                else None
+            ),
+            caked_point_reprojection_report=(
+                Path(args.caked_point_reprojection_report)
+                if args.caked_point_reprojection_report
+                else None
+            ),
+            pair_summary=Path(args.pair_summary) if args.pair_summary else None,
+            use_subprocess=bool(args.use_subprocess),
+            diagnostic_logging=bool(args.diagnostic_logging),
         )
     print(
         json.dumps(

@@ -95,6 +95,245 @@ malformed counters, timeout reports emit the full one-param schema with partial
 values or nulls, and clean one-param reports without heartbeat summaries fall
 back to their top-level counters instead of being misclassified as pair loss.
 
+Rung 3A `a` timeout diagnosis is complete under
+`artifacts/geometry_fit_ladder/new4_a_diagnose/`. The filtered `a` runs used
+fresh provider guard, Rung 1, and Rung 2 inputs, then attempted only singleton
+`a`. Variants `a_nfev5_t120`, `a_nfev10_t120`, and `a_nfev20_t300` all
+completed before timeout with `diagnosis_classification == "usable"`,
+`last_nfev == 6`, finite residual/RMS/max-error metrics, clean fixed-source
+counters, `dirty_timeout_abort == false`, and unchanged `new4.json`. No child
+kill was needed because no timeout occurred. No center, paired, block, full,
+feature, baseline, or non-`a` tuning artifacts were written. This justified
+including `a` in the bounded Rung 4 candidate set.
+
+Rung 4 paired solves are complete for the initial bounded pair set. Latest
+result: `status == "ok"`, 5 attempted pairs, 5 passed pairs, 0 failed or
+timed-out pairs, provider guard after green, and `new4.json` unchanged. Best
+pair by both RMS and max error was `[corto_detector, theta_initial]`. The run
+correctly stopped at Rung 4 and did not run full fit, feature rung, baseline,
+GUI fit button, block solve, or any higher rung.
+
+The repeated cold-start speed bug is fixed for ladder solve rungs. One solver
+context is captured once per ladder session, then reused by one-param, pair,
+block, and feature solve probes through the warm in-process worker path. Normal
+solver probes also suppress debug/intersection-cache logging unless
+`--diagnostic-logging` is requested. The previous cold subprocess path remains
+available with `--use-subprocess` for isolation diagnostics. Measured Rung 4
+pair solves improved from 315.74 seconds total across five pairs to 5.91
+seconds total, about 53.4x faster. First residual time improved from a 62.07
+second average to a 0.35 second average. End-to-end pair ladder runtime is
+still not fully solved because one-time context capture and pre-solve setup
+remain expensive.
+
+## Validated Ladder State
+
+The active `new4` recovery question has moved from "is the point handoff
+correct?" to "which bounded solve rung should run next?" The point-provider,
+fixed-source request handoff, sensitivity, singleton solve, `a` diagnosis,
+caked-point reprojection, and initial paired-solve guards below are already
+validated and should not be repeated unless they regress.
+
+Speed status as of 2026-04-22:
+
+- Bug/error: repeated per-solve cold setup is fixed for the ladder path.
+- Feature: warm in-process solver reuse is implemented and covered by tests.
+- Still open: initial context capture, provider guard, objective dry-run, and
+  sensitivity setup still dominate whole-run wall time.
+
+Point-provider parity is complete. The manual Qr picker saved/refined pairs,
+geometry-fit `provider_pairs`, and actual fitter handoff rows match exactly for
+`new4`. The provider-only report is green with
+`classification == "point_provider_parity_ok"`, 7/7 manual/provider pairs, zero
+dataset/provider mismatch, zero fallback, and no optimizer call. This proves
+the fitter receives the correct manual-picked points. It does not prove the
+optimizer converges.
+
+Rung 1 fixed-source handoff is complete. Provider/dataset rows survive into
+`GeometryFitSolverRequest` and the optimizer subset/objective as fixed-source
+rows. Required green counters are:
+
+- `provider_pair_count == 7`
+- `dataset_pair_count == 7`
+- `optimizer_request_pair_count == 7`
+- `fixed_source_pair_count == 7`
+- `fallback_row_count == 0`
+- `fixed_source_resolution_fallback_count == 0`
+- `missing_fixed_source_count == 0`
+- `fixed_source_resolved_count == 7`
+- `fallback_entry_count == 0`
+- `provider_to_optimizer_identity_match == true`
+- `provider_to_optimizer_point_match == true`
+- `objective_eval_called == true`
+- `objective_dry_run_residual_finite == true`
+- `least_squares_called == false`
+- `optimizer_solve_called == false`
+- `matched_pair_count == 7`
+- `missing_pair_count == 0`
+- `branch_mismatch_count == 0`
+
+Root cause fixed: local provider-fixed rows were previously falling back because
+local source identity was not preserved correctly through optimizer
+request/subset/remap. The duplicate-HKL provider-local remap/resolver path now
+keeps all 7 rows fixed.
+
+Rung 2 sensitivity scan is complete. The ladder can perturb each candidate
+parameter without running a real solve and identify active, near-zero, and
+unsafe parameters. Current validation result: `status == "ok"`, Rung 1 stayed
+green, `provider_pair_count == 7`, `fixed_source_pair_count == 7`,
+`fallback_entry_count == 0`, `residual_probe_called == true`,
+`least_squares_called == false`, `optimizer_solve_called == false`, and
+`state_hash_unchanged == true`. Current classification is 9 active, 4
+near-zero, 0 non-finite, and 0 unsafe. Active parameters:
+
+- `chi`
+- `cor_angle`
+- `theta_initial`
+- `corto_detector`
+- `zs`
+- `zb`
+- `a`
+- `c`
+- `psi_z`
+
+Rung 3 one-parameter solves are complete enough to proceed. Each active
+parameter was attempted as a singleton real solve with all other parameters
+frozen. Result: `status == "ok_with_failures"`. Attempted parameters were
+`chi`, `cor_angle`, `theta_initial`, `corto_detector`, `zs`, `zb`, `a`, `c`,
+and `psi_z`. Passing parameters were `chi`, `cor_angle`, `theta_initial`,
+`corto_detector`, `zs`, `zb`, `c`, and `psi_z`; `a` timed out; failed
+parameters were none. There was no pair loss, no branch mismatch, no
+no-matched-pair rejection, passing params kept fixed-source counters clean,
+`new4.json` was unchanged, and the provider guard after the run was green. This
+does not prove full geometric fitter validation. It only proves singleton solve
+viability for the listed passing params.
+
+Rung 3A diagnosed `a`. The previous `a` timeout was isolated with
+heartbeat/timeout instrumentation. Variants `a_nfev5_t120`,
+`a_nfev10_t120`, and `a_nfev20_t300` completed with `last_nfev == 6`; all
+completed before timeout, no child kill was needed,
+`dirty_timeout_abort == false`, fixed-source counters stayed clean,
+`diagnosis_classification == "usable"`, and `new4.json` hash stayed
+`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`. Key
+metrics: `last_residual_norm == 2666.27241841688`,
+`last_rms_px == 995.892462440596`,
+`last_max_error_px == 1856.9210531158`, and
+`last_parameter_value == 4.15299999995151`. This justified including `a` in
+the bounded Rung 4 candidate set. Do not treat `a` as a solver pathology.
+
+Rung 3B caked point reprojection is complete. Changing `theta_initial` or
+`corto_detector` recomputes caked/fit-space coordinates for the selected
+detector/background points through the live exact point projector, without
+recaking the full background image. Result: `status == "pass"`,
+`point_count == 7`, `exact_projector_available == true`, theta projector
+signature changed, distance projector signature changed, theta-perturbed
+points shifted, distance-perturbed points shifted,
+`full_background_recake_call_count == 0`, provider guard before/after green,
+and `new4_state_hash_unchanged == true`. Raw detector pixels do not move. The
+geometry transform changes, and the selected detector/native points are
+reprojected into caked/fit space. This proves the selected-point residual path
+responds to `theta_initial` and `corto_detector` changes without recaking the
+whole image.
+
+Rung 4 paired solves are complete for the initial bounded pair list. The latest
+run attempted 5 pairs and passed all 5 with no failures and no timeouts.
+Provider guard after the run was green, `new4.json` was unchanged, and the best
+pair by both RMS and max error was `[corto_detector, theta_initial]`. This is
+still not full geometric fitter validation: full fit, feature rung, baseline,
+GUI fit button, block solve, and higher rungs were not run and remain
+unclaimed.
+
+Rung 4 warm-path performance is validated for solve-rung overhead. The old
+Rung 4 pair artifacts under `artifacts/geometry_fit_ladder/new4/20260421_235235`
+showed individual pair solves at 56.95, 62.50, 59.47, 58.48, and 78.34 seconds.
+The warm-path measurement under
+`artifacts/geometry_fit_ladder/new4/20260422_004012` shows the same initial
+pair set at 1.17, 1.17, 1.31, 1.16, and 1.11 seconds. All five warm pair solves
+reported `solver_context_reused == true`, clean pass status, provider guard
+after green, and unchanged `new4.json`.
+
+## Do Not Redo
+
+Do not redo these completed validations unless their guard output regresses:
+
+- Point-provider parity for manual Qr picker pairs, provider pairs, and fitter
+  handoff rows.
+- Provider-only `new4` report with no optimizer call.
+- Rung 1 fixed-source request/objective dry-run.
+- Rung 2 sensitivity scan.
+- Rung 3 singleton solves for active parameters.
+- Rung 3A `a` timeout diagnosis.
+- Rung 3B caked point reprojection guard.
+- Rung 4 initial paired solves.
+
+## Next Rung
+
+Rung 4 initial paired solves are complete. Do not repeat the initial pair list
+unless a guard regresses. The next implementation patch should consume the
+recorded paired-solve result and choose the next bounded ladder step. Do not
+run block, full, feature, baseline, GUI fit button, broad parameter tuning, or a
+higher rung until its own gate is explicit.
+
+Allowed parameter set for Rung 4:
+
+- `chi`
+- `cor_angle`
+- `theta_initial`
+- `corto_detector`
+- `zs`
+- `zb`
+- `a`
+- `c`
+- `psi_z`
+
+Validated initial pair list:
+
+- `[a, c]`
+- `[chi, cor_angle]`
+- `[theta_initial, cor_angle]`
+- `[corto_detector, theta_initial]`
+- `[zs, zb]`
+
+Optional later pairs were not part of the green initial Rung 4 result. Treat
+them as unvalidated candidates for a future explicit pair-expansion step, not
+as repeat work:
+
+- `[c, psi_z]`
+- `[a, psi_z]`
+- `[corto_detector, c]`
+
+Do not run `[a, c, psi_z]` yet. That is a later block rung.
+
+Rung 4 pass requirements per pair:
+
+- `least_squares_called == true`
+- `optimizer_solve_called == true`
+- `fixed_source_pair_count == 7`
+- `fixed_source_resolved_count == 7`
+- `fallback_row_count == 0`
+- `fixed_source_resolution_fallback_count == 0`
+- `missing_fixed_source_count == 0`
+- `fallback_entry_count == 0`
+- `matched_pair_count == 7`
+- `missing_pair_count == 0`
+- `branch_mismatch_count == 0`
+- `provider_to_optimizer_identity_match == true`
+- `provider_to_optimizer_point_match == true`
+- finite residuals
+- no "No matched peak pairs were available for the fitted solution." rejection
+- `after_rms_px <= before_rms_px + 0.25`
+- `after_max_error_px <= before_max_error_px + 1.0`
+- `new4.json` unchanged
+- if pair contains `theta_initial` or `corto_detector`,
+  `caked_point_reprojection_guard_ok == true`
+
+## Still Not Validated
+
+Full geometric fitter validation is not yet claimed. Baseline completion is not
+yet claimed. RMS/max global improvement is not yet claimed. Feature rungs,
+block solves, and full solves remain unclaimed. The GUI fit button is not the
+validation path. `run_geometry_fit_quality_baseline.py` is not the immediate
+next step.
+
 ## Current State
 
 - Provider selection preserves picker-owned saved/refined background and
@@ -222,14 +461,45 @@ back to their top-level counters instead of being misclassified as pair loss.
   longer become false pair-loss failures when heartbeat/point-summary data is
   absent, and all-active metric failures keep
   `failure_reason == "no_one_param_solve_passed"`.
+- Rung 3A `a` timeout diagnosis is complete:
+  `artifacts/geometry_fit_ladder/new4_a_diagnose/variant_summary.json` reports
+  `status == "ok"` and `diagnosis_classification == "usable"`. Attempted
+  variants were `a_nfev5_t120`, `a_nfev10_t120`, and `a_nfev20_t300`; all three
+  report `param_name == "a"`, `status == "ok"`, `last_nfev == 6`,
+  `heartbeat_count == 6`, finite `last_residual_norm`, `last_rms_px`, and
+  `last_max_error_px`, clean fixed-source counters at the last heartbeat, no
+  fixed-source counter failures, `dirty_timeout_abort == false`, and
+  `state_hash_unchanged == true`. The solve completed before timeout in all
+  variants, so `child_process_killed_cleanly` is not applicable rather than
+  dirty. Non-selected active params were recorded as `filtered_params`, not
+  failures. The diagnose directory contains no rung 4/5/6, center, paired,
+  block, full, feature, or baseline artifacts.
+- Rung 3B caked point reprojection is complete. The live exact point projector
+  recomputes fit-space coordinates for selected detector/native points when
+  `theta_initial` or `corto_detector` changes, without recaking the full
+  background image. The guard passed with 7 points, projector signatures and
+  perturbed points changed, full background recake count 0, provider guards
+  green before/after, and unchanged `new4.json`.
+- Rung 4 paired solves are complete for the initial bounded pair list:
+  `[a, c]`, `[chi, cor_angle]`, `[theta_initial, cor_angle]`,
+  `[corto_detector, theta_initial]`, and `[zs, zb]`. Summary status was
+  `ok`: attempted 5, passed 5, failed 0, timed out 0. Provider guard after was
+  green, `new4.json` was unchanged, and best pair by both RMS and max error was
+  `[corto_detector, theta_initial]`. The run intentionally did not create full
+  fit, feature rung, baseline, GUI fit, block, or higher-rung validation.
 
 ## Next Actions
 
-- Treat rung 3 one-parameter solves as partial-success complete. Next
-  recommended rung is a separate bounded follow-up that either retries or
-  diagnoses the `a` timeout, then designs the next solve rung from the passing
-  singleton set only. Do not run center, paired, block, full, feature, baseline,
-  or parameter tuning inside this completed rung 3 scope.
+- Treat Rung 3 one-parameter solves, the Rung 3A `a` diagnosis, Rung 3B caked
+  point reprojection, and Rung 4 initial paired solves as complete. The next
+  patch should use the recorded Rung 4 result instead of repeating the same
+  pair discovery run.
+- Treat warm solve-rung reuse as implemented. Do not reintroduce one Python
+  subprocess or one fresh solver context per candidate unless explicitly
+  running `--use-subprocess` for diagnostics.
+- Profile the remaining one-time setup cost before more speed work. Current
+  whole-run wall time is still dominated by context capture, provider guard,
+  objective dry-run, and sensitivity setup rather than pair optimizer math.
 - Keep provider logic closed unless the provider-only parity gate regresses.
 - Keep Qr/Qz branch seed behavior closed unless raw-cache preview, manual
   toggle, refresh, or place setup regresses to either every raw ray or one
@@ -246,8 +516,9 @@ back to their top-level counters instead of being misclassified as pair loss.
   recognizing the same visible marker after switching detector/caked views.
 - Keep objective rung 1 as a guard: any request/objective fallback row must stop
   before `least_squares`.
-- Do not run solve rungs, tune parameters, loosen fallback rules, or run the old
-  baseline until the separate solve-rung project begins.
+- Do not run block, full, feature, baseline, GUI fit button, broad parameter
+  tuning, higher rungs, or loosen fallback rules without an explicit next-rung
+  gate.
 
 ## Point-Provider Stop Criteria
 
@@ -314,6 +585,54 @@ the primary point-provider parity result.
 - Huge candidate distances.
 
 ## Validation
+
+### Guard Commands
+
+Provider parity:
+
+```powershell
+python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv
+```
+
+Provider-only report:
+
+```powershell
+python scripts/debug/validate_geometry_preflight_rebind.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --point-provider-report-only --report-path artifacts/geometry_fit_gui_states/new4_point_provider_report.json
+```
+
+Rung 1 objective dry-run:
+
+```powershell
+python -m pytest tests/test_gui_geometry_fit_workflow.py::test_new4_rung1_direct_objective_dry_run_green_or_fail_before_solve -vv
+```
+
+Rung 2 sensitivity:
+
+```powershell
+python scripts/debug/run_new4_geometry_fit_ladder.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --output-root artifacts/geometry_fit_ladder/new4 --max-rung sensitivity
+```
+
+Rung 3 one-param:
+
+```powershell
+python scripts/debug/run_new4_geometry_fit_ladder.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --output-root artifacts/geometry_fit_ladder/new4 --max-rung one-param --max-nfev 20 --timeout-seconds 120
+```
+
+Rung 3A `a` diagnosis:
+
+```powershell
+python scripts/debug/run_new4_geometry_fit_ladder.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --output-root artifacts/geometry_fit_ladder/new4_a_diagnose --max-rung one-param --one-param-filter a --max-nfev 5 --timeout-seconds 120
+
+python scripts/debug/run_new4_geometry_fit_ladder.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --output-root artifacts/geometry_fit_ladder/new4_a_diagnose --max-rung one-param --one-param-filter a --max-nfev 10 --timeout-seconds 120
+
+python scripts/debug/run_new4_geometry_fit_ladder.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --output-root artifacts/geometry_fit_ladder/new4_a_diagnose --max-rung one-param --one-param-filter a --max-nfev 20 --timeout-seconds 300
+```
+
+Rung 3B caked point reprojection:
+
+```powershell
+python scripts/debug/run_new4_caked_point_reprojection_check.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --output-root artifacts/geometry_fit_ladder/new4
+```
 
 Focused point-provider gate:
 
@@ -415,6 +734,41 @@ Rung 3 review hardening validation, 2026-04-22:
   partial-success visibility, provider guard after one-param, and clean
   top-level report fallback when heartbeat/point-summary data is absent.
 
+Rung 3A `a` timeout diagnosis validation, 2026-04-22:
+
+- `py_compile`: passed for optimization, GUI fitting, preflight validator, and
+  ladder script.
+- Point-provider parity tests: 28 passed.
+- Provider-only `new4` report before and after diagnosis:
+  `classification == "point_provider_parity_ok"`.
+- Fixed-source/Rung 1 guards: fixed-source tests passed, and direct real Rung 1
+  dry-run tests passed.
+- `--max-rung sensitivity` guard passed under
+  `artifacts/geometry_fit_ladder/new4_a_diagnose/sensitivity` with
+  `state_unchanged == true`.
+- Focused `--one-param-filter`/timeout tests passed: 35 passed, covering parser
+  acceptance, singleton `a` attempt filtering, `filtered_params`, inactive
+  filter fail-before-solve, no higher-rung artifacts, timeout schema, slow/hang
+  classification, dirty fixed-source heartbeat classification, dirty child kill
+  abort, and unchanged `new4` hash.
+- Real filtered variants attempted `a_nfev5_t120`, `a_nfev10_t120`, and
+  `a_nfev20_t300`. All completed before timeout with
+  `diagnosis_classification == "usable"`, `last_nfev == 6`,
+  clean fixed-source counters, no dirty child kill, no dirty timeout abort,
+  finite residual metrics, and unchanged `new4.json`.
+
+Rung 4 paired-solve validation, 2026-04-22:
+
+- Real `new4 --max-rung pairs` completed with `status == "ok"`.
+- Attempted initial pairs were `[a, c]`, `[chi, cor_angle]`,
+  `[theta_initial, cor_angle]`, `[corto_detector, theta_initial]`, and
+  `[zs, zb]`.
+- Results: 5 attempted, 5 passed, 0 failed, 0 timed out.
+- Provider guard after was green, `new4.json` was unchanged, and best pair by
+  both RMS and max error was `[corto_detector, theta_initial]`.
+- The run intentionally did not run full fit, feature rung, baseline, GUI fit
+  button, block solve, or any higher rung.
+
 Coordinate parity closure, 2026-04-22:
 
 - Focused coordinate diagnostic tests: 9 passed.
@@ -437,6 +791,7 @@ tool. Run it only after the ladder identifies a stable parameter set.
 
 ## Links
 
+- [New4 geometric fitter recovery handoff](new4-geometric-fitter-recovery-handoff.md)
 - [Tracking hub](../index.md)
 - [GUI workflow](../../gui-workflow.md)
 - [Geometry fitting from picked spots](../../simulation_and_fitting.md#geometry-fitting-from-picked-spots)

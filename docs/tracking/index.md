@@ -22,59 +22,17 @@ gates are green.
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
 | Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
+| New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
-validate `new4.json` point-provider parity before optimizer execution. The
-manual Qr picker selected/refined pairs, geometry-fit provider pairs, and
-dataset manual point rows must match exactly. The Qr/Qz branch-seed bug/error
-scope is closed at the UI boundary: initial raw-cache preview, manual toggle,
-refresh/view-change, and place setup keep one mosaic-top seed per normalized
-branch for each real Qr/Qz group while preserving branch/reflection/ray
-provenance. The caked-mode detector-return bug is also closed: selected
-`2theta,phi` Qr/Qz seeds redraw in detector view through the same
-detector-display projection path as simulation markers. The Qr/Qz picker now
-also stays clickable after switching detector to caked or caked to detector,
-even when cached candidate rows still carry stale active-view coordinates.
-Detector-view Qr/Qz hit-table rows now use the simulated detector display frame
-for click targets; the background detector adapter applies only to explicitly
-tagged background/native-detector rows. Caked selection and caked-to-detector
-conversion remain locked by regression tests.
-Optimizer validation has a green `new4` rung 1 objective dry-run checkpoint:
-the provider/dataset/optimizer request all carry seven fixed-source rows, the
-objective resolver resolves all seven without HKL fallback, the provider
-identity and point handoff match exactly, the dry-run residual is finite, and
-`least_squares`/solve are not called. Review hardening keeps duplicate-HKL
-provider-local singleton repair branch-proven so unproven local rows still fail
-instead of becoming silent HKL-like rematches. Rung 2 sensitivity scan now stops
-after provider guard, rung 1 dry-run, and residual probing only; it writes no
-center/solve artifacts, preserves `new4.json`, and reports 9 active parameters,
-4 near-zero parameters, and 0 unsafe/non-finite parameters on the current real
-`new4` run. Review hardening now gates direct sensitivity calls on green rung 1
-and requires live per-eval point-match summaries for fixed-source counters, with
-missing or dirty counters marked unsafe instead of falling back to request-level
-counts. The adjacent abort-report and synthetic branch-mismatch review findings
-are fixed: malformed rung 1 payloads still write aborted rung 2 reports, and
-fixed-correspondence summaries measure resolver branch mismatches instead of
-hard-coding zero. Abort-report provider identity/point-match booleans now use
-strict `is True` semantics, so malformed truthy strings cannot be reported as
-green. Coordinate parity is closed through
-`GeometryFitSolverRequest.measured_peaks`: the explicit optimizer-request
-diagnostic compares all seven `new4` pairs without `least_squares`, solver
-entrypoints, or saved-state mutation. The adjacent optimizer-request
-capture-failure bug is closed too: a failed request capture is reported as
-`diagnostic_incomplete_optimizer_request_unavailable`, leaves the optimizer
-surface un-compared, and no longer becomes `frame_mismatch_detected`; runs
-without the optimizer-request flag report `not_requested`.
-Rung 3 one-parameter solves are complete as a bounded partial-success rung:
-only current-run Rung 2 `active_params` were attempted, eight singleton solves
-passed, `a` timed out cleanly, passing params preserved all fixed-source
-counters, `new4.json` stayed unchanged, and provider parity remained green
-afterward. Rung 3 review hardening is closed: dirty, missing, or boolean Rung 2
-counter payloads fail before one-param starts; timeout partial reports keep the
-full schema; and clean top-level one-param reports without heartbeat summaries
-are not false pair-loss failures. Center, paired, block, full, feature,
-baseline, and tuning rungs remain blocked until the next bounded solve-rung
-project starts. The old `new2` and `new3` saved-state gates are retired.
+New4 provider handoff, fixed-source request handoff, sensitivity scan,
+one-param solves, `a` diagnosis, caked point reprojection, and initial Rung 4
+paired solves are validated. The repeated cold-start speed bug is fixed for
+solve rungs by reusing one warm solver context in-process; Rung 4 pair solves
+measured about 53x faster, from 315.74 seconds total to 5.91 seconds total.
+Next: profile the remaining one-time setup cost, then consume the Rung 4 result
+before choosing the next bounded ladder step; no full-fit validation claimed
+yet.
 
 ## Known bugs
 
