@@ -22,8 +22,12 @@ Last updated: 2026-04-22
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.
 - Rung 5 small cumulative blocks are green for fresh same-run New4 ladder
-  validation. Run `20260422_105016` passed four attempted blocks with zero
+  validation. Run `20260422_115256` passed four attempted blocks with zero
   failed/skipped blocks.
+- Rung 0-5 timing observability is implemented. Each current-run rung report
+  gets finite timing metadata, the run directory gets `rung_timing_summary.json`,
+  `--timing-report` can write an explicit copy, and timing thresholds are
+  diagnostic only.
 - No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
   feature rung should be treated as validated.
 
@@ -36,6 +40,11 @@ Status by work type:
 - Bug/error: Rung 5 evidence handling is fixed so fatal evidence aborts stay
   fatal, local `a` usability failures stay local, and missing dependencies skip
   only affected blocks.
+- Timing feature: current-run Rung 0-5 timing JSON and stdout table are
+  available for opt-in ladder runs.
+- Timing bug/error: Rung 6 is excluded from timing collection/docs, Rung 5
+  skipped reports are timed, and `RA_SIM_NEW4_LADDER_TIMING_MAX_S` never gates
+  status or exit code.
 - Not validated: full fitter, feature rung, baseline, GUI fit, dynamic reanchor,
   multistart, and polish remain unclaimed.
 
@@ -127,6 +136,13 @@ Final coordinate diagnostic fields:
   blocks `4`, failed/skipped blocks `0`, provider guard after blocks green,
   and `new4.json` unchanged. This supersedes the earlier debug pair-backed-only
   caveat. `full_fitter_validated == false`.
+
+`artifacts/geometry_fit_ladder/new4/20260422_115256/rung_05_block_summary.json`
+
+- Fresh same-run Rung 5 block proof. Status `ok`; attempted blocks `4`, passed
+  blocks `4`, failed/timed-out blocks `0`, provider guard after blocks green,
+  caked reprojection guard path present and green, and `new4.json` unchanged.
+  `full_fitter_validated == false`.
 
 `artifacts/geometry_fit_ladder/new4/<latest>/rung_02_sensitivity_scan.json`
 
@@ -239,6 +255,25 @@ Expected Rung 2 summary:
 - `fixed_source_pair_count == 7`
 - `fallback_entry_count == 0`
 
+Opt-in Rung 0-5 timing report:
+
+```bash
+python scripts/debug/run_new4_geometry_fit_ladder.py \
+  --state artifacts/geometry_fit_gui_states/new4.json \
+  --background-index 0 \
+  --output-root artifacts/geometry_fit_ladder/new4 \
+  --max-rung blocks \
+  --max-nfev 20 \
+  --timeout-seconds 120 \
+  --timing-report artifacts/geometry_fit_ladder/new4/latest_timing_summary.json
+```
+
+Inspect timing JSON with Python:
+
+```bash
+python -c "import json; r=json.load(open('artifacts/geometry_fit_ladder/new4/latest_timing_summary.json')); print(r['rung_timings']); print(r['slowest_rung'], r['slowest_rung_elapsed_s'])"
+```
+
 Full workflow checkpoint:
 
 ```powershell
@@ -256,7 +291,7 @@ Latest reported local result: `316 passed` after class-A/class-C cleanup. This d
 | Rung 2 | sensitivity scan | green | 9 active, 4 near-zero, 0 non-finite, 0 unsafe |
 | Rung 3 | one-parameter solves | green | singleton evidence usable for pair/block work |
 | Rung 4 | paired solves | green | initial pair set passed |
-| Rung 5 | cumulative blocks | green | fresh same-run run `20260422_105016`, 4/4 blocks passed |
+| Rung 5 | cumulative blocks | green | fresh same-run run `20260422_115256`, 4/4 blocks passed |
 | Rung 6 | selected combined solve / full-candidate dry run | not started | separate approval required |
 
 ## Active and near-zero parameters from Rung 2
@@ -325,15 +360,15 @@ Fixed behavior: failed optimizer-request capture leaves the optimizer request un
 Next project: Rung 6 selected combined solve / full-candidate dry run.
 
 Fresh same-run Rung 5 is accepted for New4 ladder validation. The acceptance run
-was `20260422_105016`: Rung 5 `status == "ok"`, four attempted blocks, four
+was `20260422_115256`: Rung 5 `status == "ok"`, four attempted blocks, four
 passed blocks, zero failed/skipped blocks, provider guard after blocks green,
 and unchanged `new4.json`
-(`F5BF185EBCFBFA8B32F161CC4BD781E177175DAD84B6FCE4D563F23CA021EF36`).
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
 `full_fitter_validated == false`.
 
 Rung 6 remains separate and unstarted. Do not run dynamic reanchor, multistart,
-polish, GUI fit, baseline, feature rung, or full fitter validation until Rung 6
-is separately approved.
+polish, GUI fit, baseline, feature rung, freeze/thaw, or full fitter validation
+until Rung 6 is separately approved.
 
 ## Do not run as acceptance
 
@@ -359,7 +394,7 @@ New4 geometric fitter recovery checkpoint:
 - Rung 3A `a` diagnosis is usable.
 - Rung 3B caked-point reprojection guard is green.
 - Rung 4 initial pairs are green.
-- Rung 5 fresh same-run blocks are green: run `20260422_105016`, 4/4 blocks
+- Rung 5 fresh same-run blocks are green: run `20260422_115256`, 4/4 blocks
   passed, provider guard after blocks green, `new4.json` unchanged.
 - No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
   feature rung validated yet.

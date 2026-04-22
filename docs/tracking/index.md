@@ -29,17 +29,22 @@ Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
 one-param solves, `a` diagnosis, caked point reprojection, initial Rung 4 paired
 solves, and fresh same-run Rung 5 blocks are validated for ladder work. Fresh
-run `20260422_105016` passed Rungs 1-5; Rung 5 had `status == "ok"`, four
-attempted blocks, four passed blocks, zero failed/skipped blocks, provider guard
-after blocks green, and unchanged `new4.json`
-(`F5BF185EBCFBFA8B32F161CC4BD781E177175DAD84B6FCE4D563F23CA021EF36`). The
-debug-only Rung 5 caveat is resolved. `full_fitter_validated == false`; no full,
-feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or feature
-rung was run. Feature status: fresh same-run Rung 5 blocks are green. Bug/error
-status: fatal evidence still aborts, local `a` usability failures stay local,
+Rung 5 run `20260422_115256` passed Rungs 1-5; Rung 5 had `status == "ok"`,
+four attempted blocks, four passed blocks, zero failed/timed-out blocks,
+provider guard after blocks green, and unchanged `new4.json`
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
+Timing observability is now available for current-run Rungs 0-5:
+`rung_timing_summary.json` is written in the run directory, optional
+`--timing-report` writes the same machine-readable summary elsewhere, stdout
+prints `Rung | Status | elapsed_s | report_path`, and
+`RA_SIM_NEW4_LADDER_TIMING_MAX_S` is diagnostic-only. Bug/error status: Rung 6
+is excluded from timing collection/docs, Rung 5 skipped reports get timing
+metadata, fatal evidence still aborts, local `a` usability failures stay local,
 missing dependencies skip only affected blocks, and stale external evidence
-remains rejected. Next approved rung is separate: Rung 6 selected combined solve
-/ full-candidate dry run.
+remains rejected. `full_fitter_validated == false`; no full, feature, baseline,
+GUI fit, dynamic reanchor, multistart, polish, freeze/thaw, or feature rung was
+run. Next approved rung is separate: Rung 6 selected combined solve /
+full-candidate dry run.
 
 ## Known bugs
 

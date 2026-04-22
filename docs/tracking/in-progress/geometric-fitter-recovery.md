@@ -253,14 +253,23 @@ after green, and unchanged `new4.json`.
 
 Rung 5 small cumulative blocks are implemented behind
 `--max-rung block|blocks`. The debug pair-backed caveat is resolved for New4:
-fresh same-run run `20260422_105016` rebuilt same-run evidence and passed
+fresh same-run run `20260422_115256` rebuilt same-run evidence and passed
 Rungs 1-5. Rung 5 wrote `rung_05_block_summary.json` with `status == "ok"`,
-four attempted blocks, four passed blocks, zero failed blocks, zero skipped
+four attempted blocks, four passed blocks, zero failed blocks, zero timed-out
 blocks, provider guard after blocks green, fixed-source counters clean on
 passing blocks, and unchanged `new4.json`
-(`F5BF185EBCFBFA8B32F161CC4BD781E177175DAD84B6FCE4D563F23CA021EF36`).
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
+
 No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish,
-feature rung, or Rung 6 solve was run, and `full_fitter_validated == false`.
+feature rung, or Rung 6 solve is claimed here, and
+`full_fitter_validated == false`.
+
+New4 ladder timing observability is implemented for Rungs 0-5. Each current-run
+rung report gets finite timing metadata. Each ladder run writes
+`rung_timing_summary.json`; optional `--timing-report` writes the same summary
+to a chosen path and prints the concise timing table. Timing thresholds are
+diagnostic only and do not change rung status, summary status, process exit
+code, or pass/fail semantics.
 
 Rung 5 closeout status by work type:
 
@@ -271,11 +280,17 @@ Rung 5 closeout status by work type:
   mismatch/dirty-timeout evidence aborts before solve; local `a` usability
   failures only disallow `a`; missing pair dependencies skip only affected
   blocks; stale external pair evidence remains rejected.
-- Validation status: run `20260422_105016` passed Rungs 1-5, Rung 5 passed 4/4
+- Timing feature status: current-run Rung 0-5 timing report and stdout table are
+  available.
+- Timing bug/error status: Rung 6 is excluded from timing collection/docs,
+  skipped Rung 5 reports are timed, and timing thresholds are non-gating.
+- Validation status: run `20260422_115256` passed Rungs 1-5, Rung 5 passed 4/4
   attempted blocks, provider guard after blocks stayed green, and `new4.json`
   stayed unchanged.
-- Still open: any full/feature/baseline/GUI validation and the separately
-  approved Rung 6 selected combined solve / full-candidate dry run.
+- Still open: the separately approved Rung 6 selected combined solve /
+  full-candidate dry run, full fitter validation, feature re-enable,
+  baseline, GUI validation, dynamic reanchor, multistart, polish, and
+  freeze/thaw remain unclaimed.
 
 ## Do Not Redo
 
@@ -297,7 +312,8 @@ Do not redo these completed validations unless their guard output regresses:
 Rung 5 fresh same-run is green for New4 ladder validation. The next approved
 rung is separate: Rung 6 selected combined solve / full-candidate dry run. Do
 not run full, feature, baseline, GUI fit button, dynamic reanchor, multistart,
-polish, broad parameter tuning, or a higher rung until its own gate is explicit.
+polish, freeze/thaw, broad parameter tuning, or a higher rung until its own
+gate is explicit.
 
 Allowed parameter set for Rung 4:
 
@@ -327,7 +343,8 @@ as repeat work:
 - `[a, psi_z]`
 - `[corto_detector, c]`
 
-Do not run `[a, c, psi_z]` yet. It remains a dependency-blocked Rung 5 block.
+`[a, c, psi_z]` passed as part of the fresh Rung 5 block validation in
+`20260422_115256`. Rung 6 remains separate and unstarted.
 
 Rung 4 pass requirements per pair:
 
@@ -355,10 +372,10 @@ Rung 4 pass requirements per pair:
 ## Still Not Validated
 
 Full geometric fitter validation is not yet claimed. Baseline completion is not
-yet claimed. RMS/max global improvement is not yet claimed. Feature rungs,
-the `[a, c, psi_z]` block, and full solves remain unclaimed. The GUI fit button
-is not the validation path. `run_geometry_fit_quality_baseline.py` is not the
-immediate next step.
+yet claimed. RMS/max global improvement is not yet claimed. Feature rungs and
+full solves remain unclaimed. Rung 6 selected combined solve is not claimed in
+this tracking doc. The GUI fit button is not the validation path.
+`run_geometry_fit_quality_baseline.py` is not the immediate next step.
 
 ## Current State
 

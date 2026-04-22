@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from contextvars import ContextVar
 import copy
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
@@ -41,6 +43,18 @@ REQUIRED_PROVIDER_COUNTS = {
     "fallback_pair_count": 0,
 }
 EXPECTED_PROVIDER_PAIR_COUNT = 7
+TIMING_METADATA_KEYS = {
+    "started_at_iso",
+    "finished_at_iso",
+    "elapsed_s",
+    "elapsed_seconds",
+    "stage_elapsed_s",
+    "run_id",
+    "run_dir",
+    "rung_id",
+    "rung_index",
+    "report_path",
+}
 
 STRICT_POINT_SUMMARY_KEYS = (
     "measured_count",
@@ -191,10 +205,324 @@ def _jsonable(value: object) -> object:
     return repr(value)
 
 
+def _perf_counter() -> float:
+    return time.perf_counter()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso_z(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _finite_seconds(value: object) -> float | None:
+    try:
+        seconds = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return seconds if math.isfinite(seconds) else None
+
+
+def _timing_sum(value: object) -> float | None:
+    if not isinstance(value, Mapping):
+        return None
+    total = 0.0
+    seen = False
+    for raw in value.values():
+        seconds = _finite_seconds(raw)
+        if seconds is None:
+            continue
+        total += seconds
+        seen = True
+    return total if seen else None
+
+
+class _TimingWindow:
+    def __init__(
+        self,
+        *,
+        rung_id: str | None,
+        rung_name: str | None,
+        started_perf: float,
+        started_at: datetime,
+    ) -> None:
+        self.rung_id = rung_id
+        self.rung_name = rung_name
+        self.started_perf = started_perf
+        self.started_at = started_at
+
+
+class _TimingCollector:
+    def __init__(
+        self,
+        *,
+        run_dir: Path,
+        expected_rung_ids: Sequence[str] = (),
+        started_perf: float | None = None,
+        started_at: datetime | None = None,
+    ) -> None:
+        self.run_dir = Path(run_dir).expanduser().resolve()
+        self.expected_rung_ids = tuple(str(rung_id) for rung_id in expected_rung_ids)
+        self.started_perf = _perf_counter() if started_perf is None else float(started_perf)
+        self.started_at = _utc_now() if started_at is None else started_at
+        self.records: dict[str, dict[str, object]] = {}
+
+    @property
+    def run_id(self) -> str:
+        return self.run_dir.name
+
+    def _relative_parts(self, path: Path) -> tuple[str, ...] | None:
+        try:
+            return path.expanduser().resolve().relative_to(self.run_dir).parts
+        except ValueError:
+            return None
+
+    def _rung_id_for_path(self, path: Path) -> str | None:
+        parts = self._relative_parts(path)
+        if not parts:
+            return None
+        name = parts[-1]
+        if name.endswith(".heartbeat.json") or "heartbeat" in name:
+            return None
+        if "timing_summary" in name or name == "rung_timing_summary.json":
+            return None
+        if len(parts) == 2 and parts == (
+            "rung_03a_a_diagnosis",
+            "variant_summary.json",
+        ):
+            return "3A"
+        if len(parts) == 2 and parts == (
+            "rung_03b_caked_point_reprojection",
+            "rung_03b_caked_point_reprojection.json",
+        ):
+            return "3B"
+        if len(parts) != 1:
+            return None
+        if name == "ladder_summary.json":
+            return "summary"
+        if "provider_guard_after" in name:
+            return None
+        if name.startswith("rung_00_"):
+            return "0"
+        if name.startswith("rung_01_"):
+            return "1"
+        if name.startswith("rung_02_"):
+            return "2"
+        if name.startswith("rung_03_"):
+            return "3"
+        if name.startswith("rung_04_"):
+            return "4"
+        if name.startswith("rung_05_"):
+            return "5"
+        return None
+
+    def decorate_payload(
+        self,
+        path: Path,
+        payload: Mapping[str, object],
+        window: _TimingWindow | None,
+    ) -> dict[str, object]:
+        resolved = path.expanduser().resolve()
+        rung_id = self._rung_id_for_path(resolved)
+        if rung_id is None:
+            return dict(payload)
+
+        finished_at = _utc_now()
+        finished_perf = _perf_counter()
+        existing_elapsed = _finite_seconds(
+            payload.get("elapsed_s", payload.get("elapsed_seconds"))
+        )
+        if rung_id == "summary":
+            elapsed_s = max(0.0, finished_perf - float(self.started_perf))
+            started_at = self.started_at
+        elif window is not None:
+            elapsed_s = max(0.0, finished_perf - float(window.started_perf))
+            started_at = window.started_at
+        elif existing_elapsed is not None:
+            elapsed_s = max(0.0, existing_elapsed)
+            started_at = finished_at - timedelta(seconds=elapsed_s)
+        else:
+            elapsed_s = 0.0
+            started_at = finished_at
+
+        decorated = dict(payload)
+        if rung_id != "summary":
+            decorated["rung_id"] = rung_id
+            decorated["rung_index"] = rung_id
+        decorated.setdefault("rung_name", window.rung_name if window else resolved.stem)
+        decorated["run_id"] = self.run_id
+        decorated["run_dir"] = str(self.run_dir)
+        decorated["report_path"] = str(resolved)
+        decorated["started_at_iso"] = _iso_z(started_at)
+        decorated["finished_at_iso"] = _iso_z(finished_at)
+        decorated["elapsed_s"] = float(elapsed_s)
+        decorated["elapsed_seconds"] = float(elapsed_s)
+        stage_elapsed = _timing_sum(decorated.get("stage_timing_s"))
+        if stage_elapsed is None:
+            stage_elapsed = _timing_sum(decorated.get("phase_timing_s"))
+        if stage_elapsed is not None:
+            decorated["stage_elapsed_s"] = float(stage_elapsed)
+
+        if rung_id != "summary":
+            self.records[str(resolved)] = {
+                "rung_id": rung_id,
+                "rung_index": rung_id,
+                "rung_name": str(decorated.get("rung_name", resolved.stem)),
+                "status": str(decorated.get("status", "")),
+                "elapsed_s": float(elapsed_s),
+                "report_path": str(resolved),
+            }
+        return decorated
+
+    def summary(self) -> dict[str, object]:
+        finished_at = _utc_now()
+        total_elapsed_s = max(0.0, _perf_counter() - float(self.started_perf))
+        timings = sorted(
+            self.records.values(),
+            key=lambda item: (
+                str(item.get("rung_id", "")),
+                str(item.get("report_path", "")),
+            ),
+        )
+        slowest = max(
+            timings,
+            key=lambda item: float(item.get("elapsed_s", 0.0) or 0.0),
+            default=None,
+        )
+        present = {str(item.get("rung_id", "")) for item in timings}
+        missing = [
+            rung_id for rung_id in self.expected_rung_ids if rung_id not in present
+        ]
+        threshold_max = _finite_seconds(os.environ.get("RA_SIM_NEW4_LADDER_TIMING_MAX_S"))
+        exceeded: list[dict[str, object]] = []
+        threshold_status = "not_configured"
+        if threshold_max is not None:
+            exceeded = [
+                dict(item)
+                for item in timings
+                if float(item.get("elapsed_s", 0.0) or 0.0) > threshold_max
+            ]
+            threshold_status = "exceeded" if exceeded else "ok"
+        return {
+            "run_id": self.run_id,
+            "run_dir": str(self.run_dir),
+            "started_at_iso": _iso_z(self.started_at),
+            "finished_at_iso": _iso_z(finished_at),
+            "total_elapsed_s": float(total_elapsed_s),
+            "timing_collection_mode": "current_run",
+            "completed_rung_count": len(timings),
+            "missing_expected_rungs": missing,
+            "rung_timings": timings,
+            "slowest_rung": (
+                str(slowest.get("rung_name", "")) if slowest is not None else None
+            ),
+            "slowest_rung_elapsed_s": (
+                float(slowest.get("elapsed_s", 0.0)) if slowest is not None else None
+            ),
+            "timing_threshold_status": threshold_status,
+            "timing_threshold_max_s": threshold_max,
+            "timing_threshold_exceeded_rungs": exceeded,
+        }
+
+
+_ACTIVE_TIMING_COLLECTOR: ContextVar[_TimingCollector | None] = ContextVar(
+    "_ACTIVE_TIMING_COLLECTOR",
+    default=None,
+)
+_ACTIVE_TIMING_WINDOW: ContextVar[_TimingWindow | None] = ContextVar(
+    "_ACTIVE_TIMING_WINDOW",
+    default=None,
+)
+_SUPPRESS_TIMING_COLLECTION: ContextVar[bool] = ContextVar(
+    "_SUPPRESS_TIMING_COLLECTION",
+    default=False,
+)
+
+
+@contextmanager
+def _timed_report_window(rung_id: str | None, rung_name: str | None = None):
+    token = _ACTIVE_TIMING_WINDOW.set(
+        _TimingWindow(
+            rung_id=str(rung_id) if rung_id is not None else None,
+            rung_name=str(rung_name) if rung_name is not None else None,
+            started_perf=_perf_counter(),
+            started_at=_utc_now(),
+        )
+    )
+    try:
+        yield
+    finally:
+        _ACTIVE_TIMING_WINDOW.reset(token)
+
+
+@contextmanager
+def _suppress_timing_collection():
+    token = _SUPPRESS_TIMING_COLLECTION.set(True)
+    try:
+        yield
+    finally:
+        _SUPPRESS_TIMING_COLLECTION.reset(token)
+
+
+def _format_timing_table(summary: Mapping[str, object]) -> str:
+    rows = ["Rung | Status | elapsed_s | report_path"]
+    for item in summary.get("rung_timings", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        elapsed = _finite_seconds(item.get("elapsed_s"))
+        rows.append(
+            " | ".join(
+                (
+                    str(item.get("rung_id", item.get("rung_index", ""))),
+                    str(item.get("status", "")),
+                    f"{elapsed:.6f}" if elapsed is not None else "",
+                    str(item.get("report_path", "")),
+                )
+            )
+        )
+    return "\n".join(rows)
+
+
+def _expected_rung_ids_for_run(
+    max_rung: str,
+    *,
+    one_param_summary: Path | None = None,
+    pair_summary: Path | None = None,
+    caked_point_reprojection_report: Path | None = None,
+) -> tuple[str, ...]:
+    name = str(max_rung).strip().lower()
+    if name == "sensitivity":
+        return ("0", "1", "2")
+    if name == "one-param":
+        return ("0", "1", "2", "3")
+    if name in {"pair", "pairs"}:
+        return ("0", "1", "2", "4")
+    if name in {"block", "blocks"}:
+        expected = ["0", "1", "2", "5"]
+        if pair_summary is None:
+            expected[3:3] = ["3", "4"]
+            if caked_point_reprojection_report is None:
+                expected.insert(4, "3B")
+        return tuple(expected)
+    if name in {"center", "full"}:
+        return ("0", "1", "2", "3", "4", "5")
+    return ("0", "1", "2")
+
+
 def _write_json(path: Path, payload: Mapping[str, object]) -> None:
+    output_payload = dict(payload)
+    collector = _ACTIVE_TIMING_COLLECTOR.get()
+    if collector is not None and not _SUPPRESS_TIMING_COLLECTION.get():
+        output_payload = collector.decorate_payload(
+            Path(path),
+            output_payload,
+            _ACTIVE_TIMING_WINDOW.get(),
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(_jsonable(dict(payload)), indent=2, sort_keys=True) + "\n",
+        json.dumps(_jsonable(output_payload), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
@@ -208,7 +536,7 @@ def _provider_report_evidence_hash(payload: Mapping[str, object]) -> str:
     stable = {
         str(key): value
         for key, value in dict(payload).items()
-        if str(key) not in {"elapsed_seconds"}
+        if str(key) not in TIMING_METADATA_KEYS
     }
     return _payload_sha256(stable)
 
@@ -302,7 +630,7 @@ def run_provider_guard(
     background_index: int,
     output_path: Path,
 ) -> dict[str, object]:
-    started = time.monotonic()
+    started = _perf_counter()
     report = preflight_probe._run_point_provider_report_only(
         Path(state_path),
         background_index=int(background_index),
@@ -315,7 +643,7 @@ def run_provider_guard(
         "status": "pass" if not failures else "fail",
         "provider_guard_ok": not failures,
         "provider_guard_failures": failures,
-        "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
+        "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
     }
     _write_json(output_path, payload)
     return payload
@@ -328,7 +656,7 @@ def _run_provider_guard_report(
     rung: int,
     rung_name: str,
 ) -> dict[str, object]:
-    started = time.monotonic()
+    started = _perf_counter()
     report = preflight_probe._run_point_provider_report_only(
         Path(state_path),
         background_index=int(background_index),
@@ -341,7 +669,7 @@ def _run_provider_guard_report(
         "status": "pass" if not failures else "fail",
         "provider_guard_ok": not failures,
         "provider_guard_failures": failures,
-        "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
+        "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
     }
 
 
@@ -1036,7 +1364,7 @@ def _result_report(
         "missing_pair_count": int(point_summary.get("missing_pair_count", 0) or 0),
         "branch_mismatch_count": int(point_summary.get("branch_mismatch_count", 0) or 0),
         "nfev": getattr(result, "nfev", None),
-        "elapsed_seconds": float(max(0.0, time.monotonic() - started_at)),
+        "elapsed_seconds": float(max(0.0, _perf_counter() - started_at)),
         "solver_success": bool(getattr(result, "success", False)),
         "solver_message": str(getattr(result, "message", "") or ""),
         "rejection_reasons": rejection_reasons,
@@ -1536,8 +1864,8 @@ def _request_only_report(
         "missing_pair_count": 0,
         "branch_mismatch_count": 0,
         "nfev": None,
-        "elapsed_seconds": float(max(0.0, time.monotonic() - started_at)),
-        "elapsed_s": float(max(0.0, time.monotonic() - started_at)),
+        "elapsed_seconds": float(max(0.0, _perf_counter() - started_at)),
+        "elapsed_s": float(max(0.0, _perf_counter() - started_at)),
         "solver_success": False,
         "solver_message": "",
         "rejection_reasons": [],
@@ -1567,7 +1895,7 @@ def run_objective_dry_run(
     output_path: Path,
     max_nfev: int,
 ) -> dict[str, object]:
-    started = time.monotonic()
+    started = _perf_counter()
     request = build_solver_request(
         context,
         ["center_x"],
@@ -1883,7 +2211,7 @@ def run_sensitivity_scan(
     state_path: Path | None = None,
     state_hash_before: str | None = None,
 ) -> dict[str, object]:
-    started = time.monotonic()
+    started = _perf_counter()
     initial_state_hash = (
         str(state_hash_before)
         if state_hash_before is not None
@@ -1941,7 +2269,7 @@ def run_sensitivity_scan(
             "residual_probe_called": False,
             "least_squares_called": False,
             "optimizer_solve_called": False,
-            "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
+            "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
             "params": [],
             "parameters": [],
             "active_param_count": 0,
@@ -1963,7 +2291,7 @@ def run_sensitivity_scan(
         return payload
     residual_probe_called = False
     for name in _candidate_order(context):
-        param_started = time.monotonic()
+        param_started = _perf_counter()
         try:
             request = build_solver_request(context, [name], max_nfev=max_nfev)
             request_summary = _request_handoff_summary(request)
@@ -1975,7 +2303,7 @@ def run_sensitivity_scan(
                         "name": str(name),
                         "status": "unsafe",
                         "unsafe_reasons": list(request_failures),
-                        "elapsed_seconds": float(max(0.0, time.monotonic() - param_started)),
+                        "elapsed_seconds": float(max(0.0, _perf_counter() - param_started)),
                     }
                 )
                 continue
@@ -2072,7 +2400,7 @@ def run_sensitivity_scan(
                         request_summary.get("provider_to_optimizer_point_match") is True
                     ),
                     "probe_records": records,
-                    "elapsed_seconds": float(max(0.0, time.monotonic() - param_started)),
+                    "elapsed_seconds": float(max(0.0, _perf_counter() - param_started)),
                 }
             )
         except Exception as exc:
@@ -2084,7 +2412,7 @@ def run_sensitivity_scan(
                     "classification": "unsafe",
                     "error_text": str(exc),
                     "unsafe_reasons": ["residual_eval_raised"],
-                    "elapsed_seconds": float(max(0.0, time.monotonic() - param_started)),
+                    "elapsed_seconds": float(max(0.0, _perf_counter() - param_started)),
                 }
             )
     state_hash_after = _state_sha256(Path(state_path)) if state_path is not None else initial_state_hash
@@ -2145,7 +2473,7 @@ def run_sensitivity_scan(
         "residual_probe_called": bool(residual_probe_called),
         "least_squares_called": False,
         "optimizer_solve_called": False,
-        "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
+        "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
         "params": entries,
         "parameters": entries,
         "active_param_count": int(len(active_params)),
@@ -2191,12 +2519,12 @@ def _worker_solve_once(
     context: Mapping[str, object] | None = None,
     diagnostic_logging: bool = False,
 ) -> dict[str, object]:
-    started = time.monotonic()
+    started = _perf_counter()
     phase_timing_s: dict[str, float] = {}
     context_reused = context is not None
 
     def _record_phase(name: str, phase_started: float) -> None:
-        phase_timing_s[name] = float(max(0.0, time.monotonic() - phase_started))
+        phase_timing_s[name] = float(max(0.0, _perf_counter() - phase_started))
 
     state_hash_before = _state_sha256(Path(state_path))
     _heartbeat_write(
@@ -2211,13 +2539,13 @@ def _worker_solve_once(
             "diagnostic_logging": bool(diagnostic_logging),
         },
     )
-    phase_started = time.monotonic()
+    phase_started = _perf_counter()
     if context is None:
         with _solver_debug_logging_scope(diagnostic_logging):
             context = _capture_solver_context(Path(state_path), int(background_index))
     _record_phase("capture_solver_context_s", phase_started)
 
-    phase_started = time.monotonic()
+    phase_started = _perf_counter()
     with _solver_debug_logging_scope(diagnostic_logging):
         request = build_solver_request(
             context,
@@ -2226,7 +2554,7 @@ def _worker_solve_once(
             feature=feature,
         )
     _record_phase("build_solver_request_s", phase_started)
-    phase_started = time.monotonic()
+    phase_started = _perf_counter()
     request_summary = _request_handoff_summary(request)
     request_summary["requested_var_names"] = [str(name) for name in request.var_names]
     request_summary["requested_candidate_param_names"] = (
@@ -2256,7 +2584,7 @@ def _worker_solve_once(
         _write_json(output_path, report)
         _heartbeat_write(heartbeat_path, {"status": str(report.get("status", "")), "done": True})
         return report
-    phase_started = time.monotonic()
+    phase_started = _perf_counter()
     with _solver_debug_logging_scope(diagnostic_logging):
         before_result, _records = _run_with_probe_least_squares(request, mode="dry_run")
     _record_phase("dry_run_s", phase_started)
@@ -2319,7 +2647,7 @@ def _worker_solve_once(
         trace_entry = {
             "eval_count": int(eval_count),
             "nfev": int(eval_count),
-            "elapsed_s": float(max(0.0, time.monotonic() - started)),
+            "elapsed_s": float(max(0.0, _perf_counter() - started)),
             "residual_norm": residual_norm,
             "cost": cost,
             "rms_px": rms_px,
@@ -2415,7 +2743,7 @@ def _worker_solve_once(
 
         opt.least_squares = _counted_least_squares
         try:
-            phase_started = time.monotonic()
+            phase_started = _perf_counter()
             with _solver_debug_logging_scope(diagnostic_logging):
                 result = gui_geometry_fit.solve_geometry_fit_request(
                     request,
@@ -2477,8 +2805,8 @@ def _worker_solve_once(
             "active_params": [str(name) for name in active_names],
             "var_names": [str(name) for name in active_names],
             "candidate_param_names": [str(name) for name in active_names],
-            "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
-            "elapsed_s": float(max(0.0, time.monotonic() - started)),
+            "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
+            "elapsed_s": float(max(0.0, _perf_counter() - started)),
             "error_text": str(exc),
             "feature": feature,
             "least_squares_called": bool(least_squares_called),
@@ -2515,7 +2843,7 @@ def _worker_solve_once(
     report["first_residual_elapsed_s"] = phase_timing_s.get("first_residual_elapsed_s")
     report["solver_context_reused"] = bool(context_reused)
     report["diagnostic_logging"] = bool(diagnostic_logging)
-    phase_started = time.monotonic()
+    phase_started = _perf_counter()
     _write_json(output_path, report)
     _record_phase("report_write_s", phase_started)
     report["phase_timing_s"] = dict(phase_timing_s)
@@ -2634,8 +2962,8 @@ def _timeout_report(
             math.isfinite(_metric_float(before_rms))
             and math.isfinite(_metric_float(after_rms))
         ),
-        "elapsed_seconds": float(max(0.0, time.monotonic() - started_at)),
-        "elapsed_s": float(max(0.0, time.monotonic() - started_at)),
+        "elapsed_seconds": float(max(0.0, _perf_counter() - started_at)),
+        "elapsed_s": float(max(0.0, _perf_counter() - started_at)),
         "timeout_seconds": float(timeout_seconds),
         "timeout_s": float(timeout_seconds),
         "last_heartbeat_elapsed_s": _partial_value("last_heartbeat_elapsed_s", "elapsed_s"),
@@ -2760,7 +3088,7 @@ def _run_solver_rung_with_timeout(
     diagnostic_logging: bool = False,
     dirty_timeout_on_timeout: bool = False,
 ) -> dict[str, object]:
-    started = time.monotonic()
+    started = _perf_counter()
     heartbeat_path = output_path.with_suffix(".heartbeat.json")
     initial_state_hash = str(state_hash_before or _state_sha256(Path(state_path)))
 
@@ -2874,7 +3202,7 @@ def _run_solver_rung_with_timeout(
         "pass": False,
         "active_params": [str(name) for name in active_names],
         "candidate_param_names": [str(name) for name in active_names],
-        "elapsed_seconds": float(max(0.0, time.monotonic() - started)),
+        "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
         "returncode": process.returncode,
         "worker_stdout_tail": stdout_text.strip()[-2000:],
         "worker_stderr_tail": stderr_text.strip()[-2000:],
@@ -3346,29 +3674,30 @@ def _run_one_param_stage(
     dirty_timeout_abort = False
     for index, name in enumerate(active_params):
         output_path = _rung_path(run_dir, 3, f"one_param_{name}")
-        report = _run_solver_rung_with_timeout(
-            state_path=state_path,
-            background_index=int(background_index),
-            active_names=[name],
-            output_path=output_path,
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            rung=3,
-            rung_name=f"one_param_{name}",
-            state_hash_before=state_hash_before,
-            use_subprocess=bool(use_subprocess),
-            context=context,
-            diagnostic_logging=bool(diagnostic_logging),
-            dirty_timeout_on_timeout=not bool(use_subprocess),
-        )
-        report = _finalize_one_param_report(
-            report,
-            param_name=name,
-            state_path=state_path,
-            state_hash_before=state_hash_before,
-            timeout_seconds=float(timeout_seconds),
-        )
-        _write_json(output_path, report)
+        with _timed_report_window("3", f"one_param_{name}"):
+            report = _run_solver_rung_with_timeout(
+                state_path=state_path,
+                background_index=int(background_index),
+                active_names=[name],
+                output_path=output_path,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                rung=3,
+                rung_name=f"one_param_{name}",
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
+            )
+            report = _finalize_one_param_report(
+                report,
+                param_name=name,
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                timeout_seconds=float(timeout_seconds),
+            )
+            _write_json(output_path, report)
         reports.append(report)
         one_param_reports.append(report)
         if bool(report.get("dirty_timeout_abort", False)):
@@ -4143,31 +4472,32 @@ def _run_pair_stage(
             index += 1
             continue
 
-        report = _run_solver_rung_with_timeout(
-            state_path=state_path,
-            background_index=int(background_index),
-            active_names=pair,
-            output_path=output_path,
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            rung=4,
-            rung_name=f"pair_{pair_name}",
-            state_hash_before=state_hash_before,
-            use_subprocess=bool(use_subprocess),
-            context=context,
-            diagnostic_logging=bool(diagnostic_logging),
-            dirty_timeout_on_timeout=not bool(use_subprocess),
-        )
-        report = _finalize_pair_report(
-            report,
-            pair_name=pair_name,
-            pair=pair,
-            state_path=state_path,
-            state_hash_before=state_hash_before,
-            timeout_seconds=float(timeout_seconds),
-            base_parameter_values=base_parameter_values,
-        )
-        _write_json(output_path, report)
+        with _timed_report_window("4", f"pair_{pair_name}"):
+            report = _run_solver_rung_with_timeout(
+                state_path=state_path,
+                background_index=int(background_index),
+                active_names=pair,
+                output_path=output_path,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                rung=4,
+                rung_name=f"pair_{pair_name}",
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
+            )
+            report = _finalize_pair_report(
+                report,
+                pair_name=pair_name,
+                pair=pair,
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                timeout_seconds=float(timeout_seconds),
+                base_parameter_values=base_parameter_values,
+            )
+            _write_json(output_path, report)
         reports.append(report)
         pair_reports.append(report)
         timeout_integrity_dirty = (
@@ -4767,34 +5097,37 @@ def _run_block_stage(
         evidence_failures.extend(pair_failure_refs)
         fatal_evidence_failures.extend(pair_failure_refs)
     else:
-        one_param_summary = _run_one_param_stage(
-            state_path=state_path,
-            background_index=int(background_index),
-            run_dir=run_dir,
-            context=context,
-            sensitivity=sensitivity,
-            sensitivity_report_path=sensitivity_report_path,
-            reports=reports,
-            state_hash_before=state_hash_before,
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            use_subprocess=bool(use_subprocess),
-            diagnostic_logging=bool(diagnostic_logging),
-        )
+        with _timed_report_window("3", "one_param_summary"):
+            one_param_summary = _run_one_param_stage(
+                state_path=state_path,
+                background_index=int(background_index),
+                run_dir=run_dir,
+                context=context,
+                sensitivity=sensitivity,
+                sensitivity_report_path=sensitivity_report_path,
+                reports=reports,
+                state_hash_before=state_hash_before,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                use_subprocess=bool(use_subprocess),
+                diagnostic_logging=bool(diagnostic_logging),
+            )
         one_param_summary_path = run_dir / "rung_03_one_param_summary.json"
         current_active_params, _skipped = _active_params_from_sensitivity(sensitivity, context)
         if (
             "a" in set(current_active_params)
             and "a" not in set(_as_str_list(one_param_summary.get("passed_params")))
         ):
-            diagnosis = run_one_param_diagnosis_variants(
-                state_path=state_path,
-                background_index=int(background_index),
-                output_root=run_dir / "rung_03a_a_diagnosis",
-                one_param_filter="a",
-                use_subprocess=bool(use_subprocess),
-                diagnostic_logging=bool(diagnostic_logging),
-            )
+            with _timed_report_window("3A", "a_diagnosis"):
+                with _suppress_timing_collection():
+                    diagnosis = run_one_param_diagnosis_variants(
+                        state_path=state_path,
+                        background_index=int(background_index),
+                        output_root=run_dir / "rung_03a_a_diagnosis",
+                        one_param_filter="a",
+                        use_subprocess=bool(use_subprocess),
+                        diagnostic_logging=bool(diagnostic_logging),
+                    )
             reports.append(diagnosis)
             one_param_diagnosis_summary_path = (
                 run_dir / "rung_03a_a_diagnosis" / "variant_summary.json"
@@ -4803,35 +5136,37 @@ def _run_block_stage(
             one_param_diagnosis_summary_path = None
 
         with _solver_debug_logging_scope(diagnostic_logging):
-            caked_report = _run_caked_point_reprojection_guard(
-                state_path=state_path,
-                background_index=int(background_index),
-                output_root=run_dir,
-                run_id="rung_03b_caked_point_reprojection",
-            )
+            with _timed_report_window("3B", "caked_point_reprojection"):
+                caked_report = _run_caked_point_reprojection_guard(
+                    state_path=state_path,
+                    background_index=int(background_index),
+                    output_root=run_dir,
+                    run_id="rung_03b_caked_point_reprojection",
+                )
         reports.append(caked_report)
         report_path = caked_report.get("report_path")
         if report_path:
             caked_report_path = Path(str(report_path))
 
-        pair_summary = _run_pair_stage(
-            state_path=state_path,
-            background_index=int(background_index),
-            run_dir=run_dir,
-            context=context,
-            sensitivity=sensitivity,
-            reports=reports,
-            state_hash_before=state_hash_before,
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            one_param_summary_path=one_param_summary_path,
-            one_param_diagnosis_summary_path=one_param_diagnosis_summary_path,
-            caked_point_reprojection_report_path=caked_report_path,
-            include_psi_extension_pairs=True,
-            provider_report_hash=provider_report_hash,
-            use_subprocess=bool(use_subprocess),
-            diagnostic_logging=bool(diagnostic_logging),
-        )
+        with _timed_report_window("4", "pair_summary"):
+            pair_summary = _run_pair_stage(
+                state_path=state_path,
+                background_index=int(background_index),
+                run_dir=run_dir,
+                context=context,
+                sensitivity=sensitivity,
+                reports=reports,
+                state_hash_before=state_hash_before,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                one_param_summary_path=one_param_summary_path,
+                one_param_diagnosis_summary_path=one_param_diagnosis_summary_path,
+                caked_point_reprojection_report_path=caked_report_path,
+                include_psi_extension_pairs=True,
+                provider_report_hash=provider_report_hash,
+                use_subprocess=bool(use_subprocess),
+                diagnostic_logging=bool(diagnostic_logging),
+            )
         local_usability_failures.extend(
             _as_str_list(pair_summary.get("local_usability_failures"))
         )
@@ -4879,27 +5214,34 @@ def _run_block_stage(
     )
 
     if evidence_failures:
-        state_hash_after = _state_sha256(state_path)
-        summary = _block_summary(
-            run_dir=run_dir,
-            state_path=state_path,
-            background_index=int(background_index),
-            pair_summary=pair_summary,
-            block_reports=[],
-            state_hash_before=state_hash_before,
-            state_hash_after=state_hash_after,
-            evidence_failures=evidence_failures,
-            fatal_evidence_failures=fatal_evidence_failures,
-            local_usability_failures=local_usability_failures,
-            allowed_params=allowed_params,
-            disallowed_params=disallowed_params,
-            reports=reports,
-            provider_report_hash=provider_report_hash,
-        )
-        summary["report_path"] = str(run_dir / "rung_05_block_summary.json")
-        _write_json(run_dir / "rung_05_block_summary.json", summary)
-        return summary
+        with _timed_report_window("5", "block_summary"):
+            state_hash_after = _state_sha256(state_path)
+            summary = _block_summary(
+                run_dir=run_dir,
+                state_path=state_path,
+                background_index=int(background_index),
+                pair_summary=pair_summary,
+                block_reports=[],
+                state_hash_before=state_hash_before,
+                state_hash_after=state_hash_after,
+                evidence_failures=evidence_failures,
+                fatal_evidence_failures=fatal_evidence_failures,
+                local_usability_failures=local_usability_failures,
+                allowed_params=allowed_params,
+                disallowed_params=disallowed_params,
+                reports=reports,
+                provider_report_hash=provider_report_hash,
+            )
+            summary["report_path"] = str(run_dir / "rung_05_block_summary.json")
+            _write_json(run_dir / "rung_05_block_summary.json", summary)
+            return summary
 
+    block_summary_window = _TimingWindow(
+        rung_id="5",
+        rung_name="block_summary",
+        started_perf=_perf_counter(),
+        started_at=_utc_now(),
+    )
     passed_pairs = _passed_pair_keys(pair_summary)
     block_reports: list[dict[str, object]] = []
     dirty_abort = False
@@ -4908,14 +5250,15 @@ def _run_block_stage(
         output_path = _rung_path(run_dir, 5, f"block_{block_name}")
         missing_pairs = _block_dependency_missing(block_name, dependencies, passed_pairs)
         if missing_pairs:
-            report = _write_skipped_block_report(
-                output_path=output_path,
-                block_name=block_name,
-                block=block,
-                missing_pairs=missing_pairs,
-                state_hash_before=state_hash_before,
-                state_path=state_path,
-            )
+            with _timed_report_window("5", f"block_{block_name}"):
+                report = _write_skipped_block_report(
+                    output_path=output_path,
+                    block_name=block_name,
+                    block=block,
+                    missing_pairs=missing_pairs,
+                    state_hash_before=state_hash_before,
+                    state_path=state_path,
+                )
             reports.append(report)
             block_reports.append(report)
             continue
@@ -4923,82 +5266,85 @@ def _run_block_stage(
         current_hash = _state_sha256(state_path)
         if current_hash != state_hash_before:
             for skipped_name, skipped_block, _deps in RUNG5_BLOCKS[index:]:
-                report = {
-                    "rung": 5,
-                    "rung_name": f"block_{skipped_name}",
-                    "block_name": str(skipped_name),
-                    "block": [str(name) for name in skipped_block],
-                    "status": "skipped",
-                    "pass": False,
-                    "skip_reason": "state_hash_changed_before_block",
-                    "state_sha256_before": state_hash_before,
-                    "state_sha256_after": current_hash,
-                    "state_hash_before": state_hash_before,
-                    "state_hash_after": current_hash,
-                    "state_hash_unchanged": False,
-                }
-                _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), report)
+                with _timed_report_window("5", f"block_{skipped_name}"):
+                    report = {
+                        "rung": 5,
+                        "rung_name": f"block_{skipped_name}",
+                        "block_name": str(skipped_name),
+                        "block": [str(name) for name in skipped_block],
+                        "status": "skipped",
+                        "pass": False,
+                        "skip_reason": "state_hash_changed_before_block",
+                        "state_sha256_before": state_hash_before,
+                        "state_sha256_after": current_hash,
+                        "state_hash_before": state_hash_before,
+                        "state_hash_after": current_hash,
+                        "state_hash_unchanged": False,
+                    }
+                    _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), report)
                 reports.append(report)
                 block_reports.append(report)
             break
 
         base_parameter_values = _base_parameter_values_for_pair(context, block)
         if _block_requires_caked_reprojection(block) and caked_failures:
-            report = _write_caked_failed_block_report(
-                output_path=output_path,
-                block_name=block_name,
-                block=block,
-                caked_failures=caked_failures,
-                caked_report_path=caked_report_path,
-                state_hash_before=state_hash_before,
-                state_path=state_path,
-                base_parameter_values=base_parameter_values,
-            )
+            with _timed_report_window("5", f"block_{block_name}"):
+                report = _write_caked_failed_block_report(
+                    output_path=output_path,
+                    block_name=block_name,
+                    block=block,
+                    caked_failures=caked_failures,
+                    caked_report_path=caked_report_path,
+                    state_hash_before=state_hash_before,
+                    state_path=state_path,
+                    base_parameter_values=base_parameter_values,
+                )
             reports.append(report)
             block_reports.append(report)
             continue
 
-        report = _run_solver_rung_with_timeout(
-            state_path=state_path,
-            background_index=int(background_index),
-            active_names=block,
-            output_path=output_path,
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            rung=5,
-            rung_name=f"block_{block_name}",
-            state_hash_before=state_hash_before,
-            use_subprocess=bool(use_subprocess),
-            context=context,
-            diagnostic_logging=bool(diagnostic_logging),
-            dirty_timeout_on_timeout=not bool(use_subprocess),
-        )
-        provider_after: dict[str, object] | None = None
-        if not bool(report.get("dirty_timeout_abort", False)):
-            with _solver_debug_logging_scope(diagnostic_logging):
-                provider_after = _run_provider_guard_report(
-                    state_path=state_path,
-                    background_index=int(background_index),
-                    rung=5,
-                    rung_name=f"block_{block_name}_provider_guard_after",
-                )
-        report = _finalize_block_report(
-            report,
-            block_name=block_name,
-            block=block,
-            state_path=state_path,
-            state_hash_before=state_hash_before,
-            timeout_seconds=float(timeout_seconds),
-            base_parameter_values=base_parameter_values,
-            provider_after=provider_after,
-            caked_point_reprojection_guard_ok=(
-                not caked_failures if _block_requires_caked_reprojection(block) else None
-            ),
-            caked_point_reprojection_report_path=(
-                caked_report_path if _block_requires_caked_reprojection(block) else None
-            ),
-        )
-        _write_json(output_path, report)
+        with _timed_report_window("5", f"block_{block_name}"):
+            report = _run_solver_rung_with_timeout(
+                state_path=state_path,
+                background_index=int(background_index),
+                active_names=block,
+                output_path=output_path,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                rung=5,
+                rung_name=f"block_{block_name}",
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
+            )
+            provider_after: dict[str, object] | None = None
+            if not bool(report.get("dirty_timeout_abort", False)):
+                with _solver_debug_logging_scope(diagnostic_logging):
+                    provider_after = _run_provider_guard_report(
+                        state_path=state_path,
+                        background_index=int(background_index),
+                        rung=5,
+                        rung_name=f"block_{block_name}_provider_guard_after",
+                    )
+            report = _finalize_block_report(
+                report,
+                block_name=block_name,
+                block=block,
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                timeout_seconds=float(timeout_seconds),
+                base_parameter_values=base_parameter_values,
+                provider_after=provider_after,
+                caked_point_reprojection_guard_ok=(
+                    not caked_failures if _block_requires_caked_reprojection(block) else None
+                ),
+                caked_point_reprojection_report_path=(
+                    caked_report_path if _block_requires_caked_reprojection(block) else None
+                ),
+            )
+            _write_json(output_path, report)
         reports.append(report)
         block_reports.append(report)
         timeout_integrity_dirty = (
@@ -5013,41 +5359,43 @@ def _run_block_stage(
                 else "fixed_source_or_pair_integrity_lost"
             )
             for skipped_name, skipped_block, _deps in RUNG5_BLOCKS[index + 1 :]:
-                skipped_report = {
-                    "rung": 5,
-                    "rung_name": f"block_{skipped_name}",
-                    "block_name": str(skipped_name),
-                    "block": [str(name) for name in skipped_block],
-                    "status": "skipped",
-                    "pass": False,
-                    "skip_reason": skip_reason,
-                    "state_sha256_before": state_hash_before,
-                    "state_sha256_after": _state_sha256(state_path),
-                    "state_hash_before": state_hash_before,
-                    "state_hash_after": _state_sha256(state_path),
-                    "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
-                }
-                _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), skipped_report)
+                with _timed_report_window("5", f"block_{skipped_name}"):
+                    skipped_report = {
+                        "rung": 5,
+                        "rung_name": f"block_{skipped_name}",
+                        "block_name": str(skipped_name),
+                        "block": [str(name) for name in skipped_block],
+                        "status": "skipped",
+                        "pass": False,
+                        "skip_reason": skip_reason,
+                        "state_sha256_before": state_hash_before,
+                        "state_sha256_after": _state_sha256(state_path),
+                        "state_hash_before": state_hash_before,
+                        "state_hash_after": _state_sha256(state_path),
+                        "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
+                    }
+                    _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), skipped_report)
                 reports.append(skipped_report)
                 block_reports.append(skipped_report)
             break
         if bool(report.get("state_hash_unchanged", False)) is not True:
             for skipped_name, skipped_block, _deps in RUNG5_BLOCKS[index + 1 :]:
-                skipped_report = {
-                    "rung": 5,
-                    "rung_name": f"block_{skipped_name}",
-                    "block_name": str(skipped_name),
-                    "block": [str(name) for name in skipped_block],
-                    "status": "skipped",
-                    "pass": False,
-                    "skip_reason": "state_hash_changed_after_block",
-                    "state_sha256_before": state_hash_before,
-                    "state_sha256_after": _state_sha256(state_path),
-                    "state_hash_before": state_hash_before,
-                    "state_hash_after": _state_sha256(state_path),
-                    "state_hash_unchanged": False,
-                }
-                _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), skipped_report)
+                with _timed_report_window("5", f"block_{skipped_name}"):
+                    skipped_report = {
+                        "rung": 5,
+                        "rung_name": f"block_{skipped_name}",
+                        "block_name": str(skipped_name),
+                        "block": [str(name) for name in skipped_block],
+                        "status": "skipped",
+                        "pass": False,
+                        "skip_reason": "state_hash_changed_after_block",
+                        "state_sha256_before": state_hash_before,
+                        "state_sha256_after": _state_sha256(state_path),
+                        "state_hash_before": state_hash_before,
+                        "state_hash_after": _state_sha256(state_path),
+                        "state_hash_unchanged": False,
+                    }
+                    _write_json(_rung_path(run_dir, 5, f"block_{skipped_name}"), skipped_report)
                 reports.append(skipped_report)
                 block_reports.append(skipped_report)
             break
@@ -5076,7 +5424,11 @@ def _run_block_stage(
         else None
     )
     summary["report_path"] = str(run_dir / "rung_05_block_summary.json")
-    _write_json(run_dir / "rung_05_block_summary.json", summary)
+    block_window_token = _ACTIVE_TIMING_WINDOW.set(block_summary_window)
+    try:
+        _write_json(run_dir / "rung_05_block_summary.json", summary)
+    finally:
+        _ACTIVE_TIMING_WINDOW.reset(block_window_token)
     return summary
 
 
@@ -5116,6 +5468,7 @@ def run_ladder(
     one_param_diagnosis_summary: Path | None = None,
     caked_point_reprojection_report: Path | None = None,
     pair_summary: Path | None = None,
+    timing_report: Path | None = None,
     use_subprocess: bool = False,
     diagnostic_logging: bool = False,
 ) -> dict[str, object]:
@@ -5125,13 +5478,64 @@ def run_ladder(
     run_dir.mkdir(parents=True, exist_ok=True)
     state_hash_before = _state_sha256(state_path)
     reports: list[dict[str, object]] = []
+    parent_collector = _ACTIVE_TIMING_COLLECTOR.get()
+    collector_owned = parent_collector is None
+    collector = parent_collector or _TimingCollector(
+        run_dir=run_dir,
+        expected_rung_ids=_expected_rung_ids_for_run(
+            max_rung,
+            one_param_summary=one_param_summary,
+            pair_summary=pair_summary,
+            caked_point_reprojection_report=caked_point_reprojection_report,
+        ),
+    )
+    collector_token = (
+        _ACTIVE_TIMING_COLLECTOR.set(collector) if collector_owned else None
+    )
+    timing_report_path = (
+        Path(timing_report).expanduser().resolve() if timing_report is not None else None
+    )
+
+    def _finish(result: dict[str, object]) -> dict[str, object]:
+        try:
+            timing_summary_path = run_dir / "rung_timing_summary.json"
+            timing_summary: dict[str, object] | None = None
+            if collector_owned:
+                timing_summary = collector.summary()
+                result["timing_summary_path"] = str(timing_summary_path)
+                if timing_report_path is not None:
+                    result["timing_report_path"] = str(timing_report_path)
+                for key in (
+                    "total_elapsed_s",
+                    "timing_collection_mode",
+                    "completed_rung_count",
+                    "missing_expected_rungs",
+                    "rung_timings",
+                    "slowest_rung",
+                    "slowest_rung_elapsed_s",
+                    "timing_threshold_status",
+                    "timing_threshold_max_s",
+                    "timing_threshold_exceeded_rungs",
+                ):
+                    result[key] = timing_summary.get(key)
+            _write_json(run_dir / "ladder_summary.json", result)
+            if collector_owned and timing_summary is not None:
+                with _suppress_timing_collection():
+                    _write_json(timing_summary_path, timing_summary)
+                    if timing_report_path is not None:
+                        _write_json(timing_report_path, timing_summary)
+            return result
+        finally:
+            if collector_token is not None:
+                _ACTIVE_TIMING_COLLECTOR.reset(collector_token)
 
     with _solver_debug_logging_scope(diagnostic_logging):
-        provider_report = run_provider_guard(
-            state_path=state_path,
-            background_index=int(background_index),
-            output_path=_rung_path(run_dir, 0, "provider_guard"),
-        )
+        with _timed_report_window("0", "provider_guard"):
+            provider_report = run_provider_guard(
+                state_path=state_path,
+                background_index=int(background_index),
+                output_path=_rung_path(run_dir, 0, "provider_guard"),
+            )
     provider_report_hash = _provider_report_evidence_hash(provider_report)
     reports.append(provider_report)
     if not bool(provider_report.get("provider_guard_ok", False)):
@@ -5143,17 +5547,17 @@ def run_ladder(
             "state_sha256_before": state_hash_before,
             "state_sha256_after": _state_sha256(state_path),
         }
-        _write_json(run_dir / "ladder_summary.json", result)
-        return result
+        return _finish(result)
 
     with _solver_debug_logging_scope(diagnostic_logging):
         context = _capture_solver_context(state_path, int(background_index))
     with _solver_debug_logging_scope(diagnostic_logging):
-        dry_report = run_objective_dry_run(
-            context,
-            output_path=_rung_path(run_dir, 1, "objective_dry_run"),
-            max_nfev=int(max_nfev),
-        )
+        with _timed_report_window("1", "objective_dry_run"):
+            dry_report = run_objective_dry_run(
+                context,
+                output_path=_rung_path(run_dir, 1, "objective_dry_run"),
+                max_nfev=int(max_nfev),
+            )
     reports.append(dry_report)
     rung1_failures = _rung1_green_failures(dry_report)
     if rung1_failures:
@@ -5175,30 +5579,74 @@ def run_ladder(
             "least_squares_called": False,
             "optimizer_solve_called": False,
         }
-        _write_json(run_dir / "ladder_summary.json", result)
-        return result
+        return _finish(result)
 
     max_rung_name = str(max_rung).strip().lower()
     sensitivity_output_path = _rung_path(run_dir, 2, "sensitivity_scan")
-    if sensitivity_report is not None:
-        sensitivity = _read_json(Path(sensitivity_report).expanduser().resolve())
-        sensitivity["debug_sensitivity_report_override"] = str(
-            Path(sensitivity_report).expanduser().resolve()
-        )
-        _write_json(sensitivity_output_path, sensitivity)
-    else:
-        with _solver_debug_logging_scope(diagnostic_logging):
-            sensitivity = run_sensitivity_scan(
-                context,
-                output_path=sensitivity_output_path,
-                max_nfev=int(max_nfev),
-                rung_1_report=dry_report,
-                state_path=state_path,
-                state_hash_before=state_hash_before,
+    with _timed_report_window("2", "sensitivity_scan"):
+        if sensitivity_report is not None:
+            sensitivity = _read_json(Path(sensitivity_report).expanduser().resolve())
+            sensitivity["debug_sensitivity_report_override"] = str(
+                Path(sensitivity_report).expanduser().resolve()
             )
+            _write_json(sensitivity_output_path, sensitivity)
+        else:
+            with _solver_debug_logging_scope(diagnostic_logging):
+                sensitivity = run_sensitivity_scan(
+                    context,
+                    output_path=sensitivity_output_path,
+                    max_nfev=int(max_nfev),
+                    rung_1_report=dry_report,
+                    state_path=state_path,
+                    state_hash_before=state_hash_before,
+                )
     reports.append(sensitivity)
     if not bool(sensitivity.get("pass", False)):
         if max_rung_name == "one-param":
+            with _timed_report_window("3", "one_param_summary"):
+                result = _run_one_param_stage(
+                    state_path=state_path,
+                    background_index=int(background_index),
+                    run_dir=run_dir,
+                    context=context,
+                    sensitivity=sensitivity,
+                    sensitivity_report_path=sensitivity_output_path,
+                    reports=reports,
+                    state_hash_before=state_hash_before,
+                    max_nfev=int(max_nfev),
+                    timeout_seconds=float(timeout_seconds),
+                    one_param_filter=one_param_filter,
+                    use_subprocess=bool(use_subprocess),
+                    diagnostic_logging=bool(diagnostic_logging),
+                )
+            return _finish(result)
+        result = {
+            "status": "aborted",
+            "reason": "sensitivity_scan_failed",
+            "run_dir": str(run_dir),
+            "reports": reports,
+            "state_sha256_before": state_hash_before,
+            "state_sha256_after": _state_sha256(state_path),
+        }
+        return _finish(result)
+
+    if max_rung_name == "sensitivity":
+        result = {
+            "status": "pass",
+            "run_dir": str(run_dir),
+            "final_selected_params": list(sensitivity.get("active_params", []) or []),
+            "reports": reports,
+            "state_sha256_before": state_hash_before,
+            "state_sha256_after": _state_sha256(state_path),
+            "state_unchanged": state_hash_before == _state_sha256(state_path),
+            "residual_probe_called": bool(sensitivity.get("residual_probe_called", False)),
+            "least_squares_called": False,
+            "optimizer_solve_called": False,
+        }
+        return _finish(result)
+
+    if max_rung_name == "one-param":
+        with _timed_report_window("3", "one_param_summary"):
             result = _run_one_param_stage(
                 state_path=state_path,
                 background_index=int(background_index),
@@ -5214,53 +5662,7 @@ def run_ladder(
                 use_subprocess=bool(use_subprocess),
                 diagnostic_logging=bool(diagnostic_logging),
             )
-            _write_json(run_dir / "ladder_summary.json", result)
-            return result
-        result = {
-            "status": "aborted",
-            "reason": "sensitivity_scan_failed",
-            "run_dir": str(run_dir),
-            "reports": reports,
-            "state_sha256_before": state_hash_before,
-            "state_sha256_after": _state_sha256(state_path),
-        }
-        _write_json(run_dir / "ladder_summary.json", result)
-        return result
-
-    if max_rung_name == "sensitivity":
-        result = {
-            "status": "pass",
-            "run_dir": str(run_dir),
-            "final_selected_params": list(sensitivity.get("active_params", []) or []),
-            "reports": reports,
-            "state_sha256_before": state_hash_before,
-            "state_sha256_after": _state_sha256(state_path),
-            "state_unchanged": state_hash_before == _state_sha256(state_path),
-            "residual_probe_called": bool(sensitivity.get("residual_probe_called", False)),
-            "least_squares_called": False,
-            "optimizer_solve_called": False,
-        }
-        _write_json(run_dir / "ladder_summary.json", result)
-        return result
-
-    if max_rung_name == "one-param":
-        result = _run_one_param_stage(
-            state_path=state_path,
-            background_index=int(background_index),
-            run_dir=run_dir,
-            context=context,
-            sensitivity=sensitivity,
-            sensitivity_report_path=sensitivity_output_path,
-            reports=reports,
-            state_hash_before=state_hash_before,
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            one_param_filter=one_param_filter,
-            use_subprocess=bool(use_subprocess),
-            diagnostic_logging=bool(diagnostic_logging),
-        )
-        _write_json(run_dir / "ladder_summary.json", result)
-        return result
+        return _finish(result)
 
     if max_rung_name in {"block", "blocks"}:
         result = _run_block_stage(
@@ -5282,29 +5684,28 @@ def run_ladder(
             use_subprocess=bool(use_subprocess),
             diagnostic_logging=bool(diagnostic_logging),
         )
-        _write_json(run_dir / "ladder_summary.json", result)
-        return result
+        return _finish(result)
 
     if max_rung_name in {"pair", "pairs"}:
-        result = _run_pair_stage(
-            state_path=state_path,
-            background_index=int(background_index),
-            run_dir=run_dir,
-            context=context,
-            sensitivity=sensitivity,
-            reports=reports,
-            state_hash_before=state_hash_before,
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            one_param_summary_path=one_param_summary,
-            one_param_diagnosis_summary_path=one_param_diagnosis_summary,
-            caked_point_reprojection_report_path=caked_point_reprojection_report,
-            provider_report_hash=provider_report_hash,
-            use_subprocess=bool(use_subprocess),
-            diagnostic_logging=bool(diagnostic_logging),
-        )
-        _write_json(run_dir / "ladder_summary.json", result)
-        return result
+        with _timed_report_window("4", "pair_summary"):
+            result = _run_pair_stage(
+                state_path=state_path,
+                background_index=int(background_index),
+                run_dir=run_dir,
+                context=context,
+                sensitivity=sensitivity,
+                reports=reports,
+                state_hash_before=state_hash_before,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                one_param_summary_path=one_param_summary,
+                one_param_diagnosis_summary_path=one_param_diagnosis_summary,
+                caked_point_reprojection_report_path=caked_point_reprojection_report,
+                provider_report_hash=provider_report_hash,
+                use_subprocess=bool(use_subprocess),
+                diagnostic_logging=bool(diagnostic_logging),
+            )
+        return _finish(result)
 
     sensitive = set(str(name) for name in sensitivity.get("active_parameters", []) or [])
     one_param_reports: list[dict[str, object]] = []
@@ -5313,21 +5714,22 @@ def run_ladder(
     for name in params_to_run:
         if name not in sensitive and not (center_only and name in CENTER_PARAMS):
             continue
-        report = _run_solver_rung_with_timeout(
-            state_path=state_path,
-            background_index=int(background_index),
-            active_names=[name],
-            output_path=_rung_path(run_dir, 3, f"one_param_{name}"),
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            rung=3,
-            rung_name=f"one_param_{name}",
-            state_hash_before=state_hash_before,
-            use_subprocess=bool(use_subprocess),
-            context=context,
-            diagnostic_logging=bool(diagnostic_logging),
-            dirty_timeout_on_timeout=not bool(use_subprocess),
-        )
+        with _timed_report_window("3", f"one_param_{name}"):
+            report = _run_solver_rung_with_timeout(
+                state_path=state_path,
+                background_index=int(background_index),
+                active_names=[name],
+                output_path=_rung_path(run_dir, 3, f"one_param_{name}"),
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                rung=3,
+                rung_name=f"one_param_{name}",
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
+            )
         reports.append(report)
         one_param_reports.append(report)
         if not bool(report.get("pass", False)):
@@ -5340,8 +5742,7 @@ def run_ladder(
                 "state_sha256_before": state_hash_before,
                 "state_sha256_after": _state_sha256(state_path),
             }
-            _write_json(run_dir / "ladder_summary.json", result)
-            return result
+            return _finish(result)
 
     passed_params = _passed_params_from_one_param_reports(one_param_reports)
     theta_name = _active_theta_name(context) or "theta_initial"
@@ -5351,21 +5752,22 @@ def run_ladder(
         else _groups_for_pair_rungs(passed_params, theta_name)
     )
     for group_name, names in pair_groups:
-        report = _run_solver_rung_with_timeout(
-            state_path=state_path,
-            background_index=int(background_index),
-            active_names=names,
-            output_path=_rung_path(run_dir, 4, f"pair_{group_name}"),
-            max_nfev=int(max_nfev),
-            timeout_seconds=float(timeout_seconds),
-            rung=4,
-            rung_name=f"pair_{group_name}",
-            state_hash_before=state_hash_before,
-            use_subprocess=bool(use_subprocess),
-            context=context,
-            diagnostic_logging=bool(diagnostic_logging),
-            dirty_timeout_on_timeout=not bool(use_subprocess),
-        )
+        with _timed_report_window("4", f"pair_{group_name}"):
+            report = _run_solver_rung_with_timeout(
+                state_path=state_path,
+                background_index=int(background_index),
+                active_names=names,
+                output_path=_rung_path(run_dir, 4, f"pair_{group_name}"),
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                rung=4,
+                rung_name=f"pair_{group_name}",
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=context,
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
+            )
         reports.append(report)
         if not bool(report.get("pass", False)):
             result = {
@@ -5377,8 +5779,7 @@ def run_ladder(
                 "state_sha256_before": state_hash_before,
                 "state_sha256_after": _state_sha256(state_path),
             }
-            _write_json(run_dir / "ladder_summary.json", result)
-            return result
+            return _finish(result)
 
     final_selected_params = list(pair_groups[-1][1]) if pair_groups else list(passed_params)
     if not center_only:
@@ -5409,8 +5810,7 @@ def run_ladder(
                     "state_sha256_before": state_hash_before,
                     "state_sha256_after": _state_sha256(state_path),
                 }
-                _write_json(run_dir / "ladder_summary.json", result)
-                return result
+                return _finish(result)
             final_selected_params = list(names)
 
     if max_rung_name == "features" and final_selected_params:
@@ -5442,8 +5842,7 @@ def run_ladder(
                     "state_sha256_before": state_hash_before,
                     "state_sha256_after": _state_sha256(state_path),
                 }
-                _write_json(run_dir / "ladder_summary.json", result)
-                return result
+                return _finish(result)
 
     result = {
         "status": "pass",
@@ -5454,8 +5853,7 @@ def run_ladder(
         "state_sha256_after": _state_sha256(state_path),
         "state_unchanged": state_hash_before == _state_sha256(state_path),
     }
-    _write_json(run_dir / "ladder_summary.json", result)
-    return result
+    return _finish(result)
 
 
 def _variant_can_continue(report: Mapping[str, object]) -> bool:
@@ -5678,6 +6076,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep debug and intersection-cache logging enabled during solver probes.",
     )
+    parser.add_argument(
+        "--timing-report",
+        help="Optional path for a copy of the current-run rung timing summary JSON.",
+    )
     parser.add_argument("--_worker-solve", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--output-json", help=argparse.SUPPRESS)
     parser.add_argument("--heartbeat-json", help=argparse.SUPPRESS)
@@ -5729,6 +6131,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else None
             ),
             pair_summary=Path(args.pair_summary) if args.pair_summary else None,
+            timing_report=Path(args.timing_report) if args.timing_report else None,
             use_subprocess=bool(args.use_subprocess),
             diagnostic_logging=bool(args.diagnostic_logging),
         )
@@ -5744,6 +6147,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             sort_keys=True,
         )
     )
+    timing_summary_path = result.get("timing_summary_path")
+    if timing_summary_path:
+        timing_summary = _read_json(Path(str(timing_summary_path)))
+        if timing_summary:
+            print(_format_timing_table(timing_summary))
     return 0 if str(result.get("status")) in {"pass", "ok", "ok_with_failures", "stopped", "aborted"} else 1
 
 

@@ -7,6 +7,7 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from pathlib import Path, PurePosixPath
 import pytest
@@ -4342,6 +4343,212 @@ def _install_green_provider_guard(monkeypatch, ladder, calls=None) -> None:
         monkeypatch.setattr(ladder, "_run_provider_guard_report", _green_guard_report)
 
 
+def _install_new4_timing_clock(monkeypatch, ladder) -> None:
+    ticks = {"value": 0.0}
+    base = datetime(2026, 4, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _fake_perf_counter() -> float:
+        ticks["value"] += 1.0
+        return ticks["value"]
+
+    def _fake_utc_now() -> datetime:
+        return base + timedelta(seconds=ticks["value"])
+
+    monkeypatch.setattr(ladder, "_perf_counter", _fake_perf_counter)
+    monkeypatch.setattr(ladder, "_utc_now", _fake_utc_now)
+
+
+def _write_new4_timing_fixture_reports(ladder, run_dir: Path, rung_ids) -> dict[str, object]:
+    collector = ladder._TimingCollector(
+        run_dir=run_dir,
+        expected_rung_ids=tuple(str(rung_id) for rung_id in rung_ids),
+    )
+    token = ladder._ACTIVE_TIMING_COLLECTOR.set(collector)
+    try:
+        for index, rung_id in enumerate(rung_ids):
+            rung_id = str(rung_id)
+            if rung_id == "3A":
+                path = run_dir / "rung_03a_a_diagnosis" / "variant_summary.json"
+                rung_name = "a_diagnosis"
+                rung = 3
+            elif rung_id == "3B":
+                path = (
+                    run_dir
+                    / "rung_03b_caked_point_reprojection"
+                    / "rung_03b_caked_point_reprojection.json"
+                )
+                rung_name = "caked_point_reprojection"
+                rung = 3
+            else:
+                path = run_dir / f"rung_{int(rung_id):02d}_fixture.json"
+                rung_name = f"rung_{rung_id}_fixture"
+                rung = int(rung_id)
+            with ladder._timed_report_window(rung_id, rung_name):
+                ladder._write_json(
+                    path,
+                    {
+                        "rung": rung,
+                        "rung_name": rung_name,
+                        "status": "ok",
+                        "pass": True,
+                        "stage_timing_s": {"build": float(index + 1) / 10.0},
+                    },
+                )
+        return collector.summary()
+    finally:
+        ladder._ACTIVE_TIMING_COLLECTOR.reset(token)
+
+
+def test_new4_ladder_timing_summary_schema(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    _install_new4_timing_clock(monkeypatch, ladder)
+    run_dir = tmp_path / "timing"
+    run_dir.mkdir()
+
+    summary = _write_new4_timing_fixture_reports(ladder, run_dir, ("0", "1", "2", "5"))
+
+    assert summary["timing_collection_mode"] == "current_run"
+    assert summary["completed_rung_count"] == 4
+    assert summary["missing_expected_rungs"] == []
+    assert summary["slowest_rung"]
+    assert isinstance(summary["slowest_rung_elapsed_s"], float)
+    for item in summary["rung_timings"]:
+        assert {"rung_id", "rung_index", "rung_name", "status", "elapsed_s", "report_path"} <= set(item)
+        assert np.isfinite(float(item["elapsed_s"]))
+
+    report = json.loads((run_dir / "rung_00_fixture.json").read_text(encoding="utf-8"))
+    for key in (
+        "started_at_iso",
+        "finished_at_iso",
+        "elapsed_s",
+        "elapsed_seconds",
+        "stage_elapsed_s",
+        "run_id",
+        "run_dir",
+        "rung_id",
+        "rung_index",
+        "rung_name",
+        "report_path",
+    ):
+        assert key in report
+    assert np.isfinite(float(report["elapsed_s"]))
+
+
+def test_new4_ladder_timing_summary_writes_explicit_copy(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    _install_new4_timing_clock(monkeypatch, ladder)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    explicit_timing_path = tmp_path / "latest_timing_summary.json"
+    _install_green_provider_guard(monkeypatch, ladder)
+    _install_fast_new4_ladder_stubs(monkeypatch, ladder)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="sensitivity",
+        timestamp="timed_run",
+        timing_report=explicit_timing_path,
+    )
+
+    run_timing_path = tmp_path / "timed_run" / "rung_timing_summary.json"
+    run_summary = json.loads(run_timing_path.read_text(encoding="utf-8"))
+    explicit_summary = json.loads(explicit_timing_path.read_text(encoding="utf-8"))
+    assert result["status"] == "pass"
+    assert run_summary == explicit_summary
+    assert {item["rung_id"] for item in run_summary["rung_timings"]} == {"0", "1", "2"}
+
+
+def test_new4_ladder_timing_summary_does_not_change_pass_fail(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    _install_new4_timing_clock(monkeypatch, ladder)
+    run_dir = tmp_path / "timing"
+    run_dir.mkdir()
+    collector = ladder._TimingCollector(run_dir=run_dir, expected_rung_ids=("0", "5"))
+    token = ladder._ACTIVE_TIMING_COLLECTOR.set(collector)
+    try:
+        ok_path = run_dir / "rung_00_provider_guard.json"
+        skipped_path = run_dir / "rung_05_block_skipped.json"
+        ladder._write_json(
+            ok_path,
+            {"rung": 0, "rung_name": "provider_guard", "status": "ok", "pass": True, "elapsed_s": 99.0},
+        )
+        ladder._write_json(
+            skipped_path,
+            {"rung": 5, "rung_name": "block_skipped", "status": "skipped", "pass": False, "elapsed_s": 33.0},
+        )
+        summary = collector.summary()
+    finally:
+        ladder._ACTIVE_TIMING_COLLECTOR.reset(token)
+
+    ok_report = json.loads(ok_path.read_text(encoding="utf-8"))
+    skipped_report = json.loads(skipped_path.read_text(encoding="utf-8"))
+    assert ok_report["status"] == "ok"
+    assert ok_report["pass"] is True
+    assert skipped_report["status"] == "skipped"
+    assert skipped_report["pass"] is False
+    assert [item["status"] for item in summary["rung_timings"]] == ["ok", "skipped"]
+
+
+def test_new4_ladder_timing_report_prints_all_completed_rungs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    _install_new4_timing_clock(monkeypatch, ladder)
+    run_dir = tmp_path / "timing"
+    run_dir.mkdir()
+    rung_ids = ("0", "1", "2", "3", "3A", "3B", "4", "5")
+
+    summary = _write_new4_timing_fixture_reports(ladder, run_dir, rung_ids)
+    table = ladder._format_timing_table(summary)
+
+    assert table.splitlines()[0] == "Rung | Status | elapsed_s | report_path"
+    for rung_id in rung_ids:
+        assert f"{rung_id} | ok |" in table
+
+def test_new4_ladder_timing_threshold_optional(monkeypatch, tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    _install_new4_timing_clock(monkeypatch, ladder)
+    run_dir = tmp_path / "timing"
+    run_dir.mkdir()
+    collector = ladder._TimingCollector(run_dir=run_dir, expected_rung_ids=("5",))
+    token = ladder._ACTIVE_TIMING_COLLECTOR.set(collector)
+    try:
+        path = run_dir / "rung_05_block_slow.json"
+        ladder._write_json(
+            path,
+            {
+                "rung": 5,
+                "rung_name": "block_slow",
+                "status": "ok",
+                "pass": True,
+                "elapsed_s": 5000.0,
+            },
+        )
+        monkeypatch.delenv("RA_SIM_NEW4_LADDER_TIMING_MAX_S", raising=False)
+        unset_summary = collector.summary()
+        monkeypatch.setenv("RA_SIM_NEW4_LADDER_TIMING_MAX_S", "1")
+        exceeded_summary = collector.summary()
+    finally:
+        ladder._ACTIVE_TIMING_COLLECTOR.reset(token)
+
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["status"] == "ok"
+    assert report["pass"] is True
+    assert unset_summary["timing_threshold_status"] == "not_configured"
+    assert unset_summary["timing_threshold_exceeded_rungs"] == []
+    assert exceeded_summary["timing_threshold_status"] == "exceeded"
+    assert exceeded_summary["timing_threshold_exceeded_rungs"][0]["rung_id"] == "5"
+
+
 def test_new4_ladder_runs_provider_guard_before_optimizer(monkeypatch, tmp_path) -> None:
     ladder = _load_new4_ladder_module()
     state_path = tmp_path / "new4.json"
@@ -5340,10 +5547,13 @@ def test_new4_ladder_pair_rung_runs_allowed_pairs_and_stops_before_blocks(
     _install_pair_rung_common_stubs(monkeypatch, ladder, active_params=active)
     attempted: list[list[str]] = []
     seen_hashes: list[str] = []
+    timing_windows: list[str | None] = []
 
     def _solver(*, active_names, output_path, state_hash_before, **_kwargs):
         attempted.append([str(name) for name in active_names])
         seen_hashes.append(str(state_hash_before))
+        window = ladder._ACTIVE_TIMING_WINDOW.get()
+        timing_windows.append(window.rung_id if window is not None else None)
         assert _kwargs["use_subprocess"] is False
         assert _kwargs["diagnostic_logging"] is False
         assert _kwargs["dirty_timeout_on_timeout"] is True
@@ -6561,6 +6771,8 @@ def test_new4_ladder_block_missing_dependency_skips_not_fails(
     assert (
         block_report["effective_var_names_seen_by_solver"] == block_report["candidate_param_names"]
     )
+    assert block_report["rung_id"] == "5"
+    assert np.isfinite(float(block_report["elapsed_s"]))
     assert result["failed_blocks"] == []
     assert result["skipped_blocks"]
     assert result["failure_reason"] == "no_dependency_backed_blocks"
@@ -6592,9 +6804,12 @@ def test_new4_ladder_block_pair_summary_run_id_can_match_timestamp(
         active_params=("corto_detector", "theta_initial", "cor_angle"),
     )
     attempted: list[list[str]] = []
+    timing_windows: list[str | None] = []
 
     def _solver(*, active_names, output_path, **_kwargs):
         attempted.append([str(name) for name in active_names])
+        window = ladder._ACTIVE_TIMING_WINDOW.get()
+        timing_windows.append(window.rung_id if window is not None else None)
         payload = _green_block_report(active_names)
         ladder._write_json(output_path, payload)
         return payload
