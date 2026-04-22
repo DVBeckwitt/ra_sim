@@ -34,7 +34,7 @@ from ra_sim.utils.calculations import (
     fresnel_transmission,
 )
 from numba import types
-from numba.typed import List       #  only List lives here
+from numba.typed import List  #  only List lives here
 
 
 # Optical transport modes
@@ -187,9 +187,7 @@ def _resolve_process_peaks_runtime_values(
     default_solve_q_sin,
     numba_thread_count,
 ):
-    runtime_kwargs = get_process_peaks_runtime_kwargs(
-        numba_thread_count=numba_thread_count
-    )
+    runtime_kwargs = get_process_peaks_runtime_kwargs(numba_thread_count=numba_thread_count)
     if (
         default_solve_q_cos is None
         and default_solve_q_sin is None
@@ -396,9 +394,7 @@ def _write_intersection_cache_log(
         cache = []
 
     log_root = _resolve_intersection_cache_log_root() / "intersection_cache"
-    log_dir = log_root / (
-        f"intersection_cache_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-    )
+    log_dir = log_root / (f"intersection_cache_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}")
     row_counts = []
     cache_tables = []
     table_arrays: list[np.ndarray] = []
@@ -488,10 +484,7 @@ def _write_intersection_cache_log(
                 "table_count": metadata.get("table_count"),
                 "cache_tables": metadata.get("cache_tables", []),
             }
-            needs_separator = (
-                startup_log_path.exists()
-                and startup_log_path.stat().st_size > 0
-            )
+            needs_separator = startup_log_path.exists() and startup_log_path.stat().st_size > 0
             startup_log_path.parent.mkdir(parents=True, exist_ok=True)
             with startup_log_path.open("a", encoding="utf-8") as handle:
                 if needs_separator:
@@ -501,6 +494,7 @@ def _write_intersection_cache_log(
                 handle.write("\n")
     except Exception:
         return
+
 
 _EMPTY_PROCESS_PEAKS_SAFE_STATS = {
     "used_safe_cache": False,
@@ -526,9 +520,12 @@ def _retain_last_intersection_cache() -> bool:
         "diffraction_last_intersection",
         feature_needed=False,
     )
+
+
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
+
 
 @njit(cache=True)
 def attenuation(N, Qz, c):
@@ -551,11 +548,12 @@ def attenuation(N, Qz, c):
     A = (Qz.imag * c) / 2.0
     B = (Qz.real * c) / 2.0
     num = 1.0 - 2.0 * np.exp(-2.0 * N * A) * np.cos(2.0 * N * B) + np.exp(-4.0 * N * A)
-    den = 1.0 - 2.0 * np.exp(-2.0 * A)     * np.cos(2.0 * B)     + np.exp(-4.0 * A)
+    den = 1.0 - 2.0 * np.exp(-2.0 * A) * np.cos(2.0 * B) + np.exp(-4.0 * A)
     if abs(den) < 1e-12:
         # If near zero in the denominator, we take the limit ~ N^2
         return N**2
     return num / den
+
 
 @njit(parallel=True, cache=True)
 def attenuation_array(N, Qz_array, c):
@@ -589,6 +587,7 @@ def attenuation_array(N, Qz_array, c):
 # 2) PARALLEL CUSTOM MESHGRID
 # =============================================================================
 
+
 @njit(parallel=True, cache=True)
 def custom_meshgrid(qx_vals, qy_vals, qz_vals):
     """
@@ -621,6 +620,7 @@ def custom_meshgrid(qx_vals, qy_vals, qz_vals):
 # =============================================================================
 # 3) PARALLEL SAMPLE_FROM_PDF
 # =============================================================================
+
 
 @njit(parallel=True, cache=True)
 def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
@@ -675,7 +675,7 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
 
         iz = idx % Nz
         iy = (idx // Nz) % Ny
-        ix = (idx // (Ny*Nz)) % Nx
+        ix = (idx // (Ny * Nz)) % Nx
 
         out_Qx[i] = Qx_grid[ix, iy, iz]
         out_Qy[i] = Qy_grid[ix, iy, iz]
@@ -694,11 +694,7 @@ def wrap_to_pi(x):
 
 
 @njit(parallel=True, cache=True)
-def compute_intensity_array(Qx, Qy, Qz,
-                            G_vec,
-                            sigma,
-                            gamma_pv,
-                            eta_pv):
+def compute_intensity_array(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
     """
     Compute the mosaic surface density sigma(theta) on the Bragg sphere for
     each (Qx, Qy, Qz). Uses a pseudo-Voigt in the grazing-angle offset.
@@ -723,11 +719,11 @@ def compute_intensity_array(Qx, Qy, Qz,
     """
     # Unpack G and compute magnitudes
     Gx, Gy, Gz = G_vec[0], G_vec[1], G_vec[2]
-    G_mag = np.sqrt(Gx*Gx + Gy*Gy + Gz*Gz)
+    G_mag = np.sqrt(Gx * Gx + Gy * Gy + Gz * Gz)
     if G_mag < 1e-14:
         return np.zeros_like(Qx)
 
-    Qr = np.sqrt(Qx*Qx + Qy*Qy)
+    Qr = np.sqrt(Qx * Qx + Qy * Qy)
 
     sigma_eff = sigma
     if sigma_eff < 1e-12:
@@ -738,10 +734,10 @@ def compute_intensity_array(Qx, Qy, Qz,
 
     # Amplitude factors for normalized 1D profiles
     A_gauss = 1.0 / (sigma_eff * np.sqrt(2.0 * np.pi))
-    A_lor   = 1.0 / (np.pi * gamma_eff)
+    A_lor = 1.0 / (np.pi * gamma_eff)
 
     # Reference grazing angle for the reflection
-    Gr = np.sqrt(Gx*Gx + Gy*Gy)
+    Gr = np.sqrt(Gx * Gx + Gy * Gy)
     theta0 = np.arctan2(Gz, Gr)
 
     denom_base = 2.0 * np.pi * G_mag * G_mag
@@ -755,8 +751,8 @@ def compute_intensity_array(Qx, Qy, Qz,
         theta = np.arctan2(Qz_flat[i], Qr_flat[i])
         dtheta = wrap_to_pi(theta - theta0)
 
-        gauss_val = A_gauss * np.exp(-0.5 * (dtheta / sigma_eff)**2)
-        lor_val   = A_lor   / (1.0 + (dtheta / gamma_eff)**2)
+        gauss_val = A_gauss * np.exp(-0.5 * (dtheta / sigma_eff) ** 2)
+        lor_val = A_lor / (1.0 + (dtheta / gamma_eff) ** 2)
         omega = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
 
         # Keep a geometry normalization that is stable for pseudo-Voigt tails.
@@ -770,12 +766,14 @@ def compute_intensity_array(Qx, Qy, Qz,
 @njit(cache=True)
 def Generate_PDF_Grid(
     G_vec,
-    sigma, gamma_pv, eta_pv,
-    Qrange=0.1,   # default value; will be overridden if dynamic_Qrange is True
-    n_grid=51,    # grid resolution
+    sigma,
+    gamma_pv,
+    eta_pv,
+    Qrange=0.1,  # default value; will be overridden if dynamic_Qrange is True
+    n_grid=51,  # grid resolution
     n_samples=10000,  # number of samples
     dynamic_Qrange=True,  # new flag to control dynamic Qrange selection
-    multiplier=3.0       # factor to extend the half-width (adjust as needed)
+    multiplier=3.0,  # factor to extend the half-width (adjust as needed)
 ):
     # Compute effective FWHM in angle (radians)
     # For a Gaussian, FWHM = 2.35482*sigma
@@ -783,14 +781,14 @@ def Generate_PDF_Grid(
     fwhm_gauss = 2.35482 * sigma
     fwhm_lorentz = 2.0 * gamma_pv
     effective_fwhm = (1 - eta_pv) * fwhm_gauss + eta_pv * fwhm_lorentz
-    
+
     # Use half of the effective FWHM as the angular half-width
     effective_angle_half_width = effective_fwhm / 2.0
-    
+
     # Convert the angular half-width into Q-space using |G_vec|
-    G_mag = sqrt(G_vec[0]**2 + G_vec[1]**2 + G_vec[2]**2)
+    G_mag = sqrt(G_vec[0] ** 2 + G_vec[1] ** 2 + G_vec[2] ** 2)
     effective_Q_half_width = G_mag * effective_angle_half_width
-    
+
     # If dynamic Qrange is enabled, override the Qrange value
     if dynamic_Qrange:
         Qrange = multiplier * effective_Q_half_width
@@ -817,6 +815,7 @@ def Generate_PDF_Grid(
 # =============================================================================
 # 5) VECTORIZED INCOHERENT AVERAGING
 # =============================================================================
+
 
 @njit(cache=True)
 def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, k_mag, n2, bt):
@@ -856,9 +855,9 @@ def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, 
     average_int : float
         The average (incoherent) intensity factor from the mosaic sum.
     """
-    Qx_s = Q_grid[:,0]
-    Qy_s = Q_grid[:,1]
-    Qz_s = Q_grid[:,2]
+    Qx_s = Q_grid[:, 0]
+    Qy_s = Q_grid[:, 1]
+    Qz_s = Q_grid[:, 2]
 
     # Add the crystal wavevector offset
     kx = Qx_s + k_in_crystal[0]
@@ -866,20 +865,20 @@ def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, 
     kz = Qz_s + re_k_z
 
     # Magnitude in-plane => twotheta
-    kr = np.sqrt(kx*kx + ky*ky)
+    kr = np.sqrt(kx * kx + ky * ky)
     twotheta = np.arctan2(kz, kr)
 
-    af = k_mag**2 * (np.real(n2)*np.real(n2)) * np.sin(twotheta)**2
+    af = k_mag**2 * (np.real(n2) * np.real(n2)) * np.sin(twotheta) ** 2
 
-    real_k_tz_f = np.sqrt((np.sqrt(af*af + bt*bt) + af)/2.0)
-    im_k_tz_f   = np.sqrt((np.sqrt(af*af + bt*bt) - af)/2.0)
+    real_k_tz_f = np.sqrt((np.sqrt(af * af + bt * bt) + af) / 2.0)
+    im_k_tz_f = np.sqrt((np.sqrt(af * af + bt * bt) - af) / 2.0)
 
     n_samples = Qx_s.size
     Qz_complex_arr = np.empty(n_samples, dtype=np.complex128)
 
     # Build array of Qz for each sample
     for i in range(n_samples):
-        Qz_complex_arr[i] = (real_k_tz_f[i] - re_k_z) - 1j*(im_k_z + im_k_tz_f[i])
+        Qz_complex_arr[i] = (real_k_tz_f[i] - re_k_z) - 1j * (im_k_z + im_k_tz_f[i])
 
     # Evaluate finite-stack interference for all samples
     att_vals = attenuation_array(N, Qz_complex_arr, c)
@@ -889,10 +888,10 @@ def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, 
     return total_int / n_samples
 
 
-
 # =============================================================================
 # 3) INTERSECT_LINE_PLANE, BATCH
 # =============================================================================
+
 
 @njit(cache=True)
 def intersect_line_plane(P0, k_vec, P_plane, n_plane):
@@ -905,20 +904,24 @@ def intersect_line_plane(P0, k_vec, P_plane, n_plane):
       - Used to find where the scattered beam intersects e.g. the sample plane
         or a detector plane in real space.
     """
-    denom = k_vec[0]*n_plane[0] + k_vec[1]*n_plane[1] + k_vec[2]*n_plane[2]
+    denom = k_vec[0] * n_plane[0] + k_vec[1] * n_plane[1] + k_vec[2] * n_plane[2]
     if abs(denom) < 1e-14:
         # The ray is parallel to the plane. If the starting point already lies
         # on the plane (within a tolerance) we treat it as the intersection
         # point so that grazing rays are not discarded.
-        dist = ((P0[0] - P_plane[0]) * n_plane[0]
-              + (P0[1] - P_plane[1]) * n_plane[1]
-              + (P0[2] - P_plane[2]) * n_plane[2])
+        dist = (
+            (P0[0] - P_plane[0]) * n_plane[0]
+            + (P0[1] - P_plane[1]) * n_plane[1]
+            + (P0[2] - P_plane[2]) * n_plane[2]
+        )
         if abs(dist) < 1e-6:
             return (P0[0], P0[1], P0[2], True)
         return (np.nan, np.nan, np.nan, False)
-    num = ((P_plane[0] - P0[0]) * n_plane[0]
-         + (P_plane[1] - P0[1]) * n_plane[1]
-         + (P_plane[2] - P0[2]) * n_plane[2])
+    num = (
+        (P_plane[0] - P0[0]) * n_plane[0]
+        + (P_plane[1] - P0[1]) * n_plane[1]
+        + (P_plane[2] - P0[2]) * n_plane[2]
+    )
     t = num / denom
     # Numerical precision can yield tiny negative values for *t* when the ray
     # should intersect exactly on the plane.  Allow a small tolerance so these
@@ -928,9 +931,9 @@ def intersect_line_plane(P0, k_vec, P_plane, n_plane):
         return (np.nan, np.nan, np.nan, False)
     if t < 0.0:
         t = 0.0
-    ix = P0[0] + t*k_vec[0]
-    iy = P0[1] + t*k_vec[1]
-    iz = P0[2] + t*k_vec[2]
+    ix = P0[0] + t * k_vec[0]
+    iy = P0[1] + t * k_vec[1]
+    iz = P0[2] + t * k_vec[2]
     return (ix, iy, iz, True)
 
 
@@ -940,18 +943,16 @@ def intersect_infinite_line_plane(P0, k_vec, P_plane, n_plane):
     Intersect an infinite line (start=P0, direction=k_vec) with a plane.
     Unlike ``intersect_line_plane`` this does not reject negative t values.
     """
-    denom = k_vec[0]*n_plane[0] + k_vec[1]*n_plane[1] + k_vec[2]*n_plane[2]
+    denom = k_vec[0] * n_plane[0] + k_vec[1] * n_plane[1] + k_vec[2] * n_plane[2]
     if abs(denom) < 1e-14:
         # Parallel direction: project start point orthogonally onto the plane
         # instead of declaring "no hit", avoiding artificial horizon cutoffs.
-        dist = ((P0[0] - P_plane[0]) * n_plane[0]
-              + (P0[1] - P_plane[1]) * n_plane[1]
-              + (P0[2] - P_plane[2]) * n_plane[2])
-        n_sq = (
-            n_plane[0]*n_plane[0]
-            + n_plane[1]*n_plane[1]
-            + n_plane[2]*n_plane[2]
+        dist = (
+            (P0[0] - P_plane[0]) * n_plane[0]
+            + (P0[1] - P_plane[1]) * n_plane[1]
+            + (P0[2] - P_plane[2]) * n_plane[2]
         )
+        n_sq = n_plane[0] * n_plane[0] + n_plane[1] * n_plane[1] + n_plane[2] * n_plane[2]
         if n_sq < 1e-20:
             return (np.nan, np.nan, np.nan, False)
         scale = dist / n_sq
@@ -960,14 +961,17 @@ def intersect_infinite_line_plane(P0, k_vec, P_plane, n_plane):
         iz = P0[2] - scale * n_plane[2]
         return (ix, iy, iz, True)
 
-    num = ((P_plane[0] - P0[0]) * n_plane[0]
-         + (P_plane[1] - P0[1]) * n_plane[1]
-         + (P_plane[2] - P0[2]) * n_plane[2])
+    num = (
+        (P_plane[0] - P0[0]) * n_plane[0]
+        + (P_plane[1] - P0[1]) * n_plane[1]
+        + (P_plane[2] - P0[2]) * n_plane[2]
+    )
     t = num / denom
-    ix = P0[0] + t*k_vec[0]
-    iy = P0[1] + t*k_vec[1]
-    iz = P0[2] + t*k_vec[2]
+    ix = P0[0] + t * k_vec[0]
+    iy = P0[1] + t * k_vec[1]
+    iz = P0[2] + t * k_vec[2]
     return (ix, iy, iz, True)
+
 
 @njit(cache=True)
 def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
@@ -985,39 +989,43 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
         True if the intersection is valid (t>=0, not parallel).
     """
     Ndir = directions.shape[0]
-    intersects = np.full((Ndir,3), np.nan, dtype=np.float64)
+    intersects = np.full((Ndir, 3), np.nan, dtype=np.float64)
     valid = np.zeros(Ndir, dtype=np.bool_)
 
-    dist = ((start_pt[0] - plane_pt[0]) * plane_n[0]
-          + (start_pt[1] - plane_pt[1]) * plane_n[1]
-          + (start_pt[2] - plane_pt[2]) * plane_n[2])
+    dist = (
+        (start_pt[0] - plane_pt[0]) * plane_n[0]
+        + (start_pt[1] - plane_pt[1]) * plane_n[1]
+        + (start_pt[2] - plane_pt[2]) * plane_n[2]
+    )
 
     for i in range(Ndir):
-        kx = directions[i,0]
-        ky = directions[i,1]
-        kz = directions[i,2]
-        dot_dn = kx*plane_n[0] + ky*plane_n[1] + kz*plane_n[2]
+        kx = directions[i, 0]
+        ky = directions[i, 1]
+        kz = directions[i, 2]
+        dot_dn = kx * plane_n[0] + ky * plane_n[1] + kz * plane_n[2]
         if abs(dot_dn) < 1e-14:
             if abs(dist) < 1e-6:
-                intersects[i,0] = start_pt[0]
-                intersects[i,1] = start_pt[1]
-                intersects[i,2] = start_pt[2]
+                intersects[i, 0] = start_pt[0]
+                intersects[i, 1] = start_pt[1]
+                intersects[i, 2] = start_pt[2]
                 valid[i] = True
             continue
-        num = ((plane_pt[0]-start_pt[0])*plane_n[0]
-             + (plane_pt[1]-start_pt[1])*plane_n[1]
-             + (plane_pt[2]-start_pt[2])*plane_n[2])
-        t = num/dot_dn
+        num = (
+            (plane_pt[0] - start_pt[0]) * plane_n[0]
+            + (plane_pt[1] - start_pt[1]) * plane_n[1]
+            + (plane_pt[2] - start_pt[2]) * plane_n[2]
+        )
+        t = num / dot_dn
         if t < -1e-9:
             continue
         if t < 0.0:
             t = 0.0
-        ix = start_pt[0] + t*kx
-        iy = start_pt[1] + t*ky
-        iz = start_pt[2] + t*kz
-        intersects[i,0] = ix
-        intersects[i,1] = iy
-        intersects[i,2] = iz
+        ix = start_pt[0] + t * kx
+        iy = start_pt[1] + t * ky
+        iz = start_pt[2] + t * kz
+        intersects[i, 0] = ix
+        intersects[i, 1] = iy
+        intersects[i, 2] = iz
         valid[i] = True
     return intersects, valid
 
@@ -1120,7 +1128,7 @@ def _ctr_discrete_finite_intensity(qz, v_sum, c_ang, n_layers):
     v_eff = np.maximum(v_sum, 0.0)
     phase = qz * c_ang
     rho = np.exp(-v_eff * c_ang)
-    rho_n = rho ** n_layers
+    rho_n = rho**n_layers
 
     num = 1.0 - 2.0 * rho_n * np.cos(n_layers * phase) + rho_n * rho_n
     den = 1.0 - 2.0 * rho * np.cos(phase) + rho * rho
@@ -1243,7 +1251,7 @@ def ktz_components(k0, n2, theta_t_plane):
     """
     n2_sq = n2 * n2
     a = np.real(n2_sq) * (k0 * k0) * (np.sin(theta_t_plane) ** 2)
-    b = np.abs(np.imag(n2_sq)) * (k0 * k0)     # magnitude for stability
+    b = np.abs(np.imag(n2_sq)) * (k0 * k0)  # magnitude for stability
     root = np.sqrt(a * a + b * b)
     re_kz = np.sqrt(0.5 * (root + a))
     im_kz = np.sqrt(0.5 * (root - a))
@@ -1514,6 +1522,7 @@ def _lookup_fast_optics_lut_row(lut_row, theta):
 # 4) solve_q
 # =============================================================================
 
+
 @njit(fastmath=True, cache=True)
 def _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
     Gx = G_vec[0]
@@ -1602,9 +1611,7 @@ def _circle_theta_offset(
     e2z,
     theta0,
 ):
-    Qx, Qy, Qz = _circle_point(
-        phi, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z
-    )
+    Qx, Qy, Qz = _circle_point(phi, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z)
     Qr = sqrt(Qx * Qx + Qy * Qy)
     theta = np.arctan2(Qz, Qr)
     return wrap_to_pi(theta - theta0)
@@ -1650,12 +1657,8 @@ def _refine_theta_root(
     e2z,
     theta0,
 ):
-    fa = _circle_theta_offset(
-        phi_a, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0
-    )
-    fb = _circle_theta_offset(
-        phi_b, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0
-    )
+    fa = _circle_theta_offset(phi_a, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0)
+    fb = _circle_theta_offset(phi_b, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0)
 
     if abs(fa) <= _LOCAL_ARC_ROOT_TOL:
         return phi_a, True
@@ -1668,9 +1671,7 @@ def _refine_theta_root(
     right = phi_b
     for _ in range(48):
         mid = 0.5 * (left + right)
-        fm = _circle_theta_offset(
-            mid, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0
-        )
+        fm = _circle_theta_offset(mid, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0)
         if abs(fm) <= _LOCAL_ARC_ROOT_TOL:
             return mid, True
         if fa * fm <= 0.0:
@@ -1701,16 +1702,14 @@ def _refine_theta_boundary(
 ):
     left = phi_inside
     right = phi_outside
-    f_left = abs(
-        _circle_theta_offset(
-            left, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0
-        )
-    ) - theta_limit
-    f_right = abs(
-        _circle_theta_offset(
-            right, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0
-        )
-    ) - theta_limit
+    f_left = (
+        abs(_circle_theta_offset(left, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0))
+        - theta_limit
+    )
+    f_right = (
+        abs(_circle_theta_offset(right, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0))
+        - theta_limit
+    )
 
     if f_left > 0.0:
         return left
@@ -1719,11 +1718,14 @@ def _refine_theta_boundary(
 
     for _ in range(48):
         mid = 0.5 * (left + right)
-        f_mid = abs(
-            _circle_theta_offset(
-                mid, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0
+        f_mid = (
+            abs(
+                _circle_theta_offset(
+                    mid, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, theta0
+                )
             )
-        ) - theta_limit
+            - theta_limit
+        )
         if abs(f_mid) <= _LOCAL_ARC_BOUNDARY_TOL:
             return mid
         if f_mid <= 0.0:
@@ -1854,10 +1856,7 @@ def _build_local_arc_windows(
                 best_phi_1 = best_phi_0
             best_abs_0 = cur_abs
             best_phi_0 = phi_val
-        elif (
-            cur_abs < best_abs_1
-            and _phi_periodic_distance(phi_val, best_phi_0) > (2.0 * dphi)
-        ):
+        elif cur_abs < best_abs_1 and _phi_periodic_distance(phi_val, best_phi_0) > (2.0 * dphi):
             best_abs_1 = cur_abs
             best_phi_1 = phi_val
 
@@ -2161,8 +2160,8 @@ def _solve_q_adaptive_domain(
         mass_arr[n_intervals] = right_mass
         err_arr[n_intervals] = right_err
 
-        total_mass += (left_mass + right_mass - old_mass)
-        total_err += (left_err + right_err - old_err)
+        total_mass += left_mass + right_mass - old_mass
+        total_err += left_err + right_err - old_err
         n_intervals += 1
         err_tol = _SOLVE_Q_ABS_ERR_TOL + rel_err_tol * abs(total_mass)
 
@@ -2234,9 +2233,7 @@ def _solve_q_uniform_full_circle(
     Qy_arr = Oy + circle_r * (cth * e1y + sth * e2y)
     Qz_arr = Oz + circle_r * (cth * e1z + sth * e2z)
 
-    sigma_arr = compute_intensity_array(
-        Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv
-    )
+    sigma_arr = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv)
     ds = circle_r * dtheta
     all_int = sigma_arr * ds
 
@@ -2348,9 +2345,7 @@ def _solve_q_uniform(
         ds_arr[offset:next_offset] = ds
         offset = next_offset
 
-    sigma_arr = compute_intensity_array(
-        Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv
-    )
+    sigma_arr = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv)
     all_int = sigma_arr * ds_arr
     valid_idx = np.nonzero(all_int > _INTENSITY_CUTOFF)[0]
     out = np.zeros((valid_idx.size, 4), dtype=np.float64)
@@ -2481,7 +2476,15 @@ def _solve_q_adaptive(
 
 @njit(fastmath=True, cache=True)
 def solve_q(
-    k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H, K, L,
+    k_in_crystal,
+    k_scat,
+    G_vec,
+    sigma,
+    gamma_pv,
+    eta_pv,
+    H,
+    K,
+    L,
     N_steps=DEFAULT_SOLVE_Q_STEPS,
     base_intervals=DEFAULT_SOLVE_Q_BASE_INTERVALS,
     rel_err_tol=DEFAULT_SOLVE_Q_REL_TOL,
@@ -2495,7 +2498,7 @@ def solve_q(
     set of Q that satisfies |Q|=|G| or an intersection with Ewald sphere, then
     filter by mosaic surface density compute_intensity_array.
 
-    Physically: 
+    Physically:
       - In uniform mode, sample the full circle at fixed angular steps.
       - In adaptive mode, refine intervals deterministically where the
         pseudo-Voigt profile varies most.
@@ -2517,7 +2520,7 @@ def solve_q(
     if rel_err_tol < 0.0:
         rel_err_tol = 0.0
 
-    G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
+    G_sq = G_vec[0] * G_vec[0] + G_vec[1] * G_vec[1] + G_vec[2] * G_vec[2]
     if G_sq < 1e-14:
         status = -1
         return np.zeros((0, 4), dtype=np.float64), status
@@ -2526,15 +2529,15 @@ def solve_q(
     Ay = -k_in_crystal[1]
     Az = -k_in_crystal[2]
     rA = k_scat
-    A_sq = Ax*Ax + Ay*Ay + Az*Az
+    A_sq = Ax * Ax + Ay * Ay + Az * Az
     if A_sq < 1e-14:
         status = -2
         return np.zeros((0, 4), dtype=np.float64), status
     A_len = sqrt(A_sq)
 
-    c = (G_sq + A_sq - rA*rA) / (2.0*A_len)
+    c = (G_sq + A_sq - rA * rA) / (2.0 * A_len)
     # Compute circle parameters
-    circle_r_sq = G_sq - c*c
+    circle_r_sq = G_sq - c * c
     if circle_r_sq < 0.0:
         status = -3
         return np.zeros((0, 4), dtype=np.float64), status
@@ -2550,14 +2553,14 @@ def solve_q(
 
     # Build two orthonormal vectors (e1, e2) in the plane perpendicular to Ax_hat.
     ax, ay, az = 1.0, 0.0, 0.0
-    dot_aA = ax*Ax_hat + ay*Ay_hat + az*Az_hat
+    dot_aA = ax * Ax_hat + ay * Ay_hat + az * Az_hat
     if abs(dot_aA) > 0.9999:
         ax, ay, az = 0.0, 1.0, 0.0
-        dot_aA = ax*Ax_hat + ay*Ay_hat + az*Az_hat
-    aox = ax - dot_aA*Ax_hat
-    aoy = ay - dot_aA*Ay_hat
-    aoz = az - dot_aA*Az_hat
-    ao_len = np.sqrt(aox*aox + aoy*aoy + aoz*aoz)
+        dot_aA = ax * Ax_hat + ay * Ay_hat + az * Az_hat
+    aox = ax - dot_aA * Ax_hat
+    aoy = ay - dot_aA * Ay_hat
+    aoz = az - dot_aA * Az_hat
+    ao_len = np.sqrt(aox * aox + aoy * aoy + aoz * aoz)
     if ao_len < 1e-14:
         status = -4
         return np.zeros((0, 4), dtype=np.float64), status
@@ -2565,10 +2568,10 @@ def solve_q(
     e1y = aoy / ao_len
     e1z = aoz / ao_len
 
-    e2x = Az_hat*e1y - Ay_hat*e1z
-    e2y = Ax_hat*e1z - Az_hat*e1x
-    e2z = Ay_hat*e1x - Ax_hat*e1y
-    e2_len = np.sqrt(e2x*e2x + e2y*e2y + e2z*e2z)
+    e2x = Az_hat * e1y - Ay_hat * e1z
+    e2y = Ax_hat * e1z - Az_hat * e1x
+    e2z = Ay_hat * e1x - Ax_hat * e1y
+    e2_len = np.sqrt(e2x * e2x + e2y * e2y + e2z * e2z)
     if e2_len < 1e-14:
         status = -5
         return np.zeros((0, 4), dtype=np.float64), status
@@ -2644,7 +2647,7 @@ def _bind_process_peaks_parallel_call(args, kwargs):
             return None
         bound[name] = value
 
-    for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[len(args):]:
+    for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[len(args) :]:
         if name in kwargs:
             bound[name] = kwargs[name]
         elif name in _PROCESS_PEAKS_PARALLEL_DEFAULTS:
@@ -2896,10 +2899,14 @@ def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
             ).reshape(-1)
             if accumulate_image and flat_indices.size > 0 and flat_values.size > 0:
                 n_values = min(flat_indices.size, flat_values.size)
-                np.add.at(image_flat, flat_indices[:n_values], refl_intensity * flat_values[:n_values])
+                np.add.at(
+                    image_flat, flat_indices[:n_values], refl_intensity * flat_values[:n_values]
+                )
 
             hit_template = np.asarray(
-                source_template.get("hit_template", np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)),
+                source_template.get(
+                    "hit_template", np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+                ),
                 dtype=np.float64,
             )
             if collect_hit_tables and hit_template.size > 0:
@@ -3205,9 +3212,7 @@ def _build_sample_rotation(
     R_sample = R_cor @ R_z_R_y
 
     n_surf = R_cor @ R_ZY_n
-    n_surf /= sqrt(
-        n_surf[0] * n_surf[0] + n_surf[1] * n_surf[1] + n_surf[2] * n_surf[2]
-    )
+    n_surf /= sqrt(n_surf[0] * n_surf[0] + n_surf[1] * n_surf[1] + n_surf[2] * n_surf[2])
 
     P0_rot = R_sample @ P0
     P0_rot[0] = 0.0
@@ -3280,9 +3285,7 @@ def _precompute_sample_terms(
     half_length = 0.5 * sample_length_m if sample_length_m > 0.0 else 0.0
     u_ref = np.array([0.0, 0.0, -1.0])
     e1_temp = np.cross(n_surf, u_ref)
-    e1_norm = sqrt(
-        e1_temp[0] * e1_temp[0] + e1_temp[1] * e1_temp[1] + e1_temp[2] * e1_temp[2]
-    )
+    e1_norm = sqrt(e1_temp[0] * e1_temp[0] + e1_temp[1] * e1_temp[1] + e1_temp[2] * e1_temp[2])
     if e1_norm < 1e-12:
         alt_refs = [
             np.array([1.0, 0.0, 0.0]),
@@ -3341,19 +3344,11 @@ def _precompute_sample_terms(
         rel_y = iy - P0_rot[1]
         rel_z = iz - P0_rot[2]
         if half_width > 0.0:
-            x_local = (
-                rel_x * sample_axis_x[0]
-                + rel_y * sample_axis_x[1]
-                + rel_z * sample_axis_x[2]
-            )
+            x_local = rel_x * sample_axis_x[0] + rel_y * sample_axis_x[1] + rel_z * sample_axis_x[2]
             if np.abs(x_local) > half_width:
                 continue
         if half_length > 0.0:
-            y_local = (
-                rel_x * sample_axis_y[0]
-                + rel_y * sample_axis_y[1]
-                + rel_z * sample_axis_y[2]
-            )
+            y_local = rel_x * sample_axis_y[0] + rel_y * sample_axis_y[1] + rel_z * sample_axis_y[2]
             if np.abs(y_local) > half_length:
                 continue
 
@@ -3629,16 +3624,13 @@ def _nominal_reflection_visible(
         twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
         k_out_mag = k0
     else:
-        twotheta_t = (
-            np.arccos(
-                _clamp(
-                    np.cos(twotheta_t_prime) * n2_real,
-                    -1.0,
-                    1.0,
-                )
+        twotheta_t = np.arccos(
+            _clamp(
+                np.cos(twotheta_t_prime) * n2_real,
+                -1.0,
+                1.0,
             )
-            * np.sign(twotheta_t_prime)
-        )
+        ) * np.sign(twotheta_t_prime)
         k_out_mag = k_scat
 
     if projection_debug_enabled:
@@ -3653,11 +3645,7 @@ def _nominal_reflection_visible(
     kf_prime = np.empty(3, dtype=np.float64)
     phi_f = np.arctan2(k_tx_prime, k_ty_prime)
     if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
-        k_norm = sqrt(
-            k_tx_prime * k_tx_prime
-            + k_ty_prime * k_ty_prime
-            + k_tz_prime * k_tz_prime
-        )
+        k_norm = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime)
         if k_norm > 1.0e-30:
             kf[0] = k_tx_prime / k_norm
             kf[1] = k_ty_prime / k_norm
@@ -3687,21 +3675,9 @@ def _nominal_reflection_visible(
         kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
         kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
         kf[2] = k_out_mag * np.sin(twotheta_t)
-    kf_prime[0] = (
-        R_sample[0, 0] * kf[0]
-        + R_sample[0, 1] * kf[1]
-        + R_sample[0, 2] * kf[2]
-    )
-    kf_prime[1] = (
-        R_sample[1, 0] * kf[0]
-        + R_sample[1, 1] * kf[1]
-        + R_sample[1, 2] * kf[2]
-    )
-    kf_prime[2] = (
-        R_sample[2, 0] * kf[0]
-        + R_sample[2, 1] * kf[1]
-        + R_sample[2, 2] * kf[2]
-    )
+    kf_prime[0] = R_sample[0, 0] * kf[0] + R_sample[0, 1] * kf[1] + R_sample[0, 2] * kf[2]
+    kf_prime[1] = R_sample[1, 0] * kf[0] + R_sample[1, 1] * kf[1] + R_sample[1, 2] * kf[2]
+    kf_prime[2] = R_sample[2, 0] * kf[0] + R_sample[2, 1] * kf[1] + R_sample[2, 2] * kf[2]
 
     pixel_scale = 1.0 / 100e-6
     sigma_pad = _LOCAL_ARC_GAUSS_SIGMAS * max(sigma_rad, 1.0e-12)
@@ -3768,16 +3744,8 @@ def _nominal_reflection_visible(
     plane_to_det_x = dx - Detector_Pos[0]
     plane_to_det_y = dy - Detector_Pos[1]
     plane_to_det_z = dz - Detector_Pos[2]
-    x_det = (
-        plane_to_det_x * e1_det[0]
-        + plane_to_det_y * e1_det[1]
-        + plane_to_det_z * e1_det[2]
-    )
-    y_det = (
-        plane_to_det_x * e2_det[0]
-        + plane_to_det_y * e2_det[1]
-        + plane_to_det_z * e2_det[2]
-    )
+    x_det = plane_to_det_x * e1_det[0] + plane_to_det_y * e1_det[1] + plane_to_det_z * e1_det[2]
+    y_det = plane_to_det_x * e2_det[0] + plane_to_det_y * e2_det[1] + plane_to_det_z * e2_det[2]
     row_f = center[0] - y_det * pixel_scale
     col_f = center[1] + x_det * pixel_scale
     if not np.isfinite(row_f) or not np.isfinite(col_f):
@@ -3985,7 +3953,9 @@ def _calculate_phi_from_precomputed(
         cache_values = np.empty(cache_capacity, dtype=np.float64)
         _clear_local_pixel_cache(cache_keys, cache_values)
         cache_entry_count = 0
-        cache_flush_limit = (cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM) // _LOCAL_PIXEL_CACHE_LOAD_DEN
+        cache_flush_limit = (
+            cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM
+        ) // _LOCAL_PIXEL_CACHE_LOAD_DEN
         if cache_flush_limit < 4:
             cache_flush_limit = 4
     else:
@@ -4121,7 +4091,8 @@ def _calculate_phi_from_precomputed(
                     (not can_reuse_q_solutions and i_samp == record_sample_idx)
                     or (
                         can_reuse_q_solutions
-                        and int(sample_terms[record_sample_idx, _SAMPLE_COL_SOLVE_Q_REP]) == group_rep_idx
+                        and int(sample_terms[record_sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
+                        == group_rep_idx
                     )
                 )
             )
@@ -4317,9 +4288,7 @@ def _calculate_phi_from_precomputed(
                 phi_f = np.arctan2(k_tx_prime, k_ty_prime)
                 if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
                     k_norm = sqrt(
-                        k_tx_prime * k_tx_prime
-                        + k_ty_prime * k_ty_prime
-                        + k_tz_prime * k_tz_prime
+                        k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime
                     )
                     if k_norm > 1.0e-30:
                         kf[0] = k_tx_prime / k_norm
@@ -4352,19 +4321,13 @@ def _calculate_phi_from_precomputed(
                     kf[2] = k_out_mag * np.sin(twotheta_t)
 
                 kf_prime[0] = (
-                    R_sample[0, 0] * kf[0]
-                    + R_sample[0, 1] * kf[1]
-                    + R_sample[0, 2] * kf[2]
+                    R_sample[0, 0] * kf[0] + R_sample[0, 1] * kf[1] + R_sample[0, 2] * kf[2]
                 )
                 kf_prime[1] = (
-                    R_sample[1, 0] * kf[0]
-                    + R_sample[1, 1] * kf[1]
-                    + R_sample[1, 2] * kf[2]
+                    R_sample[1, 0] * kf[0] + R_sample[1, 1] * kf[1] + R_sample[1, 2] * kf[2]
                 )
                 kf_prime[2] = (
-                    R_sample[2, 0] * kf[0]
-                    + R_sample[2, 1] * kf[1]
-                    + R_sample[2, 2] * kf[2]
+                    R_sample[2, 0] * kf[0] + R_sample[2, 1] * kf[1] + R_sample[2, 2] * kf[2]
                 )
 
                 dx, dy, dz, valid_det = intersect_line_plane(
@@ -4603,32 +4566,57 @@ def _calculate_phi_from_precomputed(
         best_sample_idx,
     )
 
+
 # =============================================================================
 # 5) CALCULATE_PHI
 # =============================================================================
 
+
 @njit(fastmath=True, cache=True)
 def calculate_phi(
-    H, K, L, av, cv,
+    H,
+    K,
+    L,
+    av,
+    cv,
     wavelength_array,
-    image, image_size,
-    gamma_rad, Gamma_rad, chi_rad, psi_rad,
-    zs, zb, n2,
+    image,
+    image_size,
+    gamma_rad,
+    Gamma_rad,
+    chi_rad,
+    psi_rad,
+    zs,
+    zb,
+    n2,
     n2_array,
-    beam_x_array, beam_y_array,
-    theta_array, phi_array,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
     reflection_intensity,
-    sigma_rad, gamma_pv, eta_pv,
-    debye_x, debye_y,
+    sigma_rad,
+    gamma_pv,
+    eta_pv,
+    debye_x,
+    debye_y,
     center,
     theta_initial_deg,
     cor_angle_deg,
-    R_x_detector, R_z_detector, n_det_rot, Detector_Pos,
-    e1_det, e2_det,
+    R_x_detector,
+    R_z_detector,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
     R_z_R_y,
     R_ZY_n,
-    P0, unit_x,
-    save_flag, q_data, q_count, i_peaks_index,
+    P0,
+    unit_x,
+    save_flag,
+    q_data,
+    q_count,
+    i_peaks_index,
     record_status=False,
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
@@ -4647,8 +4635,8 @@ def calculate_phi(
     + "solve_q", and deposit intensities into the final 2D 'image'.
 
     Physical meaning:
-      - This function is the "core" for each reflection, merging mosaic 
-        sampling (Q_grid) with geometry (plane intersection, wavevectors) 
+      - This function is the "core" for each reflection, merging mosaic
+        sampling (Q_grid) with geometry (plane intersection, wavevectors)
         and the final detection step.
 
     Returns
@@ -4738,25 +4726,44 @@ def calculate_phi(
     )
 
 
-
 # =============================================================================
 # 6) PROCESS_PEAKS_PARALLEL
 # =============================================================================
 
+
 @njit(parallel=True, fastmath=True, cache=True)
 def _process_peaks_parallel_impl(
-    miller, intensities, image_size,
-    av, cv, lambda_, image,
-    Distance_CoR_to_Detector, gamma_deg, Gamma_deg, chi_deg, psi_deg, psi_z_deg,
-    zs, zb, n2,
-    beam_x_array, beam_y_array,
-    theta_array, phi_array,
-    sigma_pv_deg, gamma_pv_deg, eta_pv,
+    miller,
+    intensities,
+    image_size,
+    av,
+    cv,
+    lambda_,
+    image,
+    Distance_CoR_to_Detector,
+    gamma_deg,
+    Gamma_deg,
+    chi_deg,
+    psi_deg,
+    psi_z_deg,
+    zs,
+    zb,
+    n2,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    sigma_pv_deg,
+    gamma_pv_deg,
+    eta_pv,
     wavelength_array,
-    debye_x, debye_y, center,
+    debye_x,
+    debye_y,
+    center,
     theta_initial_deg,
     cor_angle_deg,
-    unit_x, n_detector,
+    unit_x,
+    n_detector,
     save_flag,
     record_status=False,
     thickness=50e-9,
@@ -4803,12 +4810,12 @@ def _process_peaks_parallel_impl(
     If save_flag==1, also returns q_data, q_count with detailed Q sampling info.
     Otherwise, returns just the updated image and max_positions for each reflection.
     """
-    gamma_rad = gamma_deg*(pi/180.0)
-    Gamma_rad = Gamma_deg*(pi/180.0)
-    chi_rad   = chi_deg*(pi/180.0)
-    psi_rad   = psi_deg*(pi/180.0)
-    sigma_rad   = sigma_pv_deg*(pi/180.0)
-    gamma_rad_m = gamma_pv_deg*(pi/180.0)
+    gamma_rad = gamma_deg * (pi / 180.0)
+    Gamma_rad = Gamma_deg * (pi / 180.0)
+    chi_rad = chi_deg * (pi / 180.0)
+    psi_rad = psi_deg * (pi / 180.0)
+    sigma_rad = sigma_pv_deg * (pi / 180.0)
+    gamma_rad_m = gamma_pv_deg * (pi / 180.0)
     solve_q_steps_i = int(solve_q_steps)
     if solve_q_steps_i < MIN_SOLVE_Q_STEPS:
         solve_q_steps_i = MIN_SOLVE_Q_STEPS
@@ -4828,72 +4835,58 @@ def _process_peaks_parallel_impl(
     sg = sin(gamma_rad)
     cG = cos(Gamma_rad)
     sG = sin(Gamma_rad)
-    R_x_det = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, cg,  sg],
-        [0.0,-sg,  cg]
-    ])
-    R_z_det = np.array([
-        [ cG, sG, 0.0],
-        [-sG, cG, 0.0],
-        [ 0.0, 0.0, 1.0]
-    ])
-    nd_temp   = R_x_det @ n_detector
+    R_x_det = np.array([[1.0, 0.0, 0.0], [0.0, cg, sg], [0.0, -sg, cg]])
+    R_z_det = np.array([[cG, sG, 0.0], [-sG, cG, 0.0], [0.0, 0.0, 1.0]])
+    nd_temp = R_x_det @ n_detector
     n_det_rot = R_z_det @ nd_temp
-    nd_len    = sqrt(n_det_rot[0]*n_det_rot[0] + n_det_rot[1]*n_det_rot[1] + n_det_rot[2]*n_det_rot[2])
-    n_det_rot/= nd_len
+    nd_len = sqrt(
+        n_det_rot[0] * n_det_rot[0] + n_det_rot[1] * n_det_rot[1] + n_det_rot[2] * n_det_rot[2]
+    )
+    n_det_rot /= nd_len
 
     Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0], dtype=np.float64)
 
-    dot_e1 = unit_x[0]*n_det_rot[0] + unit_x[1]*n_det_rot[1] + unit_x[2]*n_det_rot[2]
-    e1_det = unit_x - dot_e1*n_det_rot
-    e1_len = sqrt(e1_det[0]*e1_det[0] + e1_det[1]*e1_det[1] + e1_det[2]*e1_det[2])
+    dot_e1 = unit_x[0] * n_det_rot[0] + unit_x[1] * n_det_rot[1] + unit_x[2] * n_det_rot[2]
+    e1_det = unit_x - dot_e1 * n_det_rot
+    e1_len = sqrt(e1_det[0] * e1_det[0] + e1_det[1] * e1_det[1] + e1_det[2] * e1_det[2])
     if e1_len < 1e-14:
         e1_det = np.array([1.0, 0.0, 0.0])
     else:
         e1_det /= e1_len
 
-    tmpx = n_det_rot[1]* e1_det[2] - n_det_rot[2]* e1_det[1]
-    tmpy = n_det_rot[2]* e1_det[0] - n_det_rot[0]* e1_det[2]
-    tmpz = n_det_rot[0]* e1_det[1] - n_det_rot[1]* e1_det[0]
+    tmpx = n_det_rot[1] * e1_det[2] - n_det_rot[2] * e1_det[1]
+    tmpy = n_det_rot[2] * e1_det[0] - n_det_rot[0] * e1_det[2]
+    tmpz = n_det_rot[0] * e1_det[1] - n_det_rot[1] * e1_det[0]
     e2_det = np.array([-tmpx, -tmpy, -tmpz], dtype=np.float64)
-    e2_len = sqrt(e2_det[0]*e2_det[0] + e2_det[1]*e2_det[1] + e2_det[2]*e2_det[2])
+    e2_len = sqrt(e2_det[0] * e2_det[0] + e2_det[1] * e2_det[1] + e2_det[2] * e2_det[2])
     if e2_len < 1e-14:
-        e2_det = np.array([0.0,1.0,0.0])
+        e2_det = np.array([0.0, 1.0, 0.0])
     else:
         e2_det /= e2_len
 
     c_chi = cos(chi_rad)
     s_chi = sin(chi_rad)
-    R_y = np.array([
-        [ c_chi, 0.0,   s_chi],
-        [ 0.0,   1.0,   0.0],
-        [-s_chi, 0.0, c_chi]
-    ])
-    c_psi= cos(psi_rad)
-    s_psi= sin(psi_rad)
-    R_z = np.array([
-        [ c_psi, s_psi, 0.0],
-        [-s_psi, c_psi, 0.0],
-        [ 0.0,   0.0,   1.0]
-    ])
+    R_y = np.array([[c_chi, 0.0, s_chi], [0.0, 1.0, 0.0], [-s_chi, 0.0, c_chi]])
+    c_psi = cos(psi_rad)
+    s_psi = sin(psi_rad)
+    R_z = np.array([[c_psi, s_psi, 0.0], [-s_psi, c_psi, 0.0], [0.0, 0.0, 1.0]])
     R_z_R_y = R_z @ R_y
 
-    n1= np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    R_ZY_n= R_z_R_y @ n1
-    nzy_len= sqrt(R_ZY_n[0]*R_ZY_n[0] + R_ZY_n[1]*R_ZY_n[1] + R_ZY_n[2]*R_ZY_n[2])
-    R_ZY_n/= nzy_len
+    n1 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    R_ZY_n = R_z_R_y @ n1
+    nzy_len = sqrt(R_ZY_n[0] * R_ZY_n[0] + R_ZY_n[1] * R_ZY_n[1] + R_ZY_n[2] * R_ZY_n[2])
+    R_ZY_n /= nzy_len
 
-    P0= np.array([0.0, 0.0, -zs], dtype=np.float64)
-    num_peaks= miller.shape[0]
+    P0 = np.array([0.0, 0.0, -zs], dtype=np.float64)
+    num_peaks = miller.shape[0]
 
-    max_solutions= 2000000
-    if save_flag==1:
-        q_data= np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
-        q_count= np.zeros(num_peaks, dtype=np.int64)
+    max_solutions = 2000000
+    if save_flag == 1:
+        q_data = np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
+        q_count = np.zeros(num_peaks, dtype=np.int64)
     else:
-        q_data= np.zeros((1,1,5), dtype=np.float64)
-        q_count= np.zeros(1, dtype=np.int64)
+        q_data = np.zeros((1, 1, 5), dtype=np.float64)
+        q_count = np.zeros(1, dtype=np.int64)
     collect_tables = bool(collect_hit_tables)
     accumulate_image_flag = bool(accumulate_image)
     collect_aux_outputs = collect_tables
@@ -5023,18 +5016,12 @@ def _process_peaks_parallel_impl(
     thread_count = int(numba_thread_count)
     if thread_count < 1:
         thread_count = 1
-    bytes_needed = (
-        float(thread_count)
-        * float(image_size)
-        * float(image_size)
-        * 8.0
-    )
+    bytes_needed = float(thread_count) * float(image_size) * float(image_size) * 8.0
     can_use_thread_local = bytes_needed <= float(_THREAD_LOCAL_IMAGE_MAX_BYTES)
     merge_work = float(thread_count) * float(image_size) * float(image_size)
     ray_work = float(source_count) * float(max(n_samp, 1))
-    merge_cost_ok = (
-        image_size <= _THREAD_LOCAL_MAX_IMAGE_SIZE
-        and merge_work <= (_THREAD_LOCAL_MERGE_WORK_FACTOR * ray_work)
+    merge_cost_ok = image_size <= _THREAD_LOCAL_MAX_IMAGE_SIZE and merge_work <= (
+        _THREAD_LOCAL_MERGE_WORK_FACTOR * ray_work
     )
     parallel_sources = (
         source_count > 1
@@ -5073,7 +5060,9 @@ def _process_peaks_parallel_impl(
         if collect_tables:
             max_hits = max(n_samp * 2, 16)
             src_hit_counts = np.zeros(source_count, dtype=np.int64)
-            src_hits = np.zeros((source_count, max_hits, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+            src_hits = np.zeros(
+                (source_count, max_hits, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
+            )
             src_miss_counts = np.zeros(source_count, dtype=np.int64)
             src_miss = np.zeros((source_count, max_hits, 3), dtype=np.float64)
         else:
@@ -5115,9 +5104,7 @@ def _process_peaks_parallel_impl(
             peak_projection_debug_row_tth_sums = dummy_projection_debug_row_tth_sums
             if projection_debug_enabled:
                 peak_projection_debug_counters = projection_debug_counters[i_pk]
-                peak_projection_debug_reject_count = projection_debug_reject_counts[
-                    i_pk : i_pk + 1
-                ]
+                peak_projection_debug_reject_count = projection_debug_reject_counts[i_pk : i_pk + 1]
                 peak_projection_debug_reject_records = projection_debug_reject_records[i_pk]
                 peak_projection_debug_row_hit_counts = projection_debug_row_hit_counts[tid]
                 peak_projection_debug_row_tthp_sums = projection_debug_row_tthp_sums[tid]
@@ -5126,104 +5113,108 @@ def _process_peaks_parallel_impl(
             if accumulate_image_flag:
                 target_image = image_partials[tid]
             if sample_weight_array is None:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
-                    H,
-                    K,
-                    L,
-                    av,
-                    cv,
-                    target_image,
-                    image_size,
-                    reflI_eff,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    debye_x,
-                    debye_y,
-                    center,
-                    R_sample_precomputed,
-                    n_det_rot,
-                    Detector_Pos,
-                    e1_det,
-                    e2_det,
-                    sample_terms,
-                    sample_n2_array,
-                    sample_eps2_array,
-                    best_idx_precomputed,
-                    core_save_flag,
-                    q_data,
-                    q_count,
-                    i_pk,
-                    record_status,
-                    thickness,
-                    optics_mode,
-                    solve_q_steps_i,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    pixel_size_m,
-                    sample_qr_ring_once,
-                    None,
-                    exit_projection_mode,
-                    projection_debug_enabled,
-                    peak_projection_debug_counters,
-                    peak_projection_debug_reject_count,
-                    peak_projection_debug_reject_records,
-                    peak_projection_debug_row_hit_counts,
-                    peak_projection_debug_row_tthp_sums,
-                    peak_projection_debug_row_tth_sums,
-                    default_solve_q_dtheta,
-                    default_solve_q_cos,
-                    default_solve_q_sin,
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
+                    _calculate_phi_from_precomputed(
+                        H,
+                        K,
+                        L,
+                        av,
+                        cv,
+                        target_image,
+                        image_size,
+                        reflI_eff,
+                        sigma_rad,
+                        gamma_rad_m,
+                        eta_pv,
+                        debye_x,
+                        debye_y,
+                        center,
+                        R_sample_precomputed,
+                        n_det_rot,
+                        Detector_Pos,
+                        e1_det,
+                        e2_det,
+                        sample_terms,
+                        sample_n2_array,
+                        sample_eps2_array,
+                        best_idx_precomputed,
+                        core_save_flag,
+                        q_data,
+                        q_count,
+                        i_pk,
+                        record_status,
+                        thickness,
+                        optics_mode,
+                        solve_q_steps_i,
+                        solve_q_rel_tol_i,
+                        solve_q_mode_i,
+                        pixel_size_m,
+                        sample_qr_ring_once,
+                        None,
+                        exit_projection_mode,
+                        projection_debug_enabled,
+                        peak_projection_debug_counters,
+                        peak_projection_debug_reject_count,
+                        peak_projection_debug_reject_records,
+                        peak_projection_debug_row_hit_counts,
+                        peak_projection_debug_row_tthp_sums,
+                        peak_projection_debug_row_tth_sums,
+                        default_solve_q_dtheta,
+                        default_solve_q_cos,
+                        default_solve_q_sin,
+                    )
                 )
             else:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
-                    H,
-                    K,
-                    L,
-                    av,
-                    cv,
-                    target_image,
-                    image_size,
-                    reflI_eff,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    debye_x,
-                    debye_y,
-                    center,
-                    R_sample_precomputed,
-                    n_det_rot,
-                    Detector_Pos,
-                    e1_det,
-                    e2_det,
-                    sample_terms,
-                    sample_n2_array,
-                    sample_eps2_array,
-                    best_idx_precomputed,
-                    core_save_flag,
-                    q_data,
-                    q_count,
-                    i_pk,
-                    record_status,
-                    thickness,
-                    optics_mode,
-                    solve_q_steps_i,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    pixel_size_m,
-                    sample_qr_ring_once,
-                    sample_weight_array,
-                    exit_projection_mode,
-                    projection_debug_enabled,
-                    peak_projection_debug_counters,
-                    peak_projection_debug_reject_count,
-                    peak_projection_debug_reject_records,
-                    peak_projection_debug_row_hit_counts,
-                    peak_projection_debug_row_tthp_sums,
-                    peak_projection_debug_row_tth_sums,
-                    default_solve_q_dtheta,
-                    default_solve_q_cos,
-                    default_solve_q_sin,
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
+                    _calculate_phi_from_precomputed(
+                        H,
+                        K,
+                        L,
+                        av,
+                        cv,
+                        target_image,
+                        image_size,
+                        reflI_eff,
+                        sigma_rad,
+                        gamma_rad_m,
+                        eta_pv,
+                        debye_x,
+                        debye_y,
+                        center,
+                        R_sample_precomputed,
+                        n_det_rot,
+                        Detector_Pos,
+                        e1_det,
+                        e2_det,
+                        sample_terms,
+                        sample_n2_array,
+                        sample_eps2_array,
+                        best_idx_precomputed,
+                        core_save_flag,
+                        q_data,
+                        q_count,
+                        i_pk,
+                        record_status,
+                        thickness,
+                        optics_mode,
+                        solve_q_steps_i,
+                        solve_q_rel_tol_i,
+                        solve_q_mode_i,
+                        pixel_size_m,
+                        sample_qr_ring_once,
+                        sample_weight_array,
+                        exit_projection_mode,
+                        projection_debug_enabled,
+                        peak_projection_debug_counters,
+                        peak_projection_debug_reject_count,
+                        peak_projection_debug_reject_records,
+                        peak_projection_debug_row_hit_counts,
+                        peak_projection_debug_row_tthp_sums,
+                        peak_projection_debug_row_tth_sums,
+                        default_solve_q_dtheta,
+                        default_solve_q_cos,
+                        default_solve_q_sin,
+                    )
                 )
             if collect_tables:
                 nh = pixel_hits.shape[0]
@@ -5284,7 +5275,9 @@ def _process_peaks_parallel_impl(
             reflI_eff = source_total_sf[i_pk]
             if reflI_eff <= 0.0:
                 if collect_tables:
-                    hit_tables[i_pk] = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+                    hit_tables[i_pk] = np.empty(
+                        (0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
+                    )
                     miss_tables[i_pk] = np.empty((0, 3), dtype=np.float64)
                 if record_status:
                     all_status[i_pk, :] = 0
@@ -5303,113 +5296,115 @@ def _process_peaks_parallel_impl(
             peak_projection_debug_row_tth_sums = dummy_projection_debug_row_tth_sums
             if projection_debug_enabled:
                 peak_projection_debug_counters = projection_debug_counters[i_pk]
-                peak_projection_debug_reject_count = projection_debug_reject_counts[
-                    i_pk : i_pk + 1
-                ]
+                peak_projection_debug_reject_count = projection_debug_reject_counts[i_pk : i_pk + 1]
                 peak_projection_debug_reject_records = projection_debug_reject_records[i_pk]
                 peak_projection_debug_row_hit_counts = projection_debug_row_hit_counts[0]
                 peak_projection_debug_row_tthp_sums = projection_debug_row_tthp_sums[0]
                 peak_projection_debug_row_tth_sums = projection_debug_row_tth_sums[0]
 
             if sample_weight_array is None:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
-                    H,
-                    K,
-                    L,
-                    av,
-                    cv,
-                    image,
-                    image_size,
-                    reflI_eff,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    debye_x,
-                    debye_y,
-                    center,
-                    R_sample_precomputed,
-                    n_det_rot,
-                    Detector_Pos,
-                    e1_det,
-                    e2_det,
-                    sample_terms,
-                    sample_n2_array,
-                    sample_eps2_array,
-                    best_idx_precomputed,
-                    core_save_flag,
-                    q_data,
-                    q_count,
-                    i_pk,
-                    record_status,
-                    thickness,
-                    optics_mode,
-                    solve_q_steps_i,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    pixel_size_m,
-                    sample_qr_ring_once,
-                    None,
-                    exit_projection_mode,
-                    projection_debug_enabled,
-                    peak_projection_debug_counters,
-                    peak_projection_debug_reject_count,
-                    peak_projection_debug_reject_records,
-                    peak_projection_debug_row_hit_counts,
-                    peak_projection_debug_row_tthp_sums,
-                    peak_projection_debug_row_tth_sums,
-                    default_solve_q_dtheta,
-                    default_solve_q_cos,
-                    default_solve_q_sin,
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
+                    _calculate_phi_from_precomputed(
+                        H,
+                        K,
+                        L,
+                        av,
+                        cv,
+                        image,
+                        image_size,
+                        reflI_eff,
+                        sigma_rad,
+                        gamma_rad_m,
+                        eta_pv,
+                        debye_x,
+                        debye_y,
+                        center,
+                        R_sample_precomputed,
+                        n_det_rot,
+                        Detector_Pos,
+                        e1_det,
+                        e2_det,
+                        sample_terms,
+                        sample_n2_array,
+                        sample_eps2_array,
+                        best_idx_precomputed,
+                        core_save_flag,
+                        q_data,
+                        q_count,
+                        i_pk,
+                        record_status,
+                        thickness,
+                        optics_mode,
+                        solve_q_steps_i,
+                        solve_q_rel_tol_i,
+                        solve_q_mode_i,
+                        pixel_size_m,
+                        sample_qr_ring_once,
+                        None,
+                        exit_projection_mode,
+                        projection_debug_enabled,
+                        peak_projection_debug_counters,
+                        peak_projection_debug_reject_count,
+                        peak_projection_debug_reject_records,
+                        peak_projection_debug_row_hit_counts,
+                        peak_projection_debug_row_tthp_sums,
+                        peak_projection_debug_row_tth_sums,
+                        default_solve_q_dtheta,
+                        default_solve_q_cos,
+                        default_solve_q_sin,
+                    )
                 )
             else:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
-                    H,
-                    K,
-                    L,
-                    av,
-                    cv,
-                    image,
-                    image_size,
-                    reflI_eff,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    debye_x,
-                    debye_y,
-                    center,
-                    R_sample_precomputed,
-                    n_det_rot,
-                    Detector_Pos,
-                    e1_det,
-                    e2_det,
-                    sample_terms,
-                    sample_n2_array,
-                    sample_eps2_array,
-                    best_idx_precomputed,
-                    core_save_flag,
-                    q_data,
-                    q_count,
-                    i_pk,
-                    record_status,
-                    thickness,
-                    optics_mode,
-                    solve_q_steps_i,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    pixel_size_m,
-                    sample_qr_ring_once,
-                    sample_weight_array,
-                    exit_projection_mode,
-                    projection_debug_enabled,
-                    peak_projection_debug_counters,
-                    peak_projection_debug_reject_count,
-                    peak_projection_debug_reject_records,
-                    peak_projection_debug_row_hit_counts,
-                    peak_projection_debug_row_tthp_sums,
-                    peak_projection_debug_row_tth_sums,
-                    default_solve_q_dtheta,
-                    default_solve_q_cos,
-                    default_solve_q_sin,
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
+                    _calculate_phi_from_precomputed(
+                        H,
+                        K,
+                        L,
+                        av,
+                        cv,
+                        image,
+                        image_size,
+                        reflI_eff,
+                        sigma_rad,
+                        gamma_rad_m,
+                        eta_pv,
+                        debye_x,
+                        debye_y,
+                        center,
+                        R_sample_precomputed,
+                        n_det_rot,
+                        Detector_Pos,
+                        e1_det,
+                        e2_det,
+                        sample_terms,
+                        sample_n2_array,
+                        sample_eps2_array,
+                        best_idx_precomputed,
+                        core_save_flag,
+                        q_data,
+                        q_count,
+                        i_pk,
+                        record_status,
+                        thickness,
+                        optics_mode,
+                        solve_q_steps_i,
+                        solve_q_rel_tol_i,
+                        solve_q_mode_i,
+                        pixel_size_m,
+                        sample_qr_ring_once,
+                        sample_weight_array,
+                        exit_projection_mode,
+                        projection_debug_enabled,
+                        peak_projection_debug_counters,
+                        peak_projection_debug_reject_count,
+                        peak_projection_debug_reject_records,
+                        peak_projection_debug_row_hit_counts,
+                        peak_projection_debug_row_tthp_sums,
+                        peak_projection_debug_row_tth_sums,
+                        default_solve_q_dtheta,
+                        default_solve_q_cos,
+                        default_solve_q_sin,
+                    )
                 )
 
             if record_status:
@@ -5422,10 +5417,7 @@ def _process_peaks_parallel_impl(
                     best_sample_indices_out[i_pk] = best_sample_idx_out
 
     need_expand_templates = (
-        collect_tables
-        or record_status
-        or save_flag == 1
-        or best_sample_indices_out is not None
+        collect_tables or record_status or save_flag == 1 or best_sample_indices_out is not None
     )
     if need_expand_templates:
         # Expand non-source peaks from source templates, scaling by each peak SF.
@@ -5452,7 +5444,9 @@ def _process_peaks_parallel_impl(
                     pixel_hits = _copy_scaled_hit_table(src_hits, scale, H, K, L)
                     hit_tables[i_pk] = pixel_hits
                 else:
-                    hit_tables[i_pk] = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+                    hit_tables[i_pk] = np.empty(
+                        (0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
+                    )
 
                 src_miss = miss_tables[src_idx]
                 miss_tables[i_pk] = _copy_miss_table(src_miss)
@@ -5492,7 +5486,9 @@ def _process_peaks_parallel_impl(
 
             if scale <= 0.0:
                 if collect_tables:
-                    hit_tables[i_pk] = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+                    hit_tables[i_pk] = np.empty(
+                        (0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
+                    )
                 if save_flag == 1:
                     q_count[i_pk] = 0
                 continue
@@ -5661,7 +5657,7 @@ def _process_peaks_parallel_py_func(*args, **kwargs):
         bound["numba_thread_count"],
     )
     call_kwargs = dict(extra_kwargs)
-    for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[len(args):]:
+    for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[len(args) :]:
         call_kwargs[name] = bound[name]
     return _process_peaks_parallel_impl.py_func(*args, **call_kwargs)
 
@@ -5683,7 +5679,7 @@ def _get_unexpected_keyword_name(exc: TypeError):
     marker_index = message.find(marker)
     if marker_index < 0:
         return None
-    rest = message[marker_index + len(marker):].lstrip()
+    rest = message[marker_index + len(marker) :].lstrip()
     if not rest or rest[0] not in ("'", '"'):
         return None
     quote = rest[0]
@@ -5801,9 +5797,7 @@ def _finalize_clustered_process_peaks_result(result, cluster_meta):
     cluster_best_indices_out = cluster_meta["cluster_best_indices_out"]
     if best_sample_indices_out is not None and cluster_best_indices_out is not None:
         best_sample_indices_out[:] = -1
-        valid = (
-            np.asarray(cluster_best_indices_out) >= 0
-        ) & (
+        valid = (np.asarray(cluster_best_indices_out) >= 0) & (
             np.asarray(cluster_best_indices_out) < cluster_to_rep.shape[0]
         )
         best_sample_indices_out[valid] = cluster_to_rep[np.asarray(cluster_best_indices_out)[valid]]
@@ -6023,10 +6017,7 @@ def _refine_cluster_peak(hits_arr, *, merge_radius_px=1.5):
     cols = hits[:, 1]
     rows = hits[:, 2]
     valid_mask = (
-        np.isfinite(intensities)
-        & np.isfinite(cols)
-        & np.isfinite(rows)
-        & (intensities > 0.0)
+        np.isfinite(intensities) & np.isfinite(cols) & np.isfinite(rows) & (intensities > 0.0)
     )
     if not np.any(valid_mask):
         return float("nan"), float("nan")
@@ -6089,10 +6080,7 @@ def _cluster_hit_positions(hits_arr, *, merge_radius_px=1.5):
         col = float(hit[1])
         row = float(hit[2])
         if not (
-            np.isfinite(intensity)
-            and np.isfinite(col)
-            and np.isfinite(row)
-            and intensity > 0.0
+            np.isfinite(intensity) and np.isfinite(col) and np.isfinite(row) and intensity > 0.0
         ):
             continue
 
@@ -6326,12 +6314,7 @@ def load_logged_intersection_cache(
         )
         metadata.setdefault(
             "total_rows",
-            int(
-                sum(
-                    int(np.asarray(table, dtype=np.float64).shape[0])
-                    for table in cache_tables
-                )
-            ),
+            int(sum(int(np.asarray(table, dtype=np.float64).shape[0]) for table in cache_tables)),
         )
     return cache_tables, metadata
 
@@ -6511,10 +6494,9 @@ def _intersection_cache_top_mosaic_key(
     col = float(table[row_idx, 2]) if table.shape[1] > 2 else float("nan")
     row = float(table[row_idx, 3]) if table.shape[1] > 3 else float("nan")
     if np.isfinite(col) and np.isfinite(row) and detector_center.shape[0] >= 2:
-        detector_dist = (
-            (col - float(detector_center[0])) * (col - float(detector_center[0]))
-            + (row - float(detector_center[1])) * (row - float(detector_center[1]))
-        )
+        detector_dist = (col - float(detector_center[0])) * (col - float(detector_center[0])) + (
+            row - float(detector_center[1])
+        ) * (row - float(detector_center[1]))
     else:
         detector_dist = float("inf")
     intensity = float(table[row_idx, 4]) if table.shape[1] > 4 else float("nan")
@@ -6697,9 +6679,7 @@ def _intersection_cache_selected_row_indices(
         ]
 
     if len(selected_indices) < target_count:
-        remaining = [
-            idx for idx in valid_indices.tolist() if int(idx) not in selected_indices
-        ]
+        remaining = [idx for idx in valid_indices.tolist() if int(idx) not in selected_indices]
         while remaining and len(selected_indices) < target_count:
             rep_idx = _intersection_cache_representative_row_index(
                 table,
@@ -6764,9 +6744,7 @@ def _intersection_cache_group_key(cache_table: np.ndarray) -> tuple[object, ...]
 def _expand_intersection_cache_group(cache_tables: list[np.ndarray]) -> list[np.ndarray]:
     """Reduce one nominal Bragg family to final one-row cache tables."""
 
-    expanded_tables, _metadata = _expand_intersection_cache_group_with_metadata(
-        cache_tables
-    )
+    expanded_tables, _metadata = _expand_intersection_cache_group_with_metadata(cache_tables)
     return expanded_tables
 
 
@@ -6845,16 +6823,12 @@ def _expand_intersection_cache_group_with_metadata(
     coords = np.asarray(combined_table[:, 2:4], dtype=np.float64)
     finite_mask = np.isfinite(coords[:, 0]) & np.isfinite(coords[:, 1])
     nonfinite_indices = [
-        int(idx)
-        for idx in np.flatnonzero(~finite_mask)
-        if int(idx) not in selected_index_set
+        int(idx) for idx in np.flatnonzero(~finite_mask) if int(idx) not in selected_index_set
     ]
     row_count_before = int(combined_table.shape[0])
     row_count_after = int(len(selected_indices))
     merged_group_count = max(0, int(len(valid_tables)) - 1)
-    nominal_hkl_recovery_count = (
-        int(row_count_before) if group_kind == "non_specular_hkl" else 0
-    )
+    nominal_hkl_recovery_count = int(row_count_before) if group_kind == "non_specular_hkl" else 0
     table_summaries = []
     nominal_hkl = _intersection_cache_nominal_hkl_triplet(combined_table)
     group_qr = _intersection_cache_summary_q_value(combined_table[:, 0])
@@ -6963,7 +6937,9 @@ def build_intersection_cache(
     beam_y_arr = None if beam_y_array is None else np.asarray(beam_y_array, dtype=np.float64)
     theta_arr = None if theta_array is None else np.asarray(theta_array, dtype=np.float64)
     phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64)
-    wavelength_arr = None if wavelength_array is None else np.asarray(wavelength_array, dtype=np.float64)
+    wavelength_arr = (
+        None if wavelength_array is None else np.asarray(wavelength_array, dtype=np.float64)
+    )
     best_sample_arr = (
         None
         if best_sample_indices_out is None
@@ -7330,12 +7306,22 @@ def process_qr_rods_parallel_safe(*args, **kwargs):
 
 
 def debug_detector_paths(
-    beam_x_array, beam_y_array, theta_array, phi_array,
-    theta_initial_deg, cor_angle_deg, chi_deg, psi_deg, psi_z_deg,
-    zb, zs,
-    Distance_CoR_to_Detector, gamma_deg, Gamma_deg,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    theta_initial_deg,
+    cor_angle_deg,
+    chi_deg,
+    psi_deg,
+    psi_z_deg,
+    zb,
+    zs,
+    Distance_CoR_to_Detector,
+    gamma_deg,
+    Gamma_deg,
     n_detector=np.array([0.0, 1.0, 0.0]),
-    unit_x=np.array([1.0, 0.0, 0.0])
+    unit_x=np.array([1.0, 0.0, 0.0]),
 ):
     """Trace specular reflection paths for debugging.
 
@@ -7368,8 +7354,8 @@ def debug_detector_paths(
     """
     gamma_rad = np.radians(gamma_deg)
     Gamma_rad = np.radians(Gamma_deg)
-    chi_rad   = np.radians(chi_deg)
-    psi_rad   = np.radians(psi_deg)
+    chi_rad = np.radians(chi_deg)
+    psi_rad = np.radians(psi_deg)
     psi_z_rad = np.radians(psi_z_deg)
     rad_theta_i = np.radians(theta_initial_deg)
     cor_axis_rad = np.radians(cor_angle_deg)
@@ -7378,35 +7364,19 @@ def debug_detector_paths(
     sg = np.sin(gamma_rad)
     cG = np.cos(Gamma_rad)
     sG = np.sin(Gamma_rad)
-    R_x_det = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, cg,  sg],
-        [0.0,-sg,  cg]
-    ])
-    R_z_det = np.array([
-        [ cG, sG, 0.0],
-        [-sG, cG, 0.0],
-        [ 0.0, 0.0, 1.0]
-    ])
-    nd_temp   = R_x_det @ n_detector
+    R_x_det = np.array([[1.0, 0.0, 0.0], [0.0, cg, sg], [0.0, -sg, cg]])
+    R_z_det = np.array([[cG, sG, 0.0], [-sG, cG, 0.0], [0.0, 0.0, 1.0]])
+    nd_temp = R_x_det @ n_detector
     n_det_rot = R_z_det @ nd_temp
     n_det_rot /= np.linalg.norm(n_det_rot)
     Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0])
 
     c_chi = np.cos(chi_rad)
     s_chi = np.sin(chi_rad)
-    R_y = np.array([
-        [ c_chi, 0.0,   s_chi],
-        [ 0.0,   1.0,   0.0],
-        [-s_chi, 0.0, c_chi]
-    ])
+    R_y = np.array([[c_chi, 0.0, s_chi], [0.0, 1.0, 0.0], [-s_chi, 0.0, c_chi]])
     c_psi = np.cos(psi_rad)
     s_psi = np.sin(psi_rad)
-    R_z = np.array([
-        [ c_psi, s_psi, 0.0],
-        [-s_psi, c_psi, 0.0],
-        [ 0.0,   0.0,   1.0]
-    ])
+    R_z = np.array([[c_psi, s_psi, 0.0], [-s_psi, c_psi, 0.0], [0.0, 0.0, 1.0]])
     R_z_R_y = R_z @ R_y
 
     # Construct the pitched CoR axis in x–z and rotate with Rodrigues' formula;
@@ -7430,11 +7400,13 @@ def debug_detector_paths(
     ct = np.cos(rad_theta_i)
     st = np.sin(rad_theta_i)
     one_ct = 1.0 - ct
-    R_cor = np.array([
-        [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
-        [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
-        [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
-    ])
+    R_cor = np.array(
+        [
+            [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
+            [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
+            [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
+        ]
+    )
     R_sample = R_cor @ R_z_R_y
 
     n_surf = R_cor @ (R_z_R_y @ np.array([0.0, 0.0, 1.0]))
@@ -7449,15 +7421,13 @@ def debug_detector_paths(
 
     for i in range(N):
         dtheta = theta_array[i]
-        dphi   = phi_array[i]
+        dphi = phi_array[i]
         bx = beam_x_array[i]
         by = beam_y_array[i]
 
-        k_in = np.array([
-            np.cos(dtheta)*np.sin(dphi),
-            np.cos(dtheta)*np.cos(dphi),
-            np.sin(dtheta)
-        ])
+        k_in = np.array(
+            [np.cos(dtheta) * np.sin(dphi), np.cos(dtheta) * np.cos(dphi), np.sin(dtheta)]
+        )
 
         beam_start = np.array([bx, -20e-3, -zb + by])
         ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
@@ -7468,8 +7438,8 @@ def debug_detector_paths(
             continue
 
         I_plane = np.array([ix, iy, iz])
-        dot_kn = k_in[0]*n_surf[0] + k_in[1]*n_surf[1] + k_in[2]*n_surf[2]
-        k_spec = k_in - 2.0*dot_kn*n_surf
+        dot_kn = k_in[0] * n_surf[0] + k_in[1] * n_surf[1] + k_in[2] * n_surf[2]
+        k_spec = k_in - 2.0 * dot_kn * n_surf
 
         dx, dy, dz, valid_det = intersect_line_plane(I_plane, k_spec, Detector_Pos, n_det_rot)
         hit_det = 1.0 if valid_det else 0.0

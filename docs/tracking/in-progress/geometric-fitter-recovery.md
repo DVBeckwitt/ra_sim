@@ -251,6 +251,38 @@ pair set at 1.17, 1.17, 1.31, 1.16, and 1.11 seconds. All five warm pair solves
 reported `solver_context_reused == true`, clean pass status, provider guard
 after green, and unchanged `new4.json`.
 
+Rung 5 small cumulative blocks are implemented behind
+`--max-rung block|blocks`. The true block list excludes `[a, c]`; that pair is
+Rung 4 prerequisite evidence only. The debug pair-backed validation under
+`artifacts/geometry_fit_ladder/new4_debug_blocks_v2/debug_evidence_20260422`
+passed three dependency-backed blocks:
+`[corto_detector, theta_initial, cor_angle]`,
+`[chi, cor_angle, theta_initial]`, and
+`[corto_detector, theta_initial, zs, zb]`. `[a, c, psi_z]` was skipped with
+`skip_reason == "missing_pair_evidence"` because neither `[a, psi_z]` nor
+`[c, psi_z]` was part of the green pair evidence. Passing blocks preserved the
+7/7 fixed-source contract, provider identity/point parity, caked-point
+reprojection guard, provider guard after, exact requested solver variable list,
+and unchanged `new4.json`. No full, feature, baseline, GUI, or Rung 6 artifacts
+were written, and `full_fitter_validated == false`.
+
+The fresh default `--max-rung blocks --max-nfev 20 --timeout-seconds 120` run
+under `artifacts/geometry_fit_ladder/new4/20260422_001709` rebuilt same-run
+guards through Rung 4, but seven singleton parameters timed out and the required
+`a` diagnosis was not usable. That guard failure prevented a true Rung 5 solve
+from being dependency-backed in that run. Treat it as evidence that the guard
+abort/skip path works, not as fresh same-run Rung 5 completion.
+
+Rung 5 status by work type:
+
+- Feature: `--max-rung block|blocks` is implemented with per-block JSON and
+  `rung_05_block_summary.json`.
+- Bug/error fixed: debug `--pair-summary` can use a matching `--timestamp` for
+  strict run-id evidence, skipped dependency blocks preserve the solver-variable
+  schema, and docs no longer claim fresh same-run Rung 5 completion.
+- Still open: fresh same-run Rung 5 completion, optional psi pair evidence for
+  `[a, c, psi_z]`, and any full/feature/baseline validation.
+
 ## Do Not Redo
 
 Do not redo these completed validations unless their guard output regresses:
@@ -267,11 +299,13 @@ Do not redo these completed validations unless their guard output regresses:
 
 ## Next Rung
 
-Rung 4 initial paired solves are complete. Do not repeat the initial pair list
-unless a guard regresses. The next implementation patch should consume the
-recorded paired-solve result and choose the next bounded ladder step. Do not
-run block, full, feature, baseline, GUI fit button, broad parameter tuning, or a
-higher rung until its own gate is explicit.
+Rung 5 small cumulative blocks are implemented and have debug pair-backed pass
+evidence for the three theta/distance blocks, but fresh same-run Rung 5 did not
+complete because prerequisite singleton/diagnosis evidence timed out. The only
+unresolved Rung 5 block is `[a, c, psi_z]`, which remains blocked until `[a, c]`
+plus either `[a, psi_z]` or `[c, psi_z]` pass. Do not run full, feature,
+baseline, GUI fit button, broad parameter tuning, or a higher rung until its
+own gate is explicit.
 
 Allowed parameter set for Rung 4:
 
@@ -301,7 +335,7 @@ as repeat work:
 - `[a, psi_z]`
 - `[corto_detector, c]`
 
-Do not run `[a, c, psi_z]` yet. That is a later block rung.
+Do not run `[a, c, psi_z]` yet. It remains a dependency-blocked Rung 5 block.
 
 Rung 4 pass requirements per pair:
 
@@ -330,9 +364,9 @@ Rung 4 pass requirements per pair:
 
 Full geometric fitter validation is not yet claimed. Baseline completion is not
 yet claimed. RMS/max global improvement is not yet claimed. Feature rungs,
-block solves, and full solves remain unclaimed. The GUI fit button is not the
-validation path. `run_geometry_fit_quality_baseline.py` is not the immediate
-next step.
+the `[a, c, psi_z]` block, and full solves remain unclaimed. The GUI fit button
+is not the validation path. `run_geometry_fit_quality_baseline.py` is not the
+immediate next step.
 
 ## Current State
 

@@ -135,6 +135,8 @@ def test_default_debug_controls_allow_cli_opt_ins_when_debug_yaml_is_absent(
     cfg = _make_config_dir(tmp_path)
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
     monkeypatch.setenv("RA_SIM_DEBUG", "1")
+    monkeypatch.setenv("RA_SIM_ENABLE_PROJECTION_DEBUG", "1")
+    monkeypatch.setenv("RA_SIM_LOG_DIFFRACTION_DEBUG_CSV", "1")
     monkeypatch.setenv("RA_SIM_LOG_INTERSECTION_CACHE", "1")
 
     assert not is_logging_disabled()
@@ -427,7 +429,7 @@ def test_run_bundle_zips_run_outputs_and_non_osc_non_cif_inputs(
                 "intersection_cache": {
                     "enabled": True,
                     "log_dir": str(cache_logs_dir),
-                }
+                },
             }
         },
     )
@@ -458,7 +460,9 @@ def test_run_bundle_zips_run_outputs_and_non_osc_non_cif_inputs(
     run_log_path.parent.mkdir(parents=True, exist_ok=True)
     run_log_path.write_text("fit log", encoding="utf-8")
 
-    cache_dump_path = cache_logs_dir / "intersection_cache" / "intersection_cache_test" / "table_0000.npy"
+    cache_dump_path = (
+        cache_logs_dir / "intersection_cache" / "intersection_cache_test" / "table_0000.npy"
+    )
     cache_dump_path.parent.mkdir(parents=True, exist_ok=True)
     cache_dump_path.write_text("cache", encoding="utf-8")
 
@@ -479,8 +483,15 @@ def test_run_bundle_zips_run_outputs_and_non_osc_non_cif_inputs(
 
     assert "manifest.json" in names
     assert any(name.endswith("roots/debug_log_dir/geometry_fit_log_test.txt") for name in names)
-    assert any(name.endswith("roots/intersection_cache_log_root/intersection_cache/intersection_cache_test/table_0000.npy") for name in names)
-    assert any(name.startswith("inputs/") and name.endswith("/measured_peaks.npy") for name in names)
+    assert any(
+        name.endswith(
+            "roots/intersection_cache_log_root/intersection_cache/intersection_cache_test/table_0000.npy"
+        )
+        for name in names
+    )
+    assert any(
+        name.startswith("inputs/") and name.endswith("/measured_peaks.npy") for name in names
+    )
     assert any(name.startswith("inputs/") and name.endswith("/geometry.poni") for name in names)
     assert any(name.startswith("inputs/") and name.endswith("/parameters.npy") for name in names)
     assert any(name.startswith("outputs/") and name.endswith("/result.png") for name in names)

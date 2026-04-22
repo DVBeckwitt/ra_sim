@@ -207,9 +207,7 @@ def test_loader_resolves_relative_dir_paths_against_external_config_dir(
 
 
 def test_repo_default_config_resolves_relative_paths_against_repo_root() -> None:
-    expected = (
-        Path(__file__).resolve().parents[1] / "data" / "geometry.poni"
-    ).resolve()
+    expected = (Path(__file__).resolve().parents[1] / "data" / "geometry.poni").resolve()
 
     resolved = loader._resolve_path_value(
         "./data/geometry.poni",
@@ -303,7 +301,7 @@ def test_repo_instrument_defaults_weight_p0_fully_by_default() -> None:
     ]
 
 
-def test_repo_debug_defaults_disable_console_but_leave_outputs_enabled() -> None:
+def test_repo_debug_defaults_disable_console_and_sim_cost_outputs() -> None:
     debug_path = Path(__file__).resolve().parents[1] / "config" / "debug.yaml"
     debug = yaml.safe_load(debug_path.read_text(encoding="utf-8"))
 
@@ -313,9 +311,9 @@ def test_repo_debug_defaults_disable_console_but_leave_outputs_enabled() -> None
     assert debug["debug"]["geometry_fit"]["log_files"] is True
     assert debug["debug"]["geometry_fit"]["extra_sections"] is True
     assert debug["debug"]["mosaic_fit"]["log_files"] is True
-    assert debug["debug"]["projection_debug"]["enabled"] is True
-    assert debug["debug"]["diffraction_debug_csv"]["enabled"] is True
-    assert debug["debug"]["intersection_cache"]["enabled"] is True
+    assert debug["debug"]["projection_debug"]["enabled"] is False
+    assert debug["debug"]["diffraction_debug_csv"]["enabled"] is False
+    assert debug["debug"]["intersection_cache"]["enabled"] is False
     assert debug["debug"]["cache"]["default_retention"] == "auto"
     assert debug["debug"]["cache"]["families"]["primary_contribution"] == "auto"
     assert debug["debug"]["cache"]["families"]["diffraction_last_intersection"] == "never"

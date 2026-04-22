@@ -4350,6 +4350,8 @@ def _finalize_block_report(
     timeout_seconds: float,
     base_parameter_values: Mapping[str, object],
     provider_after: Mapping[str, object] | None,
+    caked_point_reprojection_guard_ok: bool | None = None,
+    caked_point_reprojection_report_path: Path | None = None,
 ) -> dict[str, object]:
     names = [str(name) for name in block]
     finalized = dict(report)
@@ -4401,6 +4403,14 @@ def _finalize_block_report(
     )
     finalized["provider_guard_after_ok"] = bool(provider_after_ok)
     finalized["provider_guard_after"] = provider_after_payload
+    if caked_point_reprojection_guard_ok is not None:
+        finalized["caked_point_reprojection_guard_ok"] = bool(
+            caked_point_reprojection_guard_ok
+        )
+    if caked_point_reprojection_report_path is not None:
+        finalized["caked_point_reprojection_report_path"] = str(
+            Path(caked_point_reprojection_report_path).expanduser().resolve()
+        )
     for key in RUNG2_FIXED_SOURCE_COUNTS:
         finalized.setdefault(key, None)
     for key in PROVIDER_MATCH_BOOLS:
@@ -4441,6 +4451,11 @@ def _finalize_block_report(
         solve_flag_failures.append("state_hash_changed")
     if provider_after_ok is not True:
         solve_flag_failures.append("provider_guard_after_failed")
+    if (
+        _block_requires_caked_reprojection(names)
+        and bool(finalized.get("caked_point_reprojection_guard_ok", False)) is not True
+    ):
+        solve_flag_failures.append("caked_point_reprojection_guard_failed")
 
     guard_failures = integrity_failures + metric_failures + solve_flag_failures
     finalized["block_guard_failures"] = guard_failures
@@ -4582,6 +4597,9 @@ def _write_skipped_block_report(
         "pass": False,
         "skip_reason": "missing_pair_evidence",
         "missing_pair_evidence": [[str(name) for name in pair] for pair in missing_pairs],
+        "candidate_param_names": [str(name) for name in block],
+        "var_names": [str(name) for name in block],
+        "effective_var_names_seen_by_solver": [str(name) for name in block],
         "least_squares_called": False,
         "optimizer_solve_called": False,
         "real_solve_called": False,
@@ -4619,6 +4637,7 @@ def _write_caked_failed_block_report(
         "var_names": [str(name) for name in block],
         "candidate_param_names": [str(name) for name in block],
         "effective_var_names_seen_by_solver": [],
+        "caked_point_reprojection_guard_ok": False,
         "least_squares_called": False,
         "optimizer_solve_called": False,
         "real_solve_called": False,
@@ -4738,6 +4757,10 @@ def _run_block_stage(
             use_subprocess=bool(use_subprocess),
             diagnostic_logging=bool(diagnostic_logging),
         )
+        if str(pair_summary.get("status", "")) not in {"ok", "ok_with_failures"}:
+            evidence_failures.append("pair:pair_summary_status_not_usable")
+        elif not _passed_pair_keys(pair_summary):
+            evidence_failures.append("pair:no_passed_pair_evidence")
 
     if caked_report_path is None:
         raw_caked_path = pair_summary.get("caked_point_reprojection_report_path")
@@ -4867,6 +4890,12 @@ def _run_block_stage(
             timeout_seconds=float(timeout_seconds),
             base_parameter_values=base_parameter_values,
             provider_after=provider_after,
+            caked_point_reprojection_guard_ok=(
+                not caked_failures if _block_requires_caked_reprojection(block) else None
+            ),
+            caked_point_reprojection_report_path=(
+                caked_report_path if _block_requires_caked_reprojection(block) else None
+            ),
         )
         _write_json(output_path, report)
         reports.append(report)
@@ -5528,6 +5557,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=float, default=120.0)
     parser.add_argument("--max-nfev", type=int, default=20)
     parser.add_argument(
+        "--timestamp",
+        help=(
+            "Debug run directory name. Use with --pair-summary when strict "
+            "run_id/timestamp evidence must match."
+        ),
+    )
+    parser.add_argument(
         "--use-subprocess",
         action="store_true",
         help="Run each solve rung in a separate cold worker process.",
@@ -5571,6 +5607,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_rung=str(args.max_rung),
             timeout_seconds=float(args.timeout_seconds),
             max_nfev=int(args.max_nfev),
+            timestamp=str(args.timestamp or "") or None,
             sensitivity_report=Path(args.sensitivity_report) if args.sensitivity_report else None,
             one_param_filter=str(args.one_param_filter or "") or None,
             one_param_summary=(

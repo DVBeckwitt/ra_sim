@@ -23,9 +23,9 @@ _DEBUG_DEFAULTS: dict[str, Any] = {
     "runtime_update_trace": {"enabled": True},
     "geometry_fit": {"log_files": True, "extra_sections": True},
     "mosaic_fit": {"log_files": True},
-    "projection_debug": {"enabled": True},
-    "diffraction_debug_csv": {"enabled": True},
-    "intersection_cache": {"enabled": True, "log_dir": None},
+    "projection_debug": {"enabled": False},
+    "diffraction_debug_csv": {"enabled": False},
+    "intersection_cache": {"enabled": False, "log_dir": None},
     "cache": {
         "default_retention": "auto",
         "families": {
@@ -373,6 +373,9 @@ def projection_debug_logging_enabled(
     override = _env_override_bool("RA_SIM_DISABLE_PROJECTION_DEBUG", env)
     if override is not None:
         return not override
+    override = _env_override_bool("RA_SIM_ENABLE_PROJECTION_DEBUG", env)
+    if override is not None:
+        return override
     return _resolve_config_bool(
         ("projection_debug", "enabled"),
         default=_DEBUG_DEFAULTS["projection_debug"]["enabled"],
@@ -389,6 +392,9 @@ def diffraction_debug_csv_logging_enabled(
         return False
     if _startup_debug_override_mode() == "enable_all":
         return True
+    override = _env_override_bool("RA_SIM_LOG_DIFFRACTION_DEBUG_CSV", env)
+    if override is not None:
+        return override
     return _resolve_config_bool(
         ("diffraction_debug_csv", "enabled"),
         default=_DEBUG_DEFAULTS["diffraction_debug_csv"]["enabled"],

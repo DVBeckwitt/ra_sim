@@ -366,6 +366,7 @@ def test_dynamic_point_match_exact_projector_blocks_analytic_fallback_and_ignore
             "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
             "native_cols": cols_arr,
             "native_rows": rows_arr,
+            "caked_projection_source": "fit_space_projector_native_detector",
         }
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
@@ -450,6 +451,171 @@ def test_dynamic_point_match_exact_projector_blocks_analytic_fallback_and_ignore
             "local_params": dict(local),
         },
     ]
+
+
+def test_native_detector_projector_shape_mismatch_returns_invalid_payload() -> None:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        del cols, rows, local_params, anchor_kind, input_frame
+        return {
+            "two_theta_deg": np.array([1.0], dtype=np.float64),
+            "phi_deg": np.array([2.0, 3.0], dtype=np.float64),
+            "valid": True,
+        }
+
+    result = gui_geometry_fit.project_geometry_fit_native_detector_points_to_caked_space(
+        projector,
+        [[10.0, 20.0], [30.0, 40.0]],
+        local_params={},
+    )
+
+    assert result["valid"] is False
+    assert result["invalid_reason"] == "projector_shape_mismatch"
+    assert np.asarray(result["caked_points"], dtype=np.float64).shape == (2, 2)
+    assert np.all(np.isnan(result["caked_points"]))
+
+
+def test_caked_point_reprojection_residual_path_uses_native_detector_projector(
+    monkeypatch,
+) -> None:
+    projector_calls = []
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        theta = float(local_params.get("theta_initial", 0.0))
+        distance = float(local_params.get("corto_detector", 0.0))
+        projector_calls.append(
+            {
+                "anchor_kind": str(anchor_kind),
+                "input_frame": str(input_frame),
+                "cols": cols_arr.tolist(),
+                "rows": rows_arr.tolist(),
+                "theta_initial": theta,
+                "corto_detector": distance,
+            }
+        )
+        return {
+            "two_theta_deg": cols_arr * 0.01 + theta * 0.5 + distance * 0.001,
+            "phi_deg": rows_arr * 0.01 + theta * 0.05 + distance * 0.0002,
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": f"sig-{anchor_kind}-{theta:.6f}-{distance:.6f}",
+            "fit_space_local_params_signature": f"lp-{theta:.6f}-{distance:.6f}",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": f"test-{input_frame}",
+            "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(
+        opt,
+        "_detector_pixels_to_fit_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic detector fit-space path must not run")
+        ),
+    )
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "label": "peak-0",
+                "hkl": (1, 0, 0),
+                "overlay_match_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "fit_source_identity_only": True,
+                "native_col": 30.0,
+                "native_row": 40.0,
+                "caked_x": -999999.0,
+                "caked_y": 999999.0,
+                "raw_caked_x": -888888.0,
+                "raw_caked_y": 888888.0,
+                "background_two_theta_deg": -777777.0,
+                "background_phi_deg": 777777.0,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+    local["theta_initial"] = 2.0
+    theta_local = dict(local)
+    theta_local["theta_initial"] = 2.1
+    distance_local = dict(local)
+    distance_local["corto_detector"] = 101.0
+
+    def _evaluate(local_params):
+        residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+            local_params,
+            dataset_ctx,
+            image_size=32,
+            missing_pair_penalty_deg=5.0,
+            theta_value=float(local_params["theta_initial"]),
+            collect_diagnostics=True,
+        )
+        assert np.all(np.isfinite(residual))
+        assert summary["exact_fit_space_projector_available"] is True
+        assert diagnostics[0]["measured_fit_space_source"] == "dataset_fit_space_projector"
+        assert diagnostics[0]["measured_detector_input_frame"] == "native_detector"
+        assert diagnostics[0]["fit_space_projector_kind"] == "exact_caked_bundle"
+        assert str(diagnostics[0]["cake_bundle_signature"]).startswith("sig-measured-")
+        assert diagnostics[0]["measured_native_frame_conversion_count"] == 0
+        assert diagnostics[0]["measured_two_theta_deg"] != pytest.approx(-777777.0)
+        assert np.isfinite(diagnostics[0]["measured_two_theta_deg"])
+        assert np.isfinite(diagnostics[0]["measured_phi_deg"])
+        return diagnostics[0]
+
+    base_diag = _evaluate(local)
+    theta_diag = _evaluate(theta_local)
+    distance_diag = _evaluate(distance_local)
+
+    assert theta_diag["measured_two_theta_deg"] != pytest.approx(
+        base_diag["measured_two_theta_deg"]
+    )
+    assert distance_diag["measured_two_theta_deg"] != pytest.approx(
+        base_diag["measured_two_theta_deg"]
+    )
+    measured_calls = [call for call in projector_calls if call["anchor_kind"] == "measured"]
+    assert [call["input_frame"] for call in measured_calls] == [
+        "native_detector",
+        "native_detector",
+        "native_detector",
+    ]
+    assert measured_calls[0]["cols"] == [30.0]
+    assert measured_calls[0]["rows"] == [40.0]
 
 
 def test_dynamic_point_match_invalid_exact_projector_marks_row_invalid_without_analytic_fallback(
@@ -2847,8 +3013,7 @@ def test_filter_simulation_subset_marks_duplicate_hkl_local_rows_without_branch_
     assert fallback_entries == [entry]
     assert resolution_lookup[id(entry)]["resolution_kind"] == "hkl_fallback"
     assert (
-        resolution_lookup[id(entry)]["resolution_reason"]
-        == "provider_local_duplicate_hkl_unproven"
+        resolution_lookup[id(entry)]["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
     )
 
 

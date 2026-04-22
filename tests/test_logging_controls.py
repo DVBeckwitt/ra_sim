@@ -156,6 +156,8 @@ def test_projection_debug_logging_respects_debug_yaml(
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
 
     assert not projection_debug.projection_debug_logging_enabled()
+    monkeypatch.setenv("RA_SIM_ENABLE_PROJECTION_DEBUG", "1")
+    assert projection_debug.projection_debug_logging_enabled()
 
 
 def test_intersection_cache_logging_respects_global_disable_aliases(
@@ -196,9 +198,7 @@ def test_intersection_cache_logging_respects_debug_yaml(
 
 
 def test_geometry_fit_logging_disable_helper_accepts_legacy_alias() -> None:
-    assert geometry_fit.geometry_fit_all_logging_disabled(
-        {"RA_SIM_DISABLE_LOGGING": "1"}
-    )
+    assert geometry_fit.geometry_fit_all_logging_disabled({"RA_SIM_DISABLE_LOGGING": "1"})
 
 
 def test_geometry_fit_debug_sections_respect_debug_yaml(

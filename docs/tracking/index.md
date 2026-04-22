@@ -27,12 +27,15 @@ gates are green.
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
 one-param solves, `a` diagnosis, caked point reprojection, and initial Rung 4
-paired solves are validated. The repeated cold-start speed bug is fixed for
-solve rungs by reusing one warm solver context in-process; Rung 4 pair solves
-measured about 53x faster, from 315.74 seconds total to 5.91 seconds total.
-Next: profile the remaining one-time setup cost, then consume the Rung 4 result
-before choosing the next bounded ladder step; no full-fit validation claimed
-yet.
+paired solves are validated. Rung 5 small cumulative blocks are implemented and
+have debug pair-backed pass evidence for three theta/distance blocks, but fresh
+same-run Rung 5 did not complete because prerequisite singleton/diagnosis
+evidence timed out. `[a, c, psi_z]` is skipped until a psi pair passes. The
+repeated cold-start speed bug is fixed for solve rungs by reusing one warm
+solver context in-process; Rung 4 pair solves measured about 53x faster, from
+315.74 seconds total to 5.91 seconds total. Next: decide whether to run the
+optional psi pair extension for `[a, c, psi_z]` or hold for a separately
+approved next rung; no full-fit validation claimed yet.
 
 ## Known bugs
 

@@ -11,11 +11,11 @@ debug:
   mosaic_fit:
     log_files: true
   projection_debug:
-    enabled: true
+    enabled: false
   diffraction_debug_csv:
-    enabled: true
+    enabled: false
   intersection_cache:
-    enabled: true
+    enabled: false
     log_dir:
   cache:
     default_retention: auto

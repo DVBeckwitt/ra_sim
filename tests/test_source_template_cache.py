@@ -429,7 +429,62 @@ def test_last_intersection_cache_can_be_disabled(
         },
     )
     monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    build_calls = 0
+
+    def fail_build_intersection_cache(*_args, **_kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        raise AssertionError("disabled last-intersection cache should not be built")
+
+    monkeypatch.setattr(
+        diffraction,
+        "build_intersection_cache",
+        fail_build_intersection_cache,
+    )
 
     _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
 
+    assert build_calls == 0
     assert diffraction.get_last_intersection_cache() == []
+
+
+def test_last_intersection_cache_builds_when_retained(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    cfg = _make_config_dir(
+        tmp_path,
+        debug={
+            "debug": {
+                "cache": {
+                    "families": {
+                        "diffraction_last_intersection": "always",
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+    marker = np.arange(
+        diffraction.CURRENT_DETECTOR_CACHE_WIDTH,
+        dtype=np.float64,
+    ).reshape(1, -1)
+    build_calls = 0
+
+    def fake_build_intersection_cache(*_args, **_kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        return [marker]
+
+    monkeypatch.setattr(
+        diffraction,
+        "build_intersection_cache",
+        fake_build_intersection_cache,
+    )
+
+    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
+
+    cached = diffraction.get_last_intersection_cache()
+    assert build_calls == 1
+    assert len(cached) == 1
+    np.testing.assert_array_equal(cached[0], marker)

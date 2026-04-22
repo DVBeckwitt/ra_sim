@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib
 import inspect
 import json
 import math
@@ -28,6 +29,21 @@ SURFACE_ORDER = (
 )
 REQUIRED_SURFACES = SURFACE_ORDER[:-1]
 STORED_POINT_ABS_TOLERANCE_PX = 1.0e-6
+
+
+def _load_new4_geometry_fit_ladder_module():
+    module_name = "scripts.debug.run_new4_geometry_fit_ladder"
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        missing = str(getattr(exc, "name", "") or "")
+        if missing == "scripts" or missing.startswith("scripts."):
+            raise RuntimeError(
+                "Optimizer request capture requires "
+                "scripts/debug/run_new4_geometry_fit_ladder.py in a source checkout."
+            ) from exc
+        raise
+
 
 CSV_COLUMNS = [
     "pair_index",
@@ -156,10 +172,14 @@ def _normalize_frame(value: object) -> str:
 def _distance(point_a: Sequence[float] | None, point_b: Sequence[float] | None) -> float | None:
     if point_a is None or point_b is None:
         return None
-    return float(math.hypot(float(point_b[0]) - float(point_a[0]), float(point_b[1]) - float(point_a[1])))
+    return float(
+        math.hypot(float(point_b[0]) - float(point_a[0]), float(point_b[1]) - float(point_a[1]))
+    )
 
 
-def _vector(background: Sequence[float] | None, simulated: Sequence[float] | None) -> list[float] | None:
+def _vector(
+    background: Sequence[float] | None, simulated: Sequence[float] | None
+) -> list[float] | None:
     if background is None or simulated is None:
         return None
     return [
@@ -199,8 +219,16 @@ class _AxesDrawSpy:
         return getattr(self._ax, name)
 
     def plot(self, x_values: object, y_values: object, *args: object, **kwargs: object) -> object:
-        x_list = list(x_values) if isinstance(x_values, Sequence) and not isinstance(x_values, (str, bytes)) else [x_values]
-        y_list = list(y_values) if isinstance(y_values, Sequence) and not isinstance(y_values, (str, bytes)) else [y_values]
+        x_list = (
+            list(x_values)
+            if isinstance(x_values, Sequence) and not isinstance(x_values, (str, bytes))
+            else [x_values]
+        )
+        y_list = (
+            list(y_values)
+            if isinstance(y_values, Sequence) and not isinstance(y_values, (str, bytes))
+            else [y_values]
+        )
         marker = args[0] if args else kwargs.get("marker")
         self.plot_calls.append(
             {
@@ -213,7 +241,9 @@ class _AxesDrawSpy:
         )
         return self._ax.plot(x_values, y_values, *args, **kwargs)
 
-    def scatter(self, x_values: object, y_values: object, *args: object, **kwargs: object) -> object:
+    def scatter(
+        self, x_values: object, y_values: object, *args: object, **kwargs: object
+    ) -> object:
         self.scatter_calls.append(
             {
                 "x": _jsonable(x_values),
@@ -280,7 +310,9 @@ def _plotting_metadata(ax: Any) -> dict[str, object]:
         "image_shape": image_shape,
         "origin": origin,
         "y_axis_inverted": bool(ax.yaxis_inverted()) if hasattr(ax, "yaxis_inverted") else None,
-        "display_transform_matrix": _matrix_json(getattr(ax.transData, "get_matrix", lambda: None)()),
+        "display_transform_matrix": _matrix_json(
+            getattr(ax.transData, "get_matrix", lambda: None)()
+        ),
         "canvas_pixel_transform": (
             _matrix_json(getattr(fig.dpi_scale_trans, "get_matrix", lambda: None)())
             if fig is not None and hasattr(fig, "dpi_scale_trans")
@@ -307,7 +339,9 @@ def build_visual_overlay_records_from_saved_entries(
             sim_point = _point_from_keys(entry, ("sim_col", "sim_row"))
         record = {
             "pair_index": int(pair_index),
-            "pair_id": str(entry.get("pair_id") or f"bg{int(background_index)}:pair{int(pair_index)}"),
+            "pair_id": str(
+                entry.get("pair_id") or f"bg{int(background_index)}:pair{int(pair_index)}"
+            ),
             "background_index": int(background_index),
             "hkl": _hkl(entry),
             "label": entry.get("label"),
@@ -355,9 +389,9 @@ def _manual_render_simulated_lookup(
         if isinstance(existing, Mapping):
             lookup[tuple(key)] = [dict(existing), row]
         elif isinstance(existing, Sequence) and not isinstance(existing, (str, bytes)):
-            lookup[tuple(key)] = [
-                dict(item) for item in existing if isinstance(item, Mapping)
-            ] + [row]
+            lookup[tuple(key)] = [dict(item) for item in existing if isinstance(item, Mapping)] + [
+                row
+            ]
         else:
             lookup[tuple(key)] = row
     return lookup
@@ -396,9 +430,7 @@ def _enrich_manual_overlay_identity(
         ):
             if row.get(key) is None and source.get(key) is not None:
                 row[key] = source.get(key)
-        row["visual_overlay_input_source"] = (
-            "manual_geometry.render_current_geometry_manual_pairs"
-        )
+        row["visual_overlay_input_source"] = "manual_geometry.render_current_geometry_manual_pairs"
         enriched_rows.append(row)
     return enriched_rows
 
@@ -433,9 +465,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
             current_geometry_fit_params=lambda: {},
             get_cache_data=lambda **_kwargs: {},
             source_rows_for_background=lambda bg_index, _params=None, **_kwargs: (
-                [dict(entry) for entry in saved]
-                if int(bg_index) == int(background_index)
-                else []
+                [dict(entry) for entry in saved] if int(bg_index) == int(background_index) else []
             ),
             simulated_peaks_for_params=lambda **_kwargs: [dict(entry) for entry in saved],
             build_simulated_lookup=_manual_render_simulated_lookup,
@@ -455,11 +485,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
         **_kwargs: object,
     ) -> None:
         nonlocal captured_rows, captured_marker_limit
-        raw_rows = [
-            dict(row)
-            for row in combined_pairs_display or ()
-            if isinstance(row, Mapping)
-        ]
+        raw_rows = [dict(row) for row in combined_pairs_display or () if isinstance(row, Mapping)]
         captured_rows = _enrich_manual_overlay_identity(
             raw_rows,
             saved,
@@ -561,13 +587,19 @@ def collect_geometry_visual_pair_positions(
         bg_record = None
 
         if row.get("sim_display") is not None:
-            if marker_cursor < len(marker_calls) and marker_calls[marker_cursor].get("marker") == "s":
+            if (
+                marker_cursor < len(marker_calls)
+                and marker_calls[marker_cursor].get("marker") == "s"
+            ):
                 sim_record = marker_calls[marker_cursor]
                 marker_cursor += 1
             else:
                 missing_points = True
         if row.get("bg_display") is not None:
-            if marker_cursor < len(marker_calls) and marker_calls[marker_cursor].get("marker") == "^":
+            if (
+                marker_cursor < len(marker_calls)
+                and marker_calls[marker_cursor].get("marker") == "^"
+            ):
                 bg_record = marker_calls[marker_cursor]
                 marker_cursor += 1
             else:
@@ -623,7 +655,9 @@ def collect_geometry_visual_pair_positions(
 
     source_file = inspect.getsourcefile(draw_initial_geometry_pairs_overlay)
     result = {
-        "visual_truth_available": bool(visual_pairs and not missing_identity and not missing_points),
+        "visual_truth_available": bool(
+            visual_pairs and not missing_identity and not missing_points
+        ),
         "visual_capture_path": "ra_sim.gui.overlays.draw_initial_geometry_pairs_overlay",
         "visual_capture_path_confirmed": False,
         "visual_capture_function": "ra_sim.gui.overlays.draw_initial_geometry_pairs_overlay",
@@ -644,7 +678,9 @@ def collect_geometry_visual_pair_positions(
 
 def _base_surface_record(row: Mapping[str, object], pair_index: int) -> dict[str, object]:
     return {
-        "pair_index": int(row.get("pair_index", row.get("dataset_pair_index", pair_index)) or pair_index),
+        "pair_index": int(
+            row.get("pair_index", row.get("dataset_pair_index", pair_index)) or pair_index
+        ),
         "pair_id": _pair_id(row, pair_index),
         "hkl": _hkl(row),
         "source_branch_index": _source_branch_index(row),
@@ -657,10 +693,18 @@ def _provider_surface_record(row: Mapping[str, object], pair_index: int) -> dict
     record = _base_surface_record(row, pair_index)
     record.update(
         {
-            "background_point": _point(row.get("background_point") or row.get("provider_background_point")),
-            "background_frame": _normalize_frame(row.get("background_frame", row.get("provider_background_frame"))),
-            "simulated_point": _point(row.get("simulated_point") or row.get("provider_selected_simulated_point")),
-            "simulated_frame": _normalize_frame(row.get("simulated_frame", row.get("provider_selected_simulated_frame"))),
+            "background_point": _point(
+                row.get("background_point") or row.get("provider_background_point")
+            ),
+            "background_frame": _normalize_frame(
+                row.get("background_frame", row.get("provider_background_frame"))
+            ),
+            "simulated_point": _point(
+                row.get("simulated_point") or row.get("provider_selected_simulated_point")
+            ),
+            "simulated_frame": _normalize_frame(
+                row.get("simulated_frame", row.get("provider_selected_simulated_frame"))
+            ),
         }
     )
     return record
@@ -670,10 +714,18 @@ def _manual_surface_record(row: Mapping[str, object], pair_index: int) -> dict[s
     record = _base_surface_record(row, pair_index)
     record.update(
         {
-            "background_point": _point(row.get("background_point") or row.get("manual_background_point")),
-            "background_frame": _normalize_frame(row.get("background_frame", row.get("manual_background_frame"))),
-            "simulated_point": _point(row.get("simulated_point") or row.get("manual_selected_simulated_point")),
-            "simulated_frame": _normalize_frame(row.get("simulated_frame", row.get("manual_selected_simulated_frame"))),
+            "background_point": _point(
+                row.get("background_point") or row.get("manual_background_point")
+            ),
+            "background_frame": _normalize_frame(
+                row.get("background_frame", row.get("manual_background_frame"))
+            ),
+            "simulated_point": _point(
+                row.get("simulated_point") or row.get("manual_selected_simulated_point")
+            ),
+            "simulated_frame": _normalize_frame(
+                row.get("simulated_frame", row.get("manual_selected_simulated_frame"))
+            ),
         }
     )
     return record
@@ -694,12 +746,16 @@ def _initial_surface_record(row: Mapping[str, object], pair_index: int) -> dict[
 
 def _measured_surface_record(row: Mapping[str, object], pair_index: int) -> dict[str, object]:
     record = _base_surface_record(row, pair_index)
-    bg_point = _point_from_keys(row, ("x", "y")) or _point_from_keys(row, ("display_col", "display_row"))
+    bg_point = _point_from_keys(row, ("x", "y")) or _point_from_keys(
+        row, ("display_col", "display_row")
+    )
     sim_point = _point(row.get("sim_display")) or _point_from_keys(row, ("sim_col", "sim_row"))
     record.update(
         {
             "background_point": bg_point,
-            "background_frame": _normalize_frame(row.get("provider_background_frame", row.get("detector_input_frame", "display"))),
+            "background_frame": _normalize_frame(
+                row.get("provider_background_frame", row.get("detector_input_frame", "display"))
+            ),
             "simulated_point": sim_point,
             "simulated_frame": _normalize_frame(row.get("provider_simulated_frame", "display")),
         }
@@ -723,10 +779,18 @@ def _optimizer_surface_record(
     )
     record.update(
         {
-            "background_point": _point_from_keys(row, ("x", "y")) or _point(row.get("background_point")),
-            "background_frame": _normalize_frame(row.get("provider_background_frame", row.get("detector_input_frame", provider.get("background_frame", "display")))),
+            "background_point": _point_from_keys(row, ("x", "y"))
+            or _point(row.get("background_point")),
+            "background_frame": _normalize_frame(
+                row.get(
+                    "provider_background_frame",
+                    row.get("detector_input_frame", provider.get("background_frame", "display")),
+                )
+            ),
             "simulated_point": sim_point,
-            "simulated_frame": _normalize_frame(row.get("provider_simulated_frame", provider.get("simulated_frame", "display"))),
+            "simulated_frame": _normalize_frame(
+                row.get("provider_simulated_frame", provider.get("simulated_frame", "display"))
+            ),
         }
     )
     return record
@@ -819,14 +883,10 @@ def build_backend_surfaces_from_dataset(
         if isinstance(row, Mapping)
     ]
     provider_rows = report_pairs or [
-        dict(row)
-        for row in dataset.get("provider_pairs", ()) or ()
-        if isinstance(row, Mapping)
+        dict(row) for row in dataset.get("provider_pairs", ()) or () if isinstance(row, Mapping)
     ]
     manual_rows = report_pairs or [
-        dict(row)
-        for row in dataset.get("manual_point_pairs", ()) or ()
-        if isinstance(row, Mapping)
+        dict(row) for row in dataset.get("manual_point_pairs", ()) or () if isinstance(row, Mapping)
     ]
     initial_rows = [
         dict(row)
@@ -834,15 +894,11 @@ def build_backend_surfaces_from_dataset(
         if isinstance(row, Mapping)
     ]
     measured_rows = [
-        dict(row)
-        for row in dataset.get("measured_for_fit", ()) or ()
-        if isinstance(row, Mapping)
+        dict(row) for row in dataset.get("measured_for_fit", ()) or () if isinstance(row, Mapping)
     ]
     spec = dataset.get("spec") if isinstance(dataset.get("spec"), Mapping) else {}
     spec_rows = [
-        dict(row)
-        for row in spec.get("measured_peaks", ()) or ()
-        if isinstance(row, Mapping)
+        dict(row) for row in spec.get("measured_peaks", ()) or () if isinstance(row, Mapping)
     ]
 
     surfaces = {
@@ -864,11 +920,7 @@ def build_backend_surfaces_from_dataset(
     }
 
     if optimizer_request_rows is not None:
-        rows = [
-            dict(row)
-            for row in optimizer_request_rows
-            if isinstance(row, Mapping)
-        ]
+        rows = [dict(row) for row in optimizer_request_rows if isinstance(row, Mapping)]
         surfaces["optimizer_request.measured_peaks"] = [
             _optimizer_surface_record(
                 row,
@@ -1032,14 +1084,18 @@ def _compare_surface(
             sum(
                 1
                 for row in pair_rows
-                if (row.get("background_delta_px") is None or float(row["background_delta_px"]) > tolerance)
-                and (row.get("simulated_delta_px") is None or float(row["simulated_delta_px"]) > tolerance)
+                if (
+                    row.get("background_delta_px") is None
+                    or float(row["background_delta_px"]) > tolerance
+                )
+                and (
+                    row.get("simulated_delta_px") is None
+                    or float(row["simulated_delta_px"]) > tolerance
+                )
             )
         ),
         "vector_only_mismatch_count": int(
-            0
-            if background_mismatch_count or simulated_mismatch_count
-            else vector_mismatch_count
+            0 if background_mismatch_count or simulated_mismatch_count else vector_mismatch_count
         ),
         "frame_mismatch_count": int(frame_mismatch_count),
         "passes_visual_parity": pass_visual_parity,
@@ -1077,7 +1133,9 @@ def _missing_surface_result(
     }
 
 
-def _extent_limits(metadata: Mapping[str, object] | None) -> tuple[float, float, float, float] | None:
+def _extent_limits(
+    metadata: Mapping[str, object] | None,
+) -> tuple[float, float, float, float] | None:
     metadata = metadata or {}
     extent = metadata.get("image_extent")
     if isinstance(extent, Sequence) and not isinstance(extent, (str, bytes)) and len(extent) >= 4:
@@ -1178,7 +1236,7 @@ def _fit_similarity(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.nd
         if np.linalg.det(rotation) < 0:
             vh[-1, :] *= -1
             rotation = u @ vh
-        scale = float(np.trace((src_centered @ rotation) .T @ dst_centered) / variance)
+        scale = float(np.trace((src_centered @ rotation).T @ dst_centered) / variance)
         matrix = scale * rotation
         translation = dst_mean - src_mean @ matrix.T
     except Exception:
@@ -1202,13 +1260,25 @@ def _score_transform(
         surface = surface_rows[idx]
         bg = _point(surface.get("background_point"))
         sim = _point(surface.get("simulated_point"))
-        bg_t = _apply_transform(np.asarray([bg], dtype=np.float64), matrix, translation)[0].tolist() if bg is not None else None
-        sim_t = _apply_transform(np.asarray([sim], dtype=np.float64), matrix, translation)[0].tolist() if sim is not None else None
+        bg_t = (
+            _apply_transform(np.asarray([bg], dtype=np.float64), matrix, translation)[0].tolist()
+            if bg is not None
+            else None
+        )
+        sim_t = (
+            _apply_transform(np.asarray([sim], dtype=np.float64), matrix, translation)[0].tolist()
+            if sim is not None
+            else None
+        )
         visual_bg = _point(visual.get("visual_background_point"))
         visual_sim = _point(visual.get("visual_simulated_point"))
         visual_vec = _vector(visual_bg, visual_sim)
         surface_vec = _vector(bg, sim)
-        vector_t = (np.asarray(surface_vec, dtype=np.float64) @ matrix.T).tolist() if surface_vec is not None else None
+        vector_t = (
+            (np.asarray(surface_vec, dtype=np.float64) @ matrix.T).tolist()
+            if surface_vec is not None
+            else None
+        )
         transformed_rows.append(
             {
                 "background_delta_px": _norm(_delta(bg_t, visual_bg)),
@@ -1390,9 +1460,7 @@ def build_coordinate_parity_diagnosis(
     optimizer_entrypoints_called: Sequence[object] | None = None,
 ) -> dict[str, object]:
     visual_pairs = [
-        dict(row)
-        for row in visual_capture.get("pairs", ()) or ()
-        if isinstance(row, Mapping)
+        dict(row) for row in visual_capture.get("pairs", ()) or () if isinstance(row, Mapping)
     ]
     visual_pairs.sort(key=lambda row: int(row.get("pair_index", 0) or 0))
     visual_truth_available = bool(visual_capture.get("visual_truth_available", False))
@@ -1405,10 +1473,7 @@ def build_coordinate_parity_diagnosis(
         name
         for name in SURFACE_ORDER
         if name in REQUIRED_SURFACES
-        or (
-            name == "optimizer_request.measured_peaks"
-            and name in backend_surfaces
-        )
+        or (name == "optimizer_request.measured_peaks" and name in backend_surfaces)
     ]
     optimizer_request_compared = bool("optimizer_request.measured_peaks" in compared_surfaces)
     surface_results: dict[str, dict[str, object]] = {}
@@ -1484,9 +1549,7 @@ def build_coordinate_parity_diagnosis(
         {},
     )
     optimizer_request_pair_count = (
-        int(optimizer_request_result.get("pair_count", 0) or 0)
-        if optimizer_request_compared
-        else 0
+        int(optimizer_request_result.get("pair_count", 0) or 0) if optimizer_request_compared else 0
     )
     optimizer_request_visual_parity_ok = (
         bool(optimizer_request_result.get("passes_visual_parity", False))
@@ -1495,9 +1558,7 @@ def build_coordinate_parity_diagnosis(
     )
     optimizer_entrypoints = [str(name) for name in optimizer_entrypoints_called or ()]
     first_transform = (
-        best_transform_by_surface.get(first_mismatch, {})
-        if first_mismatch is not None
-        else {}
+        best_transform_by_surface.get(first_mismatch, {}) if first_mismatch is not None else {}
     )
     classification = _top_level_classification(
         visual_truth_available=visual_truth_available,
@@ -1518,28 +1579,18 @@ def build_coordinate_parity_diagnosis(
             "branch_group_key": _jsonable(visual.get("branch_group_key")),
             "visual_background_point": _point(visual.get("visual_background_point")),
             "visual_background_data_point": _point(
-                visual.get("visual_background_data_point")
-                or visual.get("visual_background_point")
+                visual.get("visual_background_data_point") or visual.get("visual_background_point")
             ),
-            "visual_background_canvas_point": _point(
-                visual.get("visual_background_canvas_point")
-            ),
+            "visual_background_canvas_point": _point(visual.get("visual_background_canvas_point")),
             "visual_background_frame": visual.get("visual_background_frame"),
             "visual_simulated_point": _point(visual.get("visual_simulated_point")),
             "visual_simulated_data_point": _point(
-                visual.get("visual_simulated_data_point")
-                or visual.get("visual_simulated_point")
+                visual.get("visual_simulated_data_point") or visual.get("visual_simulated_point")
             ),
-            "visual_simulated_canvas_point": _point(
-                visual.get("visual_simulated_canvas_point")
-            ),
+            "visual_simulated_canvas_point": _point(visual.get("visual_simulated_canvas_point")),
             "visual_simulated_frame": visual.get("visual_simulated_frame"),
-            "visual_background_artist_source": visual.get(
-                "visual_background_artist_source"
-            ),
-            "visual_simulated_artist_source": visual.get(
-                "visual_simulated_artist_source"
-            ),
+            "visual_background_artist_source": visual.get("visual_background_artist_source"),
+            "visual_simulated_artist_source": visual.get("visual_simulated_artist_source"),
             "surfaces": {},
         }
         for surface_name in compared_surfaces:
@@ -1649,7 +1700,9 @@ def write_coordinate_pairs_csv(report: Mapping[str, object], path: Path) -> None
 
 def write_coordinate_diagnosis_json(report: Mapping[str, object], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_jsonable(report), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(_jsonable(report), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _plot_axes_style(ax: Any, metadata: Mapping[str, object]) -> None:
@@ -1672,7 +1725,11 @@ def write_coordinate_plots(report: Mapping[str, object], output_dir: Path) -> No
 
     output_dir.mkdir(parents=True, exist_ok=True)
     pairs = [dict(row) for row in report.get("pairs", []) if isinstance(row, Mapping)]
-    metadata = report.get("plotting_metadata") if isinstance(report.get("plotting_metadata"), Mapping) else {}
+    metadata = (
+        report.get("plotting_metadata")
+        if isinstance(report.get("plotting_metadata"), Mapping)
+        else {}
+    )
     colors = {
         "provider_pairs": "#d62728",
         "manual_point_pairs": "#9467bd",
@@ -1718,12 +1775,25 @@ def write_coordinate_plots(report: Mapping[str, object], output_dir: Path) -> No
         if isinstance(best_by_surface, Mapping) and first_surface in best_by_surface
         else {}
     )
-    matrix = np.asarray(best.get("matrix", np.eye(2)), dtype=np.float64).reshape(2, 2) if isinstance(best, Mapping) and best.get("matrix") is not None else np.eye(2)
+    matrix = (
+        np.asarray(best.get("matrix", np.eye(2)), dtype=np.float64).reshape(2, 2)
+        if isinstance(best, Mapping) and best.get("matrix") is not None
+        else np.eye(2)
+    )
     for pair in pairs:
         bg = _point(pair.get("visual_background_point"))
         sim = _point(pair.get("visual_simulated_point"))
         if bg is not None and sim is not None:
-            ax.arrow(bg[0], bg[1], sim[0] - bg[0], sim[1] - bg[1], color="black", width=0.15, length_includes_head=True, alpha=0.85)
+            ax.arrow(
+                bg[0],
+                bg[1],
+                sim[0] - bg[0],
+                sim[1] - bg[1],
+                color="black",
+                width=0.15,
+                length_includes_head=True,
+                alpha=0.85,
+            )
         surfaces = pair.get("surfaces") if isinstance(pair.get("surfaces"), Mapping) else {}
         for surface_name in SURFACE_ORDER:
             surface = surfaces.get(surface_name) if isinstance(surfaces, Mapping) else None
@@ -1736,8 +1806,27 @@ def write_coordinate_plots(report: Mapping[str, object], output_dir: Path) -> No
             color = colors.get(surface_name, "#666666")
             vec = np.asarray([s_sim[0] - s_bg[0], s_sim[1] - s_bg[1]], dtype=np.float64)
             vec_t = vec @ matrix.T
-            ax.arrow(s_bg[0], s_bg[1], vec[0], vec[1], color=color, width=0.08, length_includes_head=True, alpha=0.35)
-            ax.arrow(s_bg[0], s_bg[1], vec_t[0], vec_t[1], color=color, width=0.04, linestyle="--", length_includes_head=True, alpha=0.65)
+            ax.arrow(
+                s_bg[0],
+                s_bg[1],
+                vec[0],
+                vec[1],
+                color=color,
+                width=0.08,
+                length_includes_head=True,
+                alpha=0.35,
+            )
+            ax.arrow(
+                s_bg[0],
+                s_bg[1],
+                vec_t[0],
+                vec_t[1],
+                color=color,
+                width=0.04,
+                linestyle="--",
+                length_includes_head=True,
+                alpha=0.65,
+            )
     ax.set_title("Pair vectors: visual, backend, transformed backend")
     _plot_axes_style(ax, metadata)
     fig.tight_layout()
@@ -1771,10 +1860,7 @@ def saved_entries_for_background(
         if group_background_index != int(background_index):
             continue
         entries = raw_group.get("entries", [])
-        return [
-            dict(entry)
-            for entry in entries if isinstance(entry, Mapping)
-        ]
+        return [dict(entry) for entry in entries if isinstance(entry, Mapping)]
     return []
 
 
@@ -1805,8 +1891,6 @@ def capture_optimizer_request_rows_from_solver_request(
 ) -> dict[str, object]:
     """Build request rows through the ladder request builder without solving."""
 
-    from scripts.debug import run_new4_geometry_fit_ladder as ladder
-
     optimizer_entrypoints_called: list[str] = []
     patched: list[tuple[object, str, object]] = []
     patched_keys: set[tuple[int, str]] = set()
@@ -1828,14 +1912,19 @@ def capture_optimizer_request_rows_from_solver_request(
         patched.append((obj, attr, getattr(obj, attr)))
         setattr(obj, attr, _record_and_fail(name))
 
-    _patch(ladder.opt, "least_squares", "least_squares")
-    _patch(geometry_fit, "solve_geometry_fit_request", "solve_geometry_fit_request")
-    _patch(ladder.gui_geometry_fit, "solve_geometry_fit_request", "solve_geometry_fit_request")
-    _patch(ladder, "run_objective_dry_run", "run_objective_dry_run")
-    _patch(ladder, "_run_solver_rung_with_timeout", "_run_solver_rung_with_timeout")
-    _patch(ladder, "_run_with_probe_least_squares", "_run_with_probe_least_squares")
-
     try:
+        ladder = _load_new4_geometry_fit_ladder_module()
+        _patch(ladder.opt, "least_squares", "least_squares")
+        _patch(geometry_fit, "solve_geometry_fit_request", "solve_geometry_fit_request")
+        _patch(
+            ladder.gui_geometry_fit,
+            "solve_geometry_fit_request",
+            "solve_geometry_fit_request",
+        )
+        _patch(ladder, "run_objective_dry_run", "run_objective_dry_run")
+        _patch(ladder, "_run_solver_rung_with_timeout", "_run_solver_rung_with_timeout")
+        _patch(ladder, "_run_with_probe_least_squares", "_run_with_probe_least_squares")
+
         context = ladder._capture_solver_context(
             Path(state_path),
             int(background_index),
@@ -1997,14 +2086,10 @@ def run_new4_visual_backend_coordinate_diagnostic(
             "visual_capture_path_confirmed": bool(
                 overlay_input_capture.get("visual_capture_path_confirmed", False)
             ),
-            "visual_capture_function": overlay_input_capture.get(
-                "visual_capture_function"
-            ),
+            "visual_capture_function": overlay_input_capture.get("visual_capture_function"),
             "overlay_draw_function": overlay_input_capture.get("overlay_draw_function"),
             "overlay_source": overlay_input_capture.get("overlay_source"),
-            "overlay_input_pair_count": overlay_input_capture.get(
-                "overlay_input_pair_count"
-            ),
+            "overlay_input_pair_count": overlay_input_capture.get("overlay_input_pair_count"),
         }
     )
     if not bool(visual_capture.get("visual_capture_path_confirmed", False)):
@@ -2033,17 +2118,13 @@ def run_new4_visual_backend_coordinate_diagnostic(
             background_index=int(background_index),
         )
         optimizer_rows = [
-            dict(row)
-            for row in capture.get("rows", []) or []
-            if isinstance(row, Mapping)
+            dict(row) for row in capture.get("rows", []) or [] if isinstance(row, Mapping)
         ]
         optimizer_entrypoints_called = [
-            str(name)
-            for name in capture.get("optimizer_entrypoints_called", []) or []
+            str(name) for name in capture.get("optimizer_entrypoints_called", []) or []
         ]
         optimizer_request_missing_fields = [
-            str(field)
-            for field in capture.get("optimizer_request_missing_fields", []) or []
+            str(field) for field in capture.get("optimizer_request_missing_fields", []) or []
         ]
         optimizer_request_missing_fields_by_row = [
             dict(row)
@@ -2083,9 +2164,7 @@ def run_new4_visual_backend_coordinate_diagnostic(
         report.update(
             {
                 "ok": False,
-                "classification": (
-                    "diagnostic_incomplete_optimizer_request_unavailable"
-                ),
+                "classification": ("diagnostic_incomplete_optimizer_request_unavailable"),
                 "optimizer_request_compared": False,
                 "optimizer_request_pair_count": 0,
                 "optimizer_request_visual_parity_ok": False,
@@ -2101,9 +2180,7 @@ def run_new4_visual_backend_coordinate_diagnostic(
     report["rung_report_detected"] = bool(
         rung_report_path is not None and rung_report_path.exists()
     )
-    report["rung_report_filename"] = (
-        rung_report_path.name if rung_report_path is not None else None
-    )
+    report["rung_report_filename"] = rung_report_path.name if rung_report_path is not None else None
     report["optimizer_request_source"] = optimizer_request_source
     report["optimizer_request_unavailable_reason"] = optimizer_request_unavailable_reason
     report["optimizer_request_capture_error"] = optimizer_request_capture_error

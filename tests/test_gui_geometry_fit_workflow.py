@@ -276,9 +276,7 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
         ),
         current_geometry_fit_background_indices=lambda **kwargs: [0, 1, 2],
         geometry_fit_uses_shared_theta_offset=lambda indices: list(indices) == [0, 1, 2],
-        apply_background_theta_metadata=(
-            lambda **kwargs: calls["theta"].append(kwargs) or True
-        ),
+        apply_background_theta_metadata=(lambda **kwargs: calls["theta"].append(kwargs) or True),
         current_background_theta_values=lambda **kwargs: [1.0, 2.0, 3.0],
         current_geometry_theta_offset=lambda **kwargs: 0.5,
         geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
@@ -286,10 +284,10 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
             "ensure_caked", int(calls["ensure_caked"]) + 1
         ),
         build_dataset=_build_dataset,
-        build_runtime_config=lambda fit_params: calls["runtime_cfg"].append(
-            dict(fit_params)
-        )
-        or {"bounds": {"gamma": [0.0, 1.0]}, "debug_logging": True},
+        build_runtime_config=lambda fit_params: (
+            calls["runtime_cfg"].append(dict(fit_params))
+            or {"bounds": {"gamma": [0.0, 1.0]}, "debug_logging": True}
+        ),
     )
 
     assert result.error_text is None
@@ -585,9 +583,7 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                         "y": 40.0,
                     }
                 ],
-                load_background_by_index=(
-                    lambda idx: (native_background, display_background)
-                ),
+                load_background_by_index=(lambda idx: (native_background, display_background)),
                 apply_background_backend_orientation=lambda image: None,
                 geometry_manual_simulated_peaks_for_params=(
                     lambda params, *, prefer_cache: [{"dummy": True}]
@@ -603,9 +599,7 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     }
                 },
                 geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
-                unrotate_display_peaks=(
-                    lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}]
-                ),
+                unrotate_display_peaks=(lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}]),
                 display_to_native_sim_coords=lambda col, row, shape: (1.0, 2.0),
                 select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
                     orientation_choice,
@@ -629,9 +623,7 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     assert prepared.current_dataset["label"] == "bg0.osc"
     assert "experimental_image_for_fit" not in prepared.current_dataset
     prepared_spec = dict(prepared.dataset_specs[0])
-    assert prepared_spec.pop("manual_point_pairs") == prepared.current_dataset[
-        "manual_point_pairs"
-    ]
+    assert prepared_spec.pop("manual_point_pairs") == prepared.current_dataset["manual_point_pairs"]
     assert [prepared_spec] == [
         {
             "dataset_index": 0,
@@ -918,7 +910,9 @@ def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_grou
             np.zeros((4, 5), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
-        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [{"dummy": True}],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
+            {"dummy": True}
+        ],
         geometry_manual_simulated_lookup=lambda _peaks: {
             (1, 2): {
                 "hkl": (1, 1, 0),
@@ -945,7 +939,9 @@ def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_grou
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
         display_to_native_sim_coords=lambda col, row, shape: (float(col) / 10.0, float(row) / 10.0),
         select_fit_orientation=_select_fit_orientation,
-        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [
+            dict(entry) for entry in entries
+        ],
         orient_image_for_fit=lambda image, **kwargs: image,
     )
 
@@ -981,10 +977,7 @@ def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_grou
         2,
         4,
     ]
-    assert all(
-        entry["fit_source_identity_only"] is True
-        for entry in dataset["measured_for_fit"]
-    )
+    assert all(entry["fit_source_identity_only"] is True for entry in dataset["measured_for_fit"])
     assert calls["select_orientation"] == (
         [(5.0, 6.0), (1.0, 1.5)],
         [(30.0, 40.0), (70.0, 80.0)],
@@ -993,7 +986,9 @@ def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_grou
     )
 
 
-def test_build_geometry_manual_fit_dataset_preserves_branch_and_full_reflection_provenance() -> None:
+def test_build_geometry_manual_fit_dataset_preserves_branch_and_full_reflection_provenance() -> (
+    None
+):
     source_row = {
         "hkl": (1, 1, 0),
         "q_group_key": ("q", 1),
@@ -1036,9 +1031,7 @@ def test_build_geometry_manual_fit_dataset_preserves_branch_and_full_reflection_
         geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
             dict(source_row)
         ],
-        geometry_manual_simulated_lookup=lambda _simulated_peaks: {
-            (1, 2): dict(source_row)
-        },
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {(1, 2): dict(source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -1053,11 +1046,11 @@ def test_build_geometry_manual_fit_dataset_preserves_branch_and_full_reflection_
             },
             {"pairs": 1},
         ),
-        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
-        orient_image_for_fit=lambda image, **kwargs: image,
-        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
-            dict(source_row)
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [
+            dict(entry) for entry in entries
         ],
+        orient_image_for_fit=lambda image, **kwargs: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [dict(source_row)],
         geometry_manual_rebuild_source_rows_for_background=lambda *args, **kwargs: [
             dict(source_row)
         ],
@@ -1164,7 +1157,9 @@ def _make_legacy_dense_manual_dataset_bindings(
             },
             {"pairs": len(sim_pts)},
         ),
-        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [
+            dict(entry) for entry in entries
+        ],
         orient_image_for_fit=lambda image, **kwargs: image,
         geometry_manual_source_rows_for_background=_rows,
         geometry_manual_rebuild_source_rows_for_background=_rows,
@@ -1227,11 +1222,7 @@ def _required_new4_local_headless_paths(state_path: Path) -> list[Path]:
 
 
 def _missing_new4_local_headless_paths(state_path: Path) -> list[Path]:
-    return [
-        path
-        for path in _required_new4_local_headless_paths(state_path)
-        if not path.exists()
-    ]
+    return [path for path in _required_new4_local_headless_paths(state_path) if not path.exists()]
 
 
 def _write_probe_state(
@@ -1296,7 +1287,9 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
             np.zeros((4, 5), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
-        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [{"dummy": True}],
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
+            {"dummy": True}
+        ],
         geometry_manual_simulated_lookup=lambda _simulated_peaks: {
             (1, 2): {
                 "display_col": 901.0,
@@ -1317,7 +1310,14 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=_display_to_native_sim_coords,
         select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
-            {"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx", "label": "identity"},
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
             {"pairs": 1},
         ),
         apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
@@ -1337,7 +1337,9 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
     assert calls["display_to_native"] == (9.0, 8.0, (64, 64))
 
 
-def test_build_geometry_manual_fit_dataset_projects_raw_sim_image_rows_into_background_frame() -> None:
+def test_build_geometry_manual_fit_dataset_projects_raw_sim_image_rows_into_background_frame() -> (
+    None
+):
     callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
@@ -1401,7 +1403,14 @@ def test_build_geometry_manual_fit_dataset_projects_raw_sim_image_rows_into_back
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
         select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
-            {"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx", "label": "identity"},
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
             {"pairs": len(sim_pts)},
         ),
         apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
@@ -1424,7 +1433,9 @@ def test_build_geometry_manual_fit_dataset_projects_raw_sim_image_rows_into_back
     assert dataset["initial_pairs_display"][0]["sim_native"] == (1.0, 2.0)
 
 
-def test_build_geometry_manual_fit_dataset_reprojects_refined_detector_display_without_stale_native() -> None:
+def test_build_geometry_manual_fit_dataset_reprojects_refined_detector_display_without_stale_native() -> (
+    None
+):
     refined_native = (2.0, 1.0)
     refined_display = manual_geometry._default_rotate_point(
         float(refined_native[0]),
@@ -1441,10 +1452,8 @@ def test_build_geometry_manual_fit_dataset_reprojects_refined_detector_display_w
         current_background_native=lambda: np.ones((5, 5), dtype=float),
         image_size=lambda: 5,
         display_rotate_k=3,
-        display_to_native_sim_coords=lambda *_args, **_kwargs: (
-            (_ for _ in ()).throw(
-                AssertionError("refined detector display should use background inverse")
-            )
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("refined detector display should use background inverse")
         ),
         get_detector_angular_maps=lambda _ai: (_ for _ in ()).throw(
             AssertionError("detector angular maps should not be used")
@@ -1502,13 +1511,18 @@ def test_build_geometry_manual_fit_dataset_reprojects_refined_detector_display_w
         ),
         geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
-        display_to_native_sim_coords=lambda *_args, **_kwargs: (
-            (_ for _ in ()).throw(
-                AssertionError("fit fallback should not use sim-image inverse here")
-            )
+        display_to_native_sim_coords=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fit fallback should not use sim-image inverse here")
         ),
         select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
-            {"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx", "label": "identity"},
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
             {"pairs": len(sim_pts)},
         ),
         apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
@@ -1584,7 +1598,9 @@ def test_build_geometry_manual_fit_dataset_does_not_count_stale_source_ids_as_re
             },
             {"pairs": len(sim_pts)},
         ),
-        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [
+            dict(entry) for entry in entries
+        ],
         orient_image_for_fit=lambda image, **kwargs: image,
     )
 
@@ -1602,7 +1618,9 @@ def test_build_geometry_manual_fit_dataset_does_not_count_stale_source_ids_as_re
     assert "source_peak_index" not in dataset["measured_for_fit"][0]
 
 
-def test_build_geometry_manual_fit_dataset_copyback_preserves_canonical_identity_after_legacy_dense_rebind() -> None:
+def test_build_geometry_manual_fit_dataset_copyback_preserves_canonical_identity_after_legacy_dense_rebind() -> (
+    None
+):
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -1673,7 +1691,9 @@ def test_build_geometry_manual_fit_dataset_copyback_preserves_canonical_identity
     assert diag["legacy_fit_bound_entry"]["source_branch_index"] == 1
 
 
-def test_build_geometry_manual_fit_dataset_rebinds_mirrored_legacy_dense_pairs_by_branch_and_geometry() -> None:
+def test_build_geometry_manual_fit_dataset_rebinds_mirrored_legacy_dense_pairs_by_branch_and_geometry() -> (
+    None
+):
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -1768,7 +1788,9 @@ def test_build_geometry_manual_fit_dataset_rebinds_mirrored_legacy_dense_pairs_b
     assert [entry["source_peak_index"] for entry in measured_entries] == [0, 1]
     assert [entry["source_reflection_index"] for entry in initial_entries] == [202, 204]
     assert [entry["source_branch_index"] for entry in initial_entries] == [0, 1]
-    assert all(entry["source_reflection_namespace"] == "full_reflection" for entry in measured_entries)
+    assert all(
+        entry["source_reflection_namespace"] == "full_reflection" for entry in measured_entries
+    )
     assert all(entry["source_reflection_is_full"] is True for entry in measured_entries)
     diag0, diag1 = dataset["source_resolution_diagnostics"]
     assert diag0["fit_resolution_kind"] == "legacy_dense_q_group_rebind"
@@ -1781,7 +1803,9 @@ def test_build_geometry_manual_fit_dataset_rebinds_mirrored_legacy_dense_pairs_b
     assert diag1["legacy_chosen_live_row"]["source_reflection_index"] == 204
 
 
-def test_build_geometry_manual_fit_dataset_prefers_background_nearest_candidate_over_stale_identity() -> None:
+def test_build_geometry_manual_fit_dataset_prefers_background_nearest_candidate_over_stale_identity() -> (
+    None
+):
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -1856,7 +1880,9 @@ def test_build_geometry_manual_fit_dataset_prefers_background_nearest_candidate_
     assert diag["saved_simulated_detector_hint"] == (2500.0, 2500.0)
 
 
-def test_build_geometry_manual_fit_dataset_rebinds_nonlegacy_stale_source_by_background_point() -> None:
+def test_build_geometry_manual_fit_dataset_rebinds_nonlegacy_stale_source_by_background_point() -> (
+    None
+):
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -1930,7 +1956,9 @@ def test_build_geometry_manual_fit_dataset_rebinds_nonlegacy_stale_source_by_bac
     assert diag["selected_to_background_distance_px"] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
 
 
-def test_build_geometry_manual_fit_dataset_prefers_nearest_candidate_over_existing_cached_identity() -> None:
+def test_build_geometry_manual_fit_dataset_prefers_nearest_candidate_over_existing_cached_identity() -> (
+    None
+):
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -2301,11 +2329,7 @@ def test_visual_backend_parity_detects_optimizer_request_pair_order_mismatch() -
     report = coord_diag.build_coordinate_parity_diagnosis(
         _coordinate_visual_capture(),
         _all_coordinate_surfaces(
-            **{
-                "optimizer_request.measured_peaks": _coordinate_surface_rows(
-                    order=(1, 0)
-                )
-            }
+            **{"optimizer_request.measured_peaks": _coordinate_surface_rows(order=(1, 0))}
         ),
     )
 
@@ -2495,9 +2519,7 @@ def test_diagnostic_does_not_call_optimizer(monkeypatch, tmp_path) -> None:
 
 
 def _new4_visual_rows_for_optimizer_request() -> list[dict[str, object]]:
-    state = coord_diag.load_gui_state_payload(
-        Path("artifacts/geometry_fit_gui_states/new4.json")
-    )
+    state = coord_diag.load_gui_state_payload(Path("artifacts/geometry_fit_gui_states/new4.json"))
     entries = coord_diag.saved_entries_for_background(state, background_index=0)
     overlay = coord_diag.capture_manual_geometry_overlay_input_from_render_path(
         entries,
@@ -2600,25 +2622,43 @@ def test_coordinate_diagnostic_optimizer_request_capture_failure_is_incomplete_n
     )
 
     assert report["ok"] is False
-    assert (
-        report["classification"]
-        == "diagnostic_incomplete_optimizer_request_unavailable"
-    )
+    assert report["classification"] == "diagnostic_incomplete_optimizer_request_unavailable"
     assert report["optimizer_request_compared"] is False
     assert report["optimizer_request_pair_count"] == 0
     assert report["optimizer_request_visual_parity_ok"] is False
-    assert (
-        report["optimizer_request_unavailable_reason"]
-        == "solver_request_capture_failed"
-    )
+    assert report["optimizer_request_unavailable_reason"] == "solver_request_capture_failed"
     assert report["optimizer_request_capture_error"] == capture_error
     assert report["first_mismatching_surface"] is None
     assert report["recommended_fix_location"] == "optimizer_request_capture"
     assert "optimizer_request.measured_peaks" not in report["surfaces_compared"]
     assert "optimizer_request.measured_peaks" not in report["surface_results"]
     assert all(
-        result.get("frame_mismatch_count", 0) == 0
-        for result in report["surface_results"].values()
+        result.get("frame_mismatch_count", 0) == 0 for result in report["surface_results"].values()
+    )
+
+
+def test_optimizer_request_capture_missing_ladder_returns_structured_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def _missing_module(name):
+        assert name == "scripts.debug.run_new4_geometry_fit_ladder"
+        raise ModuleNotFoundError("No module named 'scripts'", name="scripts")
+
+    monkeypatch.setattr(coord_diag.importlib, "import_module", _missing_module)
+
+    result = coord_diag.capture_optimizer_request_rows_from_solver_request(
+        state_path=tmp_path / "missing_state.json",
+        background_index=0,
+    )
+
+    assert result["rows"] == []
+    assert result["optimizer_entrypoints_called"] == []
+    assert result["optimizer_request_missing_fields"] == []
+    assert result["optimizer_request_missing_fields_by_row"] == []
+    assert (
+        "requires scripts/debug/run_new4_geometry_fit_ladder.py"
+        in result["optimizer_request_capture_error"]
     )
 
 
@@ -2714,9 +2754,7 @@ def test_new4_diagnostic_rung_lacks_coordinates_reports_reason(tmp_path) -> None
 def test_new4_diagnostic_rung_rows_do_not_compare_without_optimizer_flag(
     tmp_path,
 ) -> None:
-    state = coord_diag.load_gui_state_payload(
-        Path("artifacts/geometry_fit_gui_states/new4.json")
-    )
+    state = coord_diag.load_gui_state_payload(Path("artifacts/geometry_fit_gui_states/new4.json"))
     entries = coord_diag.saved_entries_for_background(state, background_index=0)
     overlay = coord_diag.capture_manual_geometry_overlay_input_from_render_path(
         entries,
@@ -3041,17 +3079,18 @@ def test_point_provider_saved_refined_sim_point_overwrites_caked_prefill(
         55.5,
         66.5,
     ]
-    assert dataset["point_provider_report"]["pairs"][0][
-        "provider_selected_simulated_point"
-    ] == [55.5, 66.5]
+    assert dataset["point_provider_report"]["pairs"][0]["provider_selected_simulated_point"] == [
+        55.5,
+        66.5,
+    ]
     assert dataset["point_provider_report"]["pairs"][0]["dataset_simulated_point"] == [
         55.5,
         66.5,
     ]
     assert dataset["point_provider_report"]["pairs"][0]["simulated_point_match"] is True
-    assert dataset["point_provider_report"]["pairs"][0][
-        "provider_dataset_fingerprint_match"
-    ] is True
+    assert (
+        dataset["point_provider_report"]["pairs"][0]["provider_dataset_fingerprint_match"] is True
+    )
 
 
 def test_point_provider_saved_refined_display_replaces_stale_live_native() -> None:
@@ -3281,9 +3320,7 @@ def test_point_provider_stale_locator_is_diagnostic_when_saved_assignment_resolv
         }
     ]
 
-    report = _build_point_provider_dataset(saved_entries, simulated_rows)[
-        "point_provider_report"
-    ]
+    report = _build_point_provider_dataset(saved_entries, simulated_rows)["point_provider_report"]
     pair = report["pairs"][0]
 
     assert report["ok"] is True
@@ -3329,9 +3366,7 @@ def test_point_provider_marks_stale_saved_identity_as_fallback() -> None:
         }
     ]
 
-    report = _build_point_provider_dataset(saved_entries, simulated_rows)[
-        "point_provider_report"
-    ]
+    report = _build_point_provider_dataset(saved_entries, simulated_rows)["point_provider_report"]
     pair = report["pairs"][0]
 
     assert report["ok"] is False
@@ -3560,9 +3595,7 @@ def test_point_provider_report_counts_missing_handoff_surface_rows(surface) -> N
     assert report["surface_pair_count_mismatch_count"] > 0
     assert report["missing_surface_row_count"] > 0
     assert report["dataset_provider_mismatch_count"] > 0
-    assert f"{surface}_row_count_mismatch" in (
-        report["point_provider_parity_gate"]["reason_codes"]
-    )
+    assert f"{surface}_row_count_mismatch" in (report["point_provider_parity_gate"]["reason_codes"])
 
 
 def test_point_provider_does_not_call_optimizer(monkeypatch) -> None:
@@ -3621,6 +3654,7 @@ def test_point_provider_parity_for_new4_saved_state_without_running_optimizer(
     guard_state = _point_provider_optimizer_guard(monkeypatch)
     repo_root = Path(__file__).resolve().parents[1]
     probe = _load_geometry_preflight_probe_module()
+
     def _fail_provider_only_boundary(*_args, **_kwargs):
         raise AssertionError("Provider-only parity must not enter headless preflight")
 
@@ -3705,12 +3739,8 @@ def test_point_provider_parity_for_new4_saved_state_without_running_optimizer(
             "manual_picker_saved",
             "manual_picker_cache",
         }
-        assert pair["dataset_background_point_source"] == pair[
-            "provider_background_point_source"
-        ]
-        assert pair["dataset_simulated_point_source"] == pair[
-            "provider_simulated_point_source"
-        ]
+        assert pair["dataset_background_point_source"] == pair["provider_background_point_source"]
+        assert pair["dataset_simulated_point_source"] == pair["provider_simulated_point_source"]
         assert pair["provider_background_point_source"] not in {
             "live_source_row_projection",
             "fallback_rebind",
@@ -3724,9 +3754,7 @@ def test_point_provider_parity_for_new4_saved_state_without_running_optimizer(
 
 def _minimal_new4_ladder_context(ladder):
     del ladder
-    base_prepared_run, _postprocess_config = _make_prepared_run(
-        joint_background_mode=False
-    )
+    base_prepared_run, _postprocess_config = _make_prepared_run(joint_background_mode=False)
     prepared_run = replace(
         base_prepared_run,
         fit_params={
@@ -3820,9 +3848,7 @@ def _new4_ladder_context_with_provider_rows(
     full_source: bool,
     missing_identity: bool = False,
 ):
-    base_prepared_run, _postprocess_config = _make_prepared_run(
-        joint_background_mode=False
-    )
+    base_prepared_run, _postprocess_config = _make_prepared_run(joint_background_mode=False)
     provider_pairs = []
     manual_pairs = []
     measured_rows = []
@@ -4307,6 +4333,7 @@ def _install_green_provider_guard(monkeypatch, ladder, calls=None) -> None:
 
     monkeypatch.setattr(ladder, "run_provider_guard", _green_guard)
     if hasattr(ladder, "_run_provider_guard_report"):
+
         def _green_guard_report(*, rung_name="provider_guard_after", **_kwargs):
             if calls is not None:
                 calls.append(str(rung_name))
@@ -4548,14 +4575,8 @@ def test_new4_ladder_sensitivity_direct_call_aborts_on_bad_rung1(
     assert report["reason"] == "rung_1_not_green"
     assert "rung_1_status_not_ok" in report["rung_1_failures"]
     assert "provider_pair_count_-999999_expected_7" in report["rung_1_failures"]
-    assert (
-        "provider_to_optimizer_identity_match_false_expected_True"
-        in report["rung_1_failures"]
-    )
-    assert (
-        "provider_to_optimizer_point_match_false_expected_True"
-        in report["rung_1_failures"]
-    )
+    assert "provider_to_optimizer_identity_match_false_expected_True" in report["rung_1_failures"]
+    assert "provider_to_optimizer_point_match_false_expected_True" in report["rung_1_failures"]
     assert report["provider_pair_count"] == 0
     assert report["provider_to_optimizer_identity_match"] is False
     assert report["provider_to_optimizer_point_match"] is False
@@ -4596,18 +4617,9 @@ def test_new4_ladder_sensitivity_rejects_stale_green_rung1(
     assert report["status"] == "aborted"
     assert report["reason"] == "rung_1_not_green"
     assert "dataset_pair_count_-999999_expected_7" in report["rung_1_failures"]
-    assert (
-        "optimizer_request_pair_count_-999999_expected_7"
-        in report["rung_1_failures"]
-    )
-    assert (
-        "provider_to_optimizer_identity_match_None_expected_True"
-        in report["rung_1_failures"]
-    )
-    assert (
-        "provider_to_optimizer_point_match_None_expected_True"
-        in report["rung_1_failures"]
-    )
+    assert "optimizer_request_pair_count_-999999_expected_7" in report["rung_1_failures"]
+    assert "provider_to_optimizer_identity_match_None_expected_True" in report["rung_1_failures"]
+    assert "provider_to_optimizer_point_match_None_expected_True" in report["rung_1_failures"]
     assert report["residual_probe_called"] is False
 
 
@@ -4872,10 +4884,7 @@ def test_new4_ladder_sensitivity_missing_probe_summary_marks_param_unsafe(
     assert by_name["center_x"]["status"] == "unsafe"
     assert by_name["center_x"]["plus_eval"]["counter_source"] == "missing"
     assert by_name["center_x"]["plus_eval"]["fixed_source_clean"] is False
-    assert (
-        "plus_missing_point_match_summary"
-        in by_name["center_x"]["unsafe_reasons"]
-    )
+    assert "plus_missing_point_match_summary" in by_name["center_x"]["unsafe_reasons"]
     assert by_name["center_y"]["status"] == "active"
 
 
@@ -5299,8 +5308,7 @@ def _install_pair_rung_common_stubs(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -5455,9 +5463,9 @@ def test_new4_ladder_pair_rung_skips_params_not_allowed_by_singletons(
         "corto_detector_theta_initial",
         "zs_zb",
     }
-    assert {
-        item["skip_reason"] for item in result["skipped_pairs"]
-    } == {"param_not_allowed_by_singleton_evidence"}
+    assert {item["skip_reason"] for item in result["skipped_pairs"]} == {
+        "param_not_allowed_by_singleton_evidence"
+    }
 
 
 def test_new4_ladder_pair_rung_rejects_stale_one_param_summary(
@@ -5632,9 +5640,7 @@ def test_new4_ladder_pair_rung_rejects_caked_report_without_background_index(
     )
     pair_report = json.loads(
         (
-            tmp_path
-            / "caked_missing_background"
-            / "rung_04_pair_theta_initial_cor_angle.json"
+            tmp_path / "caked_missing_background" / "rung_04_pair_theta_initial_cor_angle.json"
         ).read_text()
     )
 
@@ -5682,9 +5688,7 @@ def test_new4_ladder_pair_rung_rejects_caked_report_wrong_background_index(
     )
     pair_report = json.loads(
         (
-            tmp_path
-            / "caked_wrong_background"
-            / "rung_04_pair_theta_initial_cor_angle.json"
+            tmp_path / "caked_wrong_background" / "rung_04_pair_theta_initial_cor_angle.json"
         ).read_text()
     )
 
@@ -5746,10 +5750,7 @@ def test_new4_ladder_pair_rung_dirty_timeout_aborts_remaining(
     assert attempted == [["a", "c"]]
     assert result["status"] == "failed"
     assert result["timed_out_pairs"] == [{"pair_name": "a_c", "pair": ["a", "c"]}]
-    assert {
-        (item["pair_name"], item["skip_reason"])
-        for item in result["skipped_pairs"]
-    } >= {
+    assert {(item["pair_name"], item["skip_reason"]) for item in result["skipped_pairs"]} >= {
         ("chi_cor_angle", "dirty_timeout_abort"),
         ("theta_initial_cor_angle", "param_not_allowed_by_singleton_evidence"),
     }
@@ -5815,10 +5816,9 @@ def test_new4_ladder_pair_rung_dirty_counter_timeout_aborts_remaining(
     assert attempted == [["a", "c"]]
     assert pair_report["failure_reason"] == "fixed_source_or_pair_integrity_lost"
     assert result["status"] == "failed"
-    assert {
-        (item["pair_name"], item["skip_reason"])
-        for item in result["skipped_pairs"]
-    } >= {("chi_cor_angle", "fixed_source_or_pair_integrity_lost")}
+    assert {(item["pair_name"], item["skip_reason"]) for item in result["skipped_pairs"]} >= {
+        ("chi_cor_angle", "fixed_source_or_pair_integrity_lost")
+    }
     assert result["provider_guard_after_ok"] is False
 
 
@@ -5854,9 +5854,7 @@ def test_new4_ladder_pair_rung_fallback_rows_fail_integrity(
         one_param_diagnosis_summary=diagnosis_path,
         caked_point_reprojection_report=caked_path,
     )
-    pair_report = json.loads(
-        (tmp_path / "pair_fallback" / "rung_04_pair_a_c.json").read_text()
-    )
+    pair_report = json.loads((tmp_path / "pair_fallback" / "rung_04_pair_a_c.json").read_text())
 
     assert result["status"] == "failed"
     assert result["failure_reason"] == "no_pair_solve_passed"
@@ -5947,6 +5945,8 @@ def test_new4_ladder_block_parser_accepts_block_aliases_and_pair_summary() -> No
             "block",
             "--pair-summary",
             "pairs.json",
+            "--timestamp",
+            "pair_run_id",
         ]
     )
     blocks_args = parser.parse_args(
@@ -5964,6 +5964,7 @@ def test_new4_ladder_block_parser_accepts_block_aliases_and_pair_summary() -> No
 
     assert block_args.max_rung == "block"
     assert block_args.pair_summary == "pairs.json"
+    assert block_args.timestamp == "pair_run_id"
     assert blocks_args.max_rung == "blocks"
 
 
@@ -5975,6 +5976,8 @@ def _write_block_pair_summary(
     passed_pairs,
     status="ok",
     stale_hash=False,
+    run_id=None,
+    timestamp=None,
 ) -> Path:
     state_hash = _hash_file(state_path)
     summary = {
@@ -5987,6 +5990,8 @@ def _write_block_pair_summary(
         "state_sha256_after": state_hash,
         "state_hash_unchanged": not stale_hash,
         "provider_guard_after_ok": True,
+        "run_id": str(run_id or ""),
+        "timestamp": str(timestamp or ""),
         "passed_pairs": [
             {"pair_name": "_".join(pair), "pair": [str(name) for name in pair]}
             for pair in passed_pairs
@@ -6036,9 +6041,7 @@ def _green_block_report(
             "var_names": names,
             "candidate_param_names": names,
             "effective_var_names_seen_by_solver": (
-                [str(name) for name in effective_names]
-                if effective_names is not None
-                else names
+                [str(name) for name in effective_names] if effective_names is not None else names
             ),
         }
     )
@@ -6108,9 +6111,9 @@ def test_new4_ladder_block_rung_runs_dependency_backed_blocks_not_a_c(
     )
     run_dir = tmp_path / "blocks"
     first_report = json.loads(
-        (
-            run_dir / "rung_05_block_corto_detector_theta_initial_cor_angle.json"
-        ).read_text(encoding="utf-8")
+        (run_dir / "rung_05_block_corto_detector_theta_initial_cor_angle.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     assert result["status"] == "ok"
@@ -6130,10 +6133,10 @@ def test_new4_ladder_block_rung_runs_dependency_backed_blocks_not_a_c(
     ]
     assert first_report["var_names"] == first_report["candidate_param_names"]
     assert (
-        first_report["effective_var_names_seen_by_solver"]
-        == first_report["candidate_param_names"]
+        first_report["effective_var_names_seen_by_solver"] == first_report["candidate_param_names"]
     )
     assert first_report["provider_guard_after_ok"] is True
+    assert first_report["caked_point_reprojection_guard_ok"] is True
     assert result["state_hash_unchanged"] is True
     assert result["passed_blocks"]
     assert result["recommended_next_full_candidate"] is not None
@@ -6318,17 +6321,121 @@ def test_new4_ladder_block_missing_dependency_skips_not_fails(
     )
     block_report = json.loads(
         (
-            tmp_path
-            / "missing_dep"
-            / "rung_05_block_corto_detector_theta_initial_cor_angle.json"
+            tmp_path / "missing_dep" / "rung_05_block_corto_detector_theta_initial_cor_angle.json"
         ).read_text(encoding="utf-8")
     )
 
     assert block_report["status"] == "skipped"
     assert block_report["skip_reason"] == "missing_pair_evidence"
+    assert block_report["candidate_param_names"] == [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+    ]
+    assert block_report["var_names"] == block_report["candidate_param_names"]
+    assert (
+        block_report["effective_var_names_seen_by_solver"] == block_report["candidate_param_names"]
+    )
     assert result["failed_blocks"] == []
     assert result["skipped_blocks"]
     assert result["failure_reason"] == "no_block_solve_passed"
+
+
+def test_new4_ladder_block_pair_summary_run_id_can_match_timestamp(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("corto_detector", "theta_initial"), ("theta_initial", "cor_angle")),
+        run_id="pair_run",
+        timestamp="pair_run",
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        payload = _green_block_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="pair_run",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "ok"
+    assert attempted == [["corto_detector", "theta_initial", "cor_angle"]]
+    assert result["evidence_failures"] == []
+
+
+def test_new4_ladder_block_pair_summary_run_id_mismatch_blocks_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("corto_detector", "theta_initial"), ("theta_initial", "cor_angle")),
+        run_id="old_pair_run",
+        timestamp="old_pair_run",
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("mismatch must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="new_block_run",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "pair_evidence_not_current"
+    assert "pair:run_id_not_current" in result["evidence_failures"]
+    assert "pair:timestamp_not_current" in result["evidence_failures"]
 
 
 def test_new4_ladder_block_rejects_stale_pair_summary_before_solve(
@@ -6430,6 +6537,7 @@ def test_new4_ladder_block_stale_caked_report_blocks_theta_before_solve(
 
     assert block_report["status"] == "failed"
     assert block_report["failure_reason"] == "caked_point_reprojection_guard_failed"
+    assert block_report["caked_point_reprojection_guard_ok"] is False
     assert "status_not_pass" in block_report["block_guard_failures"]
     assert result["failed_blocks"] == [
         {
@@ -6480,9 +6588,9 @@ def test_new4_ladder_block_effective_var_names_must_match_request(
         caked_point_reprojection_report=caked_path,
     )
     block_report = json.loads(
-        (
-            tmp_path / "bad_effective_names" / "rung_05_block_a_c_psi_z.json"
-        ).read_text(encoding="utf-8")
+        (tmp_path / "bad_effective_names" / "rung_05_block_a_c_psi_z.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     assert block_report["status"] == "failed"
@@ -6532,9 +6640,7 @@ def test_new4_ladder_block_fallback_rows_fail_integrity(
         caked_point_reprojection_report=caked_path,
     )
     block_report = json.loads(
-        (tmp_path / "block_fallback" / "rung_05_block_a_c_psi_z.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "block_fallback" / "rung_05_block_a_c_psi_z.json").read_text(encoding="utf-8")
     )
 
     assert block_report["status"] == "failed"
@@ -6598,9 +6704,7 @@ def test_new4_ladder_block_timeout_writes_partial_json(
         caked_point_reprojection_report=caked_path,
     )
     block_report = json.loads(
-        (tmp_path / "block_timeout" / "rung_05_block_a_c_psi_z.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "block_timeout" / "rung_05_block_a_c_psi_z.json").read_text(encoding="utf-8")
     )
 
     assert block_report["status"] == "timeout"
@@ -6689,10 +6793,7 @@ def test_new4_ladder_block_dirty_timeout_aborts_remaining(
             "block": ["corto_detector", "theta_initial", "cor_angle"],
         }
     ]
-    assert {
-        (item["block_name"], tuple(item["block"]))
-        for item in result["skipped_blocks"]
-    } >= {
+    assert {(item["block_name"], tuple(item["block"])) for item in result["skipped_blocks"]} >= {
         ("chi_cor_angle_theta_initial", ("chi", "cor_angle", "theta_initial")),
         ("a_c_psi_z", ("a", "c", "psi_z")),
     }
@@ -6718,8 +6819,7 @@ def _run_one_param_with_sensitivity_payload(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
 
@@ -6890,8 +6990,7 @@ def test_new4_ladder_one_param_does_not_use_stale_sensitivity_by_default(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
 
@@ -6941,8 +7040,7 @@ def test_new4_ladder_one_param_uses_only_active_sensitivity_params(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
 
@@ -6995,8 +7093,7 @@ def test_new4_ladder_one_param_filter_only_attempts_selected_param(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7056,8 +7153,7 @@ def test_new4_ladder_one_param_filter_inactive_fails_before_solve(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7113,8 +7209,7 @@ def test_new4_ladder_one_param_sets_candidate_param_names_singleton(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7165,8 +7260,7 @@ def test_new4_ladder_one_param_no_active_params_fails_before_solve(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7213,8 +7307,7 @@ def test_new4_ladder_one_param_does_not_run_when_sensitivity_not_green(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
 
@@ -7263,8 +7356,7 @@ def test_new4_ladder_one_param_fails_on_fallback_rows(monkeypatch, tmp_path) -> 
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7291,9 +7383,7 @@ def test_new4_ladder_one_param_fails_on_fallback_rows(monkeypatch, tmp_path) -> 
         timestamp="fallback_rows",
     )
     report = json.loads(
-        (tmp_path / "fallback_rows" / "rung_03_one_param_center_x.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "fallback_rows" / "rung_03_one_param_center_x.json").read_text(encoding="utf-8")
     )
 
     assert report["status"] == "failed"
@@ -7321,8 +7411,7 @@ def test_new4_ladder_one_param_clean_top_level_counters_without_point_summary_ok
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7350,11 +7439,9 @@ def test_new4_ladder_one_param_clean_top_level_counters_without_point_summary_ok
         timestamp="clean_no_point_summary",
     )
     report = json.loads(
-        (
-            tmp_path
-            / "clean_no_point_summary"
-            / "rung_03_one_param_center_x.json"
-        ).read_text(encoding="utf-8")
+        (tmp_path / "clean_no_point_summary" / "rung_03_one_param_center_x.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     assert result["status"] == "ok"
@@ -7377,8 +7464,7 @@ def test_new4_ladder_one_param_all_active_fail_summary(monkeypatch, tmp_path) ->
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7431,8 +7517,7 @@ def test_new4_ladder_one_param_partial_success_exposes_failures(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7505,8 +7590,7 @@ def test_new4_ladder_one_param_clean_timeout_continues_to_next_param(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7577,8 +7661,7 @@ def test_new4_ladder_one_param_each_param_uses_same_base_state(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7631,8 +7714,7 @@ def test_new4_ladder_one_param_dirty_timeout_aborts_remaining(
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -7694,8 +7776,7 @@ def test_new4_ladder_one_param_provider_guard_after(monkeypatch, tmp_path) -> No
         ladder,
         "run_objective_dry_run",
         lambda _context, *, output_path, max_nfev: (
-            ladder._write_json(output_path, _green_rung1_report())
-            or _green_rung1_report()
+            ladder._write_json(output_path, _green_rung1_report()) or _green_rung1_report()
         ),
     )
     monkeypatch.setattr(
@@ -8341,9 +8422,7 @@ def test_optimizer_request_rejects_inconsistent_local_provider_source() -> None:
     assert summary["fallback_row_count"] == 1
     assert summary["missing_fixed_source_count"] == 1
     assert first_row["optimizer_request_fallback_row"] is True
-    assert "source_table_index_hkl_mismatch" in first_row[
-        "optimizer_request_fallback_reason"
-    ]
+    assert "source_table_index_hkl_mismatch" in first_row["optimizer_request_fallback_reason"]
 
 
 def test_new4_ladder_does_not_start_solve_if_objective_uses_fallback(
@@ -8477,7 +8556,9 @@ def test_build_geometry_manual_fit_dataset_skips_cached_candidate_with_missing_h
     assert diag["selected_candidate_source_identity_fields"]["source_reflection_index"] == 204
 
 
-def test_build_geometry_manual_fit_dataset_rejects_nonlegacy_candidates_without_current_view_point() -> None:
+def test_build_geometry_manual_fit_dataset_rejects_nonlegacy_candidates_without_current_view_point() -> (
+    None
+):
     saved_entries = [
         {
             "pair_id": "bg0:pair0",
@@ -8767,7 +8848,9 @@ def test_headless_geometry_fit_legacy_dense_rebind_matches_shared_preflight(
 
     captured = {}
 
-    monkeypatch.setattr(headless_geometry_fit, "_build_runtime_defaults", lambda saved_state: defaults)
+    monkeypatch.setattr(
+        headless_geometry_fit, "_build_runtime_defaults", lambda saved_state: defaults
+    )
     monkeypatch.setattr(
         headless_geometry_fit,
         "_restore_manual_pairs",
@@ -9016,13 +9099,16 @@ def test_headless_geometry_fit_legacy_dense_rebind_matches_shared_preflight(
     assert result.accepted is True
     assert result.rms_px == 0.0
     headless_dataset = captured["dataset"]
-    assert headless_dataset["resolved_source_pair_count"] == workflow_dataset["resolved_source_pair_count"]
-    assert [
-        entry["source_reflection_index"] for entry in headless_dataset["measured_for_fit"]
-    ] == [entry["source_reflection_index"] for entry in workflow_dataset["measured_for_fit"]]
-    assert [
-        entry["source_branch_index"] for entry in headless_dataset["measured_for_fit"]
-    ] == [entry["source_branch_index"] for entry in workflow_dataset["measured_for_fit"]]
+    assert (
+        headless_dataset["resolved_source_pair_count"]
+        == workflow_dataset["resolved_source_pair_count"]
+    )
+    assert [entry["source_reflection_index"] for entry in headless_dataset["measured_for_fit"]] == [
+        entry["source_reflection_index"] for entry in workflow_dataset["measured_for_fit"]
+    ]
+    assert [entry["source_branch_index"] for entry in headless_dataset["measured_for_fit"]] == [
+        entry["source_branch_index"] for entry in workflow_dataset["measured_for_fit"]
+    ]
     assert [
         entry["fit_source_resolution_kind"] for entry in headless_dataset["measured_for_fit"]
     ] == [entry["fit_source_resolution_kind"] for entry in workflow_dataset["measured_for_fit"]]
@@ -9191,7 +9277,9 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
 
     captured = {}
 
-    monkeypatch.setattr(headless_geometry_fit, "_build_runtime_defaults", lambda saved_state: defaults)
+    monkeypatch.setattr(
+        headless_geometry_fit, "_build_runtime_defaults", lambda saved_state: defaults
+    )
     monkeypatch.setattr(
         headless_geometry_fit,
         "_restore_manual_pairs",
@@ -9418,7 +9506,10 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
     assert result.accepted is True
     assert result.rms_px == 0.0
     headless_dataset = captured["dataset"]
-    assert headless_dataset["resolved_source_pair_count"] == workflow_dataset["resolved_source_pair_count"]
+    assert (
+        headless_dataset["resolved_source_pair_count"]
+        == workflow_dataset["resolved_source_pair_count"]
+    )
     for field in (
         "source_reflection_index",
         "source_reflection_namespace",
@@ -9555,15 +9646,17 @@ def test_select_live_candidate_for_saved_entry_prefers_current_view_near_candida
     assert inventory_by_source[203][
         "distance_to_saved_background_current_view_point_px"
     ] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
-    assert inventory_by_source[203][
-        "distance_to_saved_sim_detector_hint_px"
-    ] == pytest.approx((4.0**2 + 3.0**2) ** 0.5)
-    assert inventory_by_source[204][
-        "distance_to_saved_sim_detector_hint_px"
-    ] == pytest.approx((1497.0**2 + 1502.0**2) ** 0.5)
+    assert inventory_by_source[203]["distance_to_saved_sim_detector_hint_px"] == pytest.approx(
+        (4.0**2 + 3.0**2) ** 0.5
+    )
+    assert inventory_by_source[204]["distance_to_saved_sim_detector_hint_px"] == pytest.approx(
+        (1497.0**2 + 1502.0**2) ** 0.5
+    )
 
 
-def test_select_live_candidate_for_saved_entry_prefers_live_simulated_current_view_point_over_display_aliases() -> None:
+def test_select_live_candidate_for_saved_entry_prefers_live_simulated_current_view_point_over_display_aliases() -> (
+    None
+):
     probe = _load_geometry_preflight_probe_module()
 
     result = probe._select_live_candidate_for_saved_entry(
@@ -9633,12 +9726,14 @@ def test_select_live_candidate_for_saved_entry_prefers_live_simulated_current_vi
     ] == pytest.approx(
         ((300.0 - 29.861040445064752) ** 2 + (-200.0 + 59.079850372490654) ** 2) ** 0.5
     )
-    assert inventory_by_source[204][
-        "distance_to_saved_sim_detector_hint_px"
-    ] == pytest.approx((1497.0**2 + 1502.0**2) ** 0.5)
+    assert inventory_by_source[204]["distance_to_saved_sim_detector_hint_px"] == pytest.approx(
+        (1497.0**2 + 1502.0**2) ** 0.5
+    )
 
 
-def test_select_live_candidate_for_saved_entry_ignores_background_shaped_display_only_candidate() -> None:
+def test_select_live_candidate_for_saved_entry_ignores_background_shaped_display_only_candidate() -> (
+    None
+):
     probe = _load_geometry_preflight_probe_module()
 
     result = probe._select_live_candidate_for_saved_entry(
@@ -9695,7 +9790,9 @@ def test_select_live_candidate_for_saved_entry_ignores_background_shaped_display
     )
 
 
-def test_select_live_candidate_for_saved_entry_falls_back_to_detector_native_without_saved_current_view() -> None:
+def test_select_live_candidate_for_saved_entry_falls_back_to_detector_native_without_saved_current_view() -> (
+    None
+):
     probe = _load_geometry_preflight_probe_module()
 
     result = probe._select_live_candidate_for_saved_entry(
@@ -9748,19 +9845,18 @@ def test_select_live_candidate_for_saved_entry_falls_back_to_detector_native_wit
     }
     assert inventory_by_source[203]["coordinate_frame"] == "detector_native_px"
     assert inventory_by_source[204]["coordinate_frame"] == "detector_native_px"
-    assert inventory_by_source[203][
-        "distance_to_saved_sim_detector_hint_px"
-    ] == pytest.approx((1505.0**2 + 1515.0**2) ** 0.5)
-    assert inventory_by_source[204][
-        "distance_to_saved_sim_detector_hint_px"
-    ] == pytest.approx((3.0**2 + 2.0**2) ** 0.5)
-    assert (
-        "distance_to_saved_background_current_view_point_px"
-        not in inventory_by_source[204]
+    assert inventory_by_source[203]["distance_to_saved_sim_detector_hint_px"] == pytest.approx(
+        (1505.0**2 + 1515.0**2) ** 0.5
     )
+    assert inventory_by_source[204]["distance_to_saved_sim_detector_hint_px"] == pytest.approx(
+        (3.0**2 + 2.0**2) ** 0.5
+    )
+    assert "distance_to_saved_background_current_view_point_px" not in inventory_by_source[204]
 
 
-def test_run_fresh_slot_validation_prefers_saved_xy_over_raw_xy_and_display_for_current_view_target() -> None:
+def test_run_fresh_slot_validation_prefers_saved_xy_over_raw_xy_and_display_for_current_view_target() -> (
+    None
+):
     probe = _load_geometry_preflight_probe_module()
     captured: dict[str, object] = {}
     saved_entry = {
@@ -9818,12 +9914,12 @@ def test_run_fresh_slot_validation_prefers_saved_xy_over_raw_xy_and_display_for_
     assert result["saved_entry"]["saved_background_current_view_point"] == pytest.approx(
         [1822.0, 1375.0]
     )
-    assert result["saved_entry"]["saved_background_current_view_frame"] == (
-        "current_view_display"
-    )
+    assert result["saved_entry"]["saved_background_current_view_frame"] == ("current_view_display")
 
 
-def test_run_fresh_slot_validation_uses_display_point_as_last_noncaked_current_view_fallback() -> None:
+def test_run_fresh_slot_validation_uses_display_point_as_last_noncaked_current_view_fallback() -> (
+    None
+):
     probe = _load_geometry_preflight_probe_module()
     captured: dict[str, object] = {}
     saved_entry = {
@@ -9877,9 +9973,7 @@ def test_run_fresh_slot_validation_uses_display_point_as_last_noncaked_current_v
     assert result["saved_entry"]["saved_background_current_view_point"] == pytest.approx(
         [91.0, 82.0]
     )
-    assert result["saved_entry"]["saved_background_current_view_frame"] == (
-        "current_view_display"
-    )
+    assert result["saved_entry"]["saved_background_current_view_frame"] == ("current_view_display")
 
 
 def test_run_fresh_slot_validation_passes_caked_saved_current_view_point_to_selection() -> None:
@@ -9940,9 +10034,7 @@ def test_run_fresh_slot_validation_passes_caked_saved_current_view_point_to_sele
     assert result["saved_entry"]["saved_background_current_view_point"] == pytest.approx(
         [29.861040445064752, -59.079850372490654]
     )
-    assert result["saved_entry"]["saved_background_current_view_frame"] == (
-        "caked_display"
-    )
+    assert result["saved_entry"]["saved_background_current_view_frame"] == ("caked_display")
 
 
 def test_compatibility_probe_slot_indices_prefers_first_mirrored_group() -> None:
@@ -10008,7 +10100,7 @@ def test_saved_to_selected_identity_delta_reports_legacy_canonicalization() -> N
         "source_reflection_is_full": {
             "saved": False,
             "selected": True,
-        }
+        },
     }
 
 
@@ -10148,8 +10240,7 @@ def test_probe_main_aliases_full_to_fresh_all(
     monkeypatch.setattr(
         probe,
         "_run_fresh_all_contract_validation",
-        lambda *args, **kwargs: calls.append("fresh-all")
-        or {"ok": True, "classification": "pass"},
+        lambda *args, **kwargs: calls.append("fresh-all") or {"ok": True, "classification": "pass"},
     )
     monkeypatch.setattr(
         probe,
@@ -10680,9 +10771,7 @@ def test_fresh_all_contract_validation_exports_slot_order_and_runs_compatibility
     assert result["compatibility_ok"] is True
     assert result["background_distance_gate_ok"] is True
     assert result["background_distances_all_finite"] is True
-    assert result["background_distance_px"] == [
-        float(slot_index) + 0.25 for slot_index in range(9)
-    ]
+    assert result["background_distance_px"] == [float(slot_index) + 0.25 for slot_index in range(9)]
     assert result["max_background_distance_px"] == pytest.approx(8.25)
     assert result["background_distance_gate_threshold_px"] == pytest.approx(100.0)
     assert result["deprecated_aliases_present"] is True
@@ -11221,10 +11310,7 @@ def test_fresh_contract_validation_reports_temp_state_save_failure_without_crash
 
     def _save_with_temp_failure(path, state):
         resolved_path = Path(path).resolve()
-        if (
-            resolved_path.name.startswith("fresh_state.json.")
-            and resolved_path.suffix == ".tmp"
-        ):
+        if resolved_path.name.startswith("fresh_state.json.") and resolved_path.suffix == ".tmp":
             raise OSError("temp disk full")
         return original_save_gui_state_file(path, state)
 
@@ -11978,9 +12064,7 @@ def test_downstream_identity_validation_preserves_canonical_identity(
         "_build_geometry_fit_dataset_contexts",
         lambda *args, **kwargs: [
             SimpleNamespace(
-                subset=SimpleNamespace(
-                    measured_entries=[dict(entry) for entry in saved_entries]
-                )
+                subset=SimpleNamespace(measured_entries=[dict(entry) for entry in saved_entries])
             )
         ],
     )
@@ -12100,9 +12184,7 @@ def test_downstream_identity_validation_uses_optimizer_captured_full_beam_diagno
         "_build_geometry_fit_dataset_contexts",
         lambda *args, **kwargs: [
             SimpleNamespace(
-                subset=SimpleNamespace(
-                    measured_entries=[dict(entry) for entry in saved_entries]
-                )
+                subset=SimpleNamespace(measured_entries=[dict(entry) for entry in saved_entries])
             )
         ],
     )
@@ -12293,9 +12375,7 @@ def test_downstream_identity_validation_promotes_coverage_mismatch_classificatio
         "_build_geometry_fit_dataset_contexts",
         lambda *args, **kwargs: [
             SimpleNamespace(
-                subset=SimpleNamespace(
-                    measured_entries=[dict(entry) for entry in saved_entries]
-                )
+                subset=SimpleNamespace(measured_entries=[dict(entry) for entry in saved_entries])
             )
         ],
     )
@@ -13252,7 +13332,9 @@ def test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_cak
     assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == -36.0
 
 
-def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> None:
+def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source() -> (
+    None
+):
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
         current_background_index=0,
@@ -13325,7 +13407,9 @@ def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_witho
     assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
 
 
-def test_build_geometry_manual_fit_dataset_prefers_current_view_overlay_fallback_in_caked_view() -> None:
+def test_build_geometry_manual_fit_dataset_prefers_current_view_overlay_fallback_in_caked_view() -> (
+    None
+):
     simulated_rows = [
         {
             "q_group_key": ("q", 1),
@@ -13427,7 +13511,9 @@ def test_build_geometry_manual_fit_dataset_prefers_current_view_overlay_fallback
     assert diag["overlay_distance_px"] == pytest.approx(np.hypot(0.1, 0.1))
 
 
-def test_build_geometry_manual_fit_dataset_prefers_detector_display_over_stale_sim_aliases() -> None:
+def test_build_geometry_manual_fit_dataset_prefers_detector_display_over_stale_sim_aliases() -> (
+    None
+):
     simulated_rows = [
         {
             "q_group_key": ("q", 1),
@@ -13590,9 +13676,7 @@ def test_build_geometry_manual_fit_dataset_rebuilds_missing_snapshot_and_enables
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
-        geometry_manual_simulated_lookup=lambda peaks: {
-            (1, 2): dict(valid_source_row)
-        },
+        geometry_manual_simulated_lookup=lambda peaks: {(1, 2): dict(valid_source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -13683,7 +13767,11 @@ def test_geometry_fit_dynamic_reanchor_uses_background_detector_cache_as_raw_see
     monkeypatch.setattr(
         geometry_fit,
         "build_background_peak_context",
-        lambda image, cfg: {"img_valid": True, "shape": tuple(np.asarray(image).shape), "cfg": dict(cfg)},
+        lambda image, cfg: {
+            "img_valid": True,
+            "shape": tuple(np.asarray(image).shape),
+            "cfg": dict(cfg),
+        },
     )
 
     valid_source_row = {
@@ -13722,9 +13810,7 @@ def test_geometry_fit_dynamic_reanchor_uses_background_detector_cache_as_raw_see
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
-        geometry_manual_simulated_lookup=lambda peaks: {
-            (1, 2): dict(valid_source_row)
-        },
+        geometry_manual_simulated_lookup=lambda peaks: {(1, 2): dict(valid_source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -13894,16 +13980,12 @@ def test_geometry_fit_dynamic_reanchor_uses_exact_caked_bundle_without_analytic_
         ),
         apply_background_backend_orientation=lambda image: image,
         geometry_manual_source_rows_for_background=(
-            lambda idx, params, *, consumer, required_pairs=None: [
-                dict(valid_source_row)
-            ]
+            lambda idx, params, *, consumer, required_pairs=None: [dict(valid_source_row)]
         ),
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
-        geometry_manual_simulated_lookup=lambda peaks: {
-            (1, 2): dict(valid_source_row)
-        },
+        geometry_manual_simulated_lookup=lambda peaks: {(1, 2): dict(valid_source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -14063,16 +14145,12 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
         ),
         apply_background_backend_orientation=lambda image: image,
         geometry_manual_source_rows_for_background=(
-            lambda idx, params, *, consumer, required_pairs=None: [
-                dict(valid_source_row)
-            ]
+            lambda idx, params, *, consumer, required_pairs=None: [dict(valid_source_row)]
         ),
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
-        geometry_manual_simulated_lookup=lambda peaks: {
-            (1, 2): dict(valid_source_row)
-        },
+        geometry_manual_simulated_lookup=lambda peaks: {(1, 2): dict(valid_source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -14209,17 +14287,19 @@ def test_geometry_fit_dynamic_reanchor_missing_or_invalid_bundle_falls_back_to_d
         geometry_fit,
         "resolve_cake_transform_bundle",
         lambda ai, detector_shape, radial_deg, *, raw_azimuth_deg=None, **_kwargs: (
-            rebuild_calls.append(
-                (
-                    tuple(int(v) for v in tuple(detector_shape)[:2]),
-                    int(np.asarray(radial_deg, dtype=np.float64).size),
-                    int(np.asarray(raw_azimuth_deg, dtype=np.float64).size),
+            (
+                rebuild_calls.append(
+                    (
+                        tuple(int(v) for v in tuple(detector_shape)[:2]),
+                        int(np.asarray(radial_deg, dtype=np.float64).size),
+                        int(np.asarray(raw_azimuth_deg, dtype=np.float64).size),
+                    )
                 )
+                or None
             )
-            or None
-        )
-        if ai is not None
-        else None,
+            if ai is not None
+            else None
+        ),
     )
     monkeypatch.setattr(
         geometry_fit.gui_manual_geometry,
@@ -14260,16 +14340,12 @@ def test_geometry_fit_dynamic_reanchor_missing_or_invalid_bundle_falls_back_to_d
         ),
         apply_background_backend_orientation=lambda image: image,
         geometry_manual_source_rows_for_background=(
-            lambda idx, params, *, consumer, required_pairs=None: [
-                dict(valid_source_row)
-            ]
+            lambda idx, params, *, consumer, required_pairs=None: [dict(valid_source_row)]
         ),
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
-        geometry_manual_simulated_lookup=lambda peaks: {
-            (1, 2): dict(valid_source_row)
-        },
+        geometry_manual_simulated_lookup=lambda peaks: {(1, 2): dict(valid_source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -14471,16 +14547,12 @@ def test_geometry_fit_dynamic_reanchor_projects_lut_in_native_detector_coords(
             or backend_to_native.get((float(col), float(row)), (None, None))
         ),
         geometry_manual_source_rows_for_background=(
-            lambda idx, params, *, consumer, required_pairs=None: [
-                dict(valid_source_row)
-            ]
+            lambda idx, params, *, consumer, required_pairs=None: [dict(valid_source_row)]
         ),
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(valid_source_row)]
         ),
-        geometry_manual_simulated_lookup=lambda peaks: {
-            (1, 2): dict(valid_source_row)
-        },
+        geometry_manual_simulated_lookup=lambda peaks: {(1, 2): dict(valid_source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -14604,7 +14676,9 @@ def test_rebuild_geometry_fit_source_rows_preserves_runtime_failure_status() -> 
     assert result.diagnostics["image_size"] == 2048
 
 
-def test_rebuild_geometry_fit_source_rows_rejects_invalid_live_cache_for_required_pair_and_records_dual_path_diff() -> None:
+def test_rebuild_geometry_fit_source_rows_rejects_invalid_live_cache_for_required_pair_and_records_dual_path_diff() -> (
+    None
+):
     live_rows = [
         {
             "hkl": (1, 0, 0),
@@ -14693,7 +14767,9 @@ def test_rebuild_geometry_fit_source_rows_rejects_invalid_live_cache_for_require
     ]
 
 
-def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live_runtime_cache() -> None:
+def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live_runtime_cache() -> (
+    None
+):
     live_rows = [
         {
             "hkl": (1, 0, 0),
@@ -14752,9 +14828,7 @@ def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live
             }
         ],
         live_cache_inventory={"source_snapshot_count": 1},
-        stage_callback=lambda stage, payload: stage_events.append(
-            (str(stage), dict(payload))
-        ),
+        stage_callback=lambda stage, payload: stage_events.append((str(stage), dict(payload))),
     )
 
     assert result.rebuild_source == "live_runtime_cache"
@@ -14827,9 +14901,7 @@ def test_validate_geometry_fit_live_source_rows_rejection_counts_follow_hkl_then
     assert validation["missing_required_pair_count"] == 2
     assert validation["hkl_missing_candidate_count"] == 1
     assert validation["branch_mismatch_count"] == 1
-    pair_failures = {
-        str(entry["pair_id"]): dict(entry) for entry in validation["pair_failures"]
-    }
+    pair_failures = {str(entry["pair_id"]): dict(entry) for entry in validation["pair_failures"]}
     assert pair_failures["hkl-miss"]["candidate_count_total"] == 1
     assert pair_failures["hkl-miss"]["candidate_count_after_hkl_filter"] == 0
     assert pair_failures["hkl-miss"]["candidate_count_after_branch_filter"] == 0
@@ -14904,8 +14976,7 @@ def test_rebuild_geometry_fit_source_rows_stage_callback_failure_does_not_abort(
     assert result.rebuild_source == "live_runtime_cache"
     assert result.diagnostics["stage_callback_failure_count"] == 9
     assert (
-        result.diagnostics["stage_callback_last_failed_stage"]
-        == "source_cache_project_rows_ready"
+        result.diagnostics["stage_callback_last_failed_stage"] == "source_cache_project_rows_ready"
     )
 
 
@@ -15330,10 +15401,9 @@ def test_manual_pick_change_only_changes_targeted_subset_not_full_cache() -> Non
 
     assert first_keys == moved_keys
     assert first_key_digest == moved_key_digest
-    assert (
-        geometry_fit._geometry_fit_manual_target_scoring_digest(first_targets)
-        != geometry_fit._geometry_fit_manual_target_scoring_digest(moved_targets)
-    )
+    assert geometry_fit._geometry_fit_manual_target_scoring_digest(
+        first_targets
+    ) != geometry_fit._geometry_fit_manual_target_scoring_digest(moved_targets)
     assert expanded_keys != first_keys
     assert expanded_key_digest != first_key_digest
     assert caked_key_digest != detector_key_digest
@@ -15414,10 +15484,12 @@ def test_targeted_preflight_projects_only_required_candidate_rows() -> None:
         ),
         simulate_hit_tables=lambda _params, **_kwargs: [object()],
         last_runtime_simulation_diagnostics=lambda: {"status": "success"},
-        project_rows=lambda rows: projected_row_batches.append(
-            [dict(entry) for entry in rows or () if isinstance(entry, dict)]
-        )
-        or list(rows or ()),
+        project_rows=lambda rows: (
+            projected_row_batches.append(
+                [dict(entry) for entry in rows or () if isinstance(entry, dict)]
+            )
+            or list(rows or ())
+        ),
         required_pairs=required_pairs,
         required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
             required_pairs,
@@ -15487,8 +15559,7 @@ def test_targeted_fresh_simulation_receives_required_branch_group_filter() -> No
             None,
             None,
         ),
-        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs)
-        or [object()],
+        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs) or [object()],
         last_runtime_simulation_diagnostics=lambda: {"status": "success"},
         project_rows=lambda rows: list(rows or ()),
         required_pairs=required_pairs,
@@ -15552,8 +15623,7 @@ def test_full_validation_mode_keeps_manual_geometry_targeted_preflight() -> None
             None,
             None,
         ),
-        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs)
-        or [object()],
+        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs) or [object()],
         last_runtime_simulation_diagnostics=lambda: {"status": "success"},
         project_rows=lambda rows: list(rows or ()),
         required_pairs=required_pairs,
@@ -15608,28 +15678,30 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
             "mismatch_reason": "empty_cache",
             "heavy_hit_table_load_attempted": False,
         },
-        build_source_rows_from_hit_tables=lambda _tables, **kwargs: build_kwargs.update(kwargs)
-        or (
-            [
-                _targeted_source_row(
-                    hkl=(1, 0, 0),
-                    branch_index=1,
-                    q_group_key=("q", 1),
-                    sim_col=10.0,
-                    sim_row=20.0,
-                ),
-                _targeted_source_row(
-                    hkl=(9, 9, 9),
-                    branch_index=0,
-                    q_group_key=("q", 9),
-                    sim_col=90.0,
-                    sim_row=91.0,
-                    source_peak_index=9,
-                ),
-            ],
-            None,
-            None,
-            None,
+        build_source_rows_from_hit_tables=lambda _tables, **kwargs: (
+            build_kwargs.update(kwargs)
+            or (
+                [
+                    _targeted_source_row(
+                        hkl=(1, 0, 0),
+                        branch_index=1,
+                        q_group_key=("q", 1),
+                        sim_col=10.0,
+                        sim_row=20.0,
+                    ),
+                    _targeted_source_row(
+                        hkl=(9, 9, 9),
+                        branch_index=0,
+                        q_group_key=("q", 9),
+                        sim_col=90.0,
+                        sim_row=91.0,
+                        source_peak_index=9,
+                    ),
+                ],
+                None,
+                None,
+                None,
+            )
         ),
         simulate_hit_tables=_simulate_without_targeting,
         last_runtime_simulation_diagnostics=lambda: {"status": "success"},
@@ -15641,9 +15713,7 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
         ),
         preflight_mode="manual_geometry_targeted",
         live_cache_inventory={"source_snapshot_count": 0},
-        stage_callback=lambda stage, payload: stage_events.append(
-            (str(stage), dict(payload))
-        ),
+        stage_callback=lambda stage, payload: stage_events.append((str(stage), dict(payload))),
     )
 
     assert build_kwargs["required_branch_group_keys"] == [((1, 0, 0), 1, ("q", 1))]
@@ -15860,8 +15930,7 @@ def test_targeted_simulation_used_follows_runtime_diagnostics() -> None:
             None,
             None,
         ),
-        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs)
-        or [object()],
+        simulate_hit_tables=lambda _params, **kwargs: captured_kwargs.update(kwargs) or [object()],
         last_runtime_simulation_diagnostics=lambda: {
             "status": "success",
             "targeted_simulation_supported": True,
@@ -16207,9 +16276,7 @@ def test_noncurrent_caked_rebuild_uses_caked_payload_failure_reason() -> None:
 
     assert result.stored_rows
     assert result.projected_rows == []
-    assert result.diagnostics["projection_failure_reason"] == (
-        "missing_background_caked_payload"
-    )
+    assert result.diagnostics["projection_failure_reason"] == ("missing_background_caked_payload")
 
 
 def test_full_fresh_simulation_fallback_does_not_pass_targeted_performance_gate() -> None:
@@ -16358,9 +16425,7 @@ def test_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load() -> N
         ),
         preflight_mode="manual_geometry_targeted",
         live_cache_inventory={"source_snapshot_count": 0},
-        stage_callback=lambda stage, payload: stage_events.append(
-            (str(stage), dict(payload))
-        ),
+        stage_callback=lambda stage, payload: stage_events.append((str(stage), dict(payload))),
     )
 
     miss_payload = next(
@@ -16460,10 +16525,13 @@ def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_activ
         rebuild_validation["resolved_pairs"]
     )
     assert len(fixed_validation["resolved_pairs"]) == len(rebuild_validation["resolved_pairs"]) == 1
-    assert geometry_fit._geometry_fit_required_pair_dual_path_diff(
-        fixed_validation,
-        rebuild_validation,
-    ) == []
+    assert (
+        geometry_fit._geometry_fit_required_pair_dual_path_diff(
+            fixed_validation,
+            rebuild_validation,
+        )
+        == []
+    )
     assert geometry_fit._geometry_fit_required_pair_dual_path_diff(
         broken_validation,
         rebuild_validation,
@@ -16515,9 +16583,7 @@ def test_peak_record_fallback_with_restored_provenance_matches_rebuild_for_activ
     )
 
     assert accepted.rebuild_source == "live_runtime_cache"
-    assert accepted.metadata["live_runtime_cache_metadata"]["cache_source"] == (
-        "peak_records"
-    )
+    assert accepted.metadata["live_runtime_cache_metadata"]["cache_source"] == ("peak_records")
     assert accepted.metadata["live_runtime_cache_metadata"]["active_signature_matches"] is True
 
 
@@ -16564,9 +16630,7 @@ def test_build_geometry_manual_fit_dataset_includes_runtime_exception_details_in
         ),
         geometry_manual_rebuild_source_rows_for_background=_rebuild_source_rows,
         geometry_manual_last_source_snapshot_diagnostics=lambda: dict(snapshot_diag),
-        geometry_manual_simulated_peaks_for_params=(
-            lambda params, *, prefer_cache: []
-        ),
+        geometry_manual_simulated_peaks_for_params=(lambda params, *, prefer_cache: []),
         geometry_manual_simulated_lookup=lambda peaks: {},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
@@ -16639,9 +16703,7 @@ def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() 
             geometry_theta_offset_var=_DummyVar("0.125"),
             current_background_index=lambda: background_state["index"],
             geometry_fit_uses_shared_theta_offset=lambda: shared_theta["value"],
-            current_geometry_theta_offset=lambda strict=False: theta_offset_state[
-                "value"
-            ],
+            current_geometry_theta_offset=lambda strict=False: theta_offset_state["value"],
             background_theta_for_index=(
                 lambda index, strict_count=False: {0: 2.75, 1: 4.25}[int(index)]
             ),
@@ -16801,8 +16863,7 @@ def test_build_runtime_geometry_fit_config_factory_reads_runtime_constraint_valu
             or {"gamma": {"window": 0.25, "pull": 0.5}}
         ),
         current_parameter_domains=lambda names: (
-            calls.append(("domains", list(names or [])))
-            or {"gamma": (0.0, 1.0)}
+            calls.append(("domains", list(names or []))) or {"gamma": (0.0, 1.0)}
         ),
     )
 
@@ -17650,9 +17711,7 @@ def test_build_geometry_fit_dataset_cache_log_lines_include_per_table_metadata()
         "source=geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
     )
     assert "geometry_manual_simulated_lookup" in lines[1]
-    assert lines[2] == (
-        "bg0.osc: pair_count=3 resolved_source_pairs=2 simulated_peaks=9 tables=1"
-    )
+    assert lines[2] == ("bg0.osc: pair_count=3 resolved_source_pairs=2 simulated_peaks=9 tables=1")
     assert lines[3] == (
         "bg0.osc: table[4] nominal_hkl=[1, 1, 0] q_group_key=[q, 1] "
         "qr=1.250000 qz=-0.500000 rows_before=6 rows_after=2 "
@@ -17761,8 +17820,7 @@ def test_build_geometry_fit_source_resolution_log_lines_include_unresolved_pair_
     )
 
     assert lines[0] == (
-        "bg0.osc: resolved_source_pairs=1/3 simulated_peaks=70 "
-        "simulated_source_rows=61"
+        "bg0.osc: resolved_source_pairs=1/3 simulated_peaks=70 simulated_source_rows=61"
     )
     assert "saved_row=(2, 5)" in lines[1]
     assert "saved_hkl=[1, 1, 0]" in lines[1]
@@ -17795,8 +17853,7 @@ def test_build_geometry_fit_source_resolution_log_lines_note_fit_only_rebinds() 
     )
 
     assert lines[1] == (
-        "bg0.osc: all saved manual pairs resolved for fit "
-        "(including legacy source-id remaps)."
+        "bg0.osc: all saved manual pairs resolved for fit (including legacy source-id remaps)."
     )
 
 
@@ -17838,7 +17895,9 @@ def test_build_geometry_fit_source_resolution_log_lines_include_branch_details()
     )
 
 
-def test_build_geometry_fit_simulation_diagnostic_log_lines_include_runtime_failure_details() -> None:
+def test_build_geometry_fit_simulation_diagnostic_log_lines_include_runtime_failure_details() -> (
+    None
+):
     lines = geometry_fit.build_geometry_fit_simulation_diagnostic_log_lines(
         [
             {
@@ -17956,9 +18015,7 @@ def test_build_geometry_fit_preflight_log_sections_omit_debug_sections_by_defaul
                     "source": "fresh",
                     "status": "empty_simulated_peaks",
                 },
-                "source_resolution_diagnostics": [
-                    {"pair_index": 0, "strict_resolved": False}
-                ],
+                "source_resolution_diagnostics": [{"pair_index": 0, "strict_resolved": False}],
             }
         ],
         current_dataset={
@@ -17992,9 +18049,7 @@ def test_build_geometry_fit_calibration_lines_report_pixel_size_provenance() -> 
     )
 
     assert lines[0] == "pixel_size_source=pixel_size_m value=0.000100"
-    assert lines[1] == (
-        "pixel_size=nan pixel_size_m=0.000100 debye_x=0.000000 debye_y=0.000000"
-    )
+    assert lines[1] == ("pixel_size=nan pixel_size_m=0.000100 debye_x=0.000000 debye_y=0.000000")
     assert lines[2] == "warning=debye_x <= 0; using pixel_size_m instead"
 
 
@@ -18689,7 +18744,9 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert "image_refinement" not in changed
 
 
-def test_apply_manual_point_geometry_fit_runtime_overrides_preserves_unsafe_parallel_settings() -> None:
+def test_apply_manual_point_geometry_fit_runtime_overrides_preserves_unsafe_parallel_settings() -> (
+    None
+):
     base_cfg = {
         "solver": {
             "workers": "auto",
@@ -19134,12 +19191,9 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         chosen_discrete_mode = {"rot90": 1}
         bound_hits = ["Gamma"]
         boundary_warning = (
-            "Possible identifiability issue: parameters finished near bounds "
-            "(Gamma=upper)."
+            "Possible identifiability issue: parameters finished near bounds (Gamma=upper)."
         )
-        restart_history = [
-            {"restart": 0, "cost": 2.5, "success": False, "message": "retry"}
-        ]
+        restart_history = [{"restart": 0, "cost": 2.5, "success": False, "message": "retry"}]
         rms_px = 0.75
         x = [1.5, 2.5]
         point_match_summary = {
@@ -19328,30 +19382,29 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
 
     debug_lines = geometry_fit.build_geometry_fit_debug_lines(_Result())
     assert debug_lines[0] == "point_match_mode=True datasets=1 vars=gamma,a"
+    assert any("seed_search prescore_top_k=2 n_global=3 n_jitter=1" in line for line in debug_lines)
     assert any(
-        "seed_search prescore_top_k=2 n_global=3 n_jitter=1" in line
+        "discrete_modes count=2 selected=rot90=1 labels=[identity, rot90=1]" in line
         for line in debug_lines
     )
     assert any(
-        "discrete_modes count=2 selected=rot90=1 labels=[identity, rot90=1]"
-        in line
-        for line in debug_lines
-    )
-    assert any(
-        "mode_seed[0] label=identity total_seeds=5 selected_seeds=2" in line
-        for line in debug_lines
+        "mode_seed[0] label=identity total_seeds=5 selected_seeds=2" in line for line in debug_lines
     )
     assert any("main_seed_point_match matched=4 missing=1" in line for line in debug_lines)
     assert any("main_seed kind=zero label=u=0 cost=3.500000" in line for line in debug_lines)
     assert any("seed_rms_px=1.500000" in line for line in debug_lines)
     assert any("dataset[0] label=bg0" in line for line in debug_lines)
-    assert any("param[gamma] group=tilt start=1.000000 final=1.500000 delta=0.500000" in line for line in debug_lines)
-    assert any("full_beam_polish=True full_beam_radius_px=24.000000" in line for line in debug_lines)
+    assert any(
+        "param[gamma] group=tilt start=1.000000 final=1.500000 delta=0.500000" in line
+        for line in debug_lines
+    )
+    assert any(
+        "full_beam_polish=True full_beam_radius_px=24.000000" in line for line in debug_lines
+    )
     assert any("final metric=central_point_match cost=1.250000" in line for line in debug_lines)
     assert any("solve_counts prescored=6 solved=2" in line for line in debug_lines)
     assert any(
-        "solve_progress label=main solve evaluations=12" in line
-        and "last_cost=1.100000" in line
+        "solve_progress label=main solve evaluations=12" in line and "last_cost=1.100000" in line
         for line in debug_lines
     )
     assert any("solve_progress[0] eval=1 reason=milestone" in line for line in debug_lines)
@@ -19364,8 +19417,7 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         for line in stage_lines
     )
     assert any(
-        line.startswith("adaptive_regularization:")
-        and "applied_parameters=[Gamma]" in line
+        line.startswith("adaptive_regularization:") and "applied_parameters=[Gamma]" in line
         for line in stage_lines
     )
     assert any(
@@ -19376,9 +19428,7 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         for line in stage_lines
     )
     assert any(
-        line.startswith("auto_freeze:")
-        and "fixed_parameters=[a]" in line
-        for line in stage_lines
+        line.startswith("auto_freeze:") and "fixed_parameters=[a]" in line for line in stage_lines
     )
 
     result_lines = geometry_fit.build_geometry_fit_result_lines(
@@ -19561,9 +19611,7 @@ def test_build_geometry_fit_rejection_reason_lines_flags_underconstraint_and_bou
             "unweighted_peak_max_px": 2.5,
         },
         identifiability_summary={"underconstrained": True},
-        bound_proximity_summary={
-            "near_bound_parameters": [{"name": "Gamma", "side": "upper"}]
-        },
+        bound_proximity_summary={"near_bound_parameters": [{"name": "Gamma", "side": "upper"}]},
     )
 
     reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=0.75)
@@ -19574,7 +19622,9 @@ def test_build_geometry_fit_rejection_reason_lines_flags_underconstraint_and_bou
     ]
 
 
-def test_build_geometry_fit_rejection_reason_lines_ignores_bound_proximity_without_underconstraint() -> None:
+def test_build_geometry_fit_rejection_reason_lines_ignores_bound_proximity_without_underconstraint() -> (
+    None
+):
     result = SimpleNamespace(
         success=True,
         point_match_summary={
@@ -19733,7 +19783,9 @@ def test_build_runtime_geometry_fit_result_bindings_uses_current_ui_snapshot() -
     }
 
 
-def test_capture_runtime_geometry_fit_undo_state_builds_overlay_fallback_from_manual_pairs() -> None:
+def test_capture_runtime_geometry_fit_undo_state_builds_overlay_fallback_from_manual_pairs() -> (
+    None
+):
     calls: list[tuple[str, object]] = []
 
     snapshot = geometry_fit.capture_runtime_geometry_fit_undo_state(
@@ -19867,7 +19919,9 @@ def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overl
         var_map={"gamma": gamma_var, "a": a_var},
         geometry_theta_offset_var=theta_offset_var,
         replace_profile_cache=lambda profile_cache: stored_profile_cache.update(profile_cache),
-        set_last_overlay_state=lambda overlay_state: events.append(("overlay_state", overlay_state)),
+        set_last_overlay_state=lambda overlay_state: events.append(
+            ("overlay_state", overlay_state)
+        ),
         request_preview_skip_once=lambda: events.append("skip_preview_once"),
         mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
         cancel_pending_update=lambda: events.append("cancel_pending"),
@@ -20185,7 +20239,9 @@ def test_make_runtime_geometry_tool_action_callbacks_sets_manual_pick_mode() -> 
     ]
 
 
-def test_make_runtime_geometry_tool_action_callbacks_does_not_force_caked_view_when_arming() -> None:
+def test_make_runtime_geometry_tool_action_callbacks_does_not_force_caked_view_when_arming() -> (
+    None
+):
     events: list[object] = []
     armed = {"value": False}
 
@@ -20314,9 +20370,7 @@ def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callb
         compute_frame_diagnostics=lambda *args, **kwargs: ({}, None),
     )
 
-    assert setup.postprocess_config.log_path == (
-        tmp_path / "geometry_fit_log_20260328_123000.txt"
-    )
+    assert setup.postprocess_config.log_path == (tmp_path / "geometry_fit_log_20260328_123000.txt")
     assert setup.postprocess_config.current_background_index == 1
     setup.ui_bindings.sync_joint_background_theta()
     assert theta_initial_var.get() == 4.0
@@ -20384,9 +20438,7 @@ def test_build_runtime_geometry_fit_execution_setup_uses_log_dir_when_provided(
 
     assert setup.postprocess_config.downloads_dir == downloads_dir
     assert setup.postprocess_config.log_dir == log_dir
-    assert setup.postprocess_config.log_path == (
-        log_dir / "geometry_fit_log_20260328_123010.txt"
-    )
+    assert setup.postprocess_config.log_path == (log_dir / "geometry_fit_log_20260328_123010.txt")
     assert setup.postprocess_config.log_path.parent == log_dir
 
 
@@ -20599,9 +20651,7 @@ def test_run_runtime_geometry_fit_action_uses_fit_only_mosaic_samples_for_solver
                 var_map={},
                 build_mosaic_params=_build_mosaic_params,
             ),
-            prepare_bindings_factory=lambda _var_names: (
-                _make_runtime_action_prepare_bindings()
-            ),
+            prepare_bindings_factory=lambda _var_names: _make_runtime_action_prepare_bindings(),
             execution_bindings=execution_bindings,
             solve_fit=solve_fit,
             stamp_factory=lambda: "20260328_130004",
@@ -20654,9 +20704,7 @@ def test_run_runtime_geometry_fit_action_reports_prepare_exception(tmp_path) -> 
                 current_ui_params=lambda: {},
                 var_map={},
             ),
-            prepare_bindings_factory=lambda _var_names: (
-                _make_runtime_action_prepare_bindings()
-            ),
+            prepare_bindings_factory=lambda _var_names: _make_runtime_action_prepare_bindings(),
             execution_bindings=_make_runtime_action_execution_bindings(
                 tmp_path,
                 progress_texts,
@@ -20677,9 +20725,7 @@ def test_run_runtime_geometry_fit_action_reports_prepare_exception(tmp_path) -> 
     assert action.execution_result is None
     assert action.prepare_result is not None
     assert action.error_text == "Geometry fit failed: boom"
-    assert action.prepare_result.log_path == (
-        tmp_path / "geometry_fit_log_20260328_130001.txt"
-    )
+    assert action.prepare_result.log_path == (tmp_path / "geometry_fit_log_20260328_130001.txt")
     log_text = action.prepare_result.log_path.read_text(encoding="utf-8")
     assert "Geometry fit aborted before solver start: 20260328_130001" in log_text
     assert progress_texts == ["Geometry fit failed: boom"]
@@ -20702,9 +20748,7 @@ def test_run_runtime_geometry_fit_action_writes_preflight_log_to_log_dir(
                 current_ui_params=lambda: {},
                 var_map={},
             ),
-            prepare_bindings_factory=lambda _var_names: (
-                _make_runtime_action_prepare_bindings()
-            ),
+            prepare_bindings_factory=lambda _var_names: _make_runtime_action_prepare_bindings(),
             execution_bindings=_make_runtime_action_execution_bindings(
                 downloads_dir,
                 progress_texts,
@@ -20742,9 +20786,7 @@ def test_run_runtime_geometry_fit_action_surfaces_preflight_error_text(tmp_path)
                 current_ui_params=lambda: {},
                 var_map={},
             ),
-            prepare_bindings_factory=lambda _var_names: (
-                _make_runtime_action_prepare_bindings()
-            ),
+            prepare_bindings_factory=lambda _var_names: _make_runtime_action_prepare_bindings(),
             execution_bindings=_make_runtime_action_execution_bindings(
                 tmp_path,
                 progress_texts,
@@ -20768,9 +20810,7 @@ def test_run_runtime_geometry_fit_action_surfaces_preflight_error_text(tmp_path)
     assert action.prepare_result is not None
     assert action.error_text == "Geometry fit unavailable"
     assert action.preserve_live_theta is False
-    assert action.prepare_result.log_path == (
-        tmp_path / "geometry_fit_log_20260328_130002.txt"
-    )
+    assert action.prepare_result.log_path == (tmp_path / "geometry_fit_log_20260328_130002.txt")
     log_text = action.prepare_result.log_path.read_text(encoding="utf-8")
     assert "Geometry fit aborted before solver start: 20260328_130002" in log_text
     assert "Geometry fit unavailable" in log_text
@@ -20820,9 +20860,7 @@ def test_run_runtime_geometry_fit_action_persists_debug_preflight_log_without_er
     assert action.execution_result is None
     assert action.prepare_result is not None
     assert action.error_text is None
-    assert action.prepare_result.log_path == (
-        tmp_path / "geometry_fit_log_20260328_130003.txt"
-    )
+    assert action.prepare_result.log_path == (tmp_path / "geometry_fit_log_20260328_130003.txt")
     log_text = action.prepare_result.log_path.read_text(encoding="utf-8")
     assert "Geometry fit aborted before solver start: 20260328_130003" in log_text
     assert "Geometry fit aborted before solver start." in log_text
@@ -21795,11 +21833,7 @@ def test_apply_runtime_geometry_fit_result_logs_point_match_diagnostics_when_deb
 
     assert outcome.accepted is True
     assert ("Point-match summary:", ["claimed=4"]) in events
-    diagnostic_sections = [
-        lines
-        for title, lines in events
-        if title == "Point-match diagnostics:"
-    ]
+    diagnostic_sections = [lines for title, lines in events if title == "Point-match diagnostics:"]
     assert len(diagnostic_sections) == 1
     assert diagnostic_sections[0][0] == "match_status: missing_pair=1"
     assert "dataset[0] bg0.osc: unresolved_pairs=1" in diagnostic_sections[0]
@@ -21808,8 +21842,7 @@ def test_apply_runtime_geometry_fit_result_logs_point_match_diagnostics_when_deb
         for line in diagnostic_sections[0]
     )
     assert any(
-        "resolution_reason=source_row_out_of_range" in line
-        for line in diagnostic_sections[0]
+        "resolution_reason=source_row_out_of_range" in line for line in diagnostic_sections[0]
     )
 
 
@@ -21888,9 +21921,7 @@ def test_apply_runtime_geometry_fit_result_rejects_absurd_manual_fit_before_upda
     assert outcome.rms == 1195.373582
     assert outcome.fitted_params is None
     assert outcome.postprocess is None
-    assert "RMS residual 1195.37 px exceeds the acceptance limit" in str(
-        outcome.rejection_reason
-    )
+    assert "RMS residual 1195.37 px exceeds the acceptance limit" in str(outcome.rejection_reason)
     assert progress_messages == [
         "Manual geometry fit rejected:\n"
         "RMS residual 1195.37 px exceeds the acceptance limit of 100.00 px.\n"
@@ -22318,9 +22349,7 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         }
     ]
     draw_overlay_event = next(
-        event
-        for event in events
-        if isinstance(event, tuple) and event[0] == "draw_overlay"
+        event for event in events if isinstance(event, tuple) and event[0] == "draw_overlay"
     )
     assert draw_overlay_event[2] == 120
     assert draw_overlay_event[1][0]["initial_pairs_display"][0]["pair"] == 1
@@ -22453,7 +22482,9 @@ def test_validate_geometry_fit_live_source_rows_drops_trusted_deadband_branch() 
     ]
 
 
-def test_validate_geometry_fit_live_source_rows_excludes_saved_input_failures_from_rejection_counts() -> None:
+def test_validate_geometry_fit_live_source_rows_excludes_saved_input_failures_from_rejection_counts() -> (
+    None
+):
     validation = geometry_fit.validate_geometry_fit_live_source_rows(
         [
             {
@@ -22505,24 +22536,15 @@ def test_validate_geometry_fit_live_source_rows_excludes_saved_input_failures_fr
     assert validation["missing_required_pair_count"] == 2
     assert validation["branch_mismatch_count"] == 0
     assert validation["hkl_missing_candidate_count"] == 0
-    pair_failures = {
-        str(entry["pair_id"]): dict(entry) for entry in validation["pair_failures"]
-    }
+    pair_failures = {str(entry["pair_id"]): dict(entry) for entry in validation["pair_failures"]}
     assert pair_failures["missing-branch"]["reason"] == "missing_branch"
     assert pair_failures["missing-branch"]["candidate_count_total"] == 1
     assert pair_failures["missing-branch"]["candidate_count_after_hkl_filter"] == 1
     assert pair_failures["missing-branch"]["candidate_count_after_branch_filter"] == 0
-    assert (
-        pair_failures["missing-trusted-row"]["reason"]
-        == "missing_trusted_reflection_row"
-    )
+    assert pair_failures["missing-trusted-row"]["reason"] == "missing_trusted_reflection_row"
     assert pair_failures["missing-trusted-row"]["candidate_count_total"] == 1
-    assert (
-        pair_failures["missing-trusted-row"]["candidate_count_after_hkl_filter"] == 1
-    )
-    assert (
-        pair_failures["missing-trusted-row"]["candidate_count_after_branch_filter"] == 1
-    )
+    assert pair_failures["missing-trusted-row"]["candidate_count_after_hkl_filter"] == 1
+    assert pair_failures["missing-trusted-row"]["candidate_count_after_branch_filter"] == 1
 
 
 def test_build_geometry_fit_caked_roi_selection_only_keeps_selected_branch() -> None:
@@ -22630,7 +22652,9 @@ def test_build_geometry_fit_caked_roi_selection_only_keeps_selected_branch() -> 
     assert (60, 60) not in pixels
 
 
-def test_build_geometry_fit_caked_roi_selection_does_not_reuse_stale_detector_coords_when_projection_fails() -> None:
+def test_build_geometry_fit_caked_roi_selection_does_not_reuse_stale_detector_coords_when_projection_fails() -> (
+    None
+):
     source_rows = [
         {
             "hkl": (1, 0, 0),
@@ -22721,12 +22745,15 @@ def test_geometry_fit_caked_roi_angle_point_uses_canonical_angles_only() -> None
             "caked_y": 160.0,
         }
     ) == pytest.approx((23.0, -36.0))
-    assert geometry_fit._geometry_fit_caked_roi_angle_point(
-        {
-            "caked_x": 150.0,
-            "caked_y": 160.0,
-        }
-    ) is None
+    assert (
+        geometry_fit._geometry_fit_caked_roi_angle_point(
+            {
+                "caked_x": 150.0,
+                "caked_y": 160.0,
+            }
+        )
+        is None
+    )
 
 
 def _load_new4_caked_reprojection_module():
@@ -22780,9 +22807,7 @@ def _make_caked_point_reprojection_context(
             ),
             "fit_space_projector_kind": str(projector_kind),
             "cake_bundle_signature": f"sig-theta-{theta:.8f}-dist-{distance:.8f}",
-            "fit_space_local_params_signature": (
-                f"lp-theta-{theta:.8f}-dist-{distance:.8f}"
-            ),
+            "fit_space_local_params_signature": (f"lp-theta-{theta:.8f}-dist-{distance:.8f}"),
             "valid": True,
             "invalid_reason": None,
             "native_frame_conversion_source": "identity_native_detector",
@@ -22917,7 +22942,10 @@ def test_caked_point_reprojection_uses_detector_pixel_path(tmp_path) -> None:
     report, projector_calls, _module = _run_stub_caked_point_reprojection(tmp_path)
 
     first_pair = report["pairs"][0]
-    expected_base = [100.0 * 0.01 + 2.0 * 0.5 + 100.0 * 0.001, 200.0 * 0.01 + 2.0 * 0.05 + 100.0 * 0.0002]
+    expected_base = [
+        100.0 * 0.01 + 2.0 * 0.5 + 100.0 * 0.001,
+        200.0 * 0.01 + 2.0 * 0.05 + 100.0 * 0.0002,
+    ]
     assert first_pair["base_caked_point"] == pytest.approx(expected_base)
     assert first_pair["base_caked_point"][0] != pytest.approx(-777777.0)
     assert first_pair["stale_caked_fields_present"] is True
@@ -23092,6 +23120,121 @@ def test_new4_caked_point_reprojection_context_recake_attempt_fails(
     assert "full_background_recake_not_called" in report["failures"]
 
 
+def test_new4_caked_point_reprojection_provider_before_recake_attempt_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+
+    def provider_before_with_forbidden_recake(*_args, **_kwargs):
+        module.exact_cake_portable.convert_image_to_angle_space()
+        return {"ok": True, "manual_point_pair_count": 7}
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_run_point_provider_report_only",
+        provider_before_with_forbidden_recake,
+    )
+    monkeypatch.setattr(
+        module.preflight,
+        "_prepare_validation_context",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+
+    report = module.run_new4_caked_point_reprojection_check(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "new4",
+        run_id="recake_provider_before",
+    )
+
+    assert report["status"] == "fail"
+    assert report["full_recake_guard_installed"] is True
+    assert report["full_background_recake_called"] is True
+    assert report["full_background_recake_call_count"] == 1
+    assert "full_background_recake_not_called" in report["failures"]
+    assert report["provider_guard_before_ok"] is False
+
+
+def test_new4_caked_point_reprojection_context_mutation_fails_state_guard(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+    context, provider_report, _projector_calls = _make_caked_point_reprojection_context()
+    context["ok"] = True
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_run_point_provider_report_only",
+        lambda *_args, **_kwargs: dict(provider_report),
+    )
+
+    def prepare_context_with_state_mutation(*_args, **_kwargs):
+        state_path.write_text(json.dumps({"state": {"mutated": True}}), encoding="utf-8")
+        return dict(context)
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_prepare_validation_context",
+        prepare_context_with_state_mutation,
+    )
+
+    report = module.run_new4_caked_point_reprojection_check(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "new4",
+        run_id="mutated_context",
+    )
+
+    assert report["status"] == "fail"
+    assert report["new4_state_hash_unchanged"] is False
+    assert report["state_hash_before"] != report["state_hash_after"]
+    assert "new4_state_hash_unchanged" in report["failures"]
+
+
+def test_new4_caked_point_reprojection_context_error_reports_state_hash_change(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = _load_new4_caked_reprojection_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text(json.dumps({"state": {"sentinel": True}}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_run_point_provider_report_only",
+        lambda *_args, **_kwargs: {"ok": True, "manual_point_pair_count": 7},
+    )
+
+    def prepare_context_with_state_mutation(*_args, **_kwargs):
+        state_path.write_text(json.dumps({"state": {"mutated": True}}), encoding="utf-8")
+        raise FileNotFoundError("missing local New4 image")
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_prepare_validation_context",
+        prepare_context_with_state_mutation,
+    )
+
+    report = module.run_new4_caked_point_reprojection_check(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "new4",
+        run_id="mutated_missing_context",
+    )
+
+    assert report["status"] == "skip"
+    assert report["classification"] == "validation_context_unavailable"
+    assert report["new4_state_hash_unchanged"] is False
+    assert report["state_hash_before"] != report["state_hash_after"]
+    assert report["full_background_recake_called"] is False
+
+
 def test_new4_caked_point_reprojection_context_error_skips_without_recake(
     tmp_path,
     monkeypatch,
@@ -23132,10 +23275,7 @@ def test_new4_caked_point_reprojection_report(tmp_path) -> None:
     if os.environ.get("RA_SIM_RUN_NEW4_CAKED_POINT_SMOKE") != "1":
         pytest.skip("real New4 caked point smoke is opt-in")
     state_path = (
-        Path(__file__).resolve().parents[1]
-        / "artifacts"
-        / "geometry_fit_gui_states"
-        / "new4.json"
+        Path(__file__).resolve().parents[1] / "artifacts" / "geometry_fit_gui_states" / "new4.json"
     )
     if not state_path.is_file():
         pytest.skip("new4 saved state unavailable")
