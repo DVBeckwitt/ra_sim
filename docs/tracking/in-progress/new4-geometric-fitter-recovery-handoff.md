@@ -31,6 +31,15 @@ Last updated: 2026-04-22
   ladder `status == "ok"`, total `26.612s`, slowest rung
   `caked_point_reprojection` at `9.572s`, no missing expected rungs, no Rung 6/7
   timing records, and zero non-finite elapsed values.
+- Fast manual selected-point fit defaults are implemented. The GUI manual-point
+  runtime now caps `cfg["solver"]["max_nfev"]` at 30, preserves lower valid caps,
+  forces serial `workers=1` and `parallel_mode="off"` unless unsafe runtime is
+  explicitly enabled, and disables identifiability diagnostics by default.
+- Fast ladder lean diagnostics are implemented. Lean ladder solve rungs disable
+  identifiability diagnostics unless `feature="identifiability_features"` is
+  requested, and running heartbeat JSON writes sparse residual progress without
+  rewriting the growing full residual trace on every residual evaluation. Final
+  reports still keep the full `residual_eval_trace`.
 - No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
   feature rung should be treated as validated.
 
@@ -48,6 +57,16 @@ Status by work type:
 - Timing bug/error: review follow-up is closed. Timing collection excludes
   Rung 6/7 path mappings and expected IDs, Rung 5 skipped reports are timed,
   and `RA_SIM_NEW4_LADDER_TIMING_MAX_S` never gates status or exit code.
+- Manual selected-point fit bug/error: default GUI fits no longer inherit
+  `max_nfev: 400`, parallel orchestration, or identifiability diagnostics for a
+  few selected spots. Unsafe parallel runtime and richer dynamic point fitting
+  remain explicit paths.
+- Ladder lean bug/error: finite-difference identifiability diagnostics no
+  longer run on every fast ladder solve. The identifiability feature run remains
+  the explicit diagnostic path.
+- Ladder heartbeat bug/error: running heartbeat files no longer rewrite stale or
+  growing `residual_eval_trace` payloads on every evaluation. Timeout progress
+  keeps `last_residual_eval`, counters, timing, bounds, and solver context flags.
 - Not validated: full fitter, feature rung, baseline, GUI fit, dynamic reanchor,
   multistart, and polish remain unclaimed.
 

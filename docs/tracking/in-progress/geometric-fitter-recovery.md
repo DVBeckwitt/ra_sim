@@ -136,7 +136,20 @@ validated and should not be repeated unless they regress.
 Speed status as of 2026-04-22:
 
 - Bug/error: repeated per-solve cold setup is fixed for the ladder path.
+- Bug/error: manual selected-point GUI fits no longer inherit the heavy
+  `max_nfev: 400`, parallel orchestration, or identifiability defaults. The
+  default interactive path is serial, capped at 30 evaluations, and diagnostics
+  off; unsafe parallel runtime and dynamic point fitting remain explicit richer
+  paths.
+- Bug/error: ladder lean solve rungs no longer run finite-difference
+  identifiability diagnostics by default. The identifiability feature run keeps
+  those diagnostics opt-in.
+- Bug/error: solve-rung heartbeat writes are throttled and reset before each
+  rung, so running JSON keeps current progress without rewriting a stale or
+  growing `residual_eval_trace`; final reports still keep the full trace.
 - Feature: warm in-process solver reuse is implemented and covered by tests.
+- Feature: fast manual selected-point and lean ladder runtime profiles are
+  covered by focused tests, with dynamic point fitting guarded as unchanged.
 - Still open: initial context capture, provider guard, objective dry-run, and
   sensitivity setup still dominate whole-run wall time.
 

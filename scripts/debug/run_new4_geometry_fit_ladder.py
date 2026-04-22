@@ -787,16 +787,16 @@ def _lean_runtime_config(
     discrete["enabled"] = False
     cfg["discrete_modes"] = discrete
 
+    feature_name = str(feature or "").strip().lower()
+
     ident = dict(
         cfg.get("identifiability", {}) if isinstance(cfg.get("identifiability"), Mapping) else {}
     )
-    ident["enabled"] = True
+    ident["enabled"] = False
     ident.pop("auto_freeze", None)
     ident.pop("selective_thaw", None)
     ident.pop("adaptive_regularization", None)
-    cfg["identifiability"] = ident
 
-    feature_name = str(feature or "").strip().lower()
     if feature_name == "discrete_modes":
         cfg["discrete_modes"] = {"enabled": True}
     elif feature_name == "seed_multistart":
@@ -807,11 +807,13 @@ def _lean_runtime_config(
     elif feature_name == "full_beam_polish":
         cfg["full_beam_polish"] = {"enabled": True, "max_nfev": max(5, int(max_nfev))}
     elif feature_name == "identifiability_features":
+        ident["enabled"] = True
         ident["auto_freeze"] = True
         ident["selective_thaw"] = {"enabled": True}
         ident["adaptive_regularization"] = {"enabled": True}
     elif feature_name == "dynamic_reanchor":
         cfg["dynamic_reanchor_probe_requested"] = True
+    cfg["identifiability"] = ident
     return cfg
 
 
@@ -2505,6 +2507,32 @@ def _heartbeat_write(path: Path, payload: Mapping[str, object]) -> None:
     _write_json(path, merged)
 
 
+
+def _reset_heartbeat_file(path: Path) -> None:
+    if not path:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+
+
+def _should_write_residual_heartbeat(
+    *,
+    heartbeat_count: int,
+    eval_count: int,
+    clean: bool,
+    now: float,
+    last_write_s: float,
+) -> bool:
+    heartbeat_count_i = _safe_int(heartbeat_count, default=0)
+    eval_count_i = _safe_int(eval_count, default=0)
+    return (
+        heartbeat_count_i <= 2
+        or eval_count_i in {5, 10}
+        or eval_count_i % 10 == 0
+        or not bool(clean)
+        or (float(now) - float(last_write_s)) >= 0.5
+    )
+
 def _worker_solve_once(
     *,
     state_path: Path,
@@ -2527,6 +2555,7 @@ def _worker_solve_once(
         phase_timing_s[name] = float(max(0.0, _perf_counter() - phase_started))
 
     state_hash_before = _state_sha256(Path(state_path))
+    _reset_heartbeat_file(heartbeat_path)
     _heartbeat_write(
         heartbeat_path,
         {
@@ -2593,6 +2622,7 @@ def _worker_solve_once(
     current_bounds = _current_bounds_for_param(request, param_name) if param_name else None
     heartbeat_count = 0
     residual_eval_trace: list[dict[str, object]] = []
+    last_residual_heartbeat_write_s = 0.0
     fixed_source_counters_dirty_seen = False
     fixed_source_counter_failures_seen: list[str] = []
 
@@ -2610,6 +2640,7 @@ def _worker_solve_once(
 
     def _live_update(payload: Mapping[str, object]) -> None:
         nonlocal heartbeat_count, fixed_source_counters_dirty_seen
+        nonlocal last_residual_heartbeat_write_s
         point_summary = (
             dict(payload.get("point_match_summary", {}))
             if isinstance(payload.get("point_match_summary", {}), Mapping)
@@ -2662,6 +2693,16 @@ def _worker_solve_once(
         if heartbeat_count == 1:
             phase_timing_s["first_residual_elapsed_s"] = float(trace_entry["elapsed_s"])
         residual_eval_trace.append(trace_entry)
+        now = time.monotonic()
+        if not _should_write_residual_heartbeat(
+            heartbeat_count=int(heartbeat_count),
+            eval_count=int(eval_count),
+            clean=bool(clean),
+            now=now,
+            last_write_s=float(last_residual_heartbeat_write_s),
+        ):
+            return
+        last_residual_heartbeat_write_s = now
         _heartbeat_write(
             heartbeat_path,
             {
@@ -2670,7 +2711,6 @@ def _worker_solve_once(
                 "current_rms_px": rms_px,
                 "current_max_error_px": max_error_px,
                 "last_residual_eval": trace_entry,
-                "residual_eval_trace": residual_eval_trace,
                 "heartbeat_count": int(heartbeat_count),
                 "last_heartbeat_elapsed_s": trace_entry["elapsed_s"],
                 "last_nfev": int(eval_count),
@@ -3090,6 +3130,7 @@ def _run_solver_rung_with_timeout(
 ) -> dict[str, object]:
     started = _perf_counter()
     heartbeat_path = output_path.with_suffix(".heartbeat.json")
+    _reset_heartbeat_file(heartbeat_path)
     initial_state_hash = str(state_hash_before or _state_sha256(Path(state_path)))
 
     def _make_timeout_report(

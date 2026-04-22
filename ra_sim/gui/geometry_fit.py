@@ -11117,7 +11117,7 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
     unsafe_runtime_enabled = bool(cfg.get("allow_unsafe_runtime", False))
 
-    optimizer_cfg_raw = cfg.get("optimizer", cfg.get("solver", {}))
+    optimizer_cfg_raw = cfg.get("solver", cfg.get("optimizer", {}))
     optimizer_cfg = dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
     for key in (
         "dynamic_point_geometry_fit",
@@ -11153,12 +11153,26 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     optimizer_cfg["hk0_peak_priority_weight"] = float(
         optimizer_cfg.get("hk0_peak_priority_weight", 6.0)
     )
-    optimizer_cfg["workers"] = optimizer_cfg.get("workers", "auto")
-    optimizer_cfg["parallel_mode"] = str(optimizer_cfg.get("parallel_mode", "auto")).strip()
-    optimizer_cfg["worker_numba_threads"] = optimizer_cfg.get(
-        "worker_numba_threads",
-        0,
-    )
+    manual_max_nfev = 30
+    try:
+        configured_max_nfev = int(optimizer_cfg.get("max_nfev", manual_max_nfev))
+    except (TypeError, ValueError):
+        configured_max_nfev = manual_max_nfev
+    optimizer_cfg["max_nfev"] = max(1, min(configured_max_nfev, manual_max_nfev))
+
+    if unsafe_runtime_enabled:
+        optimizer_cfg["workers"] = optimizer_cfg.get("workers", "auto")
+        optimizer_cfg["parallel_mode"] = str(
+            optimizer_cfg.get("parallel_mode", "auto")
+        ).strip()
+        optimizer_cfg["worker_numba_threads"] = optimizer_cfg.get(
+            "worker_numba_threads",
+            0,
+        )
+    else:
+        optimizer_cfg["workers"] = 1
+        optimizer_cfg["parallel_mode"] = "off"
+        optimizer_cfg["worker_numba_threads"] = 0
     cfg["optimizer"] = optimizer_cfg
     cfg["solver"] = optimizer_cfg
 
@@ -11210,7 +11224,7 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     identifiability_cfg = (
         dict(identifiability_cfg_raw) if isinstance(identifiability_cfg_raw, Mapping) else {}
     )
-    identifiability_cfg["enabled"] = True
+    identifiability_cfg["enabled"] = False
     identifiability_cfg.pop("auto_freeze", None)
     identifiability_cfg.pop("selective_thaw", None)
     identifiability_cfg.pop("adaptive_regularization", None)

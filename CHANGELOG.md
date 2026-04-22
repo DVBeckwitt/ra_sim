@@ -32,11 +32,13 @@
   - Extracted hBN fitter bundle-payload assembly into a shared helper used by `save_bundle()`.
   - Extended bundle save/load fields to include confidence, ring sigma, optimizer metadata, coordinate-frame metadata, and compatibility keys.
   - Updated `ra_sim/fitting/optimization.py` with robust solver config, restart support, one-to-one point matching, weighted residuals, and missing-pair penalties.
+  - Kept New4 ladder lean solve rungs fast by disabling identifiability diagnostics by default, preserving the explicit `identifiability_features` diagnostic run, and throttling running heartbeat writes while keeping full residual traces in final reports.
 
 - **GUI and UX updates**
   - Made simulation GUI startup default to diagnostics-off, with saved debug settings and one-run debug mode kept as explicit opt-in choices.
   - Stopped creating per-run debug bundles on default diagnostics-off launches; simulation now starts bundle capture only after the chosen normal/saved/debug startup mode is known.
   - Resolved manual Qr/Qz and HKL picker alignment across detector and caked `(2theta, phi)` views. Qr/Qz group availability now comes from CIF/lattice simulation hit-table state, caked Qr/Qz positions are mapped from simulation-native detector pixels through the live caked simulation frame, and HKL picking now reuses the same current-view candidate payload as the Qr picker.
+  - Made GUI manual selected-point geometric fits use a fast interactive runtime by default: serial solver execution, `cfg["solver"]["max_nfev"]` capped at 30, and identifiability diagnostics disabled unless an explicit diagnostic path is requested.
   - Fixed the Qr/Qz peak sensitivity tool so perturbed finite-difference rows restore trusted reflection provenance only when stable identity fields match the baseline; `new4.json` now reports trusted `ok` sensitivity rows instead of all rows being `identity_changed`.
   - Extended the Qr/Qz peak sensitivity tool with ray-cloud and image-ROI center-of-mass shape metrics, including covariance/axis outputs, COM-vs-refined-max offsets, shape-specific long/matrix artifact exports, and ray-cloud COM as the default metric.
   - Restored the GUI selection-cache path for Qr/Qz and HKL picking so selection jobs build `stored_intersection_cache` from main-run hit tables with `collect_hit_tables=True` and `build_intersection_cache=True`, while raw-only and image-only updates keep detector cache builds disabled.

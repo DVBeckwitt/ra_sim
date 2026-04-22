@@ -41,13 +41,23 @@ prints `Rung | Status | elapsed_s | report_path`, and
 `20260422_123330` completed the approved `--max-rung blocks` path with
 `status == "ok"`, total `26.612s`, slowest rung `caked_point_reprojection` at
 `9.572s`, no missing expected rungs, no Rung 6/7 timing records, and zero
-non-finite elapsed values. Bug/error status: Rung 6/7 path mappings and
-expected timing IDs are excluded from timing collection, Rung 5 skipped reports
-get timing metadata, fatal evidence still aborts, local `a` usability failures
-stay local, missing dependencies skip only affected blocks, and stale external
-evidence remains rejected. `full_fitter_validated == false`; no full, feature,
-baseline, GUI fit, dynamic reanchor, multistart, polish, freeze/thaw, or
-feature rung was run. Next solve project remains separate and unstarted.
+non-finite elapsed values. Fast manual selected-point fit defaults are now
+implemented: GUI manual fits cap `cfg["solver"]["max_nfev"]` at 30, run serial
+by default, and keep identifiability diagnostics off unless an explicit
+diagnostic path is requested. Lean ladder rungs also keep identifiability off by
+default, while `feature="identifiability_features"` remains the diagnostic
+feature path. Running ladder heartbeat writes are sparse and omit the growing
+full residual trace; final reports still include the full trace. Bug/error
+status: Rung 6/7 path mappings and expected timing IDs are excluded from timing
+collection, Rung 5 skipped reports get timing metadata, fatal evidence still
+aborts, local `a` usability failures stay local, missing dependencies skip only
+affected blocks, stale external evidence remains rejected, manual selected-point
+fits no longer inherit heavy solver defaults, and stale heartbeat traces are
+reset before solve-rung writes. `full_fitter_validated == false`; no full,
+feature, baseline, dynamic reanchor, multistart, polish, freeze/thaw, or feature
+rung was run. GUI manual selected-point runtime behavior is updated, but it does
+not validate full GUI fitter convergence. Next solve project remains separate
+and unstarted.
 
 ## Known bugs
 
