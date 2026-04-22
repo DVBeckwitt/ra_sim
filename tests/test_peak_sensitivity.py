@@ -31,6 +31,10 @@ def _parameter(name: str = "theta_initial", *, step: float = 0.5, scale: float |
     )
 
 
+def test_default_metric_preserves_refined_max() -> None:
+    assert peak_sensitivity.DEFAULT_METRIC == peak_sensitivity.METRIC_REFINED_MAX
+
+
 def _obs(
     branch: str,
     *,
@@ -94,6 +98,33 @@ def test_source_rows_callback_uses_peak_sensitivity_consumer() -> None:
         "background_index": 3,
         "params": {"theta_initial": 5.0},
         "consumer": "peak_sensitivity",
+    }
+
+
+def test_source_rows_callback_receives_required_pairs() -> None:
+    seen: dict[str, object] = {}
+    required_pairs = [{"hkl": (1, 0, 1), "source_row_index": 2}]
+
+    def callback(background_index, params, *, consumer, required_pairs):
+        seen["background_index"] = background_index
+        seen["params"] = params
+        seen["consumer"] = consumer
+        seen["required_pairs"] = required_pairs
+        return [{"hkl": (1, 0, 1)}]
+
+    rows = peak_sensitivity._call_source_rows_for_background(
+        callback,
+        3,
+        {"theta_initial": 5.0},
+        required_pairs=required_pairs,
+    )
+
+    assert rows == [{"hkl": (1, 0, 1)}]
+    assert seen == {
+        "background_index": 3,
+        "params": {"theta_initial": 5.0},
+        "consumer": "peak_sensitivity",
+        "required_pairs": required_pairs,
     }
 
 
@@ -329,6 +360,7 @@ def test_run_peak_sensitivity_passes_baseline_records_as_required_pairs(monkeypa
     assert calls[0]["required_pairs"] is None
     assert calls[1]["required_pairs"] == [baseline_record]
     assert calls[2]["required_pairs"] == [baseline_record]
+    assert result.selected_metric == "refined_max"
     assert result.diagnostics[("+x", "two_theta_deg", "theta_initial")]["status"] == "ok"
 
 
@@ -433,6 +465,397 @@ def test_normalized_sensitivity_uses_parameter_scale() -> None:
 
     assert result.jacobian[("+x", "two_theta_deg")]["theta_initial"] == 2.0
     assert result.normalized_jacobian[("+x", "two_theta_deg")]["theta_initial"] == 0.5
+
+
+def _shape_obs(
+    branch: str,
+    *,
+    com_tth: float,
+    com_phi: float,
+    provenance: str = "stable",
+    status: str = "ok",
+) -> peak_sensitivity.ShapeMetricObservation:
+    return peak_sensitivity.ShapeMetricObservation(
+        group_key=("q_group", "primary", 1, 1),
+        branch_id=branch,
+        metric="ray_cloud_com",
+        values={
+            "com_two_theta_deg": com_tth,
+            "com_phi_deg": com_phi,
+            "sigma_two_theta_deg": 1.0,
+            "sigma_phi_deg": 2.0,
+            "cov_two_theta_phi": 0.5,
+            "major_sigma_deg": 2.0,
+            "minor_sigma_deg": 1.0,
+            "axis_angle_deg": 30.0,
+            "delta_com_vs_max_two_theta": 0.5,
+            "delta_com_vs_max_phi": 1.0,
+        },
+        point_count=5,
+        total_weight=10.0,
+        provenance_digest=provenance,
+        status=status,
+    )
+
+
+def test_run_peak_sensitivity_passes_required_pairs_to_shape_evaluator(monkeypatch) -> None:
+    peak_calls: list[dict[str, object]] = []
+    shape_calls: list[dict[str, object]] = []
+    group_key = ("q_group", "primary", 1, 1)
+    baseline_record = {
+        **_source_record(group_key=group_key),
+        "two_theta_deg": 10.0,
+        "phi_deg": 20.0,
+    }
+
+    class FakeEvaluator:
+        def __init__(self, _state_path):
+            self.context = SimpleNamespace(saved_state={}, state_path="fake-state.json")
+            self.metadata = {}
+            self._last_eval_metadata = {}
+
+        @property
+        def baseline_params(self):
+            return {"theta_initial": 10.0}
+
+        def evaluate_peak_observations(
+            self,
+            param_overrides,
+            group_key_arg,
+            branch_ids=None,
+            required_pairs=None,
+        ):
+            peak_calls.append(
+                {
+                    "param_overrides": dict(param_overrides),
+                    "group_key": group_key_arg,
+                    "branch_ids": branch_ids,
+                    "required_pairs": required_pairs,
+                }
+            )
+            if not param_overrides:
+                return [
+                    peak_sensitivity._record_to_observation(
+                        baseline_record,
+                        group_key=group_key,
+                        branch_id="+x",
+                    )
+                ]
+            delta = float(param_overrides["theta_initial"]) - 10.0
+            return [
+                peak_sensitivity._record_to_observation(
+                    {
+                        **baseline_record,
+                        "two_theta_deg": 10.0 + delta,
+                        "phi_deg": 20.0 + delta,
+                    },
+                    group_key=group_key,
+                    branch_id="+x",
+                )
+            ]
+
+        def evaluate_shape_observations(
+            self,
+            param_overrides,
+            group_key_arg,
+            *,
+            metric,
+            refined_max_observations,
+            branch_ids,
+            reference_phi_by_branch,
+            options,
+            required_pairs=None,
+        ):
+            shape_calls.append(
+                {
+                    "param_overrides": dict(param_overrides),
+                    "group_key": group_key_arg,
+                    "branch_ids": branch_ids,
+                    "required_pairs": required_pairs,
+                    "metric": metric,
+                    "min_cloud_points": options.min_cloud_points,
+                }
+            )
+            delta = float(param_overrides.get("theta_initial", 10.0)) - 10.0
+            return [_shape_obs("+x", com_tth=10.0 + delta, com_phi=20.0 + delta)]
+
+    monkeypatch.setattr(peak_sensitivity, "PeakSensitivityEvaluator", FakeEvaluator)
+
+    result = run_peak_sensitivity(
+        state_path="fake-state.json",
+        group_key=group_key,
+        parameter_names=["theta_initial"],
+        metric="ray_cloud_com",
+        min_cloud_points=7,
+    )
+
+    assert peak_calls[0]["required_pairs"] is None
+    assert peak_calls[1]["required_pairs"] == [baseline_record]
+    assert peak_calls[2]["required_pairs"] == [baseline_record]
+    assert [call["required_pairs"] for call in shape_calls] == [
+        [baseline_record],
+        [baseline_record],
+        [baseline_record],
+    ]
+    assert [call["min_cloud_points"] for call in shape_calls] == [7, 7, 7]
+    assert result.selected_metric == "ray_cloud_com"
+    assert (
+        result.shape_results["ray_cloud_com"].diagnostics[
+            ("ray_cloud_com", "+x", "com_two_theta_deg", "theta_initial")
+        ]["status"]
+        == "ok"
+    )
+
+
+def test_weighted_com_on_synthetic_ray_cloud_gives_known_center() -> None:
+    rows = [
+        {"two_theta_deg": 10.0, "phi_deg": 20.0, "intensity": 1.0},
+        {"two_theta_deg": 12.0, "phi_deg": 20.0, "intensity": 1.0},
+        {"two_theta_deg": 12.0, "phi_deg": 20.0, "intensity": 2.0},
+    ]
+
+    values, point_count, total_weight, status, warning = (
+        peak_sensitivity.compute_weighted_caked_shape_metrics(
+            rows,
+            reference_phi_deg=20.0,
+            refined_max_two_theta_deg=11.0,
+            refined_max_phi_deg=20.0,
+        )
+    )
+
+    assert status == "ok"
+    assert warning is True
+    assert point_count == 3
+    assert total_weight == 4.0
+    assert values["com_two_theta_deg"] == 11.5
+    assert values["com_phi_deg"] == 20.0
+
+
+def test_ray_cloud_weight_falls_back_when_intensity_is_not_positive() -> None:
+    rows = [
+        {"two_theta_deg": 10.0, "phi_deg": 20.0, "intensity": 0.0, "weight": 1.0},
+        {"two_theta_deg": 12.0, "phi_deg": 20.0, "intensity": -1.0, "weight": 1.0},
+        {"two_theta_deg": 12.0, "phi_deg": 20.0, "weight": 2.0},
+    ]
+
+    values, point_count, total_weight, status, _warning = (
+        peak_sensitivity.compute_weighted_caked_shape_metrics(
+            rows,
+            reference_phi_deg=20.0,
+            refined_max_two_theta_deg=11.0,
+            refined_max_phi_deg=20.0,
+        )
+    )
+
+    assert status == "ok"
+    assert point_count == 3
+    assert total_weight == 4.0
+    assert values["com_two_theta_deg"] == 11.5
+
+
+def test_missing_refined_max_keeps_valid_com_and_nan_offsets() -> None:
+    rows = [
+        {"two_theta_deg": 10.0, "phi_deg": 20.0, "intensity": 1.0},
+        {"two_theta_deg": 12.0, "phi_deg": 20.0, "intensity": 1.0},
+        {"two_theta_deg": 12.0, "phi_deg": 20.0, "intensity": 2.0},
+    ]
+
+    values, _point_count, _total_weight, status, _warning = (
+        peak_sensitivity.compute_weighted_caked_shape_metrics(
+            rows,
+            reference_phi_deg=20.0,
+            refined_max_two_theta_deg=math.nan,
+            refined_max_phi_deg=math.nan,
+        )
+    )
+
+    assert status == "ok"
+    assert values["com_two_theta_deg"] == 11.5
+    assert values["com_phi_deg"] == 20.0
+    assert math.isnan(values["delta_com_vs_max_two_theta"])
+    assert math.isnan(values["delta_com_vs_max_phi"])
+
+
+def test_wrapped_phi_com_works_across_boundary() -> None:
+    rows = [
+        {"two_theta_deg": 10.0, "phi_deg": 179.0, "intensity": 1.0},
+        {"two_theta_deg": 10.0, "phi_deg": -179.0, "intensity": 1.0},
+        {"two_theta_deg": 10.0, "phi_deg": -178.0, "intensity": 1.0},
+    ]
+
+    values, _point_count, _total_weight, status, _warning = (
+        peak_sensitivity.compute_weighted_caked_shape_metrics(
+            rows,
+            reference_phi_deg=179.0,
+            refined_max_two_theta_deg=10.0,
+            refined_max_phi_deg=179.0,
+        )
+    )
+
+    assert status == "ok"
+    assert math.isclose(values["com_phi_deg"], -179.33333333333334)
+
+
+def test_covariance_major_minor_axes_for_synthetic_ellipse() -> None:
+    center_tth = 10.0
+    center_phi = 20.0
+    angle = math.radians(30.0)
+    major_radius = math.sqrt(8.0)
+    minor_radius = math.sqrt(2.0)
+    major_vec = (math.cos(angle), math.sin(angle))
+    minor_vec = (-math.sin(angle), math.cos(angle))
+    rows = []
+    for sign in (-1.0, 1.0):
+        rows.append(
+            {
+                "two_theta_deg": center_tth + sign * major_radius * major_vec[0],
+                "phi_deg": center_phi + sign * major_radius * major_vec[1],
+                "intensity": 1.0,
+            }
+        )
+        rows.append(
+            {
+                "two_theta_deg": center_tth + sign * minor_radius * minor_vec[0],
+                "phi_deg": center_phi + sign * minor_radius * minor_vec[1],
+                "intensity": 1.0,
+            }
+        )
+
+    values, _point_count, _total_weight, status, warning = (
+        peak_sensitivity.compute_weighted_caked_shape_metrics(
+            rows,
+            reference_phi_deg=center_phi,
+            refined_max_two_theta_deg=center_tth,
+            refined_max_phi_deg=center_phi,
+        )
+    )
+
+    assert status == "ok"
+    assert warning is True
+    assert math.isclose(values["major_sigma_deg"], 2.0)
+    assert math.isclose(values["minor_sigma_deg"], 1.0)
+    assert math.isclose(values["axis_angle_deg"], 30.0)
+
+
+def test_com_relative_to_refined_max_is_correct() -> None:
+    rows = [
+        {"two_theta_deg": 11.0, "phi_deg": 22.0, "intensity": 1.0},
+        {"two_theta_deg": 11.0, "phi_deg": 22.0, "intensity": 1.0},
+        {"two_theta_deg": 11.0, "phi_deg": 22.0, "intensity": 1.0},
+    ]
+
+    values, _point_count, _total_weight, status, _warning = (
+        peak_sensitivity.compute_weighted_caked_shape_metrics(
+            rows,
+            reference_phi_deg=20.0,
+            refined_max_two_theta_deg=10.0,
+            refined_max_phi_deg=20.0,
+        )
+    )
+
+    assert status == "ok"
+    assert values["delta_com_vs_max_two_theta"] == 1.0
+    assert values["delta_com_vs_max_phi"] == 2.0
+
+
+def test_finite_difference_derivative_of_synthetic_com_shift_is_correct() -> None:
+    result = peak_sensitivity.assemble_shape_finite_difference_result(
+        metric="ray_cloud_com",
+        baseline_observations=[_shape_obs("+x", com_tth=10.0, com_phi=179.0)],
+        plus_observations={"theta_initial": [_shape_obs("+x", com_tth=11.0, com_phi=-179.0)]},
+        minus_observations={"theta_initial": [_shape_obs("+x", com_tth=9.0, com_phi=178.0)]},
+        parameters=[_parameter(step=0.5)],
+    )
+
+    assert result.jacobian[("ray_cloud_com", "+x", "com_two_theta_deg")]["theta_initial"] == 2.0
+    assert result.jacobian[("ray_cloud_com", "+x", "com_phi_deg")]["theta_initial"] == 3.0
+    assert (
+        result.diagnostics[("ray_cloud_com", "+x", "com_phi_deg", "theta_initial")]["status"]
+        == "ok"
+    )
+
+
+def test_image_roi_com_recovers_gaussian_center_after_background_subtraction() -> None:
+    radial = np.linspace(9.0, 11.0, 81)
+    azimuth = np.linspace(-1.0, 3.0, 121)
+    rr, pp = np.meshgrid(radial, azimuth)
+    image = 5.0 + 100.0 * np.exp(-(((rr - 10.2) ** 2) / 0.08 + ((pp - 1.3) ** 2) / 0.12))
+
+    values, _point_count, _total_weight, status, _warning = (
+        peak_sensitivity.compute_image_roi_shape_metrics(
+            caked_image=image,
+            radial_axis=radial,
+            azimuth_axis=azimuth,
+            refined_max_two_theta_deg=10.0,
+            refined_max_phi_deg=1.0,
+            reference_phi_deg=1.0,
+            roi_two_theta_half_width=0.8,
+            roi_phi_half_width=1.0,
+            background_percentile=0.0,
+            min_total_weight=1.0e-9,
+        )
+    )
+
+    assert status == "ok"
+    assert math.isclose(values["com_two_theta_deg"], 10.2, abs_tol=0.03)
+    assert math.isclose(values["com_phi_deg"], 1.3, abs_tol=0.03)
+
+
+def test_image_roi_insufficient_weight_gives_nan_status() -> None:
+    image = np.full((5, 5), 7.0, dtype=np.float64)
+
+    values, _point_count, total_weight, status, _warning = (
+        peak_sensitivity.compute_image_roi_shape_metrics(
+            caked_image=image,
+            radial_axis=np.linspace(1.0, 5.0, 5),
+            azimuth_axis=np.linspace(-2.0, 2.0, 5),
+            refined_max_two_theta_deg=3.0,
+            refined_max_phi_deg=0.0,
+            reference_phi_deg=0.0,
+            roi_two_theta_half_width=2.0,
+            roi_phi_half_width=2.0,
+            background_percentile=50.0,
+        )
+    )
+
+    assert status == "insufficient_weight"
+    assert total_weight == 0.0
+    assert math.isnan(values["com_two_theta_deg"])
+
+
+def test_insufficient_cloud_points_gives_nan_status() -> None:
+    rows = [
+        {"two_theta_deg": 10.0, "phi_deg": 20.0, "intensity": 1.0},
+        {"two_theta_deg": 11.0, "phi_deg": 21.0, "intensity": 1.0},
+    ]
+
+    values, point_count, _total_weight, status, _warning = (
+        peak_sensitivity.compute_weighted_caked_shape_metrics(
+            rows,
+            reference_phi_deg=20.0,
+            refined_max_two_theta_deg=10.0,
+            refined_max_phi_deg=20.0,
+        )
+    )
+
+    assert point_count == 2
+    assert status == "insufficient_cloud_points"
+    assert math.isnan(values["com_phi_deg"])
+
+
+def test_shape_branch_provenance_stays_stable_across_baseline_plus_minus() -> None:
+    result = peak_sensitivity.assemble_shape_finite_difference_result(
+        metric="ray_cloud_com",
+        baseline_observations=[_shape_obs("+x", com_tth=10.0, com_phi=20.0)],
+        plus_observations={"theta_initial": [_shape_obs("+x", com_tth=11.0, com_phi=21.0)]},
+        minus_observations={"theta_initial": [_shape_obs("+x", com_tth=9.0, com_phi=19.0)]},
+        parameters=[_parameter(step=0.5)],
+    )
+
+    diag = result.diagnostics[("ray_cloud_com", "+x", "com_two_theta_deg", "theta_initial")]
+    assert diag["status"] == "ok"
+    assert diag["identity_changed"] is False
+    assert result.jacobian[("ray_cloud_com", "+x", "com_two_theta_deg")]["theta_initial"] == 2.0
 
 
 def test_csv_output_has_stable_row_and_column_order(tmp_path) -> None:
@@ -655,6 +1078,7 @@ def test_runtime_baseline_not_replaced_by_saved_gui_peak(monkeypatch) -> None:
         state_path="fake-state.json",
         group_key=group_key,
         parameter_names=["theta_initial"],
+        metric="refined_max",
     )
 
     assert result.baseline_observations[0].two_theta_deg == 10.0
@@ -788,6 +1212,49 @@ def test_cli_baseline_failure_prints_eval_error(monkeypatch, capsys, tmp_path) -
     assert code == 2
     assert '"status": "eval_error"' in captured.out
     assert '"error": "baseline failed"' in captured.out
+
+
+def test_cli_passes_min_cloud_points(monkeypatch, capsys, tmp_path) -> None:
+    seen: dict[str, object] = {}
+
+    def _run_peak_sensitivity(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(
+            baseline_observations=[],
+            metadata={"status": "ok", "baseline_shape_metrics": {}},
+            selected_metric="ray_cloud_com",
+        )
+
+    def _write_sensitivity_artifacts(_result, _outdir, **_kwargs):
+        return {"metadata": tmp_path / "metadata.json"}
+
+    monkeypatch.setattr(sensitivity_cli, "run_peak_sensitivity", _run_peak_sensitivity)
+    monkeypatch.setattr(
+        sensitivity_cli,
+        "write_sensitivity_artifacts",
+        _write_sensitivity_artifacts,
+    )
+
+    code = sensitivity_cli.main(
+        [
+            "--state",
+            "fake-state.json",
+            "--group-key",
+            "q_group,primary,1,1",
+            "--metric",
+            "ray_cloud_com",
+            "--min-cloud-points",
+            "7",
+            "--outdir",
+            str(tmp_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert '"status": "ok"' in captured.out
+    assert seen["metric"] == "ray_cloud_com"
+    assert seen["min_cloud_points"] == 7
 
 
 def test_synthetic_caked_refinement_recovers_known_local_maximum() -> None:

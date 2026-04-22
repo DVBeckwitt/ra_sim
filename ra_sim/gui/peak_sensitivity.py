@@ -48,6 +48,30 @@ OPTIONAL_PARAMETER_NAMES: tuple[str, ...] = (
     "wavelength",
 )
 COORDINATE_NAMES: tuple[str, str] = ("two_theta_deg", "phi_deg")
+METRIC_REFINED_MAX = "refined_max"
+METRIC_RAY_CLOUD_COM = "ray_cloud_com"
+METRIC_IMAGE_ROI_COM = "image_roi_com"
+METRIC_ALL = "all"
+DEFAULT_METRIC = METRIC_REFINED_MAX
+METRIC_CHOICES: tuple[str, ...] = (
+    METRIC_REFINED_MAX,
+    METRIC_RAY_CLOUD_COM,
+    METRIC_IMAGE_ROI_COM,
+    METRIC_ALL,
+)
+SHAPE_METRIC_NAMES: tuple[str, ...] = (METRIC_RAY_CLOUD_COM, METRIC_IMAGE_ROI_COM)
+SHAPE_COORDINATE_NAMES: tuple[str, ...] = (
+    "com_two_theta_deg",
+    "com_phi_deg",
+    "sigma_two_theta_deg",
+    "sigma_phi_deg",
+    "cov_two_theta_phi",
+    "major_sigma_deg",
+    "minor_sigma_deg",
+    "axis_angle_deg",
+    "delta_com_vs_max_two_theta",
+    "delta_com_vs_max_phi",
+)
 STABLE_DIAGNOSTIC_STATUSES: frozenset[str] = frozenset(
     {
         "ok",
@@ -59,6 +83,9 @@ STABLE_DIAGNOSTIC_STATUSES: frozenset[str] = frozenset(
         "eval_error",
         "nonfinite_peak",
         "missing_caked_payload",
+        "insufficient_cloud_points",
+        "insufficient_weight",
+        "nonfinite_shape",
     }
 )
 LONG_CSV_FIELDS: tuple[str, ...] = (
@@ -99,6 +126,42 @@ BASELINE_CSV_FIELDS: tuple[str, ...] = (
     "refined_by",
     "selection_reason",
     "mosaic_top_rank_key",
+)
+SHAPE_LONG_CSV_FIELDS: tuple[str, ...] = (
+    "metric",
+    *LONG_CSV_FIELDS,
+    "baseline_status",
+    "plus_status",
+    "minus_status",
+    "baseline_point_count",
+    "plus_point_count",
+    "minus_point_count",
+    "baseline_total_weight",
+    "plus_total_weight",
+    "minus_total_weight",
+    "baseline_provenance_digest",
+    "plus_provenance_digest",
+    "minus_provenance_digest",
+)
+BASELINE_SHAPE_CSV_FIELDS: tuple[str, ...] = (
+    "metric",
+    "group_key",
+    "branch_id",
+    *SHAPE_COORDINATE_NAMES,
+    "point_count",
+    "total_weight",
+    "status",
+    "low_point_warning",
+    "source_row_count",
+    "group_row_count",
+    "collapsed_row_count",
+    "branch_point_count",
+    "used_pre_collapse_rows",
+    "used_collapsed_rows",
+    "source_rows_appear_collapsed",
+    "provenance_digest",
+    "refined_max_two_theta_deg",
+    "refined_max_phi_deg",
 )
 PROVENANCE_FIELDS: tuple[str, ...] = (
     "hkl",
@@ -172,6 +235,58 @@ class PeakObservation:
 
 
 @dataclass(frozen=True)
+class ShapeMetricObservation:
+    group_key: tuple[object, ...] | None
+    branch_id: str
+    metric: str
+    values: dict[str, float] = field(default_factory=dict, compare=False)
+    point_count: int = 0
+    total_weight: float = math.nan
+    status: str = "ok"
+    low_point_warning: bool = False
+    source_row_count: int = 0
+    group_row_count: int = 0
+    collapsed_row_count: int = 0
+    branch_point_count: int = 0
+    used_pre_collapse_rows: bool = False
+    used_collapsed_rows: bool = False
+    source_rows_appear_collapsed: bool = False
+    provenance_digest: str = ""
+    refined_max_two_theta_deg: float = math.nan
+    refined_max_phi_deg: float = math.nan
+    source_record: dict[str, object] = field(default_factory=dict, compare=False)
+    eval_error: str | None = None
+
+    def provenance_key(self) -> tuple[object, ...]:
+        return (self.metric, self.provenance_digest)
+
+    def match_key(self) -> tuple[tuple[object, ...] | None, str, str]:
+        return self.group_key, self.branch_id, self.metric
+
+
+@dataclass(frozen=True)
+class ShapeSensitivityResult:
+    metric: str
+    baseline_observations: list[ShapeMetricObservation]
+    plus_observations: dict[str, list[ShapeMetricObservation]]
+    minus_observations: dict[str, list[ShapeMetricObservation]]
+    jacobian: dict[tuple[str, str, str], dict[str, float]]
+    normalized_jacobian: dict[tuple[str, str, str], dict[str, float]]
+    diagnostics: dict[tuple[str, str, str, str], dict[str, object]]
+    long_rows: list[dict[str, object]]
+    parameters: list[PeakSensitivityParameter]
+
+
+@dataclass(frozen=True)
+class ShapeMetricOptions:
+    roi_two_theta_half_width: float = 0.5
+    roi_phi_half_width: float = 0.5
+    background_percentile: float = 50.0
+    min_total_weight: float = 0.0
+    min_cloud_points: int = 3
+
+
+@dataclass(frozen=True)
 class PeakSensitivityResult:
     baseline_observations: list[PeakObservation]
     plus_observations: dict[str, list[PeakObservation]]
@@ -182,6 +297,8 @@ class PeakSensitivityResult:
     long_rows: list[dict[str, object]]
     parameters: list[PeakSensitivityParameter]
     metadata: dict[str, object] = field(default_factory=dict)
+    selected_metric: str = METRIC_REFINED_MAX
+    shape_results: dict[str, ShapeSensitivityResult] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -287,6 +404,19 @@ def wrapped_phi_delta(to_value: float, from_value: float) -> float:
     return float((float(to_value) - float(from_value) + 180.0) % 360.0 - 180.0)
 
 
+def _wrap_angle_deg(value: float) -> float:
+    if not math.isfinite(float(value)):
+        return math.nan
+    return float((float(value) + 180.0) % 360.0 - 180.0)
+
+
+def _wrapped_period_delta(to_value: float, from_value: float, *, period: float) -> float:
+    if not (math.isfinite(float(to_value)) and math.isfinite(float(from_value))):
+        return math.nan
+    half = float(period) / 2.0
+    return float((float(to_value) - float(from_value) + half) % float(period) - half)
+
+
 def coordinate_delta(
     to_value: float,
     from_value: float,
@@ -310,7 +440,32 @@ def _coordinate_value(observation: PeakObservation | None, coordinate: str) -> f
     raise ValueError(f"Unknown coordinate {coordinate!r}")
 
 
+def _shape_coordinate_value(
+    observation: ShapeMetricObservation | None,
+    coordinate: str,
+) -> float:
+    if observation is None:
+        return math.nan
+    return finite_float(observation.values.get(str(coordinate)))
+
+
+def _shape_coordinate_delta(to_value: float, from_value: float, *, coordinate: str) -> float:
+    if coordinate in {"com_phi_deg", "delta_com_vs_max_phi"}:
+        return wrapped_phi_delta(float(to_value), float(from_value))
+    if coordinate == "axis_angle_deg":
+        return _wrapped_period_delta(float(to_value), float(from_value), period=180.0)
+    if not (math.isfinite(float(to_value)) and math.isfinite(float(from_value))):
+        return math.nan
+    return float(to_value) - float(from_value)
+
+
 def _identity_text(observation: PeakObservation | None) -> str:
+    if observation is None:
+        return ""
+    return _stable_json(observation.provenance_key())
+
+
+def _shape_identity_text(observation: ShapeMetricObservation | None) -> str:
     if observation is None:
         return ""
     return _stable_json(observation.provenance_key())
@@ -609,6 +764,233 @@ def assemble_finite_difference_result(
         diagnostics=diagnostics,
         long_rows=long_rows,
         parameters=params,
+        selected_metric=METRIC_REFINED_MAX,
+    )
+
+
+def _shape_observations_by_match_key(
+    observations: Sequence[ShapeMetricObservation],
+) -> dict[tuple[tuple[object, ...] | None, str, str], ShapeMetricObservation]:
+    by_key: dict[tuple[tuple[object, ...] | None, str, str], ShapeMetricObservation] = {}
+    for observation in observations:
+        by_key.setdefault(observation.match_key(), observation)
+    return by_key
+
+
+def _shape_status(
+    *,
+    missing_plus: bool,
+    missing_minus: bool,
+    coordinate_missing: bool,
+    identity_changed: bool,
+    eval_error: str | None,
+    observation_status: str | None,
+) -> str:
+    if eval_error or observation_status == "eval_error":
+        return "eval_error"
+    if missing_plus and missing_minus:
+        return "missing_both"
+    if missing_plus:
+        return "missing_plus"
+    if missing_minus:
+        return "missing_minus"
+    if observation_status in {
+        "missing_caked_payload",
+        "insufficient_cloud_points",
+        "insufficient_weight",
+        "nonfinite_shape",
+    }:
+        return str(observation_status)
+    if coordinate_missing:
+        return "nonfinite_shape"
+    if identity_changed:
+        return "identity_changed"
+    return "ok"
+
+
+def assemble_shape_finite_difference_result(
+    *,
+    metric: str,
+    baseline_observations: Sequence[ShapeMetricObservation],
+    plus_observations: Mapping[str, Sequence[ShapeMetricObservation]],
+    minus_observations: Mapping[str, Sequence[ShapeMetricObservation]],
+    parameters: Sequence[PeakSensitivityParameter],
+    plus_eval_errors: Mapping[str, str] | None = None,
+    minus_eval_errors: Mapping[str, str] | None = None,
+) -> ShapeSensitivityResult:
+    baseline = list(baseline_observations)
+    params = list(parameters)
+    plus_errors = dict(plus_eval_errors or {})
+    minus_errors = dict(minus_eval_errors or {})
+    plus_map = {name: list(rows) for name, rows in plus_observations.items()}
+    minus_map = {name: list(rows) for name, rows in minus_observations.items()}
+    jacobian: dict[tuple[str, str, str], dict[str, float]] = {}
+    normalized: dict[tuple[str, str, str], dict[str, float]] = {}
+    diagnostics: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    long_rows: list[dict[str, object]] = []
+
+    for observation in baseline:
+        for coordinate in SHAPE_COORDINATE_NAMES:
+            row_key = (str(observation.metric), str(observation.branch_id), coordinate)
+            jacobian[row_key] = {}
+            normalized[row_key] = {}
+
+    for parameter in params:
+        plus_by_key = _shape_observations_by_match_key(plus_map.get(parameter.name, ()))
+        minus_by_key = _shape_observations_by_match_key(minus_map.get(parameter.name, ()))
+        eval_error = plus_errors.get(parameter.name) or minus_errors.get(parameter.name)
+        for observation in baseline:
+            match_key = observation.match_key()
+            plus = plus_by_key.get(match_key)
+            minus = minus_by_key.get(match_key)
+            missing_plus = plus is None
+            missing_minus = minus is None
+            status_candidates = [
+                str(item.status)
+                for item in (observation, plus, minus)
+                if item is not None and item.status not in {"", "ok"}
+            ]
+            observation_status = next(iter(status_candidates), "")
+            identity_changed = bool(
+                plus is not None
+                and plus.provenance_key() != observation.provenance_key()
+                or minus is not None
+                and minus.provenance_key() != observation.provenance_key()
+            )
+            for coordinate in SHAPE_COORDINATE_NAMES:
+                baseline_value = _shape_coordinate_value(observation, coordinate)
+                plus_value = _shape_coordinate_value(plus, coordinate)
+                minus_value = _shape_coordinate_value(minus, coordinate)
+                baseline_finite = math.isfinite(float(baseline_value))
+                plus_finite = plus is not None and math.isfinite(float(plus_value))
+                minus_finite = minus is not None and math.isfinite(float(minus_value))
+                plus_delta = (
+                    _shape_coordinate_delta(plus_value, baseline_value, coordinate=coordinate)
+                    if baseline_finite and plus_finite
+                    else math.nan
+                )
+                minus_delta = (
+                    _shape_coordinate_delta(baseline_value, minus_value, coordinate=coordinate)
+                    if baseline_finite and minus_finite
+                    else math.nan
+                )
+                central_delta = (
+                    _shape_coordinate_delta(plus_value, minus_value, coordinate=coordinate)
+                    if plus_finite and minus_finite
+                    else math.nan
+                )
+                one_sided_plus = (
+                    float(plus_delta) / float(parameter.step)
+                    if not eval_error and math.isfinite(float(plus_delta))
+                    else math.nan
+                )
+                one_sided_minus = (
+                    float(minus_delta) / float(parameter.step)
+                    if not eval_error and math.isfinite(float(minus_delta))
+                    else math.nan
+                )
+                coordinate_missing = not (baseline_finite and plus_finite and minus_finite)
+                status = _shape_status(
+                    missing_plus=missing_plus,
+                    missing_minus=missing_minus,
+                    coordinate_missing=coordinate_missing,
+                    identity_changed=identity_changed,
+                    eval_error=eval_error,
+                    observation_status=observation_status,
+                )
+                if status != "ok":
+                    derivative = math.nan
+                    asymmetry = math.nan
+                else:
+                    derivative = float(central_delta) / (2.0 * float(parameter.step))
+                    asymmetry = abs(float(one_sided_plus) - float(one_sided_minus))
+                normalized_value = (
+                    float(derivative) * float(parameter.scale_for_normalized_output)
+                    if math.isfinite(float(derivative))
+                    else math.nan
+                )
+                row_key = (str(observation.metric), str(observation.branch_id), coordinate)
+                jacobian[row_key][parameter.name] = derivative
+                normalized[row_key][parameter.name] = normalized_value
+                diag = {
+                    "one_sided_plus": one_sided_plus,
+                    "one_sided_minus": one_sided_minus,
+                    "asymmetry": asymmetry,
+                    "identity_changed": bool(identity_changed),
+                    "branch_missing": bool(missing_plus or missing_minus),
+                    "missing_plus": bool(missing_plus),
+                    "missing_minus": bool(missing_minus),
+                    "coordinate_missing": bool(coordinate_missing),
+                    "status": status,
+                    "eval_error": eval_error,
+                    "observation_status": observation_status,
+                    "plus_identity": _shape_identity_text(plus),
+                    "minus_identity": _shape_identity_text(minus),
+                }
+                diagnostics[
+                    (
+                        str(observation.metric),
+                        str(observation.branch_id),
+                        coordinate,
+                        parameter.name,
+                    )
+                ] = diag
+                long_rows.append(
+                    {
+                        "metric": str(observation.metric),
+                        "group_key": _stable_json(observation.group_key),
+                        "branch_id": str(observation.branch_id),
+                        "coordinate": coordinate,
+                        "parameter": parameter.name,
+                        "baseline_parameter_value": parameter.baseline_value,
+                        "step": parameter.step,
+                        "baseline_coordinate": baseline_value,
+                        "plus_coordinate": plus_value,
+                        "minus_coordinate": minus_value,
+                        "derivative": derivative,
+                        "normalized_derivative": normalized_value,
+                        "plus_identity": diag["plus_identity"],
+                        "minus_identity": diag["minus_identity"],
+                        "identity_changed": bool(identity_changed),
+                        "status": status,
+                        "one_sided_plus": one_sided_plus,
+                        "one_sided_minus": one_sided_minus,
+                        "asymmetry": asymmetry,
+                        "branch_missing": bool(missing_plus or missing_minus),
+                        "peak_jump_flag": False,
+                        "baseline_gui_mismatch": False,
+                        "eval_error": eval_error,
+                        "baseline_status": observation.status,
+                        "plus_status": plus.status if plus is not None else "",
+                        "minus_status": minus.status if minus is not None else "",
+                        "baseline_point_count": observation.point_count,
+                        "plus_point_count": plus.point_count if plus is not None else "",
+                        "minus_point_count": minus.point_count if minus is not None else "",
+                        "baseline_total_weight": observation.total_weight,
+                        "plus_total_weight": plus.total_weight if plus is not None else math.nan,
+                        "minus_total_weight": (
+                            minus.total_weight if minus is not None else math.nan
+                        ),
+                        "baseline_provenance_digest": observation.provenance_digest,
+                        "plus_provenance_digest": (
+                            plus.provenance_digest if plus is not None else ""
+                        ),
+                        "minus_provenance_digest": (
+                            minus.provenance_digest if minus is not None else ""
+                        ),
+                    }
+                )
+
+    return ShapeSensitivityResult(
+        metric=str(metric),
+        baseline_observations=baseline,
+        plus_observations=plus_map,
+        minus_observations=minus_map,
+        jacobian=jacobian,
+        normalized_jacobian=normalized,
+        diagnostics=diagnostics,
+        long_rows=long_rows,
+        parameters=params,
     )
 
 
@@ -636,6 +1018,12 @@ def write_sensitivity_artifacts(
         "normalized_sensitivity_matrix": output_dir / "normalized_sensitivity_matrix.csv",
         "sensitivity_long": output_dir / "sensitivity_long.csv",
         "baseline_peaks": output_dir / "baseline_peaks.csv",
+        "shape_sensitivity_long": output_dir / "shape_sensitivity_long.csv",
+        "shape_sensitivity_matrix": output_dir / "shape_sensitivity_matrix.csv",
+        "normalized_shape_sensitivity_matrix": (
+            output_dir / "normalized_shape_sensitivity_matrix.csv"
+        ),
+        "baseline_shape_metrics": output_dir / "baseline_shape_metrics.csv",
         "metadata": output_dir / "metadata.json",
         "diagnostics": output_dir / "diagnostics.json",
     }
@@ -699,11 +1087,93 @@ def write_sensitivity_artifacts(
                 {field: _csv_value(payload.get(field)) for field in BASELINE_CSV_FIELDS}
             )
 
+    shape_results = dict(result.shape_results or {})
+    with paths["shape_sensitivity_long"].open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(SHAPE_LONG_CSV_FIELDS))
+        writer.writeheader()
+        for shape_result in shape_results.values():
+            for row in shape_result.long_rows:
+                writer.writerow(
+                    {field: _csv_value(row.get(field)) for field in SHAPE_LONG_CSV_FIELDS}
+                )
+
+    with paths["shape_sensitivity_matrix"].open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["metric", "branch_id", "coordinate", *parameter_names])
+        for shape_result in shape_results.values():
+            for row_key, values in shape_result.jacobian.items():
+                metric, branch_id, coordinate = row_key
+                writer.writerow(
+                    [
+                        metric,
+                        branch_id,
+                        coordinate,
+                        *[_csv_value(values.get(name, math.nan)) for name in parameter_names],
+                    ]
+                )
+
+    with paths["normalized_shape_sensitivity_matrix"].open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["metric", "branch_id", "coordinate", *parameter_names])
+        for shape_result in shape_results.values():
+            for row_key, values in shape_result.normalized_jacobian.items():
+                metric, branch_id, coordinate = row_key
+                writer.writerow(
+                    [
+                        metric,
+                        branch_id,
+                        coordinate,
+                        *[_csv_value(values.get(name, math.nan)) for name in parameter_names],
+                    ]
+                )
+
+    with paths["baseline_shape_metrics"].open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(BASELINE_SHAPE_CSV_FIELDS))
+        writer.writeheader()
+        for shape_result in shape_results.values():
+            for observation in shape_result.baseline_observations:
+                payload = {
+                    "metric": observation.metric,
+                    "group_key": _stable_json(observation.group_key),
+                    "branch_id": observation.branch_id,
+                    **dict(observation.values),
+                    "point_count": observation.point_count,
+                    "total_weight": observation.total_weight,
+                    "status": observation.status,
+                    "low_point_warning": observation.low_point_warning,
+                    "source_row_count": observation.source_row_count,
+                    "group_row_count": observation.group_row_count,
+                    "collapsed_row_count": observation.collapsed_row_count,
+                    "branch_point_count": observation.branch_point_count,
+                    "used_pre_collapse_rows": observation.used_pre_collapse_rows,
+                    "used_collapsed_rows": observation.used_collapsed_rows,
+                    "source_rows_appear_collapsed": observation.source_rows_appear_collapsed,
+                    "provenance_digest": observation.provenance_digest,
+                    "refined_max_two_theta_deg": observation.refined_max_two_theta_deg,
+                    "refined_max_phi_deg": observation.refined_max_phi_deg,
+                }
+                writer.writerow(
+                    {field: _csv_value(payload.get(field)) for field in BASELINE_SHAPE_CSV_FIELDS}
+                )
+
     metadata_payload = dict(metadata or {})
     metadata_payload.setdefault(
         "parameters", [_parameter_metadata(item) for item in result.parameters]
     )
     metadata_payload.setdefault("row_order", list(result.jacobian.keys()))
+    metadata_payload.setdefault("selected_metric", result.selected_metric)
+    metadata_payload.setdefault(
+        "shape_row_order",
+        [
+            row_key
+            for shape_result in shape_results.values()
+            for row_key in shape_result.jacobian.keys()
+        ],
+    )
     paths["metadata"].write_text(
         json.dumps(_json_safe(metadata_payload), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -717,7 +1187,30 @@ def write_sensitivity_artifacts(
                 **dict(value),
             }
             for key, value in result.diagnostics.items()
-        ]
+        ],
+        "shape_derivatives": [
+            {
+                "metric": key[0],
+                "branch_id": key[1],
+                "coordinate": key[2],
+                "parameter": key[3],
+                **dict(value),
+            }
+            for shape_result in shape_results.values()
+            for key, value in shape_result.diagnostics.items()
+        ],
+        "shape_baseline": [
+            {
+                "metric": observation.metric,
+                "branch_id": observation.branch_id,
+                "status": observation.status,
+                "point_count": observation.point_count,
+                "total_weight": observation.total_weight,
+                "provenance_digest": observation.provenance_digest,
+            }
+            for shape_result in shape_results.values()
+            for observation in shape_result.baseline_observations
+        ],
     }
     paths["diagnostics"].write_text(
         json.dumps(_json_safe(diagnostics_payload), indent=2, sort_keys=True) + "\n",
@@ -1109,6 +1602,254 @@ def _record_to_observation(
     )
 
 
+def _empty_shape_values() -> dict[str, float]:
+    return {coordinate: math.nan for coordinate in SHAPE_COORDINATE_NAMES}
+
+
+def _source_row_weight(row: Mapping[str, object]) -> float:
+    for field_name in ("intensity", "weight"):
+        value = finite_float(row.get(field_name))
+        if math.isfinite(float(value)) and float(value) > 0.0:
+            return float(value)
+    return math.nan
+
+
+def _source_row_identity(row: Mapping[str, object]) -> dict[str, object]:
+    identity: dict[str, object] = {}
+    for field_name in (
+        *PROVENANCE_FIELDS,
+        "best_sample_index",
+        "branch_id",
+        "x_branch_id",
+        "signed_x_branch",
+        "branch_x_sign",
+    ):
+        if row.get(field_name) is not None:
+            identity[field_name] = _json_safe(row.get(field_name))
+    return identity
+
+
+def _branch_provenance_digest(rows: Sequence[Mapping[str, object]]) -> str:
+    identities = sorted(
+        (_source_row_identity(row) for row in rows),
+        key=lambda item: _stable_json(item),
+    )
+    return hashlib.sha256(_stable_json(identities).encode("utf-8")).hexdigest()
+
+
+def _shape_status_counts(observations: Sequence[ShapeMetricObservation]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for observation in observations:
+        status = str(observation.status or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _shape_point_counts(observations: Sequence[ShapeMetricObservation]) -> dict[str, int]:
+    return {
+        str(observation.branch_id): int(observation.point_count) for observation in observations
+    }
+
+
+def _weighted_caked_shape_values(
+    points: Sequence[tuple[float, float, float]],
+    *,
+    reference_phi_deg: float,
+    refined_max_two_theta_deg: float,
+    refined_max_phi_deg: float,
+    min_total_weight: float,
+    min_cloud_points: int,
+    metric: str,
+) -> tuple[dict[str, float], int, float, str, bool]:
+    usable: list[tuple[float, float, float]] = []
+    for two_theta, phi, weight in points:
+        if (
+            math.isfinite(float(two_theta))
+            and math.isfinite(float(phi))
+            and math.isfinite(float(weight))
+            and float(weight) > 0.0
+        ):
+            usable.append((float(two_theta), float(phi), float(weight)))
+    point_count = int(len(usable))
+    total_weight = float(sum(item[2] for item in usable))
+    if metric == METRIC_IMAGE_ROI_COM and total_weight <= float(min_total_weight):
+        return _empty_shape_values(), point_count, total_weight, "insufficient_weight", False
+    if point_count < int(min_cloud_points):
+        return (
+            _empty_shape_values(),
+            point_count,
+            total_weight,
+            "insufficient_cloud_points",
+            False,
+        )
+    if total_weight <= float(min_total_weight):
+        return _empty_shape_values(), point_count, total_weight, "insufficient_weight", False
+    reference_phi = (
+        float(reference_phi_deg)
+        if math.isfinite(float(reference_phi_deg))
+        else finite_float(refined_max_phi_deg, 0.0)
+    )
+    weights = np.asarray([item[2] for item in usable], dtype=np.float64)
+    two_theta_values = np.asarray([item[0] for item in usable], dtype=np.float64)
+    phi_unwrapped = np.asarray(
+        [reference_phi + wrapped_phi_delta(item[1], reference_phi) for item in usable],
+        dtype=np.float64,
+    )
+    weight_sum = float(np.sum(weights))
+    if not math.isfinite(weight_sum) or weight_sum <= float(min_total_weight):
+        return _empty_shape_values(), point_count, total_weight, "insufficient_weight", False
+    com_two_theta = float(np.sum(weights * two_theta_values) / weight_sum)
+    com_phi = _wrap_angle_deg(float(np.sum(weights * phi_unwrapped) / weight_sum))
+    dx = two_theta_values - float(com_two_theta)
+    dy = np.asarray([wrapped_phi_delta(float(item[1]), com_phi) for item in usable])
+    var_two_theta = float(np.sum(weights * dx * dx) / weight_sum)
+    var_phi = float(np.sum(weights * dy * dy) / weight_sum)
+    cov = float(np.sum(weights * dx * dy) / weight_sum)
+    covariance_matrix = np.asarray([[var_two_theta, cov], [cov, var_phi]], dtype=np.float64)
+    try:
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+    except Exception:
+        return _empty_shape_values(), point_count, total_weight, "nonfinite_shape", False
+    order = np.argsort(eigenvalues)
+    minor_var = max(float(eigenvalues[order[0]]), 0.0)
+    major_var = max(float(eigenvalues[order[-1]]), 0.0)
+    major_vector = eigenvectors[:, order[-1]]
+    axis_angle = _wrapped_period_delta(
+        math.degrees(math.atan2(float(major_vector[1]), float(major_vector[0]))),
+        0.0,
+        period=180.0,
+    )
+    delta_two_theta = (
+        float(com_two_theta) - float(refined_max_two_theta_deg)
+        if math.isfinite(float(refined_max_two_theta_deg))
+        else math.nan
+    )
+    delta_phi = (
+        wrapped_phi_delta(float(com_phi), float(refined_max_phi_deg))
+        if math.isfinite(float(refined_max_phi_deg))
+        else math.nan
+    )
+    values = {
+        "com_two_theta_deg": float(com_two_theta),
+        "com_phi_deg": float(com_phi),
+        "sigma_two_theta_deg": math.sqrt(max(var_two_theta, 0.0)),
+        "sigma_phi_deg": math.sqrt(max(var_phi, 0.0)),
+        "cov_two_theta_phi": float(cov),
+        "major_sigma_deg": math.sqrt(major_var),
+        "minor_sigma_deg": math.sqrt(minor_var),
+        "axis_angle_deg": float(axis_angle),
+        "delta_com_vs_max_two_theta": float(delta_two_theta),
+        "delta_com_vs_max_phi": float(delta_phi),
+    }
+    required_finite_coordinates = (
+        "com_two_theta_deg",
+        "com_phi_deg",
+        "sigma_two_theta_deg",
+        "sigma_phi_deg",
+        "cov_two_theta_phi",
+        "major_sigma_deg",
+        "minor_sigma_deg",
+        "axis_angle_deg",
+    )
+    if not all(math.isfinite(float(values[key])) for key in required_finite_coordinates):
+        return _empty_shape_values(), point_count, total_weight, "nonfinite_shape", False
+    return values, point_count, total_weight, "ok", bool(point_count < 5)
+
+
+def compute_weighted_caked_shape_metrics(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    reference_phi_deg: float,
+    refined_max_two_theta_deg: float,
+    refined_max_phi_deg: float,
+    min_total_weight: float = 0.0,
+    min_cloud_points: int = 3,
+    metric: str = METRIC_RAY_CLOUD_COM,
+) -> tuple[dict[str, float], int, float, str, bool]:
+    points = [
+        (
+            finite_float(row.get("two_theta_deg", row.get("caked_x"))),
+            finite_float(row.get("phi_deg", row.get("caked_y"))),
+            _source_row_weight(row),
+        )
+        for row in rows
+    ]
+    return _weighted_caked_shape_values(
+        points,
+        reference_phi_deg=float(reference_phi_deg),
+        refined_max_two_theta_deg=float(refined_max_two_theta_deg),
+        refined_max_phi_deg=float(refined_max_phi_deg),
+        min_total_weight=float(min_total_weight),
+        min_cloud_points=int(min_cloud_points),
+        metric=str(metric),
+    )
+
+
+def compute_image_roi_shape_metrics(
+    *,
+    caked_image: np.ndarray | None,
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+    refined_max_two_theta_deg: float,
+    refined_max_phi_deg: float,
+    reference_phi_deg: float,
+    roi_two_theta_half_width: float = 0.5,
+    roi_phi_half_width: float = 0.5,
+    background_percentile: float = 50.0,
+    min_total_weight: float = 0.0,
+    min_cloud_points: int = 3,
+) -> tuple[dict[str, float], int, float, str, bool]:
+    if caked_image is None or radial_axis is None or azimuth_axis is None:
+        return _empty_shape_values(), 0, math.nan, "missing_caked_payload", False
+    image = np.asarray(caked_image, dtype=np.float64)
+    radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+    azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+    if image.ndim != 2 or image.shape != (azimuth.size, radial.size):
+        return _empty_shape_values(), 0, math.nan, "missing_caked_payload", False
+    if not (
+        math.isfinite(float(refined_max_two_theta_deg))
+        and math.isfinite(float(refined_max_phi_deg))
+    ):
+        return _empty_shape_values(), 0, math.nan, "nonfinite_peak", False
+    radial_mask = np.abs(radial - float(refined_max_two_theta_deg)) <= float(
+        roi_two_theta_half_width
+    )
+    azimuth_mask = np.asarray(
+        [
+            abs(wrapped_phi_delta(float(phi), float(refined_max_phi_deg)))
+            <= float(roi_phi_half_width)
+            for phi in azimuth
+        ],
+        dtype=bool,
+    )
+    if not np.any(radial_mask) or not np.any(azimuth_mask):
+        return _empty_shape_values(), 0, 0.0, "insufficient_weight", False
+    roi = image[np.ix_(azimuth_mask, radial_mask)]
+    finite_roi = roi[np.isfinite(roi)]
+    if finite_roi.size <= 0:
+        return _empty_shape_values(), 0, 0.0, "insufficient_weight", False
+    percentile = min(max(float(background_percentile), 0.0), 100.0)
+    background = float(np.nanpercentile(finite_roi, percentile))
+    weights = np.maximum(roi - background, 0.0)
+    selected_radial = radial[radial_mask]
+    selected_azimuth = azimuth[azimuth_mask]
+    points: list[tuple[float, float, float]] = []
+    for row_index, phi in enumerate(selected_azimuth):
+        for col_index, two_theta in enumerate(selected_radial):
+            weight = finite_float(weights[row_index, col_index])
+            if math.isfinite(float(weight)) and float(weight) > 0.0:
+                points.append((float(two_theta), float(phi), float(weight)))
+    return _weighted_caked_shape_values(
+        points,
+        reference_phi_deg=float(reference_phi_deg),
+        refined_max_two_theta_deg=float(refined_max_two_theta_deg),
+        refined_max_phi_deg=float(refined_max_phi_deg),
+        min_total_weight=float(min_total_weight),
+        min_cloud_points=int(min_cloud_points),
+        metric=METRIC_IMAGE_ROI_COM,
+    )
+
+
 def _load_adapter_modules() -> SimpleNamespace:
     from ra_sim import headless_geometry_fit as hgf
     from ra_sim.gui import geometry_q_group_manager as q_groups
@@ -1222,15 +1963,23 @@ def _call_source_rows_for_background(
     callback: Callable[..., object],
     background_index: int,
     params: Mapping[str, object],
+    *,
+    required_pairs: Sequence[Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
+    kwargs: dict[str, object] = {"consumer": "peak_sensitivity"}
+    if required_pairs is not None:
+        kwargs["required_pairs"] = [dict(pair) for pair in required_pairs]
     try:
-        rows = callback(
-            int(background_index),
-            dict(params),
-            consumer="peak_sensitivity",
-        )
+        rows = callback(int(background_index), dict(params), **kwargs)
     except TypeError:
-        rows = callback(int(background_index), dict(params))
+        try:
+            rows = callback(
+                int(background_index),
+                dict(params),
+                consumer="peak_sensitivity",
+            )
+        except TypeError:
+            rows = callback(int(background_index), dict(params))
     return [dict(row) for row in (rows or ()) if isinstance(row, Mapping)]
 
 
@@ -1806,6 +2555,68 @@ class PeakSensitivityEvaluator:
                 except Exception:
                     pass
 
+    def evaluate_shape_observations(
+        self,
+        param_overrides: Mapping[str, float] | None,
+        group_key: str | Sequence[object] | tuple[object, ...],
+        *,
+        metric: str,
+        refined_max_observations: Sequence[PeakObservation],
+        branch_ids: Sequence[str] | None,
+        reference_phi_by_branch: Mapping[str, float],
+        options: ShapeMetricOptions,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
+    ) -> list[ShapeMetricObservation]:
+        requested_group_key = parse_group_key(group_key)
+        var_restore: list[tuple[object, object]] = []
+        registry = build_parameter_registry()
+        try:
+            params = _apply_parameter_overrides(self.context.params, param_overrides or {})
+            for name, value in (param_overrides or {}).items():
+                entry = registry.get(str(name))
+                if entry is None or not entry.var_name:
+                    continue
+                variables = getattr(self.context.bindings, "__dict__", {})
+                var_obj = variables.get(entry.var_name)
+                if var_obj is None:
+                    var_obj = getattr(self.context.manual_dataset_bindings, entry.var_name, None)
+                if hasattr(var_obj, "get") and hasattr(var_obj, "set"):
+                    old_value = var_obj.get()
+                    var_restore.append((var_obj, old_value))
+                    var_obj.set(float(value))
+            return self._evaluate_shape_with_params(
+                params,
+                requested_group_key,
+                metric=str(metric),
+                refined_max_observations=refined_max_observations,
+                branch_ids=branch_ids,
+                required_pairs=required_pairs,
+                reference_phi_by_branch=reference_phi_by_branch,
+                options=options,
+            )
+        except Exception as exc:
+            self._last_eval_metadata = {
+                "eval_error": f"{type(exc).__name__}: {exc}",
+                "metric": str(metric),
+            }
+            return [
+                ShapeMetricObservation(
+                    group_key=requested_group_key,
+                    branch_id=str(branch),
+                    metric=str(metric),
+                    values=_empty_shape_values(),
+                    status="eval_error",
+                    eval_error=str(exc),
+                )
+                for branch in branch_ids or ()
+            ]
+        finally:
+            for var_obj, old_value in reversed(var_restore):
+                try:
+                    var_obj.set(old_value)
+                except Exception:
+                    pass
+
     def _evaluate_with_params(
         self,
         params: Mapping[str, object],
@@ -1825,6 +2636,7 @@ class PeakSensitivityEvaluator:
             source_rows_callback,
             self.context.background_index,
             params,
+            required_pairs=required_pairs,
         )
         group_rows = _filter_group_rows(rows, modules=self.context.modules, group_key=group_key)
         caked_payload, cake_metadata = _build_caked_payload(
@@ -1896,6 +2708,165 @@ class PeakSensitivityEvaluator:
             "group_row_count": int(len(group_rows)),
             "collapsed_row_count": int(len(collapsed)),
             "observation_count": int(len(observations)),
+            "cake": cake_metadata,
+        }
+        return observations
+
+    def _evaluate_shape_with_params(
+        self,
+        params: Mapping[str, object],
+        group_key: tuple[object, ...],
+        *,
+        metric: str,
+        refined_max_observations: Sequence[PeakObservation],
+        branch_ids: Sequence[str] | None,
+        required_pairs: Sequence[Mapping[str, object]] | None,
+        reference_phi_by_branch: Mapping[str, float],
+        options: ShapeMetricOptions,
+    ) -> list[ShapeMetricObservation]:
+        source_rows_callback = getattr(
+            self.context.manual_dataset_bindings,
+            "geometry_manual_source_rows_for_background",
+            None,
+        )
+        if not callable(source_rows_callback):
+            raise RuntimeError("Captured runtime context has no source-row adapter.")
+        rows = _call_source_rows_for_background(
+            source_rows_callback,
+            self.context.background_index,
+            params,
+            required_pairs=required_pairs,
+        )
+        group_rows = _filter_group_rows(rows, modules=self.context.modules, group_key=group_key)
+        caked_payload, cake_metadata = _build_caked_payload(self.context, params)
+        projected_rows = [
+            self._ensure_caked_coordinates(row, group_key, caked_payload) for row in group_rows
+        ]
+        collapsed = _collapse_group_rows(
+            projected_rows,
+            modules=self.context.modules,
+        )
+        branch_filter = {str(branch) for branch in branch_ids or ()}
+        refined_by_branch = {str(item.branch_id): item for item in refined_max_observations}
+        branch_buckets: dict[str, list[dict[str, object]]] = {}
+        for row in projected_rows:
+            branch_id = _branch_id_for_row(
+                row,
+                modules=self.context.modules,
+                group_key=group_key,
+            )
+            if branch_filter and branch_id not in branch_filter:
+                continue
+            item = dict(row)
+            item["branch_id"] = branch_id
+            branch_buckets.setdefault(branch_id, []).append(item)
+        branch_order = list(branch_ids or branch_buckets.keys())
+        observations: list[ShapeMetricObservation] = []
+        source_rows_appear_collapsed = bool(
+            len(group_rows) > 0 and len(group_rows) <= len(collapsed)
+        )
+        caked_available = _caked_payload_available(caked_payload)
+        for branch_id in sorted({str(branch) for branch in branch_order}, key=_branch_sort_key):
+            branch_rows = branch_buckets.get(branch_id, [])
+            refined = refined_by_branch.get(branch_id)
+            refined_tth = (
+                float(refined.two_theta_deg)
+                if refined is not None and math.isfinite(float(refined.two_theta_deg))
+                else math.nan
+            )
+            refined_phi = (
+                float(refined.phi_deg)
+                if refined is not None and math.isfinite(float(refined.phi_deg))
+                else math.nan
+            )
+            reference_phi = finite_float(
+                reference_phi_by_branch.get(branch_id),
+                default=refined_phi,
+            )
+            provenance_digest = _branch_provenance_digest(branch_rows)
+            values: dict[str, float]
+            point_count: int
+            total_weight: float
+            status: str
+            low_point_warning: bool
+            if metric == METRIC_RAY_CLOUD_COM:
+                values, point_count, total_weight, status, low_point_warning = (
+                    compute_weighted_caked_shape_metrics(
+                        branch_rows,
+                        reference_phi_deg=reference_phi,
+                        refined_max_two_theta_deg=refined_tth,
+                        refined_max_phi_deg=refined_phi,
+                        min_total_weight=float(options.min_total_weight),
+                        min_cloud_points=int(options.min_cloud_points),
+                        metric=METRIC_RAY_CLOUD_COM,
+                    )
+                )
+            elif metric == METRIC_IMAGE_ROI_COM:
+                if not caked_available:
+                    values = _empty_shape_values()
+                    point_count = 0
+                    total_weight = math.nan
+                    status = "missing_caked_payload"
+                    low_point_warning = False
+                else:
+                    values, point_count, total_weight, status, low_point_warning = (
+                        compute_image_roi_shape_metrics(
+                            caked_image=getattr(caked_payload, "image", None),
+                            radial_axis=getattr(caked_payload, "radial", None),
+                            azimuth_axis=getattr(caked_payload, "azimuth", None),
+                            refined_max_two_theta_deg=refined_tth,
+                            refined_max_phi_deg=refined_phi,
+                            reference_phi_deg=reference_phi,
+                            roi_two_theta_half_width=float(options.roi_two_theta_half_width),
+                            roi_phi_half_width=float(options.roi_phi_half_width),
+                            background_percentile=float(options.background_percentile),
+                            min_total_weight=float(options.min_total_weight),
+                            min_cloud_points=int(options.min_cloud_points),
+                        )
+                    )
+            else:
+                raise ValueError(f"Unknown shape metric: {metric!r}")
+            observations.append(
+                ShapeMetricObservation(
+                    group_key=group_key,
+                    branch_id=branch_id,
+                    metric=str(metric),
+                    values=values,
+                    point_count=int(point_count),
+                    total_weight=float(total_weight),
+                    status=str(status),
+                    low_point_warning=bool(low_point_warning),
+                    source_row_count=int(len(rows)),
+                    group_row_count=int(len(group_rows)),
+                    collapsed_row_count=int(len(collapsed)),
+                    branch_point_count=int(len(branch_rows)),
+                    used_pre_collapse_rows=metric == METRIC_RAY_CLOUD_COM,
+                    used_collapsed_rows=False,
+                    source_rows_appear_collapsed=source_rows_appear_collapsed,
+                    provenance_digest=provenance_digest,
+                    refined_max_two_theta_deg=refined_tth,
+                    refined_max_phi_deg=refined_phi,
+                    source_record={
+                        "branch_source_rows": [_source_row_identity(row) for row in branch_rows],
+                        "cake": cake_metadata,
+                    },
+                )
+            )
+        observations.sort(key=lambda item: _branch_sort_key(item.branch_id))
+        self._last_eval_metadata = {
+            "metric": str(metric),
+            "source_row_count": int(len(rows)),
+            "group_row_count": int(len(group_rows)),
+            "collapsed_row_count": int(len(collapsed)),
+            "observation_count": int(len(observations)),
+            "branch_point_count": {
+                str(item.branch_id): int(item.branch_point_count) for item in observations
+            },
+            "point_count": _shape_point_counts(observations),
+            "status_counts": _shape_status_counts(observations),
+            "used_pre_collapse_rows": bool(metric == METRIC_RAY_CLOUD_COM),
+            "used_collapsed_rows": False,
+            "source_rows_appear_collapsed": source_rows_appear_collapsed,
             "cake": cake_metadata,
         }
         return observations
@@ -2101,6 +3072,50 @@ def _baseline_unusable_reason(baseline: Sequence[PeakObservation]) -> str | None
     return None
 
 
+def _requested_shape_metrics(metric: str) -> tuple[str, ...]:
+    metric_text = str(metric or DEFAULT_METRIC).strip()
+    if metric_text not in METRIC_CHOICES:
+        raise ValueError(f"Unknown metric {metric_text!r}")
+    if metric_text == METRIC_ALL:
+        return SHAPE_METRIC_NAMES
+    if metric_text in SHAPE_METRIC_NAMES:
+        return (metric_text,)
+    return ()
+
+
+def _primary_metric(metric: str) -> str:
+    metric_text = str(metric or DEFAULT_METRIC).strip()
+    if metric_text == METRIC_ALL:
+        return METRIC_RAY_CLOUD_COM
+    return metric_text
+
+
+def _shape_result_as_primary(
+    shape_result: ShapeSensitivityResult,
+) -> tuple[
+    dict[tuple[str, str], dict[str, float]],
+    dict[tuple[str, str], dict[str, float]],
+    dict[tuple[str, str, str], dict[str, object]],
+    list[dict[str, object]],
+]:
+    jacobian = {
+        (branch_id, coordinate): dict(values)
+        for (_metric, branch_id, coordinate), values in shape_result.jacobian.items()
+    }
+    normalized = {
+        (branch_id, coordinate): dict(values)
+        for (_metric, branch_id, coordinate), values in shape_result.normalized_jacobian.items()
+    }
+    diagnostics = {
+        (branch_id, coordinate, parameter): dict(values)
+        for (_metric, branch_id, coordinate, parameter), values in shape_result.diagnostics.items()
+    }
+    long_rows = [
+        {field: row.get(field) for field in LONG_CSV_FIELDS} for row in shape_result.long_rows
+    ]
+    return jacobian, normalized, diagnostics, long_rows
+
+
 def run_peak_sensitivity(
     *,
     state_path: str | Path,
@@ -2108,10 +3123,26 @@ def run_peak_sensitivity(
     parameter_names: Sequence[str] = DEFAULT_PARAMETER_NAMES,
     relative_step: float = 1.0e-4,
     step_mode: str = "default",
+    metric: str = DEFAULT_METRIC,
+    roi_two_theta_half_width: float = 0.5,
+    roi_phi_half_width: float = 0.5,
+    background_percentile: float = 50.0,
+    min_total_weight: float = 0.0,
+    min_cloud_points: int = 3,
     outdir: str | Path | None = None,
 ) -> PeakSensitivityResult:
     evaluator = PeakSensitivityEvaluator(state_path)
     parsed_group_key = parse_group_key(group_key)
+    requested_metric = str(metric or DEFAULT_METRIC).strip()
+    primary_metric = _primary_metric(requested_metric)
+    shape_metric_names = _requested_shape_metrics(requested_metric)
+    shape_options = ShapeMetricOptions(
+        roi_two_theta_half_width=float(roi_two_theta_half_width),
+        roi_phi_half_width=float(roi_phi_half_width),
+        background_percentile=float(background_percentile),
+        min_total_weight=float(min_total_weight),
+        min_cloud_points=int(min_cloud_points),
+    )
     baseline = evaluator.evaluate_peak_observations({}, parsed_group_key, branch_ids=None)
     baseline_eval_metadata = dict(evaluator._last_eval_metadata)
     top_level_eval_error = baseline_eval_metadata.get("eval_error")
@@ -2154,7 +3185,7 @@ def run_peak_sensitivity(
         eval_metadata[f"{parameter.name}:minus"] = evaluator._last_eval_metadata
         if evaluator._last_eval_metadata.get("eval_error"):
             minus_errors[parameter.name] = str(evaluator._last_eval_metadata["eval_error"])
-    result = assemble_finite_difference_result(
+    refined_result = assemble_finite_difference_result(
         baseline_observations=baseline,
         plus_observations=plus,
         minus_observations=minus,
@@ -2168,13 +3199,130 @@ def run_peak_sensitivity(
         baseline,
         group_key=parsed_group_key,
     )
-    _mark_baseline_gui_mismatches(result, smoke_check)
+    _mark_baseline_gui_mismatches(refined_result, smoke_check)
+    reference_phi_by_branch = {
+        str(item.branch_id): float(item.phi_deg)
+        for item in baseline
+        if math.isfinite(float(item.phi_deg))
+    }
+    shape_results: dict[str, ShapeSensitivityResult] = {}
+    shape_eval_metadata: dict[str, object] = {}
+    for shape_metric in shape_metric_names:
+        baseline_shape = evaluator.evaluate_shape_observations(
+            {},
+            parsed_group_key,
+            metric=shape_metric,
+            refined_max_observations=baseline,
+            branch_ids=branch_ids,
+            reference_phi_by_branch=reference_phi_by_branch,
+            options=shape_options,
+            required_pairs=required_pairs,
+        )
+        shape_eval_metadata[f"{shape_metric}:baseline"] = dict(evaluator._last_eval_metadata)
+        plus_shape: dict[str, list[ShapeMetricObservation]] = {}
+        minus_shape: dict[str, list[ShapeMetricObservation]] = {}
+        plus_shape_errors: dict[str, str] = {}
+        minus_shape_errors: dict[str, str] = {}
+        for parameter in parameters:
+            plus_value = parameter.baseline_value + parameter.step
+            minus_value = parameter.baseline_value - parameter.step
+            plus_shape[parameter.name] = evaluator.evaluate_shape_observations(
+                {parameter.name: plus_value},
+                parsed_group_key,
+                metric=shape_metric,
+                refined_max_observations=plus.get(parameter.name, []),
+                branch_ids=branch_ids,
+                reference_phi_by_branch=reference_phi_by_branch,
+                options=shape_options,
+                required_pairs=required_pairs,
+            )
+            shape_eval_metadata[f"{shape_metric}:{parameter.name}:plus"] = dict(
+                evaluator._last_eval_metadata
+            )
+            if evaluator._last_eval_metadata.get("eval_error"):
+                plus_shape_errors[parameter.name] = str(evaluator._last_eval_metadata["eval_error"])
+            minus_shape[parameter.name] = evaluator.evaluate_shape_observations(
+                {parameter.name: minus_value},
+                parsed_group_key,
+                metric=shape_metric,
+                refined_max_observations=minus.get(parameter.name, []),
+                branch_ids=branch_ids,
+                reference_phi_by_branch=reference_phi_by_branch,
+                options=shape_options,
+                required_pairs=required_pairs,
+            )
+            shape_eval_metadata[f"{shape_metric}:{parameter.name}:minus"] = dict(
+                evaluator._last_eval_metadata
+            )
+            if evaluator._last_eval_metadata.get("eval_error"):
+                minus_shape_errors[parameter.name] = str(
+                    evaluator._last_eval_metadata["eval_error"]
+                )
+        shape_results[shape_metric] = assemble_shape_finite_difference_result(
+            metric=shape_metric,
+            baseline_observations=baseline_shape,
+            plus_observations=plus_shape,
+            minus_observations=minus_shape,
+            parameters=parameters,
+            plus_eval_errors=plus_shape_errors,
+            minus_eval_errors=minus_shape_errors,
+        )
+
+    if primary_metric == METRIC_REFINED_MAX:
+        primary_jacobian = refined_result.jacobian
+        primary_normalized = refined_result.normalized_jacobian
+        primary_diagnostics = refined_result.diagnostics
+        primary_long_rows = refined_result.long_rows
+    else:
+        shape_primary = shape_results.get(primary_metric)
+        if shape_primary is None:
+            raise PeakSensitivityEvaluationError(f"Metric {primary_metric!r} was not evaluated.")
+        (
+            primary_jacobian,
+            primary_normalized,
+            primary_diagnostics,
+            primary_long_rows,
+        ) = _shape_result_as_primary(shape_primary)
     metadata = dict(evaluator.metadata)
+    shape_baseline_metadata = {
+        name: {
+            "point_count": _shape_point_counts(result.baseline_observations),
+            "status_counts": _shape_status_counts(result.baseline_observations),
+            "source_row_count": (
+                result.baseline_observations[0].source_row_count
+                if result.baseline_observations
+                else 0
+            ),
+            "group_row_count": (
+                result.baseline_observations[0].group_row_count
+                if result.baseline_observations
+                else 0
+            ),
+            "collapsed_row_count": (
+                result.baseline_observations[0].collapsed_row_count
+                if result.baseline_observations
+                else 0
+            ),
+            "used_pre_collapse_rows": any(
+                item.used_pre_collapse_rows for item in result.baseline_observations
+            ),
+            "used_collapsed_rows": any(
+                item.used_collapsed_rows for item in result.baseline_observations
+            ),
+            "source_rows_appear_collapsed": any(
+                item.source_rows_appear_collapsed for item in result.baseline_observations
+            ),
+        }
+        for name, result in shape_results.items()
+    }
     metadata.update(
         {
             "status": "ok",
             "eval_error": None,
             "group_key": parsed_group_key,
+            "requested_metric": requested_metric,
+            "selected_metric": primary_metric,
+            "shape_metrics": list(shape_metric_names),
             "params": [parameter.name for parameter in parameters],
             "steps": {parameter.name: parameter.step for parameter in parameters},
             "units": {parameter.name: parameter.units for parameter in parameters},
@@ -2188,21 +3336,32 @@ def run_peak_sensitivity(
                 "peak_jump_threshold": 0.5,
                 "units": "deg",
             },
+            "shape_metric_options": {
+                "roi_two_theta_half_width": shape_options.roi_two_theta_half_width,
+                "roi_phi_half_width": shape_options.roi_phi_half_width,
+                "background_percentile": shape_options.background_percentile,
+                "min_total_weight": shape_options.min_total_weight,
+                "min_cloud_points": shape_options.min_cloud_points,
+            },
             "evaluations": eval_metadata,
+            "shape_evaluations": shape_eval_metadata,
+            "baseline_shape_metrics": shape_baseline_metadata,
             "baseline_coordinate_source": "runtime_evaluator",
             "baseline_gui_smoke_check": smoke_check,
         }
     )
     final_result = PeakSensitivityResult(
-        baseline_observations=result.baseline_observations,
-        plus_observations=result.plus_observations,
-        minus_observations=result.minus_observations,
-        jacobian=result.jacobian,
-        normalized_jacobian=result.normalized_jacobian,
-        diagnostics=result.diagnostics,
-        long_rows=result.long_rows,
-        parameters=result.parameters,
+        baseline_observations=refined_result.baseline_observations,
+        plus_observations=refined_result.plus_observations,
+        minus_observations=refined_result.minus_observations,
+        jacobian=primary_jacobian,
+        normalized_jacobian=primary_normalized,
+        diagnostics=primary_diagnostics,
+        long_rows=primary_long_rows,
+        parameters=refined_result.parameters,
         metadata=metadata,
+        selected_metric=primary_metric,
+        shape_results=shape_results,
     )
     if outdir is not None:
         write_sensitivity_artifacts(final_result, outdir, metadata=metadata)
