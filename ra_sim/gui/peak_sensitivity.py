@@ -23,6 +23,7 @@ from typing import Any
 import numpy as np
 
 from ra_sim.io.data_loading import load_gui_state_file
+from ra_sim.utils.calculations import resolve_canonical_branch
 
 
 DEFAULT_PARAMETER_NAMES: tuple[str, ...] = (
@@ -1572,6 +1573,10 @@ def _record_to_observation(
     status: str = "ok",
     eval_error: str | None = None,
 ) -> PeakObservation:
+    source_branch_index, _, _ = resolve_canonical_branch(
+        record,
+        allow_legacy_peak_fallback=True,
+    )
     return PeakObservation(
         group_key=group_key,
         branch_id=str(branch_id),
@@ -1592,8 +1597,8 @@ def _record_to_observation(
             else None
         ),
         mosaic_top_rank_key=record.get("mosaic_top_rank_key"),
-        source_branch_index=record.get("source_branch_index"),
-        source_peak_index=record.get("source_peak_index"),
+        source_branch_index=source_branch_index,
+        source_peak_index=source_branch_index,
         source_reflection_namespace=record.get("source_reflection_namespace"),
         source_reflection_is_full=record.get("source_reflection_is_full"),
         source_record=dict(record),

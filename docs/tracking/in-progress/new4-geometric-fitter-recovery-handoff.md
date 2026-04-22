@@ -18,6 +18,9 @@ Last updated: 2026-04-22
 - Rung 3A `a` diagnosis is usable.
 - Rung 3B caked-point reprojection guard is green.
 - Rung 4 initial paired solves are green.
+- Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
+  passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
+  fixes; caked reprojection reported `failures: []`.
 - Rung 5 small cumulative blocks are implemented; debug pair-backed evidence
   passes three theta/distance blocks, but fresh same-run Rung 5 did not complete
   because prerequisite singleton/diagnosis evidence timed out.

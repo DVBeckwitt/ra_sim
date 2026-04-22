@@ -11,17 +11,13 @@ import numpy as np
 from .diffraction import (
     DEFAULT_SOLVE_Q_REL_TOL,
     DEFAULT_SOLVE_Q_MODE,
-    MAX_SOLVE_Q_REL_TOL,
-    MIN_SOLVE_Q_REL_TOL,
-    SOLVE_Q_MODE_ADAPTIVE,
-    SOLVE_Q_MODE_UNIFORM,
-    compute_intensity_array,
     intersect_infinite_line_plane,
     intersect_line_plane,
     ktz_components,
-    solve_q,
     transmit_angle_grazing,
 )
+
+_INTENSITY_CUTOFF = float(np.exp(-100.0))
 
 
 @dataclass(frozen=True)
@@ -116,6 +112,114 @@ class NominalProjectionFrame:
     e1_det: np.ndarray
     e2_det: np.ndarray
     u_i_lab: np.ndarray
+
+
+def _wrap_to_pi_array(values: np.ndarray) -> np.ndarray:
+    return (np.asarray(values, dtype=np.float64) + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def _compute_intensity_array_numpy(
+    qx: np.ndarray,
+    qy: np.ndarray,
+    qz: np.ndarray,
+    g_vec: np.ndarray,
+    sigma: float,
+    gamma_pv: float,
+    eta_pv: float,
+) -> np.ndarray:
+    g_arr = np.asarray(g_vec, dtype=np.float64).reshape(3)
+    g_mag = float(np.linalg.norm(g_arr))
+    if g_mag < 1e-14:
+        return np.zeros_like(np.asarray(qx, dtype=np.float64))
+
+    qx_arr = np.asarray(qx, dtype=np.float64)
+    qy_arr = np.asarray(qy, dtype=np.float64)
+    qz_arr = np.asarray(qz, dtype=np.float64)
+    qr_arr = np.sqrt(qx_arr * qx_arr + qy_arr * qy_arr)
+
+    sigma_eff = max(float(sigma), 1e-12)
+    gamma_eff = max(float(gamma_pv), 1e-12)
+    eta = float(eta_pv)
+    a_gauss = 1.0 / (sigma_eff * np.sqrt(2.0 * np.pi))
+    a_lor = 1.0 / (np.pi * gamma_eff)
+
+    theta0 = np.arctan2(float(g_arr[2]), np.hypot(float(g_arr[0]), float(g_arr[1])))
+    dtheta = _wrap_to_pi_array(np.arctan2(qz_arr, qr_arr) - theta0)
+    gauss_val = a_gauss * np.exp(-0.5 * (dtheta / sigma_eff) ** 2)
+    lor_val = a_lor / (1.0 + (dtheta / gamma_eff) ** 2)
+    omega = (1.0 - eta) * gauss_val + eta * lor_val
+    return omega / (2.0 * np.pi * g_mag * g_mag)
+
+
+def _solve_q_for_intersection_analysis(
+    k_in_crystal: np.ndarray,
+    k_scat: float,
+    g_vec: np.ndarray,
+    sigma: float,
+    gamma_pv: float,
+    eta_pv: float,
+    n_steps: int,
+) -> tuple[np.ndarray, int]:
+    steps = int(n_steps)
+    if steps <= 0:
+        return np.zeros((0, 4), dtype=np.float64), 0
+
+    g_arr = np.asarray(g_vec, dtype=np.float64).reshape(3)
+    g_sq = float(np.dot(g_arr, g_arr))
+    if g_sq < 1e-14:
+        return np.zeros((0, 4), dtype=np.float64), -1
+
+    a_vec = -np.asarray(k_in_crystal, dtype=np.float64).reshape(3)
+    a_sq = float(np.dot(a_vec, a_vec))
+    if a_sq < 1e-14:
+        return np.zeros((0, 4), dtype=np.float64), -2
+    a_len = sqrt(a_sq)
+
+    c_val = (g_sq + a_sq - float(k_scat) * float(k_scat)) / (2.0 * a_len)
+    circle_r_sq = g_sq - c_val * c_val
+    if circle_r_sq < 0.0:
+        return np.zeros((0, 4), dtype=np.float64), -3
+    circle_r = sqrt(circle_r_sq)
+
+    a_hat = a_vec / a_len
+    origin = c_val * a_hat
+    anchor = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    if abs(float(np.dot(anchor, a_hat))) > 0.9999:
+        anchor = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    e1 = anchor - float(np.dot(anchor, a_hat)) * a_hat
+    e1_norm = float(np.linalg.norm(e1))
+    if e1_norm < 1e-14:
+        return np.zeros((0, 4), dtype=np.float64), -4
+    e1 = e1 / e1_norm
+    e2 = np.cross(a_hat, e1)
+    e2_norm = float(np.linalg.norm(e2))
+    if e2_norm < 1e-14:
+        return np.zeros((0, 4), dtype=np.float64), -5
+    e2 = e2 / e2_norm
+
+    dtheta = (2.0 * np.pi) / float(steps)
+    theta = dtheta * np.arange(steps, dtype=np.float64)
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+    qx = origin[0] + circle_r * (cos_theta * e1[0] + sin_theta * e2[0])
+    qy = origin[1] + circle_r * (cos_theta * e1[1] + sin_theta * e2[1])
+    qz = origin[2] + circle_r * (cos_theta * e1[2] + sin_theta * e2[2])
+
+    intensity = (
+        _compute_intensity_array_numpy(qx, qy, qz, g_arr, sigma, gamma_pv, eta_pv)
+        * circle_r
+        * dtheta
+    )
+    valid = np.asarray(intensity > _INTENSITY_CUTOFF, dtype=bool)
+    if not np.any(valid):
+        return np.zeros((0, 4), dtype=np.float64), 0
+    return (
+        np.column_stack((qx[valid], qy[valid], qz[valid], intensity[valid])).astype(
+            np.float64,
+            copy=False,
+        ),
+        0,
+    )
 
 
 def compute_g_vec(h: int, k: int, l: int, a: float, c: float) -> np.ndarray:
@@ -514,16 +618,6 @@ def _solve_for_best_beam_sample(
     gamma_rad = float(np.deg2rad(mosaic.gamma_mosaic_deg))
     eta = float(mosaic.eta)
     solve_q_steps = int(np.clip(int(getattr(mosaic, "solve_q_steps", 1000)), 32, 8192))
-    solve_q_rel_tol = float(
-        np.clip(
-            float(getattr(mosaic, "solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
-            MIN_SOLVE_Q_REL_TOL,
-            MAX_SOLVE_Q_REL_TOL,
-        )
-    )
-    solve_q_mode = int(getattr(mosaic, "solve_q_mode", DEFAULT_SOLVE_Q_MODE))
-    if solve_q_mode != SOLVE_Q_MODE_UNIFORM:
-        solve_q_mode = SOLVE_Q_MODE_ADAPTIVE
 
     best_ctx = None
     best_dist2 = np.inf
@@ -582,19 +676,14 @@ def _solve_for_best_beam_sample(
         re_k_z = float(-re_k_z)
 
         k_in_crystal = np.array([k_x_scat, k_y_scat, re_k_z], dtype=np.float64)
-        all_q, status = solve_q(
+        all_q, status = _solve_q_for_intersection_analysis(
             k_in_crystal,
             k_scat,
             g_vec,
             sigma_rad,
             gamma_rad,
             eta,
-            float(h),
-            float(k),
-            float(l),
             solve_q_steps,
-            rel_err_tol=solve_q_rel_tol,
-            solve_q_mode=solve_q_mode,
         )
         if int(status) != 0 or all_q.shape[0] == 0:
             continue
@@ -919,7 +1008,7 @@ def analyze_reflection_intersection(
     sphere_z = g_mag * np.cos(vv)
     sigma_rad = float(np.deg2rad(mosaic.sigma_mosaic_deg))
     gamma_rad = float(np.deg2rad(mosaic.gamma_mosaic_deg))
-    sphere_intensity = compute_intensity_array(
+    sphere_intensity = _compute_intensity_array_numpy(
         sphere_x,
         sphere_y,
         sphere_z,

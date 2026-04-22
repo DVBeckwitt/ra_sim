@@ -1187,6 +1187,31 @@ def normalize_detector_peak_record_fallback_rows(
             gui_manual_geometry.geometry_manual_entry_is_simulation_native_frame(entry)
         )
         if (
+            background_detector_frame
+            and native_point is not None
+            and callable(native_detector_coords_to_detector_display_coords)
+        ):
+            try:
+                projected = native_detector_coords_to_detector_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+            except Exception:
+                projected = None
+            if (
+                isinstance(projected, tuple)
+                and len(projected) >= 2
+                and np.isfinite(float(projected[0]))
+                and np.isfinite(float(projected[1]))
+            ):
+                raw_detector_display = (
+                    float(projected[0]),
+                    float(projected[1]),
+                )
+                entry["detector_display_source"] = (
+                    "native_detector_coords_to_detector_display_coords"
+                )
+        if (
             raw_detector_display is None
             and native_point is not None
             and not background_detector_frame
@@ -2509,6 +2534,25 @@ def make_runtime_geometry_q_group_value_callbacks(
                 expected_table_count=provenance.get("expected_table_count"),
             )
         )
+        for entry in normalized_candidates:
+            if not isinstance(entry, dict):
+                continue
+            if (
+                entry.get("coordinate_frame") is None
+                and entry.get("detector_display_source") is None
+                and _runtime_peak_row_finite_point(
+                    entry,
+                    "display_col",
+                    "display_row",
+                )
+                is not None
+                and _runtime_peak_row_finite_point(entry, "native_col", "native_row")
+                is not None
+            ):
+                entry["coordinate_frame"] = "background_detector"
+                entry["detector_display_source"] = (
+                    "native_detector_coords_to_detector_display_coords"
+                )
         normalized_candidates = _normalize_detector_peak_record_fallback_rows(
             normalized_candidates,
             profile_cache=getattr(simulation_runtime_state, "profile_cache", None),

@@ -470,6 +470,7 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 or "sample_length_m" in call_kwargs
                 or "n2_sample_array_override" in call_kwargs
                 or "prefer_python_runner" in call_kwargs
+                or "collect_hit_tables" in call_kwargs
             ) and "unexpected keyword" in str(exc):
                 reduced_kwargs = dict(call_kwargs)
                 reduced_kwargs.pop("optics_mode", None)
@@ -482,6 +483,7 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 reduced_kwargs.pop("sample_length_m", None)
                 reduced_kwargs.pop("n2_sample_array_override", None)
                 reduced_kwargs.pop("prefer_python_runner", None)
+                reduced_kwargs.pop("collect_hit_tables", None)
                 return fn(*call_args, **reduced_kwargs)
             raise
 

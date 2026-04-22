@@ -473,10 +473,24 @@ def refresh_geometry_manual_pair_entry(
     except Exception:
         shape = ()
 
-    authoritative_caked_point = _finite_pair(
+    refined_caked_point = _finite_pair("refined_sim_caked_x", "refined_sim_caked_y")
+    saved_background_caked_point = _finite_pair(
         "background_two_theta_deg",
         "background_phi_deg",
     )
+    source_backed_saved_point = bool(
+        raw_entry is not None
+        and (
+            raw_entry.get("q_group_key") is not None
+            or raw_entry.get("source_table_index") is not None
+            or raw_entry.get("source_row_index") is not None
+        )
+        and saved_background_caked_point is not None
+    )
+    caked_point_forces_detector = bool(
+        refined_caked_point is not None or source_backed_saved_point
+    )
+    authoritative_caked_point = refined_caked_point or saved_background_caked_point
     caked_point = authoritative_caked_point
     if caked_point is None:
         caked_point = _finite_pair("caked_x", "caked_y")
@@ -639,15 +653,16 @@ def refresh_geometry_manual_pair_entry(
                     normalized.pop(stale_key, None)
                 normalized["stale_caked_fields"] = True
                 return normalized
-        detector_point = (
-            float(mapped_detector_point[0]),
-            float(mapped_detector_point[1]),
-        )
-        detector_point_source = "caked_inverse_projection"
-        display_point = (
-            float(mapped_display_point[0]),
-            float(mapped_display_point[1]),
-        )
+        if detector_point is None or caked_point_forces_detector:
+            detector_point = (
+                float(mapped_detector_point[0]),
+                float(mapped_detector_point[1]),
+            )
+            detector_point_source = "caked_inverse_projection"
+            display_point = (
+                float(mapped_display_point[0]),
+                float(mapped_display_point[1]),
+            )
 
     if detector_point is None:
         return normalized
@@ -7340,6 +7355,42 @@ def make_runtime_geometry_manual_projection_callbacks(
                         float(derived_native[0]),
                         float(derived_native[1]),
                     )
+                    if not use_caked and raw_detector_display_source == "sim_col_raw":
+                        projected_detector = None
+                        if callable(native_detector_coords_to_detector_display_coords):
+                            try:
+                                projected_detector = (
+                                    native_detector_coords_to_detector_display_coords(
+                                        float(native_point[0]),
+                                        float(native_point[1]),
+                                    )
+                                )
+                            except Exception:
+                                projected_detector = None
+                            projected_detector = _finite_projection_point(projected_detector)
+                        if (
+                            projected_detector is None
+                            and len(detector_display_shape) >= 2
+                            and min(detector_display_shape) > 0
+                        ):
+                            try:
+                                projected_detector = rotate_point_for_display(
+                                    float(native_point[0]),
+                                    float(native_point[1]),
+                                    detector_display_shape,
+                                    int(display_rotate_k),
+                                )
+                            except Exception:
+                                projected_detector = None
+                        projected_detector = _finite_projection_point(projected_detector)
+                        if projected_detector is not None:
+                            raw_detector_display = (
+                                float(projected_detector[0]),
+                                float(projected_detector[1]),
+                            )
+                            raw_detector_display_source = (
+                                "native_detector_coords_to_detector_display_coords"
+                            )
 
             if (
                 raw_detector_display is None

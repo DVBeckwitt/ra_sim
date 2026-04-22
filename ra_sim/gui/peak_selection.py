@@ -1754,6 +1754,7 @@ def ensure_runtime_peak_overlay_data(
                     continue
 
                 caked_coords = None
+                detector_display_source = None
                 if bool(show_caked):
                     caked_coords = _peak_overlay_cache_row_caked_coords(
                         np.asarray(row, dtype=float).reshape(-1),
@@ -1764,14 +1765,23 @@ def ensure_runtime_peak_overlay_data(
                     disp_cy = float(caked_coords[1])
                 else:
                     detector_display = None
-                    try:
-                        detector_display = native_sim_to_display_coords(
-                            float(cx),
-                            float(cy),
-                            image_shape,
-                        )
-                    except Exception:
-                        detector_display = None
+                    detector_display_source = None
+                    if callable(native_sim_to_display_coords):
+                        try:
+                            detector_display = native_sim_to_display_coords(
+                                float(cx),
+                                float(cy),
+                                image_shape,
+                            )
+                        except Exception:
+                            detector_display = None
+                        if (
+                            isinstance(detector_display, tuple)
+                            and len(detector_display) >= 2
+                            and np.isfinite(float(detector_display[0]))
+                            and np.isfinite(float(detector_display[1]))
+                        ):
+                            detector_display_source = "native_sim_to_display"
                     if (
                         isinstance(detector_display, tuple)
                         and len(detector_display) >= 2
@@ -1873,7 +1883,9 @@ def ensure_runtime_peak_overlay_data(
                         "caked_display" if caked_coords is not None else "detector_display"
                     ),
                     "detector_display_source": (
-                        "caked_cache" if caked_coords is not None else "native_sim_to_display"
+                        "caked_cache"
+                        if caked_coords is not None
+                        else detector_display_source or "native_sim_to_display"
                     ),
                     "hkl": hkl,
                     "hkl_raw": hkl_raw,
@@ -3057,8 +3069,25 @@ def _resolve_peak_record_display_coords(
             return explicit_display_point
         return None
 
-    if raw_detector_display is not None and not background_detector_frame:
-        return raw_detector_display
+    if (
+        background_detector_frame
+        and native_point is not None
+        and callable(native_detector_coords_to_detector_display_coords)
+    ):
+        try:
+            projected = native_detector_coords_to_detector_display_coords(
+                float(native_point[0]),
+                float(native_point[1]),
+            )
+        except Exception:
+            projected = None
+        if (
+            isinstance(projected, tuple)
+            and len(projected) >= 2
+            and np.isfinite(float(projected[0]))
+            and np.isfinite(float(projected[1]))
+        ):
+            return (float(projected[0]), float(projected[1]))
 
     if (
         native_point is not None
@@ -3085,11 +3114,8 @@ def _resolve_peak_record_display_coords(
     if (
         native_point is not None
         and callable(native_detector_coords_to_detector_display_coords)
-        and (
-            background_detector_frame
-            or not simulation_native_frame
-            or not callable(native_sim_to_display_coords)
-        )
+        and not background_detector_frame
+        and not simulation_native_frame
     ):
         try:
             projected = native_detector_coords_to_detector_display_coords(
@@ -3105,6 +3131,7 @@ def _resolve_peak_record_display_coords(
             and np.isfinite(float(projected[1]))
         ):
             return (float(projected[0]), float(projected[1]))
+
     if native_point is not None and callable(native_sim_to_display_coords):
         try:
             projected = native_sim_to_display_coords(

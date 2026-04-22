@@ -3,9 +3,11 @@
 ## Unreleased (since `e11bec1` on 2026-02-13)
 
 - **Simulation performance**
+  - Made best-sample provenance buffers lazy for image-only/no-cache forward and QR rod simulations while preserving explicit caller buffers and cache-building provenance.
   - Vectorized primary-cache hit-table rematerialization, filtered impossible off-detector rows before integer casts, and skipped optional last-intersection cache builds when retention is disabled.
   - Optimized diffraction simulation with low-discrepancy antithetic beam sampling, weighted beam clustering, nominal detector culling, local-arc `solve_q`, sparse bilinear accumulation, and a fast-mode optics lookup table.
   - Restored the Python cache/stat compatibility surface around `process_peaks_parallel_safe(...)` in `ra_sim.simulation.diffraction`, including `_PHASE_SPACE_CACHE`, `_SOURCE_TEMPLATE_CACHE`, `_Q_VECTOR_CACHE`, and `get_last_process_peaks_safe_stats()`, so the source-template cache regression coverage passes again.
+  - Scoped the default Numba cache directory by Python cache tag and moved diagnostic intersection analysis off the unstable compiled `solve_q`/intensity path to avoid stale-cache and full-suite compile failures.
 
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.
@@ -95,6 +97,7 @@
   - Fixed Qr/Qz preview and manual seed selection so raw cache rows, manual toggle, refresh/view-change, and place setup retain one mosaic-top simulated seed per normalized branch for each real Qr/Qz group while preserving branch/reflection/ray provenance.
   - Fixed caked-mode Qr/Qz manual picks so selected `2theta,phi` seeds map back to detector view through the same detector-display path as simulation markers, including stale-session refresh.
   - Fixed cross-view Qr/Qz manual picking so detector and caked clicks both resolve the same visible simulated marker after switching views, including stale caked-cache rows that still carry detector provenance.
+  - Hardened Qr/Qz selection after the lazy best-sample patch so detector-view peak records use detector-display projection, raw simulation cache rows stay simulation-native, and source-backed saved caked manual picks refresh detector/display coordinates from their saved `(2theta, phi)` values.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with the runtime live-preview match-result application helper, leaving `ra_sim/gui/runtime.py` without the local overlay-state build/store/render branch after auto-match completes.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with the runtime live-preview availability/background gate, leaving `ra_sim/gui/runtime.py` without the local disabled, caked-view, and hidden-background preview exits.
   - Expanded `ra_sim/gui/background_manager.py` with the background visibility toggle workflow used by the workspace action controls and wired it into the runtime callback bundle, leaving `ra_sim/gui/runtime.py` without a standalone background-toggle helper.

@@ -35,7 +35,12 @@ def test_format_runtime_update_trace_line_formats_scalar_and_sequence_fields() -
     )
 
 
-def test_append_runtime_update_trace_line_writes_file(tmp_path) -> None:
+def test_append_runtime_update_trace_line_writes_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime_update_trace,
+        "runtime_update_trace_logging_enabled",
+        lambda: True,
+    )
     trace_path = tmp_path / "runtime_update_trace_20260331.log"
 
     runtime_update_trace.append_runtime_update_trace_line(

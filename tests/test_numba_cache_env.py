@@ -41,7 +41,10 @@ def _fresh_import_and_restore(module_name: str) -> None:
 
 
 def _default_numba_cache_path(home: str) -> str:
-    return str((Path(home) / ".cache" / "ra_sim" / "numba").resolve())
+    cache_tag = getattr(sys.implementation, "cache_tag", None)
+    if not cache_tag:
+        cache_tag = f"py{sys.version_info.major}{sys.version_info.minor}"
+    return str((Path(home) / ".cache" / "ra_sim" / "numba" / str(cache_tag)).resolve())
 
 
 _CLI_HEAVY_PREFIXES = (

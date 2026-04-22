@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 from .user_paths import user_cache_root
 
@@ -13,7 +14,10 @@ def _ensure_numba_cache_dir() -> None:
     if "NUMBA_CACHE_DIR" in os.environ:
         return
 
-    cache_dir = user_cache_root() / "numba"
+    cache_tag = getattr(sys.implementation, "cache_tag", None)
+    if not cache_tag:
+        cache_tag = f"py{sys.version_info.major}{sys.version_info.minor}"
+    cache_dir = user_cache_root() / "numba" / str(cache_tag)
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except Exception:

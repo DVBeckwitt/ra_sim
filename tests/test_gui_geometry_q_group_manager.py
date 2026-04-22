@@ -3871,16 +3871,15 @@ def test_qr_qz_ui_paths_use_selection_collapse_wrapper() -> None:
 
 
 def test_runtime_session_keeps_qr_qz_collapse_out_of_fit_internals() -> None:
-    runtime_path = Path(geometry_q_group_manager.__file__).parent / "_runtime" / "runtime_session.py"
+    runtime_path = (
+        Path(geometry_q_group_manager.__file__).parent / "_runtime" / "runtime_session.py"
+    )
     runtime_source = runtime_path.read_text(encoding="utf-8")
 
     assert "collapse_simulated_peaks=_collapse_qr_qz_selection_peaks" in runtime_source
     assert 'globals()["_collapse_qr_qz_selection_peaks"]' in runtime_source
     assert "def _collapse_geometry_fit_simulated_peaks" in runtime_source
-    assert (
-        "gui_geometry_q_group_manager.collapse_geometry_fit_simulated_peaks"
-        in runtime_source
-    )
+    assert "gui_geometry_q_group_manager.collapse_geometry_fit_simulated_peaks" in runtime_source
     assert (
         "_collapse_geometry_fit_simulated_peaks = (\n"
         "        geometry_q_group_runtime_value_callbacks.collapse_simulated_peaks"
@@ -3889,7 +3888,9 @@ def test_runtime_session_keeps_qr_qz_collapse_out_of_fit_internals() -> None:
 
 
 def test_runtime_session_auto_refreshes_listed_qr_qz_after_simulation_update() -> None:
-    runtime_path = Path(geometry_q_group_manager.__file__).parent / "_runtime" / "runtime_session.py"
+    runtime_path = (
+        Path(geometry_q_group_manager.__file__).parent / "_runtime" / "runtime_session.py"
+    )
     runtime_source = runtime_path.read_text(encoding="utf-8")
 
     assert "q_group_auto_refresh_needed = bool(" in runtime_source
@@ -3902,15 +3903,14 @@ def test_runtime_session_auto_refreshes_listed_qr_qz_after_simulation_update() -
         "if not need_hit_table_refresh and (\n"
         "        refresh_q_group_listing_requested or auto_q_group_list_refresh"
     )
-    consume_call = runtime_source.index(
-        "gui_controllers.consume_geometry_q_group_refresh_request(\n"
-        "                geometry_q_group_state"
-    )
+    consume_call = runtime_source.index("gui_controllers.consume_geometry_q_group_refresh_request")
     assert consume_call > capture_gate
 
 
 def test_runtime_manual_projection_caked_mode_uses_active_primary_view() -> None:
-    runtime_path = Path(geometry_q_group_manager.__file__).parent / "_runtime" / "runtime_session.py"
+    runtime_path = (
+        Path(geometry_q_group_manager.__file__).parent / "_runtime" / "runtime_session.py"
+    )
     runtime_source = runtime_path.read_text(encoding="utf-8")
 
     assert "caked_view_enabled=lambda: _active_caked_primary_view()" in runtime_source

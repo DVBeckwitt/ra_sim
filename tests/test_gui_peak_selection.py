@@ -534,7 +534,7 @@ def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
     assert captured["kwargs"]["max_hits_per_reflection"]() == 3
 
 
-def test_peak_selection_runtime_peak_overlay_data_prefers_detector_display_projection_for_detector_view() -> (
+def test_peak_selection_runtime_peak_overlay_data_uses_sim_display_projection_for_sim_cache() -> (
     None
 ):
     runtime_state = state.SimulationRuntimeState(
@@ -568,11 +568,11 @@ def test_peak_selection_runtime_peak_overlay_data_prefers_detector_display_proje
     )
 
     assert ok is True
-    assert runtime_state.peak_positions == [(20.0, 40.0)]
-    assert runtime_state.peak_records[0]["display_col"] == 20.0
-    assert runtime_state.peak_records[0]["display_row"] == 40.0
-    assert detector_display_calls == [(10.0, 20.0)]
-    assert sim_display_calls == []
+    assert runtime_state.peak_positions == [(110.0, 220.0)]
+    assert runtime_state.peak_records[0]["display_col"] == 110.0
+    assert runtime_state.peak_records[0]["display_row"] == 220.0
+    assert detector_display_calls == []
+    assert sim_display_calls == [(10.0, 20.0, (64, 64))]
 
 
 def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cache() -> None:

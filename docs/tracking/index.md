@@ -27,7 +27,10 @@ gates are green.
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
 one-param solves, `a` diagnosis, caked point reprojection, and initial Rung 4
-paired solves are validated. Rung 5 small cumulative blocks are implemented and
+paired solves are validated. Latest same-day verification after the lazy
+best-sample and Qr/Qz selection hardening passed full pytest and fresh Rungs
+1->4 with run `20260422_codex_final_rungs_1_4_v5`; the caked reprojection
+report had `failures: []`. Rung 5 small cumulative blocks are implemented and
 have debug pair-backed pass evidence for three theta/distance blocks, but fresh
 same-run Rung 5 did not complete because prerequisite singleton/diagnosis
 evidence timed out. `[a, c, psi_z]` is skipped until a psi pair passes. The
@@ -58,6 +61,7 @@ approved next rung; no full-fit validation claimed yet.
 | Analyze dual-source box peak fit | feature | - | none | p1 | 2026-04-20 | [analyze-dual-source-box-peak-fit.md](archive/analyze-dual-source-box-peak-fit.md) |
 | Analyze overlay hardening | bug | - | none | p2 | 2026-04-20 | [analyze-overlay-hardening.md](archive/analyze-overlay-hardening.md) |
 | Fast primary rasterizer | refactor | - | none | p2 | 2026-04-22 | [fast-primary-rasterizer.md](archive/fast-primary-rasterizer.md) |
+| Lazy best-sample and Qr selection hardening | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [lazy-best-sample-and-qr-selection-hardening.md](archive/lazy-best-sample-and-qr-selection-hardening.md) |
 | Skip discarded fit hit tables | refactor | - | none | p2 | 2026-04-22 | [skip-discarded-fit-hit-tables.md](archive/skip-discarded-fit-hit-tables.md) |
 | Startup default detector visibility regression | bug | - | none | p1 | 2026-04-18 | [startup-default-detector-visibility.md](archive/startup-default-detector-visibility.md) |
 | Manual Qr/Qz and HKL picker alignment | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-21 | [sim-peak-overlay-recovery.md](archive/sim-peak-overlay-recovery.md) |

@@ -4110,6 +4110,7 @@ def _run_pair_stage(
             _write_json(output_path, report)
             reports.append(report)
             pair_reports.append(report)
+            index += 1
             continue
 
         report = _run_solver_rung_with_timeout(

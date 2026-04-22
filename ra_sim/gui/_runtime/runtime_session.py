@@ -15943,18 +15943,24 @@ def do_update():
         refresh_q_group_listing_requested or auto_q_group_list_refresh
     ):
         if refresh_q_group_listing_requested:
-            gui_controllers.consume_geometry_q_group_refresh_request(geometry_q_group_state)
-        listed_entries = (
-            gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
-                geometry_q_group_runtime_bindings_factory()
+            # fmt: off
+            gui_controllers.consume_geometry_q_group_refresh_request(
+                geometry_q_group_state
             )
-        )
-        progress_label_geometry.config(
-            text=(
-                f"Updated listed Qr/Qz peaks: {len(listed_entries)} groups, "
-                f"{sum(int(entry.get('peak_count', 0)) for entry in listed_entries)} peaks."
+            # fmt: on
+        q_group_bindings_factory = globals().get("geometry_q_group_runtime_bindings_factory")
+        if callable(q_group_bindings_factory):
+            listed_entries = (
+                gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
+                    q_group_bindings_factory()
+                )
             )
-        )
+            progress_label_geometry.config(
+                text=(
+                    f"Updated listed Qr/Qz peaks: {len(listed_entries)} groups, "
+                    f"{sum(int(entry.get('peak_count', 0)) for entry in listed_entries)} peaks."
+                )
+            )
 
     _set_update_trace_stage("redraw")
     _trace_update(
