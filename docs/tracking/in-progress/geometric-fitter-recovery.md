@@ -128,6 +128,13 @@ back to their top-level counters instead of being misclassified as pair loss.
   `measured_for_fit`, `spec["measured_peaks"]`, and
   `GeometryFitSolverRequest.measured_peaks` all match for seven `new4` pairs
   without `least_squares`, solver entrypoints, or `new4.json` mutation.
+- Optimizer-request capture failure is now an incomplete diagnostic state, not
+  a visual/backend frame mismatch. Failed capture leaves the optimizer request
+  un-compared, keeps `optimizer_request.measured_peaks` out of
+  `surfaces_compared`, records `solver_request_capture_failed`, recommends
+  `optimizer_request_capture`, and returns `ok == false`. Runs without
+  `--include-optimizer-request` report `not_requested` and continue to judge
+  provider/dataset surfaces normally.
 - The dataset-to-optimizer bridge copies provider canonical identity and
   measured-point fields into the optimizer request, and the optimizer
   subset/resolver preserves provider-local fixed-source rows through objective
@@ -418,6 +425,12 @@ Coordinate parity closure, 2026-04-22:
   `optimizer_request_visual_parity_ok == true`, no first mismatching surface,
   `optimizer_called == false`, `least_squares_called == false`,
   `optimizer_entrypoints_called == []`, and `state_hash_unchanged == true`.
+- Optimizer-request diagnostic failure semantics are closed. Focused
+  `visual_backend or coordinate_diagnostic or new4_visual_backend` suite passed
+  with 14 tests. Capture failure now returns
+  `diagnostic_incomplete_optimizer_request_unavailable` instead of
+  `frame_mismatch_detected`, and absent optimizer-request comparison reports
+  `not_requested` while provider/dataset parity remains green.
 
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.

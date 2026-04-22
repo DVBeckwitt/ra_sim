@@ -60,7 +60,11 @@ strict `is True` semantics, so malformed truthy strings cannot be reported as
 green. Coordinate parity is closed through
 `GeometryFitSolverRequest.measured_peaks`: the explicit optimizer-request
 diagnostic compares all seven `new4` pairs without `least_squares`, solver
-entrypoints, or saved-state mutation.
+entrypoints, or saved-state mutation. The adjacent optimizer-request
+capture-failure bug is closed too: a failed request capture is reported as
+`diagnostic_incomplete_optimizer_request_unavailable`, leaves the optimizer
+surface un-compared, and no longer becomes `frame_mismatch_detected`; runs
+without the optimizer-request flag report `not_requested`.
 Rung 3 one-parameter solves are complete as a bounded partial-success rung:
 only current-run Rung 2 `active_params` were attempted, eight singleton solves
 passed, `a` timed out cleanly, passing params preserved all fixed-source
