@@ -125,6 +125,7 @@
 
 - **CLI updates**
   - Updated `ra_sim/cli.py` CIF parsing (raw `a,c` values; no forced `c*3`) and tilt-hint application using converted degree fields.
+  - Added `fit-geometry-correlations`/`fit-geometry-correlation` for headless geometry-fit parameter correlation exports.
 
 - **Tests**
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.

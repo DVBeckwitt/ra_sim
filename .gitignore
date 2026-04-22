@@ -52,9 +52,11 @@ ra_sim/simulation/output.png
 scripts/debug/simulation.npz
 
 # Generated diagnostic artifacts
+/artifacts/geometry_fit_correlations/
 /artifacts/geometry_fit_coordinate_diagnostics/
 /artifacts/geometry_fit_gui_states/new4_point_provider_report_after*.json
 /artifacts/geometry_fit_ladder/new4/20*/
+/artifacts/geometry_fit_ladder/new4/codex_provider_*/
 /artifacts/geometry_fit_ladder/new4/codex_provider_*.json
 /artifacts/geometry_fit_ladder/new4/rung5_blocks_*.log
 /artifacts/geometry_fit_ladder/new4_verify*/

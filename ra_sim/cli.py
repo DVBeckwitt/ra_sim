@@ -2442,6 +2442,19 @@ def _resolve_fit_geometry_output_path(
     return input_path.with_name(f"{input_path.stem}_fit{suffix}")
 
 
+def _resolve_fit_geometry_correlation_output_dir(
+    args: argparse.Namespace,
+    *,
+    input_path: Path,
+) -> Path:
+    """Return the output directory for headless geometry-fit correlation artifacts."""
+
+    raw_value = getattr(args, "outdir", None) or getattr(args, "output_dir", None)
+    if raw_value:
+        return Path(str(raw_value)).expanduser()
+    return input_path.with_name(f"{input_path.stem}_geometry_fit_correlation")
+
+
 def _resolve_fit_mosaic_shape_output_path(
     args: argparse.Namespace,
     *,
@@ -2505,6 +2518,41 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
             print(f"Matched peaks: {matched_peaks_path}")
     except Exception as exc:
         raise SystemExit(str(exc)) from exc
+
+
+def _cmd_fit_geometry_correlations(args: argparse.Namespace) -> None:
+    """Export a headless geometry-fit parameter correlation map."""
+
+    from ra_sim.gui.geometry_fit_correlation import (
+        GeometryFitCorrelationError,
+        run_geometry_fit_correlation,
+        write_correlation_artifacts,
+    )
+
+    input_path = _resolve_fit_geometry_input_path(args)
+    output_dir = _resolve_fit_geometry_correlation_output_dir(args, input_path=input_path)
+    try:
+        result = run_geometry_fit_correlation(
+            state_path=input_path,
+            background_index=getattr(args, "background_index", None),
+            parameter_names=getattr(args, "params", "all"),
+            max_nfev=int(getattr(args, "max_nfev", 1)),
+            correlation_threshold=float(getattr(args, "correlation_threshold", 0.90)),
+            outdir=None,
+        )
+        paths = write_correlation_artifacts(result, output_dir)
+    except GeometryFitCorrelationError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print(f"Geometry-fit correlation artifacts: {output_dir}")
+    print(f"Parameter count: {len(result.parameters)}")
+    print(f"Pair count: {int(result.metadata.get('pair_count', 0))}")
+    print(
+        "High-correlation pairs: "
+        f"{int(result.metadata.get('high_correlation_pair_count', 0))}"
+    )
+    for label, path_value in paths.items():
+        print(f"Wrote {label}: {path_value}")
 
 
 def _cmd_fit_mosaic_shape(args: argparse.Namespace) -> None:
@@ -2616,6 +2664,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite the input GUI state instead of writing a new file.",
     )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
+
+    fit_geometry_correlation_parser = subparsers.add_parser(
+        "fit-geometry-correlations",
+        aliases=["fit-geometry-correlation"],
+        help="Compute headless geometry-fit parameter correlations from a saved GUI state.",
+    )
+    fit_geometry_correlation_parser.add_argument(
+        "state",
+        help="Path to a saved GUI state JSON file.",
+    )
+    fit_geometry_correlation_parser.add_argument(
+        "--outdir",
+        default=None,
+        help=(
+            "Output artifact directory. Defaults to "
+            "'<input>_geometry_fit_correlation'."
+        ),
+    )
+    fit_geometry_correlation_parser.add_argument(
+        "--background-index",
+        type=int,
+        default=None,
+        help="Optional background index. Defaults to the saved state's current selection.",
+    )
+    fit_geometry_correlation_parser.add_argument(
+        "--params",
+        default="all",
+        help="Comma-separated parameters, 'all', or 'active'. Default: all.",
+    )
+    fit_geometry_correlation_parser.add_argument(
+        "--correlation-threshold",
+        type=float,
+        default=0.90,
+        help="Absolute correlation threshold for flagged pairs.",
+    )
+    fit_geometry_correlation_parser.add_argument(
+        "--max-nfev",
+        type=int,
+        default=1,
+        help="No-solve probe evaluation budget placed into the solver config.",
+    )
+    fit_geometry_correlation_parser.set_defaults(func=_cmd_fit_geometry_correlations)
 
     fit_mosaic_shape_parser = subparsers.add_parser(
         "fit-mosaic-shape",
@@ -2752,6 +2842,8 @@ def main(argv: list[str] | None = None) -> None:
         "gui",
         "simulate",
         "fit-geometry",
+        "fit-geometry-correlations",
+        "fit-geometry-correlation",
         "fit-mosaic-shape",
         "fit-mosaic",
         "hbn-fit",
