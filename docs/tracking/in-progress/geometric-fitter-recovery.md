@@ -262,14 +262,18 @@ passing blocks, and unchanged `new4.json`
 No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish,
 feature rung, or Rung 6 solve was run, and `full_fitter_validated == false`.
 
-Rung 5 status by work type:
+Rung 5 closeout status by work type:
 
-- Feature: `--max-rung block|blocks` is implemented with per-block JSON and
+- Feature status: `--max-rung block|blocks` is implemented and green for fresh
+  same-run New4 ladder validation with per-block JSON and
   `rung_05_block_summary.json`.
-- Bug/error fixed: debug `--pair-summary` can use a matching `--timestamp` for
-  strict run-id evidence, local parameter usability failures no longer invalidate
-  unrelated pair/block evidence, skipped dependency blocks preserve the
-  solver-variable schema, and fresh same-run Rung 5 is green.
+- Bug/error status: evidence handling is fixed. Fatal stale/malformed/provider
+  mismatch/dirty-timeout evidence aborts before solve; local `a` usability
+  failures only disallow `a`; missing pair dependencies skip only affected
+  blocks; stale external pair evidence remains rejected.
+- Validation status: run `20260422_105016` passed Rungs 1-5, Rung 5 passed 4/4
+  attempted blocks, provider guard after blocks stayed green, and `new4.json`
+  stayed unchanged.
 - Still open: any full/feature/baseline/GUI validation and the separately
   approved Rung 6 selected combined solve / full-candidate dry run.
 

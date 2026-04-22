@@ -30,6 +30,15 @@ Last updated: 2026-04-22
 This handoff is the bounded-through-Rung-5 recovery state for `new4`. Do not
 use it as approval for full, feature, GUI, or baseline solves.
 
+Status by work type:
+
+- Feature: fresh same-run Rung 5 blocks are green for New4 ladder validation.
+- Bug/error: Rung 5 evidence handling is fixed so fatal evidence aborts stay
+  fatal, local `a` usability failures stay local, and missing dependencies skip
+  only affected blocks.
+- Not validated: full fitter, feature rung, baseline, GUI fit, dynamic reanchor,
+  multistart, and polish remain unclaimed.
+
 ## What is proven
 
 The point handoff chain is proven:

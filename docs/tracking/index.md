@@ -34,8 +34,11 @@ after blocks green, and unchanged `new4.json`
 (`F5BF185EBCFBFA8B32F161CC4BD781E177175DAD84B6FCE4D563F23CA021EF36`). The
 debug-only Rung 5 caveat is resolved. `full_fitter_validated == false`; no full,
 feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or feature
-rung was run. Next approved rung is separate: Rung 6 selected combined solve /
-full-candidate dry run.
+rung was run. Feature status: fresh same-run Rung 5 blocks are green. Bug/error
+status: fatal evidence still aborts, local `a` usability failures stay local,
+missing dependencies skip only affected blocks, and stale external evidence
+remains rejected. Next approved rung is separate: Rung 6 selected combined solve
+/ full-candidate dry run.
 
 ## Known bugs
 
