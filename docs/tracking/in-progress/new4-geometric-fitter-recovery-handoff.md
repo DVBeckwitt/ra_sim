@@ -14,22 +14,21 @@ Last updated: 2026-04-22
 - `GeometryFitSolverRequest.measured_peaks` coordinate parity is closed when optimizer-request capture succeeds.
 - Rung 1 objective dry-run is green.
 - Rung 2 sensitivity scan is green.
-- Rung 3 one-parameter solves are complete enough for bounded pair/block work.
+- Rung 3 one-parameter solves are green for bounded ladder validation.
 - Rung 3A `a` diagnosis is usable.
 - Rung 3B caked-point reprojection guard is green.
 - Rung 4 initial paired solves are green.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.
-- Rung 5 small cumulative blocks are implemented; debug pair-backed evidence
-  passes three theta/distance blocks, but fresh same-run Rung 5 did not complete
-  because prerequisite singleton/diagnosis evidence timed out.
-- `[a, c, psi_z]` remains skipped until a psi pair passes.
-- No full solve/baseline should be treated as validated yet.
+- Rung 5 small cumulative blocks are green for fresh same-run New4 ladder
+  validation. Run `20260422_105016` passed four attempted blocks with zero
+  failed/skipped blocks.
+- No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
+  feature rung should be treated as validated.
 
-This handoff is the bounded-through-Rung-4 plus debug-backed Rung-5 recovery
-state for `new4`. Do not use it as approval for full, feature, GUI, or baseline
-solves.
+This handoff is the bounded-through-Rung-5 recovery state for `new4`. Do not
+use it as approval for full, feature, GUI, or baseline solves.
 
 ## What is proven
 
@@ -113,14 +112,12 @@ Final coordinate diagnostic fields:
 
 - Rung 1 proof. Green exemplar: `artifacts/geometry_fit_ladder/new4/20260421_183827/rung_01_objective_dry_run.json`.
 
-`artifacts/geometry_fit_ladder/new4_debug_blocks_v2/debug_evidence_20260422/rung_05_block_summary.json`
+`artifacts/geometry_fit_ladder/new4/20260422_105016/rung_05_block_summary.json`
 
-- Debug pair-backed Rung 5 block proof. Status `ok`; passed blocks are
-  `[corto_detector, theta_initial, cor_angle]`,
-  `[chi, cor_angle, theta_initial]`, and
-  `[corto_detector, theta_initial, zs, zb]`. `[a, c, psi_z]` is skipped for
-  missing psi pair evidence. Fresh same-run Rung 5 did not complete.
-  `full_fitter_validated == false`.
+- Fresh same-run Rung 5 block proof. Status `ok`; attempted blocks `4`, passed
+  blocks `4`, failed/skipped blocks `0`, provider guard after blocks green,
+  and `new4.json` unchanged. This supersedes the earlier debug pair-backed-only
+  caveat. `full_fitter_validated == false`.
 
 `artifacts/geometry_fit_ladder/new4/<latest>/rung_02_sensitivity_scan.json`
 
@@ -248,10 +245,10 @@ Latest reported local result: `316 passed` after class-A/class-C cleanup. This d
 | Rung 0 | provider-only parity | green | no optimizer |
 | Rung 1 | objective dry-run | green | finite residual, 7 fixed rows, 0 fallback |
 | Rung 2 | sensitivity scan | green | 9 active, 4 near-zero, 0 non-finite, 0 unsafe |
-| Rung 3 | one-parameter solves | partial green | singleton evidence usable for pair/block work |
+| Rung 3 | one-parameter solves | green | singleton evidence usable for pair/block work |
 | Rung 4 | paired solves | green | initial pair set passed |
-| Rung 5 | cumulative blocks | implemented, debug-backed | fresh same-run run blocked by prerequisite timeouts |
-| Rung 6 | feature re-enable | not started | blocked behind Rung 5 |
+| Rung 5 | cumulative blocks | green | fresh same-run run `20260422_105016`, 4/4 blocks passed |
+| Rung 6 | selected combined solve / full-candidate dry run | not started | separate approval required |
 
 ## Active and near-zero parameters from Rung 2
 
@@ -316,95 +313,25 @@ Fixed behavior: failed optimizer-request capture leaves the optimizer request un
 
 ## Remaining work
 
-Next project: fresh same-run Rung 5 block completion.
+Next project: Rung 6 selected combined solve / full-candidate dry run.
 
-Rung 5 implementation is present and debug pair-backed block evidence is green for
-the three theta/distance blocks. Fresh same-run `--max-rung blocks` still must
-complete before this is treated as full Rung 5 acceptance; the latest fresh run
-stopped before dependency-backed solves because prerequisite singleton/diagnosis
-evidence timed out.
+Fresh same-run Rung 5 is accepted for New4 ladder validation. The acceptance run
+was `20260422_105016`: Rung 5 `status == "ok"`, four attempted blocks, four
+passed blocks, zero failed/skipped blocks, provider guard after blocks green,
+and unchanged `new4.json`
+(`F5BF185EBCFBFA8B32F161CC4BD781E177175DAD84B6FCE4D563F23CA021EF36`).
+`full_fitter_validated == false`.
 
-Before fresh Rung 5 acceptance, run:
-
-1. `py_compile`
-2. point-provider parity
-3. provider-only report
-4. fixed-source/Rung 1 guards
-5. `--max-rung sensitivity`
-6. `--max-rung one-param`
-7. Rung 3A `a` diagnosis if stale
-8. Rung 3B caked-point reprojection
-9. `--max-rung pairs`
-10. `--max-rung blocks --max-nfev 20 --timeout-seconds 120`
-11. provider-only report again
-
-Fresh Rung 5 command sequence:
-
-```powershell
-python -m py_compile scripts/debug/run_new4_geometry_fit_ladder.py scripts/debug/run_new4_caked_point_reprojection_check.py
-
-python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv
-
-python scripts/debug/validate_geometry_preflight_rebind.py `
-  --state artifacts/geometry_fit_gui_states/new4.json `
-  --background-index 0 `
-  --point-provider-report-only `
-  --report-path artifacts/geometry_fit_gui_states/new4_point_provider_report.json
-
-python scripts/debug/diagnose_new4_visual_backend_coordinates.py `
-  --state artifacts/geometry_fit_gui_states/new4.json `
-  --provider-report artifacts/geometry_fit_gui_states/new4_point_provider_report.json `
-  --background-index 0 `
-  --include-optimizer-request `
-  --output-dir artifacts/geometry_fit_coordinate_diagnostics/new4
-
-python scripts/debug/run_new4_geometry_fit_ladder.py `
-  --state artifacts/geometry_fit_gui_states/new4.json `
-  --background-index 0 `
-  --output-root artifacts/geometry_fit_ladder/new4 `
-  --max-rung sensitivity
-
-python scripts/debug/run_new4_geometry_fit_ladder.py `
-  --state artifacts/geometry_fit_gui_states/new4.json `
-  --background-index 0 `
-  --output-root artifacts/geometry_fit_ladder/new4 `
-  --max-rung one-param `
-  --max-nfev 20 `
-  --timeout-seconds 120
-
-python scripts/debug/run_new4_caked_point_reprojection_check.py `
-  --state artifacts/geometry_fit_gui_states/new4.json `
-  --background-index 0 `
-  --output-root artifacts/geometry_fit_ladder/new4
-
-python scripts/debug/run_new4_geometry_fit_ladder.py `
-  --state artifacts/geometry_fit_gui_states/new4.json `
-  --background-index 0 `
-  --output-root artifacts/geometry_fit_ladder/new4 `
-  --max-rung pairs `
-  --max-nfev 20 `
-  --timeout-seconds 120
-
-python scripts/debug/run_new4_geometry_fit_ladder.py `
-  --state artifacts/geometry_fit_gui_states/new4.json `
-  --background-index 0 `
-  --output-root artifacts/geometry_fit_ladder/new4 `
-  --max-rung blocks `
-  --max-nfev 20 `
-  --timeout-seconds 120
-```
-
-Use `--pair-summary` only for debug replay. Pair-summary debug replay now
-supports `--timestamp` so run-id/timestamp evidence can match deliberately;
-fresh default Rung 5 should build same-run evidence instead.
+Rung 6 remains separate and unstarted. Do not run dynamic reanchor, multistart,
+polish, GUI fit, baseline, feature rung, or full fitter validation until Rung 6
+is separately approved.
 
 ## Do not run as acceptance
 
 Do not use the old full baseline as the first next step.
 
 Do not run full, feature, baseline, GUI fit button, multistart, full-beam polish,
-dynamic reanchor, auto-freeze/selective thaw, or blocks outside the explicit
-Rung 5 list as acceptance.
+dynamic reanchor, auto-freeze/selective thaw, or feature rung as acceptance.
 
 Do not treat RMS/max baseline or full fitter behavior as validated yet.
 
@@ -423,10 +350,10 @@ New4 geometric fitter recovery checkpoint:
 - Rung 3A `a` diagnosis is usable.
 - Rung 3B caked-point reprojection guard is green.
 - Rung 4 initial pairs are green.
-- Rung 5 blocks are implemented and debug pair-backed evidence passes three
-  theta/distance blocks; fresh same-run Rung 5 remains open because prerequisite
-  singleton/diagnosis evidence timed out.
-- No full solve/baseline validated yet.
+- Rung 5 fresh same-run blocks are green: run `20260422_105016`, 4/4 blocks
+  passed, provider guard after blocks green, `new4.json` unchanged.
+- No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
+  feature rung validated yet.
 ```
 
 ## Links

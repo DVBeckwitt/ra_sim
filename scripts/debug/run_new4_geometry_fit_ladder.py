@@ -3503,20 +3503,21 @@ def _validate_one_param_diagnosis_evidence(
     background_index: int,
     current_hash: str,
     current_active_params: Sequence[str],
-) -> tuple[dict[str, object], list[str], bool]:
+) -> tuple[dict[str, object], list[str], list[str], bool]:
     if diagnosis_path is None:
-        return {}, [], False
+        return {}, [], [], False
     summary = _read_json(Path(diagnosis_path).expanduser().resolve())
     if not summary:
-        return {}, ["one_param_diagnosis_summary_unreadable"], False
-    failures: list[str] = []
+        return {}, ["one_param_diagnosis_summary_unreadable"], [], False
+    fatal_failures: list[str] = []
+    local_failures: list[str] = []
     final_report = _single_attempt_report(summary)
     hash_owner = summary if summary.get("state_sha256_before") else final_report
-    failures.extend(
+    fatal_failures.extend(
         _state_hash_evidence_failures(hash_owner, current_hash=current_hash)
     )
     path_owner = summary if summary.get("state_path") else final_report
-    failures.extend(
+    fatal_failures.extend(
         _run_input_evidence_failures(
             path_owner,
             state_path=state_path,
@@ -3524,20 +3525,20 @@ def _validate_one_param_diagnosis_evidence(
         )
     )
     if "a" not in set(str(name) for name in current_active_params):
-        failures.append("a_not_active_in_current_rung2")
+        local_failures.append("a_not_active")
     if str(summary.get("status", "")) != "ok":
-        failures.append("one_param_diagnosis_status_not_ok")
+        local_failures.append("one_param_diagnosis_status_not_ok")
     diagnosis = str(
         summary.get("diagnosis_classification")
         or final_report.get("diagnosis_classification")
         or ""
     )
     if diagnosis != "usable":
-        failures.append("a_diagnosis_not_usable")
+        local_failures.append("a_diagnosis_not_usable")
     if bool(summary.get("dirty_timeout_abort", final_report.get("dirty_timeout_abort", False))):
-        failures.append("dirty_timeout_abort")
-    usable = not failures
-    return summary, failures, usable
+        fatal_failures.append("dirty_timeout_abort")
+    usable = not fatal_failures and not local_failures
+    return summary, fatal_failures, local_failures, usable
 
 
 def _caked_reprojection_guard_failures(
@@ -3822,6 +3823,9 @@ def _pair_summary(
     state_hash_after: str,
     provider_after: Mapping[str, object] | None,
     evidence_failures: Sequence[str] = (),
+    fatal_evidence_failures: Sequence[str] = (),
+    local_usability_failures: Sequence[str] = (),
+    disallowed_params: Sequence[str] = (),
     reports: Sequence[Mapping[str, object]] | None = None,
     provider_report_hash: str | None = None,
 ) -> dict[str, object]:
@@ -3887,6 +3891,9 @@ def _pair_summary(
         }
         for ref in stable_pairs
     ]
+    fatal_failures = [
+        str(item) for item in (fatal_evidence_failures or evidence_failures)
+    ]
     summary = {
         "rung": 4,
         "rung_name": "pair_summary",
@@ -3900,6 +3907,7 @@ def _pair_summary(
         "provider_report_hash": str(provider_report_hash or ""),
         "active_params_from_sensitivity": _as_str_list(sensitivity.get("active_params")),
         "allowed_params": [str(name) for name in allowed_params],
+        "disallowed_params": [str(name) for name in disallowed_params],
         "attempted_pairs": attempted_pairs,
         "skipped_pairs": [dict(item) for item in skipped_pairs],
         "passed_pairs": [_pair_ref(report) for report in passed_reports],
@@ -3930,6 +3938,10 @@ def _pair_summary(
         "state_sha256_after": state_hash_after,
         "state_hash_unchanged": bool(state_hash_unchanged),
         "evidence_failures": [str(item) for item in evidence_failures],
+        "fatal_evidence_failures": fatal_failures,
+        "local_usability_failures": [
+            str(item) for item in local_usability_failures
+        ],
         "reports": list(reports or []),
     }
     return summary
@@ -3963,7 +3975,12 @@ def _run_pair_stage(
         current_hash=state_hash_before,
     )
     evidence_failures.extend(f"one_param:{failure}" for failure in one_param_failures)
-    diagnosis_summary, diagnosis_failures, a_usable = _validate_one_param_diagnosis_evidence(
+    (
+        diagnosis_summary,
+        diagnosis_fatal_failures,
+        diagnosis_local_failures,
+        a_usable,
+    ) = _validate_one_param_diagnosis_evidence(
         one_param_diagnosis_summary_path,
         state_path=state_path,
         background_index=int(background_index),
@@ -3971,15 +3988,25 @@ def _run_pair_stage(
         current_active_params=current_active_params,
     )
     evidence_failures.extend(
-        f"one_param_diagnosis:{failure}" for failure in diagnosis_failures
+        f"one_param_diagnosis:{failure}" for failure in diagnosis_fatal_failures
     )
+    local_usability_failures = [
+        f"one_param_diagnosis:{failure}" for failure in diagnosis_local_failures
+    ]
+    a_locally_unusable = bool(diagnosis_local_failures)
+    singleton_passed_params = set(_as_str_list(one_param_summary.get("passed_params")))
+    if a_locally_unusable:
+        singleton_passed_params.discard("a")
     allowed_params = [
         name
         for name in current_active_params
-        if name in set(_as_str_list(one_param_summary.get("passed_params")))
+        if name in singleton_passed_params
     ]
     if a_usable and "a" in current_active_params and "a" not in allowed_params:
         allowed_params.append("a")
+    disallowed_params = [
+        name for name in current_active_params if name not in set(allowed_params)
+    ]
 
     if evidence_failures:
         state_hash_after = _state_sha256(state_path)
@@ -3995,6 +4022,9 @@ def _run_pair_stage(
             state_hash_after=state_hash_after,
             provider_after=None,
             evidence_failures=evidence_failures,
+            fatal_evidence_failures=evidence_failures,
+            local_usability_failures=local_usability_failures,
+            disallowed_params=disallowed_params,
             reports=reports,
             provider_report_hash=provider_report_hash,
         )
@@ -4196,6 +4226,11 @@ def _run_pair_stage(
         state_hash_after=state_hash_after,
         provider_after=provider_after,
         evidence_failures=([abort_reason] if abort_reason and not pair_reports else []),
+        fatal_evidence_failures=(
+            [abort_reason] if abort_reason and not pair_reports else []
+        ),
+        local_usability_failures=local_usability_failures,
+        disallowed_params=disallowed_params,
         reports=reports,
         provider_report_hash=provider_report_hash,
     )
@@ -4282,6 +4317,8 @@ def _validate_pair_summary_evidence(
     provider_hash = str(summary.get("provider_report_hash") or "")
     if provider_hash and provider_hash != str(current_provider_report_hash):
         failures.append("provider_report_hash_not_current")
+    if bool(summary.get("dirty_timeout_abort", False)):
+        failures.append("dirty_timeout_abort")
     for key in ("run_id", "timestamp"):
         value = str(summary.get(key) or "")
         if value and value != str(current_run_id):
@@ -4493,6 +4530,10 @@ def _block_summary(
     state_hash_before: str,
     state_hash_after: str,
     evidence_failures: Sequence[str] = (),
+    fatal_evidence_failures: Sequence[str] = (),
+    local_usability_failures: Sequence[str] = (),
+    allowed_params: Sequence[str] = (),
+    disallowed_params: Sequence[str] = (),
     reports: Sequence[Mapping[str, object]] | None = None,
     provider_report_hash: str | None = None,
 ) -> dict[str, object]:
@@ -4533,6 +4574,11 @@ def _block_summary(
     if evidence_failures:
         status = "failed"
         failure_reason = "pair_evidence_not_current"
+    elif not attempted_reports:
+        status = "failed"
+        failure_reason = (
+            "no_dependency_backed_blocks" if skipped_reports else "no_block_solve_passed"
+        )
     elif not passed_reports:
         status = "failed"
         failure_reason = "no_block_solve_passed"
@@ -4542,8 +4588,25 @@ def _block_summary(
     else:
         status = "ok"
         failure_reason = None
+    provider_checked_reports = [
+        report
+        for report in attempted_reports
+        if "provider_guard_after_ok" in report
+        and (
+            bool(report.get("least_squares_called", False))
+            or bool(report.get("optimizer_solve_called", False))
+            or bool(report.get("real_solve_called", False))
+        )
+    ]
+    provider_guard_after_ok = bool(provider_checked_reports) and all(
+        bool(report.get("provider_guard_after_ok", False))
+        for report in provider_checked_reports
+    )
     best_by_rms = _best_block(block_reports, "after_rms_px")
     recommended_next_full_candidate = dict(best_by_rms) if best_by_rms else None
+    fatal_failures = [
+        str(item) for item in (fatal_evidence_failures or evidence_failures)
+    ]
     summary = {
         "rung": 5,
         "rung_name": "block_summary",
@@ -4557,6 +4620,8 @@ def _block_summary(
         "provider_report_hash": str(provider_report_hash or ""),
         "pair_summary_path": pair_summary.get("report_path"),
         "pair_summary_status": pair_summary.get("status"),
+        "allowed_params": [str(name) for name in allowed_params],
+        "disallowed_params": [str(name) for name in disallowed_params],
         "attempted_blocks": [_block_ref(report) for report in attempted_reports],
         "passed_blocks": [_block_ref(report) for report in passed_reports],
         "failed_blocks": [_block_ref(report) for report in failed_reports],
@@ -4574,7 +4639,12 @@ def _block_summary(
         "state_hash_before": state_hash_before,
         "state_hash_after": state_hash_after,
         "state_hash_unchanged": bool(state_hash_before == state_hash_after),
+        "provider_guard_after_ok": bool(provider_guard_after_ok),
         "evidence_failures": [str(item) for item in evidence_failures],
+        "fatal_evidence_failures": fatal_failures,
+        "local_usability_failures": [
+            str(item) for item in local_usability_failures
+        ],
         "reports": list(reports or []),
     }
     return summary
@@ -4681,6 +4751,8 @@ def _run_block_stage(
     caked_report_path = caked_point_reprojection_report_path
     pair_summary: dict[str, object]
     evidence_failures: list[str] = []
+    fatal_evidence_failures: list[str] = []
+    local_usability_failures: list[str] = []
 
     if pair_summary_path is not None:
         pair_summary, pair_failures = _validate_pair_summary_evidence(
@@ -4691,7 +4763,9 @@ def _run_block_stage(
             current_provider_report_hash=provider_report_hash,
             current_run_id=Path(run_dir).name,
         )
-        evidence_failures.extend(f"pair:{failure}" for failure in pair_failures)
+        pair_failure_refs = [f"pair:{failure}" for failure in pair_failures]
+        evidence_failures.extend(pair_failure_refs)
+        fatal_evidence_failures.extend(pair_failure_refs)
     else:
         one_param_summary = _run_one_param_stage(
             state_path=state_path,
@@ -4758,10 +4832,32 @@ def _run_block_stage(
             use_subprocess=bool(use_subprocess),
             diagnostic_logging=bool(diagnostic_logging),
         )
-        if str(pair_summary.get("status", "")) not in {"ok", "ok_with_failures"}:
+        local_usability_failures.extend(
+            _as_str_list(pair_summary.get("local_usability_failures"))
+        )
+        pair_fatal_failures = _as_str_list(pair_summary.get("fatal_evidence_failures"))
+        if pair_fatal_failures:
+            pair_failure_refs = [f"pair:{failure}" for failure in pair_fatal_failures]
+            evidence_failures.extend(pair_failure_refs)
+            fatal_evidence_failures.extend(pair_failure_refs)
+        elif (
+            str(pair_summary.get("status", "")) not in {"ok", "ok_with_failures"}
+            and _passed_pair_keys(pair_summary)
+        ):
             evidence_failures.append("pair:pair_summary_status_not_usable")
-        elif not _passed_pair_keys(pair_summary):
-            evidence_failures.append("pair:no_passed_pair_evidence")
+            fatal_evidence_failures.append("pair:pair_summary_status_not_usable")
+
+    allowed_params = _as_str_list(pair_summary.get("allowed_params"))
+    if not allowed_params:
+        allowed_seen: list[str] = []
+        for raw_ref in pair_summary.get("passed_pairs", []) or []:
+            if not isinstance(raw_ref, Mapping):
+                continue
+            for name in _as_str_list(raw_ref.get("pair")):
+                if name not in allowed_seen:
+                    allowed_seen.append(name)
+        allowed_params = allowed_seen
+    disallowed_params = _as_str_list(pair_summary.get("disallowed_params"))
 
     if caked_report_path is None:
         raw_caked_path = pair_summary.get("caked_point_reprojection_report_path")
@@ -4793,6 +4889,10 @@ def _run_block_stage(
             state_hash_before=state_hash_before,
             state_hash_after=state_hash_after,
             evidence_failures=evidence_failures,
+            fatal_evidence_failures=fatal_evidence_failures,
+            local_usability_failures=local_usability_failures,
+            allowed_params=allowed_params,
+            disallowed_params=disallowed_params,
             reports=reports,
             provider_report_hash=provider_report_hash,
         )
@@ -4962,6 +5062,10 @@ def _run_block_stage(
         state_hash_before=state_hash_before,
         state_hash_after=state_hash_after,
         evidence_failures=[],
+        fatal_evidence_failures=[],
+        local_usability_failures=local_usability_failures,
+        allowed_params=allowed_params,
+        disallowed_params=disallowed_params,
         reports=reports,
         provider_report_hash=provider_report_hash,
     )

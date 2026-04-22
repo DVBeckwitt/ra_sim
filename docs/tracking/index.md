@@ -26,19 +26,16 @@ gates are green.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
-one-param solves, `a` diagnosis, caked point reprojection, and initial Rung 4
-paired solves are validated. Latest same-day verification after the lazy
-best-sample and Qr/Qz selection hardening passed full pytest and fresh Rungs
-1->4 with run `20260422_codex_final_rungs_1_4_v5`; the caked reprojection
-report had `failures: []`. Rung 5 small cumulative blocks are implemented and
-have debug pair-backed pass evidence for three theta/distance blocks, but fresh
-same-run Rung 5 did not complete because prerequisite singleton/diagnosis
-evidence timed out. `[a, c, psi_z]` is skipped until a psi pair passes. The
-repeated cold-start speed bug is fixed for solve rungs by reusing one warm
-solver context in-process; Rung 4 pair solves measured about 53x faster, from
-315.74 seconds total to 5.91 seconds total. Next: decide whether to run the
-optional psi pair extension for `[a, c, psi_z]` or hold for a separately
-approved next rung; no full-fit validation claimed yet.
+one-param solves, `a` diagnosis, caked point reprojection, initial Rung 4 paired
+solves, and fresh same-run Rung 5 blocks are validated for ladder work. Fresh
+run `20260422_105016` passed Rungs 1-5; Rung 5 had `status == "ok"`, four
+attempted blocks, four passed blocks, zero failed/skipped blocks, provider guard
+after blocks green, and unchanged `new4.json`
+(`F5BF185EBCFBFA8B32F161CC4BD781E177175DAD84B6FCE4D563F23CA021EF36`). The
+debug-only Rung 5 caveat is resolved. `full_fitter_validated == false`; no full,
+feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or feature
+rung was run. Next approved rung is separate: Rung 6 selected combined solve /
+full-candidate dry run.
 
 ## Known bugs
 

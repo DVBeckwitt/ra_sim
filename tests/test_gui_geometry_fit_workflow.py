@@ -5468,6 +5468,80 @@ def test_new4_ladder_pair_rung_skips_params_not_allowed_by_singletons(
     }
 
 
+def test_new4_ladder_pair_rung_nonusable_a_skips_only_a_pairs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    one_param_path, diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_params=(
+            "a",
+            "c",
+            "chi",
+            "cor_angle",
+            "theta_initial",
+            "corto_detector",
+            "zs",
+            "zb",
+        ),
+    )
+    diagnosis = json.loads(Path(diagnosis_path).read_text(encoding="utf-8"))
+    diagnosis["status"] = "failed"
+    diagnosis["diagnosis_classification"] = "hang_solver_pathology"
+    ladder._write_json(Path(diagnosis_path), diagnosis)
+    active = (
+        "a",
+        "c",
+        "chi",
+        "cor_angle",
+        "theta_initial",
+        "corto_detector",
+        "zs",
+        "zb",
+    )
+    _install_pair_rung_common_stubs(monkeypatch, ladder, active_params=active)
+    attempted: list[list[str]] = []
+
+    def _solver(*, active_names, output_path, **_kwargs):
+        attempted.append([str(name) for name in active_names])
+        payload = _green_pair_report(active_names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="pairs",
+        timestamp="nonusable_a_pair_skip",
+        one_param_summary=one_param_path,
+        one_param_diagnosis_summary=diagnosis_path,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "ok"
+    assert attempted == [
+        ["chi", "cor_angle"],
+        ["theta_initial", "cor_angle"],
+        ["corto_detector", "theta_initial"],
+        ["zs", "zb"],
+    ]
+    assert "a" in result["disallowed_params"]
+    assert "a" not in result["allowed_params"]
+    assert {item["pair_name"] for item in result["skipped_pairs"]} == {"a_c"}
+    assert "one_param_diagnosis:a_diagnosis_not_usable" in result[
+        "local_usability_failures"
+    ]
+    assert result["fatal_evidence_failures"] == []
+
+
 def test_new4_ladder_pair_rung_rejects_stale_one_param_summary(
     monkeypatch,
     tmp_path,
@@ -5978,6 +6052,8 @@ def _write_block_pair_summary(
     stale_hash=False,
     run_id=None,
     timestamp=None,
+    provider_report_hash=None,
+    dirty_timeout_abort=False,
 ) -> Path:
     state_hash = _hash_file(state_path)
     summary = {
@@ -5992,6 +6068,8 @@ def _write_block_pair_summary(
         "provider_guard_after_ok": True,
         "run_id": str(run_id or ""),
         "timestamp": str(timestamp or ""),
+        "provider_report_hash": str(provider_report_hash or ""),
+        "dirty_timeout_abort": bool(dirty_timeout_abort),
         "passed_pairs": [
             {"pair_name": "_".join(pair), "pair": [str(name) for name in pair]}
             for pair in passed_pairs
@@ -6281,6 +6359,153 @@ def test_new4_ladder_block_default_builds_same_run_evidence(
     assert (tmp_path / "default_blocks" / "rung_05_block_summary.json").exists()
 
 
+def test_new4_ladder_fresh_blocks_nonusable_a_runs_unrelated_blocks(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    active = (
+        "a",
+        "c",
+        "psi_z",
+        "chi",
+        "cor_angle",
+        "theta_initial",
+        "corto_detector",
+        "zs",
+        "zb",
+    )
+    _install_block_rung_common_stubs(monkeypatch, ladder, active_params=active)
+    calls: list[str] = []
+
+    def _one_param_stage(
+        *,
+        run_dir,
+        state_path,
+        background_index,
+        state_hash_before,
+        reports,
+        **_kwargs,
+    ):
+        calls.append("one_param")
+        summary = {
+            "status": "ok_with_failures",
+            "state_path": str(Path(state_path).resolve()),
+            "background_index": int(background_index),
+            "state_sha256_before": state_hash_before,
+            "state_sha256_after": state_hash_before,
+            "state_hash_unchanged": True,
+            "provider_guard_after_ok": True,
+            "dirty_timeout_abort": False,
+            "passed_params": [
+                "c",
+                "psi_z",
+                "chi",
+                "cor_angle",
+                "theta_initial",
+                "corto_detector",
+                "zs",
+                "zb",
+            ],
+            "timed_out_params": ["a"],
+        }
+        ladder._write_json(Path(run_dir) / "rung_03_one_param_summary.json", summary)
+        reports.append(summary)
+        return summary
+
+    def _diagnosis_variants(*, output_root, state_path, background_index, **_kwargs):
+        calls.append("diagnosis")
+        state_hash = _hash_file(Path(state_path))
+        summary = {
+            "status": "ok",
+            "one_param_filter": "a",
+            "state_path": str(Path(state_path).resolve()),
+            "background_index": int(background_index),
+            "state_sha256_before": state_hash,
+            "state_sha256_after": state_hash,
+            "state_hash_unchanged": True,
+            "dirty_timeout_abort": False,
+            "diagnosis_classification": "hang_solver_pathology",
+        }
+        ladder._write_json(Path(output_root) / "variant_summary.json", summary)
+        return summary
+
+    def _caked_guard(*, output_root, run_id, state_path, background_index):
+        calls.append("caked")
+        state_hash = _hash_file(Path(state_path))
+        report = {
+            "status": "pass",
+            "background_index": int(background_index),
+            "state_hash_before": state_hash,
+            "state_hash_after": state_hash,
+            "point_count": 7,
+            "exact_projector_available": True,
+            "theta_projector_signature_changed": True,
+            "distance_projector_signature_changed": True,
+            "full_background_recake_call_count": 0,
+            "provider_guard_before_ok": True,
+            "provider_guard_after_ok": True,
+            "new4_state_hash_unchanged": True,
+        }
+        report_path = Path(output_root) / str(run_id) / "rung_03b_caked_point_reprojection.json"
+        ladder._write_json(report_path, report)
+        report["report_path"] = str(report_path)
+        return report
+
+    attempted_pairs: list[list[str]] = []
+    attempted_blocks: list[list[str]] = []
+
+    def _solver(*, rung, active_names, output_path, **_kwargs):
+        names = [str(name) for name in active_names]
+        if int(rung) == 4:
+            attempted_pairs.append(names)
+            payload = _green_pair_report(names)
+        else:
+            attempted_blocks.append(names)
+            payload = _green_block_report(names)
+        ladder._write_json(output_path, payload)
+        return payload
+
+    monkeypatch.setattr(ladder, "_run_one_param_stage", _one_param_stage)
+    monkeypatch.setattr(ladder, "run_one_param_diagnosis_variants", _diagnosis_variants)
+    monkeypatch.setattr(ladder, "_run_caked_point_reprojection_guard", _caked_guard)
+    monkeypatch.setattr(ladder, "_run_solver_rung_with_timeout", _solver)
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="fresh_nonusable_a_blocks",
+    )
+
+    assert calls == ["one_param", "diagnosis", "caked"]
+    assert attempted_pairs == [
+        ["chi", "cor_angle"],
+        ["theta_initial", "cor_angle"],
+        ["corto_detector", "theta_initial"],
+        ["zs", "zb"],
+    ]
+    assert attempted_blocks == [
+        ["corto_detector", "theta_initial", "cor_angle"],
+        ["chi", "cor_angle", "theta_initial"],
+        ["corto_detector", "theta_initial", "zs", "zb"],
+    ]
+    assert result["status"] == "ok"
+    assert result["provider_guard_after_ok"] is True
+    assert "a" in result["disallowed_params"]
+    assert "one_param_diagnosis:a_diagnosis_not_usable" in result[
+        "local_usability_failures"
+    ]
+    assert result["fatal_evidence_failures"] == []
+    assert result["failed_blocks"] == []
+    assert result["skipped_blocks"] == [
+        {"block_name": "a_c_psi_z", "block": ["a", "c", "psi_z"]}
+    ]
+
+
 def test_new4_ladder_block_missing_dependency_skips_not_fails(
     monkeypatch,
     tmp_path,
@@ -6338,7 +6563,7 @@ def test_new4_ladder_block_missing_dependency_skips_not_fails(
     )
     assert result["failed_blocks"] == []
     assert result["skipped_blocks"]
-    assert result["failure_reason"] == "no_block_solve_passed"
+    assert result["failure_reason"] == "no_dependency_backed_blocks"
 
 
 def test_new4_ladder_block_pair_summary_run_id_can_match_timestamp(
@@ -6436,6 +6661,143 @@ def test_new4_ladder_block_pair_summary_run_id_mismatch_blocks_solve(
     assert result["failure_reason"] == "pair_evidence_not_current"
     assert "pair:run_id_not_current" in result["evidence_failures"]
     assert "pair:timestamp_not_current" in result["evidence_failures"]
+
+
+def test_new4_ladder_block_pair_summary_provider_hash_mismatch_blocks_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("corto_detector", "theta_initial"), ("theta_initial", "cor_angle")),
+        provider_report_hash="stale_provider_hash",
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("mismatch must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="provider_hash_mismatch",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "pair_evidence_not_current"
+    assert "pair:provider_report_hash_not_current" in result["evidence_failures"]
+    assert "pair:provider_report_hash_not_current" in result["fatal_evidence_failures"]
+
+
+def test_new4_ladder_block_malformed_pair_summary_blocks_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = tmp_path / "malformed_pair_summary.json"
+    pair_summary.write_text("{", encoding="utf-8")
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("malformed must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="malformed_pair_summary",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "pair_evidence_not_current"
+    assert "pair:missing_pair_summary_unreadable" in result["evidence_failures"]
+    assert not [
+        path
+        for path in (tmp_path / "malformed_pair_summary").glob("rung_05_block_*.json")
+        if path.name != "rung_05_block_summary.json"
+    ]
+
+
+def test_new4_ladder_block_dirty_pair_summary_blocks_solve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    _one_param_path, _diagnosis_path, caked_path = _write_pair_evidence(
+        ladder,
+        tmp_path,
+        state_path,
+    )
+    pair_summary = _write_block_pair_summary(
+        ladder,
+        tmp_path,
+        state_path,
+        passed_pairs=(("corto_detector", "theta_initial"), ("theta_initial", "cor_angle")),
+        dirty_timeout_abort=True,
+    )
+    _install_block_rung_common_stubs(
+        monkeypatch,
+        ladder,
+        active_params=("corto_detector", "theta_initial", "cor_angle"),
+    )
+    monkeypatch.setattr(
+        ladder,
+        "_run_solver_rung_with_timeout",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("dirty evidence must not solve")),
+    )
+
+    result = ladder.run_ladder(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path,
+        max_rung="blocks",
+        timestamp="dirty_pair_summary",
+        pair_summary=pair_summary,
+        caked_point_reprojection_report=caked_path,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "pair_evidence_not_current"
+    assert "pair:dirty_timeout_abort" in result["evidence_failures"]
+    assert "pair:dirty_timeout_abort" in result["fatal_evidence_failures"]
 
 
 def test_new4_ladder_block_rejects_stale_pair_summary_before_solve(

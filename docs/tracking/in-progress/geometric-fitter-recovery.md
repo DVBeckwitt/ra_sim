@@ -252,36 +252,26 @@ reported `solver_context_reused == true`, clean pass status, provider guard
 after green, and unchanged `new4.json`.
 
 Rung 5 small cumulative blocks are implemented behind
-`--max-rung block|blocks`. The true block list excludes `[a, c]`; that pair is
-Rung 4 prerequisite evidence only. The debug pair-backed validation under
-`artifacts/geometry_fit_ladder/new4_debug_blocks_v2/debug_evidence_20260422`
-passed three dependency-backed blocks:
-`[corto_detector, theta_initial, cor_angle]`,
-`[chi, cor_angle, theta_initial]`, and
-`[corto_detector, theta_initial, zs, zb]`. `[a, c, psi_z]` was skipped with
-`skip_reason == "missing_pair_evidence"` because neither `[a, psi_z]` nor
-`[c, psi_z]` was part of the green pair evidence. Passing blocks preserved the
-7/7 fixed-source contract, provider identity/point parity, caked-point
-reprojection guard, provider guard after, exact requested solver variable list,
-and unchanged `new4.json`. No full, feature, baseline, GUI, or Rung 6 artifacts
-were written, and `full_fitter_validated == false`.
-
-The fresh default `--max-rung blocks --max-nfev 20 --timeout-seconds 120` run
-under `artifacts/geometry_fit_ladder/new4/20260422_001709` rebuilt same-run
-guards through Rung 4, but seven singleton parameters timed out and the required
-`a` diagnosis was not usable. That guard failure prevented a true Rung 5 solve
-from being dependency-backed in that run. Treat it as evidence that the guard
-abort/skip path works, not as fresh same-run Rung 5 completion.
+`--max-rung block|blocks`. The debug pair-backed caveat is resolved for New4:
+fresh same-run run `20260422_105016` rebuilt same-run evidence and passed
+Rungs 1-5. Rung 5 wrote `rung_05_block_summary.json` with `status == "ok"`,
+four attempted blocks, four passed blocks, zero failed blocks, zero skipped
+blocks, provider guard after blocks green, fixed-source counters clean on
+passing blocks, and unchanged `new4.json`
+(`F5BF185EBCFBFA8B32F161CC4BD781E177175DAD84B6FCE4D563F23CA021EF36`).
+No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish,
+feature rung, or Rung 6 solve was run, and `full_fitter_validated == false`.
 
 Rung 5 status by work type:
 
 - Feature: `--max-rung block|blocks` is implemented with per-block JSON and
   `rung_05_block_summary.json`.
 - Bug/error fixed: debug `--pair-summary` can use a matching `--timestamp` for
-  strict run-id evidence, skipped dependency blocks preserve the solver-variable
-  schema, and docs no longer claim fresh same-run Rung 5 completion.
-- Still open: fresh same-run Rung 5 completion, optional psi pair evidence for
-  `[a, c, psi_z]`, and any full/feature/baseline validation.
+  strict run-id evidence, local parameter usability failures no longer invalidate
+  unrelated pair/block evidence, skipped dependency blocks preserve the
+  solver-variable schema, and fresh same-run Rung 5 is green.
+- Still open: any full/feature/baseline/GUI validation and the separately
+  approved Rung 6 selected combined solve / full-candidate dry run.
 
 ## Do Not Redo
 
@@ -296,16 +286,14 @@ Do not redo these completed validations unless their guard output regresses:
 - Rung 3A `a` timeout diagnosis.
 - Rung 3B caked point reprojection guard.
 - Rung 4 initial paired solves.
+- Rung 5 fresh same-run cumulative blocks.
 
 ## Next Rung
 
-Rung 5 small cumulative blocks are implemented and have debug pair-backed pass
-evidence for the three theta/distance blocks, but fresh same-run Rung 5 did not
-complete because prerequisite singleton/diagnosis evidence timed out. The only
-unresolved Rung 5 block is `[a, c, psi_z]`, which remains blocked until `[a, c]`
-plus either `[a, psi_z]` or `[c, psi_z]` pass. Do not run full, feature,
-baseline, GUI fit button, broad parameter tuning, or a higher rung until its
-own gate is explicit.
+Rung 5 fresh same-run is green for New4 ladder validation. The next approved
+rung is separate: Rung 6 selected combined solve / full-candidate dry run. Do
+not run full, feature, baseline, GUI fit button, dynamic reanchor, multistart,
+polish, broad parameter tuning, or a higher rung until its own gate is explicit.
 
 Allowed parameter set for Rung 4:
 
