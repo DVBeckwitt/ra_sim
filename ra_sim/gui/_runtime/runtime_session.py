@@ -18,6 +18,7 @@ import copy
 import concurrent.futures
 import queue
 import faulthandler
+import hashlib
 import re
 import threading
 import traceback
@@ -240,6 +241,7 @@ from ra_sim.debug_controls import (
     runtime_update_trace_logging_enabled as _runtime_update_trace_logging_enabled,
 )
 from ra_sim.debug_utils import debug_print, is_debug_enabled
+from ra_sim.timing import timing_enabled, timing_event
 from ra_sim.hbn_geometry import (
     build_hbn_geometry_debug_trace,
     convert_hbn_bundle_geometry_to_simulation,
@@ -358,8 +360,11 @@ def _read_cif_block(cif_path):
 
     import CifFile
 
+    _timing_event("cif.read.start", phase="startup", cif_file=Path(str(cif_path)).name)
     cf = CifFile.ReadCif(cif_path)
-    return cf, cf[list(cf.keys())[0]]
+    block = cf[list(cf.keys())[0]]
+    _timing_event("cif.read.end", phase="startup", cif_file=Path(str(cif_path)).name)
+    return cf, block
 
 
 def _normalize_ordered_structure_scale(raw_value: object, *, fallback: float = 1.0) -> float:
@@ -580,6 +585,423 @@ def _ensure_runtime_update_trace_hooks() -> None:
         pass
 
 
+def _timing_get_var(name: str, default: object = None) -> object:
+    var = globals().get(name)
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return default
+    try:
+        return getter()
+    except Exception:
+        return default
+
+
+def _timing_parameter_fields() -> dict[str, object]:
+    """Return cheap current GUI parameter fields for timing events."""
+
+    if not timing_enabled():
+        return {}
+    fields: dict[str, object] = {
+        "theta_initial_deg": _timing_get_var("theta_initial_var"),
+        "resolution": _timing_get_var("resolution_var"),
+        "sample_count": _timing_get_var("sample_count_var"),
+        "custom_samples": _timing_get_var("custom_samples_var"),
+        "rod_points_per_gz": _timing_get_var("rod_points_per_gz_var"),
+        "main_display_raster_size": _timing_get_var("main_display_raster_size_var"),
+        "optics_mode": _timing_get_var("optics_mode_var"),
+        "solve_q_mode": _timing_get_var("solve_q_mode_var"),
+        "solve_q_rel_tol": _timing_get_var("solve_q_rel_tol_var"),
+        "solve_q_steps": _timing_get_var("solve_q_steps_var"),
+    }
+    try:
+        fields["background_index"] = int(background_runtime_state.current_background_index)
+    except Exception:
+        pass
+    try:
+        fields["image_size"] = int(image_size)
+    except Exception:
+        pass
+    return fields
+
+
+def _timing_event(event: str, **fields: object) -> None:
+    if not timing_enabled():
+        return
+    payload = _timing_parameter_fields()
+    payload.update(fields)
+    timing_event(event, **payload)
+
+
+def _timing_emit_runtime_metadata() -> None:
+    if not timing_enabled():
+        return
+    root_obj = globals().get("root")
+    canvas_obj = globals().get("matplotlib_canvas")
+    canvas_widget = globals().get("matplotlib_canvas_widget")
+
+    def _call_text(target: object, name: str, default: object = "not detected") -> object:
+        method = getattr(target, name, None)
+        if not callable(method):
+            return default
+        try:
+            return method()
+        except Exception:
+            return default
+
+    display_scaling: object = "not detected"
+    try:
+        display_scaling = float(root_obj.tk.call("tk", "scaling"))
+    except Exception:
+        pass
+    _timing_event(
+        "gui.runtime.metadata",
+        phase="metadata",
+        matplotlib_backend=str(matplotlib.get_backend()),
+        matplotlib_version=str(getattr(matplotlib, "__version__", "not detected")),
+        tk_version=str(getattr(tk, "TkVersion", "not detected")),
+        tcl_version=str(getattr(tk, "TclVersion", "not detected")),
+        canvas_class=f"{type(canvas_obj).__module__}.{type(canvas_obj).__name__}",
+        canvas_widget_class=f"{type(canvas_widget).__module__}.{type(canvas_widget).__name__}",
+        root_geometry=_call_text(root_obj, "geometry"),
+        root_minsize=_call_text(root_obj, "minsize"),
+        display_width_px=_call_text(root_obj, "winfo_screenwidth"),
+        display_height_px=_call_text(root_obj, "winfo_screenheight"),
+        display_scaling=display_scaling,
+    )
+
+
+def _timing_array_fingerprint(array: object) -> dict[str, object]:
+    fingerprint: dict[str, object] = {
+        "shape": None,
+        "dtype": None,
+        "finite_count": 0,
+        "min": None,
+        "max": None,
+        "mean": None,
+        "hash": None,
+    }
+    if array is None:
+        return fingerprint
+    try:
+        data = np.asarray(array)
+    except Exception:
+        return fingerprint
+    fingerprint["shape"] = list(data.shape)
+    fingerprint["dtype"] = str(data.dtype)
+    if data.size == 0:
+        fingerprint["hash"] = hashlib.sha256(b"").hexdigest()
+        return fingerprint
+    try:
+        numeric = np.asarray(data, dtype=np.float64)
+        finite = numeric[np.isfinite(numeric)]
+        fingerprint["finite_count"] = int(finite.size)
+        if finite.size:
+            fingerprint["min"] = float(np.min(finite))
+            fingerprint["max"] = float(np.max(finite))
+            fingerprint["mean"] = float(np.mean(finite))
+    except Exception:
+        pass
+    try:
+        contiguous = np.ascontiguousarray(data)
+        fingerprint["hash"] = hashlib.sha256(contiguous.view(np.uint8)).hexdigest()
+    except Exception:
+        try:
+            fingerprint["hash"] = hashlib.sha256(repr(data).encode("utf-8")).hexdigest()
+        except Exception:
+            pass
+    return fingerprint
+
+
+def _timing_display_fingerprint() -> dict[str, object]:
+    source = None
+    try:
+        artist = globals().get("image_display")
+        if artist is not None:
+            get_array = getattr(artist, "get_array", None)
+            if callable(get_array):
+                source = get_array()
+    except Exception:
+        source = None
+    if source is None:
+        source = getattr(simulation_runtime_state, "unscaled_image", None)
+    return _timing_array_fingerprint(source)
+
+
+def _timing_display_has_simulation_image() -> bool:
+    for source in (
+        getattr(simulation_runtime_state, "unscaled_image", None),
+        getattr(simulation_runtime_state, "stored_sim_image", None),
+    ):
+        if source is None:
+            continue
+        try:
+            data = np.asarray(source)
+            if data.ndim >= 2 and data.shape[0] > 1 and data.shape[1] > 1 and data.size > 1:
+                return True
+        except Exception:
+            pass
+    try:
+        artist = globals().get("image_display")
+        get_array = getattr(artist, "get_array", None)
+        if callable(get_array):
+            data = np.asarray(get_array())
+            return bool(
+                data.ndim >= 2 and data.shape[0] > 1 and data.shape[1] > 1 and data.size > 1
+            )
+    except Exception:
+        pass
+    return False
+
+
+def _timing_active_update_reason(default: str = "gui_update") -> str:
+    try:
+        reason = str(getattr(simulation_runtime_state, "timing_update_reason", "") or "")
+    except Exception:
+        reason = ""
+    return reason or default
+
+
+def _timing_visible_event_prefix(reason: str) -> str:
+    if reason == "first_visible":
+        return "first"
+    if reason.startswith("theta_change"):
+        return "theta_change"
+    if reason.startswith("redraw_only"):
+        return "redraw_only"
+    return "gui_update"
+
+
+def _timing_named_event(prefix: str, first_name: str, generic_name: str) -> str:
+    if prefix == "first":
+        return f"first_{first_name}"
+    return f"{prefix}.{generic_name}"
+
+
+def _timing_visible_key(reason: str, update_id: object) -> tuple[str, str]:
+    return (str(reason), str(update_id))
+
+
+def _timing_record_draw_event(*, update_id: object, reason: str) -> int:
+    try:
+        draw_counter = int(getattr(simulation_runtime_state, "timing_draw_event_counter", 0)) + 1
+        simulation_runtime_state.timing_draw_event_counter = draw_counter
+        simulation_runtime_state.timing_last_draw_event_key = _timing_visible_key(
+            reason,
+            update_id,
+        )
+        simulation_runtime_state.timing_last_draw_event_counter = draw_counter
+        return draw_counter
+    except Exception:
+        return 0
+
+
+def _timing_schedule_visible_if_draw_observed(
+    *,
+    update_id: object,
+    reason: str,
+    cache_hit: object,
+) -> None:
+    try:
+        last_draw_key = getattr(simulation_runtime_state, "timing_last_draw_event_key", None)
+        draw_counter = getattr(simulation_runtime_state, "timing_last_draw_event_counter", None)
+    except Exception:
+        return
+    if last_draw_key != _timing_visible_key(reason, update_id) or draw_counter is None:
+        return
+    _timing_schedule_after_idle_visible(
+        update_id=update_id,
+        reason=str(reason),
+        cache_hit=cache_hit,
+        draw_counter=int(draw_counter),
+    )
+
+
+def _timing_mark_pending_visible_update(
+    *,
+    update_id: object,
+    reason: str,
+    cache_hit: object = None,
+) -> None:
+    if not timing_enabled():
+        return
+    try:
+        simulation_runtime_state.timing_pending_visible_update_id = update_id
+        simulation_runtime_state.timing_pending_visible_reason = str(reason)
+        simulation_runtime_state.timing_pending_visible_cache_hit = cache_hit
+    except Exception:
+        pass
+    _timing_schedule_visible_if_draw_observed(
+        update_id=update_id,
+        reason=str(reason),
+        cache_hit=cache_hit,
+    )
+
+
+def _timing_pending_visible_payload() -> tuple[object, str, object]:
+    try:
+        update_id = getattr(
+            simulation_runtime_state,
+            "timing_pending_visible_update_id",
+            getattr(simulation_runtime_state, "current_update_trace_id", None),
+        )
+    except Exception:
+        update_id = None
+    try:
+        reason = str(
+            getattr(
+                simulation_runtime_state,
+                "timing_pending_visible_reason",
+                _timing_active_update_reason(),
+            )
+            or _timing_active_update_reason()
+        )
+    except Exception:
+        reason = _timing_active_update_reason()
+    try:
+        cache_hit = getattr(simulation_runtime_state, "timing_pending_visible_cache_hit", None)
+    except Exception:
+        cache_hit = None
+    return update_id, reason, cache_hit
+
+
+def _timing_signature_digest(value: object) -> str:
+    try:
+        return hashlib.sha256(repr(value).encode("utf-8", errors="replace")).hexdigest()
+    except Exception:
+        return ""
+
+
+def _timing_next_do_update_id() -> int:
+    try:
+        return int(getattr(simulation_runtime_state, "update_trace_counter", 0)) + 1
+    except Exception:
+        return 1
+
+
+def _timing_pending_action_update_id() -> object:
+    try:
+        return getattr(simulation_runtime_state, "timing_action_update_id", None)
+    except Exception:
+        return None
+
+
+def _timing_canvas_draw_event(_event=None) -> None:
+    if not timing_enabled():
+        return
+    try:
+        has_pending_visible = (
+            getattr(simulation_runtime_state, "timing_pending_visible_update_id", None) is not None
+        )
+    except Exception:
+        has_pending_visible = False
+    if has_pending_visible:
+        update_id, reason, cache_hit = _timing_pending_visible_payload()
+        prefix = _timing_visible_event_prefix(reason)
+    else:
+        update_id, reason, prefix = _timing_current_draw_context()
+        cache_hit = None
+        if reason == "first_visible" and not _timing_display_has_simulation_image():
+            reason = "gui_update"
+            prefix = "gui_update"
+    _timing_event(
+        _timing_named_event(prefix, "canvas.draw_event", "draw_event"),
+        phase="render",
+        update_id=update_id,
+        timing_reason=reason,
+        cache_hit=cache_hit,
+    )
+    draw_counter = _timing_record_draw_event(update_id=update_id, reason=reason)
+    if has_pending_visible and update_id is not None:
+        _timing_schedule_after_idle_visible(
+            update_id=update_id,
+            reason=reason,
+            cache_hit=cache_hit,
+            draw_counter=draw_counter,
+        )
+
+
+def _timing_schedule_after_idle_visible(
+    *, update_id: object, reason: str, cache_hit: object, draw_counter: int
+) -> None:
+    if not timing_enabled():
+        return
+    emitted_key = _timing_visible_key(reason, update_id)
+    scheduled_key = (*emitted_key, int(draw_counter))
+    try:
+        if getattr(simulation_runtime_state, "timing_visible_scheduled_key", None) == scheduled_key:
+            return
+        simulation_runtime_state.timing_visible_scheduled_key = scheduled_key
+    except Exception:
+        pass
+
+    def _after_idle_visible() -> None:
+        try:
+            if getattr(simulation_runtime_state, "timing_last_visible_key", None) == emitted_key:
+                return
+            simulation_runtime_state.timing_last_visible_key = emitted_key
+        except Exception:
+            pass
+        prefix = _timing_visible_event_prefix(reason)
+        _timing_event(
+            _timing_named_event(prefix, "tk.after_idle.visible", "after_idle.visible"),
+            phase="visible",
+            update_id=update_id,
+            timing_reason=reason,
+            cache_hit=cache_hit,
+            display_fingerprint=_timing_display_fingerprint(),
+        )
+        try:
+            if reason == "first_visible":
+                simulation_runtime_state.timing_first_visible_emitted = True
+            pending_key = _timing_visible_key(
+                getattr(simulation_runtime_state, "timing_pending_visible_reason", None),
+                getattr(simulation_runtime_state, "timing_pending_visible_update_id", None),
+            )
+            if pending_key == emitted_key:
+                simulation_runtime_state.timing_pending_visible_update_id = None
+                simulation_runtime_state.timing_pending_visible_reason = None
+                simulation_runtime_state.timing_pending_visible_cache_hit = None
+                simulation_runtime_state.timing_visible_scheduled_key = None
+                simulation_runtime_state.timing_action_update_id = None
+                simulation_runtime_state.timing_render_update_id = None
+                simulation_runtime_state.timing_render_reason = None
+                simulation_runtime_state.timing_update_reason = "gui_update"
+        except Exception:
+            pass
+        _timing_automation_after_visible(reason=reason, update_id=update_id)
+
+    after_idle = getattr(globals().get("root"), "after_idle", None)
+    if callable(after_idle):
+        try:
+            after_idle(_after_idle_visible)
+            return
+        except Exception:
+            pass
+    _after_idle_visible()
+
+
+def _timing_current_draw_context() -> tuple[object, str, str]:
+    update_id, reason, _cache_hit = _timing_pending_visible_payload()
+    try:
+        render_update_id = getattr(simulation_runtime_state, "timing_render_update_id", None)
+    except Exception:
+        render_update_id = None
+    try:
+        render_reason = str(getattr(simulation_runtime_state, "timing_render_reason", "") or "")
+    except Exception:
+        render_reason = ""
+    if update_id is None:
+        update_id = render_update_id
+    if update_id is None:
+        try:
+            update_id = getattr(simulation_runtime_state, "current_update_trace_id", None)
+        except Exception:
+            update_id = None
+    if render_reason:
+        reason = render_reason
+    return update_id, reason, _timing_visible_event_prefix(reason)
+
+
 background_status_refreshers = gui_runtime_background.build_runtime_background_status_refreshers(
     background_controls_runtime_factory=lambda: globals().get("background_controls_runtime"),
     background_runtime_callbacks_factory=lambda: globals().get("background_runtime_callbacks"),
@@ -766,7 +1188,9 @@ def _initialize_runtime_state_block_01() -> None:
     # Parse geometry
     poni_file_path = get_path("geometry_poni")
     app_state.file_paths["geometry_poni"] = str(poni_file_path)
+    _timing_event("poni.parse.start", phase="startup", poni_file=Path(str(poni_file_path)).name)
     parameters = parse_poni_file(poni_file_path)
+    _timing_event("poni.parse.end", phase="startup", poni_file=Path(str(poni_file_path)).name)
 
     Distance_CoR_to_Detector = parameters.get("Dist", geometry_config.get("distance_m", 0.075))
     Gamma_initial = parameters.get("Rot1", geometry_config.get("rot1", 0.0))
@@ -929,7 +1353,9 @@ def _initialize_runtime_state_block_01() -> None:
 
     lambda_override = beam_config.get("wavelength_angstrom")
     lambda_ = lambda_override if lambda_override is not None else lambda_from_poni
+    _timing_event("index_refraction.start", phase="startup", source="initial")
     n2 = IndexofRefraction(float(lambda_) * 1.0e-10)
+    _timing_event("index_refraction.end", phase="startup", source="initial")
 
     # Parameters and file paths.
     cif_file = get_path("cif_file")
@@ -1053,10 +1479,23 @@ def _current_nominal_n2(active_cif_path=None):
     """Return the nominal complex index for the active beam wavelength."""
 
     optics_path = _resolve_optics_cif_path() if active_cif_path is None else str(active_cif_path)
-    return resolve_index_of_refraction(
+    _timing_event(
+        "index_refraction.start",
+        phase="startup",
+        source="nominal",
+        cif_file=Path(str(optics_path)).name,
+    )
+    result = resolve_index_of_refraction(
         float(lambda_) * 1.0e-10,
         cif_path=optics_path,
     )
+    _timing_event(
+        "index_refraction.end",
+        phase="startup",
+        source="nominal",
+        cif_file=Path(str(optics_path)).name,
+    )
+    return result
 
 
 def _current_sample_n2_array(wavelength_angstrom_array, active_cif_path=None):
@@ -2259,7 +2698,9 @@ def _initialize_runtime_root_block_01() -> None:
     ###############################################################################
     #                                  TK SETUP
     ###############################################################################
+    _timing_event("tk.root.create.start", phase="startup")
     root = gui_views.create_root_window("RA-SIM Simulation")
+    _timing_event("tk.root.create.end", phase="startup")
     root.minsize(1200, 760)
     fit2d_error_sound_var = tk.BooleanVar(value=False)
     geometry_fit_caked_roi_enabled_var = tk.BooleanVar(value=False)
@@ -2313,6 +2754,7 @@ def _initialize_runtime_shell_block_01() -> None:
     global update_timing_label, chi_square_label
 
     _ensure_runtime_update_trace_hooks()
+    _timing_event("widgets.build.start", phase="startup")
     gui_views.create_app_shell(
         root=root,
         view_state=app_shell_view_state,
@@ -2380,6 +2822,7 @@ def _initialize_runtime_shell_block_01() -> None:
     ):
         raise RuntimeError("Status panel was not created.")
     progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
+    _timing_event("widgets.build.end", phase="startup")
 
 
 def _shutdown_gui():
@@ -2517,6 +2960,7 @@ def _initialize_runtime_plot_block_01() -> None:
         integration_region_overlay, \
         _initial_simulation_loading_overlay_artists
 
+    _timing_event("matplotlib.canvas.create.start", phase="startup")
     figure_canvas_cls = _get_tk_figure_canvas_cls()
     fig = Figure(figsize=(8, 8))
     ax = fig.add_subplot(111)
@@ -2534,6 +2978,11 @@ def _initialize_runtime_plot_block_01() -> None:
     if not widget_manager:
         matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
     canvas = matplotlib_canvas
+    if timing_enabled():
+        try:
+            matplotlib_canvas.mpl_connect("draw_event", _timing_canvas_draw_event)
+        except Exception:
+            pass
 
     # Seed imshow with a tiny placeholder; expand to detector size on first result.
     global_image_buffer = np.zeros((1, 1), dtype=np.float32)
@@ -2579,6 +3028,8 @@ def _initialize_runtime_plot_block_01() -> None:
     integration_region_overlay.set_visible(False)
 
     _initial_simulation_loading_overlay_artists = []
+    _timing_event("matplotlib.canvas.create.end", phase="startup")
+    _timing_emit_runtime_metadata()
 
 
 def _clear_initial_simulation_loading_overlay(*, redraw: bool = False) -> None:
@@ -3067,6 +3518,13 @@ def _legacy_main_matplotlib_preview_controller():
 def _draw_legacy_main_matplotlib_canvas_now() -> bool:
     if not _legacy_main_matplotlib_interaction_active():
         return False
+    update_id, reason, prefix = _timing_current_draw_context()
+    _timing_event(
+        _timing_named_event(prefix, "canvas.draw.start", "canvas_draw.start"),
+        phase="render",
+        update_id=update_id,
+        timing_reason=reason,
+    )
     projection_refresh = globals().get("_apply_current_primary_raster_projection")
     if callable(projection_refresh):
         projection_refresh()
@@ -3075,11 +3533,32 @@ def _draw_legacy_main_matplotlib_canvas_now() -> bool:
     if not callable(draw_fn):
         draw_fn = getattr(matplotlib_canvas, "draw", None)
     if not callable(draw_fn):
+        _timing_event(
+            _timing_named_event(prefix, "canvas.draw.end", "canvas_draw.end"),
+            phase="render",
+            update_id=update_id,
+            timing_reason=reason,
+            drawn=False,
+        )
         return False
     try:
         draw_fn()
     except Exception:
+        _timing_event(
+            _timing_named_event(prefix, "canvas.draw.end", "canvas_draw.end"),
+            phase="render",
+            update_id=update_id,
+            timing_reason=reason,
+            drawn=False,
+        )
         return False
+    _timing_event(
+        _timing_named_event(prefix, "canvas.draw.end", "canvas_draw.end"),
+        phase="render",
+        update_id=update_id,
+        timing_reason=reason,
+        drawn=True,
+    )
     return True
 
 
@@ -3091,9 +3570,25 @@ def _cancel_legacy_main_matplotlib_redraw() -> None:
 
 
 def _request_legacy_main_matplotlib_redraw(*, force: bool = False) -> None:
+    update_id, reason, prefix = _timing_current_draw_context()
+    _timing_event(
+        _timing_named_event(prefix, "canvas.draw_idle.start", "canvas_draw_idle.start"),
+        phase="render",
+        update_id=update_id,
+        timing_reason=reason,
+        force=bool(force),
+    )
     preview_controller = _legacy_main_matplotlib_preview_controller()
     if preview_controller is not None and bool(preview_controller.preview_active()):
         if not bool(force):
+            _timing_event(
+                _timing_named_event(prefix, "canvas.draw_idle.end", "canvas_draw_idle.end"),
+                phase="render",
+                update_id=update_id,
+                timing_reason=reason,
+                scheduled=False,
+                reason_skipped="preview_active",
+            )
             return
         _clear_legacy_main_matplotlib_preview_view(redraw=False)
     gui_main_matplotlib_interaction.request_main_matplotlib_redraw(
@@ -3103,6 +3598,13 @@ def _request_legacy_main_matplotlib_redraw(*, force: bool = False) -> None:
         perf_counter_fn=perf_counter,
         draw_now=_draw_legacy_main_matplotlib_canvas_now,
         force=bool(force),
+    )
+    _timing_event(
+        _timing_named_event(prefix, "canvas.draw_idle.end", "canvas_draw_idle.end"),
+        phase="render",
+        update_id=update_id,
+        timing_reason=reason,
+        scheduled=True,
     )
 
 
@@ -8802,6 +9304,8 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
     source, extent, origin, source_signature = _primary_raster_source_payload(artist)
     if artist is None or source is None or extent is None:
         return False
+    timing_artist_is_simulation = bool(artist is globals().get("image_display"))
+    update_id, reason, prefix = _timing_current_draw_context()
     try:
         projection_mode = (
             str(_resolved_primary_analysis_display_mode() or "detector").strip().lower()
@@ -8824,6 +9328,13 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
         axis_ylim = None
         bbox_width = None
         bbox_height = None
+    if timing_artist_is_simulation:
+        _timing_event(
+            _timing_named_event(prefix, "result.rasterize.start", "rasterize.start"),
+            phase="render",
+            update_id=update_id,
+            timing_reason=reason,
+        )
     projection = gui_display_projection.project_raster_to_view(
         source,
         source_signature=source_signature,
@@ -8835,6 +9346,14 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
         bbox_height_px=bbox_height,
         preserve_bright_features=bool(artist is globals().get("image_display")),
     )
+    if timing_artist_is_simulation:
+        _timing_event(
+            _timing_named_event(prefix, "result.rasterize.end", "rasterize.end"),
+            phase="render",
+            update_id=update_id,
+            timing_reason=reason,
+            projected=projection is not None,
+        )
     if projection is None:
         return False
     _apply_axes_image_origin(artist, origin)
@@ -8847,7 +9366,31 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
     set_data = getattr(artist, "set_data", None)
     if callable(set_data):
         try:
+            if timing_artist_is_simulation:
+                _timing_event(
+                    _timing_named_event(
+                        prefix,
+                        "display.set_data.start",
+                        "display_set_data.start",
+                    ),
+                    phase="render",
+                    update_id=update_id,
+                    timing_reason=reason,
+                    shape=list(np.asarray(projection.image).shape),
+                )
             set_data(projection.image)
+            if timing_artist_is_simulation:
+                _timing_event(
+                    _timing_named_event(
+                        prefix,
+                        "display.set_data.end",
+                        "display_set_data.end",
+                    ),
+                    phase="render",
+                    update_id=update_id,
+                    timing_reason=reason,
+                    display_fingerprint=_timing_array_fingerprint(projection.image),
+                )
         except Exception:
             return False
     return True
@@ -12637,6 +13180,32 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     request_n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     mosaic_params_job = dict(job["mosaic_params"])
     job_kind = str(job.get("job_kind", "full"))
+    timing_update_id = job.get("timing_update_id")
+    timing_reason = str(job.get("timing_reason", "simulation") or "simulation")
+    timing_prefix = _timing_visible_event_prefix(timing_reason)
+    compute_start_event = _timing_named_event(
+        timing_prefix,
+        "simulation.compute.start",
+        "compute.start",
+    )
+    compute_end_event = _timing_named_event(
+        timing_prefix,
+        "simulation.compute.end",
+        "compute.end",
+    )
+    timing_event(
+        compute_start_event,
+        phase="calculation",
+        update_id=timing_update_id,
+        timing_reason=timing_reason,
+        job_kind=job_kind,
+        theta_initial_deg=float(job["theta_initial_deg"]),
+        optics_mode=int(job["optics_mode"]),
+        solve_q_steps=int(mosaic_params_job["solve_q_steps"]),
+        solve_q_rel_tol=float(mosaic_params_job["solve_q_rel_tol"]),
+        solve_q_mode=int(mosaic_params_job["solve_q_mode"]),
+        image_size=image_size,
+    )
     active_peak_row_sides = _normalized_active_peak_row_sides(job.get("active_peak_row_sides", ()))
     secondary_available = bool(job.get("secondary_available", job.get("run_secondary", False)))
     if "active_peak_row_sides" not in job:
@@ -12650,10 +13219,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
 
     if bool(job.get("qr_cylinder_replace_simulation", False)):
         blank = np.zeros((image_size, image_size), dtype=np.float64)
-        return {
+        result = {
             "job_id": int(job["job_id"]),
             "job_kind": job_kind,
             "signature": job["signature"],
+            "timing_update_id": timing_update_id,
+            "timing_reason": timing_reason,
             "epoch": int(job["epoch"]),
             "run_primary": bool(job.get("run_primary", False)),
             "run_secondary": bool(job.get("run_secondary", False)),
@@ -12694,6 +13265,16 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "numba_cache_compiled_artifacts_available": False,
             "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
         }
+        timing_event(
+            compute_end_event,
+            phase="calculation",
+            update_id=timing_update_id,
+            timing_reason=timing_reason,
+            job_kind=job_kind,
+            image_generation_elapsed_ms=result["image_generation_elapsed_ms"],
+            skipped=True,
+        )
+        return result
 
     projection_debug_session = start_projection_debug_session(
         {
@@ -12835,9 +13416,26 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 collect_hit_tables=request_collect_hit_tables,
                 build_intersection_cache=request_build_intersection_cache,
             )
+            timing_event(
+                "simulate_qr_rods_request.start",
+                phase="calculation",
+                update_id=timing_update_id,
+                timing_reason=timing_reason,
+                job_kind=job_kind,
+                collect_hit_tables=request_collect_hit_tables,
+                build_intersection_cache=request_build_intersection_cache,
+            )
             result = simulate_qr_rods_request(
                 data,
                 request,
+            )
+            timing_event(
+                "simulate_qr_rods_request.end",
+                phase="calculation",
+                update_id=timing_update_id,
+                timing_reason=timing_reason,
+                job_kind=job_kind,
+                used_python_runner=result.used_python_runner,
             )
             return (
                 result.image,
@@ -12881,7 +13479,25 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             collect_hit_tables=request_collect_hit_tables,
             build_intersection_cache=request_build_intersection_cache,
         )
+        timing_event(
+            "simulate_request.start",
+            phase="calculation",
+            update_id=timing_update_id,
+            timing_reason=timing_reason,
+            job_kind=job_kind,
+            row_count=int(row_count),
+            collect_hit_tables=request_collect_hit_tables,
+            build_intersection_cache=request_build_intersection_cache,
+        )
         result = simulate_request(request)
+        timing_event(
+            "simulate_request.end",
+            phase="calculation",
+            update_id=timing_update_id,
+            timing_reason=timing_reason,
+            job_kind=job_kind,
+            used_python_runner=result.used_python_runner,
+        )
         return (
             result.image,
             _copy_hit_tables(result.hit_tables if request_collect_hit_tables else []),
@@ -12999,10 +13615,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         numba_cache_compiled_artifacts_available = bool(
             used_python_runner_flags and not any(bool(flag) for flag in used_python_runner_flags)
         )
-        return {
+        result = {
             "job_id": int(job["job_id"]),
             "job_kind": job_kind,
             "signature": job["signature"],
+            "timing_update_id": timing_update_id,
+            "timing_reason": timing_reason,
             "epoch": int(job["epoch"]),
             "run_primary": bool(job.get("run_primary", False)),
             "run_secondary": bool(job.get("run_secondary", False)),
@@ -13063,12 +13681,39 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "numba_cache_compiled_artifacts_available": numba_cache_compiled_artifacts_available,
             "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
         }
+        timing_event(
+            compute_end_event,
+            phase="calculation",
+            update_id=timing_update_id,
+            timing_reason=timing_reason,
+            job_kind=job_kind,
+            image_generation_elapsed_ms=result["image_generation_elapsed_ms"],
+            numba_cache_compiled_artifacts_available=(numba_cache_compiled_artifacts_available),
+        )
+        return result
     except Exception:
         finalize_projection_debug_session(projection_debug_session)
+        timing_event(
+            f"{compute_end_event}.error",
+            phase="calculation",
+            update_id=timing_update_id,
+            timing_reason=timing_reason,
+            job_kind=job_kind,
+        )
         raise
 
 
 def _submit_async_simulation_job(job: dict[str, object]) -> None:
+    timing_reason = str(job.get("timing_reason", _timing_active_update_reason()) or "")
+    timing_prefix = _timing_visible_event_prefix(timing_reason)
+    _timing_event(
+        _timing_named_event(timing_prefix, "worker.submit", "worker_submit"),
+        phase="queue",
+        update_id=job.get("timing_update_id"),
+        timing_reason=timing_reason,
+        job_id=job.get("job_id"),
+        job_kind=job.get("job_kind"),
+    )
     simulation_runtime_state.worker_active_job = job
     simulation_runtime_state.worker_future = _ensure_simulation_worker_executor().submit(
         _run_simulation_generation_job,
@@ -13102,6 +13747,13 @@ def _poll_async_simulation_job() -> None:
         return
 
     if not future.done():
+        _timing_event(
+            "simulation_worker.poll.waiting",
+            phase="queue",
+            update_id=active_job.get("timing_update_id"),
+            timing_reason=active_job.get("timing_reason"),
+            job_id=active_job.get("job_id"),
+        )
         simulation_runtime_state.worker_poll_token = root.after(
             SIMULATION_WORKER_POLL_MS,
             _poll_async_simulation_job,
@@ -13160,6 +13812,14 @@ def _poll_async_simulation_job() -> None:
         return
 
     simulation_runtime_state.worker_ready_result = result
+    _timing_event(
+        "simulation_worker.result.ready",
+        phase="queue",
+        update_id=result.get("timing_update_id"),
+        timing_reason=result.get("timing_reason"),
+        job_id=result.get("job_id"),
+        image_generation_elapsed_ms=float(result.get("image_generation_elapsed_ms", float("nan"))),
+    )
     simulation_runtime_state.last_image_generation_ms = float(
         result.get("image_generation_elapsed_ms", float("nan"))
     )
@@ -13169,6 +13829,15 @@ def _poll_async_simulation_job() -> None:
 
 
 def _request_async_simulation_job(job: dict[str, object]) -> str:
+    timing_reason = str(job.get("timing_reason", _timing_active_update_reason()) or "")
+    timing_prefix = _timing_visible_event_prefix(timing_reason)
+    _timing_event(
+        _timing_named_event(timing_prefix, "worker.request", "worker_request"),
+        phase="queue",
+        update_id=job.get("timing_update_id"),
+        timing_reason=timing_reason,
+        job_kind=job.get("job_kind"),
+    )
     requested_key = _worker_job_key(job)
     requested_selection_cache_refresh = bool(_selection_cache_refresh_active_sides(job))
     _append_job_queue_trace(
@@ -13186,6 +13855,13 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
     ):
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
+        _timing_event(
+            _timing_named_event(timing_prefix, "worker.request.ready", "worker_request.ready"),
+            phase="cache_lookup",
+            update_id=job.get("timing_update_id"),
+            timing_reason=timing_reason,
+            cache_hit=True,
+        )
         return "ready"
     if isinstance(ready_result, dict) and not _simulation_result_matches_signature(
         ready_result,
@@ -13208,6 +13884,12 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
     ):
         simulation_runtime_state.update_phase = "computing"
         _refresh_run_status_bar()
+        _timing_event(
+            _timing_named_event(timing_prefix, "worker.request.running", "worker_request.running"),
+            phase="queue",
+            update_id=job.get("timing_update_id"),
+            timing_reason=timing_reason,
+        )
         return "running"
 
     if (
@@ -13229,6 +13911,12 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
         )
         simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
+        _timing_event(
+            _timing_named_event(timing_prefix, "worker.request.queued", "worker_request.queued"),
+            phase="queue",
+            update_id=job.get("timing_update_id"),
+            timing_reason=timing_reason,
+        )
         return "queued"
 
     simulation_runtime_state.worker_job_counter = (
@@ -13251,6 +13939,17 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
             reason="requested",
         )
         _submit_async_simulation_job(queued_job)
+        _timing_event(
+            _timing_named_event(
+                timing_prefix,
+                "worker.request.submitted",
+                "worker_request.submitted",
+            ),
+            phase="queue",
+            update_id=job.get("timing_update_id"),
+            timing_reason=timing_reason,
+            job_id=queued_job.get("job_id"),
+        )
         return "submitted"
 
     # Latest-request-wins: keep one active job and one replacement queued job.
@@ -13265,6 +13964,13 @@ def _request_async_simulation_job(job: dict[str, object]) -> str:
     )
     simulation_runtime_state.update_phase = "queued"
     _refresh_run_status_bar()
+    _timing_event(
+        _timing_named_event(timing_prefix, "worker.request.queued", "worker_request.queued"),
+        phase="queue",
+        update_id=job.get("timing_update_id"),
+        timing_reason=timing_reason,
+        job_id=queued_job.get("job_id"),
+    )
     return "queued"
 
 
@@ -13288,6 +13994,16 @@ def _consume_ready_simulation_result(signature: object) -> dict[str, object] | N
 
 
 def _apply_ready_simulation_result(result: dict[str, object]) -> None:
+    timing_update_id = result.get("timing_update_id")
+    timing_reason = str(result.get("timing_reason", _timing_active_update_reason()) or "")
+    timing_prefix = _timing_visible_event_prefix(timing_reason)
+    _timing_event(
+        _timing_named_event(timing_prefix, "result.apply.start", "result_apply.start"),
+        phase="gui_update",
+        update_id=timing_update_id,
+        timing_reason=timing_reason,
+        job_kind=str(result.get("job_kind", "full")),
+    )
     simulation_runtime_state.stored_primary_sim_image = np.asarray(
         result.get("primary_image"),
         dtype=np.float64,
@@ -13487,6 +14203,13 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         stored_hit_table_signature_summary=_live_cache_signature_summary(
             simulation_runtime_state.stored_hit_table_signature
         ),
+    )
+    _timing_event(
+        _timing_named_event(timing_prefix, "result.apply.end", "result_apply.end"),
+        phase="gui_update",
+        update_id=timing_update_id,
+        timing_reason=timing_reason,
+        job_kind=str(result.get("job_kind", "full")),
     )
 
 
@@ -14556,6 +15279,11 @@ def schedule_update():
         return
 
     _ensure_runtime_update_trace_hooks()
+    timing_reason = _timing_active_update_reason()
+    timing_prefix = _timing_visible_event_prefix(timing_reason)
+    timing_update_id = _timing_pending_action_update_id()
+    if timing_update_id is None:
+        timing_update_id = getattr(simulation_runtime_state, "current_update_trace_id", None)
     previous_pending = simulation_runtime_state.update_pending
     gui_controllers.clear_tk_after_token(
         root,
@@ -14572,6 +15300,20 @@ def schedule_update():
     simulation_runtime_state.update_pending = root.after(
         _current_update_debounce_ms(),
         do_update,
+    )
+    _timing_event(
+        _timing_named_event(timing_prefix, "update_scheduled", "update_scheduled"),
+        phase="queue",
+        update_id=timing_update_id,
+        timing_reason=timing_reason,
+        previous_pending=previous_pending,
+        queued_token=simulation_runtime_state.update_pending,
+    )
+    _timing_event(
+        _timing_named_event(timing_prefix, "queue_delay.start", "queue_delay.start"),
+        phase="queue",
+        update_id=timing_update_id,
+        timing_reason=timing_reason,
     )
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "queued"
@@ -14984,6 +15726,27 @@ def do_update():
     update_trace_stage = "enter"
     simulation_runtime_state.current_update_trace_id = int(update_trace_id)
     simulation_runtime_state.current_update_trace_stage = str(update_trace_stage)
+    if (
+        timing_enabled()
+        and not bool(getattr(simulation_runtime_state, "timing_first_visible_emitted", False))
+        and getattr(simulation_runtime_state, "unscaled_image", None) is None
+    ):
+        simulation_runtime_state.timing_update_reason = "first_visible"
+    timing_reason = _timing_active_update_reason()
+    timing_prefix = _timing_visible_event_prefix(timing_reason)
+    timing_render_update_id: object = update_trace_id
+    _timing_event(
+        _timing_named_event(timing_prefix, "update.requested", "update_begin"),
+        phase="update",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+    )
+    _timing_event(
+        _timing_named_event(timing_prefix, "queue_delay.end", "queue_delay.end"),
+        phase="queue",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+    )
 
     def _set_update_trace_stage(stage: str) -> None:
         nonlocal update_trace_stage
@@ -15034,6 +15797,14 @@ def do_update():
     image_generation_elapsed_ms = 0.0
     image_generation_cached = True
     _set_update_trace_stage("params")
+    _timing_event(
+        _timing_named_event(
+            timing_prefix, "parameter_collection.start", "parameter_collection.start"
+        ),
+        phase="parameter_collection",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+    )
 
     gamma_updated = float(gamma_var.get())
     Gamma_updated = float(Gamma_var.get())
@@ -15062,6 +15833,12 @@ def do_update():
         center_y=float(center_y_up),
         show_caked_2d=bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
         preview_active=bool(simulation_runtime_state.preview_active),
+    )
+    _timing_event(
+        _timing_named_event(timing_prefix, "parameter_collection.end", "parameter_collection.end"),
+        phase="parameter_collection",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
     )
 
     new_two_theta_max = detector_two_theta_max(
@@ -15299,6 +16076,12 @@ def do_update():
 
     # Optics transport and mosaic-shape changes rescale intensities but do not
     # move detector hits, so a compatible cached hit-table bundle can be reused.
+    _timing_event(
+        _timing_named_event(timing_prefix, "sim_signature.start", "sim_signature.start"),
+        phase="simulation_signature",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+    )
     requested_hit_table_sig = _simulation_signature_base(
         optics_mode_component=0,
         include_mosaic_shape=False,
@@ -15375,10 +16158,60 @@ def do_update():
             new_sim_sig != simulation_runtime_state.last_simulation_signature
         ),
     )
+    if timing_prefix == "theta_change":
+        _timing_event(
+            "theta_change.sim_signature.old",
+            phase="simulation_signature",
+            update_id=update_trace_id,
+            signature_hash=_timing_signature_digest(
+                simulation_runtime_state.last_simulation_signature
+            ),
+        )
+        _timing_event(
+            "theta_change.sim_signature.new",
+            phase="simulation_signature",
+            update_id=update_trace_id,
+            signature_hash=_timing_signature_digest(new_sim_sig),
+        )
+    _timing_event(
+        _timing_named_event(timing_prefix, "sim_signature.end", "sim_signature.end"),
+        phase="simulation_signature",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+        image_signature_changed=bool(initial_image_signature_changed),
+        full_signature_changed=bool(
+            new_sim_sig != simulation_runtime_state.last_simulation_signature
+        ),
+    )
     applied_peak_row_refresh_payload: dict[str, object] | None = None
     capture_source_snapshot_after_publish = False
+    _timing_event(
+        _timing_named_event(timing_prefix, "cache_lookup.start", "cache_lookup.start"),
+        phase="cache_lookup",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+    )
     ready_simulation_result = _consume_ready_simulation_result(new_sim_sig)
+    _timing_event(
+        _timing_named_event(timing_prefix, "cache_lookup.end", "cache_lookup.end"),
+        phase="cache_lookup",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+        ready_result=ready_simulation_result is not None,
+    )
     if ready_simulation_result is not None:
+        timing_result_update_id = ready_simulation_result.get("timing_update_id")
+        if timing_result_update_id is not None:
+            timing_render_update_id = timing_result_update_id
+        timing_result_reason = str(ready_simulation_result.get("timing_reason", "") or "")
+        if timing_result_reason:
+            timing_reason = timing_result_reason
+            timing_prefix = _timing_visible_event_prefix(timing_reason)
+        try:
+            simulation_runtime_state.timing_render_update_id = timing_render_update_id
+            simulation_runtime_state.timing_render_reason = timing_reason
+        except Exception:
+            pass
         _trace_update(
             "do_update_apply_ready_simulation",
             job_kind=str(ready_simulation_result.get("job_kind", "full")),
@@ -15509,6 +16342,8 @@ def do_update():
         return {
             "job_kind": job_kind_value,
             "signature": new_sim_sig,
+            "timing_update_id": int(update_trace_id),
+            "timing_reason": str(timing_reason),
             "epoch": int(simulation_runtime_state.simulation_epoch),
             "image_size": int(image_size),
             "pixel_size_m": float(pixel_size_m),
@@ -15970,6 +16805,17 @@ def do_update():
         combined_peak_count=int(len(max_positions_local)),
     )
     redraw_update_start_time = perf_counter()
+    _timing_event(
+        _timing_named_event(
+            timing_prefix,
+            "gui_render_after_compute.start",
+            "post_calculation_gui_update.start",
+        ),
+        phase="gui_update",
+        update_id=update_trace_id,
+        timing_reason=timing_reason,
+        cache_hit=bool(image_generation_cached),
+    )
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
     gui_runtime_geometry_interaction.refresh_runtime_peak_selection_after_update(
         maintenance_callbacks=peak_selection_runtime_maintenance,
@@ -16360,6 +17206,25 @@ def do_update():
 
     # Recompute the slider bounds from the current simulation on every refresh.
     # Manual overrides are preserved unless they exceed the refreshed bounds.
+    current_unscaled_image_signature = getattr(
+        simulation_runtime_state,
+        "last_unscaled_image_signature",
+        None,
+    )
+    visible_reason = timing_reason
+    if (
+        timing_enabled()
+        and current_unscaled_image_signature is not None
+        and not bool(getattr(simulation_runtime_state, "timing_first_visible_emitted", False))
+        and _timing_display_has_simulation_image()
+    ):
+        visible_reason = "first_visible"
+    if current_unscaled_image_signature is not None:
+        _timing_mark_pending_visible_update(
+            update_id=timing_render_update_id,
+            reason=visible_reason,
+            cache_hit=bool(image_generation_cached),
+        )
     apply_scale_factor_to_existing_results(
         update_limits=False,
         update_1d=False,
@@ -16374,13 +17239,20 @@ def do_update():
             qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
             _clear_deferred_overlays(clear_qr_overlay=False)
     else:
+        _timing_event(
+            _timing_named_event(timing_prefix, "overlay.start", "overlay.start"),
+            phase="overlay",
+            update_id=update_trace_id,
+            timing_reason=timing_reason,
+        )
         _refresh_settled_overlays()
+        _timing_event(
+            _timing_named_event(timing_prefix, "overlay.end", "overlay.end"),
+            phase="overlay",
+            update_id=update_trace_id,
+            timing_reason=timing_reason,
+        )
 
-    current_unscaled_image_signature = getattr(
-        simulation_runtime_state,
-        "last_unscaled_image_signature",
-        None,
-    )
     desired_detector_signature = _detector_display_raster_source_signature()
     detector_artist_signature_after = _current_detector_artist_source_signature()
     first_visible_detector_simulation_after_update = bool(
@@ -16415,6 +17287,26 @@ def do_update():
 
     redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
     total_update_elapsed_ms = (perf_counter() - update_start_time) * 1e3
+    visible_prefix = _timing_visible_event_prefix(visible_reason)
+    _timing_event(
+        _timing_named_event(
+            visible_prefix,
+            "gui_render_after_compute.end",
+            "post_calculation_gui_update.end",
+        ),
+        phase="gui_update",
+        update_id=timing_render_update_id,
+        timing_reason=visible_reason,
+        cache_hit=bool(image_generation_cached),
+        redraw_update_elapsed_ms=float(redraw_update_elapsed_ms),
+    )
+    if visible_prefix == "theta_change":
+        _timing_event(
+            "theta_change.cache_hit",
+            phase="cache_lookup",
+            update_id=timing_render_update_id,
+            cache_hit=bool(image_generation_cached),
+        )
     image_generation_text = (
         "cached" if image_generation_cached else f"{image_generation_elapsed_ms:.1f} ms"
     )
@@ -27978,6 +28870,7 @@ def _initialize_runtime_controls_block_48() -> None:
     )
     theta_initial_var = beam_mosaic_parameter_sliders_view_state.theta_initial_var
     _attach_live_theta_background_theta_trace(theta_initial_var)
+    _timing_attach_theta_trace()
     theta_initial_scale = beam_mosaic_parameter_sliders_view_state.theta_initial_scale
     cor_angle_var = beam_mosaic_parameter_sliders_view_state.cor_angle_var
     cor_angle_scale = beam_mosaic_parameter_sliders_view_state.cor_angle_scale
@@ -32795,6 +33688,267 @@ def _emit_startup_benchmark_event(event: str, **payload: object) -> None:
     print(f"RA_SIM_STARTUP_EVENT {json.dumps(message, sort_keys=True)}", flush=True)
 
 
+def _timing_apply_startup_state_restore() -> None:
+    if not timing_enabled():
+        return
+    state_path_text = str(os.environ.get("RA_SIM_TIMING_RESTORE_STATE", "")).strip()
+    if not state_path_text:
+        return
+    state_path = Path(state_path_text).expanduser()
+    _timing_event(
+        "saved_state.restore.start",
+        phase="startup",
+        state_file=state_path.name,
+    )
+    try:
+        previous_startup_updates_suspended = bool(
+            getattr(simulation_runtime_state, "startup_updates_suspended", False)
+        )
+        simulation_runtime_state.startup_updates_suspended = True
+        payload = load_gui_state_file(state_path)
+        try:
+            message = _apply_full_gui_state_snapshot(dict(payload.get("state", {})))
+        finally:
+            simulation_runtime_state.startup_updates_suspended = previous_startup_updates_suspended
+    except Exception as exc:
+        _timing_event(
+            "saved_state.restore.error",
+            phase="startup",
+            state_file=state_path.name,
+            exc_type=type(exc).__name__,
+            error=str(exc),
+        )
+        raise
+    _timing_event(
+        "saved_state.restore.end",
+        phase="startup",
+        state_file=state_path.name,
+        message=message,
+    )
+
+
+def _timing_theta_trace(*_args) -> None:
+    if not timing_enabled():
+        return
+    try:
+        new_theta = float(theta_initial_var.get())
+    except Exception:
+        new_theta = None
+    startup_write = bool(getattr(simulation_runtime_state, "startup_updates_suspended", False))
+    try:
+        old_theta = getattr(simulation_runtime_state, "timing_last_theta_value", None)
+        simulation_runtime_state.timing_last_theta_value = new_theta
+        if not startup_write:
+            simulation_runtime_state.timing_update_reason = "theta_change"
+    except Exception:
+        old_theta = None
+    if startup_write:
+        _timing_event(
+            "theta_initial.var_write",
+            phase="startup",
+            old_theta=old_theta,
+            new_theta=new_theta,
+        )
+        return
+    _timing_event(
+        "theta_change.var_write",
+        phase="input",
+        update_id=_timing_pending_action_update_id(),
+        old_theta=old_theta,
+        new_theta=new_theta,
+        display_fingerprint_before=_timing_display_fingerprint(),
+    )
+
+
+def _timing_attach_theta_trace() -> None:
+    if not timing_enabled():
+        return
+    trace_add = getattr(theta_initial_var, "trace_add", None)
+    if not callable(trace_add):
+        return
+    try:
+        simulation_runtime_state.timing_last_theta_value = float(theta_initial_var.get())
+        trace_add("write", _timing_theta_trace)
+    except Exception:
+        pass
+
+
+def _timing_automation_enabled() -> bool:
+    return timing_enabled() and str(
+        os.environ.get("RA_SIM_TIMING_AUTOMATION", "")
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _timing_automation_repetitions(default: int) -> int:
+    raw_value = str(os.environ.get("RA_SIM_TIMING_REPETITIONS", "")).strip()
+    if not raw_value:
+        return int(default)
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return int(default)
+
+
+def _timing_automation_shutdown(delay_ms: int = 250) -> None:
+    after = getattr(globals().get("root"), "after", None)
+    if callable(after):
+        try:
+            after(int(delay_ms), _shutdown_gui)
+            return
+        except Exception:
+            pass
+    _shutdown_gui()
+
+
+def _timing_automation_prepare_actions() -> list[dict[str, object]]:
+    scenario = str(os.environ.get("RA_SIM_TIMING_SCENARIO", "")).strip().lower()
+    repetitions = _timing_automation_repetitions(30)
+    try:
+        original_theta = float(theta_initial_var.get())
+    except Exception:
+        original_theta = 5.0
+    actions: list[dict[str, object]] = []
+    if scenario in {"theta10", "theta10-restored", "theta10_saved_state"}:
+        for rep in range(repetitions):
+            actions.append({"kind": "theta", "value": 10.0, "transition": "to_10", "rep": rep + 1})
+            actions.append(
+                {
+                    "kind": "theta",
+                    "value": original_theta,
+                    "transition": "return",
+                    "rep": rep + 1,
+                }
+            )
+    elif scenario in {"redraw-only", "redraw_only"}:
+        for rep in range(repetitions):
+            actions.append(
+                {"kind": "scale", "value": 1.01, "transition": "scale_up", "rep": rep + 1}
+            )
+            actions.append(
+                {"kind": "scale", "value": 1.0, "transition": "scale_back", "rep": rep + 1}
+            )
+    elif scenario in {"cache-hit", "cache_hit"}:
+        actions.append({"kind": "theta", "value": 10.0, "transition": "to_10", "rep": 1})
+        actions.append({"kind": "theta", "value": 10.0, "transition": "repeat_10", "rep": 1})
+    return actions
+
+
+def _timing_automation_start() -> None:
+    if not _timing_automation_enabled():
+        return
+    try:
+        if bool(getattr(simulation_runtime_state, "timing_automation_started", False)):
+            return
+        simulation_runtime_state.timing_automation_started = True
+        simulation_runtime_state.timing_automation_actions = _timing_automation_prepare_actions()
+    except Exception:
+        return
+    _timing_event(
+        "automation.start",
+        phase="automation",
+        action_count=len(getattr(simulation_runtime_state, "timing_automation_actions", [])),
+    )
+    if not getattr(simulation_runtime_state, "timing_automation_actions", []):
+        _timing_automation_shutdown()
+        return
+    _timing_automation_step()
+
+
+def _timing_automation_step() -> None:
+    if not _timing_automation_enabled():
+        return
+    actions = list(getattr(simulation_runtime_state, "timing_automation_actions", []))
+    if not actions:
+        _timing_event("automation.complete", phase="automation")
+        _timing_automation_shutdown()
+        return
+    action = dict(actions.pop(0))
+    simulation_runtime_state.timing_automation_actions = actions
+    kind = str(action.get("kind", ""))
+    transition = str(action.get("transition", kind))
+    rep = int(action.get("rep", 0) or 0)
+    if kind == "theta":
+        value = float(action["value"])
+        update_id = _timing_next_do_update_id()
+        simulation_runtime_state.timing_action_update_id = update_id
+        simulation_runtime_state.timing_update_reason = "theta_change"
+        _timing_event(
+            "theta_change.input.start",
+            phase="input",
+            update_id=update_id,
+            new_theta=value,
+            transition=transition,
+            repetition=rep,
+            display_fingerprint_before=_timing_display_fingerprint(),
+        )
+        theta_initial_var.set(value)
+        schedule_update()
+        return
+    if kind == "scale":
+        value = float(action["value"])
+        redraw_counter = (
+            int(getattr(simulation_runtime_state, "timing_redraw_update_counter", 0)) + 1
+        )
+        simulation_runtime_state.timing_redraw_update_counter = redraw_counter
+        update_id = f"redraw-{redraw_counter}"
+        simulation_runtime_state.timing_update_reason = "redraw_only"
+        _timing_mark_pending_visible_update(
+            update_id=update_id,
+            reason="redraw_only",
+            cache_hit=True,
+        )
+        _timing_event(
+            "redraw_only.input.start",
+            phase="input",
+            update_id=update_id,
+            scale_factor=value,
+            transition=transition,
+            repetition=rep,
+            display_fingerprint_before=_timing_display_fingerprint(),
+        )
+        _set_scale_factor_value(value, adjust_range=True, reset_override=False)
+        apply_scale_factor_to_existing_results(update_limits=False)
+        _timing_event(
+            "redraw_only.compute_absent",
+            phase="calculation",
+            update_id=update_id,
+            cache_hit=True,
+        )
+        return
+    _timing_automation_step()
+
+
+def _timing_automation_after_visible(*, reason: str, update_id: object) -> None:
+    if not _timing_automation_enabled():
+        return
+    if reason == "first_visible":
+        _timing_automation_start()
+        return
+    if not bool(getattr(simulation_runtime_state, "timing_automation_started", False)):
+        return
+    try:
+        actions = getattr(simulation_runtime_state, "timing_automation_actions", [])
+    except Exception:
+        actions = []
+    if actions:
+        after = getattr(globals().get("root"), "after", None)
+        if callable(after):
+            try:
+                after(50, _timing_automation_step)
+                return
+            except Exception:
+                pass
+        _timing_automation_step()
+    else:
+        _timing_event("automation.complete", phase="automation", update_id=update_id)
+        _timing_automation_shutdown()
+
+
 def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     """Entry point for running the GUI application.
 
@@ -32813,6 +33967,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         Optional NPZ bundle path to preload when launching calibrant mode.
     """
 
+    _timing_event("gui.main.start", phase="startup", startup_mode=startup_mode)
     global write_excel
     if write_excel_flag is not None:
         write_excel = write_excel_flag
@@ -32864,12 +34019,14 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         nonlocal runtime_context
 
         try:
+            _timing_event("background.first_load.start", phase="startup")
             _emit_startup_benchmark_event("after_idle_startup_task")
             runtime_context = build_runtime_state_context()
             runtime_context = build_runtime_window_context(runtime_context)
             runtime_context = build_runtime_plot_context(runtime_context)
             runtime_context = build_runtime_controls_context(runtime_context)
             _ = runtime_context
+            _timing_event("background.first_load.end", phase="startup")
             _set_structure_bootstrap_controls_enabled(
                 bool(getattr(structure_model_state, "bootstrap_complete", False))
             )
@@ -32879,6 +34036,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 simulation_runtime_state.startup_updates_suspended = True
                 simulation_runtime_state.pending_startup_refresh = False
                 try:
+                    _timing_event("config.load.start", phase="startup")
                     load_parameters(
                         params_file_path,
                         theta_initial_var,
@@ -32913,6 +34071,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                         solve_q_rel_tol_var=solve_q_rel_tol_var,
                         solve_q_mode_var=solve_q_mode_var,
                     )
+                    _timing_event("config.load.end", phase="startup", source="parameters_file")
                 finally:
                     simulation_runtime_state.startup_updates_suspended = False
                 if finite_stack_controls_view_state.phase_delta_entry_var is not None:
@@ -32929,7 +34088,11 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 ensure_valid_resolution_choice()
                 profile_loaded = True
             else:
+                _timing_event("config.load.start", phase="startup")
                 ensure_valid_resolution_choice()
+                _timing_event("config.load.end", phase="startup", source="defaults")
+
+            _timing_apply_startup_state_restore()
 
             sample_count = int(max(1, simulation_runtime_state.num_samples))
             cif_summary = Path(_current_primary_cif_path()).name
@@ -32994,6 +34157,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             _set_structure_bootstrap_controls_enabled(True)
             progress_label.config(text="Initializing simulation...")
             _show_initial_simulation_loading_overlay()
+            _timing_event("first_update.requested", phase="startup")
             matplotlib_canvas.draw()
             root.update_idletasks()
             do_update()
@@ -33032,6 +34196,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)
     root.mainloop()
+    _timing_event("gui.main.end", phase="startup", startup_mode=startup_mode)
 
 
 if __name__ == "__main__":

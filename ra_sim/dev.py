@@ -35,6 +35,7 @@ def typecheck_targets() -> list[str]:
         "ra_sim/gui/_runtime/live_cache_helpers.py",
         "ra_sim/gui/_runtime/primary_cache_helpers.py",
         "ra_sim/gui/runtime_primary_cache.py",
+        "ra_sim/timing.py",
         "ra_sim/test_tiers.py",
     ]
 
@@ -45,10 +46,12 @@ def format_targets() -> list[str]:
             *typecheck_targets(),
             "ra_sim/fitting/optimization.py",
             "ra_sim/gui/_runtime/runtime_session.py",
+            "scripts/measure_gui_timing.py",
             "tests/test_dev_cli.py",
             "tests/test_dev_doctor.py",
             "tests/test_gui_runtime_primary_cache.py",
             "tests/test_mosaic_shape_optimization.py",
+            "tests/test_timing.py",
         }
     )
 

@@ -11,6 +11,7 @@ import sys
 from types import ModuleType
 
 from ra_sim.gui import lazy_runtime as gui_lazy_runtime
+from ra_sim.timing import timing_event
 
 write_excel = False
 
@@ -24,11 +25,13 @@ def _load_runtime_module() -> ModuleType:
 
     global _RUNTIME_MODULE
 
+    timing_event("gui.runtime_session.import.start", phase="startup")
     module = gui_lazy_runtime.load_cached_imported_module(
         _RUNTIME_MODULE,
         module_name=_RUNTIME_MODULE_NAME,
     )
     _RUNTIME_MODULE = module
+    timing_event("gui.runtime_session.import.end", phase="startup")
     return module
 
 
@@ -39,6 +42,7 @@ def main(
 ) -> None:
     """Launch the full GUI runtime session lazily."""
 
+    timing_event("gui.runtime_impl.main.start", phase="startup", startup_mode=startup_mode)
     global write_excel
     write_excel = gui_lazy_runtime.forward_lazy_main(
         current_write_excel=write_excel,
@@ -47,6 +51,7 @@ def main(
         startup_mode=startup_mode,
         calibrant_bundle=calibrant_bundle,
     )
+    timing_event("gui.runtime_impl.main.end", phase="startup", startup_mode=startup_mode)
 
 
 def __getattr__(name: str):

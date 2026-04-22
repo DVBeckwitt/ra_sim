@@ -12,6 +12,7 @@ from pathlib import Path
 from types import ModuleType
 
 from ra_sim.gui import lazy_runtime as gui_lazy_runtime
+from ra_sim.timing import timing_event
 
 write_excel = False
 
@@ -26,12 +27,14 @@ def _load_runtime_module() -> ModuleType:
 
     global _RUNTIME_MODULE
 
+    timing_event("gui.runtime_impl.import.start", phase="startup")
     module = gui_lazy_runtime.load_cached_module_from_path(
         _RUNTIME_MODULE,
         module_name=_RUNTIME_MODULE_NAME,
         module_path=_RUNTIME_MODULE_PATH,
     )
     _RUNTIME_MODULE = module
+    timing_event("gui.runtime_impl.import.end", phase="startup")
     return module
 
 
@@ -42,6 +45,7 @@ def main(
 ) -> None:
     """Launch the full GUI runtime lazily."""
 
+    timing_event("gui.runtime.main.start", phase="startup", startup_mode=startup_mode)
     global write_excel
     write_excel = gui_lazy_runtime.forward_lazy_main(
         current_write_excel=write_excel,
@@ -50,6 +54,7 @@ def main(
         startup_mode=startup_mode,
         calibrant_bundle=calibrant_bundle,
     )
+    timing_event("gui.runtime.main.end", phase="startup", startup_mode=startup_mode)
 
 
 def __getattr__(name: str):

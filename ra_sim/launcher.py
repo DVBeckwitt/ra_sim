@@ -18,9 +18,14 @@ from ra_sim.debug_controls import (
     temporary_startup_debug_override,
 )
 from ra_sim.gui import bootstrap as gui_bootstrap
+from ra_sim.timing import timing_enabled, timing_event, timing_span
 
 _MOSAIC_MODULE = "mosaic_sim.unified_app"
 _FORCE_EXIT_ON_GUI_CLOSE_ENV = "RA_SIM_FORCE_EXIT_ON_GUI_CLOSE"
+
+
+def _should_disable_debug_dialog_for_timing_automation() -> bool:
+    return timing_enabled() and env_flag_enabled("RA_SIM_TIMING_AUTOMATION")
 
 
 def _simulation_gui_startup_error_message(exc: FileNotFoundError) -> str:
@@ -79,23 +84,31 @@ def _pick_available_local_port() -> int:
 def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
     """Launch the canonical packaged simulation GUI runtime."""
 
+    timing_event("gui.command.received", phase="startup", command="gui")
     install_prereqs.require_tkinter(
         "The RA-SIM simulation GUI (`python -m ra_sim gui` or `ra-sim gui`)"
     )
 
-    debug_override = gui_bootstrap.quick_simulation_debug_override_dialog()
+    if _should_disable_debug_dialog_for_timing_automation():
+        debug_override = "disable_all"
+    else:
+        debug_override = gui_bootstrap.quick_simulation_debug_override_dialog()
     if debug_override is None:
         return
 
+    timing_event("gui.runtime.import.start", phase="startup")
     from ra_sim.gui.runtime import main as gui_main
+
+    timing_event("gui.runtime.import.end", phase="startup")
 
     try:
         with temporary_startup_debug_override(debug_override):
             start_run_bundle(entrypoint="launcher:simulation")
-            gui_main(
-                write_excel_flag=write_excel_flag,
-                startup_mode="simulation",
-            )
+            with timing_span("gui.main", phase="startup", startup_mode="simulation"):
+                gui_main(
+                    write_excel_flag=write_excel_flag,
+                    startup_mode="simulation",
+                )
     except FileNotFoundError as exc:
         error_message = _simulation_gui_startup_error_message(exc)
         _show_simulation_gui_startup_error(error_message)
@@ -123,9 +136,7 @@ def launch_mosaic_visualizer() -> None:
             check=True,
         )
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"mosaic_sim exited with status {exc.returncode}."
-        ) from exc
+        raise RuntimeError(f"mosaic_sim exited with status {exc.returncode}.") from exc
 
 
 def launch_mosaic_specular_visualizer(initial_state: object) -> None:
@@ -171,9 +182,7 @@ def launch_startup_mode(
     if startup_mode == "mosaic":
         launch_mosaic_visualizer()
         return
-    raise ValueError(
-        "startup_mode must resolve to one of: simulation, calibrant, mosaic"
-    )
+    raise ValueError("startup_mode must resolve to one of: simulation, calibrant, mosaic")
 
 
 def _forced_exit_status_from_pending_exception(
@@ -219,9 +228,7 @@ def _force_exit_after_launcher_close(
 ) -> None:
     """Finalize artifacts and hard-exit for batch-owned simulation GUI runs."""
 
-    if startup_mode != "simulation" or not env_flag_enabled(
-        _FORCE_EXIT_ON_GUI_CLOSE_ENV
-    ):
+    if startup_mode != "simulation" or not env_flag_enabled(_FORCE_EXIT_ON_GUI_CLOSE_ENV):
         return
 
     exit_code = _forced_exit_status_from_pending_exception(pending_exc_info)
@@ -230,8 +237,7 @@ def _force_exit_after_launcher_close(
     except Exception as exc:
         try:
             print(
-                "RA-SIM warning: run bundle finalization failed during forced "
-                f"GUI shutdown: {exc}",
+                f"RA-SIM warning: run bundle finalization failed during forced GUI shutdown: {exc}",
                 file=sys.stderr,
             )
         except Exception:
@@ -248,8 +254,10 @@ def _force_exit_after_launcher_close(
 def main(argv: list[str] | None = None) -> None:
     """Run the lightweight packaged GUI launcher."""
 
+    timing_event("launcher.main.start", phase="startup")
     cli_argv = list(sys.argv[1:] if argv is None else argv)
     if gui_bootstrap.should_forward_to_cli(cli_argv):
+        timing_event("launcher.forward_to_cli", phase="startup")
         from ra_sim.cli import main as cli_main
 
         cli_main(cli_argv)
@@ -259,6 +267,7 @@ def main(argv: list[str] | None = None) -> None:
     startup_mode = gui_bootstrap.resolve_startup_mode(args.command)
     if startup_mode == "prompt":
         startup_mode = gui_bootstrap.quick_startup_mode_dialog()
+    timing_event("launcher.startup_mode.resolved", phase="startup", startup_mode=startup_mode)
 
     if startup_mode is not None and startup_mode != "simulation":
         start_run_bundle(entrypoint=f"launcher:{startup_mode}")
