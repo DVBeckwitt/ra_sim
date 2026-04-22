@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from types import SimpleNamespace
 
 import numpy as np
@@ -277,6 +278,44 @@ def test_rasterize_hit_tables_to_image_matches_simulation_image() -> None:
     )
 
     assert np.allclose(image, result.image)
+
+
+def test_rasterize_hit_tables_to_image_handles_edges_and_duplicate_hits() -> None:
+    hit_tables = [
+        np.array(
+            [
+                [10.0, 1.25, 2.5, 0.0, 0.0, 0.0, 1.0],
+                [2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [3.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [8.0, -0.25, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [99.0, np.nan, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [99.0, 1.0, np.inf, 0.0, 0.0, 0.0, 1.0],
+                [99.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0],
+                [99.0, 1.0e300, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [99.0, 1.0, 1.0e300, 0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        ),
+        np.array([4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float64),
+        np.array([1.0, 2.0], dtype=np.float64),
+    ]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        image = runtime_primary_cache.rasterize_hit_tables_to_image(
+            hit_tables,
+            image_size=5,
+        )
+
+    expected = np.zeros((5, 5), dtype=np.float64)
+    expected[2, 1] += 3.75
+    expected[2, 2] += 1.25
+    expected[3, 1] += 3.75
+    expected[3, 2] += 1.25
+    expected[1, 1] += 5.0
+    expected[0, 0] += 6.0
+    expected[0, 2] += 4.0
+    assert np.allclose(image, expected)
 
 
 def test_rematerialize_primary_artifacts_matches_full_simulation_artifacts() -> None:

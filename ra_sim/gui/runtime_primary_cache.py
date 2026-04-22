@@ -215,7 +215,8 @@ def rasterize_hit_tables_to_image(
 ) -> np.ndarray:
     """Rasterize raw hit tables into one detector image using bilinear splats."""
 
-    image = np.zeros((int(image_size), int(image_size)), dtype=np.float64)
+    size = int(image_size)
+    image = np.zeros((size, size), dtype=np.float64)
     if hit_tables is None:
         return image
 
@@ -231,28 +232,43 @@ def rasterize_hit_tables_to_image(
         if hits.ndim != 2 or hits.shape[1] < 3:
             continue
 
-        for intensity, col_f, row_f in hits[:, :3]:
-            if not (np.isfinite(intensity) and np.isfinite(col_f) and np.isfinite(row_f)):
+        intensity = hits[:, 0]
+        col_f = hits[:, 1]
+        row_f = hits[:, 2]
+        in_splat_range = (
+            np.isfinite(intensity)
+            & np.isfinite(col_f)
+            & np.isfinite(row_f)
+            & (col_f > -1.0)
+            & (col_f < size)
+            & (row_f > -1.0)
+            & (row_f < size)
+        )
+        if not np.any(in_splat_range):
+            continue
+
+        intensity = intensity[in_splat_range]
+        col_f = col_f[in_splat_range]
+        row_f = row_f[in_splat_range]
+        row0 = np.floor(row_f).astype(np.int64)
+        col0 = np.floor(col_f).astype(np.int64)
+        d_row = row_f - row0
+        d_col = col_f - col0
+
+        for row_offset, row_weight in ((0, 1.0 - d_row), (1, d_row)):
+            rr = row0 + row_offset
+            row_ok = (rr >= 0) & (rr < size) & (row_weight > 0.0)
+            if not np.any(row_ok):
                 continue
-            row0 = int(np.floor(row_f))
-            col0 = int(np.floor(col_f))
-            d_row = float(row_f - row0)
-            d_col = float(col_f - col0)
-            for row_offset in range(2):
-                rr = row0 + row_offset
-                if rr < 0 or rr >= int(image_size):
-                    continue
-                w_row = 1.0 - d_row if row_offset == 0 else d_row
-                if w_row <= 0.0:
-                    continue
-                for col_offset in range(2):
-                    cc = col0 + col_offset
-                    if cc < 0 or cc >= int(image_size):
-                        continue
-                    w_col = 1.0 - d_col if col_offset == 0 else d_col
-                    if w_col <= 0.0:
-                        continue
-                    image[rr, cc] += float(intensity) * w_row * w_col
+            for col_offset, col_weight in ((0, 1.0 - d_col), (1, d_col)):
+                cc = col0 + col_offset
+                ok = row_ok & (cc >= 0) & (cc < size) & (col_weight > 0.0)
+                if np.any(ok):
+                    np.add.at(
+                        image,
+                        (rr[ok], cc[ok]),
+                        intensity[ok] * row_weight[ok] * col_weight[ok],
+                    )
     return image
 
 

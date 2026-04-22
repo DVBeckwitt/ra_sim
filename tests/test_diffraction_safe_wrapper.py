@@ -173,6 +173,42 @@ def test_process_peaks_parallel_safe_can_prefer_python_runner(monkeypatch) -> No
     assert stats["used_python_runner"] is True
 
 
+def test_process_peaks_parallel_safe_skips_last_cache_build_on_runner_path(
+    monkeypatch,
+) -> None:
+    args = _build_process_args(8)
+    build_calls = 0
+
+    def fake_kernel(*_args, **_kwargs):
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    def fail_build_intersection_cache(*_args, **_kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        raise AssertionError("disabled last-intersection cache should not be built")
+
+    monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: False)
+    monkeypatch.setattr(diffraction, "build_intersection_cache", fail_build_intersection_cache)
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
+
+    diffraction.process_peaks_parallel_safe(
+        *args,
+        save_flag=0,
+        enable_safe_cache=False,
+        sample_qr_ring_once=False,
+    )
+
+    assert build_calls == 0
+    assert diffraction.get_last_intersection_cache() == []
+
+
 def test_process_peaks_parallel_safe_injects_default_solve_q_trig_kwargs(
     monkeypatch,
 ) -> None:
@@ -443,8 +479,7 @@ def test_process_peaks_parallel_compiles_without_dynamic_global_cache_warning() 
         )
 
     assert not any(
-        "Cannot cache compiled function" in str(w.message)
-        and "dynamic globals" in str(w.message)
+        "Cannot cache compiled function" in str(w.message) and "dynamic globals" in str(w.message)
         for w in caught
     )
 

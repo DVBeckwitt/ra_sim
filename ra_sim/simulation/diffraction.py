@@ -5843,18 +5843,16 @@ def process_peaks_parallel_safe(*args, **kwargs):
     if safe_cache_result is not None:
         if isinstance(safe_stats_out, dict):
             safe_stats_out["used_python_runner"] = False
-        _set_last_intersection_cache(
-            build_intersection_cache(
-                safe_cache_result[1],
-                av,
-                cv,
-                beam_x_array=beam_x_array,
-                beam_y_array=beam_y_array,
-                theta_array=theta_array,
-                phi_array=phi_array,
-                wavelength_array=wavelength_array,
-                best_sample_indices_out=best_sample_indices_out,
-            )
+        _set_last_intersection_cache_from_hit_tables(
+            safe_cache_result[1],
+            av,
+            cv,
+            beam_x_array=beam_x_array,
+            beam_y_array=beam_y_array,
+            theta_array=theta_array,
+            phi_array=phi_array,
+            wavelength_array=wavelength_array,
+            best_sample_indices_out=best_sample_indices_out,
         )
         return safe_cache_result
     clustered_args, clustered_kwargs, cluster_meta = _prepare_clustered_process_peaks_call(
@@ -5887,18 +5885,16 @@ def process_peaks_parallel_safe(*args, **kwargs):
                     )
                     if isinstance(safe_stats_out, dict):
                         safe_stats_out["used_python_runner"] = used_python_runner
-                    _set_last_intersection_cache(
-                        build_intersection_cache(
-                            result[1],
-                            av,
-                            cv,
-                            beam_x_array=beam_x_array,
-                            beam_y_array=beam_y_array,
-                            theta_array=theta_array,
-                            phi_array=phi_array,
-                            wavelength_array=wavelength_array,
-                            best_sample_indices_out=best_sample_indices_out,
-                        )
+                    _set_last_intersection_cache_from_hit_tables(
+                        result[1],
+                        av,
+                        cv,
+                        beam_x_array=beam_x_array,
+                        beam_y_array=beam_y_array,
+                        theta_array=theta_array,
+                        phi_array=phi_array,
+                        wavelength_array=wavelength_array,
+                        best_sample_indices_out=best_sample_indices_out,
                     )
                     return _finalize_clustered_process_peaks_result(result, call_meta)
                 except TypeError as exc:
@@ -6241,6 +6237,37 @@ def _set_last_intersection_cache(cache):
         _LAST_INTERSECTION_CACHE = []
         return
     _LAST_INTERSECTION_CACHE = _copy_intersection_cache(cache)
+
+
+def _set_last_intersection_cache_from_hit_tables(
+    hit_tables,
+    av,
+    cv,
+    *,
+    beam_x_array=None,
+    beam_y_array=None,
+    theta_array=None,
+    phi_array=None,
+    wavelength_array=None,
+    best_sample_indices_out=None,
+):
+    """Build and store the optional last-intersection cache when retained."""
+
+    if not _retain_last_intersection_cache():
+        return
+    _set_last_intersection_cache(
+        build_intersection_cache(
+            hit_tables,
+            av,
+            cv,
+            beam_x_array=beam_x_array,
+            beam_y_array=beam_y_array,
+            theta_array=theta_array,
+            phi_array=phi_array,
+            wavelength_array=wavelength_array,
+            best_sample_indices_out=best_sample_indices_out,
+        )
+    )
 
 
 def get_last_intersection_cache():
