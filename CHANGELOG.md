@@ -34,6 +34,7 @@
   - Made simulation GUI startup default to diagnostics-off, with saved debug settings and one-run debug mode kept as explicit opt-in choices.
   - Stopped creating per-run debug bundles on default diagnostics-off launches; simulation now starts bundle capture only after the chosen normal/saved/debug startup mode is known.
   - Resolved manual Qr/Qz and HKL picker alignment across detector and caked `(2theta, phi)` views. Qr/Qz group availability now comes from CIF/lattice simulation hit-table state, caked Qr/Qz positions are mapped from simulation-native detector pixels through the live caked simulation frame, and HKL picking now reuses the same current-view candidate payload as the Qr picker.
+  - Fixed the Qr/Qz peak sensitivity tool so perturbed finite-difference rows restore trusted reflection provenance only when stable identity fields match the baseline; `new4.json` now reports trusted `ok` sensitivity rows instead of all rows being `identity_changed`.
   - Restored the GUI selection-cache path for Qr/Qz and HKL picking so selection jobs build `stored_intersection_cache` from main-run hit tables with `collect_hit_tables=True` and `build_intersection_cache=True`, while raw-only and image-only updates keep detector cache builds disabled.
   - Fixed the startup/default detector-view regression where a blank detached projection could be cached until a parameter change or caked-view toggle forced a new detector signature.
   - Updated `main.py` and `ra_sim/gui/app.py` to use shared hBN geometry conversion helpers.
