@@ -27,7 +27,10 @@ Last updated: 2026-04-22
 - Rung 0-5 timing observability is implemented. Each current-run rung report
   gets finite timing metadata, the run directory gets `rung_timing_summary.json`,
   `--timing-report` can write an explicit copy, and timing thresholds are
-  diagnostic only.
+  diagnostic only. Real opt-in timing run `20260422_123330` finished with
+  ladder `status == "ok"`, total `26.612s`, slowest rung
+  `caked_point_reprojection` at `9.572s`, no missing expected rungs, no Rung 6/7
+  timing records, and zero non-finite elapsed values.
 - No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
   feature rung should be treated as validated.
 
@@ -42,9 +45,9 @@ Status by work type:
   only affected blocks.
 - Timing feature: current-run Rung 0-5 timing JSON and stdout table are
   available for opt-in ladder runs.
-- Timing bug/error: Rung 6 is excluded from timing collection/docs, Rung 5
-  skipped reports are timed, and `RA_SIM_NEW4_LADDER_TIMING_MAX_S` never gates
-  status or exit code.
+- Timing bug/error: review follow-up is closed. Timing collection excludes
+  Rung 6/7 path mappings and expected IDs, Rung 5 skipped reports are timed,
+  and `RA_SIM_NEW4_LADDER_TIMING_MAX_S` never gates status or exit code.
 - Not validated: full fitter, feature rung, baseline, GUI fit, dynamic reanchor,
   multistart, and polish remain unclaimed.
 
@@ -369,6 +372,11 @@ and unchanged `new4.json`
 Rung 6 remains separate and unstarted. Do not run dynamic reanchor, multistart,
 polish, GUI fit, baseline, feature rung, freeze/thaw, or full fitter validation
 until Rung 6 is separately approved.
+
+Opt-in timing check `20260422_123330` measured the approved fresh Rung 5 blocks
+path only (`--max-rung blocks`, `--timing-report`). It wrote
+`rung_timing_summary.json` plus `latest_timing_summary.json`, listed Rungs
+0/1/2/3/3B/4/5 only, and left threshold diagnostics `not_configured`.
 
 ## Do not run as acceptance
 

@@ -4434,6 +4434,17 @@ def test_new4_ladder_timing_summary_schema(monkeypatch, tmp_path) -> None:
     assert np.isfinite(float(report["elapsed_s"]))
 
 
+def test_new4_ladder_expected_timing_ids_stop_at_rung_5() -> None:
+    ladder = _load_new4_ladder_module()
+    allowed = {"0", "1", "2", "3", "3A", "3B", "4", "5"}
+
+    for max_rung in ("combined", "selected", "feature", "features"):
+        ids = ladder._expected_rung_ids_for_run(max_rung)
+        assert set(ids) <= allowed
+        assert "6" not in ids
+        assert "7" not in ids
+
+
 def test_new4_ladder_timing_summary_writes_explicit_copy(
     monkeypatch,
     tmp_path,

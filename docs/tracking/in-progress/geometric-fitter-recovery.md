@@ -269,7 +269,10 @@ rung report gets finite timing metadata. Each ladder run writes
 `rung_timing_summary.json`; optional `--timing-report` writes the same summary
 to a chosen path and prints the concise timing table. Timing thresholds are
 diagnostic only and do not change rung status, summary status, process exit
-code, or pass/fail semantics.
+code, or pass/fail semantics. Real opt-in timing run `20260422_123330` finished
+the approved `--max-rung blocks` path with `status == "ok"`, total `26.612s`,
+slowest rung `caked_point_reprojection` at `9.572s`, no missing expected rungs,
+no Rung 6/7 timing records, and zero non-finite elapsed values.
 
 Rung 5 closeout status by work type:
 
@@ -282,8 +285,9 @@ Rung 5 closeout status by work type:
   blocks; stale external pair evidence remains rejected.
 - Timing feature status: current-run Rung 0-5 timing report and stdout table are
   available.
-- Timing bug/error status: Rung 6 is excluded from timing collection/docs,
-  skipped Rung 5 reports are timed, and timing thresholds are non-gating.
+- Timing bug/error status: Rung 6/7 path mappings and expected timing IDs are
+  excluded from timing collection, skipped Rung 5 reports are timed, and timing
+  thresholds are non-gating.
 - Validation status: run `20260422_115256` passed Rungs 1-5, Rung 5 passed 4/4
   attempted blocks, provider guard after blocks stayed green, and `new4.json`
   stayed unchanged.

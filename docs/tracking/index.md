@@ -37,14 +37,17 @@ Timing observability is now available for current-run Rungs 0-5:
 `rung_timing_summary.json` is written in the run directory, optional
 `--timing-report` writes the same machine-readable summary elsewhere, stdout
 prints `Rung | Status | elapsed_s | report_path`, and
-`RA_SIM_NEW4_LADDER_TIMING_MAX_S` is diagnostic-only. Bug/error status: Rung 6
-is excluded from timing collection/docs, Rung 5 skipped reports get timing
-metadata, fatal evidence still aborts, local `a` usability failures stay local,
-missing dependencies skip only affected blocks, and stale external evidence
-remains rejected. `full_fitter_validated == false`; no full, feature, baseline,
-GUI fit, dynamic reanchor, multistart, polish, freeze/thaw, or feature rung was
-run. Next approved rung is separate: Rung 6 selected combined solve /
-full-candidate dry run.
+`RA_SIM_NEW4_LADDER_TIMING_MAX_S` is diagnostic-only. Real opt-in timing run
+`20260422_123330` completed the approved `--max-rung blocks` path with
+`status == "ok"`, total `26.612s`, slowest rung `caked_point_reprojection` at
+`9.572s`, no missing expected rungs, no Rung 6/7 timing records, and zero
+non-finite elapsed values. Bug/error status: Rung 6/7 path mappings and
+expected timing IDs are excluded from timing collection, Rung 5 skipped reports
+get timing metadata, fatal evidence still aborts, local `a` usability failures
+stay local, missing dependencies skip only affected blocks, and stale external
+evidence remains rejected. `full_fitter_validated == false`; no full, feature,
+baseline, GUI fit, dynamic reanchor, multistart, polish, freeze/thaw, or
+feature rung was run. Next solve project remains separate and unstarted.
 
 ## Known bugs
 
