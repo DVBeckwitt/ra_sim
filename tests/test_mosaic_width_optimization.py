@@ -251,6 +251,10 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
     assert all("n2_sample_array_override" in kw for kw in recorded_kernel_kwargs)
     for kw in recorded_kernel_kwargs:
         np.testing.assert_array_equal(kw["n2_sample_array_override"], supplied_n2)
+    collect_hit_flags = [kw.get("collect_hit_tables") for kw in recorded_kernel_kwargs]
+    assert True in collect_hit_flags
+    assert False in collect_hit_flags
+    assert all(flag in {True, False} for flag in collect_hit_flags)
 
 
 def test_fit_mosaic_widths_separable_geometry_requires_measured_peaks():

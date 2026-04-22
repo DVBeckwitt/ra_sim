@@ -118,6 +118,7 @@ def _make_fake_process_peaks(
     sim_in_plane_scale=1.0,
     sim_specular_scale=1.0,
     recorded_subsets=None,
+    recorded_kernel_kwargs=None,
 ):
     def fake_process_peaks_parallel(
         miller_subset,
@@ -178,6 +179,8 @@ def _make_fake_process_peaks(
         del unit_x
         del n_detector
         del save_flag
+        if recorded_kernel_kwargs is not None:
+            recorded_kernel_kwargs.append(dict(kwargs))
         del kwargs
         recorded_theta_values.append(float(theta_initial))
         if recorded_subsets is not None:
@@ -476,13 +479,18 @@ def test_fit_mosaic_shape_parameters_only_simulates_selected_profile_reflections
     ]
 
     recorded_subsets = []
+    recorded_kernel_kwargs = []
     monkeypatch.setattr(
         "ra_sim.fitting.optimization._detector_pixels_to_fit_space",
         _fake_detector_pixels_to_fit_space,
     )
     monkeypatch.setattr(
         "ra_sim.fitting.optimization.process_peaks_parallel",
-        _make_fake_process_peaks([], recorded_subsets=recorded_subsets),
+        _make_fake_process_peaks(
+            [],
+            recorded_subsets=recorded_subsets,
+            recorded_kernel_kwargs=recorded_kernel_kwargs,
+        ),
     )
 
     def fake_least_squares(fun, x0, **kwargs):
@@ -511,6 +519,8 @@ def test_fit_mosaic_shape_parameters_only_simulates_selected_profile_reflections
 
     assert result.roi_count_by_dataset == {0: 3}
     assert recorded_subsets, "optimizer should simulate at least one selected subset"
+    assert recorded_kernel_kwargs
+    assert all(kw.get("collect_hit_tables") is False for kw in recorded_kernel_kwargs)
     for subset in recorded_subsets:
         simulated_hkls = {
             tuple(int(round(v)) for v in row) for row in np.asarray(subset, dtype=np.float64)

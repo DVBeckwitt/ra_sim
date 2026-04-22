@@ -117,45 +117,6 @@ def _ensure_request_beam_n2_sample_array(request: SimulationRequest) -> np.ndarr
     return request.beam.n2_sample_array
 
 
-def _capture_hit_tables_for_intersection_cache(
-    *,
-    hit_tables: Any,
-    collect_hit_tables_requested: bool,
-    runner: Callable[..., tuple[Any, ...]],
-    runner_args: tuple[Any, ...],
-    runner_kwargs: dict[str, Any],
-    image_arg_index: int,
-) -> Any:
-    """Return hit tables suitable for building the per-peak intersection cache."""
-
-    try:
-        if hit_tables is not None and len(hit_tables) > 0:
-            return hit_tables
-    except TypeError:
-        if hit_tables is not None:
-            return hit_tables
-
-    if collect_hit_tables_requested:
-        return hit_tables
-
-    rerun_args = list(runner_args)
-    rerun_args[image_arg_index] = np.zeros_like(
-        np.asarray(rerun_args[image_arg_index], dtype=np.float64)
-    )
-    rerun_kwargs = dict(runner_kwargs)
-    rerun_kwargs["collect_hit_tables"] = True
-    rerun_kwargs["accumulate_image"] = False
-    rerun_kwargs.pop("projection_debug_counters", None)
-    rerun_kwargs.pop("projection_debug_reject_counts", None)
-    rerun_kwargs.pop("projection_debug_reject_records", None)
-    rerun_kwargs.pop("projection_debug_row_hit_counts", None)
-    rerun_kwargs.pop("projection_debug_row_tthp_sums", None)
-    rerun_kwargs.pop("projection_debug_row_tth_sums", None)
-
-    rerun_result = runner(*rerun_args, **rerun_kwargs)
-    return rerun_result[1]
-
-
 def _last_forward_simulation_safe_run_used_python_runner() -> bool | None:
     used_python_runner = getattr(
         _FORWARD_SIMULATION_SAFE_RUN_STATE,
@@ -261,9 +222,10 @@ def _run_simulation_request(
     best_sample_indices_out = _ensure_best_sample_buffer(
         request,
         peak_count=int(np.asarray(request.miller, dtype=np.float64).shape[0]),
-        auto_allocate=True,
+        auto_allocate=bool(request.build_intersection_cache),
     )
     beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
+    collect_for_cache = bool(request.collect_hit_tables or request.build_intersection_cache)
 
     peak_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -275,7 +237,7 @@ def _run_simulation_request(
         solve_q_steps=request.mosaic.solve_q_steps,
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
-        collect_hit_tables=request.collect_hit_tables,
+        collect_hit_tables=collect_for_cache,
         accumulate_image=request.accumulate_image,
         exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
     )
@@ -293,12 +255,9 @@ def _run_simulation_request(
     if peak_runner is process_peaks_parallel_safe and _FORWARD_SIMULATION_NUMBA_DISABLED:
         peak_kwargs["prefer_python_runner"] = True
     if peak_runner is process_peaks_parallel_safe:
-        peak_kwargs.update(
-            get_process_peaks_runtime_kwargs(numba_thread_count=worker_count)
-        )
+        peak_kwargs.update(get_process_peaks_runtime_kwargs(numba_thread_count=worker_count))
     safe_run_stats_out: dict[str, Any] | None = None
     used_python_runner: bool | None = None
-    cache_hit_tables: Any = []
     if peak_runner is process_peaks_parallel_safe:
         safe_run_stats_out = {}
         peak_kwargs["_safe_stats_out"] = safe_run_stats_out
@@ -349,15 +308,6 @@ def _run_simulation_request(
             if "used_python_runner" in safe_run_stats_out:
                 used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
             peak_kwargs.pop("_safe_stats_out", None)
-        if request.build_intersection_cache:
-            cache_hit_tables = _capture_hit_tables_for_intersection_cache(
-                hit_tables=hit_tables,
-                collect_hit_tables_requested=bool(request.collect_hit_tables),
-                runner=peak_runner,
-                runner_args=peak_args,
-                runner_kwargs=peak_kwargs,
-                image_arg_index=6,
-            )
     projection_debug_background = None
     projection_debug_log_path = None
     if projection_debug_active:
@@ -377,9 +327,7 @@ def _run_simulation_request(
                 projection_debug_session,
                 projection_debug_background,
             )
-            projection_debug_log_path = finalize_projection_debug_session(
-                projection_debug_session
-            )
+            projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
         else:
             append_projection_debug_background(
                 projection_debug_session,
@@ -387,7 +335,7 @@ def _run_simulation_request(
             )
     if request.build_intersection_cache:
         intersection_cache = build_intersection_cache(
-            cache_hit_tables,
+            hit_tables,
             request.geometry.av,
             request.geometry.cv,
             beam_x_array=request.beam.beam_x_array,
@@ -399,10 +347,11 @@ def _run_simulation_request(
         )
     else:
         intersection_cache = []
+    public_hit_tables = hit_tables if request.collect_hit_tables else []
 
     return SimulationResult(
         image=np.asarray(image, dtype=np.float64),
-        hit_tables=hit_tables,
+        hit_tables=public_hit_tables,
         q_data=q_data,
         q_count=q_count,
         all_status=all_status,
@@ -546,10 +495,7 @@ def warmup_forward_simulation_numba() -> bool:
     global _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
     global _FORWARD_SIMULATION_NUMBA_DISABLED
     with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
-        if (
-            _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED
-            or _FORWARD_SIMULATION_NUMBA_DISABLED
-        ):
+        if _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED or _FORWARD_SIMULATION_NUMBA_DISABLED:
             return False
         if not _FORWARD_SIMULATION_NUMBA_WARMED:
             try:
@@ -655,15 +601,9 @@ def simulate(
     if peak_runner is process_peaks_parallel_safe:
         if not _FORWARD_SIMULATION_NUMBA_DISABLED:
             warmup_forward_simulation_numba()
-        if (
-            not _FORWARD_SIMULATION_NUMBA_WARMED
-            and not _FORWARD_SIMULATION_NUMBA_DISABLED
-        ):
+        if not _FORWARD_SIMULATION_NUMBA_WARMED and not _FORWARD_SIMULATION_NUMBA_DISABLED:
             with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
-                if (
-                    not _FORWARD_SIMULATION_NUMBA_WARMED
-                    and not _FORWARD_SIMULATION_NUMBA_DISABLED
-                ):
+                if not _FORWARD_SIMULATION_NUMBA_WARMED and not _FORWARD_SIMULATION_NUMBA_DISABLED:
                     try:
                         result = _run_simulation_request(request, peak_runner=peak_runner)
                     except Exception:
@@ -727,9 +667,10 @@ def simulate_qr_rods(
     best_sample_indices_out = _ensure_best_sample_buffer(
         request,
         peak_count=int(np.asarray(debug_miller, dtype=np.float64).shape[0]),
-        auto_allocate=True,
+        auto_allocate=bool(request.build_intersection_cache),
     )
     beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
+    collect_for_cache = bool(request.collect_hit_tables or request.build_intersection_cache)
 
     rod_kwargs: dict[str, Any] = dict(
         save_flag=request.save_flag,
@@ -741,7 +682,7 @@ def simulate_qr_rods(
         solve_q_steps=request.mosaic.solve_q_steps,
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
-        collect_hit_tables=request.collect_hit_tables,
+        collect_hit_tables=collect_for_cache,
         accumulate_image=request.accumulate_image,
         exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
     )
@@ -758,7 +699,6 @@ def simulate_qr_rods(
         rod_kwargs["enable_safe_cache"] = False
     safe_run_stats_out: dict[str, Any] | None = None
     used_python_runner: bool | None = None
-    cache_hit_tables: Any = []
     if peak_runner is process_qr_rods_parallel_safe:
         safe_run_stats_out = {}
         rod_kwargs["_safe_stats_out"] = safe_run_stats_out
@@ -808,15 +748,6 @@ def simulate_qr_rods(
             if "used_python_runner" in safe_run_stats_out:
                 used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
             rod_kwargs.pop("_safe_stats_out", None)
-        if request.build_intersection_cache:
-            cache_hit_tables = _capture_hit_tables_for_intersection_cache(
-                hit_tables=hit_tables,
-                collect_hit_tables_requested=bool(request.collect_hit_tables),
-                runner=peak_runner,
-                runner_args=rod_args,
-                runner_kwargs=rod_kwargs,
-                image_arg_index=5,
-            )
     projection_debug_background = None
     projection_debug_log_path = None
     if projection_debug_active:
@@ -836,9 +767,7 @@ def simulate_qr_rods(
                 projection_debug_session,
                 projection_debug_background,
             )
-            projection_debug_log_path = finalize_projection_debug_session(
-                projection_debug_session
-            )
+            projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
         else:
             append_projection_debug_background(
                 projection_debug_session,
@@ -846,7 +775,7 @@ def simulate_qr_rods(
             )
     if request.build_intersection_cache:
         intersection_cache = build_intersection_cache(
-            cache_hit_tables,
+            hit_tables,
             request.geometry.av,
             request.geometry.cv,
             beam_x_array=request.beam.beam_x_array,
@@ -858,10 +787,11 @@ def simulate_qr_rods(
         )
     else:
         intersection_cache = []
+    public_hit_tables = hit_tables if request.collect_hit_tables else []
 
     return SimulationResult(
         image=np.asarray(image, dtype=np.float64),
-        hit_tables=hit_tables,
+        hit_tables=public_hit_tables,
         q_data=q_data,
         q_count=q_count,
         all_status=all_status,

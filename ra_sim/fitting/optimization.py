@@ -2976,9 +2976,7 @@ def _prepare_reflection_subset(
             duplicate_hkl_count = (
                 len(hkl_to_reflection_indices.get(hkl_key, [])) if hkl_key is not None else 0
             )
-            assignment_metadata = dict(
-                local_provider_assignment_metadata.get(int(entry_index), {})
-            )
+            assignment_metadata = dict(local_provider_assignment_metadata.get(int(entry_index), {}))
             source_table_idx = _coerce_index(entry.get("source_table_index"))
             if source_table_idx is None:
                 source_table_idx = _coerce_index(entry.get("resolved_table_index"))
@@ -5064,9 +5062,7 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
             resolution_payload.get("resolution_reason", "missing_source_peak_index")
         )
         source_branch_index = _nonnegative_index(entry.get("source_branch_index"))
-        resolved_peak_index = _nonnegative_index(
-            resolution_payload.get("resolved_peak_index")
-        )
+        resolved_peak_index = _nonnegative_index(resolution_payload.get("resolved_peak_index"))
         branch_mismatch = bool(
             source_branch_index is not None
             and resolved_peak_index is not None
@@ -5117,14 +5113,10 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
                         "simulated_radius_px": _point_radius_px(simulated_point),
                         "correspondence_resolution_reason": str(simulated_reason),
                         "source_branch_index": (
-                            int(source_branch_index)
-                            if source_branch_index is not None
-                            else None
+                            int(source_branch_index) if source_branch_index is not None else None
                         ),
                         "resolved_peak_index": (
-                            int(resolved_peak_index)
-                            if resolved_peak_index is not None
-                            else None
+                            int(resolved_peak_index) if resolved_peak_index is not None else None
                         ),
                         "branch_mismatch": bool(branch_mismatch),
                         "branch_mismatch_count": int(bool(branch_mismatch)),
@@ -5631,6 +5623,7 @@ def fit_mosaic_widths_separable(
             unit_x,
             n_detector,
             0,
+            collect_hit_tables=bool(record_hits),
             **kernel_kwargs,
         )
         image = np.asarray(image, dtype=np.float64)
@@ -7074,6 +7067,7 @@ def _fit_mosaic_shape_parameters_legacy(
             uv1,
             uv2,
             save_flag=0,
+            collect_hit_tables=False,
             **_simulation_kernel_kwargs(local, local_mosaic),
         )
         return np.asarray(image, dtype=np.float64)
@@ -8407,6 +8401,7 @@ def _fit_mosaic_shape_parameters_profiles(
             uv1,
             uv2,
             save_flag=0,
+            collect_hit_tables=False,
             **_simulation_kernel_kwargs(local, local_mosaic),
         )
         cached = np.asarray(image, dtype=np.float64)
@@ -16282,9 +16277,7 @@ def fit_geometry_parameters(
                     collect_diagnostics=False,
                 )
                 probe_summary = (
-                    dict(point_match_summary)
-                    if isinstance(point_match_summary, Mapping)
-                    else {}
+                    dict(point_match_summary) if isinstance(point_match_summary, Mapping) else {}
                 )
             try:
                 matched_pair_count = int(probe_summary.get("matched_pair_count", 0))
@@ -16663,9 +16656,7 @@ def fit_geometry_parameters(
                     collect_diagnostics=False,
                 )
                 probe_summary = (
-                    dict(point_match_summary)
-                    if isinstance(point_match_summary, Mapping)
-                    else {}
+                    dict(point_match_summary) if isinstance(point_match_summary, Mapping) else {}
                 )
             try:
                 matched_pair_count = int(probe_summary.get("matched_pair_count", 0))

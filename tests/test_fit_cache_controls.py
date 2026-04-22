@@ -420,7 +420,7 @@ def test_optimization_mosaic_image_cache_respects_retention_gate(
     expected_process_calls: int,
 ) -> None:
     prepared_dataset = _make_prepared_mosaic_profile_dataset()
-    process_calls: list[int] = []
+    process_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         optimization,
@@ -442,7 +442,7 @@ def test_optimization_mosaic_image_cache_respects_retention_gate(
     )
 
     def fake_process_peaks_parallel_safe(*args, **kwargs):
-        process_calls.append(len(process_calls) + 1)
+        process_calls.append(dict(kwargs))
         return (np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64),)
 
     monkeypatch.setattr(
@@ -504,3 +504,5 @@ def test_optimization_mosaic_image_cache_respects_retention_gate(
 
     assert result.success is True
     assert len(process_calls) == expected_process_calls
+    assert process_calls
+    assert all(call.get("collect_hit_tables") is False for call in process_calls)

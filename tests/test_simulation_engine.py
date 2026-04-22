@@ -72,9 +72,7 @@ def _fake_simulation_result(request: SimulationRequest):
 
 
 def _set_forward_safe_run_result(used_python_runner: bool | None) -> None:
-    engine._set_last_forward_simulation_safe_run_used_python_runner(
-        used_python_runner
-    )
+    engine._set_last_forward_simulation_safe_run_used_python_runner(used_python_runner)
 
 
 def test_simulate_respects_typed_request_with_custom_runner() -> None:
@@ -102,6 +100,7 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     request = _build_request()
     request.optics_mode = 7
     request.collect_hit_tables = False
+    request.build_intersection_cache = False
     request.accumulate_image = False
     request.best_sample_indices_out = np.array([-1], dtype=np.int64)
     request.geometry.pixel_size_m = 172e-6
@@ -294,7 +293,7 @@ def test_simulate_forwards_default_solve_q_trig_kwargs_for_safe_runner(
     )
 
 
-def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped() -> None:
+def test_simulate_collects_hidden_hit_tables_once_to_build_intersection_cache() -> None:
     request = _build_request()
     request.collect_hit_tables = False
     calls: list[dict[str, object]] = []
@@ -329,8 +328,7 @@ def test_simulate_reruns_to_build_intersection_cache_when_hit_tables_are_skipped
     result = simulate(request, peak_runner=fake_runner)
 
     assert calls == [
-        {"collect_hit_tables": False, "accumulate_image": True},
-        {"collect_hit_tables": True, "accumulate_image": False},
+        {"collect_hit_tables": True, "accumulate_image": True},
     ]
     assert len(result.hit_tables) == 0
     assert result.intersection_cache is not None
@@ -373,6 +371,60 @@ def test_simulate_skips_hidden_rerun_when_intersection_cache_is_disabled() -> No
         {"collect_hit_tables": False, "accumulate_image": True},
     ]
     assert len(result.hit_tables) == 0
+    assert result.intersection_cache == []
+
+
+def test_simulate_omits_auto_best_sample_buffer_when_intersection_cache_is_disabled() -> None:
+    request = _build_request()
+    request.collect_hit_tables = False
+    request.build_intersection_cache = False
+    saw_best_sample_buffer: list[bool] = []
+
+    def fake_runner(*args, **kwargs):
+        saw_best_sample_buffer.append("best_sample_indices_out" in kwargs)
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    result = simulate(request, peak_runner=fake_runner)
+
+    assert saw_best_sample_buffer == [False]
+    assert request.best_sample_indices_out is None
+    assert len(result.hit_tables) == 0
+    assert result.intersection_cache == []
+
+
+def test_simulate_forwards_explicit_best_sample_buffer_when_intersection_cache_is_disabled() -> (
+    None
+):
+    request = _build_request()
+    request.collect_hit_tables = False
+    request.build_intersection_cache = False
+    request.best_sample_indices_out = np.array([-1], dtype=np.int64)
+    seen: dict[str, np.ndarray] = {}
+
+    def fake_runner(*args, **kwargs):
+        seen["best_sample_indices_out"] = kwargs["best_sample_indices_out"]
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    result = simulate(request, peak_runner=fake_runner)
+
+    assert seen["best_sample_indices_out"] is request.best_sample_indices_out
+    np.testing.assert_array_equal(request.best_sample_indices_out, np.array([-1], dtype=np.int64))
     assert result.intersection_cache == []
 
 
@@ -638,6 +690,7 @@ def test_simulate_clears_forward_warmed_state_after_python_fallback(monkeypatch)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_WEIGHTED_WARMUP_FAILED", False)
     monkeypatch.setattr(engine, "_FORWARD_SIMULATION_NUMBA_DISABLED", False)
+
     def fake_run_simulation_request(request, *, peak_runner=None):
         _set_forward_safe_run_result(True)
         return _fake_simulation_result(request)
@@ -934,6 +987,7 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
     request = _build_request()
     request.optics_mode = 5
     request.collect_hit_tables = False
+    request.build_intersection_cache = False
     request.accumulate_image = False
     request.geometry.pixel_size_m = 90e-6
     request.geometry.sample_width_m = 1.0e-3
@@ -1001,7 +1055,7 @@ def test_simulate_qr_rods_populates_missing_beam_n2_sample_array(monkeypatch) ->
     np.testing.assert_array_equal(seen["n2"], expected_n2)
 
 
-def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are_skipped() -> None:
+def test_simulate_qr_rods_collects_hidden_hit_tables_once_to_build_intersection_cache() -> None:
     request = _build_request()
     request.collect_hit_tables = False
     qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
@@ -1038,8 +1092,7 @@ def test_simulate_qr_rods_reruns_to_build_intersection_cache_when_hit_tables_are
     result = simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
 
     assert calls == [
-        {"collect_hit_tables": False, "accumulate_image": True},
-        {"collect_hit_tables": True, "accumulate_image": False},
+        {"collect_hit_tables": True, "accumulate_image": True},
     ]
     assert len(result.hit_tables) == 0
     assert result.intersection_cache is not None
@@ -1082,6 +1135,81 @@ def test_simulate_qr_rods_skips_hidden_rerun_when_intersection_cache_is_disabled
     assert calls == [
         {"collect_hit_tables": False, "accumulate_image": True},
     ]
+    assert len(result.hit_tables) == 0
+    assert result.intersection_cache == []
+    assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
+
+
+def test_simulate_qr_rods_keeps_auto_best_sample_buffer_for_intersection_cache(
+    monkeypatch,
+) -> None:
+    request = _build_request()
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    seen_runner_buffers: list[np.ndarray] = []
+    seen_cache_buffers: list[np.ndarray] = []
+
+    def fake_build_intersection_cache(*args, **kwargs):
+        del args
+        seen_cache_buffers.append(kwargs["best_sample_indices_out"])
+        return []
+
+    monkeypatch.setattr(engine, "build_intersection_cache", fake_build_intersection_cache)
+
+    def fake_runner(*args, **kwargs):
+        best_sample_indices_out = kwargs["best_sample_indices_out"]
+        seen_runner_buffers.append(best_sample_indices_out)
+        best_sample_indices_out[:] = 0
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [
+                np.array(
+                    [[2.0, 7.0, 8.0, 9.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                )
+            ],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    result = simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert len(seen_runner_buffers) == 1
+    assert seen_runner_buffers[0] is request.best_sample_indices_out
+    assert len(seen_cache_buffers) == 1
+    assert seen_cache_buffers[0] is request.best_sample_indices_out
+    assert result.intersection_cache == []
+
+
+def test_simulate_qr_rods_omits_auto_best_sample_buffer_when_intersection_cache_is_disabled() -> (
+    None
+):
+    request = _build_request()
+    request.collect_hit_tables = False
+    request.build_intersection_cache = False
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    saw_best_sample_buffer: list[bool] = []
+
+    def fake_runner(*args, **kwargs):
+        saw_best_sample_buffer.append("best_sample_indices_out" in kwargs)
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    result = simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert saw_best_sample_buffer == [False]
+    assert request.best_sample_indices_out is None
     assert len(result.hit_tables) == 0
     assert result.intersection_cache == []
     assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
