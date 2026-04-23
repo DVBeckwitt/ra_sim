@@ -37,6 +37,7 @@ class RuntimeGeometryManualProjectionWorkflow:
     last_simulation_diagnostics: Callable[..., Any]
     pick_candidates: Callable[..., Any]
     simulated_lookup: Callable[..., Any]
+    caked_projection_signature: Callable[..., Any]
 
 
 @dataclass(frozen=True)
@@ -122,13 +123,11 @@ def build_runtime_peak_selection_workflow(
         peak_selection_module=peak_selection_module,
         **selected_peak_kwargs,
     )
-    hkl_lookup_controls_runtime = (
-        bootstrap_module.build_runtime_hkl_lookup_controls_bootstrap(
-            views_module=views_module,
-            view_state=hkl_lookup_view_state,
-            peak_selection_callbacks=runtime.callbacks,
-            open_bragg_qr_groups=open_bragg_qr_groups,
-        )
+    hkl_lookup_controls_runtime = bootstrap_module.build_runtime_hkl_lookup_controls_bootstrap(
+        views_module=views_module,
+        view_state=hkl_lookup_view_state,
+        peak_selection_callbacks=runtime.callbacks,
+        open_bragg_qr_groups=open_bragg_qr_groups,
     )
     return RuntimePeakSelectionWorkflow(
         runtime=runtime,
@@ -179,6 +178,11 @@ def build_runtime_geometry_manual_projection_workflow(
         last_simulation_diagnostics=last_simulation_diagnostics,
         pick_candidates=callbacks.pick_candidates,
         simulated_lookup=callbacks.simulated_lookup,
+        caked_projection_signature=getattr(
+            callbacks,
+            "caked_projection_signature",
+            lambda: None,
+        ),
     )
 
 

@@ -6866,6 +6866,9 @@ def _initialize_runtime_controls_block_04() -> None:
             peak_records=(lambda: simulation_runtime_state.peak_records),
             current_cache_signature=(lambda: geometry_runtime_state.manual_pick_cache_signature),
             current_cache_data=(lambda: geometry_runtime_state.manual_pick_cache_data),
+            caked_projection_signature=(
+                geometry_manual_projection_workflow.caked_projection_signature
+            ),
             replace_cache_state=_set_geometry_manual_pick_cache_state,
             current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
             pairs_for_index=_geometry_manual_pairs_for_index,

@@ -48,6 +48,28 @@ _GEOMETRY_MANUAL_CAKED_QR_ID_FIELDS = (
     "source_ray_id",
     "branch_id",
 )
+_GEOMETRY_MANUAL_QR_SIM_ALIAS_FIELDS = (
+    "refined_sim_x",
+    "refined_sim_y",
+    "refined_sim_caked_x",
+    "refined_sim_caked_y",
+    "display_col",
+    "display_row",
+    "sim_col",
+    "sim_row",
+    "sim_col_local",
+    "sim_row_local",
+    "sim_col_global",
+    "sim_row_global",
+    "caked_x",
+    "caked_y",
+    "raw_caked_x",
+    "raw_caked_y",
+    "two_theta_deg",
+    "phi_deg",
+    "simulated_two_theta_deg",
+    "simulated_phi_deg",
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +136,7 @@ class GeometryManualRuntimeProjectionCallbacks:
         [Sequence[dict[str, object]] | None],
         GeometryManualLookupMap,
     ]
+    caked_projection_signature: Callable[[], object]
 
 
 GeometryManualLookupBucket = dict[str, object] | list[dict[str, object]]
@@ -2197,6 +2220,8 @@ def _geometry_manual_caked_qr_projection_source(
             or key.startswith("reflection_")
         ):
             copied[key] = value
+    for alias_key in _GEOMETRY_MANUAL_QR_SIM_ALIAS_FIELDS:
+        copied.pop(alias_key, None)
 
     if (
         _geometry_manual_finite_point(
@@ -2580,6 +2605,21 @@ def _geometry_manual_entry_caked_point(
             ("background_two_theta_deg", "background_phi_deg"),
             ("simulated_two_theta_deg", "simulated_phi_deg"),
             ("two_theta_deg", "phi_deg"),
+        ),
+    )
+
+
+def _geometry_manual_saved_caked_background_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("caked_x", "caked_y"),
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("raw_caked_x", "raw_caked_y"),
         ),
     )
 
@@ -4181,6 +4221,7 @@ def geometry_manual_pick_placed_cache_signature(
     background_index: int,
     background_image: object | None,
     use_caked_space: bool,
+    caked_projection_signature: object = None,
 ) -> tuple[object, ...]:
     """Return stable signature for placed manual-pick rows before Q-group masks."""
 
@@ -4203,6 +4244,7 @@ def geometry_manual_pick_placed_cache_signature(
         int(background_index),
         bool(use_caked_space),
         bg_token,
+        _manual_pick_cache_jsonable(caked_projection_signature) if bool(use_caked_space) else None,
     )
 
 
@@ -5568,11 +5610,6 @@ def geometry_manual_pair_entry_from_candidate(
         entry["refined_sim_native_x"] = float(simulated_native_point[0])
         entry["refined_sim_native_y"] = float(simulated_native_point[1])
 
-    simulated_caked_point = _geometry_manual_candidate_caked_sim_point(candidate)
-    if simulated_caked_point is not None:
-        entry["refined_sim_caked_x"] = float(simulated_caked_point[0])
-        entry["refined_sim_caked_y"] = float(simulated_caked_point[1])
-
     if placement_error_px is not None and np.isfinite(float(placement_error_px)):
         entry["placement_error_px"] = max(0.0, float(placement_error_px))
     if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
@@ -6314,9 +6351,18 @@ def geometry_manual_session_initial_pairs_display(
 
     def _current_view_sim_entry(raw_entry: dict[str, object]) -> dict[str, object]:
         source_entry = dict(raw_entry)
+        if bool(use_caked_display) and bool(source_entry.get("_caked_qr_projection_cache")):
+            return source_entry
         if callable(project_peaks_to_current_view):
+            projection_source = (
+                _geometry_manual_caked_qr_projection_source(source_entry)
+                if bool(use_caked_display)
+                else source_entry
+            )
+            if bool(use_caked_display) and projection_source is None:
+                return {"_caked_qr_projection_unresolved": True}
             try:
-                projected_entries = project_peaks_to_current_view([source_entry])
+                projected_entries = project_peaks_to_current_view([dict(projection_source)])
             except Exception:
                 projected_entries = []
             projected_entry = next(
@@ -6328,13 +6374,21 @@ def geometry_manual_session_initial_pairs_display(
                 None,
             )
             if isinstance(projected_entry, dict):
+                if bool(use_caked_display):
+                    projected_entry["_caked_qr_projection_cache"] = True
                 return projected_entry
+        if bool(use_caked_display):
+            return {"_caked_qr_projection_unresolved": True}
         return source_entry
 
     def _selected_sim_display_point(
         display_entry: Mapping[str, object] | None,
     ) -> tuple[float, float] | None:
         if bool(use_caked_display):
+            if not isinstance(display_entry, Mapping) or bool(
+                display_entry.get("_caked_qr_projection_unresolved")
+            ):
+                return None
             if _geometry_manual_entry_has_stale_caked_fields(display_entry):
                 return None
             live_caked_point = _geometry_manual_finite_point(
@@ -6376,7 +6430,16 @@ def geometry_manual_session_initial_pairs_display(
         elif isinstance(raw_group_key, list):
             entry["q_group_key"] = tuple(raw_group_key)
         sim_display = _selected_sim_display_point(display_entry)
-        if sim_display is None and callable(refresh_entry_geometry):
+        caked_projection_unresolved = bool(
+            use_caked_display
+            and isinstance(display_entry, Mapping)
+            and display_entry.get("_caked_qr_projection_unresolved")
+        )
+        if (
+            sim_display is None
+            and not caked_projection_unresolved
+            and callable(refresh_entry_geometry)
+        ):
             try:
                 refreshed_entry = refresh_entry_geometry(raw_entry)
             except Exception:
@@ -6385,6 +6448,8 @@ def geometry_manual_session_initial_pairs_display(
                 sim_display = _selected_sim_display_point(refreshed_entry)
         if sim_display is not None:
             entry["sim_display"] = (float(sim_display[0]), float(sim_display[1]))
+        elif bool(use_caked_display):
+            entry["sim_display_unresolved"] = True
 
         source_key = candidate_source_key(raw_entry)
         pending_candidates = (
@@ -6408,7 +6473,13 @@ def geometry_manual_session_initial_pairs_display(
                 measured_entry = dict(pending_candidates[int(resolved_index)])
         _copy_q_values_from_sources(entry, display_entry, measured_entry)
         if isinstance(measured_entry, dict):
-            bg_coords = entry_display_coords(measured_entry)
+            bg_coords = (
+                _geometry_manual_saved_caked_background_display_point(measured_entry)
+                if bool(use_caked_display)
+                else None
+            )
+            if bg_coords is None:
+                bg_coords = entry_display_coords(measured_entry)
             if bg_coords is not None:
                 entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         initial_pairs_display.append(entry)
@@ -6742,6 +6813,62 @@ def build_geometry_manual_initial_pairs_display(
         return saved_overlay_detector_point
 
     caked_qr_projection_lookup: GeometryManualLookupMap = {}
+    rebuilt_caked_qr_projection_lookup: GeometryManualLookupMap | None = None
+
+    def _call_source_rows_for_projection_rebuild() -> list[dict[str, object]]:
+        if not callable(source_rows_for_background):
+            return []
+        try:
+            raw_rows = source_rows_for_background(
+                int(background_index),
+                params_local,
+                consumer="initial_pairs_caked_projection",
+            )
+        except TypeError:
+            try:
+                raw_rows = source_rows_for_background(int(background_index), params_local)
+            except Exception:
+                raw_rows = []
+        except Exception:
+            raw_rows = []
+        return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
+
+    def _rebuild_caked_qr_projection_lookup() -> GeometryManualLookupMap:
+        source_rows = _call_source_rows_for_projection_rebuild()
+        if not source_rows:
+            source_rows = geometry_manual_simulated_peaks_from_callback(
+                simulated_peaks_for_params,
+                param_set=params_local,
+                prefer_cache=bool(
+                    prefer_cache and int(background_index) == int(current_background_index)
+                ),
+            )
+        _entries, _grouped, lookup = _geometry_manual_build_caked_qr_projection_cache(
+            source_rows,
+            project_peaks_to_current_view,
+            lambda _rows: {},
+            build_simulated_lookup,
+            filter_active_rows,
+        )
+        return _geometry_manual_copy_lookup(lookup)
+
+    def _caked_qr_projection_entry_for_saved(
+        saved_entry: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        nonlocal rebuilt_caked_qr_projection_lookup
+        projected = _geometry_manual_lookup_caked_qr_projection_entry(
+            caked_qr_projection_lookup,
+            saved_entry,
+        )
+        if projected is not None:
+            return projected
+        if rebuilt_caked_qr_projection_lookup is None:
+            rebuilt_caked_qr_projection_lookup = _rebuild_caked_qr_projection_lookup()
+        return _geometry_manual_lookup_caked_qr_projection_entry(
+            rebuilt_caked_qr_projection_lookup,
+            saved_entry,
+        )
+
     if prefer_cache and int(background_index) == int(current_background_index):
         cache_data = get_cache_data(
             param_set=params_local,
@@ -6817,22 +6944,26 @@ def build_geometry_manual_initial_pairs_display(
             initial_entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             initial_entry["q_group_key"] = tuple(raw_group_key)
-        bg_coords = entry_display_coords(entry)
-        if bg_coords is not None:
-            initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
-        caked_projection_entry = (
-            _geometry_manual_lookup_caked_qr_projection_entry(
-                caked_qr_projection_lookup,
-                entry,
-            )
+        bg_coords = (
+            _geometry_manual_saved_caked_background_display_point(entry)
             if bool(use_caked_display)
             else None
         )
-        sim_source_entry = (
-            dict(caked_projection_entry)
-            if isinstance(caked_projection_entry, Mapping)
-            else geometry_manual_lookup_source_entry(simulated_lookup, entry)
+        if bg_coords is None:
+            bg_coords = entry_display_coords(entry)
+        if bg_coords is not None:
+            initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
+        caked_projection_entry = (
+            _caked_qr_projection_entry_for_saved(entry) if bool(use_caked_display) else None
         )
+        if bool(use_caked_display):
+            sim_source_entry = (
+                dict(caked_projection_entry)
+                if isinstance(caked_projection_entry, Mapping)
+                else None
+            )
+        else:
+            sim_source_entry = geometry_manual_lookup_source_entry(simulated_lookup, entry)
         if (
             not bool(use_caked_display)
             and bg_coords is not None
@@ -6886,6 +7017,11 @@ def build_geometry_manual_initial_pairs_display(
         caked_projection_resolved = bool(
             use_caked_display and isinstance(caked_projection_entry, Mapping)
         )
+        if bool(use_caked_display) and not caked_projection_resolved:
+            initial_entry["sim_display_unresolved"] = True
+            _copy_q_values_from_sources(initial_entry, entry)
+            initial_pairs_display.append(initial_entry)
+            continue
         if not caked_projection_resolved:
             sim_entry = geometry_manual_apply_refined_simulated_override(
                 entry,
@@ -6979,6 +7115,7 @@ def make_runtime_geometry_manual_cache_callbacks(
     peak_records: Callable[[], object] | object = (),
     current_cache_signature: Callable[[], object] | object = None,
     current_cache_data: Callable[[], dict[str, object] | None] | dict[str, object] | None = None,
+    caked_projection_signature: Callable[[], object] | object = None,
     source_snapshot_signature_for_background: (
         Callable[[int, dict[str, object] | None], object] | None
     ) = None,
@@ -7039,6 +7176,7 @@ def make_runtime_geometry_manual_cache_callbacks(
                 _background_image() if background_image is None else background_image
             ),
             use_caked_space=_manual_pick_uses_caked_space(),
+            caked_projection_signature=_resolve_runtime_value(caked_projection_signature),
         )
 
     def _pick_cache_signature(
@@ -7517,6 +7655,9 @@ def make_runtime_geometry_manual_projection_callbacks(
                 caked_point = _entry_point(entry, "two_theta_deg", "phi_deg")
                 if caked_point is not None:
                     caked_point_source = "angles"
+
+            if use_caked and native_point is None:
+                continue
 
             display_detector_candidate = _entry_point(
                 entry,
@@ -8162,6 +8303,46 @@ def make_runtime_geometry_manual_projection_callbacks(
             )
         return lookup
 
+    def _axis_signature(values: object) -> tuple[object, ...] | None:
+        try:
+            arr = np.asarray(values, dtype=np.float64).ravel()
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        return (
+            int(arr.size),
+            tuple(float(value) for value in arr.tolist()),
+        )
+
+    def _caked_projection_signature() -> object:
+        if not _pick_uses_caked_space():
+            return None
+        background_image = _resolve_runtime_value(last_caked_background_image_unscaled)
+        try:
+            background_arr = np.asarray(background_image)
+            background_token = (
+                tuple(int(v) for v in background_arr.shape),
+                str(background_arr.dtype),
+            )
+        except Exception:
+            background_token = None
+        bundle = _resolve_runtime_value(caked_transform_bundle)
+        bundle_token = None
+        if isinstance(bundle, CakeTransformBundle):
+            bundle_token = (
+                tuple(int(v) for v in tuple(bundle.detector_shape)),
+                _axis_signature(bundle.radial_deg),
+                _axis_signature(bundle.raw_azimuth_deg),
+            )
+        return (
+            "caked_qr_projection",
+            background_token,
+            _axis_signature(_resolve_runtime_value(last_caked_radial_values)),
+            _axis_signature(_resolve_runtime_value(last_caked_azimuth_values)),
+            bundle_token,
+        )
+
     return GeometryManualRuntimeProjectionCallbacks(
         pick_uses_caked_space=_pick_uses_caked_space,
         current_background_image=_current_background_image,
@@ -8177,6 +8358,7 @@ def make_runtime_geometry_manual_projection_callbacks(
         last_simulation_diagnostics=_last_simulation_diagnostics,
         pick_candidates=_pick_candidates,
         simulated_lookup=_simulated_lookup,
+        caked_projection_signature=_caked_projection_signature,
     )
 
 
@@ -8637,16 +8819,23 @@ def geometry_manual_toggle_selection_at(
         return False, current_session, False
 
     cache_data = get_cache_data(background_image=display_background)
-    caked_grouped_candidates = (
-        cache_data.get("caked_qr_projection_grouped_candidates")
-        if bool(use_caked_space) and isinstance(cache_data, Mapping)
-        else None
-    )
-    grouped_candidates = dict(
-        caked_grouped_candidates
-        if isinstance(caked_grouped_candidates, Mapping) and caked_grouped_candidates
-        else cache_data.get("grouped_candidates", {})
-    )
+    if bool(use_caked_space):
+        caked_grouped_candidates = (
+            cache_data.get("caked_qr_projection_grouped_candidates")
+            if isinstance(cache_data, Mapping)
+            else None
+        )
+        if not (isinstance(caked_grouped_candidates, Mapping) and caked_grouped_candidates):
+            if callable(set_status_text):
+                set_status_text(
+                    "No simulated Qr/Qz groups are available to pick. Run a simulation update first."
+                )
+            return False, current_session, False
+        grouped_candidates = dict(caked_grouped_candidates)
+    else:
+        grouped_candidates = dict(
+            cache_data.get("grouped_candidates", {}) if isinstance(cache_data, Mapping) else {}
+        )
     if not grouped_candidates:
         if callable(set_status_text):
             set_status_text(

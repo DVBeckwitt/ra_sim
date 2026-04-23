@@ -132,12 +132,16 @@ Preserve these rules when touching manual picking again:
 
 ## Caked Qr Projection Cache Closure
 
-On 2026-04-23, the saved/live caked Qr redraw path was closed by adding an
-internal caked Qr projection cache in `ra_sim/gui/manual_geometry.py`.
+On 2026-04-23, the saved/live caked Qr redraw path was closed by making
+detector-native source rows the only simulated Qr provenance accepted in caked
+mode. Bug/error status: fixed in the manual-geometry helper path, with scoped
+runtime wiring validated. Feature status: no new operator feature; this is a
+behavioral hardening of the existing manual Qr picker.
 
-The cache is built from native/source-backed simulation rows, strips stale
-display/refined/caked aliases before projection, projects through the existing
-detector-to-caked path, and stores entries keyed by:
+The caked Qr projection cache is built by sending canonical detector-native
+source rows through the same detector-to-caked projection path used by the
+working detector-selection flow. It strips stale display/refined/caked aliases
+before projection and stores projected entries keyed by:
 
 - `source_table_index`
 - `source_row_index`
@@ -146,10 +150,18 @@ detector-to-caked path, and stores entries keyed by:
 - `source_ray_id`
 - `branch_id`
 
-Caked Qr hit testing now uses `caked_qr_projection_grouped_candidates`, active
-caked selected markers draw from those cache entries, and saved source-backed
-redraw resolves through `caked_qr_projection_lookup`. Source-less saved manual
-pairs still keep their saved refined caked fallback.
+Caked Qr hit testing now requires `caked_qr_projection_grouped_candidates`;
+there is no `grouped_candidates` fallback in caked Qr mode. Active caked
+selected markers draw from projection-cache entries. Saved caked redraw resolves
+`source identity -> caked_qr_projection_lookup -> sim_display`; if lookup is
+missing, the cache is rebuilt from canonical source rows. If the projection is
+still unavailable, `sim_display` is omitted and the row is marked unresolved
+internally. Alias-only saved simulated points are not used as truth.
+
+Background placement remains separate. Caked background points refine on the
+visible caked image and use saved/refined caked background fields for
+`bg_display`; detector background points continue to use detector display and
+the existing reverse-LUT path when crossing views.
 
 Regression coverage in `tests/test_manual_geometry_selection_helpers.py` now
 proves:
@@ -161,18 +173,29 @@ proves:
 - direct caked picking uses the caked projection cache for hit testing;
 - source-backed saved redraw resolves through the caked projection cache and
   does not move the simulated Qr marker after finish;
-- source-less saved refined caked coordinates remain honored.
+- missing caked projection lookup becomes unresolved instead of falling back to
+  stale saved aliases;
+- empty caked projection cache blocks caked simulated Qr selection only, while
+  detector picking and background placement remain available;
+- caked background refinement moves only `bg_display`; the simulated Qr marker
+  stays on the cached projected source candidate;
+- changing caked axes/binning changes the caked projection cache signature.
 
 Validation recorded for this closure:
 
-- new cache tests failed before the fix and passed after it;
-- targeted caked/saved/provenance guards passed, 11 selected tests;
+- red tests for strict cache use, alias poisoning, unresolved saved redraw, and
+  axes/binning invalidation failed before the fix and passed after it;
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py` passed
-  with 250 tests;
+  with 256 tests;
+- `python -m pytest tests/test_gui_runtime_geometry_interaction.py` passed
+  with 9 tests;
 - touched-file `ruff format --check`, touched-file `ruff check`, and
   `git diff --check` passed;
 - `python -m ra_sim.dev check` remains blocked by unrelated formatting drift in
-  `ra_sim/fitting/optimization.py` and `tests/test_timing.py`.
+  `ra_sim/fitting/optimization.py` and `tests/test_timing.py`;
+- broader `tests/test_gui_geometry_fit_workflow.py` still has legacy caked
+  alias/diagnostic expectations and is not claimed fixed by this manual-picker
+  closure.
 
 ## Regression Contract
 

@@ -1924,8 +1924,8 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_simulated_anchor_se
     assert entry["refined_sim_y"] == 96.0
     assert entry["refined_sim_native_x"] == 189.5
     assert entry["refined_sim_native_y"] == 95.5
-    assert entry["refined_sim_caked_x"] == 30.25
-    assert entry["refined_sim_caked_y"] == -57.5
+    assert "refined_sim_caked_x" not in entry
+    assert "refined_sim_caked_y" not in entry
 
 
 def test_geometry_manual_pair_json_roundtrip_preserves_selection_provenance() -> None:
@@ -2090,7 +2090,7 @@ def test_caked_manual_pair_redraws_in_detector_view_from_saved_simulated_anchor_
             "hkl": (-1, 0, 5),
             "q_group_key": ("q_group", "primary", 1, 5),
             "bg_display": (13.2, 2.5),
-            "sim_display": (30.25, -57.5),
+            "sim_display_unresolved": True,
         }
     ]
 
@@ -2126,8 +2126,8 @@ def test_geometry_manual_pair_entry_from_candidate_rejects_caked_alias_as_detect
     assert entry is not None
     assert "refined_sim_x" not in entry
     assert "refined_sim_y" not in entry
-    assert entry["refined_sim_caked_x"] == 30.25
-    assert entry["refined_sim_caked_y"] == -57.5
+    assert "refined_sim_caked_x" not in entry
+    assert "refined_sim_caked_y" not in entry
 
 
 def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_state() -> None:
@@ -4733,14 +4733,11 @@ def test_geometry_manual_session_initial_pairs_display_refreshes_caked_view_when
         entry_display_coords=lambda entry: (float(entry["sim_col"]), float(entry["sim_row"])),
     )
 
-    assert len(projection_calls) == 1
-    assert projection_calls[0]["sim_col"] == 5.0
-    assert projection_calls[0]["sim_row"] == 6.0
-    assert len(refresh_calls) == 1
-    assert refresh_calls[0]["sim_col"] == 5.0
-    assert refresh_calls[0]["sim_row"] == 6.0
+    assert projection_calls == []
+    assert refresh_calls == []
     assert len(entries) == 1
-    assert entries[0]["sim_display"] == (30.0, -40.0)
+    assert "sim_display" not in entries[0]
+    assert entries[0]["sim_display_unresolved"] is True
 
 
 def test_geometry_manual_session_initial_pairs_display_ignores_refresh_errors() -> None:
@@ -4818,7 +4815,8 @@ def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_leg
     )
 
     assert len(entries) == 1
-    assert entries[0]["sim_display"] == (30.25, -57.5)
+    assert "sim_display" not in entries[0]
+    assert entries[0]["sim_display_unresolved"] is True
 
 
 def test_geometry_manual_session_initial_pairs_display_resolves_colliding_pending_branch_entries() -> (
@@ -6177,7 +6175,7 @@ def test_build_geometry_manual_initial_pairs_display_uses_saved_refined_caked_co
             "overlay_match_index": 0,
             "hkl": (1, 0, 2),
             "bg_display": (109.0, -11.0),
-            "sim_display": (113.5, -12.5),
+            "sim_display_unresolved": True,
         }
     ]
 
@@ -7493,10 +7491,14 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
         "source_reflection_is_full": True,
         "source_branch_index": 0,
         "source_peak_index": 0,
+        "native_col": 188.0,
+        "native_row": 95.0,
+        "sim_col_raw": 188.0,
+        "sim_row_raw": 95.0,
+        "display_col": 29.0,
+        "display_row": -58.5,
         "caked_x": 29.0,
         "caked_y": -58.5,
-        "sim_col": 188.0,
-        "sim_row": 95.0,
     }
     right_candidate = {
         "source_table_index": 9,
@@ -7506,10 +7508,18 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
         "source_reflection_is_full": True,
         "source_branch_index": 1,
         "source_peak_index": 1,
+        "native_col": 190.0,
+        "native_row": 96.0,
+        "sim_col_raw": 190.0,
+        "sim_row_raw": 96.0,
+        "display_col": 30.25,
+        "display_row": -57.5,
         "caked_x": 30.25,
         "caked_y": -57.5,
-        "sim_col": 190.0,
-        "sim_row": 96.0,
+    }
+    projection_lookup = {
+        tuple(left_candidate.get(field) for field in _CROSS_VIEW_ID_FIELDS): dict(left_candidate),
+        tuple(right_candidate.get(field) for field in _CROSS_VIEW_ID_FIELDS): dict(right_candidate),
     }
 
     measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
@@ -7520,10 +7530,8 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
         pairs_for_index=lambda _idx: [dict(saved_pair)],
         current_geometry_fit_params=lambda: {"a": 1.0},
         get_cache_data=lambda **_kwargs: {
-            "simulated_lookup": {
-                _source_key(left_candidate): dict(left_candidate),
-                _source_key(right_candidate): dict(right_candidate),
-            }
+            "simulated_lookup": {},
+            "caked_qr_projection_lookup": projection_lookup,
         },
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
         build_simulated_lookup=lambda _entries: {},
@@ -7621,7 +7629,7 @@ def test_build_geometry_manual_initial_pairs_display_preserves_canonical_pair_be
             "hkl": (-1, 0, 5),
             "q_group_key": ("q_group", "primary", 1, 5),
             "bg_display": (29.861040445064752, -59.079850372490654),
-            "sim_display": (30.608825251597132, -58.571417149366184),
+            "sim_display_unresolved": True,
         }
     ]
 
@@ -8145,6 +8153,8 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
                 "q_group_key": ("q_group", "primary", 1, 0),
                 "source_table_index": 1,
                 "source_row_index": 2,
+                "native_col": 3.0,
+                "native_row": 4.0,
                 "sim_col": 99.0,
                 "sim_row": 88.0,
                 "sim_col_raw": 3.0,
@@ -8171,6 +8181,7 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
             "native_row": 4.0,
             "sim_native_x": 3.0,
             "sim_native_y": 4.0,
+            "coordinate_frame": "simulation_native",
             "caked_x": 13.0,
             "caked_y": 2.0,
             "raw_caked_x": 13.0,
@@ -8232,6 +8243,8 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
                 "q_group_key": ("q_group", "primary", 1, 0),
                 "source_table_index": 1,
                 "source_row_index": 2,
+                "native_col": 3.0,
+                "native_row": 4.0,
                 "sim_col": 90.0,
                 "sim_row": 80.0,
                 "sim_col_raw": 3.0,
@@ -8258,6 +8271,7 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
             "native_row": 4.0,
             "sim_native_x": 3.0,
             "sim_native_y": 4.0,
+            "coordinate_frame": "simulation_native",
             "caked_x": 17.0,
             "caked_y": -9.0,
             "raw_caked_x": 17.0,
@@ -8312,18 +8326,7 @@ def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_cak
         ]
     )
 
-    assert len(projected) == 1
-    projected_entry = projected[0]
-    assert projected_entry["display_col"] == 4.0
-    assert projected_entry["display_row"] == 5.0
-    assert projected_entry["caked_x"] == 4.0
-    assert projected_entry["caked_y"] == 5.0
-    assert "sim_col" not in projected_entry
-    assert "sim_row" not in projected_entry
-    assert "sim_col_raw" not in projected_entry
-    assert "sim_row_raw" not in projected_entry
-    assert "native_col" not in projected_entry
-    assert "native_row" not in projected_entry
+    assert projected == []
 
 
 def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_detector_overlays() -> (
@@ -8422,18 +8425,7 @@ def test_project_peaks_to_current_view_strips_stale_detector_fields_from_caked_o
         ]
     )
 
-    assert len(projected) == 1
-    projected_entry = projected[0]
-    assert "sim_col_raw" not in projected_entry
-    assert "sim_row_raw" not in projected_entry
-    assert "sim_col" not in projected_entry
-    assert "sim_row" not in projected_entry
-    assert "native_col" not in projected_entry
-    assert "native_row" not in projected_entry
-    assert projected_entry["display_col"] == 5.5
-    assert projected_entry["display_row"] == 12.25
-    assert projected_entry["caked_x"] == 5.5
-    assert projected_entry["caked_y"] == 12.25
+    assert projected == []
 
 
 def test_geometry_manual_entry_detector_display_point_rejects_caked_trust_only_sim_coords() -> None:
@@ -8663,16 +8655,7 @@ def test_project_peaks_to_current_view_rejects_trusted_caked_legacy_sim_without_
         ]
     )
 
-    assert len(projected) == 1
-    projected_entry = projected[0]
-    assert projected_entry["display_col"] == 30.25
-    assert projected_entry["display_row"] == -57.5
-    assert projected_entry["caked_x"] == 30.25
-    assert projected_entry["caked_y"] == -57.5
-    assert "sim_col" not in projected_entry
-    assert "sim_row" not in projected_entry
-    assert "sim_col_raw" not in projected_entry
-    assert "sim_row_raw" not in projected_entry
+    assert projected == []
 
 
 def test_project_peaks_to_current_view_recomputes_detector_display_from_native_background_frame() -> (
@@ -9980,6 +9963,26 @@ def test_geometry_manual_toggle_selection_at_uses_shared_peak_finder_in_caked_vi
     status_messages: list[str] = []
     shared_search_limits: list[float] = []
     group_key = ("q_group", "primary", 1, 0)
+    projected_grouped = {
+        group_key: [
+            {
+                "label": "caked-near",
+                "hkl": (1, 0, 0),
+                "q_group_key": group_key,
+                "source_table_index": 2,
+                "source_row_index": 1,
+                "native_col": 3.0,
+                "native_row": 4.0,
+                "sim_col_raw": 103.0,
+                "sim_row_raw": 204.0,
+                "display_col": 13.0,
+                "display_row": 2.0,
+                "caked_x": 13.0,
+                "caked_y": 2.0,
+                "_caked_qr_projection_cache": True,
+            }
+        ]
+    }
 
     handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
         13.0,
@@ -10004,6 +10007,7 @@ def test_geometry_manual_toggle_selection_at_uses_shared_peak_finder_in_caked_vi
                     }
                 ]
             },
+            "caked_qr_projection_grouped_candidates": projected_grouped,
         },
         pairs_for_index=lambda _idx: [],
         set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
@@ -11448,6 +11452,7 @@ def _toggle_cross_view_selection(
             else {
                 "signature": ("cross-view", bool(use_caked_space)),
                 "grouped_candidates": grouped,
+                "caked_qr_projection_grouped_candidates": grouped if bool(use_caked_space) else {},
             }
         ),
         pairs_for_index=lambda _idx: [],
@@ -11674,6 +11679,7 @@ def test_manual_qr_caked_toggle_uses_projection_cache_for_hit_testing() -> None:
     raw_rows = [dict(source_entry)]
     callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
     projected_entry = callbacks.project_peaks_to_current_view([dict(source_entry)])[0]
+    projected_entry["_caked_qr_projection_cache"] = True
     cache_data = {
         "signature": ("manual-cache",),
         "grouped_candidates": _group_by_q_group([dict(stale_entry)]),
@@ -11707,6 +11713,127 @@ def test_manual_qr_caked_toggle_uses_projection_cache_for_hit_testing() -> None:
         displayed[0]["sim_display"],
         (projected_entry["display_col"], projected_entry["display_row"]),
     )
+
+
+def test_manual_qr_caked_toggle_requires_projection_cache_without_grouped_fallback() -> None:
+    group_key = ("q_group", "primary", 3, 4)
+    stale_entry = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "hkl": (-3, 0, 4),
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+        "display_col": 13.0,
+        "display_row": 24.0,
+        "sim_col": 103.0,
+        "sim_row": 204.0,
+        "sim_col_raw": 103.0,
+        "sim_row_raw": 204.0,
+    }
+    cache_data = {
+        "signature": ("manual-cache",),
+        "grouped_candidates": _group_by_q_group([dict(stale_entry)]),
+        "caked_qr_projection_grouped_candidates": {},
+    }
+    status_messages: list[str] = []
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        13.0,
+        24.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: dict(cache_data),
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is False
+    assert next_session == {}
+    assert suppress_drag is False
+    assert "No simulated Qr/Qz groups" in status_messages[-1]
+
+    detector_sessions: list[dict[str, object]] = []
+    detector_handled, detector_session, detector_suppress_drag = (
+        mg.geometry_manual_toggle_selection_at(
+            103.0,
+            204.0,
+            pick_session={},
+            current_background_index=0,
+            display_background=np.zeros((8, 8), dtype=float),
+            get_cache_data=lambda **_kwargs: dict(cache_data),
+            pairs_for_index=lambda _idx: [],
+            set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+            set_pick_session_fn=lambda session: detector_sessions.append(dict(session)),
+            restore_view_fn=lambda **_kwargs: None,
+            clear_preview_artists_fn=lambda **_kwargs: None,
+            render_current_pairs_fn=lambda **_kwargs: None,
+            update_button_label_fn=lambda: None,
+            set_status_text=lambda _text: None,
+            listed_q_group_entries=lambda: [{"key": group_key}],
+            format_q_group_line=lambda _entry: "selected group",
+            use_caked_space=False,
+            pick_search_window_px=50.0,
+        )
+    )
+
+    assert detector_handled is True
+    assert detector_suppress_drag is True
+    assert detector_session["group_key"] == group_key
+    assert detector_sessions[-1]["group_key"] == group_key
+
+
+def test_caked_qr_projection_cache_rejects_alias_only_simulated_rows() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    alias_only_entry = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "hkl": (-3, 0, 4),
+        "refined_sim_x": 900.0,
+        "refined_sim_y": 901.0,
+        "refined_sim_caked_x": 902.0,
+        "refined_sim_caked_y": 903.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+        "display_col": 13.0,
+        "display_row": 24.0,
+        "sim_col": 13.0,
+        "sim_row": 24.0,
+    }
+    callbacks = _cross_view_selection_callbacks(use_caked, [dict(alias_only_entry)])
+
+    projected_rows = callbacks.project_peaks_to_current_view([dict(alias_only_entry)])
+    cache_data = _build_cross_view_pick_cache(callbacks, [dict(alias_only_entry)])
+
+    assert projected_rows == []
+    assert cache_data["caked_qr_projection_entries"] == []
+    assert cache_data["caked_qr_projection_grouped_candidates"] == {}
+    assert cache_data["caked_qr_projection_lookup"] == {}
 
 
 def test_manual_qr_caked_saved_replay_uses_projection_cache_without_reprojection() -> None:
@@ -11768,6 +11895,302 @@ def test_manual_qr_caked_saved_replay_uses_projection_cache_without_reprojection
     )
 
     assert saved_pairs[0]["bg_display"] == (113.5, -12.5)
+    _assert_pair_close(
+        saved_pairs[0]["sim_display"],
+        (projected_entry["display_col"], projected_entry["display_row"]),
+    )
+
+
+def test_manual_qr_caked_saved_redraw_unresolved_without_projection_lookup() -> None:
+    group_key = ("q_group", "primary", 3, 4)
+    saved = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "hkl": (-3, 0, 4),
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "x": 999.0,
+        "y": 998.0,
+        "detector_x": 997.0,
+        "detector_y": 996.0,
+        "caked_x": 113.5,
+        "caked_y": -12.5,
+        "background_two_theta_deg": 113.5,
+        "background_phi_deg": -12.5,
+        "refined_sim_caked_x": 902.0,
+        "refined_sim_caked_y": 903.0,
+        "display_col": 904.0,
+        "display_row": 905.0,
+        "sim_col": 906.0,
+        "sim_row": 907.0,
+    }
+
+    _measured_display, saved_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {},
+            "caked_qr_projection_lookup": {},
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        project_peaks_to_current_view=lambda entries: [
+            dict(entry) for entry in entries or () if isinstance(entry, dict)
+        ],
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert saved_pairs[0]["bg_display"] == (113.5, -12.5)
+    assert "sim_display" not in saved_pairs[0]
+    assert saved_pairs[0]["sim_display_unresolved"] is True
+
+
+def test_manual_qr_caked_active_background_refines_on_caked_image_separate_from_sim() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    radial = np.linspace(108.0, 116.0, 81)
+    azimuth = np.linspace(-16.0, -8.0, 81)
+    image = np.zeros((azimuth.size, radial.size), dtype=float)
+    refined_bg = (113.8, -12.2)
+    peak_col = int(np.argmin(np.abs(radial - refined_bg[0])))
+    peak_row = int(np.argmin(np.abs(azimuth - refined_bg[1])))
+    decoy_col = int(np.argmin(np.abs(radial - 110.0)))
+    decoy_row = int(np.argmin(np.abs(azimuth - -15.0)))
+    image[peak_row, peak_col] = 50.0
+    image[decoy_row, decoy_col] = 5000.0
+    source_entry = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "hkl": (-3, 0, 4),
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "refined_sim_x": 900.0,
+        "refined_sim_y": 901.0,
+        "refined_sim_caked_x": 902.0,
+        "refined_sim_caked_y": 903.0,
+        "display_col": 904.0,
+        "display_row": 905.0,
+        "sim_col": 906.0,
+        "sim_row": 907.0,
+    }
+    callbacks = _cross_view_selection_callbacks(use_caked, [dict(source_entry)])
+    projected_entry = callbacks.project_peaks_to_current_view([dict(source_entry)])[0]
+    projected_entry["_caked_qr_projection_cache"] = True
+    cache_data = {
+        "signature": ("manual-cache",),
+        "grouped_candidates": _group_by_q_group([dict(source_entry)]),
+        "caked_qr_projection_grouped_candidates": callbacks.pick_candidates(
+            [dict(projected_entry)]
+        ),
+    }
+
+    session = _toggle_cross_view_selection(
+        cache_data["grouped_candidates"],
+        float(projected_entry["display_col"]),
+        float(projected_entry["display_row"]),
+        use_caked_space=True,
+        group_key=group_key,
+        cache_data=cache_data,
+    )
+    selected_index, selected_entry = _selected_cross_view_group_entry(session)
+    refined = mg.geometry_manual_refine_preview_point(
+        dict(selected_entry),
+        113.5,
+        -12.5,
+        display_background=image,
+        cache_data={},
+        use_caked_space=True,
+        radial_axis=radial,
+        azimuth_axis=azimuth,
+    )
+    pending_entry = mg.geometry_manual_pair_entry_from_candidate(
+        dict(selected_entry),
+        313.8,
+        147.8,
+        group_key=group_key,
+        detector_col=213.8,
+        detector_row=-32.2,
+        raw_col=313.5,
+        raw_row=147.5,
+        caked_col=float(refined[0]),
+        caked_row=float(refined[1]),
+        raw_caked_col=113.5,
+        raw_caked_row=-12.5,
+    )
+    assert pending_entry is not None
+    pending_entry.update(
+        {
+            "x": 999.0,
+            "y": 998.0,
+            "detector_x": 997.0,
+            "detector_y": 996.0,
+            "display_col": 995.0,
+            "display_row": 994.0,
+        }
+    )
+    active_session = dict(session)
+    active_session["pending_entries"] = [dict(pending_entry)]
+
+    displayed = mg.geometry_manual_session_initial_pairs_display(
+        active_session,
+        current_background_index=0,
+        use_caked_display=True,
+        project_peaks_to_current_view=None,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    _assert_pair_close(displayed[selected_index]["bg_display"], refined)
+    _assert_pair_close(
+        displayed[selected_index]["sim_display"],
+        (projected_entry["display_col"], projected_entry["display_row"]),
+    )
+
+
+def test_manual_qr_caked_saved_background_redraw_uses_refined_caked_image_peak() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    radial = np.linspace(108.0, 116.0, 81)
+    azimuth = np.linspace(-16.0, -8.0, 81)
+    image = np.zeros((azimuth.size, radial.size), dtype=float)
+    refined_bg = (113.8, -12.2)
+    peak_col = int(np.argmin(np.abs(radial - refined_bg[0])))
+    peak_row = int(np.argmin(np.abs(azimuth - refined_bg[1])))
+    image[peak_row, peak_col] = 50.0
+    source_entry = {
+        "label": "-3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "hkl": (-3, 0, 4),
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "refined_sim_x": 900.0,
+        "refined_sim_y": 901.0,
+        "refined_sim_caked_x": 902.0,
+        "refined_sim_caked_y": 903.0,
+        "display_col": 904.0,
+        "display_row": 905.0,
+        "sim_col": 906.0,
+        "sim_row": 907.0,
+    }
+    callbacks = _cross_view_selection_callbacks(use_caked, [dict(source_entry)])
+    projected_entry = callbacks.project_peaks_to_current_view([dict(source_entry)])[0]
+    caked_lookup = {
+        tuple(projected_entry.get(field) for field in _CROSS_VIEW_ID_FIELDS): dict(projected_entry)
+    }
+    session = {
+        "group_key": group_key,
+        "group_entries": [dict(projected_entry)],
+        "pending_entries": [],
+        "target_count": 1,
+        "base_entries": [],
+        "q_label": "selected group",
+        "background_index": 0,
+        "tagged_candidate": dict(projected_entry),
+        "tagged_candidate_key": _source_key(projected_entry),
+    }
+
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        113.5,
+        -12.5,
+        pick_session=session,
+        current_background_index=0,
+        display_background=image,
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda source_entry_arg, raw_col, raw_row, **kwargs: (
+            mg.geometry_manual_refine_preview_point(
+                source_entry_arg,
+                raw_col,
+                raw_row,
+                use_caked_space=True,
+                radial_axis=radial,
+                azimuth_axis=azimuth,
+                **kwargs,
+            )
+        ),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda two_theta, phi: (
+            float(two_theta) + 200.0,
+            float(phi) + 160.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    saved = dict(saved_entry_sets[-1][0])
+    _assert_pair_close((saved["caked_x"], saved["caked_y"]), refined_bg)
+    _assert_pair_close(
+        (saved["background_two_theta_deg"], saved["background_phi_deg"]),
+        refined_bg,
+    )
+    assert saved["manual_background_input_frame"] == "caked_2theta_phi"
+    saved.update(
+        {
+            "x": 999.0,
+            "y": 998.0,
+            "detector_x": 997.0,
+            "detector_y": 996.0,
+            "display_col": 995.0,
+            "display_row": 994.0,
+        }
+    )
+
+    _measured_display, saved_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {},
+            "caked_qr_projection_lookup": caked_lookup,
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        project_peaks_to_current_view=None,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    _assert_pair_close(saved_pairs[0]["bg_display"], refined_bg)
     _assert_pair_close(
         saved_pairs[0]["sim_display"],
         (projected_entry["display_col"], projected_entry["display_row"]),
@@ -11866,6 +12289,53 @@ def test_manual_qr_caked_direct_pick_matches_detector_origin_caked_baseline() ->
     ):
         _assert_pair_close(direct_caked[key], detector_to_caked[key])
     _assert_pair_close(direct_detector["detector_visual"], detector_baseline["detector_visual"])
+    _assert_pair_close(
+        (
+            direct_caked["caked_visual"][0] + 90.0,
+            direct_caked["caked_visual"][1] + 180.0,
+        ),
+        direct_caked["detector_display"],
+    )
+
+
+def test_manual_qr_caked_projection_signature_tracks_axes_binning() -> None:
+    image = np.zeros((8, 8), dtype=float)
+    first = mg.geometry_manual_pick_placed_cache_signature(
+        source_snapshot_signature=("sim", 1),
+        background_index=0,
+        background_image=image,
+        use_caked_space=True,
+        caked_projection_signature=(
+            "caked",
+            ("radial", 10.0, 20.0, 2),
+            ("azimuth", 20.0, 30.0, 2),
+        ),
+    )
+    changed_axes = mg.geometry_manual_pick_placed_cache_signature(
+        source_snapshot_signature=("sim", 1),
+        background_index=0,
+        background_image=image,
+        use_caked_space=True,
+        caked_projection_signature=(
+            "caked",
+            ("radial", 10.0, 30.0, 3),
+            ("azimuth", 20.0, 30.0, 2),
+        ),
+    )
+    detector_mode = mg.geometry_manual_pick_placed_cache_signature(
+        source_snapshot_signature=("sim", 1),
+        background_index=0,
+        background_image=image,
+        use_caked_space=False,
+        caked_projection_signature=(
+            "caked",
+            ("radial", 10.0, 30.0, 3),
+            ("azimuth", 20.0, 30.0, 2),
+        ),
+    )
+
+    assert first != changed_axes
+    assert detector_mode[-1] is None
 
 
 def test_manual_qr_caked_saved_replay_matches_detector_origin_caked_baseline() -> None:
@@ -12616,8 +13086,8 @@ def test_caked_manual_seed_returns_to_same_detector_visual_position() -> None:
     assert saved["refined_sim_y"] == 204.0
     assert saved["refined_sim_native_x"] == 3.0
     assert saved["refined_sim_native_y"] == 4.0
-    assert saved["refined_sim_caked_x"] == 13.0
-    assert saved["refined_sim_caked_y"] == 24.0
+    assert "refined_sim_caked_x" not in saved
+    assert "refined_sim_caked_y" not in saved
     assert saved["branch_id"] == "-x"
     assert saved["source_branch_index"] == 1
     assert saved["source_reflection_index"] == 17
@@ -12708,6 +13178,8 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         "source_peak_index": 0,
         "source_table_index": 9,
         "source_row_index": 0,
+        "native_col": 181.0,
+        "native_row": 95.0,
         "sim_col": 181.0,
         "sim_row": 95.0,
         "caked_x": 29.0,
@@ -12724,6 +13196,8 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         "source_peak_index": 1,
         "source_table_index": 9,
         "source_row_index": 0,
+        "native_col": 188.0,
+        "native_row": 94.0,
         "sim_col": 188.0,
         "sim_row": 94.0,
         "caked_x": 29.75,
@@ -12784,6 +13258,32 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
     assert emitted_pair["refined_sim_caked_x"] == 30.25
     assert emitted_pair["refined_sim_caked_y"] == -57.5
 
+    def _project_detector_sources_to_caked(rows):
+        projected = []
+        for row in rows or ():
+            entry = dict(row)
+            branch_index = int(entry.get("source_branch_index", -1))
+            if branch_index == 0:
+                caked_point = (29.0, -58.5)
+            elif branch_index == 1:
+                caked_point = (29.75, -57.8)
+            else:
+                continue
+            projected.append(
+                {
+                    **entry,
+                    "sim_col_raw": float(entry["native_col"]),
+                    "sim_row_raw": float(entry["native_row"]),
+                    "display_col": caked_point[0],
+                    "display_row": caked_point[1],
+                    "caked_x": caked_point[0],
+                    "caked_y": caked_point[1],
+                    "two_theta_deg": caked_point[0],
+                    "phi_deg": caked_point[1],
+                }
+            )
+        return projected
+
     detector_measured, detector_pairs = mg.build_geometry_manual_initial_pairs_display(
         0,
         current_background_index=0,
@@ -12814,6 +13314,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         ],
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
         build_simulated_lookup=_build_lookup,
+        project_peaks_to_current_view=_project_detector_sources_to_caked,
         entry_display_coords=lambda entry: (
             float(entry["caked_x"]),
             float(entry["caked_y"]),
