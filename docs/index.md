@@ -13,6 +13,7 @@ you need implementation-level detail.
 ## Task-Focused Guides
 
 - [tracking/index.md](tracking/index.md): live work notes for substantial recoveries, investigations, and planned efforts
+- [testing-and-validation.md](testing-and-validation.md): test, validation, timing, benchmark, fixture, and automation index
 - [gui-workflow.md](gui-workflow.md): operator workflow through calibrant, GUI, and refinement stages
 - [architecture.md](architecture.md): package layout, major subsystems, and where to edit
 - [adr/index.md](adr/index.md): accepted architecture decision records
@@ -29,6 +30,7 @@ If you need to:
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
 - inspect live recovery work or substantial investigations: start with [tracking/index.md](tracking/index.md)
 - inspect the current fitter project order: start with [tracking/index.md](tracking/index.md)
+- choose tests, validation tools, timing tools, or benchmarks: read [testing-and-validation.md](testing-and-validation.md)
 - debug the geometric fitter saved-state baseline: start with [tracking/index.md](tracking/index.md)
 - debug rotated or drifting simulated peak overlays: start with [tracking/index.md](tracking/index.md)
 - debug logs or retained caches: read [debug-and-cache.md](debug-and-cache.md)

@@ -612,6 +612,7 @@ Use these entry points depending on the question:
 
 - [docs/index.md](docs/index.md): short navigation hub
 - [docs/tracking/index.md](docs/tracking/index.md): live work notes for substantial recoveries, investigations, and planned efforts
+- [docs/testing-and-validation.md](docs/testing-and-validation.md): full test, validation, benchmark, timing, fixture, and automation index
 - [docs/gui-workflow.md](docs/gui-workflow.md): operator workflow and headless equivalents
 - [docs/architecture.md](docs/architecture.md): package layout and edit routing
 - [docs/adr/index.md](docs/adr/index.md): accepted architecture decision records
@@ -626,6 +627,9 @@ reference in `docs/simulation_and_fitting.md` is authoritative.
 
 CI runs fast checks on Python 3.11 through 3.13 and the slower integration tier
 on Python 3.11.
+
+For the full test, validation, benchmark, timing, fixture, and automation
+index, see [docs/testing-and-validation.md](docs/testing-and-validation.md).
 
 ### Developer Entry Points
 
