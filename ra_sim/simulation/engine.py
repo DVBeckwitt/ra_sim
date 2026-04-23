@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
+import inspect
+from collections.abc import Iterator, Mapping
 from threading import Lock, Thread, local
 from typing import Any, Callable
 
 import numpy as np
 
+from ra_sim.timing import timing_span
 from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
 from ra_sim.utils.parallel import (
     current_parallel_thread_budget,
@@ -45,6 +49,26 @@ _QR_ROD_SIMULATION_NUMBA_WARMED = False
 _QR_ROD_SIMULATION_NUMBA_WARMUP_FAILED = False
 _QR_ROD_SIMULATION_NUMBA_WARMUP_THREAD: Thread | None = None
 _QR_ROD_SIMULATION_SAFE_RUN_STATE = local()
+
+
+@contextlib.contextmanager
+def _simulation_timing_span(
+    timing_fields: Mapping[str, object] | None,
+    name: str,
+    **fields: object,
+) -> Iterator[None]:
+    if not timing_fields:
+        yield
+        return
+    payload = dict(timing_fields)
+    event_root = str(payload.pop("event_root", "simulation") or "simulation")
+    payload.update(fields)
+    with timing_span(
+        f"{event_root}.{name}",
+        phase="calculation",
+        **payload,
+    ):
+        yield
 
 
 def _set_last_forward_simulation_safe_run_used_python_runner(
@@ -189,6 +213,7 @@ def _run_simulation_request(
     request: SimulationRequest,
     *,
     peak_runner: PeakRunner = process_peaks_parallel_safe,
+    timing_fields: Mapping[str, object] | None = None,
 ) -> SimulationResult:
     """Run a diffraction simulation from a typed request."""
 
@@ -202,29 +227,30 @@ def _run_simulation_request(
     from ra_sim.simulation.projection_debug import resolve_exit_projection_mode_flag
     from ra_sim.simulation.projection_debug import start_projection_debug_session
 
-    image_buffer = _default_image_buffer(request)
-    worker_count = _simulation_worker_count()
-    projection_debug_active = projection_debug_logging_enabled()
-    projection_debug_buffers = (
-        allocate_projection_debug_buffers(
-            request.miller.shape[0],
-            request.geometry.image_size,
-            worker_count,
+    with _simulation_timing_span(timing_fields, "beam_sample_generation", runner="peaks"):
+        image_buffer = _default_image_buffer(request)
+        worker_count = _simulation_worker_count()
+        projection_debug_active = projection_debug_logging_enabled()
+        projection_debug_buffers = (
+            allocate_projection_debug_buffers(
+                request.miller.shape[0],
+                request.geometry.image_size,
+                worker_count,
+            )
+            if projection_debug_active
+            else {}
         )
-        if projection_debug_active
-        else {}
-    )
-    projection_debug_settings = (
-        projection_debug_request_settings(request, source="simulation")
-        if projection_debug_active
-        else None
-    )
-    best_sample_indices_out = _ensure_best_sample_buffer(
-        request,
-        peak_count=int(np.asarray(request.miller, dtype=np.float64).shape[0]),
-        auto_allocate=bool(request.build_intersection_cache),
-    )
-    beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
+        projection_debug_settings = (
+            projection_debug_request_settings(request, source="simulation")
+            if projection_debug_active
+            else None
+        )
+        best_sample_indices_out = _ensure_best_sample_buffer(
+            request,
+            peak_count=int(np.asarray(request.miller, dtype=np.float64).shape[0]),
+            auto_allocate=bool(request.build_intersection_cache),
+        )
+        beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
     collect_for_cache = bool(request.collect_hit_tables or request.build_intersection_cache)
 
     peak_kwargs: dict[str, Any] = dict(
@@ -296,74 +322,85 @@ def _run_simulation_request(
         request.geometry.unit_x,
         request.geometry.n_detector,
     )
-    with temporary_numba_thread_limit(worker_count):
-        image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
-            *peak_args,
-            **peak_kwargs,
-        )
-        if safe_run_stats_out is not None:
-            _set_last_forward_simulation_safe_run_used_python_runner(
-                safe_run_stats_out.get("used_python_runner")
+    with _simulation_timing_span(
+        timing_fields,
+        "kernel_call",
+        runner="peaks",
+        row_count=int(np.asarray(request.miller, dtype=np.float64).shape[0]),
+        collect_hit_tables=bool(collect_for_cache),
+        accumulate_image=bool(request.accumulate_image),
+    ):
+        with temporary_numba_thread_limit(worker_count):
+            image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
+                *peak_args,
+                **peak_kwargs,
             )
-            if "used_python_runner" in safe_run_stats_out:
-                used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
-            peak_kwargs.pop("_safe_stats_out", None)
-    projection_debug_background = None
-    projection_debug_log_path = None
-    if projection_debug_active:
-        projection_debug_background = build_projection_debug_background(
-            projection_debug_buffers,
-            request.miller,
-            None,
-            projection_debug_settings,
-        )
-        projection_debug_session = get_current_projection_debug_session()
-        if projection_debug_session is None:
-            projection_debug_session = start_projection_debug_session(
+            if safe_run_stats_out is not None:
+                _set_last_forward_simulation_safe_run_used_python_runner(
+                    safe_run_stats_out.get("used_python_runner")
+                )
+                if "used_python_runner" in safe_run_stats_out:
+                    used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
+                peak_kwargs.pop("_safe_stats_out", None)
+    with _simulation_timing_span(timing_fields, "result_ready", runner="peaks"):
+        projection_debug_background = None
+        projection_debug_log_path = None
+        if projection_debug_active:
+            projection_debug_background = build_projection_debug_background(
+                projection_debug_buffers,
+                request.miller,
+                None,
                 projection_debug_settings,
-                source="simulation",
             )
-            append_projection_debug_background(
-                projection_debug_session,
-                projection_debug_background,
+            projection_debug_session = get_current_projection_debug_session()
+            if projection_debug_session is None:
+                projection_debug_session = start_projection_debug_session(
+                    projection_debug_settings,
+                    source="simulation",
+                )
+                append_projection_debug_background(
+                    projection_debug_session,
+                    projection_debug_background,
+                )
+                projection_debug_log_path = finalize_projection_debug_session(
+                    projection_debug_session
+                )
+            else:
+                append_projection_debug_background(
+                    projection_debug_session,
+                    projection_debug_background,
+                )
+        if request.build_intersection_cache:
+            intersection_cache = build_intersection_cache(
+                hit_tables,
+                request.geometry.av,
+                request.geometry.cv,
+                beam_x_array=request.beam.beam_x_array,
+                beam_y_array=request.beam.beam_y_array,
+                theta_array=request.beam.theta_array,
+                phi_array=request.beam.phi_array,
+                wavelength_array=request.beam.wavelength_array,
+                best_sample_indices_out=best_sample_indices_out,
             )
-            projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
         else:
-            append_projection_debug_background(
-                projection_debug_session,
-                projection_debug_background,
-            )
-    if request.build_intersection_cache:
-        intersection_cache = build_intersection_cache(
-            hit_tables,
-            request.geometry.av,
-            request.geometry.cv,
-            beam_x_array=request.beam.beam_x_array,
-            beam_y_array=request.beam.beam_y_array,
-            theta_array=request.beam.theta_array,
-            phi_array=request.beam.phi_array,
-            wavelength_array=request.beam.wavelength_array,
-            best_sample_indices_out=best_sample_indices_out,
-        )
-    else:
-        intersection_cache = []
-    public_hit_tables = hit_tables if request.collect_hit_tables else []
+            intersection_cache = []
+        public_hit_tables = hit_tables if request.collect_hit_tables else []
 
-    return SimulationResult(
-        image=np.asarray(image, dtype=np.float64),
-        hit_tables=public_hit_tables,
-        q_data=q_data,
-        q_count=q_count,
-        all_status=all_status,
-        miss_tables=miss_tables,
-        degeneracy=None,
-        intersection_cache=intersection_cache,
-        projection_debug={
-            "log_path": projection_debug_log_path,
-            "background": projection_debug_background,
-        },
-        used_python_runner=used_python_runner,
-    )
+        return SimulationResult(
+            image=np.asarray(image, dtype=np.float64),
+            hit_tables=public_hit_tables,
+            q_data=q_data,
+            q_count=q_count,
+            all_status=all_status,
+            miss_tables=miss_tables,
+            degeneracy=None,
+            intersection_cache=intersection_cache,
+            projection_debug={
+                "log_path": projection_debug_log_path,
+                "background": projection_debug_background,
+            },
+            used_python_runner=used_python_runner,
+        )
 
 
 def _build_forward_simulation_numba_warmup_request() -> SimulationRequest:
@@ -587,10 +624,39 @@ def start_qr_rod_simulation_numba_warmup_in_background() -> bool:
         return True
 
 
+def _call_run_simulation_request(
+    request: SimulationRequest,
+    *,
+    peak_runner: PeakRunner,
+    timing_fields: Mapping[str, object] | None,
+) -> SimulationResult:
+    """Call the request runner while preserving legacy test doubles."""
+
+    runner = _run_simulation_request
+    supports_timing_fields = True
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        parameters = signature.parameters.values()
+        supports_timing_fields = "timing_fields" in signature.parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+        )
+    if supports_timing_fields:
+        return runner(
+            request,
+            peak_runner=peak_runner,
+            timing_fields=timing_fields,
+        )
+    return runner(request, peak_runner=peak_runner)
+
+
 def simulate(
     request: SimulationRequest,
     *,
     peak_runner: PeakRunner = process_peaks_parallel_safe,
+    timing_fields: Mapping[str, object] | None = None,
 ) -> SimulationResult:
     """Run a diffraction simulation from a typed request."""
 
@@ -605,7 +671,11 @@ def simulate(
             with _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK:
                 if not _FORWARD_SIMULATION_NUMBA_WARMED and not _FORWARD_SIMULATION_NUMBA_DISABLED:
                     try:
-                        result = _run_simulation_request(request, peak_runner=peak_runner)
+                        result = _call_run_simulation_request(
+                            request,
+                            peak_runner=peak_runner,
+                            timing_fields=timing_fields,
+                        )
                     except Exception:
                         _FORWARD_SIMULATION_NUMBA_WARMED = False
                         _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = True
@@ -616,7 +686,11 @@ def simulate(
                     )
                     return result
 
-    result = _run_simulation_request(request, peak_runner=peak_runner)
+    result = _call_run_simulation_request(
+        request,
+        peak_runner=peak_runner,
+        timing_fields=timing_fields,
+    )
     if peak_runner is process_peaks_parallel_safe:
         _record_forward_simulation_numba_safe_run_result()
     return result
@@ -627,6 +701,7 @@ def simulate_qr_rods(
     request: SimulationRequest,
     *,
     peak_runner: RodRunner = process_qr_rods_parallel_safe,
+    timing_fields: Mapping[str, object] | None = None,
 ) -> SimulationResult:
     """Run rod-based simulation through the typed request API."""
 
@@ -641,35 +716,36 @@ def simulate_qr_rods(
     from ra_sim.simulation.projection_debug import start_projection_debug_session
     from ra_sim.utils.stacking_fault import qr_dict_to_arrays
 
-    image_buffer = _default_image_buffer(request)
-    worker_count = _simulation_worker_count()
-    debug_miller = request.miller
-    if debug_miller.size == 0:
-        debug_miller, _, _, _ = qr_dict_to_arrays(qr_dict)
-    projection_debug_active = projection_debug_logging_enabled()
-    projection_debug_buffers = (
-        allocate_projection_debug_buffers(
-            debug_miller.shape[0],
-            request.geometry.image_size,
-            worker_count,
+    with _simulation_timing_span(timing_fields, "beam_sample_generation", runner="qr_rods"):
+        image_buffer = _default_image_buffer(request)
+        worker_count = _simulation_worker_count()
+        debug_miller = request.miller
+        if debug_miller.size == 0:
+            debug_miller, _, _, _ = qr_dict_to_arrays(qr_dict)
+        projection_debug_active = projection_debug_logging_enabled()
+        projection_debug_buffers = (
+            allocate_projection_debug_buffers(
+                debug_miller.shape[0],
+                request.geometry.image_size,
+                worker_count,
+            )
+            if projection_debug_active
+            else {}
         )
-        if projection_debug_active
-        else {}
-    )
-    projection_debug_settings = (
-        projection_debug_request_settings(
+        projection_debug_settings = (
+            projection_debug_request_settings(
+                request,
+                source="simulation_qr_rods",
+            )
+            if projection_debug_active
+            else None
+        )
+        best_sample_indices_out = _ensure_best_sample_buffer(
             request,
-            source="simulation_qr_rods",
+            peak_count=int(np.asarray(debug_miller, dtype=np.float64).shape[0]),
+            auto_allocate=bool(request.build_intersection_cache),
         )
-        if projection_debug_active
-        else None
-    )
-    best_sample_indices_out = _ensure_best_sample_buffer(
-        request,
-        peak_count=int(np.asarray(debug_miller, dtype=np.float64).shape[0]),
-        auto_allocate=bool(request.build_intersection_cache),
-    )
-    beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
+        beam_n2_sample_array = _ensure_request_beam_n2_sample_array(request)
     collect_for_cache = bool(request.collect_hit_tables or request.build_intersection_cache)
 
     rod_kwargs: dict[str, Any] = dict(
@@ -736,71 +812,82 @@ def simulate_qr_rods(
         request.geometry.unit_x,
         request.geometry.n_detector,
     )
-    with temporary_numba_thread_limit(worker_count):
-        image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
-            *rod_args,
-            **rod_kwargs,
-        )
-        if safe_run_stats_out is not None:
-            _set_last_qr_rod_simulation_safe_run_used_python_runner(
-                safe_run_stats_out.get("used_python_runner")
+    with _simulation_timing_span(
+        timing_fields,
+        "kernel_call",
+        runner="qr_rods",
+        row_count=int(np.asarray(debug_miller, dtype=np.float64).shape[0]),
+        collect_hit_tables=bool(collect_for_cache),
+        accumulate_image=bool(request.accumulate_image),
+    ):
+        with temporary_numba_thread_limit(worker_count):
+            image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
+                *rod_args,
+                **rod_kwargs,
             )
-            if "used_python_runner" in safe_run_stats_out:
-                used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
-            rod_kwargs.pop("_safe_stats_out", None)
-    projection_debug_background = None
-    projection_debug_log_path = None
-    if projection_debug_active:
-        projection_debug_background = build_projection_debug_background(
-            projection_debug_buffers,
-            np.asarray(debug_miller, dtype=np.float64),
-            None,
-            projection_debug_settings,
-        )
-        projection_debug_session = get_current_projection_debug_session()
-        if projection_debug_session is None:
-            projection_debug_session = start_projection_debug_session(
+            if safe_run_stats_out is not None:
+                _set_last_qr_rod_simulation_safe_run_used_python_runner(
+                    safe_run_stats_out.get("used_python_runner")
+                )
+                if "used_python_runner" in safe_run_stats_out:
+                    used_python_runner = bool(safe_run_stats_out.get("used_python_runner"))
+                rod_kwargs.pop("_safe_stats_out", None)
+    with _simulation_timing_span(timing_fields, "result_ready", runner="qr_rods"):
+        projection_debug_background = None
+        projection_debug_log_path = None
+        if projection_debug_active:
+            projection_debug_background = build_projection_debug_background(
+                projection_debug_buffers,
+                np.asarray(debug_miller, dtype=np.float64),
+                None,
                 projection_debug_settings,
-                source="simulation_qr_rods",
             )
-            append_projection_debug_background(
-                projection_debug_session,
-                projection_debug_background,
+            projection_debug_session = get_current_projection_debug_session()
+            if projection_debug_session is None:
+                projection_debug_session = start_projection_debug_session(
+                    projection_debug_settings,
+                    source="simulation_qr_rods",
+                )
+                append_projection_debug_background(
+                    projection_debug_session,
+                    projection_debug_background,
+                )
+                projection_debug_log_path = finalize_projection_debug_session(
+                    projection_debug_session
+                )
+            else:
+                append_projection_debug_background(
+                    projection_debug_session,
+                    projection_debug_background,
+                )
+        if request.build_intersection_cache:
+            intersection_cache = build_intersection_cache(
+                hit_tables,
+                request.geometry.av,
+                request.geometry.cv,
+                beam_x_array=request.beam.beam_x_array,
+                beam_y_array=request.beam.beam_y_array,
+                theta_array=request.beam.theta_array,
+                phi_array=request.beam.phi_array,
+                wavelength_array=request.beam.wavelength_array,
+                best_sample_indices_out=best_sample_indices_out,
             )
-            projection_debug_log_path = finalize_projection_debug_session(projection_debug_session)
         else:
-            append_projection_debug_background(
-                projection_debug_session,
-                projection_debug_background,
-            )
-    if request.build_intersection_cache:
-        intersection_cache = build_intersection_cache(
-            hit_tables,
-            request.geometry.av,
-            request.geometry.cv,
-            beam_x_array=request.beam.beam_x_array,
-            beam_y_array=request.beam.beam_y_array,
-            theta_array=request.beam.theta_array,
-            phi_array=request.beam.phi_array,
-            wavelength_array=request.beam.wavelength_array,
-            best_sample_indices_out=best_sample_indices_out,
-        )
-    else:
-        intersection_cache = []
-    public_hit_tables = hit_tables if request.collect_hit_tables else []
+            intersection_cache = []
+        public_hit_tables = hit_tables if request.collect_hit_tables else []
 
-    return SimulationResult(
-        image=np.asarray(image, dtype=np.float64),
-        hit_tables=public_hit_tables,
-        q_data=q_data,
-        q_count=q_count,
-        all_status=all_status,
-        miss_tables=miss_tables,
-        degeneracy=degeneracy,
-        intersection_cache=intersection_cache,
-        projection_debug={
-            "log_path": projection_debug_log_path,
-            "background": projection_debug_background,
-        },
-        used_python_runner=used_python_runner,
-    )
+        return SimulationResult(
+            image=np.asarray(image, dtype=np.float64),
+            hit_tables=public_hit_tables,
+            q_data=q_data,
+            q_count=q_count,
+            all_status=all_status,
+            miss_tables=miss_tables,
+            degeneracy=degeneracy,
+            intersection_cache=intersection_cache,
+            projection_debug={
+                "log_path": projection_debug_log_path,
+                "background": projection_debug_background,
+            },
+            used_python_runner=used_python_runner,
+        )

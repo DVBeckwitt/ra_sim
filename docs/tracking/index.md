@@ -13,26 +13,35 @@ The active sequence is:
 3. get the structure-factor fitter working,
 4. get the stacking-fault fitter working.
 
-The geometric fitter is the only active implementation project. The other
-fitters are planned work and must stay blocked until their upstream acceptance
-gates are green.
+The geometric fitter remains the primary recovery project. A first mosaic-fitter
+scaffold is now in progress, but GUI/headless wiring must stay geometry-locked
+and downstream of accepted geometry-cache provenance.
 
 ## In progress
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
-| New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
+| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-23 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
+| New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-23 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
+| Mosaic fitter recovery | feature | - | none | p1 | 2026-04-22 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
 one-param solves, `a` diagnosis, caked point reprojection, initial Rung 4 paired
-solves, and fresh same-run Rung 5 blocks are validated for ladder work. Fresh
-Rung 5 run `20260422_115256` passed Rungs 1-5; Rung 5 had `status == "ok"`,
-four attempted blocks, four passed blocks, zero failed/timed-out blocks,
-provider guard after blocks green, and unchanged `new4.json`
-(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
+solves, fresh same-run Rung 5 blocks, Rung 6 C2, and controlled Rung 7
+`dynamic_reanchor`/`discrete_modes`/`seed_multistart` are validated for ladder
+work. Fresh seedfix chain `20260422_rung7_seedfix_provider_before`,
+`20260422_rung7_seedfix_caked`, `20260422_rung7_seedfix_blocks`,
+`20260422_rung7_seedfix_combined`, `20260422_rung7_seedfix_features`, and
+`20260422_rung7_seedfix_provider_after` kept provider/caked/Rung 5/Rung 6
+guards green. Controlled full-sequence Rung 7 passed `dynamic_reanchor`,
+`discrete_modes`, and `seed_multistart`, then failed `full_beam_polish` with
+`failure_reason == "fixed_source_or_pair_integrity_lost"`;
+`identifiability_features` was skipped with `prior_feature_failed`.
+`new4.json` stayed unchanged
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`), and
+`full_fitter_validated == false`.
 Timing observability is now available for current-run Rungs 0-5:
 `rung_timing_summary.json` is written in the run directory, optional
 `--timing-report` writes the same machine-readable summary elsewhere, stdout
@@ -48,16 +57,26 @@ diagnostic path is requested. Lean ladder rungs also keep identifiability off by
 default, while `feature="identifiability_features"` remains the diagnostic
 feature path. Running ladder heartbeat writes are sparse and omit the growing
 full residual trace; final reports still include the full trace. Bug/error
-status: Rung 6/7 path mappings and expected timing IDs are excluded from timing
+status: manual caked geometry fits now require exact hydrated per-background
+caked projectors and fail closed instead of using detector/current-view raw-row
+fallbacks in the solver/ladder path. Fresh validation under
+`temp/codex_caked_manual_blast` passed explicit Rungs 0-5 and Rung 6 combined;
+Rung 6 C1 improved caked metrics, while C2 accepted the seeded caked initial
+state because its optimizer output regressed caked RMS/max. Remaining blocker:
+four `tests/test_gui_runtime_import_safe.py` fail-closed boundary tests still
+show caked prepare/worker paths can reach dataset build before exact-payload
+ensure/failure handling, so full GUI/preflight closure is not claimed. Rung 6/7
+path mappings and expected timing IDs are excluded from timing
 collection, Rung 5 skipped reports get timing metadata, fatal evidence still
 aborts, local `a` usability failures stay local, missing dependencies skip only
 affected blocks, stale external evidence remains rejected, manual selected-point
 fits no longer inherit heavy solver defaults, and stale heartbeat traces are
-reset before solve-rung writes. `full_fitter_validated == false`; no full,
-feature, baseline, dynamic reanchor, multistart, polish, freeze/thaw, or feature
-rung was run. GUI manual selected-point runtime behavior is updated, but it does
-not validate full GUI fitter convergence. Next solve project remains separate
-and unstarted.
+reset before solve-rung writes. No full fitter, baseline, GUI fit, unrestricted
+feature combination, feature-combo solve, identifiability feature run, or full
+fitter validation was run; full-beam polish was attempted only as the controlled
+Rung 7 feature and failed. GUI manual selected-point runtime behavior is
+updated, but it does not validate full GUI fitter convergence. Next solve
+project is the `full_beam_polish` fixed-source/pair-integrity failure.
 
 ## Known bugs
 
@@ -69,7 +88,6 @@ and unstarted.
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| Mosaic fitter recovery | feature | - | none | p1 | 2026-04-20 | [mosaic-fitter.md](planned-features/mosaic-fitter.md) |
 | Structure-factor fitter recovery | feature | - | none | p2 | 2026-04-20 | [structure-factor-fitter.md](planned-features/structure-factor-fitter.md) |
 | Stacking-fault fitter recovery | feature | - | none | p2 | 2026-04-20 | [stacking-fault-fitter.md](planned-features/stacking-fault-fitter.md) |
 

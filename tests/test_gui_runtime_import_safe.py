@@ -39,6 +39,9 @@ FILE_PARSING_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "io" / "file_parsing.py"
 )
 CLI_SOURCE_PATH = Path(__file__).resolve().parent.parent / "ra_sim" / "cli.py"
+HEADLESS_GEOMETRY_FIT_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent / "ra_sim" / "headless_geometry_fit.py"
+)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUI_SOURCE_ROOT = REPO_ROOT / "ra_sim" / "gui"
 RA_SIM_SOURCE_ROOT = REPO_ROOT / "ra_sim"
@@ -145,6 +148,40 @@ def _make_geometry_fit_worker_job(runtime_session) -> dict[str, object]:
         "stamp": "20260420_000000",
         "log_path": REPO_ROOT / "artifacts" / "geometry_fit_worker_test.log",
         "enable_live_update_events": False,
+    }
+
+
+def _geometry_fit_worker_caked_payload(
+    runtime_session,
+    *,
+    background_value: float,
+    radial_values: Sequence[float],
+    azimuth_values: Sequence[float],
+) -> dict[str, object]:
+    radial_axis = np.asarray(radial_values, dtype=np.float64)
+    azimuth_axis = np.asarray(azimuth_values, dtype=np.float64)
+    raw_azimuth_axis = np.asarray(
+        runtime_session.gui_geometry_fit.gui_phi_to_raw_phi(azimuth_axis),
+        dtype=np.float64,
+    )
+    return {
+        "background": np.full(
+            (int(azimuth_axis.size), int(radial_axis.size)),
+            float(background_value),
+            dtype=np.float64,
+        ),
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "raw_to_gui_row_permutation": np.arange(int(azimuth_axis.size), dtype=np.int32),
+        "transform_bundle": runtime_session.CakeTransformBundle(
+            detector_shape=(4, 4),
+            radial_deg=radial_axis,
+            raw_azimuth_deg=raw_azimuth_axis,
+            gui_azimuth_deg=azimuth_axis,
+            lut=object(),
+        ),
+        "detector_shape": (4, 4),
     }
 
 
@@ -1086,27 +1123,38 @@ def test_runtime_session_selected_peak_probe_runner_prefers_python(monkeypatch) 
     assert captured["kwargs"]["prefer_python_runner"] is True
 
 
-def test_runtime_impl_exact_cake_cache_signature_uses_distance_center_and_wavelength() -> None:
+def test_runtime_impl_exact_cake_cache_signature_uses_distance_center_pixel_and_wavelength() -> (
+    None
+):
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
-    signature_comment = (
-        "distance, detector center, or the fundamental wavelength changes. Tilt\n"
-        "    # updates intentionally do not flush the detector-map or LUT caches"
-    )
     signature_block = """sig = _caked_geometry_cache_signature(
         corto_det_up,
         center_x_up,
         center_y_up,
+        pixel_size_m,
         wave_m,
     )"""
 
-    assert signature_comment in source
+    assert "distance, detector center, pixel size, or the fundamental wavelength" in source
+    assert "updates intentionally do not flush the detector-map or LUT" in source
+    assert "caches so the live detector<->angle transform stays stable" in source
     assert signature_block in source
     assert "Gamma_updated" not in signature_block
     assert "gamma_updated" not in signature_block
     assert "center_x_up" in signature_block
     assert "center_y_up" in signature_block
+    assert "pixel_size_m" in signature_block
     assert "wave_m" in signature_block
     assert "wavelength=wave_m," in source
+
+
+def test_runtime_exact_cake_cache_signature_tracks_pixel_size() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    first = runtime_session._caked_geometry_cache_signature(0.5, 1.0, 2.0, 1.0e-4, 1.54e-10)
+    second = runtime_session._caked_geometry_cache_signature(0.5, 1.0, 2.0, 2.0e-4, 1.54e-10)
+
+    assert first != second
 
 
 def test_runtime_impl_warms_live_exact_cake_geometry_cache() -> None:
@@ -1149,6 +1197,7 @@ def test_runtime_impl_geometry_fit_caking_reuses_signature_by_distance_center_an
     assert 'params_local.get("corto_detector", np.nan),' in source
     assert "center_value[0] if center_value.size > 0 else np.nan," in source
     assert "center_value[1] if center_value.size > 1 else np.nan," in source
+    assert "pixel_size_value," in source
     assert 'params_local.get("lambda", np.nan),' in source
     assert "persistent_cache = getattr(" in source
     assert '"geometry_fit_caking_ai_cache",' in source
@@ -3638,7 +3687,9 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "def _rebuild_source_rows_for_background_worker(" in source
     assert "geometry_manual_rebuild_source_rows_for_background=(" in source
     assert "_rebuild_source_rows_for_background_worker" in source
-    assert "raise RuntimeError(" not in helper_source
+    assert helper_source.count("raise RuntimeError(") == 2
+    assert "exact caked projector unavailable" in helper_source
+    assert "mixed detector/caked manual fit spaces are not supported" in helper_source
 
 
 def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
@@ -4532,7 +4583,7 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_rebuilds_exact_bundle_witho
         dtype=float,
     )
     expected_raw_azimuth = np.sort(expected_raw_azimuth, kind="stable")
-    original_resolve_bundle = runtime_session.resolve_cake_transform_bundle
+    original_resolve_bundle = runtime_session.gui_geometry_fit.resolve_cake_transform_bundle
     resolve_calls: list[
         tuple[object, tuple[int, int], tuple[float, ...], tuple[float, ...] | None, bool]
     ] = []
@@ -4594,7 +4645,7 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_rebuilds_exact_bundle_witho
         lambda: ai,
     )
     monkeypatch.setattr(
-        runtime_session,
+        runtime_session.gui_geometry_fit,
         "resolve_cake_transform_bundle",
         _record_resolve_bundle,
     )
@@ -4738,7 +4789,7 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_returns_none_without_valid_
         lambda: ai,
     )
     monkeypatch.setattr(
-        runtime_session,
+        runtime_session.gui_geometry_fit,
         "resolve_cake_transform_bundle",
         lambda *_args, **_kwargs: None,
     )
@@ -4836,9 +4887,19 @@ def test_runtime_worker_caked_projection_view_builds_same_axes_metadata(monkeypa
         )
         return bundle
 
-    monkeypatch.setattr(runtime_session, "detector_two_theta_max_deg", _fake_two_theta_max)
-    monkeypatch.setattr(runtime_session, "build_angle_axes", _fake_build_angle_axes)
-    monkeypatch.setattr(runtime_session, "build_cake_transform_bundle", _fake_build_bundle)
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "detector_two_theta_max_deg",
+        _fake_two_theta_max,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit, "build_angle_axes", _fake_build_angle_axes
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_cake_transform_bundle",
+        _fake_build_bundle,
+    )
 
     projection_view = runtime_session._geometry_fit_worker_caked_projection_view(
         detector_shape=(6, 8),
@@ -4907,10 +4968,8 @@ def test_runtime_impl_prepare_caked_payload_keeps_canonical_transform_metadata()
     helper_end = source.index("def _prepare_q_space_display_payload(", helper_start)
     helper_source = source[helper_start:helper_end]
 
-    assert "_normalize_geometry_fit_caked_view_payload(" in helper_source
-    assert '"raw_azimuth_axis": np.asarray(' in helper_source
-    assert '"transform_bundle": normalized_payload.get("transform_bundle")' in helper_source
-    assert '"detector_shape": tuple(normalized_payload.get("detector_shape", ()))' in helper_source
+    assert "gui_geometry_fit.build_geometry_fit_caked_view_payload_from_result(" in helper_source
+    assert "detector_shape=detector_shape" in helper_source
 
 
 def test_prepare_caked_intersection_cache_uses_exact_cake_bundle_projector(monkeypatch) -> None:
@@ -6453,7 +6512,7 @@ def test_run_simulation_generation_job_collects_raw_peak_rows_for_both_run_sides
         lambda *_args, **_kwargs: None,
     )
 
-    def _fake_simulate_request(request):
+    def _fake_simulate_request(request, **_kwargs):
         a_value = float(request.geometry.av)
         simulate_calls.append(
             (
@@ -6571,7 +6630,7 @@ def test_run_simulation_generation_job_collects_qr_raw_rows_without_best_sample_
         lambda *_args, **_kwargs: None,
     )
 
-    def _fake_simulate_qr_rods_request(_data, request):
+    def _fake_simulate_qr_rods_request(_data, request, **_kwargs):
         simulate_calls.append(
             (
                 bool(request.collect_hit_tables),
@@ -6658,6 +6717,119 @@ def test_run_simulation_generation_job_collects_qr_raw_rows_without_best_sample_
             "display_row": 6.0,
         }
     ]
+
+
+def test_run_simulation_generation_job_supports_legacy_miller_fake_without_timing_fields(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    projection_debug = importlib.import_module("ra_sim.simulation.projection_debug")
+    simulate_calls: list[bool] = []
+
+    monkeypatch.setattr(runtime_session, "timing_enabled", lambda: True, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "timing_span",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(runtime_session, "timing_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        projection_debug,
+        "start_projection_debug_session",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        projection_debug,
+        "finalize_projection_debug_session",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _fake_simulate_request(request):
+        simulate_calls.append(bool(request.collect_hit_tables))
+        return SimpleNamespace(
+            image=np.full((4, 4), 5.0, dtype=np.float64),
+            hit_tables=[],
+            intersection_cache=[],
+            used_python_runner=False,
+        )
+
+    monkeypatch.setattr(runtime_session, "simulate_request", _fake_simulate_request, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulate_qr_rods_request",
+        lambda *_args, **_kwargs: pytest.fail("qr runner should stay unused"),
+        raising=False,
+    )
+
+    result = runtime_session._run_simulation_generation_job(
+        _make_runtime_simulation_generation_job(run_primary=True, run_secondary=False)
+    )
+
+    assert simulate_calls == [False]
+    assert np.asarray(result["primary_image"]).shape == (4, 4)
+
+
+def test_run_simulation_generation_job_supports_legacy_qr_fake_without_timing_fields(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    projection_debug = importlib.import_module("ra_sim.simulation.projection_debug")
+    simulate_calls: list[bool] = []
+
+    monkeypatch.setattr(runtime_session, "timing_enabled", lambda: True, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "timing_span",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(runtime_session, "timing_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        projection_debug,
+        "start_projection_debug_session",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        projection_debug,
+        "finalize_projection_debug_session",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _fake_simulate_qr_rods_request(_data, request):
+        simulate_calls.append(bool(request.collect_hit_tables))
+        return SimpleNamespace(
+            image=np.full((4, 4), 5.0, dtype=np.float64),
+            hit_tables=[],
+            intersection_cache=[],
+            used_python_runner=False,
+        )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulate_request",
+        lambda *_args, **_kwargs: pytest.fail("miller runner should stay unused"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulate_qr_rods_request",
+        _fake_simulate_qr_rods_request,
+        raising=False,
+    )
+    job = _make_runtime_simulation_generation_job(run_primary=True, run_secondary=False)
+    job["primary_data"] = {
+        1: {
+            "hk": (1, 0),
+            "L": np.asarray([0.0], dtype=np.float64),
+            "I": np.asarray([10.0], dtype=np.float64),
+            "deg": 1,
+        }
+    }
+    job["primary_source_mode"] = "qr"
+
+    result = runtime_session._run_simulation_generation_job(job)
+
+    assert simulate_calls == [False]
+    assert np.asarray(result["primary_image"]).shape == (4, 4)
 
 
 def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
@@ -6758,7 +6930,7 @@ def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
             [],
         )
 
-    def _simulate_request_from_main_run(request):
+    def _simulate_request_from_main_run(request, **_kwargs):
         a_value = float(request.geometry.av)
         simulate_calls.append(
             (
@@ -7138,8 +7310,44 @@ def test_selection_cache_update_builds_reduced_qr_hkl_picker_cache(
     )
     primary_intersection_cache = np.asarray(
         [
-            [2.0, 4.0, 42.5, 55.5, 1000.0, -8.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [2.0, 4.0, 52.5, 65.5, 900.0, 8.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0],
+            [
+                2.0,
+                4.0,
+                42.5,
+                55.5,
+                1000.0,
+                -8.0,
+                1.0,
+                0.0,
+                2.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            [
+                2.0,
+                4.0,
+                52.5,
+                65.5,
+                900.0,
+                8.0,
+                1.0,
+                0.0,
+                2.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+            ],
         ],
         dtype=np.float64,
     )
@@ -7150,9 +7358,11 @@ def test_selection_cache_update_builds_reduced_qr_hkl_picker_cache(
     simulate_calls: list[tuple[bool, bool, float]] = []
 
     monkeypatch.setattr(projection_debug, "start_projection_debug_session", lambda *_a, **_k: None)
-    monkeypatch.setattr(projection_debug, "finalize_projection_debug_session", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        projection_debug, "finalize_projection_debug_session", lambda *_a, **_k: None
+    )
 
-    def _simulate_request_from_main_run(request):
+    def _simulate_request_from_main_run(request, **_kwargs):
         a_value = float(request.geometry.av)
         simulate_calls.append(
             (
@@ -7217,7 +7427,9 @@ def test_selection_cache_update_builds_reduced_qr_hkl_picker_cache(
     background_state.current_background_image = np.ones((128, 128), dtype=np.float64)
     monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
     monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
-    monkeypatch.setattr(runtime_session, "background_runtime_state", background_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session, "background_runtime_state", background_state, raising=False
+    )
     monkeypatch.setattr(runtime_session, "image_size", 128, raising=False)
     monkeypatch.setattr(runtime_session, "a_var", _RuntimeVar(5.0), raising=False)
     monkeypatch.setattr(runtime_session, "c_var", _RuntimeVar(6.0), raising=False)
@@ -7270,8 +7482,12 @@ def test_selection_cache_update_builds_reduced_qr_hkl_picker_cache(
     )
 
     runtime_session._apply_ready_simulation_result(result)
-    assert runtime_state.stored_primary_intersection_cache_signature == result["hit_table_signature"]
-    assert runtime_state.stored_secondary_intersection_cache_signature == result["hit_table_signature"]
+    assert (
+        runtime_state.stored_primary_intersection_cache_signature == result["hit_table_signature"]
+    )
+    assert (
+        runtime_state.stored_secondary_intersection_cache_signature == result["hit_table_signature"]
+    )
     combined_diagnostics = runtime_session._publish_combined_simulation_state(
         image_size_value=128,
         primary_a_value=5.0,
@@ -7417,12 +7633,14 @@ def test_selection_cache_update_builds_reduced_qr_hkl_picker_cache(
     qr_group_key = qr_candidate["q_group_key"]
     qr_col = float(qr_candidate["caked_x"])
     qr_row = float(qr_candidate["caked_y"])
-    selected_group, selected_entries, selected_dist = manual_geometry.geometry_manual_choose_group_at(
-        grouped_candidates,
-        qr_col,
-        qr_row,
-        window_size_px=20.0,
-        use_caked_display=True,
+    selected_group, selected_entries, selected_dist = (
+        manual_geometry.geometry_manual_choose_group_at(
+            grouped_candidates,
+            qr_col,
+            qr_row,
+            window_size_px=20.0,
+            use_caked_display=True,
+        )
     )
     assert selected_group == qr_group_key
     assert selected_entries
@@ -13914,6 +14132,1576 @@ def test_runtime_impl_source_cache_build_ready_no_longer_inlines_caked_store() -
     assert '"source_cache_caked_view_timeout"' in source
 
 
+def test_manual_caked_runtime_override_keeps_dynamic_exact_caked_path() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+
+    caked_cfg = geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
+        {"solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4}},
+        joint_background_mode=False,
+    )
+    caked_solver = caked_cfg["solver"]
+
+    assert caked_solver["manual_point_fit_mode"] is True
+    assert caked_solver["dynamic_point_geometry_fit"] is True
+    assert caked_cfg["projection_view_mode"] == "caked"
+    assert caked_solver["max_nfev"] == 30
+
+    detector_cfg = geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
+        {"solver": {"dynamic_point_geometry_fit": True, "max_nfev": 99}},
+        joint_background_mode=False,
+    )
+
+    assert detector_cfg["solver"]["manual_point_fit_mode"] is True
+    assert detector_cfg["solver"].get("dynamic_point_geometry_fit") is None
+    assert detector_cfg.get("projection_view_mode") != "caked"
+
+
+def test_manual_fit_space_classifier_rejects_mixed_backgrounds() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+
+    spaces = geometry_fit.geometry_manual_fit_space_by_background(
+        [0, 1],
+        {
+            0: [{"pair_id": "caked", "background_two_theta_deg": 12.0, "background_phi_deg": 3.0}],
+            1: [{"pair_id": "detector", "x": 10.0, "y": 20.0}],
+        },
+        pick_uses_caked_space=False,
+        current_background_index=0,
+    )
+
+    assert spaces == {0: "caked", 1: "detector"}
+    error = geometry_fit.manual_geometry_fit_space_preflight_error(
+        spaces,
+        osc_files=["caked.osc", "detector.osc"],
+    )
+    assert error is not None
+    assert "mix detector-pixel and caked fit-space" in error
+    assert "caked.osc=caked" in error
+    assert "detector.osc=detector" in error
+
+
+def test_prepare_caked_manual_fit_requires_exact_projector() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    trace_pairs = [
+        {
+            "pair_id": "trace-0",
+            "background_two_theta_deg": 1083.8179,
+            "background_phi_deg": 1083.2697,
+        },
+        {
+            "pair_id": "trace-1",
+            "background_two_theta_deg": 1846.6204,
+            "background_phi_deg": 1083.7344,
+        },
+    ]
+
+    def _projector(cols, rows, **_kwargs):
+        return {
+            "two_theta_deg": np.asarray(cols, dtype=np.float64),
+            "phi_deg": np.asarray(rows, dtype=np.float64),
+            "valid": True,
+            "fit_space_projector_kind": "exact_caked_bundle",
+        }
+
+    def _prepare_with_projector(projector, kind):
+        events: list[str] = []
+        measured = [
+            dict(entry, fit_space_anchor_override=True, fit_space_anchor_source="test")
+            for entry in trace_pairs
+        ]
+
+        def _build_dataset(background_index, **_kwargs):
+            events.append("build")
+            return {
+                "dataset_index": int(background_index),
+                "label": "trace.osc",
+                "pair_count": len(measured),
+                "resolved_source_pair_count": len(measured),
+                "measured_for_fit": measured,
+                "manual_point_pairs": measured,
+                "spec": {
+                    "dataset_index": int(background_index),
+                    "label": "trace.osc",
+                    "measured_peaks": measured,
+                    "fit_space_projector": projector,
+                    "fit_space_projector_kind": kind,
+                    "fit_space_projector_unavailable_reason": (
+                        None if kind == "exact_caked_bundle" else "missing_exact_caked_bundle"
+                    ),
+                },
+            }
+
+        def _ensure_caked_view() -> None:
+            events.append("ensure")
+
+        result = geometry_fit.prepare_geometry_fit_run(
+            params={"theta_initial": 0.0},
+            var_names=["zb"],
+            fit_config={"geometry": {}},
+            osc_files=["trace.osc"],
+            current_background_index=0,
+            theta_initial=0.0,
+            preserve_live_theta=False,
+            apply_geometry_fit_background_selection=lambda **_kwargs: True,
+            current_geometry_fit_background_indices=lambda **_kwargs: [0],
+            geometry_fit_uses_shared_theta_offset=lambda _indices: False,
+            apply_background_theta_metadata=lambda **_kwargs: True,
+            current_background_theta_values=lambda **_kwargs: [0.0],
+            current_geometry_theta_offset=lambda **_kwargs: 0.0,
+            geometry_manual_pairs_for_index=lambda _idx: trace_pairs,
+            ensure_geometry_fit_caked_view=_ensure_caked_view,
+            build_dataset=_build_dataset,
+            build_runtime_config=lambda _params: {
+                "solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99}
+            },
+        )
+        return result, events
+
+    ok_result, ok_events = _prepare_with_projector(_projector, "exact_caked_bundle")
+
+    assert ok_result.error_text is None
+    assert ok_result.prepared_run is not None
+    assert ok_events == ["ensure", "build"]
+    ok_solver = ok_result.prepared_run.geometry_runtime_cfg["solver"]
+    assert ok_solver["manual_point_fit_mode"] is True
+    assert ok_solver["dynamic_point_geometry_fit"] is True
+    assert ok_result.prepared_run.geometry_runtime_cfg["projection_view_mode"] == "caked"
+    assert ok_result.prepared_run.dataset_specs[0]["fit_space_projector_kind"] == (
+        "exact_caked_bundle"
+    )
+    assert geometry_fit.geometry_fit_datasets_use_caked_fit_space(
+        ok_result.prepared_run.dataset_infos
+    )
+
+    missing_result, missing_events = _prepare_with_projector(None, None)
+
+    assert missing_result.prepared_run is None
+    assert missing_result.error_text is not None
+    assert missing_events == ["ensure", "build"]
+    assert "exact caked fit-space projector" in missing_result.error_text
+    assert "Rebuild the caked/source cache" in missing_result.error_text
+
+
+def test_prepare_caked_manual_fit_fails_if_exact_projector_cannot_be_prepared() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    caked_pairs = [
+        {"pair_id": "caked", "background_two_theta_deg": 12.0, "background_phi_deg": 3.0}
+    ]
+    events: list[str] = []
+
+    def _ensure_caked_view() -> None:
+        events.append("ensure")
+        raise RuntimeError("no exact payload")
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 0.0},
+        var_names=["zb"],
+        fit_config={"geometry": {}},
+        osc_files=["caked.osc"],
+        current_background_index=0,
+        theta_initial=0.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda _indices: False,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [0.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda _idx: caked_pairs,
+        ensure_geometry_fit_caked_view=_ensure_caked_view,
+        build_dataset=lambda *_args, **_kwargs: pytest.fail(
+            "caked ensure failure must stop before dataset build"
+        ),
+        build_runtime_config=lambda _params: {"solver": {}},
+    )
+
+    assert events == ["ensure"]
+    assert result.prepared_run is None
+    assert result.error_text is not None
+    assert "exact caked fit-space projector could not be prepared" in result.error_text
+    assert "Rebuild the caked/source cache" in result.error_text
+
+
+def test_prepare_detector_manual_fit_ignores_projector_presence_for_routing() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    detector_pairs = [
+        {"pair_id": "detector-0", "x": 10.0, "y": 20.0},
+        {"pair_id": "detector-1", "x": 30.0, "y": 40.0},
+    ]
+
+    def _projector(cols, rows, **_kwargs):
+        return {
+            "two_theta_deg": np.asarray(cols, dtype=np.float64),
+            "phi_deg": np.asarray(rows, dtype=np.float64),
+            "valid": True,
+            "fit_space_projector_kind": "exact_caked_bundle",
+        }
+
+    def _build_dataset(background_index, **_kwargs):
+        return {
+            "dataset_index": int(background_index),
+            "label": "detector.osc",
+            "pair_count": len(detector_pairs),
+            "resolved_source_pair_count": len(detector_pairs),
+            "measured_for_fit": detector_pairs,
+            "manual_point_pairs": detector_pairs,
+            "spec": {
+                "dataset_index": int(background_index),
+                "label": "detector.osc",
+                "measured_peaks": detector_pairs,
+                "fit_space_projector": _projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+            },
+        }
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 0.0},
+        var_names=["zb"],
+        fit_config={"geometry": {}},
+        osc_files=["detector.osc"],
+        current_background_index=0,
+        theta_initial=0.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda _indices: False,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [0.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda _idx: detector_pairs,
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=_build_dataset,
+        build_runtime_config=lambda _params: {
+            "projection_view_mode": "caked",
+            "solver": {"dynamic_point_geometry_fit": True, "max_nfev": 99},
+        },
+    )
+
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    detector_solver = result.prepared_run.geometry_runtime_cfg["solver"]
+    assert detector_solver["manual_point_fit_mode"] is True
+    assert detector_solver.get("dynamic_point_geometry_fit") is None
+    assert result.prepared_run.geometry_runtime_cfg.get("projection_view_mode") != "caked"
+
+
+def test_prepare_mixed_manual_fit_spaces_fails_before_dataset_build() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    caked_pairs = [
+        {"pair_id": "caked", "background_two_theta_deg": 12.0, "background_phi_deg": 3.0}
+    ]
+    detector_pairs = [{"pair_id": "detector", "x": 10.0, "y": 20.0}]
+
+    def _pairs_for_index(index: int):
+        return caked_pairs if int(index) == 0 else detector_pairs
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 0.0},
+        var_names=["zb"],
+        fit_config={"geometry": {}},
+        osc_files=["caked.osc", "detector.osc"],
+        current_background_index=0,
+        theta_initial=0.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda _indices: True,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [0.0, 0.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        geometry_manual_pairs_for_index=_pairs_for_index,
+        ensure_geometry_fit_caked_view=lambda: pytest.fail("mixed spaces must fail before ensure"),
+        build_dataset=lambda *_args, **_kwargs: pytest.fail(
+            "mixed spaces must fail before dataset build"
+        ),
+        build_runtime_config=lambda _params: {"solver": {}},
+    )
+
+    assert result.prepared_run is None
+    assert result.error_text is not None
+    assert "mix detector-pixel and caked fit-space" in result.error_text
+
+
+def test_prepare_same_background_mixed_manual_fit_space_fails_before_dataset_build() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    mixed_pairs = [
+        {"pair_id": "caked", "background_two_theta_deg": 12.0, "background_phi_deg": 3.0},
+        {"pair_id": "detector", "x": 10.0, "y": 20.0},
+    ]
+
+    spaces = geometry_fit.geometry_manual_fit_space_by_background(
+        [0],
+        {0: mixed_pairs},
+        pick_uses_caked_space=False,
+        current_background_index=0,
+    )
+    assert spaces == {0: "mixed"}
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 0.0},
+        var_names=["zb"],
+        fit_config={"geometry": {}},
+        osc_files=["mixed.osc"],
+        current_background_index=0,
+        theta_initial=0.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda _indices: False,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [0.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda _idx: mixed_pairs,
+        ensure_geometry_fit_caked_view=lambda: pytest.fail(
+            "same-background mixed spaces must fail before ensure"
+        ),
+        build_dataset=lambda *_args, **_kwargs: pytest.fail(
+            "same-background mixed spaces must fail before dataset build"
+        ),
+        build_runtime_config=lambda _params: {"solver": {}},
+    )
+
+    assert result.prepared_run is None
+    assert result.error_text is not None
+    assert "within the same background" in result.error_text
+    assert "mixed.osc=mixed" in result.error_text
+
+
+def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_path) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_fit = runtime_session.gui_geometry_fit
+    ensure_calls: list[str] = []
+    radial_axis = np.asarray([10.0, 11.0], dtype=np.float64)
+    azimuth_axis = np.asarray([1.0, 2.0], dtype=np.float64)
+    raw_azimuth_axis = np.asarray(
+        geometry_fit.gui_phi_to_raw_phi(azimuth_axis),
+        dtype=np.float64,
+    )
+    transform_bundle = geometry_fit.CakeTransformBundle(
+        detector_shape=(4, 4),
+        radial_deg=radial_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        gui_azimuth_deg=azimuth_axis,
+        lut=object(),
+    )
+    caked_payload = {
+        "background": np.ones((4, 4), dtype=np.float64),
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
+        "transform_bundle": transform_bundle,
+        "detector_shape": (4, 4),
+    }
+    manual_pairs = [
+        {
+            "pair_id": "caked-0",
+            "background_two_theta_deg": 10.0,
+            "background_phi_deg": 1.0,
+        }
+    ]
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["bg0.osc"],
+        current_background_index=0,
+        image_size=4,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda _idx: list(manual_pairs),
+        load_background_by_index=lambda _idx: (
+            np.ones((4, 4), dtype=np.float64),
+            np.ones((4, 4), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        geometry_manual_simulated_lookup=lambda _rows: {},
+        geometry_manual_entry_display_coords=lambda _entry: None,
+        unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda *_args, **_kwargs: ({}, {"pairs": 0}),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: False,
+        geometry_manual_caked_view_for_index=lambda _idx: dict(caked_payload),
+    )
+    prepare_bindings = geometry_fit.GeometryFitRuntimePreparationBindings(
+        fit_config={"geometry": {"solver": {"dynamic_point_geometry_fit": False}}},
+        theta_initial=0.0,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda _indices: False,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [0.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        ensure_geometry_fit_caked_view=lambda: ensure_calls.append("ensure"),
+        manual_dataset_bindings=manual_dataset_bindings,
+        build_runtime_config=lambda _params: {"solver": {"dynamic_point_geometry_fit": False}},
+    )
+    execution_bindings = SimpleNamespace(
+        downloads_dir=tmp_path,
+        log_dir=tmp_path,
+        simulation_runtime_state=SimpleNamespace(
+            geometry_fit_job_counter=0,
+            geometry_fit_event_queue=runtime_session.queue.Queue(),
+            source_row_snapshots={},
+            last_simulation_signature=("sig",),
+        ),
+        solver_inputs=SimpleNamespace(miller=[], intensities=[], image_size=4),
+        background_runtime_state=SimpleNamespace(current_background_index=0),
+    )
+    bindings = SimpleNamespace(
+        value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+            current_var_names=lambda: ["zb"],
+            current_params=lambda: {
+                "theta_initial": 0.0,
+                "center": [1.0, 1.0],
+                "corto_detector": 0.5,
+                "lambda": 1.54e-10,
+            },
+            current_ui_params=lambda: {},
+            var_map={},
+            build_mosaic_params=lambda **_kwargs: {},
+        ),
+        prepare_bindings_factory=lambda _var_names: prepare_bindings,
+        execution_bindings=execution_bindings,
+        solve_fit=lambda *_args, **_kwargs: None,
+        stamp_factory=lambda: "20260422_000000",
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_background_label",
+        lambda idx: f"bg{int(idx)}.osc",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_source_snapshot_signature_for_background",
+        lambda idx, params: ("sig", int(idx)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_cache_signature_summary",
+        lambda signature: repr(signature),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_view_for_index",
+        lambda _idx: dict(caked_payload),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda background_index, **kwargs: {
+            "background_index": int(background_index),
+            "mode": kwargs.get("mode_override") or "detector",
+            "available": True,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_live_preview_simulated_peaks_from_cache",
+        lambda: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_last_live_preview_cache_metadata",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_cache_inventory_snapshot",
+        lambda: {"source_snapshot_count": 0},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_last_source_snapshot_diagnostics",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_last_simulation_diagnostics",
+        lambda: {},
+        raising=False,
+    )
+
+    job = runtime_session._build_geometry_fit_async_job(bindings)
+
+    assert ensure_calls == ["ensure"]
+    assert job["manual_fit_space_by_background"] == {0: "caked"}
+    assert job["pick_uses_caked_space"] is True
+    assert job["projection_view_mode"] == "caked"
+    assert job["geometry_runtime_cfg"]["solver"]["dynamic_point_geometry_fit"] is True
+    assert (
+        job["caked_views_by_background"][0]["transform_bundle"] is caked_payload["transform_bundle"]
+    )
+
+    manual_pairs[:] = [{"pair_id": "detector-0", "x": 10.0, "y": 20.0}]
+    ensure_calls.clear()
+    execution_bindings.simulation_runtime_state.geometry_fit_job_counter = 0
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_view_for_index",
+        lambda _idx: pytest.fail("detector manual fit must not load caked payload"),
+        raising=False,
+    )
+
+    detector_job = runtime_session._build_geometry_fit_async_job(bindings)
+
+    assert ensure_calls == []
+    assert detector_job["manual_fit_space_by_background"] == {0: "detector"}
+    assert detector_job["projection_view_mode"] == "detector"
+    assert detector_job["caked_views_by_background"] == {}
+    assert detector_job["geometry_runtime_cfg"]["solver"].get("dynamic_point_geometry_fit") is None
+
+    manual_pairs[:] = [
+        {
+            "pair_id": "caked-0",
+            "background_two_theta_deg": 10.0,
+            "background_phi_deg": 1.0,
+        },
+        {"pair_id": "detector-0", "x": 10.0, "y": 20.0},
+    ]
+    ensure_calls.clear()
+
+    with pytest.raises(RuntimeError, match="within the same background"):
+        runtime_session._build_geometry_fit_async_job(bindings)
+
+    assert ensure_calls == []
+
+
+def test_geometry_fit_worker_rejects_stored_mixed_manual_fit_space_before_prepare(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    prepare_calls: list[dict[str, object]] = []
+
+    job["manual_fit_space_by_background"] = {0: "mixed"}
+    job["manual_pairs_by_background"] = {
+        0: [
+            {
+                "pair_id": "caked",
+                "background_two_theta_deg": 10.0,
+                "background_phi_deg": 1.0,
+            },
+            {"pair_id": "detector", "x": 1.0, "y": 2.0},
+        ]
+    }
+
+    def _prepare_geometry_fit_run(**kwargs):
+        prepare_calls.append(dict(kwargs))
+        pytest.fail("mixed worker fit space must fail before prepare")
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        _prepare_geometry_fit_run,
+    )
+
+    result = runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    failure_events = [event for event in events if event.get("kind") == "preflight_failure"]
+
+    assert prepare_calls == []
+    assert result.error_text is not None
+    assert failure_events
+    assert "mixed detector/caked manual fit spaces are not supported" in str(
+        dict(failure_events[-1].get("payload") or {}).get("message")
+    )
+
+
+def test_headless_caked_manual_payload_uses_shared_exact_caked_builder(monkeypatch) -> None:
+    headless = importlib.import_module("ra_sim.headless_geometry_fit")
+    calls: list[dict[str, object]] = []
+
+    def _fake_shared_builder(detector_image, *, ai, detector_shape, npt_rad, npt_azim):
+        calls.append(
+            {
+                "detector_shape": tuple(detector_shape),
+                "image_shape": tuple(np.asarray(detector_image).shape),
+                "ai": ai,
+                "npt_rad": int(npt_rad),
+                "npt_azim": int(npt_azim),
+            }
+        )
+        return {
+            "background": np.ones((8, 8), dtype=np.float64),
+            "radial_axis": np.linspace(0.0, 1.0, 8),
+            "azimuth_axis": np.linspace(-1.0, 1.0, 8),
+            "raw_azimuth_axis": np.linspace(-180.0, 180.0, 8),
+            "raw_to_gui_row_permutation": np.arange(8, dtype=np.int32),
+            "transform_bundle": object(),
+            "detector_shape": tuple(detector_shape),
+        }
+
+    monkeypatch.setattr(
+        headless.gui_geometry_fit,
+        "build_geometry_fit_exact_caked_view_payload",
+        _fake_shared_builder,
+    )
+
+    payload = headless._build_headless_geometry_fit_caked_view_payload(
+        np.ones((8, 8), dtype=np.float64),
+        params={
+            "center": [4.0, 4.0],
+            "center_x": 4.0,
+            "center_y": 4.0,
+            "corto_detector": 0.5,
+            "lambda": 1.54,
+        },
+        pixel_size_m=1.0e-4,
+        npt_rad=8,
+        npt_azim=8,
+    )
+
+    assert calls and calls[0]["detector_shape"] == (8, 8)
+    assert calls[0]["image_shape"] == (8, 8)
+    assert calls[0]["npt_rad"] == 8
+    assert calls[0]["npt_azim"] == 8
+    assert isinstance(payload, dict)
+    assert payload["ai"] is calls[0]["ai"]
+    assert payload["transform_bundle"] is not None
+    assert np.asarray(payload["background"]).shape == (8, 8)
+    assert np.asarray(payload["background_image"]).shape == (8, 8)
+    assert np.asarray(payload["radial_axis"]).size == 8
+    assert np.asarray(payload["azimuth_axis"]).size == 8
+    assert tuple(payload["detector_shape"]) == (8, 8)
+
+
+def test_headless_hydrated_caked_payload_projects_rows_per_background(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    headless = importlib.import_module("ra_sim.headless_geometry_fit")
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    projected_rows: list[dict[str, object]] = []
+    captured_bundles: list[object] = []
+
+    class _StopAfterProjection(RuntimeError):
+        pass
+
+    def _defaults() -> dict[str, object]:
+        return {
+            "zb": 0.0,
+            "zs": 0.0,
+            "theta_initial": 0.0,
+            "psi_z": 0.0,
+            "chi": 0.0,
+            "cor_angle": 0.0,
+            "sample_width_m": 0.0,
+            "sample_length_m": 0.0,
+            "sample_depth_m": 0.0,
+            "gamma": 0.0,
+            "Gamma": 0.0,
+            "corto_detector": 0.5,
+            "a": 4.0,
+            "c": 7.0,
+            "center_x": 1.0,
+            "center_y": 1.0,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+            "sigma_mosaic_deg": 0.8,
+            "gamma_mosaic_deg": 0.7,
+            "eta": 0.0,
+            "bandwidth_percent": 0.0,
+            "solve_q_steps": 100,
+            "solve_q_rel_tol": 1.0e-3,
+            "solve_q_mode": 0,
+            "optics_mode": "fast",
+            "p0": 0.5,
+            "p1": 0.5,
+            "p2": 0.5,
+            "w0": 1.0,
+            "w1": 0.0,
+            "w2": 0.0,
+            "finite_stack": False,
+            "stack_layers": 1,
+            "phase_delta_expression": "0.0",
+            "phi_l_divisor": 1.0,
+            "weight1": 1.0,
+            "weight2": 0.0,
+        }
+
+    exact_bundles = {
+        0: geometry_fit.CakeTransformBundle(
+            detector_shape=(4, 4),
+            radial_deg=np.asarray([10.0, 11.0], dtype=np.float64),
+            raw_azimuth_deg=np.asarray(
+                geometry_fit.gui_phi_to_raw_phi([1.0, 2.0]),
+                dtype=np.float64,
+            ),
+            gui_azimuth_deg=np.asarray([1.0, 2.0], dtype=np.float64),
+            lut=object(),
+        ),
+        1: geometry_fit.CakeTransformBundle(
+            detector_shape=(4, 4),
+            radial_deg=np.asarray([101.0, 102.0], dtype=np.float64),
+            raw_azimuth_deg=np.asarray(
+                geometry_fit.gui_phi_to_raw_phi([3.0, 4.0]),
+                dtype=np.float64,
+            ),
+            gui_azimuth_deg=np.asarray([3.0, 4.0], dtype=np.float64),
+            lut=object(),
+        ),
+    }
+
+    monkeypatch.setattr(
+        headless,
+        "_build_runtime_defaults",
+        lambda _state: headless._RuntimeDefaults(
+            primary_cif_path="fake.cif",
+            secondary_cif_path=None,
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            image_size=4,
+            pixel_size_m=1.0,
+            lambda_angstrom=1.54,
+            psi_deg=0.0,
+            defaults=_defaults(),
+            fit_config={"geometry": {}},
+            intensity_threshold=0.0,
+            include_rods_flag=False,
+            two_theta_range=(0.0, 1.0),
+            mx=1,
+            background_flags={
+                "backend_rotation_k": 0,
+                "backend_flip_x": False,
+                "backend_flip_y": False,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        headless,
+        "_restore_manual_pairs",
+        lambda *_args, **_kwargs: {
+            0: [{"background_two_theta_deg": 10.0, "background_phi_deg": 1.0}],
+            1: [{"background_two_theta_deg": 101.0, "background_phi_deg": 3.0}],
+        },
+    )
+    monkeypatch.setattr(
+        headless,
+        "_load_structure_model",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(miller=[], intensities=[]),
+            SimpleNamespace(),
+            "fake.cif",
+            1.0 + 0.0j,
+        ),
+    )
+    monkeypatch.setattr(
+        headless.gui_background_theta,
+        "default_geometry_fit_background_selection",
+        lambda *, osc_files: "all",
+    )
+    monkeypatch.setattr(
+        headless.gui_background_theta,
+        "format_background_theta_values",
+        lambda values: ",".join(str(float(value)) for value in values),
+    )
+    monkeypatch.setattr(
+        headless.gui_manual_geometry,
+        "geometry_manual_pairs_for_index",
+        lambda idx, *, pairs_by_background: list(pairs_by_background.get(int(idx), ())),
+    )
+    monkeypatch.setattr(
+        headless.gui_background,
+        "apply_background_backend_orientation",
+        lambda image, **_kwargs: image,
+    )
+
+    def _load_background_image_by_index(
+        index,
+        *,
+        background_images,
+        background_images_native,
+        background_images_display,
+        **_kwargs,
+    ):
+        idx = int(index)
+        native = np.full((4, 4), float(idx), dtype=np.float64)
+        display = native.copy()
+        images = list(background_images)
+        natives = list(background_images_native)
+        displays = list(background_images_display)
+        while len(images) <= idx:
+            images.append(None)
+            natives.append(None)
+            displays.append(None)
+        images[idx] = native
+        natives[idx] = native
+        displays[idx] = display
+        return {
+            "background_images": images,
+            "background_images_native": natives,
+            "background_images_display": displays,
+            "background_image": native,
+            "background_display": display,
+        }
+
+    monkeypatch.setattr(
+        headless.gui_background,
+        "load_background_image_by_index",
+        _load_background_image_by_index,
+    )
+    monkeypatch.setattr(
+        headless.gui_geometry_q_group_manager,
+        "make_runtime_geometry_fit_simulation_callbacks",
+        lambda **_kwargs: SimpleNamespace(
+            simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+            simulated_lookup=lambda _rows: {},
+            last_simulation_diagnostics=lambda: {},
+        ),
+    )
+
+    def _payload(detector_image, **_kwargs):
+        marker = int(float(np.asarray(detector_image, dtype=np.float64)[0, 0]))
+        bundle = exact_bundles[int(marker)]
+        return {
+            "background": np.full(
+                (bundle.gui_azimuth_deg.size, bundle.radial_deg.size),
+                float(marker),
+                dtype=np.float64,
+            ),
+            "background_image": np.full(
+                (bundle.gui_azimuth_deg.size, bundle.radial_deg.size),
+                float(marker),
+                dtype=np.float64,
+            ),
+            "radial_axis": np.asarray(bundle.radial_deg, dtype=np.float64),
+            "azimuth_axis": np.asarray(bundle.gui_azimuth_deg, dtype=np.float64),
+            "raw_azimuth_axis": np.asarray(bundle.raw_azimuth_deg, dtype=np.float64),
+            "raw_to_gui_row_permutation": np.arange(
+                int(bundle.gui_azimuth_deg.size),
+                dtype=np.int32,
+            ),
+            "detector_shape": (4, 4),
+            "projection_view_mode": "caked",
+            "transform_bundle": "json-safe-bundle",
+        }
+
+    monkeypatch.setattr(headless, "_build_headless_geometry_fit_caked_view_payload", _payload)
+
+    def _hydrate(payload, **_kwargs):
+        marker = int(float(np.asarray(payload["background"], dtype=np.float64)[0, 0]))
+        hydrated = dict(payload)
+        hydrated["transform_bundle"] = exact_bundles[marker]
+        return hydrated
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "_geometry_fit_hydrate_exact_caked_payload",
+        _hydrate,
+    )
+
+    def _make_projection_callbacks(**kwargs):
+        def _project(rows):
+            bundle = kwargs["caked_transform_bundle"]()
+            captured_bundles.append(bundle)
+            marker = int(float(np.asarray(kwargs["current_background_native"]())[0, 0]))
+            return [
+                dict(entry, projected_background=marker, used_exact_bundle=bundle)
+                for entry in rows or ()
+                if isinstance(entry, Mapping)
+            ]
+
+        return SimpleNamespace(
+            project_peaks_to_current_view=_project,
+            simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+            simulated_lookup=lambda _rows: {},
+            entry_display_coords=lambda _entry: None,
+            refresh_entry_geometry=lambda entry: dict(entry),
+        )
+
+    monkeypatch.setattr(
+        headless.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        _make_projection_callbacks,
+    )
+
+    def _prepare_runtime_geometry_fit_run(*, bindings, **_kwargs):
+        dataset_bindings = bindings.manual_dataset_bindings
+        for background_idx in (0, 1):
+            cached = dataset_bindings.geometry_manual_caked_view_for_index(background_idx)
+            assert cached["transform_bundle"] is exact_bundles[background_idx]
+            cached["transform_bundle"] = "json-safe-bundle"
+        rows = [
+            {"background_index": 0, "row_id": "first"},
+            {"background_index": 1, "row_id": "second"},
+            {"background_index": 0, "row_id": "third"},
+        ]
+        for row in rows:
+            projected_rows.extend(
+                dataset_bindings.geometry_manual_project_peaks_for_background_view(
+                    int(row["background_index"]),
+                    [row],
+                )
+            )
+        raise _StopAfterProjection()
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "prepare_runtime_geometry_fit_run",
+        _prepare_runtime_geometry_fit_run,
+    )
+
+    with pytest.raises(_StopAfterProjection):
+        headless.run_headless_geometry_fit(
+            {"geometry": {"manual_pairs": []}},
+            state_path=tmp_path / "state.json",
+            downloads_dir=tmp_path,
+        )
+
+    assert [(row["row_id"], row["projected_background"]) for row in projected_rows] == [
+        ("first", 0),
+        ("second", 1),
+        ("third", 0),
+    ]
+    assert captured_bundles == [exact_bundles[0], exact_bundles[1], exact_bundles[0]]
+    assert [row["used_exact_bundle"] for row in projected_rows] == [
+        exact_bundles[0],
+        exact_bundles[1],
+        exact_bundles[0],
+    ]
+
+
+def test_cli_hydrated_caked_payload_projects_rows_per_background(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    cli = importlib.import_module("ra_sim.cli")
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    projected_rows: list[dict[str, object]] = []
+    captured_bundles: list[object] = []
+
+    class _StopAfterProjection(RuntimeError):
+        pass
+
+    primary_cif_path = tmp_path / "primary.cif"
+    primary_cif_path.write_text("data_test\n", encoding="utf-8")
+    exact_bundles = {
+        0: geometry_fit.CakeTransformBundle(
+            detector_shape=(4, 4),
+            radial_deg=np.asarray([10.0, 11.0], dtype=np.float64),
+            raw_azimuth_deg=np.asarray(
+                geometry_fit.gui_phi_to_raw_phi([1.0, 2.0]),
+                dtype=np.float64,
+            ),
+            gui_azimuth_deg=np.asarray([1.0, 2.0], dtype=np.float64),
+            lut=object(),
+        ),
+        1: geometry_fit.CakeTransformBundle(
+            detector_shape=(4, 4),
+            radial_deg=np.asarray([101.0, 102.0], dtype=np.float64),
+            raw_azimuth_deg=np.asarray(
+                geometry_fit.gui_phi_to_raw_phi([3.0, 4.0]),
+                dtype=np.float64,
+            ),
+            gui_azimuth_deg=np.asarray([3.0, 4.0], dtype=np.float64),
+            lut=object(),
+        ),
+    }
+
+    class _SimulationRuntimeState(SimpleNamespace):
+        def __init__(self, *args, **kwargs):
+            super().__init__(**kwargs)
+            self.geometry_fit_caking_ai_cache = {}
+            self.profile_cache = dict(getattr(self, "profile_cache", {}) or {})
+            self.source_row_snapshots = {}
+
+    simulation_defaults = cli.HeadlessSimulationDefaults(
+        out_path=str(tmp_path / "out.json"),
+        image_size=4,
+        samples=1,
+        vmax=1.0,
+        cif_file=str(primary_cif_path),
+        geometry=SimpleNamespace(
+            pixel_size_m=1.0,
+            lambda_angstrom=1.54,
+            theta_initial_deg=0.0,
+            cor_angle_deg=0.0,
+            chi_deg=0.0,
+            psi_z_deg=0.0,
+            zs=0.0,
+            zb=0.0,
+            sample_width_m=0.0,
+            sample_length_m=0.0,
+            Gamma_deg=0.0,
+            gamma_deg=0.0,
+            distance_m=0.5,
+            center=[1.0, 1.0],
+        ),
+        mosaic=SimpleNamespace(),
+        debye_waller=SimpleNamespace(x=0.0, y=0.0),
+        occ=(1.0,),
+        p_values=(0.5,),
+        weights=None,
+        two_theta_max=1.0,
+        ht_max_miller_index=1,
+        ht_phase_delta_expression="0.0",
+        ht_phi_l_divisor=1.0,
+        ht_finite_stack=False,
+        ht_stack_layers=1,
+        divergence_sigma_rad=0.0,
+        bandwidth_sigma=0.0,
+        bandwidth_fraction=0.0,
+        sample_depth_m=0.0,
+    )
+
+    def _load_background_image_by_index(
+        index,
+        *,
+        background_images,
+        background_images_native,
+        background_images_display,
+        **_kwargs,
+    ):
+        idx = int(index)
+        native = np.full((4, 4), float(idx), dtype=np.float64)
+        display = native.copy()
+        images = list(background_images)
+        natives = list(background_images_native)
+        displays = list(background_images_display)
+        while len(images) <= idx:
+            images.append(None)
+            natives.append(None)
+            displays.append(None)
+        images[idx] = native
+        natives[idx] = native
+        displays[idx] = display
+        return {
+            "background_images": images,
+            "background_images_native": natives,
+            "background_images_display": displays,
+            "background_image": native,
+            "background_display": display,
+        }
+
+    def _make_projection_callbacks(**kwargs):
+        def _project(rows):
+            bundle = kwargs["caked_transform_bundle"]()
+            captured_bundles.append(bundle)
+            marker = int(float(np.asarray(kwargs["current_background_native"]())[0, 0]))
+            return [
+                dict(entry, projected_background=marker, used_exact_bundle=bundle)
+                for entry in rows or ()
+                if isinstance(entry, Mapping)
+            ]
+
+        return SimpleNamespace(
+            project_peaks_to_current_view=_project,
+            simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+            simulated_lookup=lambda _rows: {},
+            entry_display_coords=lambda _entry: None,
+            refresh_entry_geometry=lambda entry: dict(entry),
+        )
+
+    def _payload(detector_image, **_kwargs):
+        marker = int(float(np.asarray(detector_image, dtype=np.float64)[0, 0]))
+        bundle = exact_bundles[int(marker)]
+        return {
+            "background": np.full(
+                (bundle.gui_azimuth_deg.size, bundle.radial_deg.size),
+                float(marker),
+                dtype=np.float64,
+            ),
+            "background_image": np.full(
+                (bundle.gui_azimuth_deg.size, bundle.radial_deg.size),
+                float(marker),
+                dtype=np.float64,
+            ),
+            "radial_axis": np.asarray(bundle.radial_deg, dtype=np.float64),
+            "azimuth_axis": np.asarray(bundle.gui_azimuth_deg, dtype=np.float64),
+            "raw_azimuth_axis": np.asarray(bundle.raw_azimuth_deg, dtype=np.float64),
+            "raw_to_gui_row_permutation": np.arange(
+                int(bundle.gui_azimuth_deg.size),
+                dtype=np.int32,
+            ),
+            "detector_shape": (4, 4),
+            "projection_view_mode": "caked",
+            "transform_bundle": "json-safe-bundle",
+        }
+
+    geometry_modules = SimpleNamespace(
+        gui_background=SimpleNamespace(
+            load_background_image_by_index=_load_background_image_by_index,
+            apply_background_backend_orientation=lambda image, **_kwargs: image,
+        ),
+        gui_background_theta=SimpleNamespace(
+            default_geometry_fit_background_selection=lambda *, osc_files: "all",
+            format_background_theta_values=lambda values: ",".join(
+                str(float(value)) for value in values
+            ),
+            apply_background_theta_metadata=lambda **_kwargs: True,
+            apply_geometry_fit_background_selection=lambda **_kwargs: True,
+            current_geometry_fit_background_indices=lambda **_kwargs: [0, 1],
+            geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: True,
+            current_geometry_theta_offset=lambda **_kwargs: 0.0,
+            current_background_theta_values=lambda **_kwargs: [0.0, 0.0],
+            background_theta_for_index=lambda index, **_kwargs: 0.0,
+        ),
+        gui_controllers=SimpleNamespace(
+            clamp_site_occupancy_values=lambda values, fallback_values=None: list(
+                values or fallback_values or [1.0]
+            ),
+            combine_cif_weighted_intensities=lambda *args, **kwargs: None,
+            normalize_stacking_weight_values=lambda values: list(values),
+        ),
+        gui_geometry_fit=geometry_fit,
+        gui_geometry_overlay=SimpleNamespace(
+            rotate_point_for_display=lambda col, row, *_args, **_kwargs: (
+                float(col),
+                float(row),
+            ),
+            display_to_native_sim_coords=lambda col, row, *_args, **_kwargs: (
+                float(col),
+                float(row),
+            ),
+            native_sim_to_display_coords=lambda col, row, *_args, **_kwargs: (
+                float(col),
+                float(row),
+            ),
+            unrotate_display_peaks=lambda entries, *_args, **_kwargs: list(entries),
+            select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+                {"label": "identity"},
+                {"pairs": len(sim_pts)},
+            ),
+            apply_orientation_to_entries=lambda entries, *_args, **_kwargs: list(entries),
+            orient_image_for_fit=lambda image, **_kwargs: image,
+        ),
+        gui_geometry_q_group_manager=SimpleNamespace(
+            make_runtime_geometry_fit_simulation_callbacks=lambda **_kwargs: SimpleNamespace(
+                simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+                simulated_lookup=lambda _rows: {},
+                last_simulation_diagnostics=lambda: {},
+            )
+        ),
+        gui_manual_geometry=SimpleNamespace(
+            apply_geometry_manual_pairs_rows=lambda *_args, replace_pairs_by_background, **_kwargs: (
+                replace_pairs_by_background(
+                    {
+                        0: [
+                            {
+                                "background_two_theta_deg": 10.0,
+                                "background_phi_deg": 1.0,
+                            }
+                        ],
+                        1: [
+                            {
+                                "background_two_theta_deg": 101.0,
+                                "background_phi_deg": 3.0,
+                            }
+                        ],
+                    }
+                )
+            ),
+            geometry_manual_pairs_for_index=lambda idx, *, pairs_by_background: list(
+                pairs_by_background.get(int(idx), ())
+            ),
+            make_runtime_geometry_manual_projection_callbacks=_make_projection_callbacks,
+        ),
+        gui_structure_model=SimpleNamespace(
+            parse_cif_num=lambda value: float(value),
+            extract_occupancy_site_metadata=lambda *_args, **_kwargs: ([], {}),
+            extract_atom_site_fractional_metadata=lambda *_args, **_kwargs: [],
+            build_initial_structure_model_state=lambda **_kwargs: SimpleNamespace(
+                miller=[],
+                intensities=[],
+            ),
+            active_primary_cif_path=lambda *_args, **_kwargs: str(primary_cif_path),
+            current_iodine_z=lambda *_args, **_kwargs: 0.0,
+            rebuild_diffraction_inputs=lambda *args, **kwargs: None,
+        ),
+        AtomSiteOverrideState=lambda: SimpleNamespace(),
+        SimulationRuntimeState=_SimulationRuntimeState,
+    )
+
+    monkeypatch.setattr(cli, "_load_cli_geometry_modules", lambda: geometry_modules)
+    monkeypatch.setattr(
+        cli, "build_headless_simulation_defaults", lambda *, out_path: simulation_defaults
+    )
+    monkeypatch.setattr(
+        cli,
+        "get_instrument_config",
+        lambda: {
+            "instrument": {
+                "detector": {"image_size": 4, "pixel_size_m": 1.0, "intensity_threshold": 1.0},
+                "beam": {"sigma_mosaic_fwhm_deg": 0.8, "gamma_mosaic_fwhm_deg": 0.7, "eta": 0.0},
+                "sample_orientation": {
+                    "theta_initial_deg": 0.0,
+                    "cor_deg": 0.0,
+                    "chi_deg": 0.0,
+                    "psi_deg": 0.0,
+                    "psi_z_deg": 0.0,
+                    "zb": 0.0,
+                    "zs": 0.0,
+                    "width_m": 0.0,
+                    "length_m": 0.0,
+                    "depth_m": 0.0,
+                },
+                "debye_waller": {"x": 0.0, "y": 0.0},
+                "hendricks_teller": {
+                    "default_p": [0.5],
+                    "default_w": [1.0],
+                    "finite_stack": False,
+                    "stack_layers": 1,
+                    "max_miller_index": 1,
+                    "include_rods": False,
+                },
+                "fit": {},
+                "occupancies": {"default": [1.0]},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        cli, "_load_cif_snapshot", lambda path: ({}, {"_cell_length_a": 4.0, "_cell_length_c": 7.0})
+    )
+    monkeypatch.setattr(cli, "resolve_index_of_refraction", lambda *_args, **_kwargs: 1.0 + 0.0j)
+    monkeypatch.setattr(
+        cli,
+        "_build_headless_geometry_mosaic_params",
+        lambda **_kwargs: (
+            {"solve_q_steps": 100, "solve_q_rel_tol": 1.0e-3, "solve_q_mode": 0},
+            1,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_fitting_optimization",
+        lambda: SimpleNamespace(
+            fit_geometry_parameters=lambda *args, **kwargs: None,
+            fit_mosaic_shape_parameters=lambda *args, **kwargs: None,
+            simulate_and_compare_hkl=lambda *args, **kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_stacking_fault_module",
+        lambda: SimpleNamespace(
+            DEFAULT_PHI_L_DIVISOR=1.0,
+            DEFAULT_PHASE_DELTA_EXPRESSION="0.0",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_diffraction_tools_module",
+        lambda: SimpleNamespace(detector_two_theta_max=lambda *args, **kwargs: 1.0),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_simulation_modules",
+        lambda: SimpleNamespace(
+            diffraction=SimpleNamespace(
+                OPTICS_MODE_FAST=0,
+                OPTICS_MODE_EXACT=1,
+                hit_tables_to_max_positions=lambda *args, **kwargs: [],
+                process_peaks_parallel=lambda *args, **kwargs: [],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_tools_module",
+        lambda: SimpleNamespace(
+            build_intensity_dataframes=lambda *args, **kwargs: None,
+            inject_fractional_reflections=lambda *args, **kwargs: None,
+            miller_generator=lambda *args, **kwargs: [],
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_shared_headless_geometry_fit",
+        lambda: SimpleNamespace(
+            _build_headless_geometry_fit_caked_view_payload=_payload,
+            _load_exact_cake_portable_module=lambda: SimpleNamespace(
+                raw_phi_to_gui_phi=lambda value: value
+            ),
+        ),
+    )
+
+    def _hydrate(payload, **_kwargs):
+        marker = int(float(np.asarray(payload["background"], dtype=np.float64)[0, 0]))
+        hydrated = dict(payload)
+        hydrated["transform_bundle"] = exact_bundles[marker]
+        return hydrated
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "_geometry_fit_hydrate_exact_caked_payload",
+        _hydrate,
+    )
+
+    def _prepare_runtime_geometry_fit_run(*, bindings, **_kwargs):
+        dataset_bindings = bindings.manual_dataset_bindings
+        for background_idx in (0, 1):
+            cached = dataset_bindings.geometry_manual_caked_view_for_index(background_idx)
+            assert cached["transform_bundle"] is exact_bundles[background_idx]
+            cached["transform_bundle"] = "json-safe-bundle"
+        rows = [
+            {"background_index": 0, "row_id": "first"},
+            {"background_index": 1, "row_id": "second"},
+            {"background_index": 0, "row_id": "third"},
+        ]
+        for row in rows:
+            projected_rows.extend(
+                dataset_bindings.geometry_manual_project_peaks_for_background_view(
+                    int(row["background_index"]),
+                    [row],
+                )
+            )
+        raise _StopAfterProjection()
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "prepare_runtime_geometry_fit_run",
+        _prepare_runtime_geometry_fit_run,
+    )
+
+    with pytest.raises(_StopAfterProjection):
+        cli.run_headless_geometry_fit(
+            {
+                "state": {
+                    "files": {
+                        "background_files": ["bg0.osc", "bg1.osc"],
+                        "primary_cif_path": str(primary_cif_path),
+                    },
+                    "geometry": {"manual_pairs": []},
+                }
+            },
+            source_path=tmp_path / "state.json",
+            output_dir=tmp_path,
+            run_mosaic_shape_fit=True,
+        )
+
+    assert [(row["row_id"], row["projected_background"]) for row in projected_rows] == [
+        ("first", 0),
+        ("second", 1),
+        ("third", 0),
+    ]
+    assert captured_bundles == [exact_bundles[0], exact_bundles[1], exact_bundles[0]]
+    assert [row["used_exact_bundle"] for row in projected_rows] == [
+        exact_bundles[0],
+        exact_bundles[1],
+        exact_bundles[0],
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad_image",
+    [
+        np.asarray(1.0, dtype=np.float64),
+        np.ones((8,), dtype=np.float64),
+        np.ones((4, 4, 1), dtype=np.float64),
+    ],
+)
+def test_headless_caked_manual_payload_rejects_malformed_images(
+    monkeypatch,
+    bad_image,
+) -> None:
+    headless = importlib.import_module("ra_sim.headless_geometry_fit")
+
+    monkeypatch.setattr(
+        headless.gui_geometry_fit,
+        "build_geometry_fit_exact_caked_view_payload",
+        lambda *_args, **_kwargs: pytest.fail("malformed images must fail before caked build"),
+    )
+
+    payload = headless._build_headless_geometry_fit_caked_view_payload(
+        bad_image,
+        params={
+            "center": [4.0, 4.0],
+            "center_x": 4.0,
+            "center_y": 4.0,
+            "corto_detector": 0.5,
+            "lambda": 1.54,
+        },
+        pixel_size_m=1.0e-4,
+        npt_rad=8,
+        npt_azim=8,
+    )
+
+    assert payload is None
+
+
+def test_manual_caked_objective_stays_in_fit_space_and_improves(monkeypatch) -> None:
+    opt = importlib.import_module("ra_sim.fitting.optimization")
+
+    def fake_process(*args, **_kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        gamma = float(local_params.get("gamma", 0.0))
+        return {
+            "two_theta_deg": cols_arr + gamma,
+            "phi_deg": rows_arr + gamma,
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": f"sig-{anchor_kind}-{gamma:.3f}",
+            "fit_space_local_params_signature": f"lp-{gamma:.3f}",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": f"test-{input_frame}",
+            "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+            "caked_projection_source": "fit_space_projector_native_detector",
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(
+        opt,
+        "_detector_pixels_to_fit_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("manual caked objective must not use detector fallback")
+        ),
+    )
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "pair_id": "trace-0",
+                "label": "peak-0",
+                "hkl": (1, 0, 0),
+                "overlay_match_index": 0,
+                "source_reflection_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+                "fit_source_identity_only": True,
+                "sim_col": 12.0,
+                "sim_row": 12.0,
+                "background_two_theta_deg": 10.0,
+                "background_phi_deg": 10.0,
+                "fit_space_anchor_override": True,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+    base_params = {
+        "gamma": 0.0,
+        "Gamma": 0.0,
+        "theta_initial": 0.0,
+        "cor_angle": 0.0,
+        "zs": 0.0,
+        "zb": 0.0,
+        "chi": 0.0,
+        "a": 4.0,
+        "c": 7.0,
+        "center": [16.0, 16.0],
+        "pixel_size": 1.0,
+        "corto_detector": 100.0,
+        "lambda": 1.54,
+        "n2": 1.0,
+        "psi": 0.0,
+        "psi_z": 0.0,
+        "debye_x": 0.0,
+        "debye_y": 0.0,
+        "optics_mode": 0,
+        "mosaic_params": {
+            "beam_x_array": np.zeros(1, dtype=np.float64),
+            "beam_y_array": np.zeros(1, dtype=np.float64),
+            "theta_array": np.zeros(1, dtype=np.float64),
+            "phi_array": np.zeros(1, dtype=np.float64),
+            "sigma_mosaic_deg": 0.2,
+            "gamma_mosaic_deg": 0.1,
+            "eta": 0.05,
+            "wavelength_array": np.ones(1, dtype=np.float64),
+        },
+    }
+    improved_params = dict(base_params, gamma=-2.0)
+
+    def _evaluate(params):
+        residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+            params,
+            dataset_ctx,
+            image_size=32,
+            missing_pair_penalty_deg=5.0,
+            theta_value=0.0,
+            collect_diagnostics=True,
+        )
+        return residual, diagnostics, summary
+
+    initial_residual, initial_diag, initial_summary = _evaluate(base_params)
+    final_residual, final_diag, final_summary = _evaluate(improved_params)
+
+    assert initial_diag[0]["pair_id"] == final_diag[0]["pair_id"] == "trace-0"
+    assert initial_diag[0]["measured_fit_space_source"] == "cached_fit_space_anchor"
+    assert final_diag[0]["measured_fit_space_source"] == "cached_fit_space_anchor"
+    assert final_diag[0]["simulated_fit_space_source"] == "dataset_fit_space_projector"
+    assert final_diag[0]["fit_space_projector_kind"] == "exact_caked_bundle"
+    assert final_diag[0]["measured_detector_input_frame"] == "explicit_override"
+    assert final_summary["manual_caked_residual_row_count"] == 1
+    assert final_summary["dataset_fit_space_projector_row_count"] == 1
+    assert final_summary["cached_fit_space_anchor_row_count"] == 1
+    assert final_summary["analytic_detector_fit_space_row_count"] == 0
+    assert final_summary["invalid_dataset_fit_space_projector_row_count"] == 0
+    assert np.linalg.norm(final_residual) <= np.linalg.norm(initial_residual)
+    assert np.linalg.norm(final_residual) == pytest.approx(0.0)
+
+
+def test_geometry_fit_trace_keeps_placement_error_out_of_optimizer_residual() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+
+    assert (
+        geometry_fit._geometry_fit_trace_optimizer_residual_px({"placement_error_px": 14.45})
+        is None
+    )
+    assert geometry_fit._geometry_fit_trace_optimizer_residual_px(
+        {"weighted_dx_px": 3.0, "weighted_dy_px": 4.0}
+    ) == pytest.approx(5.0)
+
+    record = geometry_fit._geometry_fit_trace_pair_record(
+        phase="preflight",
+        dataset_info={"dataset_index": 0, "label": "trace.osc"},
+        entry={
+            "pair_id": "trace-0",
+            "overlay_match_index": 0,
+            "placement_error_px": 14.45,
+            "measured_x": 1083.8179,
+            "measured_y": 1083.2697,
+            "simulated_x": 1083.2697,
+            "simulated_y": 1915.1821,
+        },
+        fit_run_id="fit-1",
+    )
+
+    assert record["optimizer_residual_px"] is None
+    assert record["placement_error_px"] == pytest.approx(14.45)
+
+
 def test_runtime_logged_cache_loaders_disabled_skip_disk_lookup(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
@@ -13936,7 +15724,9 @@ def test_runtime_logged_cache_loaders_disabled_skip_disk_lookup(monkeypatch) -> 
         raising=False,
     )
 
-    metadata_loader, cache_loader = runtime_session._geometry_fit_logged_intersection_cache_loaders()
+    metadata_loader, cache_loader = (
+        runtime_session._geometry_fit_logged_intersection_cache_loaders()
+    )
 
     assert metadata_loader is None
     assert cache_loader is None
@@ -14171,6 +15961,147 @@ def test_runtime_session_source_cache_caked_timeout_does_not_hide_row_cache_succ
     assert kinds.index("source_cache_build_ready") < kinds.index("source_cache_caked_view_timeout")
 
 
+def test_worker_caked_manual_prepare_fails_closed_before_dataset_build(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+
+    job["var_names"] = ["zb"]
+    job["projection_view_mode"] = "caked"
+    job["projection_payload_by_background"] = {}
+    job["caked_views_by_background"] = {}
+    job["pick_uses_caked_space"] = True
+    job["manual_fit_space_by_background"] = {0: "caked"}
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_analysis_integrator",
+        lambda _cfg: object(),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cake boom")),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda *_args, **_kwargs: pytest.fail(
+            "caked worker must fail before dataset build when exact payload is missing"
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+
+    assert action_result.error_text is not None
+    assert "exact caked fit-space projector could not be prepared" in action_result.error_text
+    assert "exact caked projector unavailable for background 1" in action_result.error_text
+    assert "source_cache_caked_view_failed" in kinds
+    assert "preflight_failure" in kinds
+
+
+def test_worker_caked_manual_rejects_axes_only_payload_before_dataset_build(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+
+    job["var_names"] = ["zb"]
+    job["projection_view_mode"] = "caked"
+    job["projection_payload_by_background"] = {}
+    job["caked_views_by_background"] = {}
+    job["pick_uses_caked_space"] = True
+    job["manual_fit_space_by_background"] = {0: "caked"}
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _cfg: object())
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(runtime_session, "caking", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: {
+            "image": np.ones((2, 2), dtype=float),
+            "radial": np.asarray([1.0, 2.0], dtype=float),
+            "azimuth": np.asarray([3.0, 4.0], dtype=float),
+            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=float),
+            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
+            "transform_bundle": None,
+            "detector_shape": (4, 4),
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda *_args, **_kwargs: pytest.fail(
+            "axes-only caked payload must fail before dataset build"
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert action_result.error_text is not None
+    assert "exact caked fit-space projector could not be prepared" in action_result.error_text
+    assert "exact caked projector unavailable for background 1" in action_result.error_text
+
+
 def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load(
     monkeypatch,
 ) -> None:
@@ -14356,6 +16287,17 @@ def test_worker_prebuild_uses_background_specific_projection_signature() -> None
     assert "projection_view_signature=projection_view_signature" in helper_source
 
 
+def test_worker_projection_signature_recomputes_detector_instead_of_reusing_stale_caked() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    helper_start = source.index("def _worker_projection_view_signature_for_background(")
+    helper_end = source.index("def _project_source_rows_for_background(", helper_start)
+    helper_source = source[helper_start:helper_end]
+
+    assert "stored_signature" not in helper_source
+    assert "mode_override=normalized_mode" in helper_source
+    assert "signature_map[background_idx]" in helper_source
+
+
 def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
     monkeypatch,
 ) -> None:
@@ -14401,14 +16343,13 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
         lambda background_index, **kwargs: (
             resolve_calls.append({"background_index": int(background_index), **dict(kwargs)})
             or {
+                **_geometry_fit_worker_caked_payload(
+                    runtime_session,
+                    background_value=float(background_index),
+                    radial_values=[101.0, 102.0],
+                    azimuth_values=[3.0, 4.0],
+                ),
                 "payload_marker": int(background_index),
-                "background": np.ones((4, 4), dtype=np.float64),
-                "radial_axis": np.asarray([101.0, 102.0], dtype=np.float64),
-                "azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-                "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-                "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-                "transform_bundle": object(),
-                "detector_shape": (4, 4),
             }
         ),
         raising=False,
@@ -14481,15 +16422,12 @@ def test_worker_does_not_call_current_view_projector_for_noncurrent_background(
     }
     job["projection_view_mode"] = "caked"
     job["projection_payload_by_background"] = {
-        1: {
-            "background": np.ones((4, 4), dtype=np.float64),
-            "radial_axis": np.asarray([101.0, 102.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        }
+        1: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[101.0, 102.0],
+            azimuth_values=[1.0, 2.0],
+        )
     }
     job["osc_files"] = ["bg0.osc", "bg1.osc"]
     job["project_rows"] = lambda _rows: pytest.fail(
@@ -14570,7 +16508,7 @@ def test_worker_does_not_call_current_view_projector_for_noncurrent_background(
     assert projected_rows[0]["projected_background"] == 1
 
 
-def test_worker_noncurrent_background_without_payload_stores_no_projected_rows(
+def test_worker_noncurrent_background_without_payload_fails_closed(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -14663,9 +16601,11 @@ def test_worker_noncurrent_background_without_payload_stores_no_projected_rows(
         ),
     )
 
-    runtime_session._run_async_geometry_fit_worker_job(job)
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
 
-    assert projected_rows == [dict(_geometry_fit_worker_live_row(), background_index=1)]
+    assert projected_rows == []
+    assert action_result.error_text is not None
+    assert "exact caked projector unavailable for background 2" in action_result.error_text
     assert any(call["background_index"] == 1 for call in resolve_calls)
     assert all(
         call["allow_generated_payload"] is True
@@ -14689,24 +16629,18 @@ def test_worker_uses_background_specific_caked_payload_for_projected_rows(
     }
     job["projection_view_mode"] = "caked"
     job["projection_payload_by_background"] = {
-        0: {
-            "background": np.zeros((4, 4), dtype=np.float64),
-            "radial_axis": np.asarray([11.0, 12.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        },
-        1: {
-            "background": np.ones((4, 4), dtype=np.float64),
-            "radial_axis": np.asarray([101.0, 102.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        },
+        0: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=0.0,
+            radial_values=[11.0, 12.0],
+            azimuth_values=[1.0, 2.0],
+        ),
+        1: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[101.0, 102.0],
+            azimuth_values=[3.0, 4.0],
+        ),
     }
     job["osc_files"] = ["bg0.osc", "bg1.osc"]
 
@@ -14773,6 +16707,126 @@ def test_worker_uses_background_specific_caked_payload_for_projected_rows(
     assert projected_rows[0]["projected_payload_marker"] == 101.0
 
 
+def test_worker_caked_projection_hydrates_json_safe_payload_before_projection(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    projected_rows: list[dict[str, object]] = []
+    captured_bundles: list[object] = []
+
+    radial_axis = np.asarray([101.0, 102.0], dtype=np.float64)
+    azimuth_axis = np.asarray([3.0, 4.0], dtype=np.float64)
+    raw_azimuth_axis = np.asarray(
+        runtime_session.gui_geometry_fit.gui_phi_to_raw_phi(azimuth_axis),
+        dtype=np.float64,
+    )
+    exact_bundle = runtime_session.CakeTransformBundle(
+        detector_shape=(4, 4),
+        radial_deg=radial_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        gui_azimuth_deg=azimuth_axis,
+        lut=object(),
+    )
+    stale_payload = _geometry_fit_worker_caked_payload(
+        runtime_session,
+        background_value=1.0,
+        radial_values=radial_axis,
+        azimuth_values=azimuth_axis,
+    )
+    stale_payload["transform_bundle"] = "json-safe-bundle"
+
+    job["current_background_index"] = 0
+    job["required_indices"] = []
+    job["background_images"][1] = {
+        "native": np.ones((4, 4), dtype=np.float64),
+        "display": np.ones((4, 4), dtype=np.float64),
+    }
+    job["projection_view_mode"] = "caked"
+    job["projection_payload_by_background"] = {1: stale_payload}
+    job["osc_files"] = ["bg0.osc", "bg1.osc"]
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_analysis_integrator",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _hydrate(payload, **_kwargs):
+        hydrated = dict(payload)
+        hydrated["transform_bundle"] = exact_bundle
+        return hydrated
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "_geometry_fit_hydrate_exact_caked_payload",
+        _hydrate,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **kwargs: SimpleNamespace(
+            project_peaks_to_current_view=lambda rows: (
+                captured_bundles.append(kwargs["caked_transform_bundle"]())
+                or [
+                    dict(
+                        entry,
+                        projected_with_exact_bundle=(
+                            kwargs["caked_transform_bundle"]() is exact_bundle
+                        ),
+                    )
+                    for entry in rows or ()
+                    if isinstance(entry, Mapping)
+                ]
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda _background_index, *, manual_dataset_bindings, **_kwargs: (
+            projected_rows.extend(
+                manual_dataset_bindings.geometry_manual_project_peaks_to_current_view(
+                    [dict(_geometry_fit_worker_live_row(), background_index=1)]
+                )
+            )
+            or {}
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **kwargs: (
+            kwargs["build_dataset"](
+                0,
+                theta_base=0.0,
+                base_fit_params={"theta_initial": 0.0},
+                orientation_cfg={},
+                stage_callback=kwargs.get("stage_callback"),
+            )
+            or runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+        ),
+    )
+
+    runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert captured_bundles == [exact_bundle]
+    assert projected_rows[0]["projected_with_exact_bundle"] is True
+    assert job["projection_payload_by_background"][1]["transform_bundle"] is exact_bundle
+
+
 def test_worker_manual_dataset_projection_splits_mixed_background_rows(
     monkeypatch,
 ) -> None:
@@ -14791,24 +16845,18 @@ def test_worker_manual_dataset_projection_splits_mixed_background_rows(
         "display": np.ones((4, 4), dtype=np.float64),
     }
     job["projection_payload_by_background"] = {
-        0: {
-            "background": np.zeros((4, 4), dtype=np.float64),
-            "radial_axis": np.asarray([11.0, 12.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        },
-        1: {
-            "background": np.ones((4, 4), dtype=np.float64),
-            "radial_axis": np.asarray([101.0, 102.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        },
+        0: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=0.0,
+            radial_values=[11.0, 12.0],
+            azimuth_values=[1.0, 2.0],
+        ),
+        1: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[101.0, 102.0],
+            azimuth_values=[3.0, 4.0],
+        ),
     }
     job["osc_files"] = ["bg0.osc", "bg1.osc"]
 
@@ -14892,7 +16940,7 @@ def test_worker_manual_dataset_projection_splits_mixed_background_rows(
     ] == [("first", 1), ("second", 0), ("third", 1)]
 
 
-def test_noncurrent_caked_projection_without_payload_falls_back_to_source_rows(
+def test_noncurrent_caked_projection_without_payload_fails_closed(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -14931,20 +16979,32 @@ def test_noncurrent_caked_projection_without_payload_falls_back_to_source_rows(
         raising=False,
     )
 
-    rows = runtime_session._geometry_manual_project_peaks_for_background(
-        1,
-        [dict(_geometry_fit_worker_live_row(), row_id="row")],
-        mode_override="caked",
-    )
+    with pytest.raises(RuntimeError, match="exact caked projector unavailable for background 2"):
+        runtime_session._geometry_manual_project_peaks_for_background(
+            1,
+            [dict(_geometry_fit_worker_live_row(), background_index=1, row_id="row")],
+            mode_override="caked",
+        )
 
     assert resolve_calls
     assert resolve_calls[0]["background_index"] == 1
     assert resolve_calls[0]["allow_generated_payload"] is True
-    assert rows == [dict(_geometry_fit_worker_live_row(), background_index=1, row_id="row")]
 
 
-def test_current_caked_projection_error_falls_back_to_source_rows(monkeypatch) -> None:
+def test_current_caked_projection_skips_legacy_projector_and_hydrates_exact_bundle(
+    monkeypatch,
+) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = _geometry_fit_worker_caked_payload(
+        runtime_session,
+        background_value=1.0,
+        radial_values=[101.0, 102.0],
+        azimuth_values=[3.0, 4.0],
+    )
+    exact_bundle = payload["transform_bundle"]
+    stale_payload = dict(payload, transform_bundle="json-safe-bundle")
+    captured_bundles: list[object] = []
+    live_bundles: list[object] = []
 
     monkeypatch.setattr(
         runtime_session,
@@ -14955,8 +17015,56 @@ def test_current_caked_projection_error_falls_back_to_source_rows(monkeypatch) -
     monkeypatch.setattr(
         runtime_session,
         "_project_geometry_manual_peaks_to_current_view",
-        lambda _rows: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda _rows: pytest.fail("caked current-background path must not use legacy projector"),
         raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_load_background_image_by_index",
+        lambda _idx: (
+            np.ones((4, 4), dtype=np.float64),
+            np.ones((4, 4), dtype=np.float64),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda *_args, **_kwargs: dict(stale_payload),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "_geometry_fit_hydrate_exact_caked_payload",
+        lambda payload, **_kwargs: dict(payload, transform_bundle=exact_bundle),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_live_caked_transform_bundle",
+        lambda bundle: live_bundles.append(bundle),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(ai_cache={}, profile_cache={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **kwargs: SimpleNamespace(
+            project_peaks_to_current_view=lambda rows: (
+                captured_bundles.append(kwargs["caked_transform_bundle"]())
+                or [
+                    dict(entry, projected_with_exact_bundle=True)
+                    for entry in rows or ()
+                    if isinstance(entry, Mapping)
+                ]
+            )
+        ),
     )
 
     rows = runtime_session._geometry_manual_project_peaks_for_background(
@@ -14965,10 +17073,72 @@ def test_current_caked_projection_error_falls_back_to_source_rows(monkeypatch) -
         mode_override="caked",
     )
 
-    assert rows == [dict(_geometry_fit_worker_live_row(), background_index=0, row_id="row")]
+    assert captured_bundles == [exact_bundle]
+    assert live_bundles == [exact_bundle]
+    assert rows[0]["projected_with_exact_bundle"] is True
 
 
-def test_noncurrent_caked_projection_error_falls_back_to_source_rows(
+def test_current_caked_projection_error_fails_closed(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = _geometry_fit_worker_caked_payload(
+        runtime_session,
+        background_value=1.0,
+        radial_values=[101.0, 102.0],
+        azimuth_values=[3.0, 4.0],
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda _rows: pytest.fail("caked current-background path must not use legacy projector"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_load_background_image_by_index",
+        lambda _idx: (
+            np.ones((4, 4), dtype=np.float64),
+            np.ones((4, 4), dtype=np.float64),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda *_args, **_kwargs: dict(payload),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **_kwargs: SimpleNamespace(
+            project_peaks_to_current_view=lambda _rows: (_ for _ in ()).throw(RuntimeError("boom"))
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(ai_cache={}, profile_cache={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        runtime_session._geometry_manual_project_peaks_for_background(
+            0,
+            [dict(_geometry_fit_worker_live_row(), row_id="row")],
+            mode_override="caked",
+        )
+
+
+def test_noncurrent_caked_projection_error_fails_closed(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -14999,15 +17169,12 @@ def test_noncurrent_caked_projection_error_falls_back_to_source_rows(
     monkeypatch.setattr(
         runtime_session,
         "_geometry_fit_resolve_targeted_caked_projection_payload",
-        lambda *_args, **_kwargs: {
-            "background": np.ones((4, 4), dtype=np.float64),
-            "radial_axis": np.asarray([101.0, 102.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        },
+        lambda *_args, **_kwargs: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[101.0, 102.0],
+            azimuth_values=[3.0, 4.0],
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -15018,13 +17185,12 @@ def test_noncurrent_caked_projection_error_falls_back_to_source_rows(
         ),
     )
 
-    rows = runtime_session._geometry_manual_project_peaks_for_background(
-        1,
-        [dict(_geometry_fit_worker_live_row(), row_id="row")],
-        mode_override="caked",
-    )
-
-    assert rows == [dict(_geometry_fit_worker_live_row(), background_index=1, row_id="row")]
+    with pytest.raises(RuntimeError, match="boom"):
+        runtime_session._geometry_manual_project_peaks_for_background(
+            1,
+            [dict(_geometry_fit_worker_live_row(), background_index=1, row_id="row")],
+            mode_override="caked",
+        )
 
 
 def test_noncurrent_caked_sync_rebuild_injects_generated_projection_payload(
@@ -15653,15 +17819,12 @@ def test_targeted_projected_cache_miss_reprojects_when_view_changes(monkeypatch)
     monkeypatch.setattr(
         runtime_session,
         "_geometry_fit_resolve_targeted_caked_projection_payload",
-        lambda *_args, **_kwargs: {
-            "background": np.ones((2, 2), dtype=np.float64),
-            "radial_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        },
+        lambda *_args, **_kwargs: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[1.0, 2.0],
+            azimuth_values=[3.0, 4.0],
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -15799,15 +17962,12 @@ def test_same_mode_changed_projection_signature_forces_cache_miss(
     monkeypatch.setattr(
         runtime_session,
         "_geometry_fit_resolve_targeted_caked_projection_payload",
-        lambda *_args, **_kwargs: {
-            "background": np.ones((2, 2), dtype=np.float64),
-            "radial_axis": np.asarray([1.0, 2.0], dtype=np.float64),
-            "azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-            "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-            "transform_bundle": object(),
-            "detector_shape": (4, 4),
-        },
+        lambda *_args, **_kwargs: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[1.0, 2.0],
+            azimuth_values=[3.0, 4.0],
+        ),
         raising=False,
     )
     monkeypatch.setattr(

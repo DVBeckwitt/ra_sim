@@ -333,10 +333,26 @@ def build_visual_overlay_records_from_saved_entries(
         if not isinstance(raw_entry, Mapping):
             continue
         entry = dict(raw_entry)
-        bg_point = _point_from_keys(entry, ("x", "y"))
-        sim_point = _point_from_keys(entry, ("refined_sim_x", "refined_sim_y"))
-        if sim_point is None:
-            sim_point = _point_from_keys(entry, ("sim_col", "sim_row"))
+        use_caked_space = geometry_fit.geometry_manual_pairs_use_caked_fit_space([entry])
+        if use_caked_space:
+            bg_point = _point_from_keys(
+                entry,
+                ("background_two_theta_deg", "background_phi_deg"),
+            ) or _point_from_keys(entry, ("caked_x", "caked_y"))
+            sim_point = _point_from_keys(
+                entry,
+                ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ) or _point_from_keys(
+                entry,
+                ("simulated_two_theta_deg", "simulated_phi_deg"),
+            )
+            frame = "caked_2theta_phi"
+        else:
+            bg_point = _point_from_keys(entry, ("x", "y"))
+            sim_point = _point_from_keys(entry, ("refined_sim_x", "refined_sim_y"))
+            if sim_point is None:
+                sim_point = _point_from_keys(entry, ("sim_col", "sim_row"))
+            frame = "display"
         record = {
             "pair_index": int(pair_index),
             "pair_id": str(
@@ -350,6 +366,8 @@ def build_visual_overlay_records_from_saved_entries(
             "branch_group_key": _jsonable(entry.get("branch_group_key")),
             "bg_display": bg_point,
             "sim_display": sim_point,
+            "background_frame": frame,
+            "simulated_frame": frame,
             "visual_overlay_input_source": "saved_gui_manual_pair_fields",
         }
         records.append(record)
@@ -358,8 +376,20 @@ def build_visual_overlay_records_from_saved_entries(
 
 def _manual_render_entry_display_coords(
     entry: Mapping[str, object] | None,
+    *,
+    use_caked_display: bool = False,
 ) -> tuple[float, float] | None:
     if not isinstance(entry, Mapping):
+        return None
+    if bool(use_caked_display):
+        for keys in (
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+        ):
+            point = _point_from_keys(entry, keys)
+            if point is not None:
+                return float(point[0]), float(point[1])
         return None
     for keys in (
         ("x", "y"),
@@ -430,6 +460,9 @@ def _enrich_manual_overlay_identity(
         ):
             if row.get(key) is None and source.get(key) is not None:
                 row[key] = source.get(key)
+        if geometry_fit.geometry_manual_pairs_use_caked_fit_space([source]):
+            row["background_frame"] = "caked_2theta_phi"
+            row["simulated_frame"] = "caked_2theta_phi"
         row["visual_overlay_input_source"] = "manual_geometry.render_current_geometry_manual_pairs"
         enriched_rows.append(row)
     return enriched_rows
@@ -445,6 +478,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
     saved = [dict(entry) for entry in saved_entries or () if isinstance(entry, Mapping)]
     captured_rows: list[dict[str, object]] | None = None
     captured_marker_limit: int | None = None
+    use_caked_display = geometry_fit.geometry_manual_pairs_use_caked_fit_space(saved)
 
     def _pairs_for_index(index: int) -> list[dict[str, object]]:
         return [dict(entry) for entry in saved] if int(index) == int(background_index) else []
@@ -460,7 +494,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
             param_set=param_set,
             current_background_index=int(background_index),
             prefer_cache=prefer_cache,
-            use_caked_display=False,
+            use_caked_display=use_caked_display,
             pairs_for_index=_pairs_for_index,
             current_geometry_fit_params=lambda: {},
             get_cache_data=lambda **_kwargs: {},
@@ -472,7 +506,12 @@ def capture_manual_geometry_overlay_input_from_render_path(
             project_peaks_to_current_view=lambda rows: [
                 dict(row) for row in rows or () if isinstance(row, Mapping)
             ],
-            entry_display_coords=_manual_render_entry_display_coords,
+            entry_display_coords=(
+                lambda entry: _manual_render_entry_display_coords(
+                    entry,
+                    use_caked_display=use_caked_display,
+                )
+            ),
             filter_active_rows=lambda rows: [
                 dict(row) for row in rows or () if isinstance(row, Mapping)
             ],
@@ -633,11 +672,15 @@ def collect_geometry_visual_pair_positions(
                 "q_group_key": _q_group_key(row),
                 "branch_group_key": _jsonable(row.get("branch_group_key")),
                 "visual_background_point": bg_point,
-                "visual_background_frame": "display",
+                "visual_background_frame": _normalize_frame(
+                    row.get("background_frame", row.get("visual_background_frame", "display"))
+                ),
                 "visual_background_data_point": bg_point,
                 "visual_background_canvas_point": _canvas_point(ax, bg_point),
                 "visual_simulated_point": sim_point,
-                "visual_simulated_frame": "display",
+                "visual_simulated_frame": _normalize_frame(
+                    row.get("simulated_frame", row.get("visual_simulated_frame", "display"))
+                ),
                 "visual_simulated_data_point": sim_point,
                 "visual_simulated_canvas_point": _canvas_point(ax, sim_point),
                 "visual_background_artist_source": (
@@ -731,14 +774,50 @@ def _manual_surface_record(row: Mapping[str, object], pair_index: int) -> dict[s
     return record
 
 
+def _caked_background_surface_point(row: Mapping[str, object]) -> tuple[float, float] | None:
+    return (
+        _point(row.get("bg_caked_display"))
+        or _point_from_keys(row, ("background_two_theta_deg", "background_phi_deg"))
+        or _point_from_keys(row, ("caked_x", "caked_y"))
+        or _point(row.get("background_point"))
+        or _point_from_keys(row, ("x", "y"))
+        or _point_from_keys(row, ("measured_x", "measured_y"))
+        or _point_from_keys(row, ("background_x", "background_y"))
+    )
+
+
+def _caked_simulated_surface_point(row: Mapping[str, object]) -> tuple[float, float] | None:
+    return (
+        _point(row.get("sim_caked_display"))
+        or _point_from_keys(row, ("simulated_two_theta_deg", "simulated_phi_deg"))
+        or _point_from_keys(row, ("refined_sim_caked_x", "refined_sim_caked_y"))
+        or _point(row.get("simulated_point"))
+        or _point(row.get("sim_display"))
+        or _point_from_keys(row, ("simulated_x", "simulated_y"))
+        or _point_from_keys(row, ("sim_x", "sim_y"))
+    )
+
+
 def _initial_surface_record(row: Mapping[str, object], pair_index: int) -> dict[str, object]:
     record = _base_surface_record(row, pair_index)
+    background_frame = _normalize_frame(row.get("provider_background_frame", "display"))
+    simulated_frame = _normalize_frame(row.get("provider_simulated_frame", "display"))
+    background_point = (
+        _caked_background_surface_point(row)
+        if background_frame == "caked_2theta_phi"
+        else _point(row.get("bg_display") or row.get("background_point"))
+    )
+    simulated_point = (
+        _caked_simulated_surface_point(row)
+        if simulated_frame == "caked_2theta_phi"
+        else _point(row.get("sim_display") or row.get("simulated_point"))
+    )
     record.update(
         {
-            "background_point": _point(row.get("bg_display") or row.get("background_point")),
-            "background_frame": _normalize_frame(row.get("provider_background_frame", "display")),
-            "simulated_point": _point(row.get("sim_display") or row.get("simulated_point")),
-            "simulated_frame": _normalize_frame(row.get("provider_simulated_frame", "display")),
+            "background_point": background_point,
+            "background_frame": background_frame,
+            "simulated_point": simulated_point,
+            "simulated_frame": simulated_frame,
         }
     )
     return record
@@ -746,18 +825,27 @@ def _initial_surface_record(row: Mapping[str, object], pair_index: int) -> dict[
 
 def _measured_surface_record(row: Mapping[str, object], pair_index: int) -> dict[str, object]:
     record = _base_surface_record(row, pair_index)
-    bg_point = _point_from_keys(row, ("x", "y")) or _point_from_keys(
-        row, ("display_col", "display_row")
+    background_frame = _normalize_frame(
+        row.get("provider_background_frame", row.get("detector_input_frame", "display"))
     )
-    sim_point = _point(row.get("sim_display")) or _point_from_keys(row, ("sim_col", "sim_row"))
+    simulated_frame = _normalize_frame(row.get("provider_simulated_frame", "display"))
+    bg_point = (
+        _caked_background_surface_point(row)
+        if background_frame == "caked_2theta_phi"
+        else _point_from_keys(row, ("x", "y"))
+        or _point_from_keys(row, ("display_col", "display_row"))
+    )
+    sim_point = (
+        _caked_simulated_surface_point(row)
+        if simulated_frame == "caked_2theta_phi"
+        else _point(row.get("sim_display")) or _point_from_keys(row, ("sim_col", "sim_row"))
+    )
     record.update(
         {
             "background_point": bg_point,
-            "background_frame": _normalize_frame(
-                row.get("provider_background_frame", row.get("detector_input_frame", "display"))
-            ),
+            "background_frame": background_frame,
             "simulated_point": sim_point,
-            "simulated_frame": _normalize_frame(row.get("provider_simulated_frame", "display")),
+            "simulated_frame": simulated_frame,
         }
     )
     return record
@@ -771,26 +859,43 @@ def _optimizer_surface_record(
     provider = provider_row if isinstance(provider_row, Mapping) else {}
     merged = {**provider, **dict(row)}
     record = _base_surface_record(merged, pair_index)
+    background_frame = _normalize_frame(
+        row.get(
+            "background_frame",
+            row.get(
+                "provider_background_frame",
+                row.get(
+                    "detector_input_frame",
+                    provider.get("background_frame", "display"),
+                ),
+            ),
+        )
+    )
+    simulated_frame = _normalize_frame(
+        row.get(
+            "simulated_frame",
+            row.get("provider_simulated_frame", provider.get("simulated_frame", "display")),
+        )
+    )
     sim_point = (
-        _point(row.get("simulated_point"))
+        _caked_simulated_surface_point(merged)
+        if simulated_frame == "caked_2theta_phi"
+        else _point(row.get("simulated_point"))
         or _point(row.get("sim_display"))
         or _point(provider.get("simulated_point"))
         or _point(provider.get("provider_selected_simulated_point"))
     )
+    bg_point = (
+        _caked_background_surface_point(merged)
+        if background_frame == "caked_2theta_phi"
+        else _point_from_keys(row, ("x", "y")) or _point(row.get("background_point"))
+    )
     record.update(
         {
-            "background_point": _point_from_keys(row, ("x", "y"))
-            or _point(row.get("background_point")),
-            "background_frame": _normalize_frame(
-                row.get(
-                    "provider_background_frame",
-                    row.get("detector_input_frame", provider.get("background_frame", "display")),
-                )
-            ),
+            "background_point": bg_point,
+            "background_frame": background_frame,
             "simulated_point": sim_point,
-            "simulated_frame": _normalize_frame(
-                row.get("provider_simulated_frame", provider.get("simulated_frame", "display"))
-            ),
+            "simulated_frame": simulated_frame,
         }
     )
     return record

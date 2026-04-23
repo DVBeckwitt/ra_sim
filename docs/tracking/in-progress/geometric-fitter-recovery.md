@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-22
+Last updated: 2026-04-23
 
 ## Summary
 
@@ -43,6 +43,20 @@ simulation-native detector pixels and projected with
 reserved for rows explicitly marked as background/native-detector. Guard tests
 lock caked selection and caked-to-detector conversion behavior so this fix does
 not reopen those known-good paths.
+
+The manual caked geometry-fit drift bug/error scope is closed for solver
+routing and Rung 6 validation, but not yet fully closed for the import-safe
+preflight boundary. Caked/Qr-Qz manual picks stay on the exact caked fit-space
+path, require exact fit-space rows, reject fallback/analytic-detector rows, and
+avoid detector/current-view raw-row fallback in ladder validation. Headless
+Rung 6 seeds later combined candidates from accepted earlier candidates plus
+accepted Rung 5 z/zb evidence, and if the optimizer worsens caked RMS/max it
+accepts the seeded caked initial state as a no-op instead of reporting a worse
+final fit. Detector manual picks keep the legacy pixel evaluator path and
+permissive detector projection fallback. Remaining blocker: four
+`tests/test_gui_runtime_import_safe.py` cases still show caked prepare/worker
+paths reaching dataset build before exact-payload ensure/fail-closed handling;
+do not claim full GUI/preflight closure until those pass.
 
 The adjacent startup/list-refresh bug is closed: normal simulation updates now
 request the same hit-table/selection cache needed by Qr/Qz picking and refresh
@@ -150,6 +164,11 @@ Speed status as of 2026-04-22:
 - Feature: warm in-process solver reuse is implemented and covered by tests.
 - Feature: fast manual selected-point and lean ladder runtime profiles are
   covered by focused tests, with dynamic point fitting guarded as unchanged.
+- Bug/error: manual caked geometry fits now fail closed unless the exact caked
+  fit-space projector is hydrated per background before dataset build. Worker,
+  headless, and CLI projection callbacks use each row's own background payload
+  and preserve row order; caked projector errors no longer return raw detector
+  rows.
 - Still open: initial context capture, provider guard, objective dry-run, and
   sensitivity setup still dominate whole-run wall time.
 
@@ -273,9 +292,28 @@ blocks, provider guard after blocks green, fixed-source counters clean on
 passing blocks, and unchanged `new4.json`
 (`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
 
-No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish,
-feature rung, or Rung 6 solve is claimed here, and
+Fresh Rung 6 combined validation is green from that block evidence. Run
+`20260422_rung7_seedfix_combined` passed both combined candidates, including C2
+`corto_detector/theta_initial/cor_angle/chi/zs/zb`, with clean 7/7
+fixed-source counters, provider/caked/state guards green, and
 `full_fitter_validated == false`.
+
+Controlled full-sequence Rung 7 feature gating is now blocked at
+`full_beam_polish`. Fresh chain `20260422_rung7_seedfix_provider_before`,
+`20260422_rung7_seedfix_caked`, `20260422_rung7_seedfix_blocks`,
+`20260422_rung7_seedfix_combined`, `20260422_rung7_seedfix_features`, and
+`20260422_rung7_seedfix_provider_after` kept provider/caked/Rung 5/Rung 6
+guards green and `new4.json` unchanged
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
+Rung 7 passed `dynamic_reanchor`, `discrete_modes`, and `seed_multistart` with
+clean 7/7 fixed-source counters. `dynamic_reanchor` kept lost, rejected,
+fallback, and rematched pair id lists empty. `seed_multistart` selected seed 11 cleanly,
+preserved 7/7 fixed manual pairs, rejected one dirty seed before ranking, and
+did not select a dirty seed. `full_beam_polish` failed with
+`failure_reason == "fixed_source_or_pair_integrity_lost"` and
+`identifiability_features` was skipped with `prior_feature_failed`. No full
+fitter, baseline, GUI fit, unrestricted feature combination, or full fitter
+validation is claimed, and `full_fitter_validated == false`.
 
 New4 ladder timing observability is implemented for Rungs 0-5. Each current-run
 rung report gets finite timing metadata. Each ladder run writes
@@ -304,10 +342,9 @@ Rung 5 closeout status by work type:
 - Validation status: run `20260422_115256` passed Rungs 1-5, Rung 5 passed 4/4
   attempted blocks, provider guard after blocks stayed green, and `new4.json`
   stayed unchanged.
-- Still open: the separately approved Rung 6 selected combined solve /
-  full-candidate dry run, full fitter validation, feature re-enable,
-  baseline, GUI validation, dynamic reanchor, multistart, polish, and
-  freeze/thaw remain unclaimed.
+- Still open: debug `full_beam_polish` fixed-source/pair-integrity loss, then
+  separately gate identifiability, full fitter validation, baseline, GUI
+  validation, unrestricted feature combinations, and freeze/thaw.
 
 ## Do Not Redo
 
@@ -323,14 +360,17 @@ Do not redo these completed validations unless their guard output regresses:
 - Rung 3B caked point reprojection guard.
 - Rung 4 initial paired solves.
 - Rung 5 fresh same-run cumulative blocks.
+- Rung 6 C2 combined candidate validation from fresh Rung 5 evidence.
+- Rung 7 `dynamic_reanchor`, `discrete_modes`, and `seed_multistart`
+  controlled single-feature passes from the full-sequence gate.
 
 ## Next Rung
 
-Rung 5 fresh same-run is green for New4 ladder validation. The next approved
-rung is separate: Rung 6 selected combined solve / full-candidate dry run. Do
-not run full, feature, baseline, GUI fit button, dynamic reanchor, multistart,
-polish, freeze/thaw, broad parameter tuning, or a higher rung until its own
-gate is explicit.
+Rung 7 `full_beam_polish` is the next focused blocker. Do not run full fitter,
+baseline, GUI fit button, unrestricted feature combinations, feature-combo
+solves, identifiability acceptance, freeze/thaw, broad parameter tuning, or a
+higher rung until `full_beam_polish` fixed-source/pair integrity is repaired
+and separately re-gated.
 
 Allowed parameter set for Rung 4:
 
@@ -361,7 +401,9 @@ as repeat work:
 - `[corto_detector, c]`
 
 `[a, c, psi_z]` passed as part of the fresh Rung 5 block validation in
-`20260422_115256`. Rung 6 remains separate and unstarted.
+`20260422_115256`. Rung 6 C2 later passed in
+`20260422_rung7_seedfix_combined`; the current blocker is the Rung 7
+`full_beam_polish` feature.
 
 Rung 4 pass requirements per pair:
 
@@ -389,9 +431,11 @@ Rung 4 pass requirements per pair:
 ## Still Not Validated
 
 Full geometric fitter validation is not yet claimed. Baseline completion is not
-yet claimed. RMS/max global improvement is not yet claimed. Feature rungs and
-full solves remain unclaimed. Rung 6 selected combined solve is not claimed in
-this tracking doc. The GUI fit button is not the validation path.
+yet claimed. RMS/max global improvement is not yet claimed. Rung 6 C2 and the
+controlled Rung 7 `dynamic_reanchor`, `discrete_modes`, and `seed_multistart`
+feature probes are claimed only as bounded ladder evidence. `full_beam_polish`
+failed and `identifiability_features` was skipped, so full feature validation
+and full solves remain unclaimed. The GUI fit button is not the validation path.
 `run_geometry_fit_quality_baseline.py` is not the immediate next step.
 
 ## Current State
@@ -551,9 +595,12 @@ this tracking doc. The GUI fit button is not the validation path.
 ## Next Actions
 
 - Treat Rung 3 one-parameter solves, the Rung 3A `a` diagnosis, Rung 3B caked
-  point reprojection, and Rung 4 initial paired solves as complete. The next
-  patch should use the recorded Rung 4 result instead of repeating the same
-  pair discovery run.
+  point reprojection, Rung 4 initial paired solves, Rung 5 blocks, Rung 6 C2,
+  and Rung 7 `dynamic_reanchor`/`discrete_modes`/`seed_multistart` as complete
+  bounded ladder evidence unless a guard regresses.
+- Debug the Rung 7 `full_beam_polish` fixed-source/pair-integrity failure
+  before any identifiability acceptance, full-candidate gate, baseline, or GUI
+  fit validation.
 - Treat warm solve-rung reuse as implemented. Do not reintroduce one Python
   subprocess or one fresh solver context per candidate unless explicitly
   running `--use-subprocess` for diagnostics.
@@ -574,11 +621,15 @@ this tracking doc. The GUI fit button is not the validation path.
   simulated `2theta,phi` seed no longer redraws at the same detector marker
   position after switching view or refreshing, or Qr/Qz seed selection stops
   recognizing the same visible marker after switching detector/caked views.
+- Keep manual caked geometry-fit routing closed unless caked manual pairs can
+  reach dataset build without exact per-background `CakeTransformBundle`
+  hydration, mixed detector/caked manual selections reach launch, or any caked
+  projector exception returns raw detector/source rows.
 - Keep objective rung 1 as a guard: any request/objective fallback row must stop
   before `least_squares`.
-- Do not run block, full, feature, baseline, GUI fit button, broad parameter
-  tuning, higher rungs, or loosen fallback rules without an explicit next-rung
-  gate.
+- Do not run full, baseline, GUI fit button, unrestricted feature combinations,
+  feature-combo solves, broad parameter tuning, higher rungs, or loosen
+  fallback rules without an explicit next-rung gate.
 
 ## Point-Provider Stop Criteria
 
@@ -845,6 +896,22 @@ Coordinate parity closure, 2026-04-22:
   `diagnostic_incomplete_optimizer_request_unavailable` instead of
   `frame_mismatch_detected`, and absent optimizer-request comparison reports
   `not_requested` while provider/dataset parity remains green.
+
+Manual caked fit fail-closed validation, 2026-04-23:
+
+- `python -m pytest tests/test_gui_runtime_import_safe.py -k "manual_caked or manual_fit_space or async_job or headless or cli or worker_caked or projection"`:
+  43 passed.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "manual_caked or manual_fit_space or projector or new4_ladder_block or new4_ladder_combined"`:
+  49 passed.
+- `python -m pytest tests/test_cli_geometry_fit.py tests/test_manual_geometry_live_peak_cache.py`:
+  36 passed.
+- `ruff check ra_sim/gui/geometry_fit.py ra_sim/gui/_runtime/runtime_session.py ra_sim/headless_geometry_fit.py ra_sim/cli.py tests/test_gui_runtime_import_safe.py tests/test_gui_geometry_fit_workflow.py`:
+  passed.
+- `python -m py_compile ra_sim/gui/geometry_fit.py ra_sim/gui/_runtime/runtime_session.py ra_sim/headless_geometry_fit.py ra_sim/cli.py tests/test_gui_runtime_import_safe.py tests/test_gui_geometry_fit_workflow.py`:
+  passed.
+- `python -m ra_sim.dev check` stopped at format-check on unrelated existing
+  format dirt in `ra_sim/fitting/optimization.py` and `tests/test_timing.py`.
+  The full Rungs 0-6 ladder was not rerun in this final fail-closed pass.
 
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.

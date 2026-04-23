@@ -37,8 +37,12 @@ from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
+    build_angle_axes,
+    build_cake_transform_bundle,
     detector_pixel_to_caked_bin,
+    detector_two_theta_max_deg,
     gui_phi_to_raw_phi,
+    prepare_gui_phi_display,
     raw_phi_to_gui_phi,
     resolve_cake_transform_bundle,
 )
@@ -101,6 +105,320 @@ def _geometry_fit_detector_shape_2d(
     if len(detector_shape) < 2 or detector_shape[0] <= 0 or detector_shape[1] <= 0:
         return None
     return detector_shape
+
+
+def normalize_geometry_fit_caked_view_payload(
+    payload: Mapping[str, object] | None,
+    *,
+    detector_shape: Sequence[object] | None = None,
+    ai: FastAzimuthalIntegrator | None = None,
+) -> dict[str, object] | None:
+    if not isinstance(payload, Mapping):
+        return None
+
+    transform_bundle = payload.get("transform_bundle")
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
+        normalized_shape = _geometry_fit_detector_shape_2d(payload.get("detector_shape"))
+    if normalized_shape is None and isinstance(transform_bundle, CakeTransformBundle):
+        normalized_shape = _geometry_fit_detector_shape_2d(transform_bundle.detector_shape)
+    if normalized_shape is None:
+        return None
+
+    background_value = payload.get(
+        "background",
+        payload.get("background_image", payload.get("image")),
+    )
+    background = None
+    if background_value is not None:
+        try:
+            background = np.asarray(background_value, dtype=np.float64).copy()
+        except Exception:
+            return None
+        if background.ndim != 2 or background.size <= 0:
+            return None
+
+    radial_source = payload.get("radial_axis", payload.get("radial"))
+    if radial_source is None and isinstance(transform_bundle, CakeTransformBundle):
+        radial_source = transform_bundle.radial_deg
+    azimuth_source = payload.get("azimuth_axis", payload.get("azimuth"))
+    if azimuth_source is None and isinstance(transform_bundle, CakeTransformBundle):
+        bundle_gui_axis = np.asarray(
+            raw_phi_to_gui_phi(transform_bundle.raw_azimuth_deg),
+            dtype=np.float64,
+        ).reshape(-1)
+        azimuth_source = bundle_gui_axis[np.argsort(bundle_gui_axis, kind="stable")]
+    try:
+        radial_axis = np.asarray(radial_source, dtype=np.float64).reshape(-1)
+        azimuth_axis = np.asarray(azimuth_source, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if (
+        radial_axis.size <= 0
+        or azimuth_axis.size <= 0
+        or not np.all(np.isfinite(radial_axis))
+        or not np.all(np.isfinite(azimuth_axis))
+    ):
+        return None
+
+    raw_azimuth_value = payload.get(
+        "raw_azimuth_axis",
+        payload.get("raw_azimuth"),
+    )
+    if raw_azimuth_value is None:
+        raw_azimuth_axis = _geometry_fit_raw_azimuth_axis_from_display_axis(azimuth_axis)
+    else:
+        try:
+            raw_azimuth_axis = np.asarray(
+                raw_azimuth_value,
+                dtype=np.float64,
+            ).reshape(-1)
+        except Exception:
+            return None
+    if (
+        raw_azimuth_axis is None
+        or raw_azimuth_axis.size != azimuth_axis.size
+        or not np.all(np.isfinite(raw_azimuth_axis))
+    ):
+        return None
+    raw_azimuth_axis = np.asarray(raw_azimuth_axis, dtype=np.float64).copy()
+
+    canonical_row_permutation = np.asarray(
+        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
+        dtype=np.int32,
+    )
+    raw_to_gui_value = payload.get("raw_to_gui_row_permutation")
+    try:
+        raw_to_gui_row_permutation = np.asarray(
+            raw_to_gui_value if raw_to_gui_value is not None else canonical_row_permutation,
+            dtype=np.int32,
+        ).reshape(-1)
+    except Exception:
+        raw_to_gui_row_permutation = canonical_row_permutation
+    if raw_to_gui_row_permutation.shape != canonical_row_permutation.shape or not np.array_equal(
+        raw_to_gui_row_permutation,
+        canonical_row_permutation,
+    ):
+        raw_to_gui_row_permutation = canonical_row_permutation
+
+    resolved_bundle = resolve_cake_transform_bundle(
+        ai,
+        normalized_shape,
+        radial_axis,
+        gui_azimuth_deg=azimuth_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        transform_bundle=(
+            transform_bundle if isinstance(transform_bundle, CakeTransformBundle) else None
+        ),
+        require_gui_display_match=True,
+    )
+
+    normalized_payload = {
+        "detector_shape": tuple(int(v) for v in normalized_shape),
+        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
+        "azimuth_axis": np.asarray(azimuth_axis, dtype=np.float64).copy(),
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "raw_to_gui_row_permutation": np.asarray(
+            raw_to_gui_row_permutation,
+            dtype=np.int32,
+        ).copy(),
+        "transform_bundle": (
+            resolved_bundle if isinstance(resolved_bundle, CakeTransformBundle) else None
+        ),
+    }
+    if background is not None:
+        normalized_payload["background"] = background
+    return normalized_payload
+
+
+def build_geometry_fit_exact_caked_projection_view(
+    *,
+    detector_shape: Sequence[object] | None,
+    ai: FastAzimuthalIntegrator | None,
+    npt_rad: int | None = None,
+    npt_azim: int | None = None,
+) -> dict[str, object] | None:
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
+        return None
+
+    radial_bins = int(max(1, npt_rad)) if npt_rad is not None else 1000
+    azimuth_bins = int(max(1, npt_azim)) if npt_azim is not None else 720
+    try:
+        radial_axis, raw_azimuth_axis = build_angle_axes(
+            npt_rad=radial_bins,
+            npt_azim=azimuth_bins,
+            tth_min_deg=0.0,
+            tth_max_deg=detector_two_theta_max_deg(
+                normalized_shape,
+                ai.geometry,
+            ),
+            azimuth_min_deg=-180.0,
+            azimuth_max_deg=180.0,
+        )
+        transform_bundle = build_cake_transform_bundle(
+            ai,
+            normalized_shape,
+            radial_axis,
+            raw_azimuth_axis,
+        )
+    except Exception:
+        return None
+    if not isinstance(transform_bundle, CakeTransformBundle):
+        return None
+
+    gui_azimuth_axis = np.asarray(
+        raw_phi_to_gui_phi(raw_azimuth_axis),
+        dtype=np.float64,
+    )
+    raw_to_gui_row_permutation = np.asarray(
+        np.argsort(gui_azimuth_axis, kind="stable"),
+        dtype=np.int32,
+    )
+    gui_azimuth_axis = gui_azimuth_axis[raw_to_gui_row_permutation]
+    return normalize_geometry_fit_caked_view_payload(
+        {
+            "detector_shape": normalized_shape,
+            "radial_axis": radial_axis,
+            "azimuth_axis": gui_azimuth_axis,
+            "raw_azimuth_axis": raw_azimuth_axis,
+            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+            "transform_bundle": transform_bundle,
+        },
+        detector_shape=normalized_shape,
+        ai=ai,
+    )
+
+
+def build_geometry_fit_caked_view_payload_from_result(
+    res2: object,
+    *,
+    ai: FastAzimuthalIntegrator | None = None,
+    detector_shape: Sequence[object] | None = None,
+) -> dict[str, object] | None:
+    if res2 is None:
+        return None
+
+    try:
+        raw_azimuth_axis = np.asarray(res2.azimuthal, dtype=float)
+        raw_to_gui_row_permutation = np.asarray(
+            np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
+            dtype=np.int32,
+        )
+        caked_img, radial_vals, azimuth_vals = prepare_gui_phi_display(res2)
+    except Exception:
+        return None
+
+    radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
+    if np.any(radial_mask):
+        radial_vals = radial_vals[radial_mask]
+        caked_img = caked_img[:, radial_mask]
+
+    if radial_vals.size:
+        radial_min = float(np.min(radial_vals))
+        radial_max = float(np.max(radial_vals))
+    else:
+        radial_min, radial_max = 0.0, 90.0
+
+    if azimuth_vals.size:
+        azimuth_min = float(np.min(azimuth_vals))
+        azimuth_max = float(np.max(azimuth_vals))
+    else:
+        azimuth_min, azimuth_max = -180.0, 180.0
+
+    normalized_payload = normalize_geometry_fit_caked_view_payload(
+        {
+            "background": caked_img,
+            "detector_shape": detector_shape,
+            "radial_axis": radial_vals,
+            "azimuth_axis": azimuth_vals,
+            "raw_azimuth_axis": raw_azimuth_axis,
+            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
+            "transform_bundle": None,
+        },
+        detector_shape=detector_shape,
+        ai=ai if isinstance(ai, FastAzimuthalIntegrator) else None,
+    )
+    if not isinstance(normalized_payload, Mapping):
+        return None
+    return {
+        "image": np.asarray(normalized_payload.get("background"), dtype=float),
+        "background": np.asarray(normalized_payload.get("background"), dtype=float),
+        "radial": np.asarray(normalized_payload.get("radial_axis"), dtype=float),
+        "radial_axis": np.asarray(
+            normalized_payload.get("radial_axis"),
+            dtype=float,
+        ),
+        "azimuth": np.asarray(normalized_payload.get("azimuth_axis"), dtype=float),
+        "azimuth_axis": np.asarray(
+            normalized_payload.get("azimuth_axis"),
+            dtype=float,
+        ),
+        "raw_azimuth": np.asarray(
+            normalized_payload.get("raw_azimuth_axis"),
+            dtype=float,
+        ),
+        "raw_azimuth_axis": np.asarray(
+            normalized_payload.get("raw_azimuth_axis"),
+            dtype=float,
+        ),
+        "raw_to_gui_row_permutation": np.asarray(
+            normalized_payload.get("raw_to_gui_row_permutation"),
+            dtype=np.int32,
+        ),
+        "transform_bundle": normalized_payload.get("transform_bundle"),
+        "detector_shape": tuple(normalized_payload.get("detector_shape", ())),
+        "extent": [
+            radial_min,
+            radial_max,
+            azimuth_min,
+            azimuth_max,
+        ],
+    }
+
+
+def build_geometry_fit_exact_caked_view_payload(
+    detector_image: object,
+    *,
+    ai: FastAzimuthalIntegrator | None,
+    detector_shape: Sequence[object] | None = None,
+    npt_rad: int | None = None,
+    npt_azim: int | None = None,
+) -> dict[str, object] | None:
+    if not isinstance(ai, FastAzimuthalIntegrator):
+        return None
+    try:
+        image = np.asarray(detector_image, dtype=np.float64)
+    except Exception:
+        return None
+    if image.ndim != 2:
+        return None
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
+        normalized_shape = _geometry_fit_detector_shape_2d(image.shape[:2])
+    if normalized_shape is None:
+        return None
+
+    radial_bins = int(max(1, npt_rad)) if npt_rad is not None else 1000
+    azimuth_bins = int(max(1, npt_azim)) if npt_azim is not None else 720
+    try:
+        res2 = ai.integrate2d(
+            image,
+            npt_rad=radial_bins,
+            npt_azim=azimuth_bins,
+            correctSolidAngle=True,
+            method="lut",
+            unit="2th_deg",
+        )
+    except Exception:
+        return None
+    return build_geometry_fit_caked_view_payload_from_result(
+        res2,
+        ai=ai,
+        detector_shape=normalized_shape,
+    )
 
 
 def _fit_detector_coords_to_native_detector_coords(
@@ -283,6 +601,18 @@ def _geometry_fit_transform_driven_param_payload(
         "Gamma": float(Gamma_value) if np.isfinite(Gamma_value) else None,
         "theta_initial": (float(theta_initial_value) if np.isfinite(theta_initial_value) else None),
         "theta_offset": (float(theta_offset_value) if np.isfinite(theta_offset_value) else None),
+    }
+
+
+def _geometry_fit_exact_caked_bundle_param_payload(
+    params: Mapping[str, object] | None,
+) -> dict[str, object]:
+    transform_payload = _geometry_fit_transform_driven_param_payload(params)
+    return {
+        "center_row": transform_payload.get("center_row"),
+        "center_col": transform_payload.get("center_col"),
+        "detector_distance": transform_payload.get("detector_distance"),
+        "pixel_size": transform_payload.get("pixel_size"),
     }
 
 
@@ -606,6 +936,87 @@ def _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
     )
 
 
+def _geometry_fit_caked_payload_exact_bundle(
+    payload: Mapping[str, object] | None,
+    *,
+    detector_shape: object = None,
+    params: Mapping[str, object] | None = None,
+    require_background: bool = True,
+) -> CakeTransformBundle | None:
+    """Return a resolved exact cake bundle only when the payload is usable."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    transform_bundle = payload.get("transform_bundle")
+    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
+    if normalized_shape is None:
+        normalized_shape = _geometry_fit_detector_shape_2d(payload.get("detector_shape"))
+    if normalized_shape is None and isinstance(transform_bundle, CakeTransformBundle):
+        normalized_shape = _geometry_fit_detector_shape_2d(transform_bundle.detector_shape)
+    if normalized_shape is None:
+        return None
+
+    background = None
+    background_value = payload.get(
+        "background",
+        payload.get("background_image", payload.get("image")),
+    )
+    if background_value is not None:
+        try:
+            background = np.asarray(background_value, dtype=np.float64)
+        except Exception:
+            return None
+        if background.ndim != 2 or background.size <= 0 or not np.all(np.isfinite(background)):
+            return None
+    elif require_background:
+        return None
+
+    radial_axis = _geometry_fit_float64_vector(payload.get("radial_axis", payload.get("radial")))
+    azimuth_axis = _geometry_fit_float64_vector(payload.get("azimuth_axis", payload.get("azimuth")))
+    raw_azimuth_axis = _geometry_fit_float64_vector(
+        payload.get("raw_azimuth_axis", payload.get("raw_azimuth"))
+    )
+    if raw_azimuth_axis is None:
+        raw_azimuth_axis = _geometry_fit_raw_azimuth_axis_from_display_axis(azimuth_axis)
+    if radial_axis is None or azimuth_axis is None or raw_azimuth_axis is None:
+        return None
+    if raw_azimuth_axis.shape != azimuth_axis.shape:
+        return None
+    if background is not None and background.shape != (
+        int(azimuth_axis.size),
+        int(radial_axis.size),
+    ):
+        return None
+    return _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
+        detector_shape=normalized_shape,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        raw_azimuth_axis=raw_azimuth_axis,
+        transform_bundle=transform_bundle,
+        params=params,
+    )
+
+
+def _geometry_fit_hydrate_exact_caked_payload(
+    payload: Mapping[str, object] | None,
+    *,
+    detector_shape: object = None,
+    params: Mapping[str, object] | None = None,
+    require_background: bool = True,
+) -> dict[str, object] | None:
+    exact_bundle = _geometry_fit_caked_payload_exact_bundle(
+        payload,
+        detector_shape=detector_shape,
+        params=params,
+        require_background=bool(require_background),
+    )
+    if not isinstance(exact_bundle, CakeTransformBundle) or not isinstance(payload, Mapping):
+        return None
+    hydrated = dict(payload)
+    hydrated["transform_bundle"] = exact_bundle
+    return hydrated
+
+
 def geometry_fit_all_logging_disabled(
     env: Mapping[str, object] | None = None,
 ) -> bool:
@@ -730,6 +1141,9 @@ class GeometryFitRuntimeManualDatasetBindings:
     orient_image_for_fit: Callable[..., object]
     geometry_manual_project_peaks_to_current_view: (
         Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
+    ) = None
+    geometry_manual_project_peaks_for_background_view: (
+        Callable[[int, Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
     ) = None
     backend_detector_coords_to_native_detector_coords: (
         Callable[
@@ -1538,13 +1952,19 @@ def _entry_display_point(
             saved_row = float("nan")
         if np.isfinite(saved_col) and np.isfinite(saved_row):
             return float(saved_col), float(saved_row)
-    for key_x, key_y in (
+    point_keys = [
         ("display_col", "display_row"),
         ("x", "y"),
         ("raw_x", "raw_y"),
-        ("caked_x", "caked_y"),
-        ("raw_caked_x", "raw_caked_y"),
-    ):
+    ]
+    if not _entry_has_stale_caked_fields(entry):
+        point_keys.extend(
+            [
+                ("caked_x", "caked_y"),
+                ("raw_caked_x", "raw_caked_y"),
+            ]
+        )
+    for key_x, key_y in point_keys:
         try:
             col = float(entry.get(key_x, np.nan))
             row = float(entry.get(key_y, np.nan))
@@ -1563,30 +1983,96 @@ def _background_current_view_frame(
     explicit_frame = entry.get("saved_background_current_view_frame")
     if isinstance(explicit_frame, str) and explicit_frame.strip():
         return str(explicit_frame)
-    has_caked_point = any(
-        _finite is not None
-        for _finite in (
-            _entry_display_point(
-                {
-                    "saved_background_current_view_point": (
-                        entry.get("caked_x"),
-                        entry.get("caked_y"),
-                    )
-                }
-            ),
-            _entry_display_point(
-                {
-                    "saved_background_current_view_point": (
-                        entry.get("raw_caked_x"),
-                        entry.get("raw_caked_y"),
-                    )
-                }
-            ),
+    has_caked_point = False
+    if not _entry_has_stale_caked_fields(entry):
+        has_caked_point = any(
+            _finite is not None
+            for _finite in (
+                _entry_display_point(
+                    {
+                        "saved_background_current_view_point": (
+                            entry.get("caked_x"),
+                            entry.get("caked_y"),
+                        )
+                    }
+                ),
+                _entry_display_point(
+                    {
+                        "saved_background_current_view_point": (
+                            entry.get("raw_caked_x"),
+                            entry.get("raw_caked_y"),
+                        )
+                    }
+                ),
+            )
         )
-    )
     if has_caked_point:
         return "caked_display"
     return "current_view_display" if _entry_display_point(entry) is not None else None
+
+
+def _entry_has_stale_caked_fields(entry: object) -> bool:
+    return bool(isinstance(entry, Mapping) and entry.get("stale_caked_fields", False))
+
+
+def _source_rebinding_allows_saved_current_view_point(
+    entry: Mapping[str, object],
+) -> bool:
+    frame = entry.get("saved_background_current_view_frame")
+    frame_text = str(frame or "").strip().lower()
+    if not frame_text:
+        return True
+    if any(token in frame_text for token in ("caked", "two_theta", "theta_phi", "qr", "qz")):
+        return False
+    normalized = gui_manual_geometry.normalize_geometry_point_frame(frame_text)
+    return normalized in {"display", "detector_native"} or frame_text in {
+        "current_view",
+        "current_view_display",
+        "display",
+        "detector_display",
+        "fit_detector",
+        "detector_native",
+        "native_detector",
+        "native_detector_coords",
+        "background_detector",
+    }
+
+
+def _entry_source_rebinding_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    if _source_rebinding_allows_saved_current_view_point(entry):
+        try:
+            point = entry.get("saved_background_current_view_point")
+            if isinstance(point, (list, tuple, np.ndarray)) and len(point) >= 2:
+                x_val = float(point[0])
+                y_val = float(point[1])
+                if np.isfinite(x_val) and np.isfinite(y_val):
+                    return float(x_val), float(y_val)
+        except Exception:
+            pass
+    for key_x, key_y in (
+        ("display_col", "display_row"),
+        ("x", "y"),
+        ("raw_x", "raw_y"),
+    ):
+        try:
+            x_val = float(entry.get(key_x, np.nan))
+            y_val = float(entry.get(key_y, np.nan))
+        except Exception:
+            continue
+        if np.isfinite(x_val) and np.isfinite(y_val):
+            return float(x_val), float(y_val)
+    return None
+
+
+def _source_rebinding_background_point_and_frame(
+    entry: Mapping[str, object] | None,
+) -> tuple[tuple[float, float] | None, str | None]:
+    point = _entry_source_rebinding_display_point(entry)
+    return point, "current_view_display" if point is not None else None
 
 
 def _geometry_fit_normalize_point_frame(frame: object) -> str:
@@ -2981,6 +3467,7 @@ def collect_geometry_fit_required_manual_fit_targets(
             continue
         entry = dict(raw_entry)
         required_branch_group_key = _geometry_fit_required_branch_group_key(entry)
+        background_point, background_frame = _source_rebinding_background_point_and_frame(entry)
         target = {
             "background_index": int(background_index),
             "pair_id": str(
@@ -2992,8 +3479,8 @@ def collect_geometry_fit_required_manual_fit_targets(
             "normalized_hkl": _geometry_fit_normalized_hkl(entry.get("hkl")),
             "source_branch_index": _geometry_fit_source_branch_index(entry),
             "q_group_key": _geometry_fit_group_identity(entry),
-            "saved_background_current_view_point": _entry_display_point(entry),
-            "saved_background_current_view_frame": _background_current_view_frame(entry),
+            "saved_background_current_view_point": background_point,
+            "saved_background_current_view_frame": background_frame,
             "required_branch_group_key": required_branch_group_key,
             "branch_constraint_status": _geometry_fit_branch_constraint_status(entry),
             "branch_unconstrained": (
@@ -4933,6 +5420,9 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
     geometry_manual_project_peaks_to_current_view: (
         Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
     ) = None,
+    geometry_manual_project_peaks_for_background_view: (
+        Callable[[int, Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
+    ) = None,
     unrotate_display_peaks: Callable[..., list[dict[str, object]]],
     display_to_native_sim_coords: Callable[..., tuple[float, float]],
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
@@ -4986,6 +5476,9 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         geometry_manual_project_peaks_to_current_view=(
             geometry_manual_project_peaks_to_current_view
         ),
+        geometry_manual_project_peaks_for_background_view=(
+            geometry_manual_project_peaks_for_background_view
+        ),
         unrotate_display_peaks=unrotate_display_peaks,
         display_to_native_sim_coords=display_to_native_sim_coords,
         select_fit_orientation=select_fit_orientation,
@@ -5020,6 +5513,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
     ],
     geometry_manual_project_peaks_to_current_view: (
         Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
+    ) = None,
+    geometry_manual_project_peaks_for_background_view: (
+        Callable[[int, Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
     ) = None,
     unrotate_display_peaks: Callable[..., list[dict[str, object]]],
     display_to_native_sim_coords: Callable[..., tuple[float, float]],
@@ -5076,6 +5572,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             geometry_manual_entry_display_coords=(geometry_manual_entry_display_coords),
             geometry_manual_project_peaks_to_current_view=(
                 geometry_manual_project_peaks_to_current_view
+            ),
+            geometry_manual_project_peaks_for_background_view=(
+                geometry_manual_project_peaks_for_background_view
             ),
             unrotate_display_peaks=unrotate_display_peaks,
             display_to_native_sim_coords=display_to_native_sim_coords,
@@ -7409,13 +7908,73 @@ def build_geometry_manual_fit_dataset(
         rows: object,
     ) -> list[dict[str, object]]:
         normalized_rows = [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
-        projector = manual_dataset_bindings.geometry_manual_project_peaks_to_current_view
-        if not callable(projector) or not normalized_rows:
+        if not normalized_rows:
             return normalized_rows
-        try:
-            projected_rows = projector(normalized_rows)
-        except Exception:
-            return normalized_rows
+        caked_projection_required = bool(
+            use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries)
+        )
+
+        per_background_projector = (
+            manual_dataset_bindings.geometry_manual_project_peaks_for_background_view
+        )
+        if callable(per_background_projector):
+            order_key = "__ra_sim_geometry_fit_projection_order__"
+            grouped_rows: dict[int, list[dict[str, object]]] = {}
+            ordered_backgrounds: list[int] = []
+            for position, raw_entry in enumerate(normalized_rows):
+                entry = dict(raw_entry)
+                try:
+                    row_background_idx = int(entry.get("background_index", background_idx))
+                except Exception:
+                    row_background_idx = int(background_idx)
+                entry.setdefault("background_index", int(row_background_idx))
+                entry[order_key] = int(position)
+                if int(row_background_idx) not in grouped_rows:
+                    ordered_backgrounds.append(int(row_background_idx))
+                    grouped_rows[int(row_background_idx)] = []
+                grouped_rows[int(row_background_idx)].append(entry)
+            projected_rows = []
+            for row_background_idx in ordered_backgrounds:
+                try:
+                    projected_rows.extend(
+                        dict(entry)
+                        for entry in (
+                            per_background_projector(
+                                int(row_background_idx),
+                                grouped_rows[int(row_background_idx)],
+                            )
+                            or ()
+                        )
+                        if isinstance(entry, Mapping)
+                    )
+                except Exception:
+                    if caked_projection_required:
+                        raise
+                    return normalized_rows
+            projected_rows = sorted(
+                projected_rows,
+                key=lambda entry: (
+                    int(entry.get(order_key))
+                    if isinstance(entry, Mapping) and entry.get(order_key) is not None
+                    else int(1e12)
+                ),
+            )
+            for projected_entry in projected_rows:
+                projected_entry.pop(order_key, None)
+        else:
+            if caked_projection_required:
+                raise RuntimeError(
+                    "exact caked projector unavailable for manual caked geometry fit"
+                )
+            projector = manual_dataset_bindings.geometry_manual_project_peaks_to_current_view
+            if not callable(projector):
+                return normalized_rows
+            try:
+                projected_rows = projector(normalized_rows)
+            except Exception:
+                if caked_projection_required:
+                    raise
+                return normalized_rows
         projected = [dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)]
         if not use_caked_display:
             try:
@@ -7736,6 +8295,8 @@ def build_geometry_manual_fit_dataset(
         entry: Mapping[str, object] | None,
     ) -> str | None:
         if use_caked_display:
+            if _entry_has_stale_caked_fields(entry):
+                return None
             return (
                 "caked_display"
                 if (
@@ -9794,6 +10355,13 @@ def build_geometry_manual_fit_dataset(
                 measured_entry["fit_detector_y"] = float(display_row)
                 measured_entry["detector_input_frame"] = "fit_detector"
                 measured_entry["detector_input_frame_reason"] = "apply_orientation_to_entries"
+        caked_two_theta = _finite_float(measured_entry.get("background_two_theta_deg"))
+        caked_phi = _finite_float(measured_entry.get("background_phi_deg"))
+        if caked_two_theta is not None and caked_phi is not None:
+            measured_entry["background_two_theta_deg"] = float(caked_two_theta)
+            measured_entry["background_phi_deg"] = float(caked_phi)
+            measured_entry["fit_space_anchor_override"] = True
+            measured_entry["fit_space_anchor_source"] = "manual_caked_background_angles"
     for pair_idx, provider_pair in enumerate(provider_pairs):
         measured_entry = (
             measured_for_fit[pair_idx]
@@ -9865,6 +10433,7 @@ def build_geometry_manual_fit_dataset(
     dynamic_reanchor_azimuth_axis: np.ndarray | None = None
     dynamic_reanchor_raw_azimuth_axis: np.ndarray | None = None
     dynamic_reanchor_transform_bundle: object = None
+    dynamic_reanchor_exact_bundle: CakeTransformBundle | None = None
     dynamic_reanchor_caked_view_ready = False
     dynamic_reanchor_enabled = (
         isinstance(experimental_image_for_fit, np.ndarray)
@@ -9906,6 +10475,22 @@ def build_geometry_manual_fit_dataset(
             caked_background_local = raw_caked_view[0]
             radial_axis_local = raw_caked_view[1]
             azimuth_axis_local = raw_caked_view[2]
+        exact_payload = {
+            "background": caked_background_local,
+            "detector_shape": np.asarray(native_background).shape[:2],
+            "radial_axis": radial_axis_local,
+            "azimuth_axis": azimuth_axis_local,
+            "raw_azimuth_axis": raw_azimuth_axis_local,
+            "transform_bundle": dynamic_reanchor_transform_bundle,
+        }
+        dynamic_reanchor_exact_bundle = _geometry_fit_caked_payload_exact_bundle(
+            exact_payload,
+            detector_shape=np.asarray(native_background).shape[:2],
+            params=params_i,
+            require_background=True,
+        )
+        if isinstance(dynamic_reanchor_exact_bundle, CakeTransformBundle):
+            dynamic_reanchor_transform_bundle = dynamic_reanchor_exact_bundle
         try:
             if caked_background_local is not None:
                 dynamic_reanchor_caked_background = np.asarray(
@@ -9946,8 +10531,15 @@ def build_geometry_manual_fit_dataset(
             and dynamic_reanchor_radial_axis.size > 0
             and isinstance(dynamic_reanchor_azimuth_axis, np.ndarray)
             and dynamic_reanchor_azimuth_axis.size > 0
+            and isinstance(dynamic_reanchor_exact_bundle, CakeTransformBundle)
         ):
             dynamic_reanchor_caked_view_ready = True
+        elif (
+            isinstance(dynamic_reanchor_caked_background, np.ndarray)
+            or isinstance(dynamic_reanchor_radial_axis, np.ndarray)
+            or isinstance(dynamic_reanchor_azimuth_axis, np.ndarray)
+        ):
+            fit_space_projector_unavailable_reason = "missing_exact_caked_bundle"
     if dynamic_reanchor_enabled:
         dynamic_reanchor_detector_image = np.asarray(
             experimental_image_for_fit,
@@ -10041,6 +10633,62 @@ def build_geometry_manual_fit_dataset(
                 return float(params_i.get("theta_initial", theta_base))
             except Exception:
                 return float(theta_base)
+
+        dynamic_reanchor_exact_bundle_cache: dict[tuple[object, ...], CakeTransformBundle] = {}
+
+        def _dynamic_reanchor_axis_cache_signature(axis: object) -> tuple[object, ...] | None:
+            vec = _geometry_fit_float64_vector(axis)
+            if vec is None:
+                return None
+            arr = np.ascontiguousarray(np.asarray(vec, dtype=np.float64).reshape(-1))
+            if arr.size <= 0:
+                return (0, "empty")
+            digest = hashlib.sha1(arr.tobytes()).hexdigest()
+            return (
+                int(arr.size),
+                float(arr[0]),
+                float(arr[-1]),
+                str(arr.dtype),
+                digest,
+            )
+
+        def _dynamic_reanchor_bundle_cache_key(
+            active_params: Mapping[str, object] | None,
+        ) -> tuple[object, ...]:
+            return (
+                "exact_caked_bundle",
+                tuple(dynamic_reanchor_native_shape or ()),
+                _dynamic_reanchor_axis_cache_signature(dynamic_reanchor_radial_axis),
+                _dynamic_reanchor_axis_cache_signature(dynamic_reanchor_azimuth_axis),
+                _dynamic_reanchor_axis_cache_signature(dynamic_reanchor_raw_azimuth_axis),
+                _geometry_fit_projection_signature(
+                    _geometry_fit_exact_caked_bundle_param_payload(active_params)
+                ),
+            )
+
+        def _resolve_dynamic_reanchor_cached_caked_bundle(
+            active_params: Mapping[str, object] | None,
+            *,
+            prefer_rebuild_bundle: bool,
+        ) -> CakeTransformBundle | None:
+            bundle_cache_key = _dynamic_reanchor_bundle_cache_key(active_params)
+            active_bundle = dynamic_reanchor_exact_bundle_cache.get(bundle_cache_key)
+            if isinstance(active_bundle, CakeTransformBundle):
+                return active_bundle
+            active_bundle = _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
+                detector_shape=dynamic_reanchor_native_shape,
+                radial_axis=dynamic_reanchor_radial_axis,
+                azimuth_axis=dynamic_reanchor_azimuth_axis,
+                raw_azimuth_axis=dynamic_reanchor_raw_azimuth_axis,
+                transform_bundle=(
+                    None if prefer_rebuild_bundle else dynamic_reanchor_transform_bundle
+                ),
+                params=active_params,
+            )
+            if isinstance(active_bundle, CakeTransformBundle):
+                dynamic_reanchor_exact_bundle_cache[bundle_cache_key] = active_bundle
+                return active_bundle
+            return None
 
         def _project_detector_points_with_active_caked_bundle(
             cols: object,
@@ -10160,15 +10808,9 @@ def build_geometry_manual_fit_dataset(
             theta_adjustment_deg = 0.0
             if np.isfinite(base_theta_value) and np.isfinite(active_theta_value):
                 theta_adjustment_deg = float(active_theta_value - base_theta_value)
-            active_bundle = _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
-                detector_shape=dynamic_reanchor_native_shape,
-                radial_axis=dynamic_reanchor_radial_axis,
-                azimuth_axis=dynamic_reanchor_azimuth_axis,
-                raw_azimuth_axis=dynamic_reanchor_raw_azimuth_axis,
-                transform_bundle=(
-                    None if prefer_rebuild_bundle else dynamic_reanchor_transform_bundle
-                ),
-                params=active_params,
+            active_bundle = _resolve_dynamic_reanchor_cached_caked_bundle(
+                active_params,
+                prefer_rebuild_bundle=prefer_rebuild_bundle,
             )
             if not isinstance(active_bundle, CakeTransformBundle):
                 invalid_projection["invalid_reason"] = "missing_exact_caked_bundle"
@@ -10277,13 +10919,9 @@ def build_geometry_manual_fit_dataset(
             raw_row = None
             active_params = local_params if isinstance(local_params, Mapping) else params_i
             active_caked_bundle = (
-                _geometry_fit_resolve_dynamic_reanchor_caked_bundle(
-                    detector_shape=dynamic_reanchor_native_shape,
-                    radial_axis=dynamic_reanchor_radial_axis,
-                    azimuth_axis=dynamic_reanchor_azimuth_axis,
-                    raw_azimuth_axis=dynamic_reanchor_raw_azimuth_axis,
-                    transform_bundle=dynamic_reanchor_transform_bundle,
-                    params=active_params,
+                _resolve_dynamic_reanchor_cached_caked_bundle(
+                    active_params,
+                    prefer_rebuild_bundle=False,
                 )
                 if dynamic_reanchor_caked_view_ready
                 else None
@@ -10461,6 +11099,8 @@ def build_geometry_manual_fit_dataset(
             fit_space_projector = _fit_space_projector
             fit_space_projector_kind = "exact_caked_bundle"
             fit_space_projector_unavailable_reason = None
+        elif fit_space_projector_unavailable_reason == "missing_exact_caked_bundle":
+            pass
         elif not dynamic_reanchor_caked_view_ready:
             fit_space_projector_unavailable_reason = "exact_caked_view_unavailable"
         else:
@@ -10694,6 +11334,7 @@ def prepare_geometry_fit_run(
     require_selected_var_names: bool = True,
     require_active_background_in_selection: bool = True,
     include_all_selected_backgrounds: bool | None = None,
+    manual_fit_pick_uses_caked_space: bool = False,
     stage_callback: GeometryFitStageCallback | None = None,
 ) -> GeometryFitPreparationResult:
     """Validate and assemble the manual-pair geometry-fit runtime inputs."""
@@ -10871,7 +11512,7 @@ def prepare_geometry_fit_run(
         else [int(primary_index)]
     )
     missing_indices = [
-        idx for idx in required_indices if not geometry_manual_pairs_for_index(int(idx))
+        idx for idx in selected_background_indices if not geometry_manual_pairs_for_index(int(idx))
     ]
     if missing_indices:
         missing_names = [
@@ -10886,6 +11527,26 @@ def prepare_geometry_fit_run(
             selected_background_indices=selected_background_indices,
             joint_background_mode=joint_background_mode,
         )
+
+    manual_fit_space_by_background = geometry_manual_fit_space_by_background(
+        required_indices,
+        geometry_manual_pairs_for_index,
+        pick_uses_caked_space=bool(manual_fit_pick_uses_caked_space),
+        current_background_index=int(current_index),
+    )
+    fit_space_error = manual_geometry_fit_space_preflight_error(
+        manual_fit_space_by_background,
+        osc_files=osc_files,
+    )
+    if fit_space_error:
+        return _failure_result(
+            fit_space_error,
+            selected_background_indices=selected_background_indices,
+            joint_background_mode=joint_background_mode,
+        )
+    manual_pairs_use_caked_space = any(
+        str(kind) == "caked" for kind in manual_fit_space_by_background.values()
+    )
 
     def _theta_base_for_index(dataset_index: int) -> float:
         if build_all_selected_backgrounds:
@@ -10964,13 +11625,33 @@ def prepare_geometry_fit_run(
         )
 
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
-    geometry_runtime_cfg = apply_manual_point_geometry_fit_runtime_overrides(
-        apply_joint_geometry_fit_runtime_safety_overrides(
-            build_runtime_config(fit_params),
-            joint_background_mode=joint_background_mode,
-        ),
+    manual_fit_uses_caked_space = bool(
+        manual_pairs_use_caked_space or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
+    )
+    base_runtime_cfg = apply_joint_geometry_fit_runtime_safety_overrides(
+        build_runtime_config(fit_params),
         joint_background_mode=joint_background_mode,
     )
+    if manual_fit_uses_caked_space:
+        geometry_runtime_cfg = apply_manual_caked_point_geometry_fit_runtime_overrides(
+            base_runtime_cfg,
+            joint_background_mode=joint_background_mode,
+        )
+        projector_error = manual_caked_geometry_fit_projector_preflight_error(dataset_specs)
+        if projector_error:
+            return _failure_result(
+                projector_error,
+                dataset_infos=dataset_infos,
+                current_dataset=current_dataset,
+                selected_background_indices=selected_background_indices,
+                joint_background_mode=joint_background_mode,
+                geometry_runtime_cfg=geometry_runtime_cfg,
+            )
+    else:
+        geometry_runtime_cfg = apply_manual_point_geometry_fit_runtime_overrides(
+            base_runtime_cfg,
+            joint_background_mode=joint_background_mode,
+        )
     _emit_geometry_fit_stage_event(
         stage_callback,
         "prepare_ready",
@@ -11022,6 +11703,14 @@ def prepare_runtime_geometry_fit_run(
 
     fit_config = bindings.fit_config if isinstance(bindings.fit_config, Mapping) else {}
     manual_dataset_bindings = bindings.manual_dataset_bindings
+    try:
+        manual_fit_pick_uses_caked_space = (
+            bool(manual_dataset_bindings.pick_uses_caked_space())
+            if callable(manual_dataset_bindings.pick_uses_caked_space)
+            else False
+        )
+    except Exception:
+        manual_fit_pick_uses_caked_space = False
 
     return prepare_geometry_fit_run(
         params=params,
@@ -11054,6 +11743,7 @@ def prepare_runtime_geometry_fit_run(
         build_runtime_config=(
             lambda fit_params: bindings.build_runtime_config(dict(fit_params or {}))
         ),
+        manual_fit_pick_uses_caked_space=bool(manual_fit_pick_uses_caked_space),
         stage_callback=stage_callback,
     )
 
@@ -11071,6 +11761,209 @@ def build_geometry_fit_dataset_specs(
         if isinstance(spec, Mapping):
             dataset_specs.append(dict(spec))
     return dataset_specs
+
+
+def _geometry_fit_finite_float(value: object) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(out):
+        return None
+    return float(out)
+
+
+def _geometry_manual_entry_uses_caked_fit_space(entry: object) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    if _entry_has_stale_caked_fields(entry):
+        return False
+    two_theta = _geometry_fit_finite_float(entry.get("background_two_theta_deg"))
+    phi = _geometry_fit_finite_float(entry.get("background_phi_deg"))
+    if two_theta is not None and phi is not None:
+        return True
+    caked_x = _geometry_fit_finite_float(entry.get("caked_x"))
+    caked_y = _geometry_fit_finite_float(entry.get("caked_y"))
+    if caked_x is not None and caked_y is not None:
+        return True
+    raw_caked_x = _geometry_fit_finite_float(entry.get("raw_caked_x"))
+    raw_caked_y = _geometry_fit_finite_float(entry.get("raw_caked_y"))
+    return raw_caked_x is not None and raw_caked_y is not None
+
+
+def geometry_manual_pairs_use_caked_fit_space(
+    manual_pairs: object,
+) -> bool:
+    """Return whether saved manual pairs carry caked fit-space anchors."""
+
+    if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
+        return False
+    return any(_geometry_manual_entry_uses_caked_fit_space(entry) for entry in manual_pairs)
+
+
+def _geometry_manual_pair_fit_space_kinds(manual_pairs: object) -> set[str]:
+    if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
+        return set()
+    kinds: set[str] = set()
+    for entry in manual_pairs:
+        if not isinstance(entry, Mapping):
+            continue
+        if _geometry_manual_entry_uses_caked_fit_space(entry):
+            kinds.add("caked")
+        else:
+            kinds.add("detector")
+    return kinds
+
+
+def geometry_manual_pairs_fit_space_kind(
+    manual_pairs: object,
+    *,
+    pick_uses_caked_space: bool = False,
+    pick_applies_to_background: bool = False,
+) -> str:
+    """Classify one manual-pair set as detector-pixel or caked fit-space."""
+
+    pair_kinds = _geometry_manual_pair_fit_space_kinds(manual_pairs)
+    if len(pair_kinds) > 1:
+        return "mixed"
+    if pair_kinds == {"caked"}:
+        return "caked"
+    if bool(pick_uses_caked_space) and bool(pick_applies_to_background):
+        return "caked"
+    return "detector"
+
+
+def geometry_manual_fit_space_by_background(
+    background_indices: Sequence[object] | None,
+    pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]] | Mapping[object, object],
+    *,
+    pick_uses_caked_space: bool = False,
+    current_background_index: int | None = None,
+) -> dict[int, str]:
+    """Return detector/caked manual fit-space classification per background."""
+
+    indices = [int(idx) for idx in (background_indices or ())]
+    result: dict[int, str] = {}
+    for idx in indices:
+        if callable(pairs_for_index):
+            pairs = pairs_for_index(int(idx))
+        elif isinstance(pairs_for_index, Mapping):
+            pairs = pairs_for_index.get(int(idx), pairs_for_index.get(str(int(idx)), ()))
+        else:
+            pairs = ()
+        pick_applies = bool(pick_uses_caked_space) and (
+            len(indices) == 1
+            or (current_background_index is not None and int(idx) == int(current_background_index))
+        )
+        result[int(idx)] = geometry_manual_pairs_fit_space_kind(
+            pairs,
+            pick_uses_caked_space=bool(pick_uses_caked_space),
+            pick_applies_to_background=bool(pick_applies),
+        )
+    return result
+
+
+def manual_geometry_fit_space_preflight_error(
+    fit_space_by_background: Mapping[object, object] | None,
+    *,
+    osc_files: Sequence[object] | None = None,
+) -> str | None:
+    """Reject mixed detector/caked manual-pair selections before overrides run."""
+
+    normalized: dict[int, str] = {}
+    for raw_idx, raw_kind in (fit_space_by_background or {}).items():
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        kind = str(raw_kind or "detector").strip().lower()
+        normalized[idx] = kind if kind in {"caked", "mixed"} else "detector"
+    mixed_indices = [idx for idx, kind in normalized.items() if kind == "mixed"]
+    if mixed_indices:
+        labels: list[str] = []
+        osc_list = list(osc_files or ())
+        for idx in sorted(mixed_indices):
+            if 0 <= int(idx) < len(osc_list):
+                label = Path(str(osc_list[int(idx)])).name
+            else:
+                label = f"background {int(idx) + 1}"
+            labels.append(f"{label}=mixed")
+        return (
+            "Geometry fit unavailable: saved manual Qr/Qz pairs mix detector-pixel "
+            "and caked fit-space coordinates within the same background. Clear and "
+            "re-pick the selected groups in one view before fitting. Fit spaces: "
+            + ", ".join(labels)
+            + "."
+        )
+    if len(set(normalized.values())) <= 1:
+        return None
+
+    labels: list[str] = []
+    osc_list = list(osc_files or ())
+    for idx in sorted(normalized):
+        if 0 <= int(idx) < len(osc_list):
+            label = Path(str(osc_list[int(idx)])).name
+        else:
+            label = f"background {int(idx) + 1}"
+        labels.append(f"{label}={normalized[idx]}")
+    return (
+        "Geometry fit unavailable: selected manual Qr/Qz pairs mix detector-pixel "
+        "and caked fit-space coordinates. Clear and re-pick the selected groups in "
+        "one view before fitting. Fit spaces: " + ", ".join(labels) + "."
+    )
+
+
+def geometry_fit_datasets_use_caked_fit_space(
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+) -> bool:
+    """Classify prepared manual datasets before applying runtime overrides."""
+
+    for info in dataset_infos or ():
+        if not isinstance(info, Mapping):
+            continue
+        for key in (
+            "measured_for_fit",
+            "measured_display",
+            "measured_native",
+            "initial_pairs_display",
+            "provider_pairs",
+            "manual_picker_truth_pairs",
+            "manual_point_pairs",
+        ):
+            if geometry_manual_pairs_use_caked_fit_space(info.get(key)):
+                return True
+        spec = info.get("spec")
+        if isinstance(spec, Mapping):
+            if geometry_manual_pairs_use_caked_fit_space(spec.get("measured_peaks")):
+                return True
+    return False
+
+
+def manual_caked_geometry_fit_projector_preflight_error(
+    dataset_specs: Sequence[Mapping[str, object]] | None,
+) -> str | None:
+    """Fail closed when caked manual fits cannot use exact caked projection."""
+
+    missing_labels: list[str] = []
+    for idx, spec in enumerate(dataset_specs or ()):
+        if not isinstance(spec, Mapping):
+            missing_labels.append(f"dataset {idx + 1}")
+            continue
+        projector = spec.get("fit_space_projector")
+        projector_kind = str(spec.get("fit_space_projector_kind") or "")
+        if projector_kind != "exact_caked_bundle" or not callable(projector):
+            label = str(spec.get("label") or f"dataset {idx + 1}")
+            reason = str(spec.get("fit_space_projector_unavailable_reason") or "missing")
+            missing_labels.append(f"{label} ({reason})")
+    if not missing_labels:
+        return None
+    return (
+        "Geometry fit unavailable: caked manual Qr/Qz pairs require an exact "
+        "caked fit-space projector for every selected background. Rebuild the "
+        "caked/source cache and rerun the fit. Missing exact projector for "
+        + ", ".join(missing_labels)
+        + "."
+    )
 
 
 def apply_joint_geometry_fit_runtime_safety_overrides(
@@ -11115,6 +12008,7 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     """Build the lean runtime profile for raw detector-pixel manual point fitting."""
 
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
+    cfg.pop("projection_view_mode", None)
     unsafe_runtime_enabled = bool(cfg.get("allow_unsafe_runtime", False))
 
     optimizer_cfg_raw = cfg.get("solver", cfg.get("optimizer", {}))
@@ -11162,9 +12056,7 @@ def apply_manual_point_geometry_fit_runtime_overrides(
 
     if unsafe_runtime_enabled:
         optimizer_cfg["workers"] = optimizer_cfg.get("workers", "auto")
-        optimizer_cfg["parallel_mode"] = str(
-            optimizer_cfg.get("parallel_mode", "auto")
-        ).strip()
+        optimizer_cfg["parallel_mode"] = str(optimizer_cfg.get("parallel_mode", "auto")).strip()
         optimizer_cfg["worker_numba_threads"] = optimizer_cfg.get(
             "worker_numba_threads",
             0,
@@ -11229,6 +12121,27 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     identifiability_cfg.pop("selective_thaw", None)
     identifiability_cfg.pop("adaptive_regularization", None)
     cfg["identifiability"] = identifiability_cfg
+    return cfg
+
+
+def apply_manual_caked_point_geometry_fit_runtime_overrides(
+    runtime_cfg: Mapping[str, object] | None,
+    *,
+    joint_background_mode: bool,
+) -> dict[str, object]:
+    """Build the manual profile for caked fit-space point fitting."""
+
+    cfg = apply_manual_point_geometry_fit_runtime_overrides(
+        runtime_cfg,
+        joint_background_mode=joint_background_mode,
+    )
+    optimizer_cfg_raw = cfg.get("optimizer", cfg.get("solver", {}))
+    optimizer_cfg = dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
+    optimizer_cfg["manual_point_fit_mode"] = True
+    optimizer_cfg["dynamic_point_geometry_fit"] = True
+    cfg["optimizer"] = optimizer_cfg
+    cfg["solver"] = optimizer_cfg
+    cfg["projection_view_mode"] = "caked"
     return cfg
 
 
@@ -13007,9 +13920,6 @@ def _geometry_fit_trace_optimizer_residual_px(
     weighted_dy = _geometry_fit_metric_float(entry.get("weighted_dy_px", np.nan))
     if np.isfinite(weighted_dx) and np.isfinite(weighted_dy):
         return float(np.hypot(weighted_dx, weighted_dy))
-    placement_error = _geometry_fit_metric_float(entry.get("placement_error_px", np.nan))
-    if np.isfinite(placement_error):
-        return float(placement_error)
     return None
 
 
@@ -13149,6 +14059,7 @@ def _geometry_fit_trace_pair_record(
         "dy_px": dy_px,
         "optimizer_residual_px": _geometry_fit_trace_optimizer_residual_px(entry),
         "detector_residual_px": _geometry_fit_metric_float(entry.get("distance_px", np.nan)),
+        "placement_error_px": _geometry_fit_metric_float(entry.get("placement_error_px", np.nan)),
     }
     for key in (
         "measured_detector_field_name",

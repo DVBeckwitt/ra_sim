@@ -15,7 +15,9 @@ gui_bootstrap.early_main_bootstrap(__name__)
 import math
 import json
 import copy
+import contextlib
 import concurrent.futures
+import inspect
 import queue
 import faulthandler
 import hashlib
@@ -157,15 +159,11 @@ from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_backgr
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
-    build_angle_axes,
-    build_cake_transform_bundle,
     build_geometry,
     caked_point_to_detector_pixel,
     detector_points_to_angles,
-    detector_two_theta_max_deg,
     detector_pixel_to_caked_bin,
     gui_phi_to_raw_phi,
-    prepare_gui_phi_display,
     raw_phi_to_gui_phi,
     resolve_cake_transform_bundle,
     start_exact_cake_geometry_warmup_in_background,
@@ -241,7 +239,7 @@ from ra_sim.debug_controls import (
     runtime_update_trace_logging_enabled as _runtime_update_trace_logging_enabled,
 )
 from ra_sim.debug_utils import debug_print, is_debug_enabled
-from ra_sim.timing import timing_enabled, timing_event
+from ra_sim.timing import timing_enabled, timing_event, timing_span
 from ra_sim.hbn_geometry import (
     build_hbn_geometry_debug_trace,
     convert_hbn_bundle_geometry_to_simulation,
@@ -5640,127 +5638,11 @@ def _normalize_geometry_fit_caked_view_payload(
     detector_shape: Sequence[object] | None = None,
     ai: FastAzimuthalIntegrator | None = None,
 ) -> dict[str, object] | None:
-    if not isinstance(payload, Mapping):
-        return None
-
-    transform_bundle = payload.get("transform_bundle")
-    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
-    if normalized_shape is None:
-        normalized_shape = _geometry_fit_detector_shape_2d(payload.get("detector_shape"))
-    if normalized_shape is None and isinstance(transform_bundle, CakeTransformBundle):
-        normalized_shape = _geometry_fit_detector_shape_2d(transform_bundle.detector_shape)
-    if normalized_shape is None:
-        return None
-
-    background_value = payload.get(
-        "background",
-        payload.get("background_image", payload.get("image")),
+    return gui_geometry_fit.normalize_geometry_fit_caked_view_payload(
+        payload,
+        detector_shape=detector_shape,
+        ai=ai,
     )
-    background = None
-    if background_value is not None:
-        try:
-            background = np.asarray(background_value, dtype=np.float64).copy()
-        except Exception:
-            return None
-        if background.ndim != 2 or background.size <= 0:
-            return None
-
-    radial_source = payload.get("radial_axis", payload.get("radial"))
-    if radial_source is None and isinstance(transform_bundle, CakeTransformBundle):
-        radial_source = transform_bundle.radial_deg
-    azimuth_source = payload.get("azimuth_axis", payload.get("azimuth"))
-    if azimuth_source is None and isinstance(transform_bundle, CakeTransformBundle):
-        bundle_gui_axis = np.asarray(
-            raw_phi_to_gui_phi(transform_bundle.raw_azimuth_deg),
-            dtype=np.float64,
-        ).reshape(-1)
-        azimuth_source = bundle_gui_axis[np.argsort(bundle_gui_axis, kind="stable")]
-    try:
-        radial_axis = np.asarray(
-            radial_source,
-            dtype=np.float64,
-        ).reshape(-1)
-        azimuth_axis = np.asarray(
-            azimuth_source,
-            dtype=np.float64,
-        ).reshape(-1)
-    except Exception:
-        return None
-    if (
-        radial_axis.size <= 0
-        or azimuth_axis.size <= 0
-        or not np.all(np.isfinite(radial_axis))
-        or not np.all(np.isfinite(azimuth_axis))
-    ):
-        return None
-
-    raw_azimuth_value = payload.get(
-        "raw_azimuth_axis",
-        payload.get("raw_azimuth"),
-    )
-    if raw_azimuth_value is None:
-        raw_azimuth_axis = _canonical_raw_azimuth_axis_from_gui_axis(azimuth_axis)
-    else:
-        try:
-            raw_azimuth_axis = np.asarray(
-                raw_azimuth_value,
-                dtype=np.float64,
-            ).reshape(-1)
-        except Exception:
-            return None
-    if (
-        raw_azimuth_axis is None
-        or raw_azimuth_axis.size != azimuth_axis.size
-        or not np.all(np.isfinite(raw_azimuth_axis))
-    ):
-        return None
-    raw_azimuth_axis = np.asarray(raw_azimuth_axis, dtype=np.float64).copy()
-
-    canonical_row_permutation = np.asarray(
-        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
-        dtype=np.int32,
-    )
-    raw_to_gui_value = payload.get("raw_to_gui_row_permutation")
-    try:
-        raw_to_gui_row_permutation = np.asarray(
-            raw_to_gui_value if raw_to_gui_value is not None else canonical_row_permutation,
-            dtype=np.int32,
-        ).reshape(-1)
-    except Exception:
-        raw_to_gui_row_permutation = canonical_row_permutation
-    if raw_to_gui_row_permutation.shape != canonical_row_permutation.shape or not np.array_equal(
-        raw_to_gui_row_permutation, canonical_row_permutation
-    ):
-        raw_to_gui_row_permutation = canonical_row_permutation
-
-    resolved_bundle = resolve_cake_transform_bundle(
-        ai,
-        normalized_shape,
-        radial_axis,
-        gui_azimuth_deg=azimuth_axis,
-        raw_azimuth_deg=raw_azimuth_axis,
-        transform_bundle=(
-            transform_bundle if isinstance(transform_bundle, CakeTransformBundle) else None
-        ),
-        require_gui_display_match=True,
-    )
-
-    normalized_payload = {
-        "detector_shape": tuple(int(v) for v in normalized_shape),
-        "radial_axis": np.asarray(radial_axis, dtype=np.float64).copy(),
-        "azimuth_axis": np.asarray(azimuth_axis, dtype=np.float64).copy(),
-        "raw_azimuth_axis": raw_azimuth_axis,
-        "raw_to_gui_row_permutation": np.asarray(
-            raw_to_gui_row_permutation,
-            dtype=np.int32,
-        ).copy(),
-        "transform_bundle": (
-            resolved_bundle if isinstance(resolved_bundle, CakeTransformBundle) else None
-        ),
-    }
-    if background is not None:
-        normalized_payload["background"] = background
-    return normalized_payload
 
 
 def _geometry_fit_caked_roi_preview_mask(
@@ -6287,14 +6169,22 @@ def _geometry_manual_project_peaks_for_background(
         except Exception:
             return []
 
-    if is_current_background and callable(_project_geometry_manual_peaks_to_current_view):
+    if (
+        normalized_mode != "caked"
+        and is_current_background
+        and callable(_project_geometry_manual_peaks_to_current_view)
+    ):
         try:
             return _geometry_fit_rows_for_background(
                 background_index,
                 _project_geometry_manual_peaks_to_current_view(normalized_rows),
             )
         except Exception:
-            return [] if normalized_mode == "q_space" else normalized_rows
+            if normalized_mode == "q_space":
+                return []
+            if normalized_mode == "caked":
+                raise
+            return normalized_rows
 
     native_background = background_native
     display_background = background_display
@@ -6322,7 +6212,29 @@ def _geometry_manual_project_peaks_for_background(
             allow_generated_payload=True,
         )
         if not isinstance(resolved_caked_payload, Mapping):
-            return normalized_rows
+            raise RuntimeError(
+                f"exact caked projector unavailable for background {int(background_index) + 1}"
+            )
+        try:
+            params_for_payload = dict(_current_geometry_fit_params() or {})
+        except Exception:
+            params_for_payload = {}
+        hydrated_caked_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            resolved_caked_payload,
+            detector_shape=detector_shape,
+            params=params_for_payload,
+            require_background=False,
+        )
+        if not isinstance(hydrated_caked_payload, Mapping) or not isinstance(
+            hydrated_caked_payload.get("transform_bundle"),
+            CakeTransformBundle,
+        ):
+            raise RuntimeError(
+                f"exact caked projector unavailable for background {int(background_index) + 1}"
+            )
+        resolved_caked_payload = hydrated_caked_payload
+        if is_current_background:
+            _set_live_caked_transform_bundle(hydrated_caked_payload.get("transform_bundle"))
     try:
         center_pair = [float(center_x_var.get()), float(center_y_var.get())]
     except Exception:
@@ -6422,7 +6334,11 @@ def _geometry_manual_project_peaks_for_background(
             projection_callbacks.project_peaks_to_current_view(normalized_rows),
         )
     except Exception:
-        return [] if normalized_mode == "q_space" else normalized_rows
+        if normalized_mode == "q_space":
+            return []
+        if normalized_mode == "caked":
+            raise
+        return normalized_rows
 
 
 def _geometry_manual_project_peaks_by_row_background(
@@ -6457,6 +6373,8 @@ def _geometry_manual_project_peaks_by_row_background(
                 if isinstance(entry, Mapping)
             )
         except Exception:
+            if normalized_mode == "caked":
+                raise
             continue
     sorted_rows = sorted(
         projected_rows,
@@ -6731,63 +6649,19 @@ def _geometry_fit_worker_caked_projection_view(
 ) -> dict[str, object] | None:
     """Build exact-cake axis metadata for worker ROI filtering before first cake."""
 
-    if not isinstance(ai, FastAzimuthalIntegrator):
-        return None
-    normalized_shape = _geometry_fit_detector_shape_2d(detector_shape)
-    if normalized_shape is None:
-        return None
-
-    radial_bins = (
-        int(max(1, npt_rad)) if npt_rad is not None else int(max(1, DEFAULT_ANALYSIS_RADIAL_BINS))
-    )
-    azimuth_bins = (
-        int(max(1, npt_azim))
-        if npt_azim is not None
-        else int(max(1, DEFAULT_ANALYSIS_AZIMUTH_BINS))
-    )
-    try:
-        radial_axis, raw_azimuth_axis = build_angle_axes(
-            npt_rad=radial_bins,
-            npt_azim=azimuth_bins,
-            tth_min_deg=0.0,
-            tth_max_deg=detector_two_theta_max_deg(
-                normalized_shape,
-                ai.geometry,
-            ),
-            azimuth_min_deg=-180.0,
-            azimuth_max_deg=180.0,
-        )
-        transform_bundle = build_cake_transform_bundle(
-            ai,
-            normalized_shape,
-            radial_axis,
-            raw_azimuth_axis,
-        )
-    except Exception:
-        return None
-    if not isinstance(transform_bundle, CakeTransformBundle):
-        return None
-
-    gui_azimuth_axis = np.asarray(
-        raw_phi_to_gui_phi(raw_azimuth_axis),
-        dtype=np.float64,
-    )
-    raw_to_gui_row_permutation = np.asarray(
-        np.argsort(gui_azimuth_axis, kind="stable"),
-        dtype=np.int32,
-    )
-    gui_azimuth_axis = gui_azimuth_axis[raw_to_gui_row_permutation]
-    return _normalize_geometry_fit_caked_view_payload(
-        {
-            "detector_shape": normalized_shape,
-            "radial_axis": radial_axis,
-            "azimuth_axis": gui_azimuth_axis,
-            "raw_azimuth_axis": raw_azimuth_axis,
-            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
-            "transform_bundle": transform_bundle,
-        },
-        detector_shape=normalized_shape,
+    return gui_geometry_fit.build_geometry_fit_exact_caked_projection_view(
+        detector_shape=detector_shape,
         ai=ai,
+        npt_rad=(
+            int(max(1, npt_rad))
+            if npt_rad is not None
+            else int(max(1, DEFAULT_ANALYSIS_RADIAL_BINS))
+        ),
+        npt_azim=(
+            int(max(1, npt_azim))
+            if npt_azim is not None
+            else int(max(1, DEFAULT_ANALYSIS_AZIMUTH_BINS))
+        ),
     )
 
 
@@ -13183,6 +13057,65 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     timing_update_id = job.get("timing_update_id")
     timing_reason = str(job.get("timing_reason", "simulation") or "simulation")
     timing_prefix = _timing_visible_event_prefix(timing_reason)
+    compute_event_root = (
+        "first_simulation" if timing_prefix == "first" else f"{timing_prefix}.simulation"
+    )
+
+    def _compute_timing_fields(**fields: object) -> dict[str, object] | None:
+        if not timing_enabled():
+            return None
+        payload: dict[str, object] = {
+            "event_root": compute_event_root,
+            "update_id": timing_update_id,
+            "timing_reason": timing_reason,
+            "job_kind": job_kind,
+        }
+        payload.update(fields)
+        return payload
+
+    def _call_simulation_request_with_optional_timing(
+        func: Callable[..., object],
+        *args: object,
+        timing_fields: Mapping[str, object] | None,
+    ) -> object:
+        pass_timing_fields = timing_fields is not None
+        if pass_timing_fields:
+            try:
+                signature = inspect.signature(func)
+                parameters = signature.parameters.values()
+                pass_timing_fields = "timing_fields" in signature.parameters or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+                )
+            except (TypeError, ValueError):
+                pass_timing_fields = True
+        if not pass_timing_fields:
+            return func(*args)
+        try:
+            return func(*args, timing_fields=timing_fields)
+        except TypeError as exc:
+            message = str(exc)
+            if "timing_fields" in message and (
+                "unexpected keyword" in message
+                or "got an unexpected" in message
+                or "invalid keyword" in message
+            ):
+                return func(*args)
+            raise
+
+    @contextlib.contextmanager
+    def _compute_timing_span(name: str, **fields: object):
+        payload = _compute_timing_fields(**fields)
+        if payload is None:
+            yield
+            return
+        event_root = str(payload.pop("event_root"))
+        with timing_span(
+            f"{event_root}.{name}",
+            phase="calculation",
+            **payload,
+        ):
+            yield
+
     compute_start_event = _timing_named_event(
         timing_prefix,
         "simulation.compute.start",
@@ -13425,9 +13358,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 collect_hit_tables=request_collect_hit_tables,
                 build_intersection_cache=request_build_intersection_cache,
             )
-            result = simulate_qr_rods_request(
+            result = _call_simulation_request_with_optional_timing(
+                simulate_qr_rods_request,
                 data,
                 request,
+                timing_fields=_compute_timing_fields(source_mode="qr_rods"),
             )
             timing_event(
                 "simulate_qr_rods_request.end",
@@ -13489,7 +13424,11 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             collect_hit_tables=request_collect_hit_tables,
             build_intersection_cache=request_build_intersection_cache,
         )
-        result = simulate_request(request)
+        result = _call_simulation_request_with_optional_timing(
+            simulate_request,
+            request,
+            timing_fields=_compute_timing_fields(source_mode="miller"),
+        )
         timing_event(
             "simulate_request.end",
             phase="calculation",
@@ -13615,72 +13554,77 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         numba_cache_compiled_artifacts_available = bool(
             used_python_runner_flags and not any(bool(flag) for flag in used_python_runner_flags)
         )
-        result = {
-            "job_id": int(job["job_id"]),
-            "job_kind": job_kind,
-            "signature": job["signature"],
-            "timing_update_id": timing_update_id,
-            "timing_reason": timing_reason,
-            "epoch": int(job["epoch"]),
-            "run_primary": bool(job.get("run_primary", False)),
-            "run_secondary": bool(job.get("run_secondary", False)),
-            "secondary_available": bool(secondary_available),
-            "active_peak_row_sides": tuple(active_peak_row_sides),
-            "is_preview": bool(job.get("is_preview", False)),
-            "preview_sample_count": (
-                int(job.get("preview_sample_count", 0))
-                if job.get("preview_sample_count") is not None
-                else None
-            ),
-            "primary_image": img1,
-            "secondary_image": img2,
-            "collected_hit_tables": bool(job["collect_hit_tables"]),
-            "primary_hit_table_state_refreshed": bool(primary_hit_table_state_refreshed),
-            "secondary_hit_table_state_refreshed": bool(secondary_hit_table_state_refreshed),
-            "primary_raw_rows_fresh": bool(primary_raw_rows_fresh),
-            "secondary_raw_rows_fresh": bool(secondary_raw_rows_fresh),
-            "primary_intersection_cache_built": bool(primary_intersection_cache_built),
-            "secondary_intersection_cache_built": bool(secondary_intersection_cache_built),
-            "hit_table_signature": job.get("hit_table_signature"),
-            "primary_contribution_cache_signature": job.get("primary_contribution_cache_signature"),
-            "primary_source_mode": job.get("primary_source_mode"),
-            "primary_contribution_keys": list(job.get("primary_contribution_keys", [])),
-            "active_primary_contribution_keys": list(
-                job.get(
-                    "active_primary_contribution_keys",
-                    job.get("primary_contribution_keys", []),
-                )
-            ),
-            "primary_hit_tables_raw": _copy_hit_tables(
-                raw_hit_tables1 if capture_primary_hit_tables_raw else []
-            ),
-            "primary_best_sample_indices": np.asarray(
-                best_sample_indices1,
-                dtype=np.int64,
-            ).copy(),
-            "secondary_hit_tables_raw": _copy_hit_tables(
-                raw_hit_tables2 if capture_secondary_hit_tables_raw else []
-            ),
-            "secondary_best_sample_indices": np.asarray(
-                best_sample_indices2,
-                dtype=np.int64,
-            ).copy(),
-            "primary_max_positions": list(primary_peak_tables),
-            "secondary_max_positions": list(secondary_peak_tables),
-            "primary_intersection_cache": _copy_intersection_cache_tables(cache1),
-            "secondary_intersection_cache": _copy_intersection_cache_tables(cache2),
-            "primary_peak_table_lattice": [
-                (float(job["a_primary"]), float(job["c_primary"]), "primary")
-                for _ in range(primary_peak_table_count)
-            ],
-            "secondary_peak_table_lattice": [
-                (float(job["a_secondary"]), float(job["c_secondary"]), "secondary")
-                for _ in range(secondary_peak_table_count)
-            ],
-            "projection_debug_log_path": projection_debug_log_path,
-            "numba_cache_compiled_artifacts_available": numba_cache_compiled_artifacts_available,
-            "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
-        }
+        with _compute_timing_span("result_ready"):
+            result = {
+                "job_id": int(job["job_id"]),
+                "job_kind": job_kind,
+                "signature": job["signature"],
+                "timing_update_id": timing_update_id,
+                "timing_reason": timing_reason,
+                "epoch": int(job["epoch"]),
+                "run_primary": bool(job.get("run_primary", False)),
+                "run_secondary": bool(job.get("run_secondary", False)),
+                "secondary_available": bool(secondary_available),
+                "active_peak_row_sides": tuple(active_peak_row_sides),
+                "is_preview": bool(job.get("is_preview", False)),
+                "preview_sample_count": (
+                    int(job.get("preview_sample_count", 0))
+                    if job.get("preview_sample_count") is not None
+                    else None
+                ),
+                "primary_image": img1,
+                "secondary_image": img2,
+                "collected_hit_tables": bool(job["collect_hit_tables"]),
+                "primary_hit_table_state_refreshed": bool(primary_hit_table_state_refreshed),
+                "secondary_hit_table_state_refreshed": bool(secondary_hit_table_state_refreshed),
+                "primary_raw_rows_fresh": bool(primary_raw_rows_fresh),
+                "secondary_raw_rows_fresh": bool(secondary_raw_rows_fresh),
+                "primary_intersection_cache_built": bool(primary_intersection_cache_built),
+                "secondary_intersection_cache_built": bool(secondary_intersection_cache_built),
+                "hit_table_signature": job.get("hit_table_signature"),
+                "primary_contribution_cache_signature": job.get(
+                    "primary_contribution_cache_signature"
+                ),
+                "primary_source_mode": job.get("primary_source_mode"),
+                "primary_contribution_keys": list(job.get("primary_contribution_keys", [])),
+                "active_primary_contribution_keys": list(
+                    job.get(
+                        "active_primary_contribution_keys",
+                        job.get("primary_contribution_keys", []),
+                    )
+                ),
+                "primary_hit_tables_raw": _copy_hit_tables(
+                    raw_hit_tables1 if capture_primary_hit_tables_raw else []
+                ),
+                "primary_best_sample_indices": np.asarray(
+                    best_sample_indices1,
+                    dtype=np.int64,
+                ).copy(),
+                "secondary_hit_tables_raw": _copy_hit_tables(
+                    raw_hit_tables2 if capture_secondary_hit_tables_raw else []
+                ),
+                "secondary_best_sample_indices": np.asarray(
+                    best_sample_indices2,
+                    dtype=np.int64,
+                ).copy(),
+                "primary_max_positions": list(primary_peak_tables),
+                "secondary_max_positions": list(secondary_peak_tables),
+                "primary_intersection_cache": _copy_intersection_cache_tables(cache1),
+                "secondary_intersection_cache": _copy_intersection_cache_tables(cache2),
+                "primary_peak_table_lattice": [
+                    (float(job["a_primary"]), float(job["c_primary"]), "primary")
+                    for _ in range(primary_peak_table_count)
+                ],
+                "secondary_peak_table_lattice": [
+                    (float(job["a_secondary"]), float(job["c_secondary"]), "secondary")
+                    for _ in range(secondary_peak_table_count)
+                ],
+                "projection_debug_log_path": projection_debug_log_path,
+                "numba_cache_compiled_artifacts_available": (
+                    numba_cache_compiled_artifacts_available
+                ),
+                "image_generation_elapsed_ms": (perf_counter() - image_generation_start_time) * 1e3,
+            }
         timing_event(
             compute_end_event,
             phase="calculation",
@@ -13763,9 +13707,27 @@ def _poll_async_simulation_job() -> None:
     simulation_runtime_state.worker_future = None
     simulation_runtime_state.worker_active_job = None
     queued_job = simulation_runtime_state.worker_queued_job
+    _timing_event(
+        "simulation_worker.result.fetch.start",
+        phase="queue",
+        update_id=active_job.get("timing_update_id"),
+        timing_reason=active_job.get("timing_reason"),
+        job_id=active_job.get("job_id"),
+        job_kind=active_job.get("job_kind"),
+    )
     try:
         result = future.result()
     except Exception as exc:
+        _timing_event(
+            "simulation_worker.result.fetch.end",
+            phase="queue",
+            update_id=active_job.get("timing_update_id"),
+            timing_reason=active_job.get("timing_reason"),
+            job_id=active_job.get("job_id"),
+            job_kind=active_job.get("job_kind"),
+            outcome="error",
+            exc_type=type(exc).__name__,
+        )
         _append_job_queue_trace(
             "job_finished",
             lane="simulation",
@@ -13783,6 +13745,15 @@ def _poll_async_simulation_job() -> None:
         if _promote_queued_simulation_job(reason="previous_job_failed"):
             return
         return
+    _timing_event(
+        "simulation_worker.result.fetch.end",
+        phase="queue",
+        update_id=result.get("timing_update_id"),
+        timing_reason=result.get("timing_reason"),
+        job_id=result.get("job_id"),
+        job_kind=result.get("job_kind"),
+        outcome="success",
+    )
 
     _append_job_queue_trace(
         "job_finished",
@@ -14232,8 +14203,9 @@ def _caked_geometry_cache_signature(
     distance_value: object,
     center_x_value: object,
     center_y_value: object,
+    pixel_size_value: object,
     wavelength_value: object,
-) -> tuple[float | None, float | None, float | None, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
     """Return the cache key for detector<->caked LUT state."""
 
     try:
@@ -14249,6 +14221,10 @@ def _caked_geometry_cache_signature(
     except Exception:
         center_y_float = float("nan")
     try:
+        pixel_size_float = float(pixel_size_value)
+    except Exception:
+        pixel_size_float = float("nan")
+    try:
         wavelength_float = float(wavelength_value)
     except Exception:
         wavelength_float = float("nan")
@@ -14256,6 +14232,7 @@ def _caked_geometry_cache_signature(
         round(distance_float, 9) if np.isfinite(distance_float) else None,
         round(center_x_float, 6) if np.isfinite(center_x_float) else None,
         round(center_y_float, 6) if np.isfinite(center_y_float) else None,
+        round(pixel_size_float, 12) if np.isfinite(pixel_size_float) else None,
         round(wavelength_float, 12) if np.isfinite(wavelength_float) else None,
     )
 
@@ -14310,82 +14287,11 @@ def _prepare_caked_display_payload(
     ai: FastAzimuthalIntegrator | None = None,
     detector_shape: tuple[int, ...] | list[int] | None = None,
 ) -> dict[str, object] | None:
-    if res2 is None:
-        return None
-
-    raw_azimuth_axis = np.asarray(res2.azimuthal, dtype=float)
-    raw_to_gui_row_permutation = np.asarray(
-        np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable"),
-        dtype=np.int32,
-    )
-    caked_img, radial_vals, azimuth_vals = prepare_gui_phi_display(res2)
-
-    radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
-    if np.any(radial_mask):
-        radial_vals = radial_vals[radial_mask]
-        caked_img = caked_img[:, radial_mask]
-
-    if radial_vals.size:
-        radial_min = float(np.min(radial_vals))
-        radial_max = float(np.max(radial_vals))
-    else:
-        radial_min, radial_max = 0.0, 90.0
-
-    if azimuth_vals.size:
-        azimuth_min = float(np.min(azimuth_vals))
-        azimuth_max = float(np.max(azimuth_vals))
-    else:
-        azimuth_min, azimuth_max = -180.0, 180.0
-
-    normalized_payload = _normalize_geometry_fit_caked_view_payload(
-        {
-            "background": caked_img,
-            "detector_shape": detector_shape,
-            "radial_axis": radial_vals,
-            "azimuth_axis": azimuth_vals,
-            "raw_azimuth_axis": raw_azimuth_axis,
-            "raw_to_gui_row_permutation": raw_to_gui_row_permutation,
-            "transform_bundle": None,
-        },
+    return gui_geometry_fit.build_geometry_fit_caked_view_payload_from_result(
+        res2,
+        ai=ai,
         detector_shape=detector_shape,
-        ai=ai if isinstance(ai, FastAzimuthalIntegrator) else None,
     )
-    if not isinstance(normalized_payload, Mapping):
-        return None
-    return {
-        "image": np.asarray(normalized_payload.get("background"), dtype=float),
-        "background": np.asarray(normalized_payload.get("background"), dtype=float),
-        "radial": np.asarray(normalized_payload.get("radial_axis"), dtype=float),
-        "radial_axis": np.asarray(
-            normalized_payload.get("radial_axis"),
-            dtype=float,
-        ),
-        "azimuth": np.asarray(normalized_payload.get("azimuth_axis"), dtype=float),
-        "azimuth_axis": np.asarray(
-            normalized_payload.get("azimuth_axis"),
-            dtype=float,
-        ),
-        "raw_azimuth": np.asarray(
-            normalized_payload.get("raw_azimuth_axis"),
-            dtype=float,
-        ),
-        "raw_azimuth_axis": np.asarray(
-            normalized_payload.get("raw_azimuth_axis"),
-            dtype=float,
-        ),
-        "raw_to_gui_row_permutation": np.asarray(
-            normalized_payload.get("raw_to_gui_row_permutation"),
-            dtype=np.int32,
-        ),
-        "transform_bundle": normalized_payload.get("transform_bundle"),
-        "detector_shape": tuple(normalized_payload.get("detector_shape", ())),
-        "extent": [
-            radial_min,
-            radial_max,
-            azimuth_min,
-            azimuth_max,
-        ],
-    }
 
 
 _Q_SPACE_DISPLAY_LUT_MAX_DETECTOR_PIXELS = 512 * 512
@@ -15741,6 +15647,13 @@ def do_update():
         update_id=update_trace_id,
         timing_reason=timing_reason,
     )
+    if timing_prefix == "first":
+        _timing_event(
+            "first_update.update_begin",
+            phase="update",
+            update_id=update_trace_id,
+            timing_reason=timing_reason,
+        )
     _timing_event(
         _timing_named_event(timing_prefix, "queue_delay.end", "queue_delay.end"),
         phase="queue",
@@ -16900,14 +16813,16 @@ def do_update():
     # ---------------------------------------------------------------
     # The exact-cake analysis integrator setup is relatively expensive. Cache
     # the runtime integrator instance and only recreate it when the detector
-    # distance, detector center, or the fundamental wavelength changes. Tilt
-    # updates intentionally do not flush the detector-map or LUT caches so the
-    # live detector<->angle transform stays stable during geometry work.
+    # distance, detector center, pixel size, or the fundamental wavelength
+    # changes. Tilt updates intentionally do not flush the detector-map or LUT
+    # caches so the live detector<->angle transform stays stable during geometry
+    # work.
     # ---------------------------------------------------------------
     sig = _caked_geometry_cache_signature(
         corto_det_up,
         center_x_up,
         center_y_up,
+        pixel_size_m,
         wave_m,
     )
     ai_cache_action = "reuse"
@@ -18568,29 +18483,53 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
 
     warnings: list[str] = []
 
+    def _timed_primary_cif_path(raw_path):
+        with _saved_state_timing_span("saved_state.cif_restore_or_read", cif_role="primary"):
+            return _apply_primary_cif_path(raw_path)
+
+    def _timed_secondary_cif_path(raw_path):
+        with _saved_state_timing_span("saved_state.cif_restore_or_read", cif_role="secondary"):
+            return _apply_secondary_cif_path(raw_path)
+
+    def _timed_background_load(file_paths: list[str], select_index: int = 0) -> None:
+        with _saved_state_timing_span(
+            "saved_state.background_selection_restore",
+            selected_background_index=int(select_index),
+            requested_background_count=len(file_paths),
+        ):
+            pass
+        with _saved_state_timing_span(
+            "saved_state.background_load",
+            selected_background_index=int(select_index),
+            requested_background_count=len(file_paths),
+        ):
+            return _load_background_files_for_import_state(file_paths, select_index)
+
     warnings.extend(
         gui_state_io.apply_gui_state_files(
             snapshot.get("files", {}),
-            apply_primary_cif_path=_apply_primary_cif_path,
-            apply_secondary_cif_path=_apply_secondary_cif_path,
-            load_background_files=_load_background_files_for_import_state,
+            apply_primary_cif_path=_timed_primary_cif_path,
+            apply_secondary_cif_path=_timed_secondary_cif_path,
+            load_background_files=_timed_background_load,
         )
     )
 
     variables = snapshot.get("variables", {})
-    warnings.extend(
-        gui_state_io.apply_gui_state_variables(
-            variables,
-            global_items=_gui_state_variable_items(),
-            tk_variable_type=tk.Variable,
+    with _saved_state_timing_span("saved_state.variable_restore"):
+        warnings.extend(
+            gui_state_io.apply_gui_state_variables(
+                variables,
+                global_items=_gui_state_variable_items(),
+                tk_variable_type=tk.Variable,
+            )
         )
-    )
     if bool(structure_model_state.has_second_cif):
         try:
             update_weights()
         except Exception as exc:
             warnings.append(f"secondary CIF weights: {exc}")
-    _apply_analysis_range_snapshot(snapshot.get("analysis_range", {}))
+    with _saved_state_timing_span("saved_state.analysis_selections_restore"):
+        _apply_analysis_range_snapshot(snapshot.get("analysis_range", {}))
 
     gui_state_io.apply_gui_state_background_theta_compatibility(
         variables,
@@ -18641,13 +18580,21 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         flag_state["scale_factor_user_override"]
     )
 
+    def _timed_geometry_manual_pairs_snapshot(*args, **kwargs):
+        with _saved_state_timing_span("saved_state.geometry_manual_pairs_restore"):
+            return _apply_geometry_manual_pairs_snapshot(*args, **kwargs)
+
+    def _timed_replace_gui_state_peak_cache(*args, **kwargs):
+        with _saved_state_timing_span("saved_state.manual_geometry_cache_restore"):
+            return _replace_gui_state_peak_cache(*args, **kwargs)
+
     geometry_state = gui_state_io.apply_gui_state_geometry(
         snapshot.get("geometry", {}),
         q_group_state=geometry_q_group_state,
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-        apply_geometry_manual_pairs_snapshot=_apply_geometry_manual_pairs_snapshot,
-        replace_runtime_peak_cache=_replace_gui_state_peak_cache,
+        apply_geometry_manual_pairs_snapshot=_timed_geometry_manual_pairs_snapshot,
+        replace_runtime_peak_cache=_timed_replace_gui_state_peak_cache,
         current_background_index=background_runtime_state.current_background_index,
         selected_hkl_target=peak_selection_state.selected_hkl_target,
     )
@@ -18683,10 +18630,12 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     geometry_q_group_runtime_callbacks.refresh_window()
     peak_selection_runtime_callbacks.reselect_current_peak()
     ensure_valid_resolution_choice()
-    toggle_1d_plots()
-    toggle_caked_2d(getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")())
+    with _saved_state_timing_span("saved_state.caked_state_restore"):
+        toggle_1d_plots()
+        toggle_caked_2d(getattr(app_shell_view_state.view_mode_var, "get", lambda: "detector")())
     toggle_log_display()
-    _sync_primary_raster_geometry(view_mode=_resolved_primary_analysis_display_mode())
+    with _saved_state_timing_span("saved_state.caked_state_restore"):
+        _sync_primary_raster_geometry(view_mode=_resolved_primary_analysis_display_mode())
     _sync_selected_qr_rod_controls_state()
     if bool(analysis_peak_selection_state.pick_armed) and bool(
         _current_analysis_roi_values().get("integrate_selected_qr_rod", False)
@@ -18698,9 +18647,11 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     _refresh_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
-    qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
-    _refresh_live_geometry_preview(update_status=False)
-    schedule_update()
+    with _saved_state_timing_span("saved_state.overlay_restore"):
+        qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
+        _refresh_live_geometry_preview(update_status=False)
+    with _saved_state_timing_span("saved_state.initial_update_request"):
+        schedule_update()
 
     return gui_state_io.build_gui_state_import_summary(warnings)
 
@@ -19590,13 +19541,17 @@ def _initialize_runtime_controls_block_38() -> None:
     _geometry_manual_source_snapshot_diagnostics_state = {}
 
 
+_geometry_manual_source_snapshot_diagnostics_state: dict[str, object] = {}
+
+
 def _set_geometry_manual_source_snapshot_diagnostics(**kwargs) -> None:
-    _geometry_manual_source_snapshot_diagnostics_state.clear()
-    _geometry_manual_source_snapshot_diagnostics_state.update(kwargs)
+    state = globals().setdefault("_geometry_manual_source_snapshot_diagnostics_state", {})
+    state.clear()
+    state.update(kwargs)
 
 
 def _geometry_manual_last_source_snapshot_diagnostics() -> dict[str, object]:
-    return dict(_geometry_manual_source_snapshot_diagnostics_state)
+    return dict(globals().get("_geometry_manual_source_snapshot_diagnostics_state", {}) or {})
 
 
 def _geometry_source_signature_numeric(
@@ -24266,7 +24221,9 @@ def on_fit_mosaic_click():
             geometry_manual_pairs_for_index=(
                 manual_dataset_bindings.geometry_manual_pairs_for_index
             ),
-            ensure_geometry_fit_caked_view=lambda: None,
+            ensure_geometry_fit_caked_view=(
+                lambda: _ensure_geometry_fit_caked_view(force_refresh=True)
+            ),
             build_dataset=(
                 lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
                     gui_geometry_fit.build_geometry_manual_fit_dataset(
@@ -29532,9 +29489,6 @@ def _build_geometry_fit_async_job(
         except Exception:
             pass
 
-    if callable(prepare_bindings.ensure_geometry_fit_caked_view):
-        prepare_bindings.ensure_geometry_fit_caked_view()
-
     selection_applied = bool(
         prepare_bindings.apply_geometry_fit_background_selection(
             trigger_update=False,
@@ -29667,23 +29621,6 @@ def _build_geometry_fit_async_job(
         requested_signatures[int(idx)] = requested_signature
         requested_signature_summaries[int(idx)] = _live_cache_signature_summary(requested_signature)
 
-    geometry_runtime_cfg = copy.deepcopy(
-        prepare_bindings.build_runtime_config(dict(fit_params_snapshot))
-    )
-    solver_runtime_cfg = gui_geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
-        gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
-            geometry_runtime_cfg,
-            joint_background_mode=joint_background_mode,
-        ),
-        joint_background_mode=joint_background_mode,
-    )
-    fit_solver_mosaic_params, fit_sample_count = (
-        gui_geometry_fit.build_geometry_fit_solver_mosaic_params(
-            params=fit_params_snapshot,
-            geometry_runtime_cfg=solver_runtime_cfg,
-            build_mosaic_params=build_mosaic_params,
-        )
-    )
     try:
         manual_match_config = (
             copy.deepcopy(manual_dataset_bindings.geometry_manual_match_config() or {})
@@ -29701,6 +29638,53 @@ def _build_geometry_fit_async_job(
     except Exception:
         pick_uses_caked_space = False
 
+    manual_fit_space_by_background = gui_geometry_fit.geometry_manual_fit_space_by_background(
+        required_indices,
+        manual_pairs_by_background,
+        pick_uses_caked_space=bool(pick_uses_caked_space),
+        current_background_index=int(current_background_index),
+    )
+    fit_space_error = gui_geometry_fit.manual_geometry_fit_space_preflight_error(
+        manual_fit_space_by_background,
+        osc_files=list(manual_dataset_bindings.osc_files or ()),
+    )
+    if fit_space_error:
+        raise RuntimeError(fit_space_error)
+    manual_fit_uses_caked_space = any(
+        str(kind) == "caked" for kind in manual_fit_space_by_background.values()
+    )
+    if manual_fit_uses_caked_space:
+        if callable(prepare_bindings.ensure_geometry_fit_caked_view):
+            prepare_bindings.ensure_geometry_fit_caked_view()
+        pick_uses_caked_space = True
+
+    base_geometry_runtime_cfg = copy.deepcopy(
+        prepare_bindings.build_runtime_config(dict(fit_params_snapshot))
+    )
+    geometry_runtime_cfg = gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+        base_geometry_runtime_cfg,
+        joint_background_mode=joint_background_mode,
+    )
+    if manual_fit_uses_caked_space:
+        geometry_runtime_cfg = (
+            gui_geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
+                geometry_runtime_cfg,
+                joint_background_mode=joint_background_mode,
+            )
+        )
+    else:
+        geometry_runtime_cfg = gui_geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
+            geometry_runtime_cfg,
+            joint_background_mode=joint_background_mode,
+        )
+    fit_solver_mosaic_params, fit_sample_count = (
+        gui_geometry_fit.build_geometry_fit_solver_mosaic_params(
+            params=fit_params_snapshot,
+            geometry_runtime_cfg=geometry_runtime_cfg,
+            build_mosaic_params=build_mosaic_params,
+        )
+    )
+
     live_rows_by_background: dict[int, list[dict[str, object]]] = {}
     live_rows_cache_metadata_by_background: dict[int, dict[str, object]] = {}
     if int(current_background_index) in set(required_indices):
@@ -29714,6 +29698,7 @@ def _build_geometry_fit_async_job(
             if callable(_last_live_preview_cache_metadata)
             else {}
         )
+    if manual_fit_uses_caked_space and int(current_background_index) in set(required_indices):
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
         if isinstance(caked_view_payload, Mapping):
             try:
@@ -29787,7 +29772,9 @@ def _build_geometry_fit_async_job(
                 int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
             )
 
-    projection_view_mode = _geometry_fit_targeted_projection_view_mode()
+    projection_view_mode = (
+        "caked" if manual_fit_uses_caked_space else _geometry_fit_targeted_projection_view_mode()
+    )
     projection_view_signature_by_background: dict[int, dict[str, object]] = {}
     for idx in required_indices:
         background_payload = dict(background_images.get(int(idx)) or {})
@@ -29809,9 +29796,9 @@ def _build_geometry_fit_async_job(
         )
 
     simulation_runtime_state.geometry_fit_job_counter = (
-        int(simulation_runtime_state.geometry_fit_job_counter) + 1
+        int(getattr(simulation_runtime_state, "geometry_fit_job_counter", 0) or 0) + 1
     )
-    job_id = int(simulation_runtime_state.geometry_fit_job_counter)
+    job_id = int(getattr(simulation_runtime_state, "geometry_fit_job_counter", 0) or 0)
     return {
         "job_id": int(job_id),
         "stamp": stamp,
@@ -29869,7 +29856,10 @@ def _build_geometry_fit_async_job(
         "theta_base_by_background": theta_base_by_background,
         "theta_initial_by_background": theta_initial_by_background,
         "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
-        "simulation_diagnostics": _geometry_manual_last_simulation_diagnostics(),
+        "simulation_diagnostics": globals().get(
+            "_geometry_manual_last_simulation_diagnostics",
+            lambda: {},
+        )(),
         "live_cache_inventory": _live_cache_inventory_snapshot(),
         "memory_intersection_cache": _copy_intersection_cache_tables(get_last_intersection_cache()),
         "memory_intersection_cache_signature": (simulation_runtime_state.last_simulation_signature),
@@ -29877,6 +29867,7 @@ def _build_geometry_fit_async_job(
         "live_rows_cache_metadata_by_background": live_rows_cache_metadata_by_background,
         "live_rows_signature": simulation_runtime_state.last_simulation_signature,
         "manual_match_config": manual_match_config,
+        "manual_fit_space_by_background": dict(manual_fit_space_by_background),
         "pick_uses_caked_space": bool(pick_uses_caked_space),
         "geometry_manual_simulated_lookup": (
             manual_dataset_bindings.geometry_manual_simulated_lookup
@@ -29901,7 +29892,7 @@ def _build_geometry_fit_async_job(
         "solver_inputs": execution_bindings.solver_inputs,
         "solve_fit": bindings.solve_fit,
         "execution_bindings": execution_bindings,
-        "event_queue": simulation_runtime_state.geometry_fit_event_queue,
+        "event_queue": getattr(simulation_runtime_state, "geometry_fit_event_queue", None),
         "enable_live_update_events": False,
     }
 
@@ -30170,11 +30161,29 @@ def _run_async_geometry_fit_worker_job(
         )
         if not caked_payload:
             return None
-        return _normalize_geometry_fit_caked_view_payload(
+        normalized_payload = _normalize_geometry_fit_caked_view_payload(
             caked_payload,
             detector_shape=caked_payload.get("detector_shape"),
             ai=_worker_geometry_fit_caking_integrator(),
         )
+        hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            normalized_payload,
+            detector_shape=(
+                normalized_payload.get("detector_shape")
+                if isinstance(normalized_payload, Mapping)
+                else caked_payload.get("detector_shape")
+            ),
+            params=dict(job_data.get("params", {}) or {}),
+            require_background=True,
+        )
+        if not isinstance(hydrated_payload, dict):
+            return None
+        job_data.setdefault("caked_views_by_background", {})[int(index)] = hydrated_payload
+        if str(job_data.get("projection_view_mode") or "").strip().lower() == "caked":
+            job_data.setdefault("projection_payload_by_background", {})[int(index)] = (
+                hydrated_payload
+            )
+        return hydrated_payload
 
     def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
@@ -30233,7 +30242,6 @@ def _run_async_geometry_fit_worker_job(
             normalized_mode = "detector"
         signature_map = job_data.setdefault("projection_view_signature_by_background", {})
         payload_map = job_data.setdefault("projection_payload_by_background", {})
-        stored_signature = signature_map.get(background_idx)
         background_payload = dict(
             dict(job_data.get("background_images", {}) or {}).get(background_idx) or {}
         )
@@ -30267,15 +30275,12 @@ def _run_async_geometry_fit_worker_job(
                     analysis_preview_bins=job_data.get("analysis_bins"),
                 )
         else:
-            if isinstance(stored_signature, Mapping):
-                resolved_signature = gui_geometry_fit._geometry_fit_cache_jsonable(stored_signature)
-            else:
-                resolved_signature = _geometry_fit_targeted_projection_view_signature(
-                    background_idx,
-                    mode_override=normalized_mode,
-                    detector_shape=detector_shape,
-                    analysis_preview_bins=job_data.get("analysis_bins"),
-                )
+            resolved_signature = _geometry_fit_targeted_projection_view_signature(
+                background_idx,
+                mode_override=normalized_mode,
+                detector_shape=detector_shape,
+                analysis_preview_bins=job_data.get("analysis_bins"),
+            )
 
         signature_map[background_idx] = copy.deepcopy(dict(resolved_signature))
         if background_idx == int(job_data.get("current_background_index", -1)):
@@ -30319,7 +30324,9 @@ def _run_async_geometry_fit_worker_job(
             )
         except Exception:
             detector_shape = None
+        params_local = dict(job_data.get("params", {}) or {})
         resolved_caked_payload = None
+        exact_caked_bundle = None
         if normalized_mode == "caked":
             payload_map = job_data.setdefault("projection_payload_by_background", {})
             resolved_caked_payload = payload_map.get(int(background_index))
@@ -30334,14 +30341,27 @@ def _run_async_geometry_fit_worker_job(
                     analysis_preview_bins=job_data.get("analysis_bins"),
                     allow_generated_payload=True,
                 )
-                if isinstance(resolved_caked_payload, Mapping):
-                    payload_map[int(background_index)] = (
-                        gui_geometry_fit._geometry_fit_cache_jsonable(resolved_caked_payload)
-                    )
             if not isinstance(resolved_caked_payload, Mapping):
-                return normalized_rows
+                raise RuntimeError(
+                    f"exact caked projector unavailable for background {int(background_index) + 1}"
+                )
+            hydrated_caked_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+                resolved_caked_payload,
+                detector_shape=detector_shape,
+                params=params_local,
+                require_background=False,
+            )
+            if not isinstance(hydrated_caked_payload, Mapping) or not isinstance(
+                hydrated_caked_payload.get("transform_bundle"),
+                CakeTransformBundle,
+            ):
+                raise RuntimeError(
+                    f"exact caked projector unavailable for background {int(background_index) + 1}"
+                )
+            resolved_caked_payload = hydrated_caked_payload
+            exact_caked_bundle = hydrated_caked_payload.get("transform_bundle")
+            payload_map[int(background_index)] = hydrated_caked_payload
 
-        params_local = dict(job_data.get("params", {}) or {})
         center_value = params_local.get("center")
         if isinstance(center_value, Sequence) and len(center_value) >= 2:
             try:
@@ -30388,8 +30408,8 @@ def _run_async_geometry_fit_worker_job(
                 detector_distance=lambda: float(params_local.get("corto_detector", 0.0) or 0.0),
                 pixel_size=float(pixel_size_m),
                 caked_transform_bundle=lambda: (
-                    resolved_caked_payload.get("transform_bundle")
-                    if isinstance(resolved_caked_payload, Mapping)
+                    exact_caked_bundle
+                    if isinstance(exact_caked_bundle, CakeTransformBundle)
                     else None
                 ),
                 wrap_phi_range=(
@@ -30449,7 +30469,11 @@ def _run_async_geometry_fit_worker_job(
                 projection_callbacks.project_peaks_to_current_view(normalized_rows),
             )
         except Exception:
-            return [] if normalized_mode == "q_space" else normalized_rows
+            if normalized_mode == "q_space":
+                return []
+            if normalized_mode == "caked":
+                raise
+            return normalized_rows
 
     def _project_source_rows_by_row_background(
         raw_rows: Sequence[object] | None,
@@ -30613,10 +30637,15 @@ def _run_async_geometry_fit_worker_job(
             params_local.get("center", [np.nan, np.nan]),
             dtype=np.float64,
         ).reshape(-1)
+        pixel_size_value = params_local.get(
+            "pixel_size_m",
+            params_local.get("pixel_size"),
+        )
         requested_sig = _caked_geometry_cache_signature(
             params_local.get("corto_detector", np.nan),
             center_value[0] if center_value.size > 0 else np.nan,
             center_value[1] if center_value.size > 1 else np.nan,
+            pixel_size_value,
             params_local.get("lambda", np.nan),
         )
         persistent_cache = getattr(
@@ -30637,10 +30666,6 @@ def _run_async_geometry_fit_worker_job(
             worker_geometry_fit_caking_ai = persistent_cache.get("ai")
             worker_geometry_fit_caking_sig = requested_sig
             return worker_geometry_fit_caking_ai
-        pixel_size_value = params_local.get(
-            "pixel_size_m",
-            params_local.get("pixel_size"),
-        )
         try:
             worker_geometry_fit_caking_ai = _build_analysis_integrator(
                 {
@@ -30914,6 +30939,24 @@ def _run_async_geometry_fit_worker_job(
                 roi_fallback_reason="invalid_caked_payload",
                 roi_half_width_px=float(roi_half_width_px),
             )
+        hydrated_caked_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            caked_payload,
+            detector_shape=backend_background.shape[:2],
+            params=dict(job_data.get("params", {}) or {}),
+            require_background=True,
+        )
+        if not isinstance(hydrated_caked_payload, Mapping):
+            return _caked_result(
+                "invalid_exact_caked_payload",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="invalid_exact_caked_payload",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        caked_payload = hydrated_caked_payload
 
         if not _source_cache_generation_matches(
             background_idx,
@@ -31178,32 +31221,39 @@ def _run_async_geometry_fit_worker_job(
             )
             or None
         )
+        try:
+            detector_shape_for_projection = tuple(
+                int(v)
+                for v in np.asarray(
+                    dict(job_data.get("background_images", {}) or {})
+                    .get(int(background_idx), {})
+                    .get("native"),
+                    dtype=np.float64,
+                ).shape[:2]
+            )
+        except Exception:
+            detector_shape_for_projection = None
         if projection_view_mode == "caked" and not isinstance(projection_payload, Mapping):
             projection_payload = _load_caked_view_by_index_snapshot(int(background_idx))
             if not isinstance(projection_payload, Mapping):
-                try:
-                    detector_shape = tuple(
-                        int(v)
-                        for v in np.asarray(
-                            dict(job_data.get("background_images", {}) or {})
-                            .get(int(background_idx), {})
-                            .get("native"),
-                            dtype=np.float64,
-                        ).shape[:2]
-                    )
-                except Exception:
-                    detector_shape = None
                 projection_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
                     int(background_idx),
                     caked_payload=None,
-                    detector_shape=detector_shape,
+                    detector_shape=detector_shape_for_projection,
                     ai=_worker_geometry_fit_caking_integrator(),
                     analysis_preview_bins=job_data.get("analysis_bins"),
                     allow_generated_payload=True,
                 )
+        if projection_view_mode == "caked" and isinstance(projection_payload, Mapping):
+            projection_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+                projection_payload,
+                detector_shape=detector_shape_for_projection,
+                params=params_local,
+                require_background=False,
+            )
             if isinstance(projection_payload, Mapping):
                 job_data.setdefault("projection_payload_by_background", {})[int(background_idx)] = (
-                    gui_geometry_fit._geometry_fit_cache_jsonable(projection_payload)
+                    dict(projection_payload)
                 )
         logged_cache_metadata_loader, logged_cache_loader = (
             _geometry_fit_logged_intersection_cache_loaders()
@@ -31788,10 +31838,86 @@ def _run_async_geometry_fit_worker_job(
                 )
                 announce_caked_timeout()
 
+    def _worker_manual_fit_space_by_background() -> dict[int, str]:
+        required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
+        stored_spaces = job_data.get("manual_fit_space_by_background")
+        normalized: dict[int, str] = {}
+        if isinstance(stored_spaces, Mapping):
+            for background_idx in required_indices:
+                raw_kind = stored_spaces.get(
+                    int(background_idx),
+                    stored_spaces.get(str(int(background_idx))),
+                )
+                kind = str(raw_kind or "detector").strip().lower()
+                normalized[int(background_idx)] = kind if kind in {"caked", "mixed"} else "detector"
+            if len(normalized) == len(required_indices):
+                return normalized
+        return gui_geometry_fit.geometry_manual_fit_space_by_background(
+            required_indices,
+            lambda idx: [
+                dict(entry)
+                for entry in (
+                    dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
+                        int(idx),
+                        (),
+                    )
+                    or ()
+                )
+                if isinstance(entry, Mapping)
+            ],
+            pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
+            current_background_index=int(job_data.get("current_background_index", 0)),
+        )
+
+    def _worker_caked_view_payload_ready(background_index: int) -> bool:
+        payload = _load_caked_view_by_index_snapshot(int(background_index))
+        return isinstance(
+            gui_geometry_fit._geometry_fit_caked_payload_exact_bundle(
+                payload,
+                detector_shape=(
+                    payload.get("detector_shape") if isinstance(payload, Mapping) else None
+                ),
+                params=dict(job_data.get("params", {}) or {}),
+                require_background=True,
+            ),
+            CakeTransformBundle,
+        )
+
+    def _reject_worker_mixed_manual_fit_spaces(manual_spaces: Mapping[int, str]) -> None:
+        mixed_backgrounds = [
+            int(background_idx)
+            for background_idx, kind in manual_spaces.items()
+            if str(kind) == "mixed"
+        ]
+        if not mixed_backgrounds:
+            return
+        labels = ", ".join(str(idx + 1) for idx in sorted(mixed_backgrounds))
+        raise RuntimeError(
+            "mixed detector/caked manual fit spaces are not supported "
+            f"for background(s) {labels}; rebuild manual pairs in one fit space"
+        )
+
+    def _ensure_worker_geometry_fit_caked_view() -> None:
+        manual_spaces = _worker_manual_fit_space_by_background()
+        _reject_worker_mixed_manual_fit_spaces(manual_spaces)
+        caked_backgrounds = [
+            int(background_idx)
+            for background_idx, kind in manual_spaces.items()
+            if str(kind) == "caked"
+        ]
+        for background_idx in caked_backgrounds:
+            if _worker_caked_view_payload_ready(int(background_idx)):
+                continue
+            raise RuntimeError(
+                f"exact caked projector unavailable for background {int(background_idx) + 1}"
+            )
+
     worker_manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=list(job_data.get("osc_files", ()) or ()),
         current_background_index=int(job_data.get("current_background_index", 0)),
-        image_size=int(job_data.get("image_size", image_size)),
+        image_size=int(
+            job_data["image_size"] if "image_size" in job_data else globals().get("image_size", 0)
+        ),
         display_rotate_k=int(job_data.get("display_rotate_k", DISPLAY_ROTATE_K)),
         geometry_manual_pairs_for_index=(
             lambda idx: [
@@ -31823,6 +31949,12 @@ def _run_async_geometry_fit_worker_job(
         geometry_manual_refresh_pair_entry=job_data.get("geometry_manual_refresh_pair_entry"),
         geometry_manual_caked_view_for_index=_load_caked_view_by_index_snapshot,
         geometry_manual_project_peaks_to_current_view=_project_source_rows_by_row_background,
+        geometry_manual_project_peaks_for_background_view=(
+            lambda background_index, rows: _project_source_rows_for_background(
+                int(background_index),
+                rows,
+            )
+        ),
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
         display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
         select_fit_orientation=job_data.get("select_fit_orientation"),
@@ -31835,6 +31967,8 @@ def _run_async_geometry_fit_worker_job(
         _emit_worker_event(str(stage), dict(payload or {}))
 
     try:
+        manual_spaces = _worker_manual_fit_space_by_background()
+        _reject_worker_mixed_manual_fit_spaces(manual_spaces)
         _prebuild_required_background_caches()
         prepare_result = gui_geometry_fit.prepare_geometry_fit_run(
             params=dict(job_data.get("params", {}) or {}),
@@ -31873,7 +32007,7 @@ def _run_async_geometry_fit_worker_job(
             geometry_manual_pairs_for_index=(
                 worker_manual_dataset_bindings.geometry_manual_pairs_for_index
             ),
-            ensure_geometry_fit_caked_view=lambda: None,
+            ensure_geometry_fit_caked_view=_ensure_worker_geometry_fit_caked_view,
             build_dataset=(
                 lambda background_index, *, theta_base, base_fit_params, orientation_cfg, stage_callback=None: (
                     gui_geometry_fit.build_geometry_manual_fit_dataset(
@@ -31891,6 +32025,7 @@ def _run_async_geometry_fit_worker_job(
                     dict(job_data.get("geometry_runtime_cfg", {}) or {})
                 )
             ),
+            manual_fit_pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
             stage_callback=_stage_callback,
         )
     except Exception as exc:
@@ -32283,6 +32418,12 @@ def _initialize_runtime_controls_block_50() -> None:
             ),
             "geometry_manual_project_peaks_to_current_view": (
                 _geometry_manual_project_peaks_by_row_background
+            ),
+            "geometry_manual_project_peaks_for_background_view": (
+                lambda background_index, rows: _geometry_manual_project_peaks_for_background(
+                    int(background_index),
+                    rows,
+                )
             ),
             "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
             "geometry_manual_caked_view_for_index": (_geometry_fit_caked_view_for_index),
@@ -33688,6 +33829,114 @@ def _emit_startup_benchmark_event(event: str, **payload: object) -> None:
     print(f"RA_SIM_STARTUP_EVENT {json.dumps(message, sort_keys=True)}", flush=True)
 
 
+def _saved_state_sequence_count(value: object) -> int | None:
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return int(len(value))
+    return None
+
+
+def _saved_state_snapshot_metadata(snapshot: object) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "restored_background_count": None,
+        "restored_manual_pair_count": None,
+        "restored_selection_count": None,
+        "restored_has_caked_state": None,
+        "restored_has_geometry_manual_pairs": None,
+        "metadata_status": "not_detected",
+        "missing_phase_reason": "saved_state_snapshot_unavailable",
+    }
+    if not isinstance(snapshot, Mapping):
+        return metadata
+
+    files_state = snapshot.get("files", {})
+    geometry_state = snapshot.get("geometry", {})
+    missing: list[str] = []
+    if isinstance(files_state, Mapping):
+        background_count = _saved_state_sequence_count(files_state.get("background_files"))
+        metadata["restored_background_count"] = background_count
+        if background_count is None:
+            missing.append("restored_background_count")
+    else:
+        missing.append("restored_background_count")
+
+    if isinstance(geometry_state, Mapping):
+        manual_pair_count = _saved_state_sequence_count(geometry_state.get("manual_pairs"))
+        metadata["restored_manual_pair_count"] = manual_pair_count
+        metadata["restored_has_geometry_manual_pairs"] = (
+            bool(manual_pair_count) if manual_pair_count is not None else None
+        )
+        selection_count = _saved_state_sequence_count(geometry_state.get("q_group_rows"))
+        metadata["restored_selection_count"] = selection_count
+        if manual_pair_count is None:
+            missing.append("restored_manual_pair_count")
+            missing.append("restored_has_geometry_manual_pairs")
+        if selection_count is None:
+            missing.append("restored_selection_count")
+    else:
+        missing.extend(
+            [
+                "restored_manual_pair_count",
+                "restored_has_geometry_manual_pairs",
+                "restored_selection_count",
+            ]
+        )
+
+    if "analysis_range" in snapshot:
+        metadata["restored_has_caked_state"] = isinstance(snapshot.get("analysis_range"), Mapping)
+    else:
+        missing.append("restored_has_caked_state")
+
+    if missing:
+        metadata["metadata_status"] = "partial"
+        metadata["missing_phase_reason"] = ",".join(sorted(set(missing)))
+    else:
+        metadata["metadata_status"] = "measured"
+        metadata["missing_phase_reason"] = None
+    return metadata
+
+
+def _saved_state_timing_context_fields() -> dict[str, object]:
+    fields: dict[str, object] = {}
+    try:
+        context = getattr(simulation_runtime_state, "timing_saved_state_context", {}) or {}
+    except Exception:
+        context = {}
+    if isinstance(context, Mapping):
+        fields.update(dict(context))
+    return fields
+
+
+def _saved_state_timing_event(event: str, **fields: object) -> None:
+    if not timing_enabled():
+        return
+    payload = _saved_state_timing_context_fields()
+    payload.update(fields)
+    _timing_event(event, phase="startup", **payload)
+
+
+@contextlib.contextmanager
+def _saved_state_timing_span(name: str, **fields: object):
+    if not timing_enabled():
+        yield
+        return
+    payload = _saved_state_timing_context_fields()
+    payload.update(fields)
+    _timing_event(f"{name}.start", phase="startup", **payload)
+    try:
+        yield
+    except Exception as exc:
+        _timing_event(
+            f"{name}.error",
+            phase="startup",
+            **payload,
+            exc_type=type(exc).__name__,
+            error=str(exc),
+        )
+        raise
+    finally:
+        _timing_event(f"{name}.end", phase="startup", **payload)
+
+
 def _timing_apply_startup_state_restore() -> None:
     if not timing_enabled():
         return
@@ -33695,36 +33944,52 @@ def _timing_apply_startup_state_restore() -> None:
     if not state_path_text:
         return
     state_path = Path(state_path_text).expanduser()
-    _timing_event(
-        "saved_state.restore.start",
-        phase="startup",
-        state_file=state_path.name,
-    )
+    context: dict[str, object] = {
+        "state_path_basename": state_path.name,
+        "state_file": state_path.name,
+    }
+    try:
+        context["state_file_size_bytes"] = int(state_path.stat().st_size)
+    except OSError:
+        context["state_file_size_bytes"] = None
+    simulation_runtime_state.timing_saved_state_context = dict(context)
+    _saved_state_timing_event("saved_state.start")
+    _saved_state_timing_event("saved_state.restore.start")
     try:
         previous_startup_updates_suspended = bool(
             getattr(simulation_runtime_state, "startup_updates_suspended", False)
         )
         simulation_runtime_state.startup_updates_suspended = True
+        simulation_runtime_state.timing_saved_state_restore_active = True
         payload = load_gui_state_file(state_path)
+        snapshot = dict(payload.get("state", {}))
+        context.update(_saved_state_snapshot_metadata(snapshot))
+        simulation_runtime_state.timing_saved_state_context = dict(context)
+        _saved_state_timing_event("saved_state.metadata")
         try:
-            message = _apply_full_gui_state_snapshot(dict(payload.get("state", {})))
+            message = _apply_full_gui_state_snapshot(snapshot)
         finally:
             simulation_runtime_state.startup_updates_suspended = previous_startup_updates_suspended
+            simulation_runtime_state.timing_saved_state_restore_active = False
     except Exception as exc:
-        _timing_event(
+        _saved_state_timing_event(
             "saved_state.restore.error",
-            phase="startup",
-            state_file=state_path.name,
             exc_type=type(exc).__name__,
             error=str(exc),
         )
+        _saved_state_timing_event(
+            "saved_state.error",
+            exc_type=type(exc).__name__,
+            error=str(exc),
+        )
+        simulation_runtime_state.timing_saved_state_restore_active = False
         raise
-    _timing_event(
+    simulation_runtime_state.timing_saved_state_restore_completed = True
+    _saved_state_timing_event(
         "saved_state.restore.end",
-        phase="startup",
-        state_file=state_path.name,
         message=message,
     )
+    _saved_state_timing_event("saved_state.end", message=message)
 
 
 def _timing_theta_trace(*_args) -> None:

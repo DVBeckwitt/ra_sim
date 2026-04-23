@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-22
+Last updated: 2026-04-23
 
 ## Current status
 
@@ -24,6 +24,20 @@ Last updated: 2026-04-22
 - Rung 5 small cumulative blocks are green for fresh same-run New4 ladder
   validation. Run `20260422_115256` passed four attempted blocks with zero
   failed/skipped blocks.
+- Fresh Rung 7 feature-gate prerequisites are green. Run
+  `20260422_rung7_feature_gate_blocks` passed 4/4 Rung 5 blocks, and
+  `20260422_rung7_feature_gate_combined` passed both Rung 6 combined
+  candidates, including C2
+  `corto_detector/theta_initial/cor_angle/chi/zs/zb`.
+- Controlled Rung 7 feature gate was rerun after the `seed_multistart` fix.
+  Fresh chain `20260422_rung7_seedfix_provider_before`,
+  `20260422_rung7_seedfix_caked`, `20260422_rung7_seedfix_blocks`,
+  `20260422_rung7_seedfix_combined`, `20260422_rung7_seedfix_features`, and
+  `20260422_rung7_seedfix_provider_after` kept provider/caked/Rung 5/Rung 6
+  guards green. The full feature sequence passed `dynamic_reanchor`,
+  `discrete_modes`, and `seed_multistart`, then failed `full_beam_polish` with
+  `failure_reason == "fixed_source_or_pair_integrity_lost"`.
+  `identifiability_features` was skipped with `prior_feature_failed`.
 - Rung 0-5 timing observability is implemented. Each current-run rung report
   gets finite timing metadata, the run directory gets `rung_timing_summary.json`,
   `--timing-report` can write an explicit copy, and timing thresholds are
@@ -40,15 +54,38 @@ Last updated: 2026-04-22
   requested, and running heartbeat JSON writes sparse residual progress without
   rewriting the growing full residual trace on every residual evaluation. Final
   reports still keep the full `residual_eval_trace`.
-- No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
-  feature rung should be treated as validated.
+- Manual caked geometry-fit drift is fixed for solver routing and Rung 6
+  validation. Caked manual picks keep `dynamic_point_geometry_fit=True`, require
+  exact caked fit-space rows, report `fit_space_projector_kind ==
+  "exact_caked_bundle"`, and reject fallback/analytic-detector rows. Headless
+  Rung 6 now seeds C2 from accepted C1 plus the accepted Rung 5 z/zb block.
+  Real validation chain:
+  `temp/codex_caked_manual_blast/final_caked_reprojection/current`,
+  `temp/codex_caked_manual_blast/final_ladder_full_retry/20260422_195846`, and
+  `temp/codex_caked_manual_blast/final_ladder_combined_noop/20260422_201042`.
+  Rungs 0-5 passed, Rung 6 C1 improved caked metrics
+  `57.6813/99.4711 -> 37.9420/99.2608`, and Rung 6 C2 accepted the seeded
+  initial caked state because the optimizer candidate regressed
+  `37.8529/98.9712 -> 37.8940/99.1367`; accepted final C2 metrics stayed
+  `37.8529/98.9712`.
+- Remaining manual caked gate blocker: exact-caked preflight ordering is still
+  not fully green. `tests/test_gui_runtime_import_safe.py
+  tests/test_gui_geometry_fit_workflow.py -q` ended with `4 failed, 796 passed,
+  1 skipped`; all failures show caked prepare/worker paths can reach dataset
+  build before exact-payload ensure/fail-closed handling in the import-safe
+  boundary tests. Do not claim full GUI/preflight closure until those four tests
+  pass.
+- No full fitter, baseline, GUI fit, unrestricted feature combination, full-beam
+  polish, or identifiability feature run should be treated as validated.
 
-This handoff is the bounded-through-Rung-5 recovery state for `new4`. Do not
-use it as approval for full, feature, GUI, or baseline solves.
+This handoff is the bounded-through-Rung-7 feature-gate recovery state for
+`new4`. Do not use it as approval for full fitter, GUI, baseline, or unrestricted
+feature-combination solves.
 
 Status by work type:
 
-- Feature: fresh same-run Rung 5 blocks are green for New4 ladder validation.
+- Feature: controlled Rung 7 passed `dynamic_reanchor`, `discrete_modes`, and
+  `seed_multistart`; `full_beam_polish` is the first failing feature.
 - Bug/error: Rung 5 evidence handling is fixed so fatal evidence aborts stay
   fatal, local `a` usability failures stay local, and missing dependencies skip
   only affected blocks.
@@ -61,14 +98,80 @@ Status by work type:
   `max_nfev: 400`, parallel orchestration, or identifiability diagnostics for a
   few selected spots. Unsafe parallel runtime and richer dynamic point fitting
   remain explicit paths.
+- Manual caked fit bug/error: solver-path drift is fixed and Rung 6 validates
+  same-coordinate exact-caked rows without detector fallback. Preflight
+  fail-closed ordering still has four focused import-safe failures, so the
+  operator-facing GUI preflight path remains in-progress.
 - Ladder lean bug/error: finite-difference identifiability diagnostics no
   longer run on every fast ladder solve. The identifiability feature run remains
   the explicit diagnostic path.
 - Ladder heartbeat bug/error: running heartbeat files no longer rewrite stale or
   growing `residual_eval_trace` payloads on every evaluation. Timeout progress
   keeps `last_residual_eval`, counters, timing, bounds, and solver context flags.
-- Not validated: full fitter, feature rung, baseline, GUI fit, dynamic reanchor,
-  multistart, and polish remain unclaimed.
+- GUI timing harness: gated smoke and 10-trial evidence was collected under
+  `artifacts/gui_timing/20260422_130625`; 30-trial evidence stopped at a
+  focused `theta10` child timeout after `defaults_30` passed.
+- Not validated: full fitter, baseline, GUI fit, unrestricted feature
+  combinations, full-beam polish acceptance, and identifiability features remain
+  unclaimed. Full-beam polish was attempted only as the controlled Rung 7
+  feature and failed.
+
+## GUI timing harness checkpoint
+
+Artifact root: `artifacts/gui_timing/20260422_130625`
+
+Prechecks passed:
+
+- `python -m ruff check ra_sim/timing.py scripts/measure_gui_timing.py tests/test_timing.py tests/test_gui_runtime_update_trace.py`
+- `python -m pytest tests/test_timing.py tests/test_gui_runtime_update_trace.py -q` -> `17 passed`
+- `python -m mypy ra_sim/timing.py`
+
+CLI source of truth:
+
+- Uses `--scenario`, not `--preset`.
+- Restored New4 scenario is `saved-state-startup --state artifacts/geometry_fit_gui_states/new4.json`; summaries record it as `defaults-restored`.
+- Per-run artifacts are `summary.json`, `metadata.json`, `combined_events.csv`,
+  `README.md`, and per-trial `trial_*.jsonl`/stdout/stderr files. The current
+  harness output does not emit top-level `events.jsonl` or `report.csv`.
+- Current summaries/events do not record RSS samples, so RSS peak and RSS growth
+  were not available from these artifacts.
+
+Batch status:
+
+- Smoke passed for `defaults`, `theta10`, `redraw-only`, `cache-hit`, and restored New4.
+- 10-trial batch passed for all five scenarios with zero `trial_failures`.
+- 30-trial batch: `defaults_30` passed; `theta10_30` timed out on
+  `trial_001.jsonl`, so `redraw-only_30`, `cache-hit_30`, and restored New4 30
+  were not run.
+
+10-trial timing comparison:
+
+| Scenario | Primary span | median ms | p95 ms | max ms | events |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `defaults_10` | startup/process launch to first visible | 6443.5 | 6636.6 | 6636.6 | 1473 |
+| `theta10_10` | theta change/total change to visible | 3991.0 | 4515.6 | 4515.6 | 2281 |
+| `theta10_10` | theta return/total change to visible | 1675.1 | 2000.1 | 2000.1 | 2281 |
+| `redraw_only_10` | redraw/input to visible | 146.2 | 175.2 | 271.2 | 458 |
+| `cache_hit_10` | theta change/total change to visible | 4805.3 | 4805.3 | 4805.3 | 325 |
+| `restored_new4_10` | startup/process launch to first visible | 16562.6 | 16739.6 | 16739.6 | 1887 |
+
+Observed timing shape:
+
+- Slowest 10-trial spans were restored New4 startup (`~16.6s`), default startup
+  (`~6.4s`), and theta change visible latency (`~4.0s`).
+- Restored New4 adds about `10.1s` startup/restore overhead versus default
+  startup median.
+- `cache-hit_10` did not come out faster than `theta10_10`; its measured theta
+  change was one counted span at `4805.3ms`, with cache-hit events showing both
+  false and true states. Treat cache-hit evidence as needing focused follow-up
+  before using it as a speed claim.
+- `redraw_only_10` is fast and compute-free in the summary: redraw visible
+  median `146.2ms`, p95 `175.2ms`.
+- Repeated update IDs mostly match repeated scenario work. The focused
+  `theta10_30` timeout ended after partial measurements (`14` theta changes,
+  `13` returns); last events show repeated render callbacks for update `56` and
+  overlay update `57`, then no stderr and a `151.849s` event gap until the 240s
+  harness timeout.
 
 ## What is proven
 
@@ -313,8 +416,9 @@ Latest reported local result: `316 passed` after class-A/class-C cleanup. This d
 | Rung 2 | sensitivity scan | green | 9 active, 4 near-zero, 0 non-finite, 0 unsafe |
 | Rung 3 | one-parameter solves | green | singleton evidence usable for pair/block work |
 | Rung 4 | paired solves | green | initial pair set passed |
-| Rung 5 | cumulative blocks | green | fresh same-run run `20260422_115256`, 4/4 blocks passed |
-| Rung 6 | selected combined solve / full-candidate dry run | not started | separate approval required |
+| Rung 5 | cumulative blocks | green | fresh run `20260422_rung7_feature_gate_blocks`, 4/4 blocks passed |
+| Rung 6 | selected combined solve / full-candidate dry run | green | fresh run `20260422_rung7_feature_gate_combined`, C2 passed |
+| Rung 7 | controlled feature gate | blocked at `full_beam_polish` | `dynamic_reanchor`, `discrete_modes`, and `seed_multistart` passed; `identifiability_features` skipped after first failure |
 
 ## Active and near-zero parameters from Rung 2
 
@@ -379,18 +483,37 @@ Fixed behavior: failed optimizer-request capture leaves the optimizer request un
 
 ## Remaining work
 
-Next project: Rung 6 selected combined solve / full-candidate dry run.
+Next project: debug the Rung 7 `full_beam_polish` fixed-source/pair-integrity
+loss.
 
-Fresh same-run Rung 5 is accepted for New4 ladder validation. The acceptance run
-was `20260422_115256`: Rung 5 `status == "ok"`, four attempted blocks, four
-passed blocks, zero failed/skipped blocks, provider guard after blocks green,
-and unchanged `new4.json`
-(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
+Fresh seedfix Rung 7 prerequisites are accepted for New4 gating. Provider-only
+reports before and after the run had `classification == "point_provider_parity_ok"`.
+Standalone caked reprojection run `20260422_rung7_seedfix_caked` had
+`status == "pass"`, `failures == []`, provider before/after green, and
+unchanged `new4.json`
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`). Rung 5
+run `20260422_rung7_seedfix_blocks` had `status == "ok"`, four passed blocks,
+zero failed/timed-out blocks, provider guard after green, and unchanged state.
+Rung 6 run `20260422_rung7_seedfix_combined` had `status == "ok"` and passed C2
+`corto_detector/theta_initial/cor_angle/chi/zs/zb` with clean 7/7 fixed-source
+counters, provider/caked/state guards green, and `full_fitter_validated == false`.
+
+Controlled full-sequence Rung 7 run `20260422_rung7_seedfix_features` had
+`status == "ok_with_failures"` and
+`first_failing_feature == "full_beam_polish"`. Passing features
+`dynamic_reanchor`, `discrete_modes`, and `seed_multistart` all had
+`least_squares_called == true`, `optimizer_solve_called == true`,
+`matched_pair_count == 7`, `missing_pair_count == 0`,
+`branch_mismatch_count == 0`, `fixed_source_resolved_count == 7`,
+`fallback_entry_count == 0`, provider identity/point matches true, caked guard
+true, provider guard after green, and state hash unchanged. `dynamic_reanchor`
+also kept `lost_pair_ids == []`, `rejected_pair_ids == []`,
+`fallback_pair_ids == []`, and `rematched_pair_ids == []`. `seed_multistart`
+selected seed 11 cleanly, preserved 7/7 fixed manual pairs, rejected one dirty
+seed before ranking, and did not select any dirty seed. `full_beam_polish`
+failed with `failure_reason == "fixed_source_or_pair_integrity_lost"`;
+`identifiability_features` was skipped with `prior_feature_failed`.
 `full_fitter_validated == false`.
-
-Rung 6 remains separate and unstarted. Do not run dynamic reanchor, multistart,
-polish, GUI fit, baseline, feature rung, freeze/thaw, or full fitter validation
-until Rung 6 is separately approved.
 
 Opt-in timing check `20260422_123330` measured the approved fresh Rung 5 blocks
 path only (`--max-rung blocks`, `--timing-report`). It wrote
@@ -401,8 +524,10 @@ path only (`--max-rung blocks`, `--timing-report`). It wrote
 
 Do not use the old full baseline as the first next step.
 
-Do not run full, feature, baseline, GUI fit button, multistart, full-beam polish,
-dynamic reanchor, auto-freeze/selective thaw, or feature rung as acceptance.
+Do not run full fitter, baseline, GUI fit button, unrestricted feature
+combinations, auto-freeze/selective thaw, or feature-combo solves as full
+acceptance. Do not proceed past the `full_beam_polish` blocker to claim
+identifiability or full fitter validation.
 
 Do not treat RMS/max baseline or full fitter behavior as validated yet.
 
@@ -411,20 +536,24 @@ Do not treat RMS/max baseline or full fitter behavior as validated yet.
 Issue [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) was updated with this checkpoint:
 
 ```text
-New4 geometric fitter recovery checkpoint:
+New4 Rung 7 seedfix full feature-gate checkpoint:
 
-- Provider parity closed.
-- Visual/backend coordinate parity closed.
-- Rung 1 objective dry-run green.
-- Rung 2 sensitivity scan green.
-- Rung 3 one-parameter solves have usable bounded evidence.
-- Rung 3A `a` diagnosis is usable.
-- Rung 3B caked-point reprojection guard is green.
-- Rung 4 initial pairs are green.
-- Rung 5 fresh same-run blocks are green: run `20260422_115256`, 4/4 blocks
-  passed, provider guard after blocks green, `new4.json` unchanged.
-- No full, feature, baseline, GUI fit, dynamic reanchor, multistart, polish, or
-  feature rung validated yet.
+- Provider-before `20260422_rung7_seedfix_provider_before`: green.
+- Caked guard `20260422_rung7_seedfix_caked`: pass, no failures.
+- Rung 5 `20260422_rung7_seedfix_blocks`: status ok, 4/4 blocks passed.
+- Rung 6 `20260422_rung7_seedfix_combined`: status ok, C2 passed.
+- Rung 7 `20260422_rung7_seedfix_features`: full controlled feature sequence,
+  no `--feature`, no full fit, no baseline, no GUI fit.
+- Passed: `dynamic_reanchor`, `discrete_modes`, `seed_multistart`.
+- First failing feature: `full_beam_polish`, reason
+  `fixed_source_or_pair_integrity_lost`.
+- Skipped: `identifiability_features` with `prior_feature_failed`.
+- Provider-after `20260422_rung7_seedfix_provider_after`: green.
+- `new4.json` hash stayed
+  `f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`.
+- `full_fitter_validated == false`; next work is the `full_beam_polish`
+  fixed-source/pair-integrity failure, not baseline.
+
 ```
 
 ## Links

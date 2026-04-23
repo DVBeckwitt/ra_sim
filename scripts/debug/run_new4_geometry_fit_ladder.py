@@ -43,6 +43,14 @@ REQUIRED_PROVIDER_COUNTS = {
     "fallback_pair_count": 0,
 }
 EXPECTED_PROVIDER_PAIR_COUNT = 7
+RAW_ANGULAR_METRIC_NAME = "raw_angular_rms_deg"
+RAW_ANGULAR_MAX_METRIC_NAME = "raw_angular_max_deg"
+RAW_ANGULAR_METRIC_UNIT = "deg"
+WEIGHTED_ANGULAR_METRIC_NAME = "weighted_angular_rms_weighted_deg"
+WEIGHTED_ANGULAR_MAX_METRIC_NAME = "weighted_angular_max_weighted_deg"
+WEIGHTED_ANGULAR_METRIC_UNIT = "weighted_deg"
+RAW_ANGULAR_COMPONENT_BOUND_DEG = 180.0
+RAW_ANGULAR_VECTOR_NORM_BOUND_DEG = math.hypot(90.0, 180.0)
 TIMING_METADATA_KEYS = {
     "started_at_iso",
     "finished_at_iso",
@@ -65,6 +73,33 @@ STRICT_POINT_SUMMARY_KEYS = (
     "fallback_entry_count",
     "fallback_hkl_count",
     "subset_fallback_hkl_count",
+)
+
+FULL_BEAM_POLISH_TRACE_KEYS = (
+    "polish_started",
+    "polish_completed",
+    "polish_candidate_param_names",
+    "polish_var_names",
+    "polish_effective_var_names_seen_by_solver",
+    "manual_fixed_source_pair_count_before",
+    "polish_manual_fixed_source_pair_count_before",
+    "polish_fixed_source_resolved_count_before",
+    "polish_fixed_source_resolved_count_after",
+    "polish_matched_pair_count_before",
+    "polish_matched_pair_count_after",
+    "polish_fallback_entry_count_before",
+    "polish_fallback_entry_count_after",
+    "polish_missing_pair_count_before",
+    "polish_missing_pair_count_after",
+    "polish_branch_mismatch_count_before",
+    "polish_branch_mismatch_count_after",
+    "polish_lost_pair_ids",
+    "polish_missing_pair_ids",
+    "polish_fallback_pair_ids",
+    "polish_rematched_pair_ids",
+    "polish_lost_pair_details",
+    "polish_rejection_reason",
+    "full_beam_polish_failure_reason",
 )
 
 REQUEST_HANDOFF_FIELDS = (
@@ -144,6 +179,16 @@ FEATURE_RUNS = [
     "full_beam_polish",
     "identifiability_features",
 ]
+DYNAMIC_REANCHOR_POLICY = "preserve_manual_fixed_source_identity"
+RUNG7_BASE_CANDIDATE_NAME = "corto_detector_theta_initial_cor_angle_chi_zs_zb"
+RUNG7_BASE_CANDIDATE = (
+    "corto_detector",
+    "theta_initial",
+    "cor_angle",
+    "chi",
+    "zs",
+    "zb",
+)
 
 RUNG4_DEFAULT_PAIRS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("a_c", ("a", "c")),
@@ -178,9 +223,36 @@ RUNG5_BLOCKS: tuple[tuple[str, tuple[str, ...], tuple[tuple[str, str], ...]], ..
         (("a", "c"),),
     ),
 )
+RUNG6_COMBINED_CANDIDATES: tuple[tuple[str, tuple[str, ...], tuple[tuple[str, ...], ...]], ...] = (
+    (
+        "corto_detector_theta_initial_cor_angle_chi",
+        ("corto_detector", "theta_initial", "cor_angle", "chi"),
+        (
+            ("corto_detector", "theta_initial", "cor_angle"),
+            ("chi", "cor_angle", "theta_initial"),
+        ),
+    ),
+    (
+        "corto_detector_theta_initial_cor_angle_chi_zs_zb",
+        ("corto_detector", "theta_initial", "cor_angle", "chi", "zs", "zb"),
+        (("corto_detector", "theta_initial", "zs", "zb"),),
+    ),
+)
+RUNG6_DISABLED_FEATURE_FLAGS = {
+    "dynamic_reanchor": False,
+    "multistart": False,
+    "full_beam_polish": False,
+    "discrete_modes": False,
+    "auto_freeze": False,
+    "selective_thaw": False,
+    "adaptive_regularization": False,
+    "baseline": False,
+}
 CAKED_REPROJECTION_REQUIRED_PARAMS = {"theta_initial", "theta_offset", "corto_detector"}
 PAIR_RMS_TOLERANCE_PX = 0.25
 PAIR_MAX_ERROR_TOLERANCE_PX = 1.0
+CAKED_RMS_TOLERANCE_DEG = 0.25
+CAKED_MAX_ERROR_TOLERANCE_DEG = 1.0
 
 
 def _jsonable(value: object) -> object:
@@ -316,6 +388,10 @@ class _TimingCollector:
             return "4"
         if name.startswith("rung_05_"):
             return "5"
+        if name.startswith("rung_06_"):
+            return "6"
+        if name.startswith("rung_07_"):
+            return "7"
         return None
 
     def decorate_payload(
@@ -331,9 +407,7 @@ class _TimingCollector:
 
         finished_at = _utc_now()
         finished_perf = _perf_counter()
-        existing_elapsed = _finite_seconds(
-            payload.get("elapsed_s", payload.get("elapsed_seconds"))
-        )
+        existing_elapsed = _finite_seconds(payload.get("elapsed_s", payload.get("elapsed_seconds")))
         if rung_id == "summary":
             elapsed_s = max(0.0, finished_perf - float(self.started_perf))
             started_at = self.started_at
@@ -392,9 +466,7 @@ class _TimingCollector:
             default=None,
         )
         present = {str(item.get("rung_id", "")) for item in timings}
-        missing = [
-            rung_id for rung_id in self.expected_rung_ids if rung_id not in present
-        ]
+        missing = [rung_id for rung_id in self.expected_rung_ids if rung_id not in present]
         threshold_max = _finite_seconds(os.environ.get("RA_SIM_NEW4_LADDER_TIMING_MAX_S"))
         exceeded: list[dict[str, object]] = []
         threshold_status = "not_configured"
@@ -415,9 +487,7 @@ class _TimingCollector:
             "completed_rung_count": len(timings),
             "missing_expected_rungs": missing,
             "rung_timings": timings,
-            "slowest_rung": (
-                str(slowest.get("rung_name", "")) if slowest is not None else None
-            ),
+            "slowest_rung": (str(slowest.get("rung_name", "")) if slowest is not None else None),
             "slowest_rung_elapsed_s": (
                 float(slowest.get("elapsed_s", 0.0)) if slowest is not None else None
             ),
@@ -491,6 +561,7 @@ def _expected_rung_ids_for_run(
     one_param_summary: Path | None = None,
     pair_summary: Path | None = None,
     caked_point_reprojection_report: Path | None = None,
+    combined_summary: Path | None = None,
 ) -> tuple[str, ...]:
     name = str(max_rung).strip().lower()
     if name == "sensitivity":
@@ -506,6 +577,12 @@ def _expected_rung_ids_for_run(
             if caked_point_reprojection_report is None:
                 expected.insert(4, "3B")
         return tuple(expected)
+    if name in {"combined", "selected"}:
+        return ("0", "1", "2", "6")
+    if name in {"feature", "features"}:
+        if combined_summary is None:
+            return ("0", "1", "2", "6", "7")
+        return ("0", "1", "2", "7")
     if name in {"center", "full"}:
         return ("0", "1", "2", "3", "4", "5")
     return ("0", "1", "2")
@@ -726,9 +803,7 @@ def _capture_solver_context(state_path: Path, background_index: int) -> dict[str
 def _coerce_active_names(context: Mapping[str, object], names: Sequence[object]) -> list[str]:
     prepared_run = context["prepared_run"]
     fit_params = (
-        dict(getattr(prepared_run, "fit_params", {}) or {})
-        if prepared_run is not None
-        else {}
+        dict(getattr(prepared_run, "fit_params", {}) or {}) if prepared_run is not None else {}
     )
     active: list[str] = []
     for raw_name in names:
@@ -742,6 +817,30 @@ def _coerce_active_names(context: Mapping[str, object], names: Sequence[object])
     return active
 
 
+def _runtime_config_uses_caked_manual_fit(runtime_cfg: Mapping[str, object] | None) -> bool:
+    cfg = runtime_cfg if isinstance(runtime_cfg, Mapping) else {}
+    solver_raw = cfg.get("solver", cfg.get("optimizer", {}))
+    solver = solver_raw if isinstance(solver_raw, Mapping) else {}
+    projection_mode = str(cfg.get("projection_view_mode", "")).strip().lower()
+    return (
+        bool(solver.get("manual_point_fit_mode", False))
+        and bool(solver.get("dynamic_point_geometry_fit", False))
+        and projection_mode == "caked"
+    )
+
+
+def _assert_caked_manual_runtime_config(runtime_cfg: Mapping[str, object] | None) -> None:
+    cfg = runtime_cfg if isinstance(runtime_cfg, Mapping) else {}
+    solver_raw = cfg.get("solver", cfg.get("optimizer", {}))
+    solver = solver_raw if isinstance(solver_raw, Mapping) else {}
+    if not (
+        bool(solver.get("manual_point_fit_mode", False))
+        and bool(solver.get("dynamic_point_geometry_fit", False))
+        and str(cfg.get("projection_view_mode", "")).strip().lower() == "caked"
+    ):
+        raise RuntimeError("caked manual runtime config stripped after ladder slimming")
+
+
 def _lean_runtime_config(
     runtime_cfg: Mapping[str, object] | None,
     *,
@@ -751,11 +850,17 @@ def _lean_runtime_config(
 ) -> dict[str, object]:
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
     cfg["candidate_param_names"] = [str(name) for name in active_names]
+    preserve_caked_manual = _runtime_config_uses_caked_manual_fit(cfg)
 
     solver_raw = cfg.get("solver", cfg.get("optimizer", {}))
     solver = dict(solver_raw) if isinstance(solver_raw, Mapping) else {}
     solver["manual_point_fit_mode"] = True
-    solver.pop("dynamic_point_geometry_fit", None)
+    if preserve_caked_manual:
+        solver["dynamic_point_geometry_fit"] = True
+        cfg["projection_view_mode"] = "caked"
+    else:
+        solver.pop("dynamic_point_geometry_fit", None)
+        cfg.pop("projection_view_mode", None)
     solver["max_nfev"] = int(max_nfev)
     solver["loss"] = "linear"
     solver["f_scale_px"] = 1.0
@@ -812,8 +917,14 @@ def _lean_runtime_config(
         ident["selective_thaw"] = {"enabled": True}
         ident["adaptive_regularization"] = {"enabled": True}
     elif feature_name == "dynamic_reanchor":
+        solver["dynamic_point_geometry_fit"] = True
         cfg["dynamic_reanchor_probe_requested"] = True
     cfg["identifiability"] = ident
+    if preserve_caked_manual:
+        solver["manual_point_fit_mode"] = True
+        solver["dynamic_point_geometry_fit"] = True
+        cfg["projection_view_mode"] = "caked"
+        _assert_caked_manual_runtime_config(cfg)
     return cfg
 
 
@@ -875,7 +986,9 @@ def build_solver_request(
     return request
 
 
-def _rows_from_request(request: gui_geometry_fit.GeometryFitSolverRequest) -> list[dict[str, object]]:
+def _rows_from_request(
+    request: gui_geometry_fit.GeometryFitSolverRequest,
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for spec in request.dataset_specs or ():
         if not isinstance(spec, Mapping):
@@ -967,6 +1080,7 @@ def _request_handoff_summary(
     computed.update(bridge_summary)
     computed["provider_row_fallback_count"] = int(computed.get("fallback_row_count", 0) or 0)
     computed["provider_row_fallbacks"] = fallback_rows
+    computed.update(_runtime_feature_flags(cfg))
     for key in REQUEST_HANDOFF_FIELDS:
         computed.setdefault(key, None if key.startswith("provider_to_") else 0)
     return computed
@@ -990,6 +1104,255 @@ def _summary_max(summary: Mapping[str, object] | None) -> float:
     if not isinstance(summary, Mapping):
         return float("nan")
     return _metric_float(summary.get("unweighted_peak_max_px", summary.get("max_error_px", np.nan)))
+
+
+def _summary_rms_deg(summary: Mapping[str, object] | None) -> float:
+    if not isinstance(summary, Mapping):
+        return float("nan")
+    return _metric_float(
+        summary.get(
+            "raw_angular_rms_deg",
+            summary.get("unweighted_peak_rms_deg", summary.get("rms_deg", np.nan)),
+        )
+    )
+
+
+def _summary_max_deg(summary: Mapping[str, object] | None) -> float:
+    if not isinstance(summary, Mapping):
+        return float("nan")
+    return _metric_float(
+        summary.get(
+            "raw_angular_max_deg",
+            summary.get("unweighted_peak_max_deg", summary.get("max_error_deg", np.nan)),
+        )
+    )
+
+
+def _summary_weighted_rms(summary: Mapping[str, object] | None) -> float:
+    if not isinstance(summary, Mapping):
+        return float("nan")
+    return _metric_float(summary.get("weighted_angular_rms_weighted_deg", np.nan))
+
+
+def _summary_weighted_max(summary: Mapping[str, object] | None) -> float:
+    if not isinstance(summary, Mapping):
+        return float("nan")
+    return _metric_float(summary.get("weighted_angular_max_weighted_deg", np.nan))
+
+
+def _summary_selected_caked_metric(
+    summary: Mapping[str, object] | None,
+) -> tuple[str, str, float, float]:
+    if not isinstance(summary, Mapping):
+        return "", "", float("nan"), float("nan")
+    metric_name = str(summary.get("metric_name", "") or "")
+    metric_unit = str(summary.get("metric_unit", "") or "")
+    raw_rms = _summary_rms_deg(summary)
+    raw_max = _summary_max_deg(summary)
+    weighted_rms = _summary_weighted_rms(summary)
+    weighted_max = _summary_weighted_max(summary)
+    if metric_name == WEIGHTED_ANGULAR_METRIC_NAME or metric_unit == WEIGHTED_ANGULAR_METRIC_UNIT:
+        return (
+            metric_name or WEIGHTED_ANGULAR_METRIC_NAME,
+            metric_unit or WEIGHTED_ANGULAR_METRIC_UNIT,
+            weighted_rms,
+            weighted_max,
+        )
+    if metric_name == RAW_ANGULAR_METRIC_NAME or metric_unit == RAW_ANGULAR_METRIC_UNIT:
+        return (
+            metric_name or RAW_ANGULAR_METRIC_NAME,
+            metric_unit or RAW_ANGULAR_METRIC_UNIT,
+            raw_rms,
+            raw_max,
+        )
+    if (
+        _caked_summary_uses_exact_fit_space(summary)
+        and math.isfinite(raw_rms)
+        and math.isfinite(raw_max)
+    ):
+        return RAW_ANGULAR_METRIC_NAME, RAW_ANGULAR_METRIC_UNIT, raw_rms, raw_max
+    return metric_name, metric_unit, float("nan"), float("nan")
+
+
+def _summary_metric_name(summary: Mapping[str, object] | None) -> str:
+    return _summary_selected_caked_metric(summary)[0]
+
+
+def _summary_metric_unit(summary: Mapping[str, object] | None) -> str:
+    return _summary_selected_caked_metric(summary)[1]
+
+
+def _summary_metric_rms(summary: Mapping[str, object] | None) -> float:
+    return _summary_selected_caked_metric(summary)[2]
+
+
+def _summary_metric_max(summary: Mapping[str, object] | None) -> float:
+    return _summary_selected_caked_metric(summary)[3]
+
+
+def _metric_component_from_key(metric_key: str) -> str:
+    key = str(metric_key)
+    if "max" in key:
+        return "max"
+    return "rms"
+
+
+def _component_metric_name(metric_name: str, component: str) -> str:
+    if str(component) != "max":
+        return str(metric_name)
+    if metric_name == RAW_ANGULAR_METRIC_NAME:
+        return RAW_ANGULAR_MAX_METRIC_NAME
+    if metric_name == WEIGHTED_ANGULAR_METRIC_NAME:
+        return WEIGHTED_ANGULAR_MAX_METRIC_NAME
+    return str(metric_name)
+
+
+def _has_explicit_caked_metric_fields(report: Mapping[str, object], phase_name: str) -> bool:
+    return any(
+        key in report
+        for key in (
+            f"{phase_name}_caked_metric_name",
+            f"{phase_name}_caked_metric_unit",
+            f"{phase_name}_caked_metric_rms",
+            f"{phase_name}_caked_metric_max",
+        )
+    )
+
+
+def _report_selected_metric(
+    report: Mapping[str, object],
+    *,
+    phase: str,
+    component: str,
+) -> dict[str, object]:
+    phase_name = "before" if str(phase) == "before" else "after"
+    component_name = "max" if str(component) == "max" else "rms"
+    point_summary = (
+        report.get("point_match_summary")
+        if isinstance(report.get("point_match_summary"), Mapping)
+        else {}
+    )
+    if _report_requires_caked_manual_exact_fit_space(report) or _caked_summary_uses_exact_fit_space(
+        point_summary
+    ):
+        summary_metric_name, summary_metric_unit, summary_rms, summary_max = (
+            _summary_selected_caked_metric(point_summary)
+            if phase_name == "after"
+            else ("", "", float("nan"), float("nan"))
+        )
+        metric_name = str(
+            report.get(f"{phase_name}_caked_metric_name")
+            or summary_metric_name
+            or RAW_ANGULAR_METRIC_NAME
+        )
+        metric_unit = str(
+            report.get(f"{phase_name}_caked_metric_unit")
+            or summary_metric_unit
+            or RAW_ANGULAR_METRIC_UNIT
+        )
+        explicit_metric_fields = _has_explicit_caked_metric_fields(report, phase_name)
+        value_key = f"{phase_name}_caked_metric_{component_name}"
+        value = _metric_float(report.get(value_key, np.nan))
+        if (
+            not explicit_metric_fields
+            and not math.isfinite(value)
+            and (metric_name == RAW_ANGULAR_METRIC_NAME or metric_unit == RAW_ANGULAR_METRIC_UNIT)
+        ):
+            fallback_key = (
+                f"{phase_name}_caked_rms_deg"
+                if component_name == "rms"
+                else f"{phase_name}_caked_max_error_deg"
+            )
+            value = _metric_float(report.get(fallback_key, np.nan))
+        if not explicit_metric_fields and not math.isfinite(value) and phase_name == "after":
+            value = summary_rms if component_name == "rms" else summary_max
+        return {
+            "metric_kind": "caked_angular",
+            "metric_component": component_name,
+            "metric_key": value_key,
+            "metric_name": _component_metric_name(metric_name, component_name),
+            "metric_unit": metric_unit,
+            "metric_value": value,
+        }
+
+    metric_key = f"{phase_name}_rms_px" if component_name == "rms" else f"{phase_name}_max_error_px"
+    return {
+        "metric_kind": "pixel",
+        "metric_component": component_name,
+        "metric_key": metric_key,
+        "metric_name": metric_key,
+        "metric_unit": "px",
+        "metric_value": _metric_float(report.get(metric_key, np.nan)),
+    }
+
+
+def _report_selected_metrics_finite(
+    report: Mapping[str, object],
+    *,
+    require_before: bool,
+    require_max: bool,
+) -> bool:
+    checks = [
+        _report_selected_metric(report, phase="after", component="rms")["metric_value"],
+    ]
+    if require_max:
+        checks.append(
+            _report_selected_metric(report, phase="after", component="max")["metric_value"]
+        )
+    if require_before:
+        checks.append(
+            _report_selected_metric(report, phase="before", component="rms")["metric_value"]
+        )
+        if require_max:
+            checks.append(
+                _report_selected_metric(report, phase="before", component="max")["metric_value"]
+            )
+    return all(math.isfinite(_metric_float(value)) for value in checks)
+
+
+def _best_metric_payload(
+    report: Mapping[str, object],
+    *,
+    metric_key: str,
+) -> dict[str, object]:
+    component = _metric_component_from_key(metric_key)
+    selected = _report_selected_metric(report, phase="after", component=component)
+    value = _metric_float(selected.get("metric_value"))
+    payload = {
+        "metric_name": str(selected.get("metric_name", "")),
+        "metric_unit": str(selected.get("metric_unit", "")),
+        "metric_value": value,
+        "metric_kind": str(selected.get("metric_kind", "")),
+        "metric_component": str(selected.get("metric_component", component)),
+    }
+    if selected.get("metric_kind") == "pixel":
+        payload[str(metric_key)] = value
+    else:
+        caked_key = "after_caked_metric_rms" if component == "rms" else "after_caked_metric_max"
+        payload[caked_key] = value
+        diagnostic_key = (
+            "diagnostic_after_rms_px" if component == "rms" else "diagnostic_after_max_error_px"
+        )
+        payload[diagnostic_key] = report.get(str(metric_key))
+    return payload
+
+
+def _best_report_by_selected_metric(
+    reports: Sequence[Mapping[str, object]],
+    metric_key: str,
+) -> tuple[Mapping[str, object] | None, float]:
+    best_report: Mapping[str, object] | None = None
+    best_value = float("inf")
+    component = _metric_component_from_key(metric_key)
+    for report in reports:
+        if bool(report.get("pass", False)) is not True:
+            continue
+        selected = _report_selected_metric(report, phase="after", component=component)
+        value = _metric_float(selected.get("metric_value"))
+        if math.isfinite(value) and value < best_value:
+            best_value = value
+            best_report = report
+    return best_report, best_value
 
 
 def _point_match_summary(result: object) -> dict[str, object]:
@@ -1022,6 +1385,12 @@ def _as_str_list(value: object) -> list[str]:
     return result
 
 
+def _as_str_sequence(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [str(item) for item in value]
+
+
 def _as_mapping_list(value: object) -> list[dict[str, object]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
@@ -1043,7 +1412,11 @@ def _param_report(
     params: list[dict[str, object]] = []
     for idx, name in enumerate(request.var_names):
         start = _metric_float(request.params.get(str(name), np.nan))
-        final = float(final_x[idx]) if idx < final_x.size and np.isfinite(final_x[idx]) else float("nan")
+        final = (
+            float(final_x[idx])
+            if idx < final_x.size and np.isfinite(final_x[idx])
+            else float("nan")
+        )
         bound = bounds.get(str(name))
         lower = upper = float("nan")
         in_bounds = True
@@ -1057,7 +1430,9 @@ def _param_report(
                 "name": str(name),
                 "start": start,
                 "final": final,
-                "delta": final - start if math.isfinite(start) and math.isfinite(final) else float("nan"),
+                "delta": final - start
+                if math.isfinite(start) and math.isfinite(final)
+                else float("nan"),
                 "lower": lower,
                 "upper": upper,
                 "within_bounds": bool(in_bounds),
@@ -1165,8 +1540,7 @@ def _live_fixed_source_counter_failures(summary: Mapping[str, object] | None) ->
     fixed_actual = _safe_int(fixed_value, default=-999999)
     if fixed_actual != EXPECTED_PROVIDER_PAIR_COUNT:
         failures.append(
-            "fixed_source_resolved_count_"
-            f"{fixed_actual}_expected_{EXPECTED_PROVIDER_PAIR_COUNT}"
+            f"fixed_source_resolved_count_{fixed_actual}_expected_{EXPECTED_PROVIDER_PAIR_COUNT}"
         )
     for key, expected in LIVE_HEARTBEAT_COUNTERS.items():
         if key == "fixed_source_resolved_count":
@@ -1203,11 +1577,14 @@ def _finite_timeout_progress(report: Mapping[str, object]) -> bool:
 
 def _diagnosis_classification(report: Mapping[str, object]) -> str | None:
     status = str(report.get("status", ""))
+    if str(report.get("failure_reason") or report.get("full_beam_polish_failure_reason") or "") == (
+        "full_beam_polish_incompatible_with_fixed_manual_pairs"
+    ):
+        return "fixed_source_or_pair_integrity_lost"
     heartbeat_dirty = bool(report.get("fixed_source_counters_dirty_seen", False))
-    heartbeat_failures = (
-        _as_str_list(report.get("fixed_source_counter_failures_seen"))
-        + _as_str_list(report.get("fixed_source_counter_failures_at_last_heartbeat"))
-    )
+    heartbeat_failures = _as_str_list(
+        report.get("fixed_source_counter_failures_seen")
+    ) + _as_str_list(report.get("fixed_source_counter_failures_at_last_heartbeat"))
     if status == "timeout":
         if heartbeat_dirty or any(
             failure != "missing_point_match_summary" for failure in heartbeat_failures
@@ -1225,11 +1602,20 @@ def _diagnosis_classification(report: Mapping[str, object]) -> str | None:
     if _one_param_integrity_failures(report):
         return "fixed_source_or_pair_integrity_lost"
     residual_finite = bool(report.get("residuals_finite", False))
-    last_residual = _metric_float(report.get("last_residual_norm", report.get("residual_norm", np.nan)))
-    after_rms = _metric_float(report.get("after_rms_px", report.get("last_rms_px", np.nan)))
-    after_max = _metric_float(
-        report.get("after_max_error_px", report.get("last_max_error_px", np.nan))
+    last_residual = _metric_float(
+        report.get("last_residual_norm", report.get("residual_norm", np.nan))
     )
+    after_rms = _metric_float(
+        _report_selected_metric(report, phase="after", component="rms").get("metric_value")
+    )
+    after_max = _metric_float(
+        _report_selected_metric(report, phase="after", component="max").get("metric_value")
+    )
+    if not _report_requires_caked_manual_exact_fit_space(report):
+        if not math.isfinite(after_rms):
+            after_rms = _metric_float(report.get("last_rms_px", np.nan))
+        if not math.isfinite(after_max):
+            after_max = _metric_float(report.get("last_max_error_px", np.nan))
     if (
         status in {"ok", "pass"}
         and residual_finite
@@ -1334,11 +1720,30 @@ def _result_report(
     extra: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     point_summary = _point_match_summary(result)
-    residual_norm, residuals_finite = _finite_residual_norm(getattr(result, "fun", []))
+    result_fun = getattr(result, "fun", None)
+    result_fun_arr = (
+        np.asarray(result_fun, dtype=float).reshape(-1)
+        if result_fun is not None
+        else np.asarray([], dtype=float)
+    )
+    result_has_residual_vector = bool(result_fun_arr.size)
+    residual_norm, residuals_finite = _finite_residual_norm(result_fun_arr)
     after_rms = _summary_rms(point_summary)
     if not math.isfinite(after_rms):
         after_rms = _metric_float(getattr(result, "rms_px", np.nan))
     after_max = _summary_max(point_summary)
+    (
+        before_caked_metric_name,
+        before_caked_metric_unit,
+        before_caked_metric_rms,
+        before_caked_metric_max,
+    ) = _summary_selected_caked_metric(before_summary)
+    (
+        after_caked_metric_name,
+        after_caked_metric_unit,
+        after_caked_metric_rms,
+        after_caked_metric_max,
+    ) = _summary_selected_caked_metric(point_summary)
     rejection_reasons = _rejection_reasons(result, after_rms)
     report = {
         "rung": int(rung),
@@ -1357,10 +1762,29 @@ def _result_report(
             and isinstance(request.refinement_config.get("solver"), Mapping)
             else {}
         ),
+        "requires_caked_manual_exact_fit_space": bool(
+            _runtime_config_uses_caked_manual_fit(
+                request.refinement_config
+                if isinstance(request.refinement_config, Mapping)
+                else None
+            )
+        ),
         "before_rms_px": _summary_rms(before_summary),
         "before_max_error_px": _summary_max(before_summary),
+        "before_caked_rms_deg": _summary_rms_deg(before_summary),
+        "before_caked_max_error_deg": _summary_max_deg(before_summary),
+        "before_caked_metric_name": before_caked_metric_name,
+        "before_caked_metric_unit": before_caked_metric_unit,
+        "before_caked_metric_rms": before_caked_metric_rms,
+        "before_caked_metric_max": before_caked_metric_max,
         "after_rms_px": float(after_rms),
         "after_max_error_px": float(after_max),
+        "after_caked_rms_deg": _summary_rms_deg(point_summary),
+        "after_caked_max_error_deg": _summary_max_deg(point_summary),
+        "after_caked_metric_name": after_caked_metric_name,
+        "after_caked_metric_unit": after_caked_metric_unit,
+        "after_caked_metric_rms": after_caked_metric_rms,
+        "after_caked_metric_max": after_caked_metric_max,
         "residual_norm": residual_norm,
         "matched_pair_count": int(point_summary.get("matched_pair_count", 0) or 0),
         "missing_pair_count": int(point_summary.get("missing_pair_count", 0) or 0),
@@ -1382,18 +1806,53 @@ def _result_report(
     report["elapsed_s"] = report["elapsed_seconds"]
     for key in STRICT_POINT_SUMMARY_KEYS:
         report[key] = _summary_int(point_summary, key)
+    for key in (
+        "seed_count",
+        "seeds_prescored",
+        "seeds_solved",
+        "seeds_rejected_for_pair_integrity",
+        "selected_seed_index",
+        "selected_seed_cost",
+        "selected_seed_clean",
+        "selected_seed_fixed_source_resolved_count",
+        "selected_seed_matched_pair_count",
+        "selected_seed_preserved_fixed_pairs",
+        "lost_pair_ids_by_seed",
+        "fallback_pair_ids_by_seed",
+        "rematched_pair_ids_by_seed",
+        "missing_pair_ids_by_seed",
+        "seed_multistart_failure_reason",
+        "seed_multistart_trace",
+    ):
+        if key in point_summary:
+            report[key] = copy.deepcopy(point_summary[key])
+    full_beam_polish_summary = getattr(result, "full_beam_polish_summary", None)
+    if isinstance(full_beam_polish_summary, Mapping):
+        report["full_beam_polish_summary"] = copy.deepcopy(dict(full_beam_polish_summary))
+        for key in FULL_BEAM_POLISH_TRACE_KEYS:
+            if key in full_beam_polish_summary:
+                report[key] = copy.deepcopy(full_beam_polish_summary[key])
+    for key in FULL_BEAM_POLISH_TRACE_KEYS:
+        if key in point_summary and key not in report:
+            report[key] = copy.deepcopy(point_summary[key])
+    if "polish_effective_var_names_seen_by_solver" in report:
+        report.setdefault(
+            "effective_var_names_seen_by_solver",
+            copy.deepcopy(report["polish_effective_var_names_seen_by_solver"]),
+        )
     report.update(_request_handoff_summary(request))
-    report["branch_mismatch_count"] = int(
-        point_summary.get("branch_mismatch_count", 0) or 0
-    )
+    report["branch_mismatch_count"] = int(point_summary.get("branch_mismatch_count", 0) or 0)
     if isinstance(extra, Mapping):
         report.update(dict(extra))
+    if not result_has_residual_vector:
+        residuals_finite = bool(report.get("objective_dry_run_residual_finite", False))
     report["residuals_finite"] = bool(
-        residuals_finite
-        and math.isfinite(_metric_float(report.get("before_rms_px", np.nan)))
-        and math.isfinite(_metric_float(report.get("after_rms_px", np.nan)))
-        and math.isfinite(_metric_float(report.get("before_max_error_px", np.nan)))
-        and math.isfinite(_metric_float(report.get("after_max_error_px", np.nan)))
+        bool(residuals_finite)
+        and _report_selected_metrics_finite(
+            report,
+            require_before=before_summary is not None,
+            require_max=True,
+        )
     )
     _apply_single_param_fields(report)
     _apply_one_param_diagnostic_aliases(report)
@@ -1457,8 +1916,7 @@ def _strict_no_fallback_failures(report: Mapping[str, object]) -> list[str]:
     if optimizer_pair_count:
         if fixed_source_pair_count != optimizer_pair_count:
             _add(
-                "fixed_source_pair_count_"
-                f"{fixed_source_pair_count}_expected_{optimizer_pair_count}"
+                f"fixed_source_pair_count_{fixed_source_pair_count}_expected_{optimizer_pair_count}"
             )
         for key in (
             "provider_to_optimizer_identity_match",
@@ -1475,6 +1933,96 @@ def _one_param_integrity_failures(report: Mapping[str, object]) -> list[str]:
         expected_counts=ONE_PARAM_FIXED_SOURCE_COUNTS,
         required_bool_keys=PROVIDER_MATCH_BOOLS,
     )
+
+
+def _report_residual_gate_metrics(
+    report: Mapping[str, object],
+) -> tuple[float, float, float, float]:
+    return (
+        _metric_float(
+            _report_selected_metric(report, phase="before", component="rms").get("metric_value")
+        ),
+        _metric_float(
+            _report_selected_metric(report, phase="after", component="rms").get("metric_value")
+        ),
+        _metric_float(
+            _report_selected_metric(report, phase="before", component="max").get("metric_value")
+        ),
+        _metric_float(
+            _report_selected_metric(report, phase="after", component="max").get("metric_value")
+        ),
+    )
+
+
+def _full_beam_manual_polish_failures(report: Mapping[str, object]) -> list[str]:
+    if str(report.get("feature", "")) != "full_beam_polish":
+        return []
+    provider_identity_present = isinstance(
+        report.get("provider_selected_source_identity_canonical"),
+        Mapping,
+    ) or isinstance(report.get("manual_picker_selected_source_identity_canonical"), Mapping)
+    provider_contract_marked = bool(
+        report.get("optimizer_request_has_fixed_source", False)
+        or str(report.get("optimizer_request_source", "") or "").strip().lower() == "provider_pair"
+        or str(report.get("fit_source_resolution_kind", "") or "").strip().lower()
+        in {"provider_fixed_source", "provider_fixed_source_local"}
+    )
+    explicit_manual_failure = bool(
+        str(report.get("full_beam_polish_failure_reason") or report.get("failure_reason") or "")
+        == "full_beam_polish_incompatible_with_fixed_manual_pairs"
+    )
+    explicit_manual_pair_count = _safe_int(
+        report.get(
+            "polish_manual_fixed_source_pair_count_before",
+            report.get("manual_fixed_source_pair_count_before"),
+        ),
+        default=0,
+    )
+    marked_start_pair_count = any(
+        _safe_int(report.get(key), default=0) == EXPECTED_PROVIDER_PAIR_COUNT
+        for key in (
+            "polish_fixed_source_resolved_count_before",
+            "polish_matched_pair_count_before",
+            "fixed_source_pair_count",
+            "optimizer_request_pair_count",
+            "provider_pair_count",
+        )
+    )
+    manual_mode = bool(
+        explicit_manual_pair_count == EXPECTED_PROVIDER_PAIR_COUNT
+        or ((provider_identity_present or provider_contract_marked) and marked_start_pair_count)
+        or explicit_manual_failure
+    )
+    if not manual_mode:
+        return []
+    failures: list[str] = []
+    expected_counts = {
+        "polish_fixed_source_resolved_count_after": EXPECTED_PROVIDER_PAIR_COUNT,
+        "polish_matched_pair_count_after": EXPECTED_PROVIDER_PAIR_COUNT,
+        "polish_missing_pair_count_after": 0,
+        "polish_fallback_entry_count_after": 0,
+        "polish_branch_mismatch_count_after": 0,
+    }
+    for key, expected in expected_counts.items():
+        actual = _safe_int(report.get(key), default=-999999)
+        if actual != expected:
+            failures.append(f"{key}_{actual}_expected_{expected}")
+    for key in (
+        "polish_lost_pair_ids",
+        "polish_missing_pair_ids",
+        "polish_fallback_pair_ids",
+        "polish_rematched_pair_ids",
+    ):
+        values = _as_str_list(report.get(key))
+        if values:
+            failures.append(f"{key}_nonempty")
+    if str(report.get("full_beam_polish_failure_reason") or report.get("failure_reason") or "") == (
+        "full_beam_polish_incompatible_with_fixed_manual_pairs"
+    ):
+        failures.append("full_beam_polish_incompatible_with_fixed_manual_pairs")
+    if failures and "full_beam_polish_incompatible_with_fixed_manual_pairs" not in failures:
+        failures.insert(0, "full_beam_polish_incompatible_with_fixed_manual_pairs")
+    return failures
 
 
 def _fixed_source_contract_failures(
@@ -1507,10 +2055,7 @@ def _one_param_metric_failures(report: Mapping[str, object]) -> list[str]:
     residual_norm = _metric_float(
         report.get("last_residual_norm", report.get("residual_norm", np.nan))
     )
-    before_rms = _metric_float(report.get("before_rms_px", np.nan))
-    after_rms = _metric_float(report.get("after_rms_px", np.nan))
-    before_max = _metric_float(report.get("before_max_error_px", np.nan))
-    after_max = _metric_float(report.get("after_max_error_px", np.nan))
+    before_rms, after_rms, before_max, after_max = _report_residual_gate_metrics(report)
     if (
         not bool(report.get("residuals_finite", False))
         or not math.isfinite(residual_norm)
@@ -1528,15 +2073,23 @@ def _one_param_metric_failures(report: Mapping[str, object]) -> list[str]:
         failures.append("no_matched_peak_rejection")
     if bool(report.get("parameter_within_bounds", True)) is not True:
         failures.append("parameter_out_of_bounds")
+    failures.extend(_caked_manual_report_guard_failures(report, require_improvement=True))
     return failures
 
 
 def _rung_passed(report: Mapping[str, object]) -> bool:
     if str(report.get("status", "")) not in {"ok", "pass"}:
         return False
-    if not math.isfinite(_metric_float(report.get("after_rms_px", np.nan))):
+    if report.get("residuals_finite") is not True:
         return False
-    if int(report.get("rung", 0) or 0) == 3:
+    rung = int(report.get("rung", 0) or 0)
+    if not _report_selected_metrics_finite(
+        report,
+        require_before=False,
+        require_max=False,
+    ):
+        return False
+    if rung == 3:
         if _one_param_integrity_failures(report):
             return False
         if _one_param_metric_failures(report):
@@ -1555,6 +2108,8 @@ def _rung_passed(report: Mapping[str, object]) -> bool:
         if len(names) != 1 or candidates != names:
             return False
         return True
+    if _caked_manual_report_guard_failures(report, require_improvement=False):
+        return False
     if _strict_no_fallback_failures(report):
         return False
     if int(report.get("matched_pair_count", 0) or 0) != 7:
@@ -1566,12 +2121,9 @@ def _rung_passed(report: Mapping[str, object]) -> bool:
     rejection_reason = str(report.get("rejection_reason", ""))
     if "No matched peak pairs were available" in rejection_reason:
         return False
-    before_rms = _metric_float(report.get("before_rms_px", np.nan))
-    after_rms = _metric_float(report.get("after_rms_px", np.nan))
+    before_rms, after_rms, before_max, after_max = _report_residual_gate_metrics(report)
     if math.isfinite(before_rms) and math.isfinite(after_rms) and after_rms > before_rms + 0.25:
         return False
-    before_max = _metric_float(report.get("before_max_error_px", np.nan))
-    after_max = _metric_float(report.get("after_max_error_px", np.nan))
     if math.isfinite(before_max) and math.isfinite(after_max) and after_max > before_max + 1.0:
         return False
     for entry in report.get("parameter_deltas", []) or []:
@@ -1607,7 +2159,9 @@ class _ProbeLeastSquares:
         return float(max(abs(float(value)) * 1.0e-4, 1.0e-6))
 
     @staticmethod
-    def _bounds(kwargs: Mapping[str, object], size: int) -> tuple[np.ndarray | None, np.ndarray | None]:
+    def _bounds(
+        kwargs: Mapping[str, object], size: int
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
         lower, upper = kwargs.get("bounds", (None, None))
         lower_arr = np.asarray(lower, dtype=float).reshape(-1) if lower is not None else None
         upper_arr = np.asarray(upper, dtype=float).reshape(-1) if upper is not None else None
@@ -1960,7 +2514,11 @@ def run_objective_dry_run(
     if int(report.get("branch_mismatch_count", 0) or 0) != 0:
         report["status"] = "failed"
         report.setdefault("failure_reason", "branch_mismatch_present")
-    if not math.isfinite(_metric_float(report.get("after_rms_px", np.nan))):
+    if not _report_selected_metrics_finite(
+        report,
+        require_before=False,
+        require_max=False,
+    ):
         report["status"] = "failed"
         report.setdefault("failure_reason", "non_finite_initial_residual")
     report["pass"] = str(report.get("status")) == "ok"
@@ -1972,9 +2530,7 @@ def _active_theta_name(context: Mapping[str, object]) -> str | None:
     saved_var_names = [str(name) for name in context.get("saved_var_names", []) or []]
     prepared_run = context.get("prepared_run")
     fit_params = (
-        dict(getattr(prepared_run, "fit_params", {}) or {})
-        if prepared_run is not None
-        else {}
+        dict(getattr(prepared_run, "fit_params", {}) or {}) if prepared_run is not None else {}
     )
     if "theta_offset" in saved_var_names and "theta_offset" in fit_params:
         return "theta_offset"
@@ -2011,6 +2567,437 @@ def _safe_int(value: object, *, default: int = 0) -> int:
     return int(numeric)
 
 
+def _caked_summary_uses_exact_fit_space(summary: Mapping[str, object] | None) -> bool:
+    if not isinstance(summary, Mapping):
+        return False
+    if bool(summary.get("exact_fit_space_projector_available", False)):
+        return True
+    if _safe_int(summary.get("manual_caked_residual_row_count"), default=0) > 0:
+        return True
+    for raw_dataset in summary.get("per_dataset", ()) or ():
+        if not isinstance(raw_dataset, Mapping):
+            continue
+        if str(raw_dataset.get("fit_space_projector_kind") or "") == "exact_caked_bundle":
+            return True
+    return False
+
+
+def _caked_summary_projector_kind(summary: Mapping[str, object] | None) -> str | None:
+    if not isinstance(summary, Mapping):
+        return None
+    kind = str(summary.get("fit_space_projector_kind") or "").strip()
+    if kind:
+        return kind
+    kinds: list[str] = []
+    for raw_dataset in summary.get("per_dataset", ()) or ():
+        if not isinstance(raw_dataset, Mapping):
+            continue
+        dataset_kind = str(raw_dataset.get("fit_space_projector_kind") or "").strip()
+        if dataset_kind and dataset_kind not in kinds:
+            kinds.append(dataset_kind)
+    if len(kinds) == 1:
+        return kinds[0]
+    if "exact_caked_bundle" in kinds:
+        return "exact_caked_bundle"
+    return None
+
+
+def _manual_pair_ids_unchanged(report: Mapping[str, object]) -> bool:
+    existing = report.get("same_manual_pair_ids_before_after")
+    if isinstance(existing, bool):
+        return bool(existing)
+    for key in (
+        "lost_pair_ids",
+        "fallback_pair_ids",
+        "rematched_pair_ids",
+        "rejected_pair_ids",
+        "polish_lost_pair_ids",
+        "polish_missing_pair_ids",
+        "polish_fallback_pair_ids",
+        "polish_rematched_pair_ids",
+    ):
+        if _as_str_list(report.get(key)):
+            return False
+    for key in (
+        "missing_pair_count",
+        "branch_mismatch_count",
+        "fallback_row_count",
+        "fallback_entry_count",
+        "fixed_source_resolution_fallback_count",
+    ):
+        if key in report and _safe_int(report.get(key), default=0) != 0:
+            return False
+    return True
+
+
+def _expected_caked_pair_count(
+    report: Mapping[str, object],
+    point_summary: Mapping[str, object],
+) -> int:
+    for source in (report, point_summary):
+        value = _safe_int(source.get("expected_saved_caked_manual_pair_count"), default=0)
+        if value > 0:
+            return value
+    for key in (
+        "provider_pair_count",
+        "dataset_pair_count",
+        "optimizer_request_pair_count",
+        "fixed_source_pair_count",
+        "matched_pair_count",
+        "point_count",
+    ):
+        value = _safe_int(report.get(key), default=0)
+        if value > 0:
+            return value
+    return EXPECTED_PROVIDER_PAIR_COUNT
+
+
+def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
+    point_summary = (
+        dict(report.get("point_match_summary"))
+        if isinstance(report.get("point_match_summary"), Mapping)
+        else {}
+    )
+    has_caked_rows = any(
+        _safe_int(source.get(key), default=0) > 0
+        for source in (report, point_summary)
+        for key in (
+            "manual_caked_residual_row_count",
+            "dataset_fit_space_projector_row_count",
+        )
+    )
+    if not has_caked_rows and not _caked_summary_uses_exact_fit_space(point_summary):
+        return
+
+    expected_count = _expected_caked_pair_count(report, point_summary)
+    point_summary["expected_saved_caked_manual_pair_count"] = int(expected_count)
+    report["expected_saved_caked_manual_pair_count"] = int(expected_count)
+
+    for key in (
+        "manual_caked_residual_row_count",
+        "dataset_fit_space_projector_row_count",
+        "invalid_dataset_fit_space_projector_row_count",
+        "analytic_detector_fit_space_row_count",
+    ):
+        if key in report:
+            point_summary.setdefault(key, report.get(key))
+        elif key in point_summary:
+            report[key] = point_summary.get(key)
+
+    for key in (
+        "exact_fit_space_projector_available",
+        "exact_fit_space_projection_reason",
+    ):
+        if key in report:
+            point_summary.setdefault(key, report.get(key))
+        elif key in point_summary:
+            report[key] = point_summary.get(key)
+
+    projector_kind = (
+        _caked_summary_projector_kind(point_summary)
+        or str(report.get("fit_space_projector_kind") or "").strip()
+    )
+    if projector_kind:
+        point_summary["fit_space_projector_kind"] = projector_kind
+        report["fit_space_projector_kind"] = projector_kind
+
+    same_ids = _manual_pair_ids_unchanged(report)
+    point_summary["same_manual_pair_ids_before_after"] = bool(same_ids)
+    report["same_manual_pair_ids_before_after"] = bool(same_ids)
+    report["fixed_source_counters_unchanged"] = bool(
+        report.get("fixed_source_counters_clean_at_last_heartbeat", True)
+    ) and not bool(report.get("fixed_source_counters_dirty_seen", False))
+    report["point_match_summary"] = point_summary
+
+
+def _caked_summary_fit_space_guard_failures(
+    summary: Mapping[str, object] | None,
+    *,
+    required: bool = False,
+) -> list[str]:
+    if not _caked_summary_uses_exact_fit_space(summary):
+        return ["exact_caked_fit_space_summary_missing"] if required else []
+    assert isinstance(summary, Mapping)
+    failures: list[str] = []
+    manual_rows = _safe_int(summary.get("manual_caked_residual_row_count"), default=0)
+    projector_rows = _safe_int(
+        summary.get("dataset_fit_space_projector_row_count"),
+        default=0,
+    )
+    invalid_rows = _safe_int(
+        summary.get("invalid_dataset_fit_space_projector_row_count"),
+        default=0,
+    )
+    analytic_rows = _safe_int(
+        summary.get("analytic_detector_fit_space_row_count"),
+        default=0,
+    )
+    expected_rows = _safe_int(
+        summary.get("expected_saved_caked_manual_pair_count"),
+        default=0,
+    )
+    if expected_rows <= 0:
+        expected_rows = EXPECTED_PROVIDER_PAIR_COUNT
+    if bool(summary.get("exact_fit_space_projector_available", False)) is not True:
+        failures.append("exact_caked_projector_not_available")
+    if manual_rows <= 0:
+        failures.append("manual_caked_residual_rows_missing")
+    elif manual_rows != expected_rows:
+        failures.append(f"manual_caked_residual_row_count_{manual_rows}_expected_{expected_rows}")
+    if projector_rows <= 0:
+        failures.append("dataset_fit_space_projector_rows_missing")
+    elif projector_rows != expected_rows:
+        failures.append(
+            f"dataset_fit_space_projector_row_count_{projector_rows}_expected_{expected_rows}"
+        )
+    if invalid_rows != 0:
+        failures.append(f"invalid_dataset_fit_space_projector_rows_{invalid_rows}")
+    if analytic_rows != 0:
+        failures.append(f"analytic_detector_fit_space_rows_{analytic_rows}")
+    if _caked_summary_projector_kind(summary) != "exact_caked_bundle":
+        failures.append("fit_space_projector_kind_not_exact_caked_bundle")
+    if bool(summary.get("same_manual_pair_ids_before_after", True)) is not True:
+        failures.append("same_manual_pair_ids_before_after_false")
+    for raw_dataset in summary.get("per_dataset", ()) or ():
+        if not isinstance(raw_dataset, Mapping):
+            continue
+        if str(raw_dataset.get("fit_space_projector_kind") or "") != "exact_caked_bundle":
+            failures.append("dataset_fit_space_projector_kind_not_exact_caked_bundle")
+        if _safe_int(raw_dataset.get("manual_caked_residual_row_count"), default=0) <= 0:
+            failures.append("dataset_manual_caked_residual_rows_missing")
+        if _safe_int(raw_dataset.get("dataset_fit_space_projector_row_count"), default=0) <= 0:
+            failures.append("dataset_projector_rows_missing")
+        if _safe_int(raw_dataset.get("invalid_dataset_fit_space_projector_row_count"), default=0):
+            failures.append("dataset_invalid_projector_rows_present")
+        if _safe_int(raw_dataset.get("analytic_detector_fit_space_row_count"), default=0):
+            failures.append("dataset_analytic_detector_fit_space_rows_present")
+    return list(dict.fromkeys(failures))
+
+
+def _report_requires_caked_manual_exact_fit_space(report: Mapping[str, object]) -> bool:
+    if bool(report.get("requires_caked_manual_exact_fit_space", False)):
+        return True
+    for key in ("point_match_summary", "last_point_match_summary"):
+        summary = report.get(key)
+        if _caked_summary_uses_exact_fit_space(summary if isinstance(summary, Mapping) else None):
+            return True
+    runtime_cfg = report.get("runtime_config")
+    if not isinstance(runtime_cfg, Mapping):
+        runtime_cfg = report.get("geometry_runtime_config")
+    if not isinstance(runtime_cfg, Mapping):
+        runtime_cfg = report.get("geometry_runtime_cfg")
+    if isinstance(runtime_cfg, Mapping):
+        return _runtime_config_uses_caked_manual_fit(runtime_cfg)
+    return False
+
+
+def _caked_manual_report_guard_failures(
+    report: Mapping[str, object],
+    *,
+    require_improvement: bool,
+) -> list[str]:
+    point_summary = (
+        dict(report.get("point_match_summary", {}))
+        if isinstance(report.get("point_match_summary", {}), Mapping)
+        else {}
+    )
+    required = _report_requires_caked_manual_exact_fit_space(report)
+    caked_summary_present = any(
+        key in point_summary
+        for key in (
+            "exact_fit_space_projector_available",
+            "manual_caked_residual_row_count",
+            "dataset_fit_space_projector_row_count",
+            "analytic_detector_fit_space_row_count",
+            "fit_space_projector_kind",
+        )
+    )
+    failures = _caked_summary_fit_space_guard_failures(
+        point_summary,
+        required=required or caked_summary_present,
+    )
+    if not required and not failures and not _caked_summary_uses_exact_fit_space(point_summary):
+        return []
+    if _safe_int(report.get("fallback_row_count"), default=0) != 0:
+        failures.append("fallback_rows_present")
+    if _safe_int(report.get("fallback_entry_count"), default=0) != 0:
+        failures.append("fallback_entries_present")
+    if _safe_int(report.get("subset_fallback_hkl_count"), default=0) != 0:
+        failures.append("subset_fallback_hkls_present")
+    before_metric_name = str(report.get("before_caked_metric_name") or RAW_ANGULAR_METRIC_NAME)
+    after_metric_name = str(report.get("after_caked_metric_name") or RAW_ANGULAR_METRIC_NAME)
+    before_metric_unit = str(report.get("before_caked_metric_unit") or RAW_ANGULAR_METRIC_UNIT)
+    after_metric_unit = str(report.get("after_caked_metric_unit") or RAW_ANGULAR_METRIC_UNIT)
+    if before_metric_name != after_metric_name:
+        failures.append("caked_metric_name_mismatch")
+    if before_metric_unit != after_metric_unit:
+        failures.append("caked_metric_unit_mismatch")
+    raw_metric_selected = (
+        before_metric_name == RAW_ANGULAR_METRIC_NAME
+        and after_metric_name == RAW_ANGULAR_METRIC_NAME
+    )
+    weighted_metric_selected = (
+        before_metric_name == WEIGHTED_ANGULAR_METRIC_NAME
+        and after_metric_name == WEIGHTED_ANGULAR_METRIC_NAME
+    )
+    before_metric_rms = _metric_float(report.get("before_caked_metric_rms", np.nan))
+    after_metric_rms = _metric_float(report.get("after_caked_metric_rms", np.nan))
+    before_metric_max = _metric_float(report.get("before_caked_metric_max", np.nan))
+    after_metric_max = _metric_float(report.get("after_caked_metric_max", np.nan))
+    before_explicit_metric = _has_explicit_caked_metric_fields(report, "before")
+    after_explicit_metric = _has_explicit_caked_metric_fields(report, "after")
+    before_metric_required = require_improvement or int(report.get("rung", 0) or 0) != 1
+    if raw_metric_selected:
+        if not before_explicit_metric and not math.isfinite(before_metric_rms):
+            before_metric_rms = _metric_float(report.get("before_caked_rms_deg", np.nan))
+        if not after_explicit_metric and not math.isfinite(after_metric_rms):
+            after_metric_rms = _metric_float(report.get("after_caked_rms_deg", np.nan))
+        if not before_explicit_metric and not math.isfinite(before_metric_max):
+            before_metric_max = _metric_float(report.get("before_caked_max_error_deg", np.nan))
+        if not after_explicit_metric and not math.isfinite(after_metric_max):
+            after_metric_max = _metric_float(report.get("after_caked_max_error_deg", np.nan))
+    if not math.isfinite(after_metric_rms):
+        failures.append("caked_selected_rms_not_finite")
+    if not math.isfinite(after_metric_max):
+        failures.append("caked_selected_max_not_finite")
+    if before_metric_required and not math.isfinite(before_metric_rms):
+        failures.append("caked_selected_rms_not_finite")
+    if before_metric_required and not math.isfinite(before_metric_max):
+        failures.append("caked_selected_max_not_finite")
+    if point_summary.get("raw_angular_sanity_ok") is not True:
+        failures.append("raw_angular_sanity_not_true")
+    if point_summary.get("raw_angular_range_sanity_ok") is not True:
+        failures.append("raw_angular_range_sanity_not_true")
+    manual_caked_rows = _safe_int(
+        point_summary.get("manual_caked_residual_row_count"),
+        default=0,
+    )
+    raw_angular_row_count = _safe_int(point_summary.get("raw_angular_row_count"), default=0)
+    if raw_angular_row_count <= 0:
+        failures.append("raw_angular_row_count_missing")
+    else:
+        if manual_caked_rows > 0 and raw_angular_row_count != manual_caked_rows:
+            failures.append(
+                f"raw_angular_row_count_{raw_angular_row_count}_expected_{manual_caked_rows}"
+            )
+        for key in (
+            "raw_angular_delta_failure_count",
+            "raw_angular_range_failure_count",
+        ):
+            if key not in point_summary:
+                failures.append(f"{key}_missing")
+            elif _safe_int(point_summary.get(key), default=-1) != 0:
+                failures.append(f"{key}_nonzero")
+    if "raw_angular_range_row_count" not in point_summary:
+        failures.append("raw_angular_range_row_count_missing")
+    else:
+        raw_angular_range_row_count = _safe_int(
+            point_summary.get("raw_angular_range_row_count"),
+            default=0,
+        )
+        if manual_caked_rows > 0 and raw_angular_range_row_count != manual_caked_rows:
+            failures.append(
+                "raw_angular_range_row_count_"
+                f"{raw_angular_range_row_count}_expected_{manual_caked_rows}"
+            )
+    optimizer_point_component_count = _safe_int(
+        point_summary.get("optimizer_point_component_count"),
+        default=0,
+    )
+    if raw_angular_row_count > 0:
+        expected_point_components = 2 * raw_angular_row_count
+        if "optimizer_point_component_count" not in point_summary:
+            failures.append("optimizer_point_component_count_missing")
+        elif optimizer_point_component_count != expected_point_components:
+            failures.append(
+                "optimizer_point_component_count_"
+                f"{optimizer_point_component_count}_expected_{expected_point_components}"
+            )
+    if optimizer_point_component_count > 0:
+        if "optimizer_point_component_failure_count" not in point_summary:
+            failures.append("optimizer_point_component_failure_count_missing")
+        elif (
+            _safe_int(point_summary.get("optimizer_point_component_failure_count"), default=-1) != 0
+        ):
+            failures.append("optimizer_point_component_failure_count_nonzero")
+    optimizer_component_count = _safe_int(
+        point_summary.get("optimizer_component_count"),
+        default=0,
+    )
+    if optimizer_component_count > 0:
+        if _safe_int(point_summary.get("optimizer_component_nonfinite_count"), default=0) != 0:
+            failures.append("optimizer_component_nonfinite")
+        optimizer_component_rms = _metric_float(
+            point_summary.get("optimizer_component_rms_weighted_deg", np.nan)
+        )
+        if not math.isfinite(optimizer_component_rms):
+            failures.append("optimizer_component_rms_not_finite")
+    if raw_metric_selected:
+        if before_metric_unit != RAW_ANGULAR_METRIC_UNIT:
+            failures.append("caked_raw_metric_unit_not_deg")
+        if after_metric_unit != RAW_ANGULAR_METRIC_UNIT:
+            failures.append("caked_raw_metric_unit_not_deg")
+        for key, value in (
+            ("before_caked_metric_rms", before_metric_rms),
+            ("after_caked_metric_rms", after_metric_rms),
+            ("before_caked_metric_max", before_metric_max),
+            ("after_caked_metric_max", after_metric_max),
+        ):
+            if math.isfinite(value) and value > RAW_ANGULAR_VECTOR_NORM_BOUND_DEG + 1.0e-9:
+                failures.append(f"{key}_raw_angular_bound_exceeded")
+        for key in (
+            "before_caked_rms_deg",
+            "after_caked_rms_deg",
+            "before_caked_max_error_deg",
+            "after_caked_max_error_deg",
+        ):
+            value = _metric_float(report.get(key, np.nan))
+            if math.isfinite(value) and value > RAW_ANGULAR_VECTOR_NORM_BOUND_DEG + 1.0e-9:
+                failures.append(f"{key}_raw_angular_bound_exceeded")
+        component_max = _metric_float(
+            point_summary.get("raw_angular_component_max_abs_deg", np.nan)
+        )
+        if (
+            math.isfinite(component_max)
+            and component_max > RAW_ANGULAR_COMPONENT_BOUND_DEG + 1.0e-9
+        ):
+            failures.append("raw_angular_component_bound_exceeded")
+        if (
+            _safe_int(point_summary.get("raw_angular_row_count"), default=0) > 0
+            and point_summary.get("raw_angular_sanity_ok") is False
+        ):
+            failures.append("raw_angular_sanity_false")
+    elif weighted_metric_selected:
+        if before_metric_unit != WEIGHTED_ANGULAR_METRIC_UNIT:
+            failures.append("caked_weighted_metric_unit_not_weighted_deg")
+        if after_metric_unit != WEIGHTED_ANGULAR_METRIC_UNIT:
+            failures.append("caked_weighted_metric_unit_not_weighted_deg")
+        for key in (
+            "weighted_angular_failure_count",
+            "weighted_angular_recompute_failure_count",
+        ):
+            if key not in point_summary:
+                failures.append(f"{key}_missing")
+            elif _safe_int(point_summary.get(key), default=-1) != 0:
+                failures.append(f"{key}_nonzero")
+    else:
+        failures.append("caked_metric_not_raw_or_weighted_angular")
+    if require_improvement:
+        before_rms = before_metric_rms
+        after_rms = after_metric_rms
+        before_max = before_metric_max
+        after_max = after_metric_max
+        if not (math.isfinite(before_rms) and math.isfinite(after_rms)):
+            failures.append("caked_rms_not_finite")
+        elif after_rms > before_rms + CAKED_RMS_TOLERANCE_DEG:
+            failures.append("caked_rms_regressed")
+        if not (math.isfinite(before_max) and math.isfinite(after_max)):
+            failures.append("caked_max_not_finite")
+        elif after_max > before_max + CAKED_MAX_ERROR_TOLERANCE_DEG:
+            failures.append("caked_max_regressed")
+    return list(dict.fromkeys(failures))
+
+
 def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
     failures: list[str] = []
     if str(report.get("status", "")) != "ok" or bool(report.get("pass", False)) is not True:
@@ -2044,6 +3031,7 @@ def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
         failures.append("least_squares_called")
     if bool(report.get("optimizer_solve_called", True)):
         failures.append("optimizer_solve_called")
+    failures.extend(_caked_manual_report_guard_failures(report, require_improvement=False))
     return failures
 
 
@@ -2178,8 +3166,7 @@ def _sensitivity_status(
             reasons.append(f"{label}_eval_raised")
         if not bool(eval_report.get("fixed_source_clean", False)):
             reasons.extend(
-                f"{label}_{reason}"
-                for reason in eval_report.get("fixed_source_failures", []) or []
+                f"{label}_{reason}" for reason in eval_report.get("fixed_source_failures", []) or []
             )
     if reasons:
         return "unsafe", reasons, float("nan")
@@ -2327,9 +3314,7 @@ def run_sensitivity_scan(
             residual_norm_base = _metric_float(base_eval.get("residual_norm", np.nan))
             threshold = max(
                 1.0e-7,
-                1.0e-7 * abs(residual_norm_base)
-                if math.isfinite(residual_norm_base)
-                else 0.0,
+                1.0e-7 * abs(residual_norm_base) if math.isfinite(residual_norm_base) else 0.0,
             )
             status, unsafe_reasons, sensitivity_norm = _sensitivity_status(
                 base_eval=base_eval,
@@ -2417,13 +3402,17 @@ def run_sensitivity_scan(
                     "elapsed_seconds": float(max(0.0, _perf_counter() - param_started)),
                 }
             )
-    state_hash_after = _state_sha256(Path(state_path)) if state_path is not None else initial_state_hash
+    state_hash_after = (
+        _state_sha256(Path(state_path)) if state_path is not None else initial_state_hash
+    )
     state_hash_unchanged = (
         bool(initial_state_hash == state_hash_after)
         if initial_state_hash is not None and state_hash_after is not None
         else True
     )
-    active_params = [str(entry["param_name"]) for entry in entries if entry.get("status") == "active"]
+    active_params = [
+        str(entry["param_name"]) for entry in entries if entry.get("status") == "active"
+    ]
     near_zero_params = [
         str(entry["param_name"]) for entry in entries if entry.get("status") == "near_zero"
     ]
@@ -2507,7 +3496,6 @@ def _heartbeat_write(path: Path, payload: Mapping[str, object]) -> None:
     _write_json(path, merged)
 
 
-
 def _reset_heartbeat_file(path: Path) -> None:
     if not path:
         return
@@ -2528,10 +3516,11 @@ def _should_write_residual_heartbeat(
     return (
         heartbeat_count_i <= 2
         or eval_count_i in {5, 10}
-        or eval_count_i % 10 == 0
+        or (eval_count_i > 0 and eval_count_i % 10 == 0)
         or not bool(clean)
         or (float(now) - float(last_write_s)) >= 0.5
     )
+
 
 def _worker_solve_once(
     *,
@@ -2724,13 +3713,9 @@ def _worker_solve_once(
                 "fixed_source_counters_clean_at_last_heartbeat": bool(clean),
                 "fixed_source_counter_failures_at_last_heartbeat": failures,
                 "fixed_source_counters_dirty_seen": bool(fixed_source_counters_dirty_seen),
-                "fixed_source_counter_failures_seen": list(
-                    fixed_source_counter_failures_seen
-                ),
+                "fixed_source_counter_failures_seen": list(fixed_source_counter_failures_seen),
                 "phase_timing_s": dict(phase_timing_s),
-                "first_residual_elapsed_s": phase_timing_s.get(
-                    "first_residual_elapsed_s"
-                ),
+                "first_residual_elapsed_s": phase_timing_s.get("first_residual_elapsed_s"),
                 "solver_context_reused": bool(context_reused),
                 "diagnostic_logging": bool(diagnostic_logging),
             },
@@ -2762,8 +3747,7 @@ def _worker_solve_once(
                 effective_var_names_seen_by_solver = []
             try:
                 effective_candidate_param_names_seen_by_solver = [
-                    str(name)
-                    for name in kwargs.get("candidate_param_names", []) or []
+                    str(name) for name in kwargs.get("candidate_param_names", []) or []
                 ]
             except Exception:
                 effective_candidate_param_names_seen_by_solver = []
@@ -2771,9 +3755,7 @@ def _worker_solve_once(
                 heartbeat_path,
                 {
                     "optimizer_solve_called": True,
-                    "effective_var_names_seen_by_solver": list(
-                        effective_var_names_seen_by_solver
-                    ),
+                    "effective_var_names_seen_by_solver": list(effective_var_names_seen_by_solver),
                     "effective_candidate_param_names_seen_by_solver": list(
                         effective_candidate_param_names_seen_by_solver
                     ),
@@ -2808,9 +3790,7 @@ def _worker_solve_once(
                 "least_squares_called": bool(least_squares_called),
                 "optimizer_solve_called": bool(optimizer_solve_called),
                 "real_solve_called": bool(optimizer_solve_called),
-                "effective_var_names_seen_by_solver": list(
-                    effective_var_names_seen_by_solver
-                ),
+                "effective_var_names_seen_by_solver": list(effective_var_names_seen_by_solver),
                 "effective_candidate_param_names_seen_by_solver": list(
                     effective_candidate_param_names_seen_by_solver
                 ),
@@ -2819,18 +3799,12 @@ def _worker_solve_once(
                 "state_hash_unchanged": state_hash_before == state_hash_after,
                 "heartbeat_count": int(heartbeat_count),
                 "residual_eval_trace": list(residual_eval_trace),
-                "fixed_source_counters_dirty_seen": bool(
-                    fixed_source_counters_dirty_seen
-                ),
-                "fixed_source_counter_failures_seen": list(
-                    fixed_source_counter_failures_seen
-                ),
+                "fixed_source_counters_dirty_seen": bool(fixed_source_counters_dirty_seen),
+                "fixed_source_counter_failures_seen": list(fixed_source_counter_failures_seen),
                 "dirty_timeout_abort": False,
                 "child_process_killed_cleanly": None,
                 "phase_timing_s": dict(phase_timing_s),
-                "first_residual_elapsed_s": phase_timing_s.get(
-                    "first_residual_elapsed_s"
-                ),
+                "first_residual_elapsed_s": phase_timing_s.get("first_residual_elapsed_s"),
                 "solver_context_reused": bool(context_reused),
                 "diagnostic_logging": bool(diagnostic_logging),
             },
@@ -2852,9 +3826,7 @@ def _worker_solve_once(
             "least_squares_called": bool(least_squares_called),
             "optimizer_solve_called": bool(optimizer_solve_called),
             "real_solve_called": bool(optimizer_solve_called),
-            "effective_var_names_seen_by_solver": list(
-                effective_var_names_seen_by_solver
-            ),
+            "effective_var_names_seen_by_solver": list(effective_var_names_seen_by_solver),
             "effective_candidate_param_names_seen_by_solver": list(
                 effective_candidate_param_names_seen_by_solver
             ),
@@ -2864,15 +3836,11 @@ def _worker_solve_once(
             "heartbeat_count": int(heartbeat_count),
             "residual_eval_trace": list(residual_eval_trace),
             "fixed_source_counters_dirty_seen": bool(fixed_source_counters_dirty_seen),
-            "fixed_source_counter_failures_seen": list(
-                fixed_source_counter_failures_seen
-            ),
+            "fixed_source_counter_failures_seen": list(fixed_source_counter_failures_seen),
             "dirty_timeout_abort": False,
             "child_process_killed_cleanly": None,
             "phase_timing_s": dict(phase_timing_s),
-            "first_residual_elapsed_s": phase_timing_s.get(
-                "first_residual_elapsed_s"
-            ),
+            "first_residual_elapsed_s": phase_timing_s.get("first_residual_elapsed_s"),
             "solver_context_reused": bool(context_reused),
             "diagnostic_logging": bool(diagnostic_logging),
         }
@@ -2883,6 +3851,7 @@ def _worker_solve_once(
     report["first_residual_elapsed_s"] = phase_timing_s.get("first_residual_elapsed_s")
     report["solver_context_reused"] = bool(context_reused)
     report["diagnostic_logging"] = bool(diagnostic_logging)
+    _apply_caked_fit_space_evidence_fields(report)
     phase_started = _perf_counter()
     _write_json(output_path, report)
     _record_phase("report_write_s", phase_started)
@@ -2998,10 +3967,7 @@ def _timeout_report(
         "parameter_after": _partial_value("parameter_after"),
         "parameter_delta": _partial_value("parameter_delta"),
         "parameter_bounds": _partial_value("parameter_bounds"),
-        "residuals_finite": bool(
-            math.isfinite(_metric_float(before_rms))
-            and math.isfinite(_metric_float(after_rms))
-        ),
+        "residuals_finite": False,
         "elapsed_seconds": float(max(0.0, _perf_counter() - started_at)),
         "elapsed_s": float(max(0.0, _perf_counter() - started_at)),
         "timeout_seconds": float(timeout_seconds),
@@ -3072,8 +4038,14 @@ def _timeout_report(
         report[key] = _partial_value(key, *tuple(alias for alias in aliases if alias != key))
     for key in PROVIDER_MATCH_BOOLS:
         report[key] = _partial_value(key)
+    report["residuals_finite"] = _report_selected_metrics_finite(
+        report,
+        require_before=True,
+        require_max=False,
+    )
     _apply_single_param_fields(report)
     _apply_one_param_diagnostic_aliases(report)
+    _apply_caked_fit_space_evidence_fields(report)
     report.setdefault("parameter_bounds", None)
     return report
 
@@ -3153,13 +4125,9 @@ def _run_solver_rung_with_timeout(
         )
 
     if not use_subprocess:
-        timeout_report_factory = (
-            lambda: _make_timeout_report(
-                dirty_timeout_abort=bool(dirty_timeout_on_timeout),
-                child_process_killed_cleanly=(
-                    False if bool(dirty_timeout_on_timeout) else None
-                ),
-            )
+        timeout_report_factory = lambda: _make_timeout_report(
+            dirty_timeout_abort=bool(dirty_timeout_on_timeout),
+            child_process_killed_cleanly=(False if bool(dirty_timeout_on_timeout) else None),
         )
         return _run_in_process_worker_with_timeout(
             worker=lambda: _worker_solve_once(
@@ -3317,11 +4285,13 @@ def _finalize_one_param_report(
         finalized.setdefault(key, None)
     for key in PROVIDER_MATCH_BOOLS:
         finalized.setdefault(key, None)
-    finalized["residuals_finite"] = bool(
-        math.isfinite(_metric_float(finalized.get("before_rms_px", np.nan)))
-        and math.isfinite(_metric_float(finalized.get("after_rms_px", np.nan)))
+    finalized["residuals_finite"] = _report_selected_metrics_finite(
+        finalized,
+        require_before=True,
+        require_max=False,
     )
     _apply_one_param_diagnostic_aliases(finalized)
+    _apply_caked_fit_space_evidence_fields(finalized)
 
     if str(finalized.get("status", "")) == "timeout":
         finalized["pass"] = False
@@ -3395,15 +4365,19 @@ def _active_params_from_sensitivity(
 
 def _rung2_green_failures(sensitivity: Mapping[str, object]) -> list[str]:
     failures: list[str] = []
-    if str(sensitivity.get("status", "")) != "ok" or bool(sensitivity.get("pass", False)) is not True:
+    if (
+        str(sensitivity.get("status", "")) != "ok"
+        or bool(sensitivity.get("pass", False)) is not True
+    ):
         failures.append("sensitivity_status_not_ok")
     if bool(sensitivity.get("least_squares_called", False)):
         failures.append("least_squares_called")
     if bool(sensitivity.get("optimizer_solve_called", False)):
         failures.append("optimizer_solve_called")
-    if "state_hash_unchanged" in sensitivity and bool(
-        sensitivity.get("state_hash_unchanged", False)
-    ) is not True:
+    if (
+        "state_hash_unchanged" in sensitivity
+        and bool(sensitivity.get("state_hash_unchanged", False)) is not True
+    ):
         failures.append("state_hash_changed")
     failures.extend(
         _fixed_source_contract_failures(
@@ -3438,21 +4412,12 @@ def _best_single_param(
     reports: Sequence[Mapping[str, object]],
     metric_key: str,
 ) -> dict[str, object] | None:
-    best_report: Mapping[str, object] | None = None
-    best_value = float("inf")
-    for report in reports:
-        if bool(report.get("pass", False)) is not True:
-            continue
-        value = _metric_float(report.get(metric_key, np.nan))
-        if math.isfinite(value) and value < best_value:
-            best_value = value
-            best_report = report
+    best_report, _best_value = _best_report_by_selected_metric(reports, metric_key)
     if best_report is None:
         return None
-    return {
-        "param_name": str(best_report.get("param_name", "")),
-        metric_key: best_value,
-    }
+    payload = {"param_name": str(best_report.get("param_name", ""))}
+    payload.update(_best_metric_payload(best_report, metric_key=metric_key))
+    return payload
 
 
 def _one_param_summary(
@@ -3479,9 +4444,7 @@ def _one_param_summary(
         for report in attempted_reports
         if bool(report.get("pass", False))
     ]
-    passing_reports = [
-        report for report in attempted_reports if bool(report.get("pass", False))
-    ]
+    passing_reports = [report for report in attempted_reports if bool(report.get("pass", False))]
     timed_out_params = [
         str(report.get("param_name", ""))
         for report in attempted_reports
@@ -3499,8 +4462,7 @@ def _one_param_summary(
     }
     any_pair_loss = any(
         str(report.get("failure_reason", "")) == "fixed_source_or_pair_integrity_lost"
-        or str(report.get("diagnosis_classification", ""))
-        == "fixed_source_or_pair_integrity_lost"
+        or str(report.get("diagnosis_classification", "")) == "fixed_source_or_pair_integrity_lost"
         or (
             str(report.get("status", "")) != "timeout"
             and bool(_one_param_integrity_failures(report))
@@ -3509,8 +4471,7 @@ def _one_param_summary(
     )
     passing_pair_loss = any(
         str(report.get("failure_reason", "")) == "fixed_source_or_pair_integrity_lost"
-        or str(report.get("diagnosis_classification", ""))
-        == "fixed_source_or_pair_integrity_lost"
+        or str(report.get("diagnosis_classification", "")) == "fixed_source_or_pair_integrity_lost"
         or bool(_one_param_integrity_failures(report))
         for report in passing_reports
     )
@@ -3552,9 +4513,15 @@ def _one_param_summary(
         or provider_guard_after_ok is not True
         or state_hash_unchanged is not True
     ):
-        status = "ok_with_failures" if provider_guard_after_ok and state_hash_unchanged else "failed"
+        status = (
+            "ok_with_failures" if provider_guard_after_ok and state_hash_unchanged else "failed"
+        )
         if status == "failed" and not failure_reason:
-            failure_reason = "provider_guard_after_failed" if not provider_guard_after_ok else "state_hash_changed"
+            failure_reason = (
+                "provider_guard_after_failed"
+                if not provider_guard_after_ok
+                else "state_hash_changed"
+            )
     else:
         status = "ok"
 
@@ -3576,9 +4543,7 @@ def _one_param_summary(
         "filtered_params": [str(name) for name in (filtered_params or [])],
         "diagnosis_by_param": diagnosis_by_param,
         "diagnosis_classification": (
-            next(iter(diagnosis_by_param.values()))
-            if len(diagnosis_by_param) == 1
-            else None
+            next(iter(diagnosis_by_param.values())) if len(diagnosis_by_param) == 1 else None
         ),
         "best_single_param_by_rms": _best_single_param(attempted_reports, "after_rms_px"),
         "best_single_param_by_max_error": _best_single_param(
@@ -3586,9 +4551,7 @@ def _one_param_summary(
             "after_max_error_px",
         ),
         "all_fixed_source_counters_clean": bool(all_fixed_source_counters_clean),
-        "all_passing_fixed_source_counters_clean": bool(
-            all_passing_fixed_source_counters_clean
-        ),
+        "all_passing_fixed_source_counters_clean": bool(all_passing_fixed_source_counters_clean),
         "any_timeout": bool(any_timeout),
         "any_pair_loss": bool(any_pair_loss),
         "any_branch_mismatch": any(
@@ -3779,7 +4742,9 @@ def _run_one_param_stage(
     return summary
 
 
-def _groups_for_pair_rungs(passed_params: Sequence[str], theta_name: str) -> list[tuple[str, list[str]]]:
+def _groups_for_pair_rungs(
+    passed_params: Sequence[str], theta_name: str
+) -> list[tuple[str, list[str]]]:
     passed = set(str(name) for name in passed_params)
     candidates = [
         ("center_xy", ["center_x", "center_y"]),
@@ -3791,7 +4756,9 @@ def _groups_for_pair_rungs(passed_params: Sequence[str], theta_name: str) -> lis
         ("a_c", ["a", "c"]),
         ("a_c_psi_z", ["a", "c", "psi_z"]),
     ]
-    return [(name, params) for name, params in candidates if all(param in passed for param in params)]
+    return [
+        (name, params) for name, params in candidates if all(param in passed for param in params)
+    ]
 
 
 def _state_hash_evidence_failures(
@@ -3828,7 +4795,9 @@ def _run_input_evidence_failures(
     return failures
 
 
-def _load_required_json(path: Path | None, missing_reason: str) -> tuple[dict[str, object], list[str]]:
+def _load_required_json(
+    path: Path | None, missing_reason: str
+) -> tuple[dict[str, object], list[str]]:
     if path is None:
         return {}, [missing_reason]
     report = _read_json(Path(path).expanduser().resolve())
@@ -3847,9 +4816,7 @@ def _validate_one_param_summary_evidence(
     summary, failures = _load_required_json(summary_path, "missing_one_param_summary")
     if failures:
         return summary, failures
-    failures.extend(
-        _state_hash_evidence_failures(summary, current_hash=current_hash)
-    )
+    failures.extend(_state_hash_evidence_failures(summary, current_hash=current_hash))
     failures.extend(
         _run_input_evidence_failures(
             summary,
@@ -3883,9 +4850,7 @@ def _validate_one_param_diagnosis_evidence(
     local_failures: list[str] = []
     final_report = _single_attempt_report(summary)
     hash_owner = summary if summary.get("state_sha256_before") else final_report
-    fatal_failures.extend(
-        _state_hash_evidence_failures(hash_owner, current_hash=current_hash)
-    )
+    fatal_failures.extend(_state_hash_evidence_failures(hash_owner, current_hash=current_hash))
     path_owner = summary if summary.get("state_path") else final_report
     fatal_failures.extend(
         _run_input_evidence_failures(
@@ -3922,6 +4887,7 @@ def _caked_reprojection_guard_failures(
         "status": "pass",
         "point_count": EXPECTED_PROVIDER_PAIR_COUNT,
         "exact_projector_available": True,
+        "all_projection_projector_kinds_exact": True,
         "theta_projector_signature_changed": True,
         "distance_projector_signature_changed": True,
         "full_background_recake_call_count": 0,
@@ -3936,6 +4902,62 @@ def _caked_reprojection_guard_failures(
                 failures.append(f"{key}_not_{expected_value}")
         elif actual != expected_value:
             failures.append(f"{key}_not_{expected_value}")
+    expected_rows = _safe_int(
+        report.get("expected_saved_caked_manual_pair_count"),
+        default=EXPECTED_PROVIDER_PAIR_COUNT,
+    )
+    manual_rows = _safe_int(report.get("manual_caked_residual_row_count"), default=0)
+    projector_rows = _safe_int(
+        report.get("dataset_fit_space_projector_row_count"),
+        default=0,
+    )
+    if manual_rows <= 0:
+        failures.append("manual_caked_residual_row_count_not_positive")
+    elif manual_rows != expected_rows:
+        failures.append(f"manual_caked_residual_row_count_{manual_rows}_expected_{expected_rows}")
+    if projector_rows <= 0:
+        failures.append("dataset_fit_space_projector_row_count_not_positive")
+    elif projector_rows != expected_rows:
+        failures.append(
+            f"dataset_fit_space_projector_row_count_{projector_rows}_expected_{expected_rows}"
+        )
+    if _safe_int(report.get("analytic_detector_fit_space_row_count"), default=-1) != 0:
+        failures.append("analytic_detector_fit_space_row_count_not_0")
+    if bool(report.get("same_manual_pair_ids_before_after", True)) is not True:
+        failures.append("same_manual_pair_ids_before_after_false")
+    if _safe_int(report.get("invalid_row_count"), default=0) != 0:
+        failures.append("invalid_row_count_not_0")
+    invalid_rows = report.get("invalid_rows")
+    if (
+        isinstance(invalid_rows, Sequence)
+        and not isinstance(
+            invalid_rows,
+            (str, bytes),
+        )
+        and invalid_rows
+    ):
+        failures.append("invalid_rows_not_empty")
+    failures.extend(_strict_no_fallback_failures(report))
+    projection_metadata = report.get("projection_metadata", {})
+    if isinstance(projection_metadata, Mapping):
+        for key in ("base", "theta", "distance"):
+            metadata = projection_metadata.get(key)
+            if not isinstance(metadata, Mapping):
+                failures.append(f"{key}_projection_metadata_missing")
+                continue
+            if str(metadata.get("fit_space_projector_kind") or "") != "exact_caked_bundle":
+                failures.append(f"{key}_fit_space_projector_kind_not_exact_caked_bundle")
+    for metric in ("rms_px", "max_error_px"):
+        before_key = f"before_same_coordinate_{metric}"
+        after_key = f"after_same_coordinate_{metric}"
+        if before_key not in report and after_key not in report:
+            continue
+        before_value = _metric_float(report.get(before_key, np.nan))
+        after_value = _metric_float(report.get(after_key, np.nan))
+        if not (math.isfinite(before_value) and math.isfinite(after_value)):
+            failures.append(f"same_coordinate_{metric}_not_finite")
+        elif after_value > before_value + 1.0e-9:
+            failures.append(f"same_coordinate_{metric}_regressed")
     if "background_index" not in report:
         failures.append("background_index_missing")
     elif _safe_int(report.get("background_index"), default=-999999) != int(background_index):
@@ -3961,11 +4983,29 @@ def _base_parameter_values_for_pair(
     context: Mapping[str, object],
     pair: Sequence[str],
 ) -> dict[str, object]:
+    return {str(name): _base_fit_parameters_from_context(context).get(str(name)) for name in pair}
+
+
+def _base_fit_parameters_from_context(context: Mapping[str, object]) -> dict[str, object]:
     prepared_run = context.get("prepared_run")
     params = getattr(prepared_run, "fit_params", {}) if prepared_run is not None else {}
     if not isinstance(params, Mapping):
-        params = {}
-    return {str(name): params.get(str(name)) for name in pair}
+        return {}
+    return dict(params)
+
+
+def _context_with_base_fit_parameters(
+    context: Mapping[str, object],
+    base_fit_params: Mapping[str, object],
+) -> dict[str, object]:
+    candidate_context = dict(context)
+    prepared_run = context.get("prepared_run")
+    if prepared_run is not None:
+        candidate_context["prepared_run"] = preflight_probe.replace(
+            prepared_run,
+            fit_params=dict(base_fit_params),
+        )
+    return candidate_context
 
 
 def _parameter_maps_from_deltas(
@@ -3996,10 +5036,7 @@ def _pair_metric_failures(report: Mapping[str, object]) -> list[str]:
     residual_norm = _metric_float(
         report.get("last_residual_norm", report.get("residual_norm", np.nan))
     )
-    before_rms = _metric_float(report.get("before_rms_px", np.nan))
-    after_rms = _metric_float(report.get("after_rms_px", np.nan))
-    before_max = _metric_float(report.get("before_max_error_px", np.nan))
-    after_max = _metric_float(report.get("after_max_error_px", np.nan))
+    before_rms, after_rms, before_max, after_max = _report_residual_gate_metrics(report)
     if (
         not bool(report.get("residuals_finite", False))
         or not math.isfinite(residual_norm)
@@ -4024,6 +5061,7 @@ def _pair_metric_failures(report: Mapping[str, object]) -> list[str]:
     )
     if NO_MATCH_REJECTION in rejection_text:
         failures.append("no_matched_peak_rejection")
+    failures.extend(_caked_manual_report_guard_failures(report, require_improvement=True))
     return failures
 
 
@@ -4031,7 +5069,10 @@ def _pair_timeout_integrity_dirty(report: Mapping[str, object]) -> bool:
     if bool(report.get("fixed_source_counters_dirty_seen", False)):
         return True
     failures = _as_str_list(report.get("fixed_source_counter_failures_at_last_heartbeat"))
-    if failures and bool(report.get("fixed_source_counters_clean_at_last_heartbeat", True)) is not True:
+    if (
+        failures
+        and bool(report.get("fixed_source_counters_clean_at_last_heartbeat", True)) is not True
+    ):
         return True
     return False
 
@@ -4054,9 +5095,7 @@ def _finalize_pair_report(
     finalized["pair"] = list(names)
     finalized["active_params"] = list(names)
     finalized["var_names"] = _as_str_list(finalized.get("var_names")) or list(names)
-    finalized["candidate_param_names"] = _as_str_list(
-        finalized.get("candidate_param_names")
-    )
+    finalized["candidate_param_names"] = _as_str_list(finalized.get("candidate_param_names"))
     finalized["effective_var_names_seen_by_solver"] = _as_str_list(
         finalized.get("effective_var_names_seen_by_solver")
     )
@@ -4093,6 +5132,7 @@ def _finalize_pair_report(
         finalized.setdefault(key, None)
     for key in PROVIDER_MATCH_BOOLS:
         finalized.setdefault(key, None)
+    _apply_caked_fit_space_evidence_fields(finalized)
 
     if str(finalized.get("status", "")) == "timeout":
         finalized["pass"] = False
@@ -4164,19 +5204,11 @@ def _best_pair(
     reports: Sequence[Mapping[str, object]],
     metric_key: str,
 ) -> dict[str, object] | None:
-    best_report: Mapping[str, object] | None = None
-    best_value = float("inf")
-    for report in reports:
-        if bool(report.get("pass", False)) is not True:
-            continue
-        value = _metric_float(report.get(metric_key, np.nan))
-        if math.isfinite(value) and value < best_value:
-            best_value = value
-            best_report = report
+    best_report, _best_value = _best_report_by_selected_metric(reports, metric_key)
     if best_report is None:
         return None
     payload = _pair_ref(best_report)
-    payload[metric_key] = best_value
+    payload.update(_best_metric_payload(best_report, metric_key=metric_key))
     return payload
 
 
@@ -4210,10 +5242,7 @@ def _pair_summary(
     improved_reports: list[Mapping[str, object]] = []
     neutral_reports: list[Mapping[str, object]] = []
     for report in passed_reports:
-        before_rms = _metric_float(report.get("before_rms_px", np.nan))
-        after_rms = _metric_float(report.get("after_rms_px", np.nan))
-        before_max = _metric_float(report.get("before_max_error_px", np.nan))
-        after_max = _metric_float(report.get("after_max_error_px", np.nan))
+        before_rms, after_rms, before_max, after_max = _report_residual_gate_metrics(report)
         improved = (
             math.isfinite(before_rms)
             and math.isfinite(after_rms)
@@ -4261,9 +5290,7 @@ def _pair_summary(
         }
         for ref in stable_pairs
     ]
-    fatal_failures = [
-        str(item) for item in (fatal_evidence_failures or evidence_failures)
-    ]
+    fatal_failures = [str(item) for item in (fatal_evidence_failures or evidence_failures)]
     summary = {
         "rung": 4,
         "rung_name": "pair_summary",
@@ -4309,9 +5336,7 @@ def _pair_summary(
         "state_hash_unchanged": bool(state_hash_unchanged),
         "evidence_failures": [str(item) for item in evidence_failures],
         "fatal_evidence_failures": fatal_failures,
-        "local_usability_failures": [
-            str(item) for item in local_usability_failures
-        ],
+        "local_usability_failures": [str(item) for item in local_usability_failures],
         "reports": list(reports or []),
     }
     return summary
@@ -4367,16 +5392,10 @@ def _run_pair_stage(
     singleton_passed_params = set(_as_str_list(one_param_summary.get("passed_params")))
     if a_locally_unusable:
         singleton_passed_params.discard("a")
-    allowed_params = [
-        name
-        for name in current_active_params
-        if name in singleton_passed_params
-    ]
+    allowed_params = [name for name in current_active_params if name in singleton_passed_params]
     if a_usable and "a" in current_active_params and "a" not in allowed_params:
         allowed_params.append("a")
-    disallowed_params = [
-        name for name in current_active_params if name not in set(allowed_params)
-    ]
+    disallowed_params = [name for name in current_active_params if name not in set(allowed_params)]
 
     if evidence_failures:
         state_hash_after = _state_sha256(state_path)
@@ -4541,10 +5560,9 @@ def _run_pair_stage(
             _write_json(output_path, report)
         reports.append(report)
         pair_reports.append(report)
-        timeout_integrity_dirty = (
-            str(report.get("status", "")) == "timeout"
-            and _pair_timeout_integrity_dirty(report)
-        )
+        timeout_integrity_dirty = str(
+            report.get("status", "")
+        ) == "timeout" and _pair_timeout_integrity_dirty(report)
         if bool(report.get("dirty_timeout_abort", False)) or timeout_integrity_dirty:
             dirty_abort = True
             abort_reason = (
@@ -4597,9 +5615,7 @@ def _run_pair_stage(
         state_hash_after=state_hash_after,
         provider_after=provider_after,
         evidence_failures=([abort_reason] if abort_reason and not pair_reports else []),
-        fatal_evidence_failures=(
-            [abort_reason] if abort_reason and not pair_reports else []
-        ),
+        fatal_evidence_failures=([abort_reason] if abort_reason and not pair_reports else []),
         local_usability_failures=local_usability_failures,
         disallowed_params=disallowed_params,
         reports=reports,
@@ -4671,9 +5687,7 @@ def _validate_pair_summary_evidence(
     summary, failures = _load_required_json(summary_path, "missing_pair_summary")
     if failures:
         return summary, failures
-    failures.extend(
-        _state_hash_evidence_failures(summary, current_hash=current_hash)
-    )
+    failures.extend(_state_hash_evidence_failures(summary, current_hash=current_hash))
     failures.extend(
         _run_input_evidence_failures(
             summary,
@@ -4707,14 +5721,11 @@ def _block_dependency_missing(
     passed_pairs: set[frozenset[str]],
 ) -> list[list[str]]:
     missing = [
-        [str(name) for name in pair]
-        for pair in dependencies
-        if _pair_key(pair) not in passed_pairs
+        [str(name) for name in pair] for pair in dependencies if _pair_key(pair) not in passed_pairs
     ]
     if block_name == "a_c_psi_z":
         psi_pair_ok = (
-            _pair_key(("a", "psi_z")) in passed_pairs
-            or _pair_key(("c", "psi_z")) in passed_pairs
+            _pair_key(("a", "psi_z")) in passed_pairs or _pair_key(("c", "psi_z")) in passed_pairs
         )
         if not psi_pair_ok:
             missing.append(["a", "psi_z"])
@@ -4733,19 +5744,11 @@ def _best_block(
     reports: Sequence[Mapping[str, object]],
     metric_key: str,
 ) -> dict[str, object] | None:
-    best_report: Mapping[str, object] | None = None
-    best_value = float("inf")
-    for report in reports:
-        if bool(report.get("pass", False)) is not True:
-            continue
-        value = _metric_float(report.get(metric_key, np.nan))
-        if math.isfinite(value) and value < best_value:
-            best_value = value
-            best_report = report
+    best_report, _best_value = _best_report_by_selected_metric(reports, metric_key)
     if best_report is None:
         return None
     payload = _block_ref(best_report)
-    payload[metric_key] = best_value
+    payload.update(_best_metric_payload(best_report, metric_key=metric_key))
     return payload
 
 
@@ -4770,9 +5773,7 @@ def _finalize_block_report(
     finalized["block"] = list(names)
     finalized["active_params"] = list(names)
     finalized["var_names"] = _as_str_list(finalized.get("var_names")) or list(names)
-    finalized["candidate_param_names"] = _as_str_list(
-        finalized.get("candidate_param_names")
-    )
+    finalized["candidate_param_names"] = _as_str_list(finalized.get("candidate_param_names"))
     finalized["effective_var_names_seen_by_solver"] = _as_str_list(
         finalized.get("effective_var_names_seen_by_solver")
     )
@@ -4813,9 +5814,8 @@ def _finalize_block_report(
     finalized["provider_guard_after_ok"] = bool(provider_after_ok)
     finalized["provider_guard_after"] = provider_after_payload
     if caked_point_reprojection_guard_ok is not None:
-        finalized["caked_point_reprojection_guard_ok"] = bool(
-            caked_point_reprojection_guard_ok
-        )
+        finalized["caked_point_reprojection_guard_ok"] = bool(caked_point_reprojection_guard_ok)
+        finalized["caked_reprojection_guard_ok"] = bool(caked_point_reprojection_guard_ok)
     if caked_point_reprojection_report_path is not None:
         finalized["caked_point_reprojection_report_path"] = str(
             Path(caked_point_reprojection_report_path).expanduser().resolve()
@@ -4824,6 +5824,7 @@ def _finalize_block_report(
         finalized.setdefault(key, None)
     for key in PROVIDER_MATCH_BOOLS:
         finalized.setdefault(key, None)
+    _apply_caked_fit_space_evidence_fields(finalized)
 
     if str(finalized.get("status", "")) == "timeout":
         finalized["pass"] = False
@@ -4924,10 +5925,7 @@ def _block_summary(
     improved_reports: list[Mapping[str, object]] = []
     neutral_reports: list[Mapping[str, object]] = []
     for report in passed_reports:
-        before_rms = _metric_float(report.get("before_rms_px", np.nan))
-        after_rms = _metric_float(report.get("after_rms_px", np.nan))
-        before_max = _metric_float(report.get("before_max_error_px", np.nan))
-        after_max = _metric_float(report.get("after_max_error_px", np.nan))
+        before_rms, after_rms, before_max, after_max = _report_residual_gate_metrics(report)
         improved = (
             math.isfinite(before_rms)
             and math.isfinite(after_rms)
@@ -4970,14 +5968,11 @@ def _block_summary(
         )
     ]
     provider_guard_after_ok = bool(provider_checked_reports) and all(
-        bool(report.get("provider_guard_after_ok", False))
-        for report in provider_checked_reports
+        bool(report.get("provider_guard_after_ok", False)) for report in provider_checked_reports
     )
     best_by_rms = _best_block(block_reports, "after_rms_px")
     recommended_next_full_candidate = dict(best_by_rms) if best_by_rms else None
-    fatal_failures = [
-        str(item) for item in (fatal_evidence_failures or evidence_failures)
-    ]
+    fatal_failures = [str(item) for item in (fatal_evidence_failures or evidence_failures)]
     summary = {
         "rung": 5,
         "rung_name": "block_summary",
@@ -5013,9 +6008,7 @@ def _block_summary(
         "provider_guard_after_ok": bool(provider_guard_after_ok),
         "evidence_failures": [str(item) for item in evidence_failures],
         "fatal_evidence_failures": fatal_failures,
-        "local_usability_failures": [
-            str(item) for item in local_usability_failures
-        ],
+        "local_usability_failures": [str(item) for item in local_usability_failures],
         "reports": list(reports or []),
     }
     return summary
@@ -5099,6 +6092,1980 @@ def _write_caked_failed_block_report(
     return report
 
 
+def _disabled_feature_flags() -> dict[str, bool]:
+    return dict(RUNG6_DISABLED_FEATURE_FLAGS)
+
+
+def _cfg_enabled(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return bool(value.get("enabled", False))
+    return bool(value)
+
+
+def _runtime_feature_flags(runtime_cfg: Mapping[str, object] | None) -> dict[str, object]:
+    cfg = dict(runtime_cfg or {})
+    solver = (
+        dict(cfg.get("solver", cfg.get("optimizer", {})))
+        if isinstance(
+            cfg.get("solver", cfg.get("optimizer", {})),
+            Mapping,
+        )
+        else {}
+    )
+    seed = dict(cfg.get("seed_search", {})) if isinstance(cfg.get("seed_search"), Mapping) else {}
+    ident = (
+        dict(cfg.get("identifiability", {}))
+        if isinstance(cfg.get("identifiability"), Mapping)
+        else {}
+    )
+    full_beam = cfg.get("full_beam_polish", {})
+    discrete = cfg.get("discrete_modes", {})
+    dynamic_enabled = bool(
+        solver.get("dynamic_point_geometry_fit", False)
+        or cfg.get("dynamic_reanchor_probe_requested", False)
+    )
+    seed_enabled = (
+        _safe_int(seed.get("prescore_top_k", 1), default=1) > 1
+        or _safe_int(seed.get("n_global", 0), default=0) > 0
+        or _safe_int(seed.get("n_jitter", 0), default=0) > 0
+    )
+    auto_freeze = _cfg_enabled(ident.get("auto_freeze", False))
+    selective_thaw = _cfg_enabled(ident.get("selective_thaw", False))
+    adaptive_regularization = _cfg_enabled(ident.get("adaptive_regularization", False))
+    flags = {
+        "dynamic_reanchor": bool(dynamic_enabled),
+        "dynamic_reanchor_enabled": bool(dynamic_enabled),
+        "discrete_modes": _cfg_enabled(discrete),
+        "discrete_modes_enabled": _cfg_enabled(discrete),
+        "multistart": bool(seed_enabled),
+        "seed_multistart_enabled": bool(seed_enabled),
+        "full_beam_polish": _cfg_enabled(full_beam),
+        "full_beam_polish_enabled": _cfg_enabled(full_beam),
+        "auto_freeze": bool(auto_freeze),
+        "auto_freeze_enabled": bool(auto_freeze),
+        "selective_thaw": bool(selective_thaw),
+        "selective_thaw_enabled": bool(selective_thaw),
+        "adaptive_regularization": bool(adaptive_regularization),
+        "adaptive_regularization_enabled": bool(adaptive_regularization),
+        "baseline": False,
+    }
+    enabled_features: list[str] = []
+    if flags["dynamic_reanchor"]:
+        enabled_features.append("dynamic_reanchor")
+    if flags["discrete_modes"]:
+        enabled_features.append("discrete_modes")
+    if flags["multistart"]:
+        enabled_features.append("seed_multistart")
+    if flags["full_beam_polish"]:
+        enabled_features.append("full_beam_polish")
+    if flags["auto_freeze"] or flags["selective_thaw"] or flags["adaptive_regularization"]:
+        enabled_features.append("identifiability_features")
+    flags["enabled_features"] = enabled_features
+    return flags
+
+
+def _feature_flag_payload(feature: str | None) -> dict[str, object]:
+    feature_name = str(feature or "").strip().lower()
+    payload: dict[str, object] = {
+        **_disabled_feature_flags(),
+        "dynamic_reanchor_enabled": False,
+        "discrete_modes_enabled": False,
+        "seed_multistart_enabled": False,
+        "full_beam_polish_enabled": False,
+        "identifiability_features": False,
+        "identifiability_features_enabled": False,
+        "auto_freeze_enabled": False,
+        "selective_thaw_enabled": False,
+        "adaptive_regularization_enabled": False,
+        "enabled_features": [feature_name] if feature_name else [],
+    }
+    if feature_name == "dynamic_reanchor":
+        payload["dynamic_reanchor"] = True
+        payload["dynamic_reanchor_enabled"] = True
+    elif feature_name == "discrete_modes":
+        payload["discrete_modes"] = True
+        payload["discrete_modes_enabled"] = True
+    elif feature_name == "seed_multistart":
+        payload["multistart"] = True
+        payload["seed_multistart_enabled"] = True
+    elif feature_name == "full_beam_polish":
+        payload["full_beam_polish"] = True
+        payload["full_beam_polish_enabled"] = True
+    elif feature_name == "identifiability_features":
+        payload["identifiability_features"] = True
+        payload["identifiability_features_enabled"] = True
+        payload["auto_freeze"] = True
+        payload["auto_freeze_enabled"] = True
+        payload["selective_thaw"] = True
+        payload["selective_thaw_enabled"] = True
+        payload["adaptive_regularization"] = True
+        payload["adaptive_regularization_enabled"] = True
+    return payload
+
+
+def _observed_enabled_features(report: Mapping[str, object]) -> list[str]:
+    seen: list[str] = []
+
+    def _add(name: str) -> None:
+        if name not in seen:
+            seen.append(name)
+
+    for raw_name in _as_str_list(report.get("enabled_features")):
+        if raw_name:
+            _add(raw_name)
+    if any(
+        bool(report.get(key, False))
+        for key in (
+            "dynamic_reanchor",
+            "dynamic_reanchor_enabled",
+            "dynamic_point_geometry_fit",
+            "measured_anchor_reanchor_enabled",
+        )
+    ):
+        _add("dynamic_reanchor")
+    if any(bool(report.get(key, False)) for key in ("discrete_modes", "discrete_modes_enabled")):
+        _add("discrete_modes")
+    if any(bool(report.get(key, False)) for key in ("multistart", "seed_multistart_enabled")):
+        _add("seed_multistart")
+    if any(
+        bool(report.get(key, False)) for key in ("full_beam_polish", "full_beam_polish_enabled")
+    ):
+        _add("full_beam_polish")
+    if any(
+        bool(report.get(key, False))
+        for key in (
+            "auto_freeze",
+            "auto_freeze_enabled",
+            "selective_thaw",
+            "selective_thaw_enabled",
+            "adaptive_regularization",
+            "adaptive_regularization_enabled",
+        )
+    ):
+        _add("identifiability_features")
+    return seen
+
+
+def _passed_block_keys(block_summary: Mapping[str, object]) -> set[frozenset[str]]:
+    keys: set[frozenset[str]] = set()
+    for raw_ref in block_summary.get("passed_blocks", []) or []:
+        if not isinstance(raw_ref, Mapping):
+            continue
+        block = _as_str_list(raw_ref.get("block"))
+        if block:
+            keys.add(_pair_key(block))
+    return keys
+
+
+def _missing_block_evidence(
+    required_blocks: Sequence[Sequence[str]],
+    passed_blocks: set[frozenset[str]],
+) -> list[list[str]]:
+    return [
+        [str(name) for name in block]
+        for block in required_blocks
+        if _pair_key(block) not in passed_blocks
+    ]
+
+
+def _fit_parameter_updates_from_report(
+    report: Mapping[str, object],
+    names: Sequence[str],
+) -> dict[str, float]:
+    wanted = {str(name) for name in names}
+    updates: dict[str, float] = {}
+    parameter_after = report.get("parameter_after")
+    if isinstance(parameter_after, Mapping):
+        for name in wanted:
+            value = _metric_float(parameter_after.get(name, np.nan))
+            if math.isfinite(value):
+                updates[name] = value
+    for entry in _as_mapping_list(report.get("parameter_deltas")):
+        name = str(entry.get("name", ""))
+        if name not in wanted:
+            continue
+        value = _metric_float(entry.get("final", np.nan))
+        if math.isfinite(value):
+            updates[name] = value
+    return updates
+
+
+def _combined_caked_metric_regressed(report: Mapping[str, object]) -> bool:
+    if int(report.get("rung", 0) or 0) != 6:
+        return False
+    if not _report_requires_caked_manual_exact_fit_space(report):
+        return False
+    before_rms, after_rms, before_max, after_max = _report_residual_gate_metrics(report)
+    if not all(math.isfinite(value) for value in (before_rms, after_rms, before_max, after_max)):
+        return False
+    return bool(after_rms > before_rms + 1.0e-9 or after_max > before_max + 1.0e-9)
+
+
+def _apply_combined_caked_no_regression_acceptance(
+    report: dict[str, object],
+    names: Sequence[str],
+) -> None:
+    if not _combined_caked_metric_regressed(report):
+        return
+
+    for key in (
+        "after_rms_px",
+        "after_max_error_px",
+        "after_caked_rms_deg",
+        "after_caked_max_error_deg",
+        "after_caked_metric_name",
+        "after_caked_metric_unit",
+        "after_caked_metric_rms",
+        "after_caked_metric_max",
+    ):
+        if key in report:
+            report[f"optimizer_{key}"] = copy.deepcopy(report.get(key))
+
+    replacements = {
+        "after_rms_px": "before_rms_px",
+        "after_max_error_px": "before_max_error_px",
+        "after_caked_rms_deg": "before_caked_rms_deg",
+        "after_caked_max_error_deg": "before_caked_max_error_deg",
+        "after_caked_metric_name": "before_caked_metric_name",
+        "after_caked_metric_unit": "before_caked_metric_unit",
+        "after_caked_metric_rms": "before_caked_metric_rms",
+        "after_caked_metric_max": "before_caked_metric_max",
+    }
+    for after_key, before_key in replacements.items():
+        if before_key in report:
+            report[after_key] = copy.deepcopy(report.get(before_key))
+
+    parameter_before = (
+        dict(report.get("parameter_before"))
+        if isinstance(report.get("parameter_before"), Mapping)
+        else {}
+    )
+    if parameter_before:
+        report["optimizer_parameter_after"] = copy.deepcopy(report.get("parameter_after"))
+        report["optimizer_parameter_delta"] = copy.deepcopy(report.get("parameter_delta"))
+        report["parameter_after"] = {
+            str(name): copy.deepcopy(parameter_before.get(str(name))) for name in names
+        }
+        report["parameter_delta"] = {
+            str(name): 0.0
+            for name in names
+            if math.isfinite(_metric_float(parameter_before.get(str(name), np.nan)))
+        }
+
+    parameter_deltas = _as_mapping_list(report.get("parameter_deltas"))
+    if parameter_deltas:
+        report["optimizer_parameter_deltas"] = copy.deepcopy(parameter_deltas)
+        accepted_deltas: list[dict[str, object]] = []
+        wanted = {str(name) for name in names}
+        for entry in parameter_deltas:
+            accepted = dict(entry)
+            name = str(accepted.get("name", ""))
+            if name in wanted:
+                accepted["optimizer_final"] = accepted.get("final")
+                accepted["optimizer_delta"] = accepted.get("delta")
+                accepted["final"] = accepted.get("start")
+                accepted["delta"] = 0.0
+            accepted_deltas.append(accepted)
+        report["parameter_deltas"] = accepted_deltas
+
+    report["accepted_result_source"] = "initial_caked_noop"
+    report["accepted_noop_reason"] = "caked_metric_regressed"
+
+
+def _passed_block_reports_by_key(
+    block_summary: Mapping[str, object],
+) -> dict[frozenset[str], Mapping[str, object]]:
+    reports: dict[frozenset[str], Mapping[str, object]] = {}
+    for raw_report in block_summary.get("reports", []) or []:
+        if not isinstance(raw_report, Mapping):
+            continue
+        if bool(raw_report.get("pass", False)) is not True:
+            continue
+        block = _as_str_list(raw_report.get("block"))
+        if block:
+            reports[_pair_key(block)] = raw_report
+    return reports
+
+
+def _combined_candidate_seed_fit_parameters(
+    *,
+    base_fit_params: Mapping[str, object],
+    accepted_fit_params: Mapping[str, object],
+    accepted_candidate_params: set[str],
+    block_summary: Mapping[str, object],
+    required_blocks: Sequence[Sequence[str]],
+    candidate: Sequence[str],
+) -> tuple[dict[str, object], dict[str, str]]:
+    candidate_names = [str(name) for name in candidate]
+    candidate_set = set(candidate_names)
+    seed = dict(base_fit_params)
+    sources = {name: "base" for name in candidate_names}
+
+    for name in sorted(accepted_candidate_params & candidate_set):
+        if name in accepted_fit_params:
+            seed[name] = accepted_fit_params[name]
+            sources[name] = "prior_combined_candidate"
+
+    # Only use block outputs to fill params not already supplied by a successful
+    # combined candidate. That keeps candidate 1 on the base-state probe while
+    # letting candidate 2 inherit accepted z-shift evidence.
+    if accepted_candidate_params:
+        block_reports = _passed_block_reports_by_key(block_summary)
+        for block in required_blocks:
+            report = block_reports.get(_pair_key(block))
+            if report is None:
+                continue
+            block_name = str(report.get("block_name") or "_".join(str(name) for name in block))
+            for name, value in _fit_parameter_updates_from_report(report, candidate_names).items():
+                if name in accepted_candidate_params:
+                    continue
+                seed[name] = value
+                sources[name] = f"block:{block_name}"
+    return seed, sources
+
+
+def _validate_block_summary_evidence(
+    summary_path: Path | None,
+    *,
+    state_path: Path,
+    background_index: int,
+    current_hash: str,
+    current_provider_report_hash: str,
+) -> tuple[dict[str, object], list[str]]:
+    summary, failures = _load_required_json(summary_path, "missing_block_summary")
+    if failures:
+        return summary, failures
+    failures.extend(_state_hash_evidence_failures(summary, current_hash=current_hash))
+    failures.extend(
+        _run_input_evidence_failures(
+            summary,
+            state_path=state_path,
+            background_index=int(background_index),
+        )
+    )
+    if str(summary.get("status", "")) != "ok":
+        failures.append("block_summary_status_not_ok")
+    if bool(summary.get("provider_guard_after_ok", False)) is not True:
+        failures.append("provider_guard_after_not_green")
+    provider_hash = str(summary.get("provider_report_hash") or "")
+    if not provider_hash:
+        failures.append("provider_report_hash_missing")
+    elif provider_hash != str(current_provider_report_hash):
+        failures.append("provider_report_hash_not_current")
+    if bool(summary.get("state_hash_unchanged", False)) is not True:
+        failures.append("state_hash_unchanged_not_true")
+    if summary.get("failed_blocks"):
+        failures.append("failed_blocks_present")
+    if summary.get("timed_out_blocks"):
+        failures.append("timed_out_blocks_present")
+    if bool(summary.get("dirty_timeout_abort", False)):
+        failures.append("dirty_timeout_abort")
+    if summary.get("evidence_failures"):
+        failures.append("block_summary_evidence_failures_present")
+    if summary.get("fatal_evidence_failures"):
+        failures.append("block_summary_fatal_evidence_failures_present")
+    if not _passed_block_keys(summary):
+        failures.append("no_passed_block_evidence")
+    return summary, failures
+
+
+def _combined_caked_report_path(
+    block_summary: Mapping[str, object],
+    explicit_path: Path | None,
+) -> Path | None:
+    if explicit_path is not None:
+        return Path(explicit_path).expanduser().resolve()
+    raw_path = block_summary.get("caked_point_reprojection_report_path")
+    if raw_path:
+        return Path(str(raw_path)).expanduser().resolve()
+    return None
+
+
+def _validate_combined_caked_report(
+    *,
+    block_summary: Mapping[str, object],
+    caked_point_reprojection_report_path: Path | None,
+    current_hash: str,
+    background_index: int,
+) -> tuple[Path | None, list[str]]:
+    report_path = _combined_caked_report_path(
+        block_summary,
+        caked_point_reprojection_report_path,
+    )
+    if report_path is None:
+        return None, ["missing_caked_point_reprojection_report"]
+    report = _read_json(report_path)
+    if not report:
+        return report_path, ["caked_point_reprojection_report_unreadable"]
+    return report_path, _caked_reprojection_guard_failures(
+        report,
+        current_hash=current_hash,
+        background_index=int(background_index),
+    )
+
+
+def _combined_candidate_ref(report: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "candidate_name": str(report.get("candidate_name", "")),
+        "candidate": [str(name) for name in report.get("candidate", []) or []],
+    }
+
+
+def _best_combined_candidate(
+    reports: Sequence[Mapping[str, object]],
+    metric_key: str,
+) -> dict[str, object] | None:
+    best_report, _best_value = _best_report_by_selected_metric(reports, metric_key)
+    if best_report is None:
+        return None
+    payload = _combined_candidate_ref(best_report)
+    payload.update(_best_metric_payload(best_report, metric_key=metric_key))
+    return payload
+
+
+def _write_combined_not_run_report(
+    *,
+    output_path: Path,
+    candidate_name: str,
+    candidate: Sequence[str],
+    status: str,
+    state_path: Path,
+    state_hash_before: str,
+    base_parameter_values: Mapping[str, object],
+    failure_reason: str | None = None,
+    skip_reason: str | None = None,
+    missing_block_evidence: Sequence[Sequence[str]] = (),
+    caked_guard_failures: Sequence[str] = (),
+    caked_point_reprojection_report_path: Path | None = None,
+    seed_parameter_sources: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    names = [str(name) for name in candidate]
+    state_hash_after = _state_sha256(state_path)
+    before, after, delta, bounds = _parameter_maps_from_deltas(
+        {},
+        names,
+        base_parameter_values,
+    )
+    guard_failure = failure_reason or skip_reason
+    report: dict[str, object] = {
+        "rung": 6,
+        "rung_name": f"combined_{candidate_name}",
+        "candidate_name": str(candidate_name),
+        "candidate": list(names),
+        "status": str(status),
+        "pass": False,
+        "failure_reason": failure_reason,
+        "skip_reason": skip_reason,
+        "active_params": list(names),
+        "var_names": list(names),
+        "candidate_param_names": list(names),
+        "effective_var_names_seen_by_solver": [],
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
+        "real_solve_called": False,
+        "base_parameter_values": dict(base_parameter_values),
+        "seed_parameter_sources": dict(seed_parameter_sources or {}),
+        "parameter_before": before,
+        "parameter_after": after,
+        "parameter_delta": delta,
+        "parameter_bounds": bounds,
+        "state_sha256_before": str(state_hash_before),
+        "state_sha256_after": str(state_hash_after),
+        "state_hash_before": str(state_hash_before),
+        "state_hash_after": str(state_hash_after),
+        "state_hash_unchanged": bool(str(state_hash_before) == str(state_hash_after)),
+        "provider_guard_after_ok": False,
+        "caked_point_reprojection_guard_ok": False,
+        "caked_reprojection_guard_ok": False,
+        "combined_guard_failures": [str(guard_failure)] if guard_failure else [],
+        "missing_block_evidence": [
+            [str(name) for name in block] for block in missing_block_evidence
+        ],
+        "caked_guard_failures": [str(item) for item in caked_guard_failures],
+        "feature_flags_disabled": _disabled_feature_flags(),
+        "full_fitter_validated": False,
+        **_disabled_feature_flags(),
+    }
+    if caked_point_reprojection_report_path is not None:
+        report["caked_point_reprojection_report_path"] = str(
+            Path(caked_point_reprojection_report_path).expanduser().resolve()
+        )
+    _write_json(output_path, report)
+    return report
+
+
+def _finalize_combined_report(
+    report: Mapping[str, object],
+    *,
+    candidate_name: str,
+    candidate: Sequence[str],
+    state_path: Path,
+    state_hash_before: str,
+    timeout_seconds: float,
+    base_parameter_values: Mapping[str, object],
+    seed_parameter_sources: Mapping[str, object] | None = None,
+    provider_after: Mapping[str, object] | None,
+    caked_point_reprojection_report_path: Path,
+) -> dict[str, object]:
+    names = [str(name) for name in candidate]
+    finalized = dict(report)
+    finalized.setdefault("rung", 6)
+    finalized.setdefault("rung_name", f"combined_{candidate_name}")
+    finalized["candidate_name"] = str(candidate_name)
+    finalized["candidate"] = list(names)
+    finalized["active_params"] = list(names)
+    finalized["var_names"] = _as_str_sequence(finalized.get("var_names")) or list(names)
+    finalized["candidate_param_names"] = _as_str_sequence(finalized.get("candidate_param_names"))
+    finalized["effective_var_names_seen_by_solver"] = _as_str_sequence(
+        finalized.get("effective_var_names_seen_by_solver")
+    )
+    finalized["effective_candidate_param_names_seen_by_solver"] = _as_str_sequence(
+        finalized.get("effective_candidate_param_names_seen_by_solver")
+    )
+    finalized.setdefault("elapsed_s", finalized.get("elapsed_seconds", 0.0))
+    finalized.setdefault("elapsed_seconds", finalized.get("elapsed_s", 0.0))
+    finalized["timeout_s"] = float(timeout_seconds)
+    finalized.setdefault("timeout_seconds", float(timeout_seconds))
+    finalized["state_sha256_before"] = str(
+        finalized.get("state_sha256_before") or state_hash_before
+    )
+    finalized["state_sha256_after"] = str(
+        finalized.get("state_sha256_after") or _state_sha256(Path(state_path))
+    )
+    finalized["state_hash_before"] = finalized["state_sha256_before"]
+    finalized["state_hash_after"] = finalized["state_sha256_after"]
+    finalized["state_hash_unchanged"] = (
+        finalized["state_sha256_before"] == finalized["state_sha256_after"]
+    )
+    finalized["base_parameter_values"] = dict(base_parameter_values)
+    finalized["seed_parameter_sources"] = dict(seed_parameter_sources or {})
+    before, after, delta, bounds = _parameter_maps_from_deltas(
+        finalized,
+        names,
+        base_parameter_values,
+    )
+    finalized["parameter_before"] = before
+    finalized["parameter_after"] = after
+    finalized["parameter_delta"] = delta
+    finalized["parameter_bounds"] = bounds
+    finalized.setdefault("point_match_summary", {})
+    finalized.setdefault(
+        "last_point_match_summary",
+        finalized.get("point_match_summary") if finalized.get("point_match_summary") else None,
+    )
+    finalized.setdefault("dirty_timeout_abort", False)
+    provider_after_payload = dict(provider_after or {})
+    provider_after_ok = (
+        bool(provider_after_payload.get("provider_guard_ok", False))
+        and str(provider_after_payload.get("classification", "")) == "point_provider_parity_ok"
+    )
+    finalized["provider_guard_after_ok"] = bool(provider_after_ok)
+    finalized["provider_guard_after"] = provider_after_payload
+    finalized["caked_point_reprojection_guard_ok"] = True
+    finalized["caked_reprojection_guard_ok"] = True
+    finalized["caked_point_reprojection_report_path"] = str(
+        Path(caked_point_reprojection_report_path).expanduser().resolve()
+    )
+    finalized["feature_flags_disabled"] = _disabled_feature_flags()
+    finalized["full_fitter_validated"] = False
+    finalized.update(_disabled_feature_flags())
+    for key in RUNG2_FIXED_SOURCE_COUNTS:
+        finalized.setdefault(key, None)
+    for key in PROVIDER_MATCH_BOOLS:
+        finalized.setdefault(key, None)
+    _apply_caked_fit_space_evidence_fields(finalized)
+    _apply_combined_caked_no_regression_acceptance(finalized, names)
+
+    if str(finalized.get("status", "")) == "timeout":
+        finalized["pass"] = False
+        if bool(finalized.get("dirty_timeout_abort", False)):
+            finalized["failure_reason"] = "dirty_timeout_abort"
+        elif _pair_timeout_integrity_dirty(finalized):
+            finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+        else:
+            finalized["failure_reason"] = "timeout"
+        finalized["combined_guard_failures"] = [str(finalized["failure_reason"])]
+        return finalized
+
+    integrity_failures = _fixed_source_contract_failures(
+        finalized,
+        expected_counts=ONE_PARAM_FIXED_SOURCE_COUNTS,
+        required_bool_keys=PROVIDER_MATCH_BOOLS,
+    )
+    metric_failures = _pair_metric_failures(finalized)
+    variable_failures: list[str] = []
+    if finalized.get("candidate_param_names") != list(names):
+        variable_failures.append("candidate_param_names_not_candidate")
+    if finalized.get("var_names") != list(names):
+        variable_failures.append("var_names_not_candidate")
+    if finalized.get("effective_var_names_seen_by_solver") != list(names):
+        variable_failures.append("effective_var_names_seen_by_solver_not_candidate")
+    effective_candidate = finalized.get("effective_candidate_param_names_seen_by_solver")
+    if effective_candidate and effective_candidate != list(names):
+        variable_failures.append("effective_candidate_param_names_seen_by_solver_not_candidate")
+    solve_flag_failures: list[str] = []
+    if bool(finalized.get("least_squares_called", False)) is not True:
+        solve_flag_failures.append("least_squares_not_called")
+    if bool(finalized.get("optimizer_solve_called", False)) is not True:
+        solve_flag_failures.append("optimizer_solve_not_called")
+    if bool(finalized.get("state_hash_unchanged", False)) is not True:
+        solve_flag_failures.append("state_hash_changed")
+    if provider_after_ok is not True:
+        solve_flag_failures.append("provider_guard_after_failed")
+    if bool(finalized.get("caked_point_reprojection_guard_ok", False)) is not True:
+        solve_flag_failures.append("caked_point_reprojection_guard_failed")
+
+    guard_failures = integrity_failures + metric_failures + variable_failures + solve_flag_failures
+    finalized["combined_guard_failures"] = guard_failures
+    if not guard_failures:
+        finalized["status"] = "ok"
+        finalized["pass"] = True
+        finalized["failure_reason"] = None
+        return finalized
+
+    finalized["status"] = "failed"
+    finalized["pass"] = False
+    if integrity_failures:
+        finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+    elif variable_failures:
+        finalized["failure_reason"] = "unexpected_solver_variable_set"
+    elif "no_matched_peak_rejection" in metric_failures:
+        finalized["failure_reason"] = "no_matched_peak_rejection"
+    elif any(reason.startswith("non_finite") for reason in metric_failures):
+        finalized["failure_reason"] = "non_finite_residual"
+    elif metric_failures:
+        finalized["failure_reason"] = "metric_guard_failed"
+    elif solve_flag_failures:
+        finalized["failure_reason"] = "solve_flag_guard_failed"
+    else:
+        finalized.setdefault("failure_reason", "combined_solve_failed")
+    return finalized
+
+
+def _combined_summary(
+    *,
+    run_dir: Path,
+    state_path: Path,
+    background_index: int,
+    block_summary_path: Path | None,
+    candidate_reports: Sequence[Mapping[str, object]],
+    state_hash_before: str,
+    state_hash_after: str,
+    provider_report_hash: str,
+    evidence_failures: Sequence[str] = (),
+    caked_guard_failures: Sequence[str] = (),
+    reports: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
+    passed_reports = [report for report in candidate_reports if bool(report.get("pass", False))]
+    failed_reports = [
+        report for report in candidate_reports if str(report.get("status", "")) == "failed"
+    ]
+    timed_out_reports = [
+        report for report in candidate_reports if str(report.get("status", "")) == "timeout"
+    ]
+    skipped_reports = [
+        report for report in candidate_reports if str(report.get("status", "")) == "skipped"
+    ]
+    attempted_reports = [
+        report for report in candidate_reports if str(report.get("status", "")) != "skipped"
+    ]
+    if evidence_failures and not candidate_reports:
+        status = "failed"
+        failure_reason = "block_evidence_not_current"
+    elif not passed_reports:
+        status = "failed"
+        failure_reason = "no_combined_candidate_passed"
+    elif failed_reports or timed_out_reports:
+        status = "ok_with_failures"
+        failure_reason = None
+    else:
+        status = "ok"
+        failure_reason = None
+    provider_checked_reports = [
+        report
+        for report in attempted_reports
+        if bool(report.get("least_squares_called", False))
+        or bool(report.get("optimizer_solve_called", False))
+        or bool(report.get("real_solve_called", False))
+    ]
+    provider_guard_after_ok = bool(provider_checked_reports) and all(
+        bool(report.get("provider_guard_after_ok", False)) for report in provider_checked_reports
+    )
+    best_by_rms = _best_combined_candidate(candidate_reports, "after_rms_px")
+    recommended_next = dict(best_by_rms) if best_by_rms else None
+    if recommended_next is not None:
+        recommended_next["feature_rung_not_run"] = True
+    summary: dict[str, object] = {
+        "rung": 6,
+        "rung_name": "combined_summary",
+        "status": status,
+        "failure_reason": failure_reason,
+        "run_dir": str(run_dir),
+        "run_id": Path(run_dir).name,
+        "timestamp": Path(run_dir).name,
+        "state_path": str(Path(state_path).expanduser().resolve()),
+        "background_index": int(background_index),
+        "block_summary_path": (
+            str(Path(block_summary_path).expanduser().resolve())
+            if block_summary_path is not None
+            else None
+        ),
+        "provider_report_hash": str(provider_report_hash),
+        "attempted_candidates": [_combined_candidate_ref(report) for report in attempted_reports],
+        "passed_candidates": [_combined_candidate_ref(report) for report in passed_reports],
+        "failed_candidates": [_combined_candidate_ref(report) for report in failed_reports],
+        "timed_out_candidates": [_combined_candidate_ref(report) for report in timed_out_reports],
+        "skipped_candidates": [
+            {
+                **_combined_candidate_ref(report),
+                "skip_reason": report.get("skip_reason"),
+            }
+            for report in skipped_reports
+        ],
+        "best_candidate_by_rms": best_by_rms,
+        "best_candidate_by_max_error": _best_combined_candidate(
+            candidate_reports,
+            "after_max_error_px",
+        ),
+        "recommended_next_feature_rung": recommended_next,
+        "full_fitter_validated": False,
+        "state_sha256_before": str(state_hash_before),
+        "state_sha256_after": str(state_hash_after),
+        "state_hash_before": str(state_hash_before),
+        "state_hash_after": str(state_hash_after),
+        "state_hash_unchanged": bool(str(state_hash_before) == str(state_hash_after)),
+        "provider_guard_after_ok": bool(provider_guard_after_ok),
+        "evidence_failures": [str(item) for item in evidence_failures],
+        "caked_guard_failures": [str(item) for item in caked_guard_failures],
+        "reports": list(reports or []),
+        "feature_flags_disabled": _disabled_feature_flags(),
+        **_disabled_feature_flags(),
+    }
+    evidence_source = next(
+        (
+            report
+            for report in passed_reports
+            if _as_str_list(report.get("candidate")) == list(RUNG7_BASE_CANDIDATE)
+        ),
+        passed_reports[0] if passed_reports else None,
+    )
+    if isinstance(evidence_source, Mapping):
+        for key in (
+            "manual_caked_residual_row_count",
+            "dataset_fit_space_projector_row_count",
+            "invalid_dataset_fit_space_projector_row_count",
+            "analytic_detector_fit_space_row_count",
+            "exact_fit_space_projector_available",
+            "fit_space_projector_kind",
+            "expected_saved_caked_manual_pair_count",
+            "same_manual_pair_ids_before_after",
+            "fixed_source_counters_unchanged",
+            "caked_point_reprojection_guard_ok",
+            "caked_reprojection_guard_ok",
+            "caked_point_reprojection_report_path",
+        ):
+            if key in evidence_source:
+                summary[key] = evidence_source.get(key)
+    return summary
+
+
+def _run_combined_stage(
+    *,
+    state_path: Path,
+    background_index: int,
+    run_dir: Path,
+    context: Mapping[str, object],
+    reports: list[dict[str, object]],
+    state_hash_before: str,
+    max_nfev: int,
+    timeout_seconds: float,
+    provider_report_hash: str,
+    block_summary_path: Path | None = None,
+    caked_point_reprojection_report_path: Path | None = None,
+    use_subprocess: bool = False,
+    diagnostic_logging: bool = False,
+) -> dict[str, object]:
+    block_summary, evidence_failures = _validate_block_summary_evidence(
+        block_summary_path,
+        state_path=state_path,
+        background_index=int(background_index),
+        current_hash=state_hash_before,
+        current_provider_report_hash=provider_report_hash,
+    )
+    candidate_reports: list[dict[str, object]] = []
+    caked_report_path: Path | None = None
+    caked_failures: list[str] = []
+    if not evidence_failures:
+        caked_report_path, caked_failures = _validate_combined_caked_report(
+            block_summary=block_summary,
+            caked_point_reprojection_report_path=caked_point_reprojection_report_path,
+            current_hash=state_hash_before,
+            background_index=int(background_index),
+        )
+    if evidence_failures:
+        state_hash_after = _state_sha256(state_path)
+        summary = _combined_summary(
+            run_dir=run_dir,
+            state_path=state_path,
+            background_index=int(background_index),
+            block_summary_path=block_summary_path,
+            candidate_reports=[],
+            state_hash_before=state_hash_before,
+            state_hash_after=state_hash_after,
+            provider_report_hash=provider_report_hash,
+            evidence_failures=evidence_failures,
+            reports=reports,
+        )
+        summary["report_path"] = str(run_dir / "rung_06_combined_summary.json")
+        _write_json(run_dir / "rung_06_combined_summary.json", summary)
+        return summary
+
+    passed_blocks = _passed_block_keys(block_summary)
+    abort_remaining_reason: str | None = None
+    prior_candidate_failed = False
+    base_fit_params = _base_fit_parameters_from_context(context)
+    accepted_fit_params = dict(base_fit_params)
+    accepted_candidate_params: set[str] = set()
+    for index, (candidate_name, raw_candidate, required_blocks) in enumerate(
+        RUNG6_COMBINED_CANDIDATES
+    ):
+        candidate = [str(name) for name in raw_candidate]
+        output_path = _rung_path(run_dir, 6, f"combined_{candidate_name}")
+        candidate_fit_params, seed_parameter_sources = _combined_candidate_seed_fit_parameters(
+            base_fit_params=base_fit_params,
+            accepted_fit_params=accepted_fit_params,
+            accepted_candidate_params=accepted_candidate_params,
+            block_summary=block_summary,
+            required_blocks=required_blocks,
+            candidate=candidate,
+        )
+        base_parameter_values = {
+            str(name): candidate_fit_params.get(str(name)) for name in candidate
+        }
+
+        if abort_remaining_reason:
+            report = _write_combined_not_run_report(
+                output_path=output_path,
+                candidate_name=candidate_name,
+                candidate=candidate,
+                status="skipped",
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                base_parameter_values=base_parameter_values,
+                skip_reason=abort_remaining_reason,
+                caked_point_reprojection_report_path=caked_report_path,
+                seed_parameter_sources=seed_parameter_sources,
+            )
+            reports.append(report)
+            candidate_reports.append(report)
+            continue
+
+        missing_blocks = _missing_block_evidence(required_blocks, passed_blocks)
+        if missing_blocks:
+            if prior_candidate_failed:
+                report = _write_combined_not_run_report(
+                    output_path=output_path,
+                    candidate_name=candidate_name,
+                    candidate=candidate,
+                    status="skipped",
+                    state_path=state_path,
+                    state_hash_before=state_hash_before,
+                    base_parameter_values=base_parameter_values,
+                    skip_reason="prior_candidate_failed",
+                    missing_block_evidence=missing_blocks,
+                    caked_point_reprojection_report_path=caked_report_path,
+                    seed_parameter_sources=seed_parameter_sources,
+                )
+                reports.append(report)
+                candidate_reports.append(report)
+                continue
+            report = _write_combined_not_run_report(
+                output_path=output_path,
+                candidate_name=candidate_name,
+                candidate=candidate,
+                status="failed",
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                base_parameter_values=base_parameter_values,
+                failure_reason="missing_block_evidence",
+                missing_block_evidence=missing_blocks,
+                caked_point_reprojection_report_path=caked_report_path,
+                seed_parameter_sources=seed_parameter_sources,
+            )
+            reports.append(report)
+            candidate_reports.append(report)
+            prior_candidate_failed = True
+            continue
+
+        if caked_failures or caked_report_path is None:
+            report = _write_combined_not_run_report(
+                output_path=output_path,
+                candidate_name=candidate_name,
+                candidate=candidate,
+                status="failed",
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                base_parameter_values=base_parameter_values,
+                failure_reason="caked_point_reprojection_guard_failed",
+                caked_guard_failures=caked_failures or ["missing_caked_point_reprojection_report"],
+                caked_point_reprojection_report_path=caked_report_path,
+                seed_parameter_sources=seed_parameter_sources,
+            )
+            reports.append(report)
+            candidate_reports.append(report)
+            prior_candidate_failed = True
+            continue
+
+        current_hash = _state_sha256(state_path)
+        if current_hash != state_hash_before:
+            report = _write_combined_not_run_report(
+                output_path=output_path,
+                candidate_name=candidate_name,
+                candidate=candidate,
+                status="failed",
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                base_parameter_values=base_parameter_values,
+                failure_reason="state_hash_changed",
+                caked_point_reprojection_report_path=caked_report_path,
+                seed_parameter_sources=seed_parameter_sources,
+            )
+            reports.append(report)
+            candidate_reports.append(report)
+            abort_remaining_reason = "state_hash_changed"
+            continue
+
+        report = _run_solver_rung_with_timeout(
+            state_path=state_path,
+            background_index=int(background_index),
+            active_names=candidate,
+            output_path=output_path,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            rung=6,
+            rung_name=f"combined_{candidate_name}",
+            state_hash_before=state_hash_before,
+            use_subprocess=bool(use_subprocess),
+            context=_context_with_base_fit_parameters(context, candidate_fit_params),
+            diagnostic_logging=bool(diagnostic_logging),
+            dirty_timeout_on_timeout=not bool(use_subprocess),
+        )
+        provider_after: dict[str, object] | None = None
+        if not bool(report.get("dirty_timeout_abort", False)):
+            with _solver_debug_logging_scope(diagnostic_logging):
+                provider_after = _run_provider_guard_report(
+                    state_path=state_path,
+                    background_index=int(background_index),
+                    rung=6,
+                    rung_name=f"combined_{candidate_name}_provider_guard_after",
+                )
+        report = _finalize_combined_report(
+            report,
+            candidate_name=candidate_name,
+            candidate=candidate,
+            state_path=state_path,
+            state_hash_before=state_hash_before,
+            timeout_seconds=float(timeout_seconds),
+            base_parameter_values=base_parameter_values,
+            seed_parameter_sources=seed_parameter_sources,
+            provider_after=provider_after,
+            caked_point_reprojection_report_path=caked_report_path,
+        )
+        _write_json(output_path, report)
+        reports.append(report)
+        candidate_reports.append(report)
+        timeout_integrity_dirty = str(
+            report.get("status", "")
+        ) == "timeout" and _pair_timeout_integrity_dirty(report)
+        if bool(report.get("dirty_timeout_abort", False)) or timeout_integrity_dirty:
+            abort_remaining_reason = (
+                "dirty_timeout_abort"
+                if bool(report.get("dirty_timeout_abort", False))
+                else "fixed_source_or_pair_integrity_lost"
+            )
+        elif str(report.get("status", "")) != "ok" or not bool(report.get("pass", False)):
+            abort_remaining_reason = "prior_candidate_failed"
+            prior_candidate_failed = True
+        else:
+            updates = _fit_parameter_updates_from_report(report, candidate)
+            accepted_fit_params.update(updates)
+            accepted_candidate_params.update(updates)
+
+    state_hash_after = _state_sha256(state_path)
+    summary = _combined_summary(
+        run_dir=run_dir,
+        state_path=state_path,
+        background_index=int(background_index),
+        block_summary_path=block_summary_path,
+        candidate_reports=candidate_reports,
+        state_hash_before=state_hash_before,
+        state_hash_after=state_hash_after,
+        provider_report_hash=provider_report_hash,
+        evidence_failures=[],
+        caked_guard_failures=caked_failures,
+        reports=reports,
+    )
+    summary["report_path"] = str(run_dir / "rung_06_combined_summary.json")
+    _write_json(run_dir / "rung_06_combined_summary.json", summary)
+    return summary
+
+
+def _feature_ref(report: Mapping[str, object]) -> dict[str, object]:
+    payload: dict[str, object] = {"feature": str(report.get("feature", ""))}
+    if _report_requires_caked_manual_exact_fit_space(report):
+        if report.get("after_rms_px") is not None:
+            payload["diagnostic_after_rms_px"] = report.get("after_rms_px")
+        if report.get("after_max_error_px") is not None:
+            payload["diagnostic_after_max_error_px"] = report.get("after_max_error_px")
+        return payload
+    if report.get("after_rms_px") is not None:
+        payload["after_rms_px"] = report.get("after_rms_px")
+    if report.get("after_max_error_px") is not None:
+        payload["after_max_error_px"] = report.get("after_max_error_px")
+    return payload
+
+
+def _best_feature_report(
+    reports: Sequence[Mapping[str, object]],
+    metric_key: str,
+) -> dict[str, object] | None:
+    best_report, _best_value = _best_report_by_selected_metric(reports, metric_key)
+    if best_report is None:
+        return None
+    payload = _feature_ref(best_report)
+    payload.update(_best_metric_payload(best_report, metric_key=metric_key))
+    return payload
+
+
+def _combined_c2_report_from_summary(
+    summary: Mapping[str, object],
+    summary_path: Path | None,
+) -> dict[str, object]:
+    for raw_report in summary.get("reports", []) or []:
+        if not isinstance(raw_report, Mapping):
+            continue
+        candidate = _as_str_list(raw_report.get("candidate"))
+        if candidate == list(RUNG7_BASE_CANDIDATE):
+            return dict(raw_report)
+    if summary_path is not None:
+        report_path = (
+            Path(summary_path).expanduser().resolve().parent
+            / f"rung_06_combined_{RUNG7_BASE_CANDIDATE_NAME}.json"
+        )
+        report = _read_json(report_path)
+        if report:
+            return report
+    return {}
+
+
+def _validate_rung6_summary_for_features(
+    combined_summary_path: Path | None,
+    *,
+    state_path: Path,
+    background_index: int,
+    current_hash: str,
+    current_provider_report_hash: str,
+    summary_override: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object], Path | None, list[str]]:
+    summary_path = (
+        Path(combined_summary_path).expanduser().resolve()
+        if combined_summary_path is not None
+        else None
+    )
+    summary = dict(summary_override or {})
+    if not summary:
+        if summary_path is None:
+            return {}, {}, None, ["missing_rung6_combined_summary"]
+        summary = _read_json(summary_path)
+    failures: list[str] = []
+    if not summary:
+        return {}, {}, None, ["rung6_combined_summary_unreadable"]
+    if str(summary.get("status", "")) != "ok":
+        failures.append("rung6_summary_status_not_ok")
+    failures.extend(
+        _run_input_evidence_failures(
+            summary,
+            state_path=state_path,
+            background_index=int(background_index),
+        )
+    )
+    failures.extend(_state_hash_evidence_failures(summary, current_hash=current_hash))
+    if str(summary.get("provider_report_hash") or "") != str(current_provider_report_hash):
+        failures.append("provider_report_hash_not_current")
+    if bool(summary.get("provider_guard_after_ok", False)) is not True:
+        failures.append("rung6_provider_guard_after_not_ok")
+    if bool(summary.get("full_fitter_validated", True)) is not False:
+        failures.append("rung6_full_fitter_validated_not_false")
+
+    passed_c2 = False
+    for raw_ref in summary.get("passed_candidates", []) or []:
+        if not isinstance(raw_ref, Mapping):
+            continue
+        if _as_str_list(raw_ref.get("candidate")) == list(RUNG7_BASE_CANDIDATE):
+            passed_c2 = True
+            break
+    if not passed_c2:
+        failures.append("rung6_c2_candidate_not_passed")
+
+    c2_report = _combined_c2_report_from_summary(summary, summary_path)
+    if not c2_report:
+        failures.append("rung6_c2_report_missing")
+        return summary, {}, None, failures
+    if str(c2_report.get("status", "")) != "ok" or bool(c2_report.get("pass", False)) is not True:
+        failures.append("rung6_c2_status_not_ok")
+    if _as_str_list(c2_report.get("candidate")) != list(RUNG7_BASE_CANDIDATE):
+        failures.append("rung6_c2_candidate_not_base")
+    if _as_str_list(c2_report.get("candidate_param_names")) != list(RUNG7_BASE_CANDIDATE):
+        failures.append("rung6_c2_candidate_param_names_not_base")
+    if _as_str_list(c2_report.get("var_names")) != list(RUNG7_BASE_CANDIDATE):
+        failures.append("rung6_c2_var_names_not_base")
+    effective = _as_str_list(c2_report.get("effective_var_names_seen_by_solver"))
+    if effective != list(RUNG7_BASE_CANDIDATE):
+        failures.append("rung6_c2_effective_var_names_not_base")
+    if bool(c2_report.get("provider_guard_after_ok", False)) is not True:
+        failures.append("rung6_c2_provider_guard_after_not_ok")
+    if bool(c2_report.get("caked_point_reprojection_guard_ok", False)) is not True:
+        failures.append("rung6_c2_caked_guard_not_ok")
+    if bool(c2_report.get("state_hash_unchanged", False)) is not True:
+        failures.append("rung6_c2_state_hash_changed")
+    if bool(c2_report.get("full_fitter_validated", True)) is not False:
+        failures.append("rung6_c2_full_fitter_validated_not_false")
+    if _fixed_source_contract_failures(
+        c2_report,
+        expected_counts=ONE_PARAM_FIXED_SOURCE_COUNTS,
+        required_bool_keys=PROVIDER_MATCH_BOOLS,
+    ):
+        failures.append("rung6_c2_fixed_source_counters_not_clean")
+    caked_path: Path | None = None
+    raw_caked_path = c2_report.get("caked_point_reprojection_report_path")
+    if raw_caked_path:
+        caked_path = Path(str(raw_caked_path)).expanduser().resolve()
+    else:
+        failures.append("rung6_c2_caked_report_path_missing")
+    return summary, c2_report, caked_path, failures
+
+
+def _feature_bounds_failures(report: Mapping[str, object]) -> list[str]:
+    failures: list[str] = []
+    if report.get("parameter_within_bounds") is False:
+        failures.append("parameter_within_bounds_false")
+    for entry in _as_mapping_list(report.get("parameter_deltas")):
+        if entry.get("within_bounds") is False:
+            name = str(entry.get("name", "parameter") or "parameter")
+            failures.append(f"{name}_outside_bounds")
+    return failures
+
+
+def _dynamic_reanchor_record_richness(value: object) -> int:
+    if isinstance(value, Mapping):
+        total = 0
+        for nested in value.values():
+            if nested is None:
+                continue
+            if isinstance(nested, str) and not nested:
+                continue
+            if isinstance(nested, (list, tuple, dict)) and not nested:
+                continue
+            total += 1 + _dynamic_reanchor_record_richness(nested)
+        return total
+    if isinstance(value, (list, tuple)):
+        return sum(_dynamic_reanchor_record_richness(item) for item in value)
+    if value is None:
+        return 0
+    if isinstance(value, str) and not value:
+        return 0
+    return 1
+
+
+def _dynamic_reanchor_record_key(key: str, value: object) -> tuple[object, ...]:
+    if not isinstance(value, Mapping):
+        return ("raw", key, json.dumps(value, sort_keys=True, default=str))
+    dataset_id = str(
+        value.get(
+            "dataset_index",
+            value.get("dataset_label", ""),
+        )
+    )
+    if key == "dynamic_reanchor_trace":
+        event_index = value.get(
+            "reanchor_event_index",
+            value.get("dataset_reanchor_event_index", ""),
+        )
+        lost_ids = tuple(_as_str_list(value.get("lost_pair_ids")))
+        rematched_ids = tuple(_as_str_list(value.get("rematched_pair_ids")))
+        fallback_ids = tuple(_as_str_list(value.get("fallback_pair_ids")))
+        rejected_ids = tuple(_as_str_list(value.get("rejected_pair_ids")))
+        if event_index not in (None, ""):
+            return (
+                "trace",
+                dataset_id,
+                str(event_index),
+                str(value.get("status", "")),
+                str(value.get("rejection_reason", "")),
+            )
+        if any((lost_ids, rematched_ids, fallback_ids, rejected_ids)):
+            return (
+                "trace",
+                dataset_id,
+                str(event_index),
+                str(value.get("status", "")),
+                str(value.get("rejection_reason", "")),
+                lost_ids,
+                rematched_ids,
+                fallback_ids,
+                rejected_ids,
+            )
+    else:
+        pair_id = value.get("pair_id", value.get("pair_index", ""))
+        reason = value.get("reason", value.get("rejection_reason", ""))
+        if pair_id not in (None, "") or reason not in (None, ""):
+            return (
+                "pair",
+                key,
+                dataset_id,
+                str(pair_id),
+                str(reason),
+            )
+    return ("json", key, json.dumps(dict(value), sort_keys=True, default=str))
+
+
+def _dynamic_reanchor_trace_fields(report: Mapping[str, object]) -> dict[str, object]:
+    sources: list[Mapping[str, object]] = [report]
+
+    def _append_point_summary(value: object) -> None:
+        if isinstance(value, Mapping):
+            sources.append(dict(value))
+
+    _append_point_summary(report.get("point_match_summary"))
+    _append_point_summary(report.get("last_point_match_summary"))
+    last_residual = report.get("last_residual_eval")
+    if isinstance(last_residual, Mapping):
+        _append_point_summary(last_residual.get("point_match_summary"))
+    residual_trace = _as_mapping_list(report.get("residual_eval_trace"))
+    if residual_trace:
+        _append_point_summary(residual_trace[-1].get("point_match_summary"))
+
+    out: dict[str, object] = {
+        "dynamic_reanchor_policy": DYNAMIC_REANCHOR_POLICY,
+    }
+    for source in sources:
+        policy = source.get("dynamic_reanchor_policy")
+        if policy:
+            out["dynamic_reanchor_policy"] = str(policy)
+            break
+
+    mapping_list_keys = (
+        "dynamic_reanchor_trace",
+        "dynamic_reanchor_rejected_pairs",
+        "dynamic_reanchor_lost_pairs",
+    )
+    id_list_keys = (
+        "lost_pair_ids",
+        "rematched_pair_ids",
+        "fallback_pair_ids",
+        "rejected_pair_ids",
+        "reanchor_rejection_reasons",
+    )
+
+    for key in mapping_list_keys:
+        merged: list[object] = []
+        indexes: dict[tuple[object, ...], int] = {}
+        for source in sources:
+            raw_values = source.get(key)
+            if not isinstance(raw_values, list):
+                continue
+            for item in raw_values:
+                value = dict(item) if isinstance(item, Mapping) else item
+                marker = _dynamic_reanchor_record_key(key, value)
+                existing_index = indexes.get(marker)
+                if existing_index is None:
+                    indexes[marker] = len(merged)
+                    merged.append(value)
+                    continue
+                if _dynamic_reanchor_record_richness(value) > _dynamic_reanchor_record_richness(
+                    merged[existing_index]
+                ):
+                    merged[existing_index] = value
+        out[key] = merged
+
+    for key in id_list_keys:
+        merged_ids: list[str] = []
+        for source in sources:
+            for item in _as_str_list(source.get(key)):
+                if item not in merged_ids:
+                    merged_ids.append(item)
+        out[key] = merged_ids
+
+    out["reanchor_update_rejected"] = bool(out.get("rejected_pair_ids")) or any(
+        bool(source.get("reanchor_update_rejected", False)) for source in sources
+    )
+    out["measured_anchor_reanchor_rejected_count"] = max(
+        [
+            _safe_int(source.get("measured_anchor_reanchor_rejected_count"), default=0)
+            for source in sources
+        ]
+        or [0]
+    )
+    return out
+
+
+def _write_feature_not_run_report(
+    *,
+    output_path: Path,
+    feature: str,
+    candidate: Sequence[str],
+    status: str,
+    state_path: Path,
+    state_hash_before: str,
+    base_parameter_values: Mapping[str, object],
+    failure_reason: str | None = None,
+    skip_reason: str | None = None,
+    caked_guard_failures: Sequence[str] = (),
+    caked_point_reprojection_report_path: Path | None = None,
+) -> dict[str, object]:
+    names = [str(name) for name in candidate]
+    state_hash_after = _state_sha256(state_path)
+    before, after, delta, bounds = _parameter_maps_from_deltas(
+        {},
+        names,
+        base_parameter_values,
+    )
+    guard_failure = failure_reason or skip_reason
+    report: dict[str, object] = {
+        "rung": 7,
+        "rung_name": f"feature_{feature}",
+        "feature": str(feature),
+        "candidate": list(names),
+        "active_params": list(names),
+        "var_names": list(names),
+        "candidate_param_names": list(names),
+        "effective_var_names_seen_by_solver": list(names),
+        "status": str(status),
+        "pass": False,
+        "failure_reason": failure_reason,
+        "skip_reason": skip_reason,
+        "least_squares_called": False,
+        "optimizer_solve_called": False,
+        "real_solve_called": False,
+        "base_parameter_values": dict(base_parameter_values),
+        "parameter_before": before,
+        "parameter_after": after,
+        "parameter_delta": delta,
+        "parameter_bounds": bounds,
+        "state_sha256_before": str(state_hash_before),
+        "state_sha256_after": str(state_hash_after),
+        "state_hash_before": str(state_hash_before),
+        "state_hash_after": str(state_hash_after),
+        "state_hash_unchanged": bool(str(state_hash_before) == str(state_hash_after)),
+        "provider_guard_after_ok": False,
+        "caked_point_reprojection_guard_ok": False,
+        "caked_reprojection_guard_ok": False,
+        "caked_guard_failures": [str(item) for item in caked_guard_failures],
+        "feature_guard_failures": [str(guard_failure)] if guard_failure else [],
+        "all_other_feature_flags_disabled": True,
+        "full_fitter_validated": False,
+        **_feature_flag_payload(feature if status != "skipped" else None),
+    }
+    if str(feature) == "dynamic_reanchor":
+        report.update(_dynamic_reanchor_trace_fields(report))
+    if caked_point_reprojection_report_path is not None:
+        report["caked_point_reprojection_report_path"] = str(
+            Path(caked_point_reprojection_report_path).expanduser().resolve()
+        )
+    _write_json(output_path, report)
+    return report
+
+
+def _finalize_feature_report(
+    report: Mapping[str, object],
+    *,
+    feature: str,
+    candidate: Sequence[str],
+    state_path: Path,
+    state_hash_before: str,
+    timeout_seconds: float,
+    base_parameter_values: Mapping[str, object],
+    provider_after: Mapping[str, object] | None,
+    caked_point_reprojection_report_path: Path,
+) -> dict[str, object]:
+    names = [str(name) for name in candidate]
+    observed_enabled = _observed_enabled_features(report)
+    finalized = dict(report)
+    finalized.setdefault("rung", 7)
+    finalized.setdefault("rung_name", f"feature_{feature}")
+    finalized["feature"] = str(feature)
+    finalized["candidate"] = list(names)
+    finalized["active_params"] = list(names)
+    finalized["var_names"] = _as_str_sequence(finalized.get("var_names")) or list(names)
+    finalized["candidate_param_names"] = _as_str_sequence(finalized.get("candidate_param_names"))
+    finalized["effective_var_names_seen_by_solver"] = _as_str_sequence(
+        finalized.get("effective_var_names_seen_by_solver")
+    )
+    finalized["effective_candidate_param_names_seen_by_solver"] = _as_str_sequence(
+        finalized.get("effective_candidate_param_names_seen_by_solver")
+    )
+    finalized.setdefault("elapsed_s", finalized.get("elapsed_seconds", 0.0))
+    finalized.setdefault("elapsed_seconds", finalized.get("elapsed_s", 0.0))
+    finalized["timeout_s"] = float(timeout_seconds)
+    finalized.setdefault("timeout_seconds", float(timeout_seconds))
+    finalized["state_sha256_before"] = str(
+        finalized.get("state_sha256_before") or state_hash_before
+    )
+    finalized["state_sha256_after"] = str(
+        finalized.get("state_sha256_after") or _state_sha256(Path(state_path))
+    )
+    finalized["state_hash_before"] = finalized["state_sha256_before"]
+    finalized["state_hash_after"] = finalized["state_sha256_after"]
+    finalized["state_hash_unchanged"] = (
+        finalized["state_sha256_before"] == finalized["state_sha256_after"]
+    )
+    finalized["base_parameter_values"] = dict(base_parameter_values)
+    before, after, delta, bounds = _parameter_maps_from_deltas(
+        finalized,
+        names,
+        base_parameter_values,
+    )
+    finalized["parameter_before"] = before
+    finalized["parameter_after"] = after
+    finalized["parameter_delta"] = delta
+    finalized["parameter_bounds"] = bounds
+    provider_after_payload = dict(provider_after or {})
+    provider_after_ok = (
+        bool(provider_after_payload.get("provider_guard_ok", False))
+        and str(provider_after_payload.get("classification", "")) == "point_provider_parity_ok"
+    )
+    finalized["provider_guard_after_ok"] = bool(provider_after_ok)
+    finalized["provider_guard_after"] = provider_after_payload
+    finalized["caked_point_reprojection_guard_ok"] = True
+    finalized["caked_reprojection_guard_ok"] = True
+    finalized["caked_point_reprojection_report_path"] = str(
+        Path(caked_point_reprojection_report_path).expanduser().resolve()
+    )
+    finalized["full_fitter_validated"] = False
+    if str(feature) == "dynamic_reanchor":
+        finalized.update(_dynamic_reanchor_trace_fields(finalized))
+    for key in RUNG2_FIXED_SOURCE_COUNTS:
+        finalized.setdefault(key, None)
+    for key in PROVIDER_MATCH_BOOLS:
+        finalized.setdefault(key, None)
+
+    hidden_features = [name for name in observed_enabled if name != str(feature)]
+    explicit_enabled = _as_str_list(report.get("enabled_features"))
+    finalized["observed_enabled_features"] = list(observed_enabled)
+    finalized["unexpected_enabled_features"] = list(hidden_features)
+    finalized["raw_enabled_features"] = list(explicit_enabled)
+    feature_failures: list[str] = []
+    if explicit_enabled and explicit_enabled != [str(feature)]:
+        feature_failures.append("enabled_features_not_single_feature")
+    if hidden_features:
+        feature_failures.append("hidden_feature_enabled")
+
+    finalized.update(_feature_flag_payload(feature))
+    finalized["all_other_feature_flags_disabled"] = not hidden_features
+
+    if feature_failures:
+        status = str(finalized.get("status", ""))
+        finalized["pass"] = False
+        finalized["failure_reason"] = "unexpected_feature_enabled"
+        if status != "timeout":
+            finalized["status"] = "failed"
+        guard_failures = list(feature_failures)
+        if status == "timeout":
+            if bool(finalized.get("dirty_timeout_abort", False)):
+                guard_failures.append("dirty_timeout_abort")
+            elif _pair_timeout_integrity_dirty(finalized):
+                guard_failures.append("fixed_source_or_pair_integrity_lost")
+            else:
+                guard_failures.append("timeout")
+        elif status == "error":
+            guard_failures.append("solver_exception")
+        finalized["feature_guard_failures"] = guard_failures
+        return finalized
+
+    if str(finalized.get("status", "")) == "timeout":
+        finalized["pass"] = False
+        if bool(finalized.get("dirty_timeout_abort", False)):
+            finalized["failure_reason"] = "dirty_timeout_abort"
+        elif _pair_timeout_integrity_dirty(finalized):
+            finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+        else:
+            finalized["failure_reason"] = "timeout"
+        finalized["feature_guard_failures"] = [str(finalized["failure_reason"])]
+        return finalized
+    if str(finalized.get("status", "")) == "error":
+        finalized["status"] = "failed"
+        finalized["pass"] = False
+        finalized["failure_reason"] = "solver_exception"
+        finalized["feature_guard_failures"] = ["solver_exception"]
+        return finalized
+
+    integrity_failures = _fixed_source_contract_failures(
+        finalized,
+        expected_counts=ONE_PARAM_FIXED_SOURCE_COUNTS,
+        required_bool_keys=PROVIDER_MATCH_BOOLS,
+    )
+    metric_failures = _pair_metric_failures(finalized)
+    bounds_failures = _feature_bounds_failures(finalized)
+    variable_failures: list[str] = []
+    if finalized.get("candidate_param_names") != list(names):
+        variable_failures.append("candidate_param_names_not_base_candidate")
+    if finalized.get("var_names") != list(names):
+        variable_failures.append("var_names_not_base_candidate")
+    if finalized.get("effective_var_names_seen_by_solver") != list(names):
+        variable_failures.append("effective_var_names_seen_by_solver_not_base_candidate")
+    effective_candidate = finalized.get("effective_candidate_param_names_seen_by_solver")
+    if effective_candidate and effective_candidate != list(names):
+        variable_failures.append(
+            "effective_candidate_param_names_seen_by_solver_not_base_candidate"
+        )
+    solve_flag_failures: list[str] = []
+    if bool(finalized.get("least_squares_called", False)) is not True:
+        solve_flag_failures.append("least_squares_not_called")
+    if bool(finalized.get("optimizer_solve_called", False)) is not True:
+        solve_flag_failures.append("optimizer_solve_not_called")
+    if bool(finalized.get("state_hash_unchanged", False)) is not True:
+        solve_flag_failures.append("state_hash_changed")
+    if provider_after_ok is not True:
+        solve_flag_failures.append("provider_guard_after_failed")
+    if bool(finalized.get("caked_point_reprojection_guard_ok", False)) is not True:
+        solve_flag_failures.append("caked_point_reprojection_guard_failed")
+    if str(feature) == "seed_multistart":
+        point_summary = (
+            finalized.get("point_match_summary")
+            if isinstance(finalized.get("point_match_summary"), Mapping)
+            else {}
+        )
+        seed_failure = str(
+            finalized.get("seed_multistart_failure_reason")
+            or point_summary.get("seed_multistart_failure_reason")
+            or ""
+        ).strip()
+        if seed_failure:
+            integrity_failures.append(seed_failure)
+        selected_seed_clean = finalized.get(
+            "selected_seed_clean",
+            point_summary.get("selected_seed_clean"),
+        )
+        if selected_seed_clean is not True:
+            integrity_failures.append("selected_seed_not_clean")
+    full_beam_polish_failures = _full_beam_manual_polish_failures(finalized)
+    if full_beam_polish_failures:
+        integrity_failures.extend(full_beam_polish_failures)
+
+    guard_failures = (
+        feature_failures
+        + variable_failures
+        + integrity_failures
+        + solve_flag_failures
+        + metric_failures
+        + bounds_failures
+    )
+    finalized["feature_guard_failures"] = guard_failures
+    if not guard_failures:
+        finalized["status"] = "ok"
+        finalized["pass"] = True
+        finalized["failure_reason"] = None
+        return finalized
+
+    finalized["status"] = "failed"
+    finalized["pass"] = False
+    if feature_failures:
+        finalized["failure_reason"] = "unexpected_feature_enabled"
+    elif variable_failures:
+        finalized["failure_reason"] = "unexpected_solver_variable_set"
+    elif (
+        str(feature) == "seed_multistart"
+        and "seed_multistart_incompatible_with_fixed_manual_pairs" in integrity_failures
+    ):
+        finalized["failure_reason"] = "seed_multistart_incompatible_with_fixed_manual_pairs"
+    elif "full_beam_polish_incompatible_with_fixed_manual_pairs" in integrity_failures:
+        finalized["failure_reason"] = "full_beam_polish_incompatible_with_fixed_manual_pairs"
+        finalized["diagnosis_classification"] = "fixed_source_or_pair_integrity_lost"
+    elif integrity_failures:
+        finalized["failure_reason"] = "fixed_source_or_pair_integrity_lost"
+    elif "provider_guard_after_failed" in solve_flag_failures:
+        finalized["failure_reason"] = "provider_guard_after_failed"
+    elif "state_hash_changed" in solve_flag_failures:
+        finalized["failure_reason"] = "state_hash_changed"
+    elif "caked_point_reprojection_guard_failed" in solve_flag_failures:
+        finalized["failure_reason"] = "caked_point_reprojection_guard_failed"
+    elif solve_flag_failures:
+        finalized["failure_reason"] = "solve_flag_guard_failed"
+    elif "no_matched_peak_rejection" in metric_failures:
+        finalized["failure_reason"] = "no_matched_pairs"
+    elif any(reason.startswith("non_finite") for reason in metric_failures):
+        finalized["failure_reason"] = "non_finite_residual"
+    elif bounds_failures:
+        finalized["failure_reason"] = "bounds_violation"
+    elif metric_failures:
+        finalized["failure_reason"] = "metric_regression"
+    else:
+        finalized.setdefault("failure_reason", "solver_exception")
+    return finalized
+
+
+def _feature_summary(
+    *,
+    run_dir: Path,
+    state_path: Path,
+    background_index: int,
+    combined_summary_path: Path | None,
+    feature_reports: Sequence[Mapping[str, object]],
+    state_hash_before: str,
+    state_hash_after: str,
+    provider_report_hash: str,
+    rung6_evidence_failures: Sequence[str] = (),
+    caked_guard_failures: Sequence[str] = (),
+    reports: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
+    attempted_reports = [
+        report for report in feature_reports if str(report.get("status", "")) != "skipped"
+    ]
+    passed_reports = [report for report in attempted_reports if bool(report.get("pass", False))]
+    failed_reports = [
+        report for report in attempted_reports if str(report.get("status", "")) == "failed"
+    ]
+    timed_out_reports = [
+        report for report in attempted_reports if str(report.get("status", "")) == "timeout"
+    ]
+    skipped_reports = [
+        report for report in feature_reports if str(report.get("status", "")) == "skipped"
+    ]
+    first_failing_feature = None
+    first_failing_reason = None
+    for report in attempted_reports:
+        if bool(report.get("pass", False)) is not True:
+            first_failing_feature = str(report.get("feature", ""))
+            first_failing_reason = report.get("failure_reason")
+            break
+    if rung6_evidence_failures and not attempted_reports:
+        status = "failed"
+    elif first_failing_feature and not passed_reports:
+        status = "failed"
+    elif first_failing_feature:
+        status = "ok_with_failures"
+    else:
+        status = "ok"
+    rung6_evidence_failed = bool(rung6_evidence_failures and not attempted_reports)
+    if first_failing_feature:
+        recommended_next_action = f"debug_{first_failing_feature}_feature"
+    elif rung6_evidence_failed:
+        recommended_next_action = "debug_rung6_evidence"
+    else:
+        recommended_next_action = "proceed_to_full_candidate_gate_without_baseline"
+    feature_summary = {
+        "rung": 7,
+        "rung_name": "feature_summary",
+        "status": status,
+        "failure_reason": (
+            "rung6_evidence_not_passed"
+            if rung6_evidence_failures and not attempted_reports
+            else first_failing_reason
+        ),
+        "run_dir": str(run_dir),
+        "run_id": Path(run_dir).name,
+        "timestamp": Path(run_dir).name,
+        "state_path": str(Path(state_path).expanduser().resolve()),
+        "background_index": int(background_index),
+        "combined_summary_path": (
+            str(Path(combined_summary_path).expanduser().resolve())
+            if combined_summary_path is not None
+            else None
+        ),
+        "provider_report_hash": str(provider_report_hash),
+        "base_candidate": list(RUNG7_BASE_CANDIDATE),
+        "attempted_features": [str(report.get("feature", "")) for report in attempted_reports],
+        "passed_features": [str(report.get("feature", "")) for report in passed_reports],
+        "failed_features": [str(report.get("feature", "")) for report in failed_reports],
+        "timed_out_features": [str(report.get("feature", "")) for report in timed_out_reports],
+        "skipped_features": [
+            {
+                "feature": str(report.get("feature", "")),
+                "skip_reason": report.get("skip_reason"),
+            }
+            for report in skipped_reports
+        ],
+        "first_failing_feature": first_failing_feature,
+        "best_feature_by_rms": _best_feature_report(feature_reports, "after_rms_px"),
+        "best_feature_by_max_error": _best_feature_report(
+            feature_reports,
+            "after_max_error_px",
+        ),
+        "recommended_next_action": recommended_next_action,
+        "full_fitter_validated": False,
+        "state_sha256_before": str(state_hash_before),
+        "state_sha256_after": str(state_hash_after),
+        "state_hash_before": str(state_hash_before),
+        "state_hash_after": str(state_hash_after),
+        "state_hash_unchanged": bool(str(state_hash_before) == str(state_hash_after)),
+        "provider_guard_after_ok": bool(
+            [
+                report
+                for report in attempted_reports
+                if bool(report.get("least_squares_called", False))
+                or bool(report.get("optimizer_solve_called", False))
+                or bool(report.get("real_solve_called", False))
+            ]
+            and all(
+                bool(report.get("provider_guard_after_ok", False))
+                for report in attempted_reports
+                if bool(report.get("least_squares_called", False))
+                or bool(report.get("optimizer_solve_called", False))
+                or bool(report.get("real_solve_called", False))
+            )
+        ),
+        "rung6_evidence_failures": [str(item) for item in rung6_evidence_failures],
+        "caked_guard_failures": [str(item) for item in caked_guard_failures],
+        "reports": list(reports or []),
+        "feature_flags_disabled": _disabled_feature_flags(),
+        **_disabled_feature_flags(),
+    }
+    evidence_source = next(
+        (
+            report
+            for report in passed_reports
+            if _as_str_list(report.get("candidate")) == list(RUNG7_BASE_CANDIDATE)
+        ),
+        passed_reports[0] if passed_reports else None,
+    )
+    if isinstance(evidence_source, Mapping):
+        for key in (
+            "manual_caked_residual_row_count",
+            "dataset_fit_space_projector_row_count",
+            "invalid_dataset_fit_space_projector_row_count",
+            "analytic_detector_fit_space_row_count",
+            "exact_fit_space_projector_available",
+            "fit_space_projector_kind",
+            "expected_saved_caked_manual_pair_count",
+            "same_manual_pair_ids_before_after",
+            "fixed_source_counters_unchanged",
+            "caked_point_reprojection_guard_ok",
+            "caked_reprojection_guard_ok",
+            "caked_point_reprojection_report_path",
+        ):
+            if key in evidence_source:
+                feature_summary[key] = evidence_source.get(key)
+    return feature_summary
+
+
+def _run_feature_stage(
+    *,
+    state_path: Path,
+    background_index: int,
+    run_dir: Path,
+    context: Mapping[str, object],
+    reports: list[dict[str, object]],
+    state_hash_before: str,
+    max_nfev: int,
+    timeout_seconds: float,
+    provider_report_hash: str,
+    combined_summary_path: Path | None = None,
+    block_summary_path: Path | None = None,
+    caked_point_reprojection_report_path: Path | None = None,
+    feature_filter: str | None = None,
+    use_subprocess: bool = False,
+    diagnostic_logging: bool = False,
+) -> dict[str, object]:
+    feature_names = list(FEATURE_RUNS)
+    if feature_filter:
+        requested_feature = str(feature_filter).strip().lower()
+        if requested_feature not in FEATURE_RUNS:
+            raise ValueError(f"unknown Rung 7 feature: {feature_filter}")
+        feature_names = [requested_feature]
+    combined_summary_override: dict[str, object] | None = None
+    effective_combined_summary_path = (
+        Path(combined_summary_path).expanduser().resolve()
+        if combined_summary_path is not None
+        else None
+    )
+    if effective_combined_summary_path is None:
+        with _timed_report_window("6", "combined_summary"):
+            combined_summary_override = _run_combined_stage(
+                state_path=state_path,
+                background_index=int(background_index),
+                run_dir=run_dir,
+                context=context,
+                reports=reports,
+                state_hash_before=state_hash_before,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                provider_report_hash=provider_report_hash,
+                block_summary_path=block_summary_path,
+                caked_point_reprojection_report_path=caked_point_reprojection_report_path,
+                use_subprocess=bool(use_subprocess),
+                diagnostic_logging=bool(diagnostic_logging),
+            )
+        effective_combined_summary_path = run_dir / "rung_06_combined_summary.json"
+
+    combined_summary, c2_report, caked_report_path, evidence_failures = (
+        _validate_rung6_summary_for_features(
+            effective_combined_summary_path,
+            state_path=state_path,
+            background_index=int(background_index),
+            current_hash=state_hash_before,
+            current_provider_report_hash=provider_report_hash,
+            summary_override=combined_summary_override,
+        )
+    )
+    del combined_summary, c2_report
+    feature_reports: list[dict[str, object]] = []
+    base_fit_params = _base_fit_parameters_from_context(context)
+    base_parameter_values = {
+        str(name): base_fit_params.get(str(name)) for name in RUNG7_BASE_CANDIDATE
+    }
+    if evidence_failures:
+        state_hash_after = _state_sha256(state_path)
+        summary = _feature_summary(
+            run_dir=run_dir,
+            state_path=state_path,
+            background_index=int(background_index),
+            combined_summary_path=effective_combined_summary_path,
+            feature_reports=[],
+            state_hash_before=state_hash_before,
+            state_hash_after=state_hash_after,
+            provider_report_hash=provider_report_hash,
+            rung6_evidence_failures=evidence_failures,
+            reports=reports,
+        )
+        summary["report_path"] = str(run_dir / "rung_07_feature_summary.json")
+        _write_json(run_dir / "rung_07_feature_summary.json", summary)
+        return summary
+
+    skip_remaining_reason: str | None = None
+    first_caked_failures: list[str] = []
+    for feature in feature_names:
+        output_path = _rung_path(run_dir, 7, f"feature_{feature}")
+        if skip_remaining_reason:
+            with _timed_report_window("7", f"feature_{feature}"):
+                report = _write_feature_not_run_report(
+                    output_path=output_path,
+                    feature=feature,
+                    candidate=RUNG7_BASE_CANDIDATE,
+                    status="skipped",
+                    state_path=state_path,
+                    state_hash_before=state_hash_before,
+                    base_parameter_values=base_parameter_values,
+                    skip_reason=skip_remaining_reason,
+                    caked_point_reprojection_report_path=caked_report_path,
+                )
+            reports.append(report)
+            feature_reports.append(report)
+            continue
+
+        caked_failures: list[str] = []
+        if caked_report_path is None:
+            caked_failures = ["missing_caked_point_reprojection_report"]
+        else:
+            caked_report = _read_json(caked_report_path)
+            caked_failures = (
+                _caked_reprojection_guard_failures(
+                    caked_report,
+                    current_hash=state_hash_before,
+                    background_index=int(background_index),
+                )
+                if caked_report
+                else ["caked_point_reprojection_report_unreadable"]
+            )
+        if caked_failures:
+            first_caked_failures = list(caked_failures)
+            with _timed_report_window("7", f"feature_{feature}"):
+                report = _write_feature_not_run_report(
+                    output_path=output_path,
+                    feature=feature,
+                    candidate=RUNG7_BASE_CANDIDATE,
+                    status="failed",
+                    state_path=state_path,
+                    state_hash_before=state_hash_before,
+                    base_parameter_values=base_parameter_values,
+                    failure_reason="caked_point_reprojection_guard_failed",
+                    caked_guard_failures=caked_failures,
+                    caked_point_reprojection_report_path=caked_report_path,
+                )
+            reports.append(report)
+            feature_reports.append(report)
+            skip_remaining_reason = "prior_feature_failed"
+            continue
+
+        current_hash = _state_sha256(state_path)
+        if current_hash != state_hash_before:
+            with _timed_report_window("7", f"feature_{feature}"):
+                report = _write_feature_not_run_report(
+                    output_path=output_path,
+                    feature=feature,
+                    candidate=RUNG7_BASE_CANDIDATE,
+                    status="failed",
+                    state_path=state_path,
+                    state_hash_before=state_hash_before,
+                    base_parameter_values=base_parameter_values,
+                    failure_reason="fixed_source_or_pair_integrity_lost",
+                    caked_point_reprojection_report_path=caked_report_path,
+                )
+            reports.append(report)
+            feature_reports.append(report)
+            skip_remaining_reason = "prior_feature_failed"
+            continue
+
+        with _timed_report_window("7", f"feature_{feature}"):
+            report = _run_solver_rung_with_timeout(
+                state_path=state_path,
+                background_index=int(background_index),
+                active_names=RUNG7_BASE_CANDIDATE,
+                output_path=output_path,
+                max_nfev=int(max_nfev),
+                timeout_seconds=float(timeout_seconds),
+                rung=7,
+                rung_name=f"feature_{feature}",
+                feature=feature,
+                state_hash_before=state_hash_before,
+                use_subprocess=bool(use_subprocess),
+                context=_context_with_base_fit_parameters(context, base_fit_params),
+                diagnostic_logging=bool(diagnostic_logging),
+                dirty_timeout_on_timeout=not bool(use_subprocess),
+            )
+            provider_after: dict[str, object] | None = None
+            if not bool(report.get("dirty_timeout_abort", False)):
+                with _solver_debug_logging_scope(diagnostic_logging):
+                    provider_after = _run_provider_guard_report(
+                        state_path=state_path,
+                        background_index=int(background_index),
+                        rung=7,
+                        rung_name=f"feature_{feature}_provider_guard_after",
+                    )
+            report = _finalize_feature_report(
+                report,
+                feature=feature,
+                candidate=RUNG7_BASE_CANDIDATE,
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                timeout_seconds=float(timeout_seconds),
+                base_parameter_values=base_parameter_values,
+                provider_after=provider_after,
+                caked_point_reprojection_report_path=caked_report_path,
+            )
+            _write_json(output_path, report)
+        reports.append(report)
+        feature_reports.append(report)
+        if bool(report.get("pass", False)) is not True:
+            skip_remaining_reason = "prior_feature_failed"
+
+    state_hash_after = _state_sha256(state_path)
+    summary = _feature_summary(
+        run_dir=run_dir,
+        state_path=state_path,
+        background_index=int(background_index),
+        combined_summary_path=effective_combined_summary_path,
+        feature_reports=feature_reports,
+        state_hash_before=state_hash_before,
+        state_hash_after=state_hash_after,
+        provider_report_hash=provider_report_hash,
+        caked_guard_failures=first_caked_failures,
+        reports=reports,
+    )
+    summary["report_path"] = str(run_dir / "rung_07_feature_summary.json")
+    _write_json(run_dir / "rung_07_feature_summary.json", summary)
+    return summary
+
+
 def _run_block_stage(
     *,
     state_path: Path,
@@ -5155,9 +8122,8 @@ def _run_block_stage(
             )
         one_param_summary_path = run_dir / "rung_03_one_param_summary.json"
         current_active_params, _skipped = _active_params_from_sensitivity(sensitivity, context)
-        if (
-            "a" in set(current_active_params)
-            and "a" not in set(_as_str_list(one_param_summary.get("passed_params")))
+        if "a" in set(current_active_params) and "a" not in set(
+            _as_str_list(one_param_summary.get("passed_params"))
         ):
             with _timed_report_window("3A", "a_diagnosis"):
                 with _suppress_timing_collection():
@@ -5169,10 +8135,11 @@ def _run_block_stage(
                         use_subprocess=bool(use_subprocess),
                         diagnostic_logging=bool(diagnostic_logging),
                     )
+                one_param_diagnosis_summary_path = (
+                    run_dir / "rung_03a_a_diagnosis" / "variant_summary.json"
+                )
+                _write_json(one_param_diagnosis_summary_path, diagnosis)
             reports.append(diagnosis)
-            one_param_diagnosis_summary_path = (
-                run_dir / "rung_03a_a_diagnosis" / "variant_summary.json"
-            )
         elif one_param_diagnosis_summary_path is None:
             one_param_diagnosis_summary_path = None
 
@@ -5184,10 +8151,11 @@ def _run_block_stage(
                     output_root=run_dir,
                     run_id="rung_03b_caked_point_reprojection",
                 )
+                report_path = caked_report.get("report_path")
+                if report_path:
+                    caked_report_path = Path(str(report_path))
+                    _write_json(caked_report_path, caked_report)
         reports.append(caked_report)
-        report_path = caked_report.get("report_path")
-        if report_path:
-            caked_report_path = Path(str(report_path))
 
         with _timed_report_window("4", "pair_summary"):
             pair_summary = _run_pair_stage(
@@ -5208,18 +8176,16 @@ def _run_block_stage(
                 use_subprocess=bool(use_subprocess),
                 diagnostic_logging=bool(diagnostic_logging),
             )
-        local_usability_failures.extend(
-            _as_str_list(pair_summary.get("local_usability_failures"))
-        )
+        local_usability_failures.extend(_as_str_list(pair_summary.get("local_usability_failures")))
         pair_fatal_failures = _as_str_list(pair_summary.get("fatal_evidence_failures"))
         if pair_fatal_failures:
             pair_failure_refs = [f"pair:{failure}" for failure in pair_fatal_failures]
             evidence_failures.extend(pair_failure_refs)
             fatal_evidence_failures.extend(pair_failure_refs)
-        elif (
-            str(pair_summary.get("status", "")) not in {"ok", "ok_with_failures"}
-            and _passed_pair_keys(pair_summary)
-        ):
+        elif str(pair_summary.get("status", "")) not in {
+            "ok",
+            "ok_with_failures",
+        } and _passed_pair_keys(pair_summary):
             evidence_failures.append("pair:pair_summary_status_not_usable")
             fatal_evidence_failures.append("pair:pair_summary_status_not_usable")
 
@@ -5388,10 +8354,9 @@ def _run_block_stage(
             _write_json(output_path, report)
         reports.append(report)
         block_reports.append(report)
-        timeout_integrity_dirty = (
-            str(report.get("status", "")) == "timeout"
-            and _pair_timeout_integrity_dirty(report)
-        )
+        timeout_integrity_dirty = str(
+            report.get("status", "")
+        ) == "timeout" and _pair_timeout_integrity_dirty(report)
         if bool(report.get("dirty_timeout_abort", False)) or timeout_integrity_dirty:
             dirty_abort = True
             skip_reason = (
@@ -5473,7 +8438,9 @@ def _run_block_stage(
     return summary
 
 
-def _groups_for_cumulative_rungs(passed_params: Sequence[str], theta_name: str) -> list[tuple[str, list[str]]]:
+def _groups_for_cumulative_rungs(
+    passed_params: Sequence[str], theta_name: str
+) -> list[tuple[str, list[str]]]:
     passed = set(str(name) for name in passed_params)
     groups: list[tuple[str, list[str]]] = []
     current: list[str] = []
@@ -5509,6 +8476,9 @@ def run_ladder(
     one_param_diagnosis_summary: Path | None = None,
     caked_point_reprojection_report: Path | None = None,
     pair_summary: Path | None = None,
+    block_summary: Path | None = None,
+    combined_summary: Path | None = None,
+    feature: str | None = None,
     timing_report: Path | None = None,
     use_subprocess: bool = False,
     diagnostic_logging: bool = False,
@@ -5528,11 +8498,10 @@ def run_ladder(
             one_param_summary=one_param_summary,
             pair_summary=pair_summary,
             caked_point_reprojection_report=caked_point_reprojection_report,
+            combined_summary=combined_summary,
         ),
     )
-    collector_token = (
-        _ACTIVE_TIMING_COLLECTOR.set(collector) if collector_owned else None
-    )
+    collector_token = _ACTIVE_TIMING_COLLECTOR.set(collector) if collector_owned else None
     timing_report_path = (
         Path(timing_report).expanduser().resolve() if timing_report is not None else None
     )
@@ -5705,7 +8674,7 @@ def run_ladder(
             )
         return _finish(result)
 
-    if max_rung_name in {"block", "blocks"}:
+    if max_rung_name in {"block", "blocks", "full"}:
         result = _run_block_stage(
             state_path=state_path,
             background_index=int(background_index),
@@ -5722,6 +8691,44 @@ def run_ladder(
             one_param_summary_path=one_param_summary,
             one_param_diagnosis_summary_path=one_param_diagnosis_summary,
             caked_point_reprojection_report_path=caked_point_reprojection_report,
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
+        )
+        return _finish(result)
+
+    if max_rung_name in {"combined", "selected"}:
+        result = _run_combined_stage(
+            state_path=state_path,
+            background_index=int(background_index),
+            run_dir=run_dir,
+            context=context,
+            reports=reports,
+            state_hash_before=state_hash_before,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            provider_report_hash=provider_report_hash,
+            block_summary_path=block_summary,
+            caked_point_reprojection_report_path=caked_point_reprojection_report,
+            use_subprocess=bool(use_subprocess),
+            diagnostic_logging=bool(diagnostic_logging),
+        )
+        return _finish(result)
+
+    if max_rung_name in {"feature", "features"}:
+        result = _run_feature_stage(
+            state_path=state_path,
+            background_index=int(background_index),
+            run_dir=run_dir,
+            context=context,
+            reports=reports,
+            state_hash_before=state_hash_before,
+            max_nfev=int(max_nfev),
+            timeout_seconds=float(timeout_seconds),
+            provider_report_hash=provider_report_hash,
+            combined_summary_path=combined_summary,
+            block_summary_path=block_summary,
+            caked_point_reprojection_report_path=caked_point_reprojection_report,
+            feature_filter=feature,
             use_subprocess=bool(use_subprocess),
             diagnostic_logging=bool(diagnostic_logging),
         )
@@ -5755,12 +8762,13 @@ def run_ladder(
     for name in params_to_run:
         if name not in sensitive and not (center_only and name in CENTER_PARAMS):
             continue
+        output_path = _rung_path(run_dir, 3, f"one_param_{name}")
         with _timed_report_window("3", f"one_param_{name}"):
             report = _run_solver_rung_with_timeout(
                 state_path=state_path,
                 background_index=int(background_index),
                 active_names=[name],
-                output_path=_rung_path(run_dir, 3, f"one_param_{name}"),
+                output_path=output_path,
                 max_nfev=int(max_nfev),
                 timeout_seconds=float(timeout_seconds),
                 rung=3,
@@ -5771,6 +8779,14 @@ def run_ladder(
                 diagnostic_logging=bool(diagnostic_logging),
                 dirty_timeout_on_timeout=not bool(use_subprocess),
             )
+            report = _finalize_one_param_report(
+                report,
+                param_name=name,
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                timeout_seconds=float(timeout_seconds),
+            )
+            _write_json(output_path, report)
         reports.append(report)
         one_param_reports.append(report)
         if not bool(report.get("pass", False)):
@@ -5792,13 +8808,91 @@ def run_ladder(
         if center_only
         else _groups_for_pair_rungs(passed_params, theta_name)
     )
+    cumulative_groups = (
+        [] if center_only else list(_groups_for_cumulative_rungs(passed_params, theta_name))
+    )
+    caked_report_path: Path | None = (
+        Path(caked_point_reprojection_report).expanduser().resolve()
+        if caked_point_reprojection_report is not None
+        else None
+    )
+    caked_failures: list[str] = []
+    caked_required = any(
+        _pair_requires_caked_reprojection(names) for _group_name, names in pair_groups
+    ) or any(_block_requires_caked_reprojection(names) for _group_name, names in cumulative_groups)
+    if caked_required:
+        if caked_report_path is None:
+            with _solver_debug_logging_scope(diagnostic_logging):
+                with _timed_report_window("3B", "caked_point_reprojection"):
+                    caked_report = _run_caked_point_reprojection_guard(
+                        state_path=state_path,
+                        background_index=int(background_index),
+                        output_root=run_dir,
+                        run_id="rung_03b_caked_point_reprojection",
+                    )
+                    report_path = caked_report.get("report_path")
+                    if report_path:
+                        caked_report_path = Path(str(report_path)).expanduser().resolve()
+                        _write_json(caked_report_path, caked_report)
+            reports.append(caked_report)
+        caked_report_payload = (
+            _read_json(caked_report_path) if caked_report_path is not None else {}
+        )
+        caked_failures = (
+            _caked_reprojection_guard_failures(
+                caked_report_payload,
+                current_hash=state_hash_before,
+                background_index=int(background_index),
+            )
+            if caked_report_payload
+            else ["missing_caked_point_reprojection_report"]
+        )
     for group_name, names in pair_groups:
+        output_path = _rung_path(run_dir, 4, f"pair_{group_name}")
+        base_parameter_values = _base_parameter_values_for_pair(context, names)
+        if _pair_requires_caked_reprojection(names) and caked_failures:
+            report = {
+                "rung": 4,
+                "rung_name": f"pair_{group_name}",
+                "pair_name": str(group_name),
+                "pair": list(names),
+                "status": "failed",
+                "pass": False,
+                "failure_reason": "caked_point_reprojection_guard_failed",
+                "pair_guard_failures": list(caked_failures),
+                "active_params": list(names),
+                "var_names": list(names),
+                "candidate_param_names": list(names),
+                "effective_var_names_seen_by_solver": [],
+                "least_squares_called": False,
+                "optimizer_solve_called": False,
+                "real_solve_called": False,
+                "base_parameter_values": base_parameter_values,
+                "state_sha256_before": state_hash_before,
+                "state_sha256_after": _state_sha256(state_path),
+                "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
+                "caked_point_reprojection_report_path": (
+                    str(caked_report_path) if caked_report_path is not None else None
+                ),
+            }
+            _write_json(output_path, report)
+            reports.append(report)
+            result = {
+                "status": "stopped",
+                "reason": "pair_failed",
+                "failed_group": str(group_name),
+                "run_dir": str(run_dir),
+                "reports": reports,
+                "state_sha256_before": state_hash_before,
+                "state_sha256_after": _state_sha256(state_path),
+            }
+            return _finish(result)
         with _timed_report_window("4", f"pair_{group_name}"):
             report = _run_solver_rung_with_timeout(
                 state_path=state_path,
                 background_index=int(background_index),
                 active_names=names,
-                output_path=_rung_path(run_dir, 4, f"pair_{group_name}"),
+                output_path=output_path,
                 max_nfev=int(max_nfev),
                 timeout_seconds=float(timeout_seconds),
                 rung=4,
@@ -5809,6 +8903,21 @@ def run_ladder(
                 diagnostic_logging=bool(diagnostic_logging),
                 dirty_timeout_on_timeout=not bool(use_subprocess),
             )
+            report = _finalize_pair_report(
+                report,
+                pair_name=str(group_name),
+                pair=names,
+                state_path=state_path,
+                state_hash_before=state_hash_before,
+                timeout_seconds=float(timeout_seconds),
+                base_parameter_values=base_parameter_values,
+            )
+            if _pair_requires_caked_reprojection(names):
+                report["caked_point_reprojection_guard_ok"] = not caked_failures
+                report["caked_point_reprojection_report_path"] = (
+                    str(caked_report_path) if caked_report_path is not None else None
+                )
+            _write_json(output_path, report)
         reports.append(report)
         if not bool(report.get("pass", False)):
             result = {
@@ -5824,22 +8933,74 @@ def run_ladder(
 
     final_selected_params = list(pair_groups[-1][1]) if pair_groups else list(passed_params)
     if not center_only:
-        for group_name, names in _groups_for_cumulative_rungs(passed_params, theta_name):
-            report = _run_solver_rung_with_timeout(
-                state_path=state_path,
-                background_index=int(background_index),
-                active_names=names,
-                output_path=_rung_path(run_dir, 5, f"block_{group_name}"),
-                max_nfev=int(max_nfev),
-                timeout_seconds=float(timeout_seconds),
-                rung=5,
-                rung_name=f"block_{group_name}",
-                state_hash_before=state_hash_before,
-                use_subprocess=bool(use_subprocess),
-                context=context,
-                diagnostic_logging=bool(diagnostic_logging),
-                dirty_timeout_on_timeout=not bool(use_subprocess),
-            )
+        for group_name, names in cumulative_groups:
+            output_path = _rung_path(run_dir, 5, f"block_{group_name}")
+            base_parameter_values = _base_parameter_values_for_pair(context, names)
+            if _block_requires_caked_reprojection(names) and caked_failures:
+                with _timed_report_window("5", f"block_{group_name}"):
+                    report = _write_caked_failed_block_report(
+                        output_path=output_path,
+                        block_name=str(group_name),
+                        block=names,
+                        caked_failures=caked_failures,
+                        caked_report_path=caked_report_path,
+                        state_hash_before=state_hash_before,
+                        state_path=state_path,
+                        base_parameter_values=base_parameter_values,
+                    )
+                reports.append(report)
+                result = {
+                    "status": "stopped",
+                    "reason": "cumulative_block_failed",
+                    "failed_group": str(group_name),
+                    "run_dir": str(run_dir),
+                    "reports": reports,
+                    "state_sha256_before": state_hash_before,
+                    "state_sha256_after": _state_sha256(state_path),
+                }
+                return _finish(result)
+            with _timed_report_window("5", f"block_{group_name}"):
+                report = _run_solver_rung_with_timeout(
+                    state_path=state_path,
+                    background_index=int(background_index),
+                    active_names=names,
+                    output_path=output_path,
+                    max_nfev=int(max_nfev),
+                    timeout_seconds=float(timeout_seconds),
+                    rung=5,
+                    rung_name=f"block_{group_name}",
+                    state_hash_before=state_hash_before,
+                    use_subprocess=bool(use_subprocess),
+                    context=context,
+                    diagnostic_logging=bool(diagnostic_logging),
+                    dirty_timeout_on_timeout=not bool(use_subprocess),
+                )
+                provider_after: dict[str, object] | None = None
+                if not bool(report.get("dirty_timeout_abort", False)):
+                    with _solver_debug_logging_scope(diagnostic_logging):
+                        provider_after = _run_provider_guard_report(
+                            state_path=state_path,
+                            background_index=int(background_index),
+                            rung=5,
+                            rung_name=f"block_{group_name}_provider_guard_after",
+                        )
+                report = _finalize_block_report(
+                    report,
+                    block_name=str(group_name),
+                    block=names,
+                    state_path=state_path,
+                    state_hash_before=state_hash_before,
+                    timeout_seconds=float(timeout_seconds),
+                    base_parameter_values=base_parameter_values,
+                    provider_after=provider_after,
+                    caked_point_reprojection_guard_ok=(
+                        not caked_failures if _block_requires_caked_reprojection(names) else None
+                    ),
+                    caked_point_reprojection_report_path=(
+                        caked_report_path if _block_requires_caked_reprojection(names) else None
+                    ),
+                )
+                _write_json(output_path, report)
             reports.append(report)
             if not bool(report.get("pass", False)):
                 result = {
@@ -5853,37 +9014,6 @@ def run_ladder(
                 }
                 return _finish(result)
             final_selected_params = list(names)
-
-    if max_rung_name == "features" and final_selected_params:
-        for feature in FEATURE_RUNS:
-            report = _run_solver_rung_with_timeout(
-                state_path=state_path,
-                background_index=int(background_index),
-                active_names=final_selected_params,
-                output_path=_rung_path(run_dir, 6, f"feature_{feature}"),
-                max_nfev=int(max_nfev),
-                timeout_seconds=float(timeout_seconds),
-                rung=6,
-                rung_name=f"feature_{feature}",
-                feature=feature,
-                state_hash_before=state_hash_before,
-                use_subprocess=bool(use_subprocess),
-                context=context,
-                diagnostic_logging=bool(diagnostic_logging),
-                dirty_timeout_on_timeout=not bool(use_subprocess),
-            )
-            reports.append(report)
-            if not bool(report.get("pass", False)):
-                result = {
-                    "status": "stopped",
-                    "reason": "feature_failed",
-                    "failed_feature": str(feature),
-                    "run_dir": str(run_dir),
-                    "reports": reports,
-                    "state_sha256_before": state_hash_before,
-                    "state_sha256_after": _state_sha256(state_path),
-                }
-                return _finish(result)
 
     result = {
         "status": "pass",
@@ -5914,7 +9044,10 @@ def _variant_can_continue(report: Mapping[str, object]) -> bool:
         return False
     if bool(report.get("state_hash_unchanged", False)) is not True:
         return False
-    if str(report.get("status", "")) == "timeout" and report.get("child_process_killed_cleanly") is not True:
+    if (
+        str(report.get("status", "")) == "timeout"
+        and report.get("child_process_killed_cleanly") is not True
+    ):
         return False
     return True
 
@@ -5941,9 +9074,7 @@ def _variant_stop_reason(
     ):
         return "fixed_source_or_pair_integrity_lost"
     result_reason = str(result.get("failure_reason") or result.get("reason") or "")
-    single_reason = str(
-        single_report.get("failure_reason") or single_report.get("reason") or ""
-    )
+    single_reason = str(single_report.get("failure_reason") or single_report.get("reason") or "")
     reason = result_reason or single_reason
     if reason in {
         "filtered_param_not_active",
@@ -5953,11 +9084,9 @@ def _variant_stop_reason(
         "no_active_params",
     }:
         return reason
-    if (
-        not single_report.get("param_name")
-        and str(result.get("status", single_report.get("status", "")))
-        in {"failed", "aborted"}
-    ):
+    if not single_report.get("param_name") and str(
+        result.get("status", single_report.get("status", ""))
+    ) in {"failed", "aborted"}:
         return reason or str(result.get("status") or single_report.get("status"))
     return None
 
@@ -6007,8 +9136,7 @@ def run_one_param_diagnosis_variants(
     summary = {
         "status": (
             "failed"
-            if stopped_reason
-            and stopped_reason != "variant_c_conditions_not_met"
+            if stopped_reason and stopped_reason != "variant_c_conditions_not_met"
             else "ok"
         ),
         "failure_reason": stopped_reason,
@@ -6063,6 +9191,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "pairs",
             "block",
             "blocks",
+            "combined",
+            "selected",
+            "feature",
             "center",
             "full",
             "features",
@@ -6092,6 +9223,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pair-summary",
         help="Debug-only Rung 4 pair summary JSON override for block rungs.",
+    )
+    parser.add_argument(
+        "--block-summary",
+        help="Required Rung 5 block summary JSON for selected combined Rung 6.",
+    )
+    parser.add_argument(
+        "--combined-summary",
+        help="Passed Rung 6 combined summary JSON for Rung 7 feature probes.",
     )
     parser.add_argument(
         "--run-one-param-variants",
@@ -6127,7 +9266,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--active-params-json", help=argparse.SUPPRESS)
     parser.add_argument("--rung-number", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--rung-name", help=argparse.SUPPRESS)
-    parser.add_argument("--feature", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--feature",
+        help="Run only one Rung 7 feature probe, e.g. dynamic_reanchor.",
+    )
     return parser
 
 
@@ -6138,6 +9280,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _worker_main(args)
     if not args.output_root:
         parser.error("--output-root is required.")
+    max_rung_name = str(args.max_rung).strip().lower()
+    if max_rung_name in {"combined", "selected"} and not args.block_summary:
+        parser.error("--block-summary is required when --max-rung is combined or selected.")
+    if max_rung_name in {"feature", "features"} and not (
+        args.combined_summary or args.block_summary
+    ):
+        parser.error(
+            "--combined-summary or --block-summary is required when --max-rung is feature/features."
+        )
+    if args.feature:
+        requested_feature = str(args.feature).strip().lower()
+        if requested_feature not in FEATURE_RUNS:
+            parser.error(f"--feature must be one of: {', '.join(FEATURE_RUNS)}")
+        if max_rung_name not in {"feature", "features"}:
+            parser.error("--feature is only valid with --max-rung feature/features.")
     if bool(getattr(args, "run_one_param_variants", False)):
         result = run_one_param_diagnosis_variants(
             state_path=Path(args.state),
@@ -6158,13 +9315,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             timestamp=str(args.timestamp or "") or None,
             sensitivity_report=Path(args.sensitivity_report) if args.sensitivity_report else None,
             one_param_filter=str(args.one_param_filter or "") or None,
-            one_param_summary=(
-                Path(args.one_param_summary) if args.one_param_summary else None
-            ),
+            one_param_summary=(Path(args.one_param_summary) if args.one_param_summary else None),
             one_param_diagnosis_summary=(
-                Path(args.one_param_diagnosis_summary)
-                if args.one_param_diagnosis_summary
-                else None
+                Path(args.one_param_diagnosis_summary) if args.one_param_diagnosis_summary else None
             ),
             caked_point_reprojection_report=(
                 Path(args.caked_point_reprojection_report)
@@ -6172,6 +9325,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else None
             ),
             pair_summary=Path(args.pair_summary) if args.pair_summary else None,
+            block_summary=Path(args.block_summary) if args.block_summary else None,
+            combined_summary=(Path(args.combined_summary) if args.combined_summary else None),
+            feature=str(args.feature or "").strip().lower() or None,
             timing_report=Path(args.timing_report) if args.timing_report else None,
             use_subprocess=bool(args.use_subprocess),
             diagnostic_logging=bool(args.diagnostic_logging),
@@ -6193,7 +9349,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         timing_summary = _read_json(Path(str(timing_summary_path)))
         if timing_summary:
             print(_format_timing_table(timing_summary))
-    return 0 if str(result.get("status")) in {"pass", "ok", "ok_with_failures", "stopped", "aborted"} else 1
+    return 0 if str(result.get("status")) in {"pass", "ok", "ok_with_failures", "stopped"} else 1
 
 
 if __name__ == "__main__":

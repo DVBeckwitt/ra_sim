@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 DISPLAY_ROTATE_K = -1
 SIM_DISPLAY_ROTATE_K = 0
+HEADLESS_GEOMETRY_CAKED_RADIAL_BINS = 1000
+HEADLESS_GEOMETRY_CAKED_AZIMUTH_BINS = 720
 
 
 @dataclass(frozen=True)
@@ -178,6 +180,13 @@ def _load_fitting_runtime():
 
 
 @lru_cache(maxsize=1)
+def _load_exact_cake_portable_module():
+    from ra_sim.simulation import exact_cake_portable
+
+    return exact_cake_portable
+
+
+@lru_cache(maxsize=1)
 def _load_simulation_diffraction():
     from ra_sim.simulation import diffraction
 
@@ -277,6 +286,92 @@ def _coerce_bool(value: object, default: bool) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return bool(default)
+
+
+def _headless_geometry_fit_center(params: Mapping[str, object]) -> tuple[float, float] | None:
+    center_value = params.get("center")
+    if (
+        isinstance(center_value, Sequence)
+        and not isinstance(center_value, (str, bytes))
+        and len(center_value) >= 2
+    ):
+        try:
+            center_row = float(center_value[0])
+            center_col = float(center_value[1])
+        except Exception:
+            center_row = center_col = float("nan")
+        if np.isfinite(center_row) and np.isfinite(center_col):
+            return float(center_row), float(center_col)
+    try:
+        center_row = float(params.get("center_x", np.nan))
+        center_col = float(params.get("center_y", np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(center_row) and np.isfinite(center_col)):
+        return None
+    return float(center_row), float(center_col)
+
+
+def _build_headless_geometry_fit_caked_view_payload(
+    detector_image: object,
+    *,
+    params: Mapping[str, object],
+    pixel_size_m: float,
+    npt_rad: int = HEADLESS_GEOMETRY_CAKED_RADIAL_BINS,
+    npt_azim: int = HEADLESS_GEOMETRY_CAKED_AZIMUTH_BINS,
+) -> dict[str, object] | None:
+    """Build the exact caked view/projector payload used by manual caked fits."""
+
+    image = np.asarray(detector_image, dtype=np.float64)
+    if image.ndim != 2:
+        return None
+    detector_shape = tuple(int(v) for v in image.shape[:2])
+    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return None
+    center = _headless_geometry_fit_center(params)
+    if center is None:
+        return None
+    try:
+        distance_m = float(params.get("corto_detector", np.nan))
+        pixel_size = float(pixel_size_m)
+        wavelength_m = float(params.get("lambda", np.nan)) * 1.0e-10
+    except Exception:
+        return None
+    if not (
+        np.isfinite(distance_m)
+        and distance_m > 0.0
+        and np.isfinite(pixel_size)
+        and pixel_size > 0.0
+    ):
+        return None
+
+    exact_cake = _load_exact_cake_portable_module()
+    try:
+        ai = exact_cake.FastAzimuthalIntegrator(
+            dist=float(distance_m),
+            poni1=float(center[0]) * float(pixel_size),
+            poni2=float(center[1]) * float(pixel_size),
+            rot1=0.0,
+            rot2=0.0,
+            rot3=0.0,
+            wavelength=float(wavelength_m) if np.isfinite(wavelength_m) else None,
+            pixel1=float(pixel_size),
+            pixel2=float(pixel_size),
+        )
+    except Exception:
+        return None
+    payload = gui_geometry_fit.build_geometry_fit_exact_caked_view_payload(
+        image,
+        ai=ai,
+        detector_shape=detector_shape,
+        npt_rad=int(max(2, npt_rad)),
+        npt_azim=int(max(2, npt_azim)),
+    )
+    if not isinstance(payload, dict):
+        return None
+    payload["ai"] = ai
+    payload["background_image"] = np.asarray(payload.get("background"), dtype=np.float64)
+    return payload
 
 
 def _ensure_triplet(raw_value: object, fallback: list[float]) -> list[float]:
@@ -1550,13 +1645,278 @@ def run_headless_geometry_fit(
             return None, None
         return float(col_val), float(row_val)
 
+    caked_views_by_background: dict[int, dict[str, object]] = {}
+
+    def _manual_current_background_uses_caked_space() -> bool:
+        try:
+            background_idx = int(background_state.current_background_index)
+        except Exception:
+            return False
+        return gui_geometry_fit.geometry_manual_pairs_use_caked_fit_space(
+            _pairs_for_index(background_idx)
+        )
+
+    def _headless_geometry_fit_caked_payload_signature(
+        background_idx: int,
+        detector_shape: Sequence[object],
+        params_local: Mapping[str, object],
+    ) -> tuple[object, ...]:
+        center = _headless_geometry_fit_center(params_local)
+        center_signature = (
+            _signature_numeric(center[0]) if center is not None else None,
+            _signature_numeric(center[1]) if center is not None else None,
+        )
+        try:
+            source_signature = _source_snapshot_signature_for_background(
+                int(background_idx),
+                dict(params_local),
+            )
+        except Exception:
+            source_signature = None
+        return (
+            "headless_exact_caked_view",
+            int(background_idx),
+            tuple(int(v) for v in tuple(detector_shape)[:2]),
+            int(HEADLESS_GEOMETRY_CAKED_RADIAL_BINS),
+            int(HEADLESS_GEOMETRY_CAKED_AZIMUTH_BINS),
+            "caked",
+            _signature_numeric(params_local.get("corto_detector")),
+            _signature_numeric(params_local.get("lambda")),
+            center_signature,
+            _signature_numeric(defaults.pixel_size_m),
+            bool(background_state.backend_flip_x),
+            bool(background_state.backend_flip_y),
+            int(background_state.backend_rotation_k),
+            source_signature,
+        )
+
+    def _headless_geometry_fit_hydrate_caked_payload(
+        payload: object,
+        *,
+        signature: tuple[object, ...],
+        detector_shape: Sequence[object],
+        params_local: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        if not isinstance(payload, Mapping):
+            return None
+        if payload.get("headless_caked_payload_signature") != signature:
+            return None
+        if str(payload.get("projection_view_mode") or "").strip().lower() != "caked":
+            return None
+        expected_shape = tuple(int(v) for v in tuple(detector_shape)[:2])
+        try:
+            payload_shape = tuple(int(v) for v in tuple(payload.get("detector_shape"))[:2])
+        except Exception:
+            return None
+        if payload_shape != expected_shape:
+            return None
+        try:
+            background = np.asarray(
+                payload.get("background_image", payload.get("background")),
+                dtype=np.float64,
+            )
+            radial_axis = np.asarray(payload.get("radial_axis"), dtype=np.float64).reshape(-1)
+            azimuth_axis = np.asarray(payload.get("azimuth_axis"), dtype=np.float64).reshape(-1)
+            raw_azimuth_axis = np.asarray(
+                payload.get("raw_azimuth_axis"),
+                dtype=np.float64,
+            ).reshape(-1)
+        except Exception:
+            return None
+        if (
+            background.ndim != 2
+            or radial_axis.size <= 0
+            or azimuth_axis.size <= 0
+            or raw_azimuth_axis.size <= 0
+            or background.shape != (azimuth_axis.size, radial_axis.size)
+            or not np.all(np.isfinite(radial_axis))
+            or not np.all(np.isfinite(azimuth_axis))
+            or not np.all(np.isfinite(raw_azimuth_axis))
+        ):
+            return None
+        normalized_payload = gui_geometry_fit.normalize_geometry_fit_caked_view_payload(
+            payload,
+            detector_shape=expected_shape,
+        )
+        if not isinstance(normalized_payload, dict):
+            return None
+        hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            normalized_payload,
+            detector_shape=expected_shape,
+            params=params_local,
+            require_background=True,
+        )
+        if not isinstance(hydrated_payload, dict):
+            return None
+        for key in (
+            "background_index",
+            "projection_view_mode",
+            "headless_caked_payload_signature",
+            "source_cache_signature",
+            "geometry_projection_params_signature",
+            "projection_parameter_signature",
+            "transform_bundle_generation",
+            "caked_axis_shape",
+            "raw_to_gui_row_permutation",
+        ):
+            if key in payload:
+                hydrated_payload[key] = payload[key]
+        hydrated_payload["projection_view_mode"] = "caked"
+        hydrated_payload["headless_caked_payload_signature"] = signature
+        return hydrated_payload
+
+    def _headless_geometry_fit_caked_payload_is_fresh(
+        payload: object,
+        *,
+        signature: tuple[object, ...],
+        detector_shape: Sequence[object],
+        params_local: Mapping[str, object],
+    ) -> bool:
+        return (
+            _headless_geometry_fit_hydrate_caked_payload(
+                payload,
+                signature=signature,
+                detector_shape=detector_shape,
+                params_local=params_local,
+            )
+            is not None
+        )
+
+    def _geometry_fit_caked_view_for_index(index: int) -> dict[str, object] | None:
+        background_idx = int(index)
+        native_background, _display_background = _load_background_by_index(background_idx)
+        backend_background = gui_background.apply_background_backend_orientation(
+            np.asarray(native_background, dtype=np.float64),
+            flip_x=background_state.backend_flip_x,
+            flip_y=background_state.backend_flip_y,
+            rotation_k=background_state.backend_rotation_k,
+        )
+        if backend_background is None:
+            backend_background = native_background
+        backend_image = np.asarray(backend_background, dtype=np.float64)
+        if backend_image.ndim != 2:
+            caked_views_by_background.pop(background_idx, None)
+            return None
+        detector_shape = tuple(int(v) for v in backend_image.shape[:2])
+        params_local = dict(value_callbacks.current_params())
+        payload_signature = _headless_geometry_fit_caked_payload_signature(
+            background_idx,
+            detector_shape,
+            params_local,
+        )
+        cached = caked_views_by_background.get(background_idx)
+        hydrated_cached = _headless_geometry_fit_hydrate_caked_payload(
+            cached,
+            signature=payload_signature,
+            detector_shape=detector_shape,
+            params_local=params_local,
+        )
+        if isinstance(hydrated_cached, dict):
+            caked_views_by_background[background_idx] = hydrated_cached
+            return hydrated_cached
+        payload = _build_headless_geometry_fit_caked_view_payload(
+            backend_image,
+            params=params_local,
+            pixel_size_m=float(defaults.pixel_size_m),
+        )
+        if not isinstance(payload, dict):
+            caked_views_by_background.pop(background_idx, None)
+            return None
+        payload.update(
+            {
+                "background_index": int(background_idx),
+                "projection_view_mode": "caked",
+                "headless_caked_payload_signature": payload_signature,
+                "source_cache_signature": payload_signature[-1],
+                "geometry_projection_params_signature": payload_signature,
+                "projection_parameter_signature": payload_signature,
+                "transform_bundle_generation": _signature_summary(
+                    (
+                        detector_shape,
+                        int(np.asarray(payload.get("radial_axis")).size),
+                        int(np.asarray(payload.get("raw_azimuth_axis")).size),
+                        payload_signature,
+                    )
+                ),
+                "caked_axis_shape": (
+                    int(np.asarray(payload.get("azimuth_axis")).size),
+                    int(np.asarray(payload.get("radial_axis")).size),
+                ),
+            }
+        )
+        hydrated_payload = _headless_geometry_fit_hydrate_caked_payload(
+            payload,
+            signature=payload_signature,
+            detector_shape=detector_shape,
+            params_local=params_local,
+        )
+        if not isinstance(hydrated_payload, dict):
+            caked_views_by_background.pop(background_idx, None)
+            return None
+        caked_views_by_background[background_idx] = hydrated_payload
+        return hydrated_payload
+
+    def _geometry_fit_required_background_indices() -> list[int]:
+        selected = [int(idx) for idx in _current_geometry_fit_background_indices(strict=True)]
+        if _geometry_fit_uses_shared_theta_offset(selected):
+            return selected
+        current_idx = int(background_state.current_background_index)
+        if current_idx in set(selected):
+            return [current_idx]
+        return [int(selected[0])] if selected else [current_idx]
+
+    def _ensure_geometry_fit_caked_view() -> None:
+        previous_background_idx = int(background_state.current_background_index)
+        try:
+            for background_idx in _geometry_fit_required_background_indices():
+                if not gui_geometry_fit.geometry_manual_pairs_use_caked_fit_space(
+                    _pairs_for_index(int(background_idx))
+                ):
+                    continue
+                if _geometry_fit_caked_view_for_index(int(background_idx)) is None:
+                    raise RuntimeError(
+                        "exact caked projector unavailable for "
+                        f"background {int(background_idx) + 1}"
+                    )
+        finally:
+            if int(background_state.current_background_index) != int(previous_background_idx):
+                try:
+                    _load_background_by_index(previous_background_idx)
+                except Exception:
+                    pass
+
+    def _headless_current_caked_view_for_callbacks() -> dict[str, object] | None:
+        try:
+            background_idx = int(background_state.current_background_index)
+        except Exception:
+            return None
+        if not gui_geometry_fit.geometry_manual_pairs_use_caked_fit_space(
+            _pairs_for_index(background_idx)
+        ):
+            return None
+        payload = _geometry_fit_caked_view_for_index(background_idx)
+        return payload if isinstance(payload, dict) else None
+
+    def _headless_caked_payload_value(key: str) -> object:
+        payload = _headless_current_caked_view_for_callbacks()
+        if not isinstance(payload, Mapping):
+            return None
+        return payload.get(key)
+
+    def _headless_wrap_phi_range(value: object) -> object:
+        return _load_exact_cake_portable_module().raw_phi_to_gui_phi(value)
+
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
-        caked_view_enabled=False,
-        last_caked_background_image_unscaled=None,
-        last_caked_radial_values=None,
-        last_caked_azimuth_values=None,
+        caked_view_enabled=lambda: isinstance(
+            _headless_current_caked_view_for_callbacks(),
+            Mapping,
+        ),
+        last_caked_background_image_unscaled=lambda: _headless_caked_payload_value("background"),
+        last_caked_radial_values=lambda: _headless_caked_payload_value("radial_axis"),
+        last_caked_azimuth_values=lambda: _headless_caked_payload_value("azimuth_axis"),
         current_background_display=_current_background_display,
         current_background_native=_current_background_native,
+        ai=lambda: _headless_caked_payload_value("ai"),
         center=lambda: [
             _coerce_float(var_store["center_x_var"].get(), defaults.defaults["center_x"]),
             _coerce_float(var_store["center_y_var"].get(), defaults.defaults["center_y"]),
@@ -1566,6 +1926,8 @@ def run_headless_geometry_fit(
             defaults.defaults["corto_detector"],
         ),
         pixel_size=float(defaults.pixel_size_m),
+        caked_transform_bundle=lambda: _headless_caked_payload_value("transform_bundle"),
+        wrap_phi_range=_headless_wrap_phi_range,
         rotate_point_for_display=gui_geometry_overlay.rotate_point_for_display,
         display_rotate_k=DISPLAY_ROTATE_K,
         current_geometry_fit_params=value_callbacks.current_params,
@@ -1588,7 +1950,123 @@ def run_headless_geometry_fit(
         ),
     )
 
+    def _project_peaks_for_background_view(
+        background_index: int,
+        rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        normalized_rows = [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+        if not normalized_rows:
+            return []
+        background_idx = int(background_index)
+        if not gui_geometry_fit.geometry_manual_pairs_use_caked_fit_space(
+            _pairs_for_index(background_idx)
+        ):
+            return [
+                dict(entry)
+                for entry in (
+                    projection_callbacks.project_peaks_to_current_view(normalized_rows) or ()
+                )
+                if isinstance(entry, Mapping)
+            ]
+        previous_background_idx = int(background_state.current_background_index)
+        try:
+            payload = _geometry_fit_caked_view_for_index(background_idx)
+            if not isinstance(payload, Mapping):
+                raise RuntimeError(
+                    f"exact caked projector unavailable for background {int(background_idx) + 1}"
+                )
+            native_background, display_background = _load_background_by_index(background_idx)
+            detector_shape = tuple(int(value) for value in np.asarray(native_background).shape[:2])
+
+            def _native_detector_coords_to_bundle_detector_coords(
+                col: float,
+                row: float,
+            ) -> tuple[float | None, float | None]:
+                if len(detector_shape) < 2 or min(detector_shape) <= 0:
+                    return None, None
+                return gui_geometry_overlay.rotate_point_for_display(
+                    float(col),
+                    float(row),
+                    detector_shape,
+                    DISPLAY_ROTATE_K,
+                )
+
+            background_projection_callbacks = (
+                gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
+                    caked_view_enabled=lambda: True,
+                    last_caked_background_image_unscaled=lambda: payload.get("background"),
+                    last_caked_radial_values=lambda: payload.get("radial_axis"),
+                    last_caked_azimuth_values=lambda: payload.get("azimuth_axis"),
+                    current_background_display=lambda: display_background,
+                    current_background_native=lambda: native_background,
+                    ai=lambda: payload.get("ai"),
+                    center=lambda: [
+                        _coerce_float(
+                            var_store["center_x_var"].get(),
+                            defaults.defaults["center_x"],
+                        ),
+                        _coerce_float(
+                            var_store["center_y_var"].get(),
+                            defaults.defaults["center_y"],
+                        ),
+                    ],
+                    detector_distance=lambda: _coerce_float(
+                        var_store["corto_detector_var"].get(),
+                        defaults.defaults["corto_detector"],
+                    ),
+                    pixel_size=float(defaults.pixel_size_m),
+                    caked_transform_bundle=lambda: payload.get("transform_bundle"),
+                    wrap_phi_range=_headless_wrap_phi_range,
+                    rotate_point_for_display=gui_geometry_overlay.rotate_point_for_display,
+                    display_rotate_k=DISPLAY_ROTATE_K,
+                    current_geometry_fit_params=value_callbacks.current_params,
+                    miller=lambda: structure_state.miller,
+                    intensities=lambda: structure_state.intensities,
+                    image_size=int(defaults.image_size),
+                    display_to_native_sim_coords=lambda col, row, image_shape: (
+                        gui_geometry_overlay.display_to_native_sim_coords(
+                            col,
+                            row,
+                            image_shape,
+                            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                        )
+                    ),
+                    native_detector_coords_to_bundle_detector_coords=(
+                        _native_detector_coords_to_bundle_detector_coords
+                    ),
+                    bundle_detector_coords_to_background_display_coords=(
+                        lambda col, row: (float(col), float(row))
+                    ),
+                )
+            )
+            projected_rows = background_projection_callbacks.project_peaks_to_current_view(
+                normalized_rows
+            )
+            return [
+                {**dict(entry), "background_index": int(background_idx)}
+                for entry in (projected_rows or ())
+                if isinstance(entry, Mapping)
+            ]
+        finally:
+            if int(background_state.current_background_index) != int(previous_background_idx):
+                try:
+                    _load_background_by_index(previous_background_idx)
+                except Exception:
+                    pass
+
     source_snapshot_diagnostics_state: dict[str, object] = {}
+
+    def _project_peaks_to_current_view_for_dataset(
+        rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        callback = getattr(projection_callbacks, "project_peaks_to_current_view", None)
+        if callable(callback):
+            try:
+                projected = callback(rows)
+            except Exception:
+                projected = rows
+            return [dict(entry) for entry in (projected or ()) if isinstance(entry, Mapping)]
+        return [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
 
     def _signature_numeric(value: object) -> object:
         try:
@@ -2158,7 +2636,11 @@ def run_headless_geometry_fit(
         geometry_manual_match_config=lambda: (
             gui_manual_geometry.current_geometry_manual_match_config(defaults.fit_config)
         ),
+        pick_uses_caked_space=_manual_current_background_uses_caked_space,
+        geometry_manual_caked_view_for_index=_geometry_fit_caked_view_for_index,
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
+        geometry_manual_project_peaks_to_current_view=(_project_peaks_to_current_view_for_dataset),
+        geometry_manual_project_peaks_for_background_view=(_project_peaks_for_background_view),
         geometry_manual_refresh_pair_entry=projection_callbacks.refresh_entry_geometry,
         unrotate_display_peaks=lambda measured, rotated_shape, *, k=None: (
             gui_geometry_overlay.unrotate_display_peaks(
@@ -2199,7 +2681,7 @@ def run_headless_geometry_fit(
             apply_background_theta_metadata=_apply_background_theta_metadata,
             current_background_theta_values=_current_background_theta_values,
             current_geometry_theta_offset=_current_geometry_theta_offset,
-            ensure_geometry_fit_caked_view=lambda: None,
+            ensure_geometry_fit_caked_view=_ensure_geometry_fit_caked_view,
             manual_dataset_bindings=manual_dataset_bindings,
             build_runtime_config=lambda _fit_params: copy.deepcopy(
                 defaults.fit_config.get("geometry", {})
@@ -2212,16 +2694,10 @@ def run_headless_geometry_fit(
         raise RuntimeError(str(preparation.error_text or "Geometry fit preparation failed."))
     prepared_run = preparation.prepared_run
     preflight_elapsed_s = float(max(0.0, time.monotonic() - preflight_started_at))
-    headless_geometry_cfg = gui_geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
-        gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
-            copy.deepcopy(
-                defaults.fit_config.get("geometry", {})
-                if isinstance(defaults.fit_config, dict)
-                else {}
-            ),
-            joint_background_mode=prepared_run.joint_background_mode,
-        ),
-        joint_background_mode=prepared_run.joint_background_mode,
+    headless_geometry_cfg = (
+        copy.deepcopy(prepared_run.geometry_runtime_cfg)
+        if isinstance(prepared_run.geometry_runtime_cfg, Mapping)
+        else {}
     )
     prepared_run = replace(
         prepared_run,
