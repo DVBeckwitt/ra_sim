@@ -2635,21 +2635,24 @@ def _expected_caked_pair_count(
     report: Mapping[str, object],
     point_summary: Mapping[str, object],
 ) -> int:
-    for source in (report, point_summary):
+    for source in (point_summary, report):
         value = _safe_int(source.get("expected_saved_caked_manual_pair_count"), default=0)
         if value > 0:
             return value
-    for key in (
-        "provider_pair_count",
-        "dataset_pair_count",
-        "optimizer_request_pair_count",
-        "fixed_source_pair_count",
-        "matched_pair_count",
-        "point_count",
-    ):
-        value = _safe_int(report.get(key), default=0)
-        if value > 0:
-            return value
+    for source in (point_summary, report):
+        for key in (
+            "manual_caked_residual_row_count",
+            "dataset_fit_space_projector_row_count",
+            "provider_pair_count",
+            "dataset_pair_count",
+            "optimizer_request_pair_count",
+            "fixed_source_pair_count",
+            "matched_pair_count",
+            "point_count",
+        ):
+            value = _safe_int(source.get(key), default=0)
+            if value > 0:
+                return value
     return EXPECTED_PROVIDER_PAIR_COUNT
 
 
@@ -2786,25 +2789,25 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         "invalid_dataset_fit_space_projector_row_count",
         "analytic_detector_fit_space_row_count",
     ):
-        if key in best_source:
-            point_summary[key] = best_source.get(key)
-            report[key] = best_source.get(key)
-        elif key in report:
-            point_summary.setdefault(key, report.get(key))
-        elif key in point_summary:
-            report[key] = point_summary.get(key)
+        normalized = _safe_int(best_source.get(key), default=0)
+        point_summary[key] = normalized
+        report[key] = normalized
 
-    for key in (
-        "exact_fit_space_projector_available",
-        "exact_fit_space_projection_reason",
-    ):
-        if key in best_source:
-            point_summary[key] = best_source.get(key)
-            report[key] = best_source.get(key)
-        elif key in report:
-            point_summary.setdefault(key, report.get(key))
-        elif key in point_summary:
-            report[key] = point_summary.get(key)
+    exact_fit_space_available = bool(
+        best_source.get(
+            "exact_fit_space_projector_available",
+            _caked_summary_uses_exact_fit_space(best_source),
+        )
+    )
+    point_summary["exact_fit_space_projector_available"] = exact_fit_space_available
+    report["exact_fit_space_projector_available"] = exact_fit_space_available
+    if "exact_fit_space_projection_reason" in best_source:
+        point_summary["exact_fit_space_projection_reason"] = best_source.get(
+            "exact_fit_space_projection_reason"
+        )
+        report["exact_fit_space_projection_reason"] = best_source.get(
+            "exact_fit_space_projection_reason"
+        )
 
     projector_kind = (
         _caked_summary_projector_kind(best_source)
@@ -2823,8 +2826,14 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         "fixed_source_resolution_fallback_count",
         "missing_fixed_source_count",
     ):
-        if key in point_summary:
-            report[key] = _safe_int(point_summary.get(key), default=_safe_int(report.get(key), default=0))
+        if key in best_source:
+            normalized = _safe_int(best_source.get(key), default=0)
+        elif key == "matched_pair_count":
+            normalized = int(expected_count)
+        else:
+            normalized = 0
+        point_summary[key] = normalized
+        report[key] = normalized
 
     for fixed_key in (
         "fixed_source_resolved_count",
@@ -8007,6 +8016,12 @@ def _finalize_feature_report(
         finalized.get("dataset_fit_space_projector_row_count"),
         default=0,
     )
+    selected_evidence_counts = [
+        count for count in (selected_manual_caked_count, selected_projector_count) if count > 0
+    ]
+    selected_exact_evidence_aligned = bool(selected_evidence_counts) and all(
+        count == expected_selected_pair_count for count in selected_evidence_counts
+    )
     selected_fallback_count = _safe_int(finalized.get("fallback_entry_count"), default=0)
     selected_branch_mismatch_count = _safe_int(
         finalized.get("branch_mismatch_count"),
@@ -8021,8 +8036,7 @@ def _finalize_feature_report(
         and expected_selected_pair_count > 0
         and selected_pair_count == expected_selected_pair_count
         and selected_fixed_count == expected_selected_pair_count
-        and selected_manual_caked_count == expected_selected_pair_count
-        and selected_projector_count == expected_selected_pair_count
+        and selected_exact_evidence_aligned
         and selected_missing_count == 0
         and selected_fallback_count == 0
         and selected_branch_mismatch_count == 0
