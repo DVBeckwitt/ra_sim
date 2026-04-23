@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
 Priority: p1
-Last updated: 2026-04-21
+Last updated: 2026-04-23
 
 This page records the resolved detector/caked manual-picking problem for Qr/Qz
 group selection and HKL selection. It replaces the earlier in-progress
@@ -29,6 +29,11 @@ pickers consume the same current-view simulated-candidate payload.
 
 User confirmation on 2026-04-19: Qr selection is working correctly, and the
 entire Qr/HKL picker problem is resolved.
+
+Follow-up status on 2026-04-23: the caked-origin Qr saved-redraw drift is fixed
+by routing source-backed caked Qr hit testing, active selected markers, and
+saved-pair redraw through one detector-to-caked projection cache. Automated
+helper coverage is green; live GUI recheck is still not recorded in repo docs.
 
 ## Implementation Summary
 
@@ -120,6 +125,54 @@ Preserve these rules when touching manual picking again:
 - Caked aliases must remain caked/angular coordinates.
 - HKL and Qr/Qz picking should share candidate source identity and current-view
   projection wherever possible.
+- Source-backed caked Qr/Qz hit testing, active `sim_display`, and saved
+  `sim_display` must resolve through the detector-to-caked projection cache.
+  Background `bg_display` may use clicked/refined caked coordinates, but those
+  measured fields must not move the simulated branch marker.
+
+## Caked Qr Projection Cache Closure
+
+On 2026-04-23, the saved/live caked Qr redraw path was closed by adding an
+internal caked Qr projection cache in `ra_sim/gui/manual_geometry.py`.
+
+The cache is built from native/source-backed simulation rows, strips stale
+display/refined/caked aliases before projection, projects through the existing
+detector-to-caked path, and stores entries keyed by:
+
+- `source_table_index`
+- `source_row_index`
+- `source_reflection_index`
+- `source_branch_index`
+- `source_ray_id`
+- `branch_id`
+
+Caked Qr hit testing now uses `caked_qr_projection_grouped_candidates`, active
+caked selected markers draw from those cache entries, and saved source-backed
+redraw resolves through `caked_qr_projection_lookup`. Source-less saved manual
+pairs still keep their saved refined caked fallback.
+
+Regression coverage in `tests/test_manual_geometry_selection_helpers.py` now
+proves:
+
+- detector-origin Qr selection projected into caked view is the oracle for
+  direct caked Qr selection;
+- poisoned `refined_sim_*`, `display_*`, and `sim_*` aliases do not beat native
+  detector provenance;
+- direct caked picking uses the caked projection cache for hit testing;
+- source-backed saved redraw resolves through the caked projection cache and
+  does not move the simulated Qr marker after finish;
+- source-less saved refined caked coordinates remain honored.
+
+Validation recorded for this closure:
+
+- new cache tests failed before the fix and passed after it;
+- targeted caked/saved/provenance guards passed, 11 selected tests;
+- `python -m pytest tests/test_manual_geometry_selection_helpers.py` passed
+  with 250 tests;
+- touched-file `ruff format --check`, touched-file `ruff check`, and
+  `git diff --check` passed;
+- `python -m ra_sim.dev check` remains blocked by unrelated formatting drift in
+  `ra_sim/fitting/optimization.py` and `tests/test_timing.py`.
 
 ## Regression Contract
 

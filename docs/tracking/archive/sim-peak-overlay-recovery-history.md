@@ -5,12 +5,18 @@ Type: investigation
 Owner:
 Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
 Priority: p1
-Last updated: 2026-04-19
+Last updated: 2026-04-23
 
 This page preserves the original in-progress investigation log for the
 simulated-peak overlay bug behind issue `#248`. It is archived as debugging
 history now that the finished resolution lives in
 `Manual Qr/Qz and HKL picker alignment`.
+
+Update on 2026-04-23: the later caked-origin Qr saved-redraw drift was closed
+in the resolved summary. Source-backed caked Qr selection now uses a
+detector-to-caked projection cache for caked hit testing, active marker display,
+and saved-pair redraw. The older "caked-view selected-Qr redraw is still wrong"
+notes below remain historical context, not current status.
 
 See also:
 

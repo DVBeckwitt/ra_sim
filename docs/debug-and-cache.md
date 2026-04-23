@@ -69,6 +69,14 @@ Caked manual picking uses two different coordinate responsibilities:
 - caked aliases such as `caked_x`, `caked_y`, `raw_caked_x`, `raw_caked_y`,
   `two_theta_deg`, and `phi_deg` hold current-view angular coordinates.
 
+For source-backed caked Qr/Qz selection, the detector-to-caked projection cache
+is the authority for hit testing, active selected markers, and saved-pair
+redraw. The cache is keyed by stable source/branch identity and stores the
+native detector point, detector display point, caked visual point, and caked
+`(2theta, phi)`. Saved or refined aliases can still describe the measured
+background point, but they must not override the simulated Qr/Qz marker for a
+source-backed saved pair.
+
 The HKL picker intentionally shares the corrected Qr/manual picker candidate
 payload for hit testing and selected-marker placement. If either picker
 regresses, first check whether the failing path bypassed that shared candidate
