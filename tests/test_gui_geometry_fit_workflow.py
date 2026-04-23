@@ -12421,18 +12421,63 @@ def test_new4_ladder_caked_evidence_prefers_clean_selected_summary_over_stale_re
     ladder._apply_caked_fit_space_evidence_fields(report)
 
     assert report["manual_caked_residual_row_count"] == 7
-    assert report["dataset_fit_space_projector_row_count"] == 0
+    assert report["dataset_fit_space_projector_row_count"] == 6
     assert report["matched_pair_count"] == 7
     assert report["missing_pair_count"] == 0
     assert report["fallback_entry_count"] == 0
     assert report["branch_mismatch_count"] == 0
     assert report["fixed_source_resolved_count"] == 7
     assert report["point_match_summary"]["manual_caked_residual_row_count"] == 7
-    assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 0
+    assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 6
     assert report["point_match_summary"]["matched_pair_count"] == 7
     assert report["point_match_summary"]["missing_pair_count"] == 0
     assert report["point_match_summary"]["fallback_entry_count"] == 0
     assert report["point_match_summary"]["branch_mismatch_count"] == 0
+    assert report["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
+
+
+def test_new4_ladder_caked_evidence_prefers_projector_rich_selected_summary() -> None:
+    ladder = _load_new4_ladder_module()
+    report = {
+        "exact_fit_space_projector_available": False,
+        "exact_fit_space_projection_reason": "stale_report",
+        "manual_caked_residual_row_count": 6,
+        "dataset_fit_space_projector_row_count": 6,
+        "fit_space_projector_kind": "exact_caked_bundle",
+        "matched_pair_count": 6,
+        "missing_pair_count": 1,
+        "fallback_entry_count": 2,
+        "branch_mismatch_count": 1,
+        "point_match_summary": {
+            "exact_fit_space_projector_available": True,
+            "exact_fit_space_projection_reason": "projector_rich_point",
+            "manual_caked_residual_row_count": 7,
+            "dataset_fit_space_projector_row_count": 7,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "fallback_entry_count": 0,
+            "branch_mismatch_count": 0,
+        },
+        "last_point_match_summary": {
+            "exact_fit_space_projector_available": True,
+            "exact_fit_space_projection_reason": "manual_only_last_point",
+            "manual_caked_residual_row_count": 7,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "fallback_entry_count": 0,
+            "branch_mismatch_count": 0,
+        },
+    }
+
+    ladder._apply_caked_fit_space_evidence_fields(report)
+
+    assert report["exact_fit_space_projection_reason"] == "projector_rich_point"
+    assert report["dataset_fit_space_projector_row_count"] == 7
+    assert report["point_match_summary"]["exact_fit_space_projection_reason"] == "projector_rich_point"
+    assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 7
+    assert report["point_match_summary"]["manual_caked_residual_row_count"] == 7
     assert report["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
 
 
@@ -12676,9 +12721,11 @@ def test_new4_ladder_full_beam_finalizer_accepts_sparse_exact_caked_summary(
     assert finalized["fallback_entry_count"] == 0
     assert finalized["branch_mismatch_count"] == 0
     assert finalized["manual_caked_residual_row_count"] == 7
-    assert finalized["dataset_fit_space_projector_row_count"] == 0
+    assert finalized["dataset_fit_space_projector_row_count"] == 7
+    assert finalized["exact_fit_space_projector_available"] is True
     assert finalized["point_match_summary"]["manual_caked_residual_row_count"] == 7
-    assert finalized["point_match_summary"]["dataset_fit_space_projector_row_count"] == 0
+    assert finalized["point_match_summary"]["dataset_fit_space_projector_row_count"] == 7
+    assert finalized["point_match_summary"]["exact_fit_space_projector_available"] is True
     assert finalized["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
 
 

@@ -44,19 +44,15 @@ reserved for rows explicitly marked as background/native-detector. Guard tests
 lock caked selection and caked-to-detector conversion behavior so this fix does
 not reopen those known-good paths.
 
-The manual caked geometry-fit drift bug/error scope is closed for solver
-routing and Rung 6 validation, but not yet fully closed for the import-safe
-preflight boundary. Caked/Qr-Qz manual picks stay on the exact caked fit-space
-path, require exact fit-space rows, reject fallback/analytic-detector rows, and
-avoid detector/current-view raw-row fallback in ladder validation. Headless
-Rung 6 seeds later combined candidates from accepted earlier candidates plus
-accepted Rung 5 z/zb evidence, and if the optimizer worsens caked RMS/max it
-accepts the seeded caked initial state as a no-op instead of reporting a worse
-final fit. Detector manual picks keep the legacy pixel evaluator path and
-permissive detector projection fallback. Remaining blocker: four
-`tests/test_gui_runtime_import_safe.py` cases still show caked prepare/worker
-paths reaching dataset build before exact-payload ensure/fail-closed handling;
-do not claim full GUI/preflight closure until those pass.
+The manual caked geometry-fit drift bug/error scope is now closed through
+Rung 7. Caked/Qr-Qz manual picks stay on the exact caked fit-space path,
+require exact fit-space rows, reject fallback/analytic-detector rows, and the
+import-safe preflight boundary now fails closed before dataset build.
+Headless Rung 6 still seeds later combined candidates from accepted earlier
+candidates plus accepted Rung 5 z/zb evidence, and the final Rung 7 feature
+chain passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
+`full_beam_polish`, and `identifiability_features` with exact-caked evidence
+preserved in the finalizer.
 
 The adjacent startup/list-refresh bug is closed: normal simulation updates now
 request the same hit-table/selection cache needed by Qr/Qz picking and refresh
@@ -342,9 +338,11 @@ Rung 5 closeout status by work type:
 - Validation status: run `20260422_115256` passed Rungs 1-5, Rung 5 passed 4/4
   attempted blocks, provider guard after blocks stayed green, and `new4.json`
   stayed unchanged.
-- Still open: debug `full_beam_polish` fixed-source/pair-integrity loss, then
-  separately gate identifiability, full fitter validation, baseline, GUI
-  validation, unrestricted feature combinations, and freeze/thaw.
+- Still open: keep the separate Rung 2 sensitivity drift follow-up
+  (`active_param_count=11`, `near_zero_param_count=2`) isolated from the
+  exact-caked path, then continue any remaining full fitter, baseline, GUI
+  validation, unrestricted feature combinations, and freeze/thaw work in a
+  later solve project.
 
 ## Do Not Redo
 
@@ -366,11 +364,10 @@ Do not redo these completed validations unless their guard output regresses:
 
 ## Next Rung
 
-Rung 7 `full_beam_polish` is the next focused blocker. Do not run full fitter,
-baseline, GUI fit button, unrestricted feature combinations, feature-combo
-solves, identifiability acceptance, freeze/thaw, broad parameter tuning, or a
-higher rung until `full_beam_polish` fixed-source/pair integrity is repaired
-and separately re-gated.
+Rung 7 exact-caked work is complete. The next focused follow-up is the separate
+Rung 2 sensitivity drift (`active_param_count=11`, `near_zero_param_count=2`).
+Do not reopen the exact-caked preflight, 3B harness, or full_beam_polish
+paths in this track unless a guard regresses.
 
 Allowed parameter set for Rung 4:
 
@@ -432,10 +429,9 @@ Rung 4 pass requirements per pair:
 
 Full geometric fitter validation is not yet claimed. Baseline completion is not
 yet claimed. RMS/max global improvement is not yet claimed. Rung 6 C2 and the
-controlled Rung 7 `dynamic_reanchor`, `discrete_modes`, and `seed_multistart`
-feature probes are claimed only as bounded ladder evidence. `full_beam_polish`
-failed and `identifiability_features` was skipped, so full feature validation
-and full solves remain unclaimed. The GUI fit button is not the validation path.
+controlled Rung 7 `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
+`full_beam_polish`, and `identifiability_features` feature probes are claimed
+as bounded ladder evidence. The GUI fit button is not the validation path.
 `run_geometry_fit_quality_baseline.py` is not the immediate next step.
 
 ## Current State
@@ -596,11 +592,12 @@ and full solves remain unclaimed. The GUI fit button is not the validation path.
 
 - Treat Rung 3 one-parameter solves, the Rung 3A `a` diagnosis, Rung 3B caked
   point reprojection, Rung 4 initial paired solves, Rung 5 blocks, Rung 6 C2,
-  and Rung 7 `dynamic_reanchor`/`discrete_modes`/`seed_multistart` as complete
-  bounded ladder evidence unless a guard regresses.
-- Debug the Rung 7 `full_beam_polish` fixed-source/pair-integrity failure
-  before any identifiability acceptance, full-candidate gate, baseline, or GUI
-  fit validation.
+  and Rung 7 `dynamic_reanchor`/`discrete_modes`/`seed_multistart`/
+  `full_beam_polish`/`identifiability_features` as complete bounded ladder
+  evidence unless a guard regresses.
+- Keep the separate Rung 2 sensitivity drift follow-up isolated from the
+  exact-caked path. Do not reopen the exact-caked preflight, 3B harness, or
+  full_beam_polish paths in this track unless a guard regresses.
 - Treat warm solve-rung reuse as implemented. Do not reintroduce one Python
   subprocess or one fresh solver context per candidate unless explicitly
   running `--use-subprocess` for diagnostics.

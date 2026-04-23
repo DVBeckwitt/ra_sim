@@ -29,15 +29,13 @@ Last updated: 2026-04-23
   `20260422_rung7_feature_gate_combined` passed both Rung 6 combined
   candidates, including C2
   `corto_detector/theta_initial/cor_angle/chi/zs/zb`.
-- Controlled Rung 7 feature gate was rerun after the `seed_multistart` fix.
-  Fresh chain `20260422_rung7_seedfix_provider_before`,
-  `20260422_rung7_seedfix_caked`, `20260422_rung7_seedfix_blocks`,
-  `20260422_rung7_seedfix_combined`, `20260422_rung7_seedfix_features`, and
-  `20260422_rung7_seedfix_provider_after` kept provider/caked/Rung 5/Rung 6
-  guards green. The full feature sequence passed `dynamic_reanchor`,
-  `discrete_modes`, and `seed_multistart`, then failed `full_beam_polish` with
-  `failure_reason == "fixed_source_or_pair_integrity_lost"`.
-  `identifiability_features` was skipped with `prior_feature_failed`.
+- Controlled Rung 7 feature gate is now green end-to-end. The final frozen
+  chain `codex_final_blocks_20260423`, `codex_final_combined_20260423`, and
+  `codex_final_features_20260423` kept provider/caked/Rung 5/Rung 6 guards
+  green and passed `dynamic_reanchor`, `discrete_modes`,
+  `seed_multistart`, `full_beam_polish`, and `identifiability_features`.
+  Exact-caked evidence stayed present in the feature report, and the finalizer
+  normalized `residuals_finite` without masking unrelated guard failures.
 - Rung 0-5 timing observability is implemented. Each current-run rung report
   gets finite timing metadata, the run directory gets `rung_timing_summary.json`,
   `--timing-report` can write an explicit copy, and timing thresholds are
@@ -68,15 +66,11 @@ Last updated: 2026-04-23
   initial caked state because the optimizer candidate regressed
   `37.8529/98.9712 -> 37.8940/99.1367`; accepted final C2 metrics stayed
   `37.8529/98.9712`.
-- Remaining manual caked gate blocker: exact-caked preflight ordering is still
-  not fully green. `tests/test_gui_runtime_import_safe.py
-  tests/test_gui_geometry_fit_workflow.py -q` ended with `4 failed, 796 passed,
-  1 skipped`; all failures show caked prepare/worker paths can reach dataset
-  build before exact-payload ensure/fail-closed handling in the import-safe
-  boundary tests. Do not claim full GUI/preflight closure until those four tests
-  pass.
-- No full fitter, baseline, GUI fit, unrestricted feature combination, full-beam
-  polish, or identifiability feature run should be treated as validated.
+- The exact-caked preflight boundary is closed. The follow-up is separate
+  Rung 2 sensitivity drift (`active_param_count=11`,
+  `near_zero_param_count=2`); do not mix it with the exact-caked path.
+- No full fitter, baseline, GUI fit, or unrestricted feature combination run
+  should be treated as validated.
 
 This handoff is the bounded-through-Rung-7 feature-gate recovery state for
 `new4`. Do not use it as approval for full fitter, GUI, baseline, or unrestricted
@@ -84,11 +78,11 @@ feature-combination solves.
 
 Status by work type:
 
-- Feature: controlled Rung 7 passed `dynamic_reanchor`, `discrete_modes`, and
-  `seed_multistart`; `full_beam_polish` is the first failing feature.
-- Bug/error: Rung 5 evidence handling is fixed so fatal evidence aborts stay
-  fatal, local `a` usability failures stay local, and missing dependencies skip
-  only affected blocks.
+- Feature: controlled Rung 7 passed `dynamic_reanchor`, `discrete_modes`,
+  `seed_multistart`, `full_beam_polish`, and `identifiability_features`; the
+  exact-caked path is green through Rung 7.
+- Bug/error: exact-caked preflight ordering/harness blockers are closed; Rung 2
+  sensitivity drift remains the separate follow-up.
 - Timing feature: current-run Rung 0-5 timing JSON and stdout table are
   available for opt-in ladder runs.
 - Timing bug/error: review follow-up is closed. Timing collection excludes
@@ -111,10 +105,9 @@ Status by work type:
 - GUI timing harness: gated smoke and 10-trial evidence was collected under
   `artifacts/gui_timing/20260422_130625`; 30-trial evidence stopped at a
   focused `theta10` child timeout after `defaults_30` passed.
-- Not validated: full fitter, baseline, GUI fit, unrestricted feature
-  combinations, full-beam polish acceptance, and identifiability features remain
-  unclaimed. Full-beam polish was attempted only as the controlled Rung 7
-  feature and failed.
+- Not validated: full fitter, baseline, GUI fit, and unrestricted feature
+  combinations remain unclaimed. Full-beam validation is now green as bounded
+  ladder evidence, but it is not the same as full fitter acceptance.
 
 ## GUI timing harness checkpoint
 
@@ -418,7 +411,7 @@ Latest reported local result: `316 passed` after class-A/class-C cleanup. This d
 | Rung 4 | paired solves | green | initial pair set passed |
 | Rung 5 | cumulative blocks | green | fresh run `20260422_rung7_feature_gate_blocks`, 4/4 blocks passed |
 | Rung 6 | selected combined solve / full-candidate dry run | green | fresh run `20260422_rung7_feature_gate_combined`, C2 passed |
-| Rung 7 | controlled feature gate | blocked at `full_beam_polish` | `dynamic_reanchor`, `discrete_modes`, and `seed_multistart` passed; `identifiability_features` skipped after first failure |
+| Rung 7 | controlled feature gate | green | `dynamic_reanchor`, `discrete_modes`, `seed_multistart`, `full_beam_polish`, and `identifiability_features` passed |
 
 ## Active and near-zero parameters from Rung 2
 
@@ -483,37 +476,21 @@ Fixed behavior: failed optimizer-request capture leaves the optimizer request un
 
 ## Remaining work
 
-Next project: debug the Rung 7 `full_beam_polish` fixed-source/pair-integrity
-loss.
+Next project: the separate Rung 2 sensitivity drift follow-up
+(`active_param_count=11`, `near_zero_param_count=2`). Do not reopen the
+exact-caked preflight, 3B harness, or full_beam_polish paths in this track
+unless a guard regresses.
 
-Fresh seedfix Rung 7 prerequisites are accepted for New4 gating. Provider-only
-reports before and after the run had `classification == "point_provider_parity_ok"`.
-Standalone caked reprojection run `20260422_rung7_seedfix_caked` had
-`status == "pass"`, `failures == []`, provider before/after green, and
-unchanged `new4.json`
-(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`). Rung 5
-run `20260422_rung7_seedfix_blocks` had `status == "ok"`, four passed blocks,
-zero failed/timed-out blocks, provider guard after green, and unchanged state.
-Rung 6 run `20260422_rung7_seedfix_combined` had `status == "ok"` and passed C2
-`corto_detector/theta_initial/cor_angle/chi/zs/zb` with clean 7/7 fixed-source
-counters, provider/caked/state guards green, and `full_fitter_validated == false`.
-
-Controlled full-sequence Rung 7 run `20260422_rung7_seedfix_features` had
-`status == "ok_with_failures"` and
-`first_failing_feature == "full_beam_polish"`. Passing features
-`dynamic_reanchor`, `discrete_modes`, and `seed_multistart` all had
-`least_squares_called == true`, `optimizer_solve_called == true`,
-`matched_pair_count == 7`, `missing_pair_count == 0`,
-`branch_mismatch_count == 0`, `fixed_source_resolved_count == 7`,
-`fallback_entry_count == 0`, provider identity/point matches true, caked guard
-true, provider guard after green, and state hash unchanged. `dynamic_reanchor`
-also kept `lost_pair_ids == []`, `rejected_pair_ids == []`,
-`fallback_pair_ids == []`, and `rematched_pair_ids == []`. `seed_multistart`
-selected seed 11 cleanly, preserved 7/7 fixed manual pairs, rejected one dirty
-seed before ranking, and did not select any dirty seed. `full_beam_polish`
-failed with `failure_reason == "fixed_source_or_pair_integrity_lost"`;
-`identifiability_features` was skipped with `prior_feature_failed`.
-`full_fitter_validated == false`.
+Final frozen New4 chain:
+`codex_final_blocks_20260423`, `codex_final_combined_20260423`, and
+`codex_final_features_20260423` kept provider/caked/Rung 5/Rung 6 guards green
+and passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
+`full_beam_polish`, and `identifiability_features`. Exact-caked evidence stayed
+present and the finalizer normalized `residuals_finite` without masking other
+guard failures. `new4.json` stayed unchanged
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`), and
+`full_fitter_validated == false` because the full fitter itself is still not
+claimed.
 
 Opt-in timing check `20260422_123330` measured the approved fresh Rung 5 blocks
 path only (`--max-rung blocks`, `--timing-report`). It wrote
@@ -526,8 +503,7 @@ Do not use the old full baseline as the first next step.
 
 Do not run full fitter, baseline, GUI fit button, unrestricted feature
 combinations, auto-freeze/selective thaw, or feature-combo solves as full
-acceptance. Do not proceed past the `full_beam_polish` blocker to claim
-identifiability or full fitter validation.
+acceptance. Rung 2 drift remains a separate follow-up.
 
 Do not treat RMS/max baseline or full fitter behavior as validated yet.
 
@@ -536,23 +512,20 @@ Do not treat RMS/max baseline or full fitter behavior as validated yet.
 Issue [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) was updated with this checkpoint:
 
 ```text
-New4 Rung 7 seedfix full feature-gate checkpoint:
+New4 Rung 7 final frozen feature-gate checkpoint:
 
-- Provider-before `20260422_rung7_seedfix_provider_before`: green.
-- Caked guard `20260422_rung7_seedfix_caked`: pass, no failures.
-- Rung 5 `20260422_rung7_seedfix_blocks`: status ok, 4/4 blocks passed.
-- Rung 6 `20260422_rung7_seedfix_combined`: status ok, C2 passed.
-- Rung 7 `20260422_rung7_seedfix_features`: full controlled feature sequence,
+- Provider/caked/Rung 5/Rung 6 guards stayed green across the final frozen
+  ladder chain.
+- Rung 7 `codex_final_features_20260423`: full controlled feature sequence,
   no `--feature`, no full fit, no baseline, no GUI fit.
-- Passed: `dynamic_reanchor`, `discrete_modes`, `seed_multistart`.
-- First failing feature: `full_beam_polish`, reason
-  `fixed_source_or_pair_integrity_lost`.
-- Skipped: `identifiability_features` with `prior_feature_failed`.
-- Provider-after `20260422_rung7_seedfix_provider_after`: green.
+- Passed: `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
+  `full_beam_polish`, `identifiability_features`.
+- Exact-caked evidence stayed present and `residuals_finite` normalized
+  without masking unrelated guard failures.
 - `new4.json` hash stayed
   `f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`.
-- `full_fitter_validated == false`; next work is the `full_beam_polish`
-  fixed-source/pair-integrity failure, not baseline.
+- `full_fitter_validated == false`; next work is the separate Rung 2
+  sensitivity drift, not the exact-caked path.
 
 ```
 

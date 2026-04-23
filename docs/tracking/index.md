@@ -35,19 +35,16 @@ unresolved on reverse-LUT failure. Validation is still pending.
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
 one-param solves, `a` diagnosis, caked point reprojection, initial Rung 4 paired
-solves, fresh same-run Rung 5 blocks, Rung 6 C2, and controlled Rung 7
-`dynamic_reanchor`/`discrete_modes`/`seed_multistart` are validated for ladder
-work. Fresh seedfix chain `20260422_rung7_seedfix_provider_before`,
-`20260422_rung7_seedfix_caked`, `20260422_rung7_seedfix_blocks`,
-`20260422_rung7_seedfix_combined`, `20260422_rung7_seedfix_features`, and
-`20260422_rung7_seedfix_provider_after` kept provider/caked/Rung 5/Rung 6
-guards green. Controlled full-sequence Rung 7 passed `dynamic_reanchor`,
-`discrete_modes`, and `seed_multistart`, then failed `full_beam_polish` with
-`failure_reason == "fixed_source_or_pair_integrity_lost"`;
-`identifiability_features` was skipped with `prior_feature_failed`.
+solves, fresh same-run Rung 5 blocks, Rung 6 C2, and the full Rung 7 feature
+chain are now validated for ladder work. Final frozen runs
+`codex_final_blocks_20260423`, `codex_final_combined_20260423`, and
+`codex_final_features_20260423` kept provider/caked/Rung 5/Rung 6 guards green
+and passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
+`full_beam_polish`, and `identifiability_features`. The remaining follow-up is
+separate Rung 2 sensitivity drift (`active_param_count=11`,
+`near_zero_param_count=2`); do not mix it with the exact-caked path.
 `new4.json` stayed unchanged
-(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`), and
-`full_fitter_validated == false`.
+(`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
 Timing observability is now available for current-run Rungs 0-5:
 `rung_timing_summary.json` is written in the run directory, optional
 `--timing-report` writes the same machine-readable summary elsewhere, stdout

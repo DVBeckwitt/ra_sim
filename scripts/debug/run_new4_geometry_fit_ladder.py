@@ -2741,6 +2741,8 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
             clean_counts,
             aligned_counts,
             finite_metrics,
+            projector_rows,
+            manual_rows,
             expected_rows,
             matched_pairs,
             fixed_pairs,
@@ -2783,22 +2785,28 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
     point_summary["expected_saved_caked_manual_pair_count"] = int(expected_count)
     report["expected_saved_caked_manual_pair_count"] = int(expected_count)
 
+    exact_caked_source_selected = _caked_summary_uses_exact_fit_space(best_source)
     for key in (
         "manual_caked_residual_row_count",
         "dataset_fit_space_projector_row_count",
         "invalid_dataset_fit_space_projector_row_count",
         "analytic_detector_fit_space_row_count",
     ):
-        normalized = _safe_int(best_source.get(key), default=0)
+        existing_value = _safe_int(report.get(key), default=0)
+        if key in best_source:
+            normalized = _safe_int(best_source.get(key), default=existing_value)
+        else:
+            normalized = existing_value
         point_summary[key] = normalized
         report[key] = normalized
 
-    exact_fit_space_available = bool(
-        best_source.get(
-            "exact_fit_space_projector_available",
-            _caked_summary_uses_exact_fit_space(best_source),
-        )
-    )
+    exact_fit_space_available = bool(best_source.get("exact_fit_space_projector_available", False))
+    if exact_caked_source_selected:
+        exact_fit_space_available = True
+    elif not exact_fit_space_available:
+        exact_fit_space_available = bool(report.get("exact_fit_space_projector_available", False))
+        if not exact_fit_space_available:
+            exact_fit_space_available = bool(point_summary.get("exact_fit_space_projector_available", False))
     point_summary["exact_fit_space_projector_available"] = exact_fit_space_available
     report["exact_fit_space_projector_available"] = exact_fit_space_available
     if "exact_fit_space_projection_reason" in best_source:
@@ -8016,11 +8024,9 @@ def _finalize_feature_report(
         finalized.get("dataset_fit_space_projector_row_count"),
         default=0,
     )
-    selected_evidence_counts = [
-        count for count in (selected_manual_caked_count, selected_projector_count) if count > 0
-    ]
-    selected_exact_evidence_aligned = bool(selected_evidence_counts) and all(
-        count == expected_selected_pair_count for count in selected_evidence_counts
+    selected_exact_evidence_aligned = (
+        selected_manual_caked_count == expected_selected_pair_count
+        and selected_projector_count == expected_selected_pair_count
     )
     selected_fallback_count = _safe_int(finalized.get("fallback_entry_count"), default=0)
     selected_branch_mismatch_count = _safe_int(
