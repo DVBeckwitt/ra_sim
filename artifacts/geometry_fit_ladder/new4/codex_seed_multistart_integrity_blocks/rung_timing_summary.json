@@ -1,0 +1,49 @@
+{
+  "completed_rung_count": 4,
+  "finished_at_iso": "2026-04-22T19:47:09.637005Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_blocks",
+  "run_id": "codex_seed_multistart_integrity_blocks",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.005933700000241515,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_blocks\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 0.08233569999902102,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_blocks\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 1.3462425000016083,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_blocks\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.0011522999993758276,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_blocks\\rung_05_block_summary.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_summary",
+      "status": "failed"
+    }
+  ],
+  "slowest_rung": "sensitivity_scan",
+  "slowest_rung_elapsed_s": 1.3462425000016083,
+  "started_at_iso": "2026-04-22T19:47:02.569089Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 7.0679229999987
+}

@@ -1,0 +1,26 @@
+{
+  "background_index": 0,
+  "classification": "validation_context_unavailable",
+  "context_classification": null,
+  "context_ok": false,
+  "error_text": null,
+  "exact_projector_available": false,
+  "failures": [
+    "full_background_recake_not_called"
+  ],
+  "full_background_recake_call_count": 57,
+  "full_background_recake_called": true,
+  "full_recake_guard_installed": true,
+  "guard_error": "RuntimeError:exact caked projector unavailable for background 1",
+  "new4_state_hash_unchanged": true,
+  "point_count": 0,
+  "point_only_reprojection_call_count": 0,
+  "point_only_reprojection_called": false,
+  "provider_guard_after_ok": false,
+  "provider_guard_before_ok": true,
+  "provider_guard_ok": false,
+  "provider_pair_count": 7,
+  "state_hash_after": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "state_hash_before": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "status": "fail"
+}

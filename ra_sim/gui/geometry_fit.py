@@ -11547,6 +11547,18 @@ def prepare_geometry_fit_run(
     manual_pairs_use_caked_space = any(
         str(kind) == "caked" for kind in manual_fit_space_by_background.values()
     )
+    if manual_pairs_use_caked_space:
+        try:
+            ensure_geometry_fit_caked_view()
+        except Exception as exc:
+            return _failure_result(
+                (
+                    "Geometry fit unavailable: exact caked fit-space projector "
+                    f"could not be prepared ({exc}). Rebuild the caked/source cache."
+                ),
+                selected_background_indices=selected_background_indices,
+                joint_background_mode=joint_background_mode,
+            )
 
     def _theta_base_for_index(dataset_index: int) -> float:
         if build_all_selected_backgrounds:

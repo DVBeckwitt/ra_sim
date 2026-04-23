@@ -478,6 +478,13 @@ def refresh_geometry_manual_pair_entry(
         "background_two_theta_deg",
         "background_phi_deg",
     )
+    manual_background_frame = normalize_geometry_point_frame(
+        normalized.get("manual_background_input_frame")
+    )
+    caked_background_is_authoritative = bool(
+        manual_background_frame == "caked_2theta_phi"
+        and saved_background_caked_point is not None
+    )
     source_backed_saved_point = bool(
         raw_entry is not None
         and (
@@ -490,7 +497,11 @@ def refresh_geometry_manual_pair_entry(
     caked_point_forces_detector = bool(
         refined_caked_point is not None or source_backed_saved_point
     )
-    authoritative_caked_point = refined_caked_point or saved_background_caked_point
+    authoritative_caked_point = (
+        saved_background_caked_point
+        if caked_background_is_authoritative
+        else refined_caked_point or saved_background_caked_point
+    )
     caked_point = authoritative_caked_point
     if caked_point is None:
         caked_point = _finite_pair("caked_x", "caked_y")
@@ -729,15 +740,20 @@ def refresh_geometry_manual_pair_entry(
                 float(detector_row),
             )
         )
-    if recomputed_caked is not None:
-        normalized["background_two_theta_deg"] = float(recomputed_caked[0])
-        normalized["background_phi_deg"] = float(recomputed_caked[1])
-        normalized["caked_x"] = float(recomputed_caked[0])
-        normalized["caked_y"] = float(recomputed_caked[1])
-        normalized["raw_caked_x"] = float(recomputed_caked[0])
-        normalized["raw_caked_y"] = float(recomputed_caked[1])
-        normalized["two_theta_deg"] = float(recomputed_caked[0])
-        normalized["phi_deg"] = float(recomputed_caked[1])
+    output_caked = (
+        saved_background_caked_point
+        if caked_background_is_authoritative
+        else recomputed_caked
+    )
+    if output_caked is not None:
+        normalized["background_two_theta_deg"] = float(output_caked[0])
+        normalized["background_phi_deg"] = float(output_caked[1])
+        normalized["caked_x"] = float(output_caked[0])
+        normalized["caked_y"] = float(output_caked[1])
+        normalized["raw_caked_x"] = float(output_caked[0])
+        normalized["raw_caked_y"] = float(output_caked[1])
+        normalized["two_theta_deg"] = float(output_caked[0])
+        normalized["phi_deg"] = float(output_caked[1])
 
     return normalized
 
@@ -1095,6 +1111,10 @@ def normalize_geometry_manual_pair_entry(
         normalized["source_label"] = str(entry.get("source_label"))
     if "stale_caked_fields" in entry:
         normalized["stale_caked_fields"] = bool(entry.get("stale_caked_fields", False))
+    if entry.get("manual_background_input_frame") is not None:
+        normalized["manual_background_input_frame"] = normalize_geometry_point_frame(
+            entry.get("manual_background_input_frame")
+        )
     for key in ("branch_id", "branch_source", "selection_reason"):
         if entry.get(key) is not None:
             normalized[key] = str(entry.get(key))
@@ -5250,6 +5270,7 @@ def geometry_manual_pair_entry_from_candidate(
         entry["raw_x"] = float(raw_col)
         entry["raw_y"] = float(raw_row)
     if caked_col is not None and caked_row is not None:
+        entry["manual_background_input_frame"] = "caked_2theta_phi"
         entry["background_two_theta_deg"] = float(caked_col)
         entry["background_phi_deg"] = float(caked_row)
         entry["caked_x"] = float(caked_col)

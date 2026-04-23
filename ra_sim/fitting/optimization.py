@@ -62,6 +62,12 @@ DETECTOR_DERIVED_FIT_SPACE_ANCHOR_REASONS = frozenset(
         "display_fit_space_anchor",
     )
 )
+RAW_ANGULAR_METRIC_NAME = "raw_angular_rms_deg"
+RAW_ANGULAR_METRIC_UNIT = "deg"
+WEIGHTED_ANGULAR_METRIC_NAME = "weighted_angular_rms_weighted_deg"
+WEIGHTED_ANGULAR_METRIC_UNIT = "weighted_deg"
+RAW_ANGULAR_COMPONENT_BOUND_DEG = 180.0
+RAW_ANGULAR_VECTOR_NORM_BOUND_DEG = math.hypot(90.0, 180.0)
 
 process_peaks_parallel = getattr(
     _runtime,
@@ -75,6 +81,717 @@ _NUMBA_PROCESS_PEAKS_WARMUP_LOCK = getattr(
     "_NUMBA_PROCESS_PEAKS_WARMUP_LOCK",
     Lock(),
 )
+
+
+def _finite_min_max(values: np.ndarray) -> Tuple[float, float]:
+    finite = np.asarray(values, dtype=float).reshape(-1)
+    finite = finite[np.isfinite(finite)]
+    if not finite.size:
+        return float("nan"), float("nan")
+    return float(np.min(finite)), float(np.max(finite))
+
+
+def _component_rms(values: Sequence[float]) -> float:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if not arr.size:
+        return float("nan")
+    if not np.all(np.isfinite(arr)):
+        return float("nan")
+    return float(np.sqrt(np.mean(arr * arr)))
+
+
+def _component_nonfinite_count(values: Sequence[float]) -> int:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if not arr.size:
+        return 0
+    return int(arr.size - int(np.count_nonzero(np.isfinite(arr))))
+
+
+def _wrapped_delta_deg(projected_deg: np.ndarray, measured_deg: np.ndarray) -> np.ndarray:
+    return (projected_deg - measured_deg + 180.0) % 360.0 - 180.0
+
+
+def _paired_component_arrays(
+    first_values: Sequence[float],
+    second_values: Sequence[float],
+) -> Tuple[np.ndarray, np.ndarray, int, int]:
+    first = np.asarray(first_values, dtype=float).reshape(-1)
+    second = np.asarray(second_values, dtype=float).reshape(-1)
+    expected_count = max(int(first.size), int(second.size))
+    pair_count = min(int(first.size), int(second.size))
+    if pair_count <= 0:
+        return (
+            np.array([], dtype=float),
+            np.array([], dtype=float),
+            int(expected_count),
+            int(expected_count),
+        )
+    first = first[:pair_count]
+    second = second[:pair_count]
+    nonfinite_count = int(
+        pair_count - int(np.count_nonzero(np.isfinite(first) & np.isfinite(second)))
+    )
+    missing_count = int(expected_count - pair_count)
+    return first, second, int(expected_count), int(missing_count + nonfinite_count)
+
+
+def _angular_degree_residual_audit_summary(
+    *,
+    measured_two_theta_deg: Sequence[float],
+    measured_phi_deg: Sequence[float],
+    projected_two_theta_deg: Sequence[float],
+    projected_phi_deg: Sequence[float],
+    delta_two_theta_deg: Sequence[float],
+    wrapped_delta_phi_deg: Sequence[float],
+    weighted_delta_two_theta_deg: Sequence[float],
+    weighted_delta_phi_deg: Sequence[float],
+    priority_weights: Sequence[float],
+    solver_residual_vector: Sequence[float],
+    optimizer_point_residual_vector: Sequence[float] | None = None,
+) -> Dict[str, object]:
+    raw_theta, raw_phi, raw_expected_count, raw_delta_failure_count = _paired_component_arrays(
+        delta_two_theta_deg,
+        wrapped_delta_phi_deg,
+    )
+    (
+        weighted_theta,
+        weighted_phi,
+        weighted_expected_count,
+        weighted_failure_count,
+    ) = _paired_component_arrays(
+        weighted_delta_two_theta_deg,
+        weighted_delta_phi_deg,
+    )
+    measured_two_theta_arr = np.asarray(measured_two_theta_deg, dtype=float).reshape(-1)
+    measured_phi_arr = np.asarray(measured_phi_deg, dtype=float).reshape(-1)
+    projected_two_theta_arr = np.asarray(projected_two_theta_deg, dtype=float).reshape(-1)
+    projected_phi_arr = np.asarray(projected_phi_deg, dtype=float).reshape(-1)
+    priority_weight_arr = np.asarray(priority_weights, dtype=float).reshape(-1)
+    angle_lengths = (
+        int(measured_two_theta_arr.size),
+        int(measured_phi_arr.size),
+        int(projected_two_theta_arr.size),
+        int(projected_phi_arr.size),
+    )
+    range_expected_count = int(raw_expected_count)
+    range_pair_count = min((range_expected_count, *angle_lengths))
+    range_length_failure_count = int(
+        max((range_expected_count, *angle_lengths))
+        - min((range_expected_count, *angle_lengths))
+    )
+    measured_phi_wrapped_full = (measured_phi_arr + 180.0) % 360.0 - 180.0
+    projected_phi_wrapped_full = (projected_phi_arr + 180.0) % 360.0 - 180.0
+    raw_delta_recompute_failure_count = 0
+    if range_pair_count > 0:
+        measured_two_theta_pair = measured_two_theta_arr[:range_pair_count]
+        measured_phi_wrapped_pair = measured_phi_wrapped_full[:range_pair_count]
+        projected_two_theta_pair = projected_two_theta_arr[:range_pair_count]
+        projected_phi_wrapped_pair = projected_phi_wrapped_full[:range_pair_count]
+        range_finite = (
+            np.isfinite(measured_two_theta_pair)
+            & np.isfinite(measured_phi_wrapped_pair)
+            & np.isfinite(projected_two_theta_pair)
+            & np.isfinite(projected_phi_wrapped_pair)
+        )
+        range_ok = (
+            range_finite
+            & (measured_two_theta_pair >= 0.0)
+            & (measured_two_theta_pair <= 90.0)
+            & (projected_two_theta_pair >= 0.0)
+            & (projected_two_theta_pair <= 90.0)
+            & (measured_phi_wrapped_pair >= -180.0)
+            & (measured_phi_wrapped_pair <= 180.0)
+            & (projected_phi_wrapped_pair >= -180.0)
+            & (projected_phi_wrapped_pair <= 180.0)
+        )
+        range_failure_count = int(range_pair_count - int(np.count_nonzero(range_ok)))
+        raw_delta_compare_count = min(int(raw_theta.size), int(raw_phi.size), range_pair_count)
+        if raw_delta_compare_count > 0:
+            recomputed_theta = (
+                projected_two_theta_pair[:raw_delta_compare_count]
+                - measured_two_theta_pair[:raw_delta_compare_count]
+            )
+            recomputed_phi = _wrapped_delta_deg(
+                projected_phi_wrapped_pair[:raw_delta_compare_count],
+                measured_phi_wrapped_pair[:raw_delta_compare_count],
+            )
+            supplied_theta = raw_theta[:raw_delta_compare_count]
+            supplied_phi = raw_phi[:raw_delta_compare_count]
+            delta_matches = (
+                np.isfinite(supplied_theta)
+                & np.isfinite(supplied_phi)
+                & np.isfinite(recomputed_theta)
+                & np.isfinite(recomputed_phi)
+                & np.isclose(supplied_theta, recomputed_theta, rtol=0.0, atol=1.0e-9)
+                & np.isclose(supplied_phi, recomputed_phi, rtol=0.0, atol=1.0e-9)
+            )
+            raw_delta_recompute_failure_count = int(
+                raw_delta_compare_count - int(np.count_nonzero(delta_matches))
+            )
+    else:
+        range_failure_count = 0
+    range_failure_count += int(range_length_failure_count)
+    raw_delta_failure_count += int(raw_delta_recompute_failure_count)
+    weighted_recompute_failure_count = 0
+    weighted_length_failure_count = int(
+        max((raw_expected_count, weighted_expected_count, int(priority_weight_arr.size)))
+        - min((raw_expected_count, weighted_expected_count, int(priority_weight_arr.size)))
+    )
+    weighted_compare_count = min(
+        int(raw_theta.size),
+        int(raw_phi.size),
+        int(weighted_theta.size),
+        int(weighted_phi.size),
+        int(priority_weight_arr.size),
+    )
+    if weighted_compare_count > 0:
+        weights_pair = priority_weight_arr[:weighted_compare_count]
+        expected_weighted_theta = raw_theta[:weighted_compare_count] * weights_pair
+        expected_weighted_phi = raw_phi[:weighted_compare_count] * weights_pair
+        supplied_weighted_theta = weighted_theta[:weighted_compare_count]
+        supplied_weighted_phi = weighted_phi[:weighted_compare_count]
+        theta_matches = (
+            np.isfinite(weights_pair)
+            & np.isfinite(expected_weighted_theta)
+            & np.isfinite(supplied_weighted_theta)
+            & np.isclose(
+                supplied_weighted_theta,
+                expected_weighted_theta,
+                rtol=0.0,
+                atol=1.0e-9,
+            )
+        )
+        phi_matches = (
+            np.isfinite(weights_pair)
+            & np.isfinite(expected_weighted_phi)
+            & np.isfinite(supplied_weighted_phi)
+            & np.isclose(
+                supplied_weighted_phi,
+                expected_weighted_phi,
+                rtol=0.0,
+                atol=1.0e-9,
+            )
+        )
+        weighted_recompute_failure_count = int(
+            2 * weighted_compare_count
+            - int(np.count_nonzero(theta_matches))
+            - int(np.count_nonzero(phi_matches))
+        )
+    weighted_recompute_failure_count += int(weighted_length_failure_count)
+    solver_residual_arr = np.asarray(solver_residual_vector, dtype=float).reshape(-1)
+    point_residual_source = (
+        optimizer_point_residual_vector
+        if optimizer_point_residual_vector is not None
+        else solver_residual_vector
+    )
+    point_residual_arr = np.asarray(point_residual_source, dtype=float).reshape(-1)
+    optimizer_point_component_failure_count = 0
+    optimizer_point_row_count = min(
+        int(raw_theta.size),
+        int(raw_phi.size),
+        int(priority_weight_arr.size),
+        int(point_residual_arr.size // 2),
+    )
+    if optimizer_point_row_count > 0:
+        weights_pair = priority_weight_arr[:optimizer_point_row_count]
+        expected_point_components = np.column_stack(
+            (
+                raw_theta[:optimizer_point_row_count] * weights_pair,
+                raw_phi[:optimizer_point_row_count] * weights_pair,
+            )
+        ).reshape(-1)
+        supplied_point_components = point_residual_arr[: expected_point_components.size]
+        point_matches = (
+            np.isfinite(expected_point_components)
+            & np.isfinite(supplied_point_components)
+            & np.isclose(
+                supplied_point_components,
+                expected_point_components,
+                rtol=0.0,
+                atol=1.0e-9,
+            )
+        )
+        optimizer_point_component_failure_count = int(
+            expected_point_components.size - int(np.count_nonzero(point_matches))
+        )
+    expected_point_component_count = 2 * int(weighted_expected_count)
+    optimizer_point_component_count = int(point_residual_arr.size)
+    if int(point_residual_arr.size) != expected_point_component_count:
+        optimizer_point_component_failure_count += int(
+            abs(expected_point_component_count - int(point_residual_arr.size))
+        )
+    weighted_failure_count += int(weighted_recompute_failure_count)
+    weighted_failure_count += int(optimizer_point_component_failure_count)
+    measured_two_theta_min, measured_two_theta_max = _finite_min_max(measured_two_theta_arr)
+    projected_two_theta_min, projected_two_theta_max = _finite_min_max(projected_two_theta_arr)
+    measured_phi_min, measured_phi_max = _finite_min_max(measured_phi_wrapped_full)
+    projected_phi_min, projected_phi_max = _finite_min_max(projected_phi_wrapped_full)
+    summary: Dict[str, object] = {
+        "metric_name": RAW_ANGULAR_METRIC_NAME,
+        "metric_unit": RAW_ANGULAR_METRIC_UNIT,
+        "weighted_metric_name": WEIGHTED_ANGULAR_METRIC_NAME,
+        "weighted_metric_unit": WEIGHTED_ANGULAR_METRIC_UNIT,
+        "raw_angular_rms_formula": ("sqrt(mean(delta_two_theta_deg^2 + wrapped_delta_phi_deg^2))"),
+        "raw_angular_max_formula": "max(raw_angular_norm_deg)",
+        "weighted_angular_rms_formula": (
+            "sqrt(mean((w*delta_two_theta_deg)^2 + (w*wrapped_delta_phi_deg)^2))"
+        ),
+        "raw_angular_component_bound_deg": float(RAW_ANGULAR_COMPONENT_BOUND_DEG),
+        "raw_angular_vector_norm_bound_deg": float(RAW_ANGULAR_VECTOR_NORM_BOUND_DEG),
+        "raw_angular_range_row_count": int(range_expected_count),
+        "raw_angular_range_failure_count": int(range_failure_count),
+        "raw_angular_delta_recompute_failure_count": int(
+            raw_delta_recompute_failure_count
+        ),
+        "weighted_angular_recompute_failure_count": int(
+            weighted_recompute_failure_count
+        ),
+        "optimizer_point_component_count": int(optimizer_point_component_count),
+        "optimizer_point_component_failure_count": int(
+            optimizer_point_component_failure_count
+        ),
+        "raw_angular_range_sanity_ok": bool(
+            range_expected_count > 0 and range_failure_count == 0
+        ),
+        "measured_two_theta_min_deg": float(measured_two_theta_min),
+        "measured_two_theta_max_deg": float(measured_two_theta_max),
+        "projected_two_theta_min_deg": float(projected_two_theta_min),
+        "projected_two_theta_max_deg": float(projected_two_theta_max),
+        "measured_phi_wrapped_min_deg": float(measured_phi_min),
+        "measured_phi_wrapped_max_deg": float(measured_phi_max),
+        "projected_phi_wrapped_min_deg": float(projected_phi_min),
+        "projected_phi_wrapped_max_deg": float(projected_phi_max),
+    }
+    if raw_expected_count > 0 and raw_delta_failure_count == 0:
+        raw_sq = raw_theta * raw_theta + raw_phi * raw_phi
+        raw_norm = np.sqrt(raw_sq)
+        raw_component_abs = np.abs(np.concatenate((raw_theta, raw_phi)))
+        raw_component_max = float(np.max(raw_component_abs))
+        raw_max = float(np.max(raw_norm))
+        summary.update(
+            {
+                "raw_angular_row_count": int(raw_theta.size),
+                "raw_angular_delta_failure_count": 0,
+                "raw_angular_rms_deg": float(np.sqrt(np.mean(raw_sq))),
+                "raw_angular_max_deg": raw_max,
+                "raw_angular_component_max_abs_deg": raw_component_max,
+                "raw_angular_delta_sanity_ok": bool(
+                    raw_max <= RAW_ANGULAR_VECTOR_NORM_BOUND_DEG + 1.0e-9
+                    and raw_component_max <= RAW_ANGULAR_COMPONENT_BOUND_DEG + 1.0e-9
+                ),
+            }
+        )
+    else:
+        summary.update(
+            {
+                "raw_angular_row_count": int(raw_expected_count),
+                "raw_angular_delta_failure_count": int(raw_delta_failure_count),
+                "raw_angular_rms_deg": float("nan"),
+                "raw_angular_max_deg": float("nan"),
+                "raw_angular_component_max_abs_deg": float("nan"),
+                "raw_angular_delta_sanity_ok": False,
+            }
+        )
+    summary["raw_angular_sanity_ok"] = bool(
+        summary.get("raw_angular_delta_sanity_ok") is True
+        and summary.get("raw_angular_range_sanity_ok") is True
+    )
+
+    if weighted_expected_count > 0 and weighted_failure_count == 0:
+        weighted_sq = weighted_theta * weighted_theta + weighted_phi * weighted_phi
+        weighted_norm = np.sqrt(weighted_sq)
+        summary.update(
+            {
+                "weighted_angular_row_count": int(weighted_theta.size),
+                "weighted_angular_failure_count": 0,
+                "weighted_angular_rms_weighted_deg": float(np.sqrt(np.mean(weighted_sq))),
+                "weighted_angular_max_weighted_deg": float(np.max(weighted_norm)),
+            }
+        )
+    else:
+        summary.update(
+            {
+                "weighted_angular_row_count": int(weighted_expected_count),
+                "weighted_angular_failure_count": int(weighted_failure_count),
+                "weighted_angular_rms_weighted_deg": float("nan"),
+                "weighted_angular_max_weighted_deg": float("nan"),
+            }
+        )
+    summary["optimizer_component_rms_weighted_deg"] = _component_rms(solver_residual_arr)
+    summary["optimizer_component_count"] = int(solver_residual_arr.size)
+    summary["optimizer_component_nonfinite_count"] = _component_nonfinite_count(
+        solver_residual_arr
+    )
+    return summary
+
+
+def _merged_angular_degree_residual_audit_summary(
+    summaries: Sequence[Mapping[str, object]],
+    diagnostics: Sequence[Mapping[str, object]] = (),
+    solver_residual_vector: Sequence[float] | None = None,
+) -> Dict[str, object]:
+    matched_diagnostics = [
+        entry
+        for entry in diagnostics
+        if isinstance(entry, Mapping) and str(entry.get("match_status", "")).lower() == "matched"
+    ]
+    if matched_diagnostics:
+        matched_point_solver_vector = [
+            component
+            for entry in matched_diagnostics
+            for component in (
+                entry.get("solver_residual_vector", ())
+                if isinstance(entry.get("solver_residual_vector"), Sequence)
+                and not isinstance(entry.get("solver_residual_vector"), (str, bytes))
+                else ()
+            )
+        ]
+        solver_vector = (
+            solver_residual_vector
+            if solver_residual_vector is not None
+            else matched_point_solver_vector
+        )
+        diagnostic_summary = _angular_degree_residual_audit_summary(
+            measured_two_theta_deg=[
+                float(entry.get("measured_two_theta_deg", np.nan)) for entry in matched_diagnostics
+            ],
+            measured_phi_deg=[
+                float(entry.get("measured_phi_deg", np.nan)) for entry in matched_diagnostics
+            ],
+            projected_two_theta_deg=[
+                float(
+                    entry.get(
+                        "projected_two_theta_deg",
+                        entry.get("simulated_two_theta_deg", np.nan),
+                    )
+                )
+                for entry in matched_diagnostics
+            ],
+            projected_phi_deg=[
+                float(entry.get("projected_phi_deg", entry.get("simulated_phi_deg", np.nan)))
+                for entry in matched_diagnostics
+            ],
+            delta_two_theta_deg=[
+                float(entry.get("delta_two_theta_deg", np.nan)) for entry in matched_diagnostics
+            ],
+            wrapped_delta_phi_deg=[
+                float(entry.get("wrapped_delta_phi_deg", entry.get("delta_phi_deg", np.nan)))
+                for entry in matched_diagnostics
+            ],
+            weighted_delta_two_theta_deg=[
+                float(entry.get("weighted_delta_two_theta_deg", np.nan))
+                for entry in matched_diagnostics
+            ],
+            weighted_delta_phi_deg=[
+                float(entry.get("weighted_delta_phi_deg", np.nan)) for entry in matched_diagnostics
+            ],
+            priority_weights=[
+                float(entry.get("weight", entry.get("priority_weight", np.nan)))
+                for entry in matched_diagnostics
+            ],
+            solver_residual_vector=solver_vector,
+            optimizer_point_residual_vector=matched_point_solver_vector,
+        )
+        if summaries:
+            for key in (
+                "raw_angular_delta_failure_count",
+                "raw_angular_delta_recompute_failure_count",
+                "raw_angular_range_failure_count",
+                "weighted_angular_failure_count",
+                "weighted_angular_recompute_failure_count",
+                "optimizer_point_component_failure_count",
+                "optimizer_component_nonfinite_count",
+            ):
+                dataset_failure_count = 0
+                for summary in summaries:
+                    if not isinstance(summary, Mapping):
+                        continue
+                    try:
+                        dataset_failure_count += int(summary.get(key, 0) or 0)
+                    except Exception:
+                        dataset_failure_count += 1
+                if dataset_failure_count:
+                    try:
+                        current_failure_count = int(diagnostic_summary.get(key, 0) or 0)
+                    except Exception:
+                        current_failure_count = 0
+                    diagnostic_summary[key] = int(
+                        max(current_failure_count, dataset_failure_count)
+                    )
+            raw_delta_total = max(
+                int(diagnostic_summary.get("raw_angular_delta_failure_count", 0) or 0),
+                int(diagnostic_summary.get("raw_angular_delta_recompute_failure_count", 0) or 0),
+            )
+            diagnostic_summary["raw_angular_delta_failure_count"] = int(raw_delta_total)
+            weighted_total = max(
+                int(diagnostic_summary.get("weighted_angular_failure_count", 0) or 0),
+                int(
+                    diagnostic_summary.get(
+                        "weighted_angular_recompute_failure_count",
+                        0,
+                    )
+                    or 0
+                ),
+                int(diagnostic_summary.get("optimizer_point_component_failure_count", 0) or 0),
+            )
+            diagnostic_summary["weighted_angular_failure_count"] = int(weighted_total)
+            if int(diagnostic_summary.get("raw_angular_delta_failure_count", 0) or 0) != 0:
+                diagnostic_summary["raw_angular_delta_sanity_ok"] = False
+                diagnostic_summary["raw_angular_rms_deg"] = float("nan")
+                diagnostic_summary["raw_angular_max_deg"] = float("nan")
+                diagnostic_summary["raw_angular_component_max_abs_deg"] = float("nan")
+            if int(diagnostic_summary.get("raw_angular_range_failure_count", 0) or 0) != 0:
+                diagnostic_summary["raw_angular_range_sanity_ok"] = False
+            diagnostic_summary["raw_angular_sanity_ok"] = bool(
+                diagnostic_summary.get("raw_angular_delta_sanity_ok") is True
+                and diagnostic_summary.get("raw_angular_range_sanity_ok") is True
+            )
+            if int(diagnostic_summary.get("weighted_angular_failure_count", 0) or 0) != 0:
+                diagnostic_summary["weighted_angular_rms_weighted_deg"] = float("nan")
+                diagnostic_summary["weighted_angular_max_weighted_deg"] = float("nan")
+            if int(diagnostic_summary.get("optimizer_component_nonfinite_count", 0) or 0) != 0:
+                diagnostic_summary["optimizer_component_rms_weighted_deg"] = float("nan")
+        return diagnostic_summary
+
+    raw_count = 0
+    raw_sq_sum = 0.0
+    raw_max = float("nan")
+    raw_component_max = float("nan")
+    raw_delta_failure_count = 0
+    raw_delta_recompute_failure_count = 0
+    raw_rms_valid = True
+    weighted_count = 0
+    weighted_sq_sum = 0.0
+    weighted_max = float("nan")
+    weighted_failure_count = 0
+    weighted_recompute_failure_count = 0
+    weighted_rms_valid = True
+    optimizer_point_component_count = 0
+    optimizer_point_component_failure_count = 0
+    optimizer_component_count = 0
+    optimizer_component_nonfinite_count = 0
+    optimizer_component_sq_sum = 0.0
+    optimizer_component_rms_valid = True
+    for summary in summaries:
+        if not isinstance(summary, Mapping):
+            continue
+        try:
+            dataset_raw_count = int(summary.get("raw_angular_row_count", 0) or 0)
+        except Exception:
+            dataset_raw_count = 0
+        try:
+            raw_delta_failure_count += int(
+                summary.get("raw_angular_delta_failure_count", 0) or 0
+            )
+        except Exception:
+            raw_delta_failure_count += int(dataset_raw_count)
+        try:
+            raw_delta_recompute_failure_count += int(
+                summary.get("raw_angular_delta_recompute_failure_count", 0) or 0
+            )
+        except Exception:
+            raw_delta_recompute_failure_count += int(dataset_raw_count)
+        try:
+            dataset_raw_rms = float(summary.get("raw_angular_rms_deg", np.nan))
+        except Exception:
+            dataset_raw_rms = float("nan")
+        if dataset_raw_count > 0:
+            raw_count += int(dataset_raw_count)
+            if np.isfinite(dataset_raw_rms):
+                raw_sq_sum += (
+                    float(dataset_raw_count) * float(dataset_raw_rms) * float(dataset_raw_rms)
+                )
+            else:
+                raw_rms_valid = False
+        try:
+            dataset_raw_max = float(summary.get("raw_angular_max_deg", np.nan))
+        except Exception:
+            dataset_raw_max = float("nan")
+        if np.isfinite(dataset_raw_max):
+            if not np.isfinite(raw_max) or dataset_raw_max > raw_max:
+                raw_max = float(dataset_raw_max)
+        try:
+            dataset_component_max = float(summary.get("raw_angular_component_max_abs_deg", np.nan))
+        except Exception:
+            dataset_component_max = float("nan")
+        if np.isfinite(dataset_component_max):
+            if not np.isfinite(raw_component_max) or dataset_component_max > raw_component_max:
+                raw_component_max = float(dataset_component_max)
+
+        try:
+            dataset_weighted_count = int(
+                summary.get("weighted_angular_row_count", dataset_raw_count) or 0
+            )
+        except Exception:
+            dataset_weighted_count = 0
+        try:
+            weighted_failure_count += int(
+                summary.get("weighted_angular_failure_count", 0) or 0
+            )
+        except Exception:
+            weighted_failure_count += int(dataset_weighted_count)
+        try:
+            weighted_recompute_failure_count += int(
+                summary.get("weighted_angular_recompute_failure_count", 0) or 0
+            )
+        except Exception:
+            weighted_recompute_failure_count += int(dataset_weighted_count)
+        try:
+            dataset_weighted_rms = float(summary.get("weighted_angular_rms_weighted_deg", np.nan))
+        except Exception:
+            dataset_weighted_rms = float("nan")
+        if dataset_weighted_count > 0:
+            weighted_count += int(dataset_weighted_count)
+            if np.isfinite(dataset_weighted_rms):
+                weighted_sq_sum += (
+                    float(dataset_weighted_count)
+                    * float(dataset_weighted_rms)
+                    * float(dataset_weighted_rms)
+                )
+            else:
+                weighted_rms_valid = False
+        try:
+            dataset_weighted_max = float(summary.get("weighted_angular_max_weighted_deg", np.nan))
+        except Exception:
+            dataset_weighted_max = float("nan")
+        if np.isfinite(dataset_weighted_max):
+            if not np.isfinite(weighted_max) or dataset_weighted_max > weighted_max:
+                weighted_max = float(dataset_weighted_max)
+        try:
+            optimizer_point_component_count += int(
+                summary.get("optimizer_point_component_count", 0) or 0
+            )
+        except Exception:
+            pass
+        try:
+            optimizer_point_component_failure_count += int(
+                summary.get("optimizer_point_component_failure_count", 0) or 0
+            )
+        except Exception:
+            optimizer_point_component_failure_count += int(2 * dataset_weighted_count)
+        try:
+            dataset_optimizer_rms = float(
+                summary.get("optimizer_component_rms_weighted_deg", np.nan)
+            )
+        except Exception:
+            dataset_optimizer_rms = float("nan")
+        try:
+            dataset_component_count = int(
+                summary.get("optimizer_component_count", 2 * int(dataset_weighted_count)) or 0
+            )
+        except Exception:
+            dataset_component_count = 0
+        try:
+            dataset_component_nonfinite_count = int(
+                summary.get("optimizer_component_nonfinite_count", 0) or 0
+            )
+        except Exception:
+            dataset_component_nonfinite_count = 0
+        if dataset_component_count > 0:
+            optimizer_component_count += int(dataset_component_count)
+            optimizer_component_nonfinite_count += int(dataset_component_nonfinite_count)
+            if dataset_component_nonfinite_count > 0 or not np.isfinite(
+                dataset_optimizer_rms
+            ):
+                optimizer_component_rms_valid = False
+                continue
+            optimizer_component_sq_sum += (
+                float(dataset_component_count)
+                * float(dataset_optimizer_rms)
+                * float(dataset_optimizer_rms)
+            )
+
+    merged = {
+        "metric_name": RAW_ANGULAR_METRIC_NAME,
+        "metric_unit": RAW_ANGULAR_METRIC_UNIT,
+        "weighted_metric_name": WEIGHTED_ANGULAR_METRIC_NAME,
+        "weighted_metric_unit": WEIGHTED_ANGULAR_METRIC_UNIT,
+        "raw_angular_rms_formula": ("sqrt(mean(delta_two_theta_deg^2 + wrapped_delta_phi_deg^2))"),
+        "raw_angular_max_formula": "max(raw_angular_norm_deg)",
+        "weighted_angular_rms_formula": (
+            "sqrt(mean((w*delta_two_theta_deg)^2 + (w*wrapped_delta_phi_deg)^2))"
+        ),
+        "raw_angular_component_bound_deg": float(RAW_ANGULAR_COMPONENT_BOUND_DEG),
+        "raw_angular_vector_norm_bound_deg": float(RAW_ANGULAR_VECTOR_NORM_BOUND_DEG),
+        "raw_angular_row_count": int(raw_count),
+        "raw_angular_delta_failure_count": int(raw_delta_failure_count),
+        "raw_angular_delta_recompute_failure_count": int(
+            raw_delta_recompute_failure_count
+        ),
+        "raw_angular_rms_deg": (
+            float(np.sqrt(raw_sq_sum / float(raw_count)))
+            if raw_count > 0 and raw_rms_valid
+            else float("nan")
+        ),
+        "raw_angular_max_deg": float(raw_max),
+        "raw_angular_component_max_abs_deg": float(raw_component_max),
+        "weighted_angular_row_count": int(weighted_count),
+        "weighted_angular_failure_count": int(weighted_failure_count),
+        "weighted_angular_recompute_failure_count": int(
+            weighted_recompute_failure_count
+        ),
+        "weighted_angular_rms_weighted_deg": (
+            float(np.sqrt(weighted_sq_sum / float(weighted_count)))
+            if weighted_count > 0 and weighted_rms_valid and weighted_failure_count == 0
+            else float("nan")
+        ),
+        "weighted_angular_max_weighted_deg": float(weighted_max),
+        "optimizer_point_component_count": int(optimizer_point_component_count),
+        "optimizer_point_component_failure_count": int(
+            optimizer_point_component_failure_count
+        ),
+        "optimizer_component_rms_weighted_deg": (
+            float(np.sqrt(optimizer_component_sq_sum / float(optimizer_component_count)))
+            if optimizer_component_count > 0 and optimizer_component_rms_valid
+            else float("nan")
+        ),
+        "optimizer_component_count": int(optimizer_component_count),
+        "optimizer_component_nonfinite_count": int(optimizer_component_nonfinite_count),
+    }
+    range_count = int(
+        sum(int(summary.get("raw_angular_range_row_count", 0) or 0) for summary in summaries)
+    )
+    range_failure_count = int(
+        sum(int(summary.get("raw_angular_range_failure_count", 0) or 0) for summary in summaries)
+    )
+    merged["raw_angular_range_row_count"] = int(range_count)
+    merged["raw_angular_range_failure_count"] = int(range_failure_count)
+    merged["raw_angular_range_sanity_ok"] = bool(range_count > 0 and range_failure_count == 0)
+    merged["raw_angular_delta_sanity_ok"] = bool(
+        raw_count > 0
+        and raw_delta_failure_count == 0
+        and np.isfinite(merged["raw_angular_max_deg"])
+        and np.isfinite(merged["raw_angular_component_max_abs_deg"])
+        and float(merged["raw_angular_max_deg"]) <= RAW_ANGULAR_VECTOR_NORM_BOUND_DEG + 1.0e-9
+        and float(merged["raw_angular_component_max_abs_deg"])
+        <= RAW_ANGULAR_COMPONENT_BOUND_DEG + 1.0e-9
+    )
+    merged["raw_angular_sanity_ok"] = bool(
+        merged["raw_angular_delta_sanity_ok"] is True
+        and merged["raw_angular_range_sanity_ok"] is True
+    )
+    for key in (
+        "measured_two_theta_min_deg",
+        "measured_two_theta_max_deg",
+        "projected_two_theta_min_deg",
+        "projected_two_theta_max_deg",
+        "measured_phi_wrapped_min_deg",
+        "measured_phi_wrapped_max_deg",
+        "projected_phi_wrapped_min_deg",
+        "projected_phi_wrapped_max_deg",
+    ):
+        values = np.asarray(
+            [float(summary.get(key, np.nan)) for summary in summaries],
+            dtype=float,
+        )
+        values = values[np.isfinite(values)]
+        if not values.size:
+            merged[key] = float("nan")
+        elif key.endswith("_min_deg"):
+            merged[key] = float(np.min(values))
+        else:
+            merged[key] = float(np.max(values))
+    return merged
 
 
 def _retain_fit_simulation_cache() -> bool:
@@ -591,6 +1308,10 @@ class MosaicShapeDatasetContext:
     measured_peak_count: int
 
 
+CenteredMosaicProfileComparison = _mosaic_profiles.CenteredMosaicProfileComparison
+LorentzianGaussianProfileFit = _mosaic_profiles.LorentzianGaussianProfileFit
+MosaicPhiProfile = _mosaic_profiles.MosaicPhiProfile
+MosaicPointPair = _mosaic_profiles.MosaicPointPair
 MosaicProfileROI = _mosaic_profiles.MosaicProfileROI
 MosaicProfileDatasetContext = _mosaic_profiles.MosaicProfileDatasetContext
 
@@ -2031,6 +2752,15 @@ _mosaic_profile_group_key = _mosaic_profiles._mosaic_profile_group_key
 _mosaic_profile_intensity_lookup = _mosaic_profiles._mosaic_profile_intensity_lookup
 _mosaic_profile_peak_score = _mosaic_profiles._mosaic_profile_peak_score
 _mosaic_profile_entry_priority = _mosaic_profiles._mosaic_profile_entry_priority
+compare_centered_phi_profiles = _mosaic_profiles.compare_centered_phi_profiles
+fit_lorentzian_plus_gaussian_profile = _mosaic_profiles.fit_lorentzian_plus_gaussian_profile
+fit_mosaic_parameters_from_centered_phi_profiles = (
+    _mosaic_profiles.fit_mosaic_parameters_from_centered_phi_profiles
+)
+integrate_selected_qr_phi_profiles = _mosaic_profiles.integrate_selected_qr_phi_profiles
+lorentzian_plus_gaussian_profile = _mosaic_profiles.lorentzian_plus_gaussian_profile
+pair_selected_qr_and_background_points = _mosaic_profiles.pair_selected_qr_and_background_points
+stack_centered_phi_profiles = _mosaic_profiles.stack_centered_phi_profiles
 
 
 def focus_mosaic_profile_dataset_specs(
@@ -4123,6 +4853,16 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     diagnostics: List[Dict[str, object]] = []
     pixel_distances: List[float] = []
     angular_distances: List[float] = []
+    measured_two_theta_deg_values: List[float] = []
+    measured_phi_deg_values: List[float] = []
+    projected_two_theta_deg_values: List[float] = []
+    projected_phi_deg_values: List[float] = []
+    raw_delta_two_theta_deg_values: List[float] = []
+    raw_wrapped_delta_phi_deg_values: List[float] = []
+    weighted_delta_two_theta_deg_values: List[float] = []
+    weighted_delta_phi_deg_values: List[float] = []
+    priority_weight_values: List[float] = []
+    optimizer_point_residual_values: List[float] = []
     matched_pair_count = 0
     missing_pairs = 0
     fixed_source_resolved_count = 0
@@ -4173,7 +4913,138 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     measured_anchor_reanchor_attempt_count = 0
     measured_anchor_reanchor_count = 0
     measured_anchor_reanchor_fail_count = 0
+    measured_anchor_reanchor_rejected_count = 0
     measured_anchor_motion_px: List[float] = []
+    dynamic_reanchor_trace: List[Dict[str, object]] = []
+    dynamic_reanchor_rejected_pairs: List[Dict[str, object]] = []
+    dynamic_reanchor_lost_pairs: List[Dict[str, object]] = []
+    dynamic_reanchor_lost_pair_ids: List[str] = []
+    dynamic_reanchor_rematched_pair_ids: List[str] = []
+    dynamic_reanchor_fallback_pair_ids: List[str] = []
+    dynamic_reanchor_rejected_pair_ids: List[str] = []
+
+    def _append_unique(values: List[str], value: object) -> None:
+        text = str(value)
+        if text and text not in values:
+            values.append(text)
+
+    def _mark_lost_pair(
+        idx: int,
+        before_entry: Mapping[str, object],
+        after_entry: Mapping[str, object] | None,
+        sim_point_value: object,
+        reason: str,
+        raw_reason: object | None = None,
+        resolution_payload: Mapping[str, object] | None = None,
+    ) -> None:
+        pair_id = _dynamic_reanchor_pair_id(before_entry, idx)
+        _append_unique(dynamic_reanchor_lost_pair_ids, pair_id)
+        if not any(
+            str(record.get("pair_id", "")) == pair_id for record in dynamic_reanchor_lost_pairs
+        ):
+            dynamic_reanchor_lost_pairs.append(
+                _dynamic_reanchor_pair_trace_record(
+                    pair_index=idx,
+                    before_entry=before_entry,
+                    after_entry=after_entry,
+                    sim_point=sim_point_value,
+                    reason=reason,
+                    raw_reason=raw_reason,
+                    resolution_payload=resolution_payload,
+                )
+            )
+
+    def _resolution_trace_fields(
+        resolution_payload: Mapping[str, object],
+    ) -> Dict[str, object]:
+        fields: Dict[str, object] = {}
+        for key in (
+            "requested_source_peak_index",
+            "requested_source_row_index",
+            "requested_branch_index",
+            "requested_branch_exists",
+            "requested_peak_exists",
+            "legacy_peak_exists",
+            "hit_table_row_count",
+            "valid_row_count",
+            "hkl_exists_in_table",
+            "branch_filtered_row_count",
+            "branch_table_filtered_out",
+            "projection_available",
+            "projection_finite",
+            "off_detector",
+        ):
+            if key in resolution_payload:
+                fields[key] = _dynamic_reanchor_jsonable(resolution_payload.get(key))
+        if "resolution_subreason" in resolution_payload:
+            fields["resolution_subreason"] = str(resolution_payload.get("resolution_subreason"))
+        return fields
+
+    def _new_dynamic_reanchor_event(
+        idx: int,
+        entry: Mapping[str, object],
+        sim_point_value: object,
+    ) -> tuple[int, Dict[str, object]]:
+        before_anchor, _before_reason, _before_meta = _measured_fit_space_anchor(
+            entry,
+            center=fit_center,
+            detector_distance=detector_distance,
+            pixel_size=pixel_size,
+            gamma_deg=gamma_deg,
+            Gamma_deg=Gamma_deg,
+            a_lattice=a_lattice,
+            c_lattice=c_lattice,
+            wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
+            dataset_ctx=dataset_ctx,
+            local_params=local,
+        )
+        before_resolved = int(before_anchor is not None and sim_point_value is not None)
+        identity = _dynamic_reanchor_identity_payload(entry, idx)
+        return before_resolved, {
+            "reanchor_event_index": int(len(dynamic_reanchor_trace)),
+            "candidate_param_names": list(local.get("_active_fit_param_names", ())),
+            "enabled_features": ["dynamic_reanchor"],
+            "pair_id": identity.get("pair_id"),
+            "pair_index": int(idx),
+            "hkl": identity.get("hkl"),
+            "normalized_hkl": identity.get("normalized_hkl"),
+            "source_branch_index": identity.get("source_branch_index"),
+            "q_group_key": identity.get("q_group_key"),
+            "branch_group_key": identity.get("branch_group_key"),
+            "provider_identity": identity.get("provider_source_identity"),
+            "pre_reanchor_resolved_table_index": identity.get("resolved_table_index"),
+            "post_reanchor_resolved_table_index": identity.get("resolved_table_index"),
+            "pre_reanchor_source_peak_index": identity.get("source_peak_index"),
+            "pre_reanchor_source_row_index": identity.get("source_row_index"),
+            "post_reanchor_source_peak_index": identity.get("source_peak_index"),
+            "post_reanchor_source_row_index": identity.get("source_row_index"),
+            "pair_count_before": 1,
+            "pair_count_after": 1,
+            "pair_count_before_reanchor": 1,
+            "pair_count_after_reanchor": 1,
+            "fixed_source_resolved_count_before": int(before_resolved),
+            "fixed_source_resolved_count_after": int(before_resolved),
+            "fixed_source_resolved_count_before_reanchor": int(before_resolved),
+            "fixed_source_resolved_count_after_reanchor": int(before_resolved),
+            "fallback_entry_count_before": 0,
+            "fallback_entry_count_after": 0,
+            "fallback_entry_count_before_reanchor": 0,
+            "fallback_entry_count_after_reanchor": 0,
+            "missing_pair_count_before": int(1 - before_resolved),
+            "missing_pair_count_after": int(1 - before_resolved),
+            "missing_pair_count_before_reanchor": int(1 - before_resolved),
+            "missing_pair_count_after_reanchor": int(1 - before_resolved),
+            "branch_mismatch_count_before": 0,
+            "branch_mismatch_count_after": 0,
+            "branch_mismatch_count_before_reanchor": 0,
+            "branch_mismatch_count_after_reanchor": 0,
+            "lost_pair_ids": [],
+            "rematched_pair_ids": [],
+            "fallback_pair_ids": [],
+            "rejected_pair_ids": [],
+            "status": "failed",
+            "rejection_reason": "callback_failed",
+        }
 
     def _entry_diag(entry: Dict[str, object], idx: int) -> Dict[str, object]:
         return {
@@ -4183,6 +5054,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "q_group_key": entry.get("q_group_key"),
             **_copy_source_identity_payload(entry),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
+            "optimizer_request_has_fixed_source": entry.get("optimizer_request_has_fixed_source"),
+            "optimizer_request_source": entry.get("optimizer_request_source"),
+            "optimizer_request_fallback_row": entry.get("optimizer_request_fallback_row"),
+            "manual_picker_selected_source_identity_canonical": entry.get(
+                "manual_picker_selected_source_identity_canonical"
+            ),
         }
 
     for idx, measured_entry in enumerate(normalized_measured):
@@ -4194,11 +5071,17 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             hk0_peak_priority_weight=float(hk0_peak_priority_weight),
         )
         priority_weight = float(priority_fields["priority_weight"])
-        sim_point, sim_reason = _geometry_fit_correspondence_simulated_point(
+        (
+            sim_point,
+            sim_resolution_payload,
+        ) = _geometry_fit_correspondence_simulated_point_payload(
             measured_entry,
             hit_tables=hit_tables,
             max_positions=maxpos,
             trusted_full_reflection_local_index_map=full_reflection_local_index_map,
+        )
+        sim_reason = str(
+            sim_resolution_payload.get("resolution_reason", "missing_source_peak_index")
         )
         if sim_point is not None:
             sim_col = float(sim_point[0])
@@ -4211,16 +5094,103 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 or sim_col > float(image_size - 1)
                 or sim_row > float(image_size - 1)
             ):
+                sim_resolution_payload = dict(sim_resolution_payload)
+                sim_resolution_payload["pre_rejection_resolution_reason"] = str(sim_reason)
+                sim_resolution_payload["resolution_reason"] = "off_detector"
+                sim_resolution_payload["resolution_subreason"] = str(sim_reason)
+                sim_resolution_payload["projection_available"] = True
+                sim_resolution_payload["projection_finite"] = bool(
+                    np.isfinite(sim_col) and np.isfinite(sim_row)
+                )
+                sim_resolution_payload["off_detector"] = True
                 sim_point = None
                 sim_reason = "off_detector"
 
         reanchor_attempted = False
         reanchor_status = "disabled"
+        reanchor_event_index = None
+        reanchor_update_rejected = False
+        reanchor_rejection_reason = None
+        reanchor_identity_mismatch_fields: List[str] = []
         reanchor_motion_px = float("nan")
-        if dynamic_reanchor_enabled and sim_point is not None:
+        original_entry: Dict[str, object] | None = None
+        event: Dict[str, object] | None = None
+        pending_reanchor_acceptance = False
+        pending_reanchor_after_resolved = 0
+        pending_reanchor_after_identity: Dict[str, object] | None = None
+        if dynamic_reanchor_enabled:
             reanchor_attempted = True
             measured_anchor_reanchor_attempt_count += 1
             reanchor_status = "callback_failed"
+            original_entry = dict(measured_entry)
+            before_resolved, event = _new_dynamic_reanchor_event(
+                idx,
+                original_entry,
+                sim_point,
+            )
+            reanchor_event_index = int(event["reanchor_event_index"])
+            if sim_point is None:
+                pair_id = _dynamic_reanchor_pair_id(original_entry, idx)
+                reanchor_update_rejected = True
+                reanchor_rejection_reason = "missing_after_reanchor"
+                measured_anchor_reanchor_fail_count += 1
+                measured_anchor_reanchor_rejected_count += 1
+                _append_unique(dynamic_reanchor_rejected_pair_ids, pair_id)
+                rejected_record = _dynamic_reanchor_pair_trace_record(
+                    pair_index=idx,
+                    before_entry=original_entry,
+                    after_entry=original_entry,
+                    sim_point=sim_point,
+                    reason="missing_after_reanchor",
+                    raw_reason=sim_reason,
+                    resolution_payload=sim_resolution_payload,
+                )
+                rejected_record["identity_mismatch_fields"] = []
+                dynamic_reanchor_rejected_pairs.append(rejected_record)
+                _mark_lost_pair(
+                    idx,
+                    original_entry,
+                    original_entry,
+                    sim_point,
+                    "missing_after_reanchor",
+                    raw_reason=sim_reason,
+                    resolution_payload=sim_resolution_payload,
+                )
+                sim_resolution_payload_json = _dynamic_reanchor_jsonable(sim_resolution_payload)
+                event.update(
+                    {
+                        "status": "failed",
+                        "rejection_reason": "missing_after_reanchor",
+                        "raw_rejection_reason": str(sim_reason or ""),
+                        "sim_reason": str(sim_reason or ""),
+                        "sim_resolution_payload": sim_resolution_payload_json,
+                        "sim_resolution_reason": str(sim_reason or ""),
+                        "sim_resolution_subreason": sim_resolution_payload.get(
+                            "resolution_subreason"
+                        ),
+                        **_resolution_trace_fields(sim_resolution_payload),
+                        "fixed_source_resolved_count_after": int(before_resolved),
+                        "fixed_source_resolved_count_after_reanchor": int(before_resolved),
+                        "missing_pair_count_after": int(1 - before_resolved),
+                        "missing_pair_count_after_reanchor": int(1 - before_resolved),
+                        "lost_pair_ids": [pair_id],
+                        "rematched_pair_ids": [],
+                        "fallback_pair_ids": [],
+                        "rejected_pair_ids": [pair_id],
+                        "rejected_pair_details": [rejected_record],
+                    }
+                )
+                dynamic_reanchor_trace.append(event)
+
+        if dynamic_reanchor_enabled and sim_point is not None:
+            if original_entry is None or event is None:
+                original_entry = dict(measured_entry)
+                _before_resolved, event = _new_dynamic_reanchor_event(
+                    idx,
+                    original_entry,
+                    sim_point,
+                )
+                reanchor_event_index = int(event["reanchor_event_index"])
             try:
                 rebuilt_entry = dataset_ctx.dynamic_reanchor_callback(
                     dict(measured_entry),
@@ -4233,31 +5203,169 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             if isinstance(rebuilt_entry, Mapping):
                 updated_entry = dict(measured_entry)
                 updated_entry.update(dict(rebuilt_entry))
-                try:
-                    reanchor_motion_px = float(
-                        rebuilt_entry.get("measured_reanchor_motion_px", np.nan)
+                updated_anchor, updated_reason, _updated_meta = _measured_fit_space_anchor(
+                    updated_entry,
+                    center=fit_center,
+                    detector_distance=detector_distance,
+                    pixel_size=pixel_size,
+                    gamma_deg=gamma_deg,
+                    Gamma_deg=Gamma_deg,
+                    a_lattice=a_lattice,
+                    c_lattice=c_lattice,
+                    wavelength=wavelength_scalar if np.isfinite(wavelength_scalar) else None,
+                    dataset_ctx=dataset_ctx,
+                    local_params=local,
+                )
+                after_resolved = int(updated_anchor is not None and sim_point is not None)
+                reanchor_identity_mismatch_fields = _dynamic_reanchor_identity_mismatches(
+                    original_entry,
+                    updated_entry,
+                    idx,
+                )
+                after_identity = _dynamic_reanchor_identity_payload(updated_entry, idx)
+                pair_id = _dynamic_reanchor_pair_id(original_entry, idx)
+                if bool(rebuilt_entry.get("drop_pair", False)) or bool(
+                    rebuilt_entry.get("dropped_pair", False)
+                ):
+                    reanchor_rejection_reason = "dropped_pair"
+                elif _dynamic_reanchor_fallback_created(updated_entry):
+                    reanchor_rejection_reason = "fallback_created"
+                elif reanchor_identity_mismatch_fields:
+                    reanchor_rejection_reason = "fixed_source_identity_changed"
+                elif _dynamic_reanchor_has_nonfinite_point(updated_entry):
+                    reanchor_rejection_reason = "non_finite_point"
+                elif updated_anchor is None:
+                    reanchor_rejection_reason = str(updated_reason or "missing_after_reanchor")
+                    if reanchor_rejection_reason not in {
+                        "missing_after_reanchor",
+                        "non_finite_point",
+                    }:
+                        reanchor_rejection_reason = "missing_after_reanchor"
+                if reanchor_rejection_reason:
+                    reanchor_update_rejected = True
+                    reanchor_status = "rejected"
+                    measured_anchor_reanchor_rejected_count += 1
+                    _append_unique(dynamic_reanchor_rejected_pair_ids, pair_id)
+                    rejected_record = _dynamic_reanchor_pair_trace_record(
+                        pair_index=idx,
+                        before_entry=original_entry,
+                        after_entry=updated_entry,
+                        sim_point=sim_point,
+                        reason=str(reanchor_rejection_reason),
+                        resolution_payload=sim_resolution_payload,
                     )
-                except Exception:
-                    reanchor_motion_px = float("nan")
-                if not np.isfinite(reanchor_motion_px):
-                    old_detector_anchor, _old_reason = _measured_detector_anchor(measured_entry)
-                    new_detector_anchor, _new_reason = _measured_detector_anchor(updated_entry)
-                    if old_detector_anchor is not None and new_detector_anchor is not None:
-                        reanchor_motion_px = float(
-                            math.hypot(
-                                float(new_detector_anchor[0]) - float(old_detector_anchor[0]),
-                                float(new_detector_anchor[1]) - float(old_detector_anchor[1]),
-                            )
+                    rejected_record["identity_mismatch_fields"] = list(
+                        reanchor_identity_mismatch_fields
+                    )
+                    dynamic_reanchor_rejected_pairs.append(rejected_record)
+                    if str(reanchor_rejection_reason) == "fixed_source_identity_changed":
+                        _append_unique(dynamic_reanchor_rematched_pair_ids, pair_id)
+                    if str(reanchor_rejection_reason) == "fallback_created":
+                        _append_unique(dynamic_reanchor_fallback_pair_ids, pair_id)
+                    if str(reanchor_rejection_reason) in {
+                        "dropped_pair",
+                        "fallback_created",
+                        "missing_after_reanchor",
+                        "non_finite_point",
+                    }:
+                        event_lost_pair_ids = [pair_id]
+                        _mark_lost_pair(
+                            idx,
+                            original_entry,
+                            updated_entry,
+                            sim_point,
+                            str(reanchor_rejection_reason),
+                            resolution_payload=sim_resolution_payload,
                         )
-                if np.isfinite(reanchor_motion_px):
-                    measured_anchor_motion_px.append(float(reanchor_motion_px))
-                measured_entry = updated_entry
-                diag = _entry_diag(measured_entry, idx)
-                measured_anchor_reanchor_count += 1
-                reanchor_status = "updated"
+                    else:
+                        event_lost_pair_ids = []
+                    event.update(
+                        {
+                            "status": "rejected",
+                            "rejection_reason": str(reanchor_rejection_reason),
+                            "sim_reason": str(sim_reason or ""),
+                            "sim_resolution_payload": _dynamic_reanchor_jsonable(
+                                sim_resolution_payload
+                            ),
+                            "sim_resolution_reason": str(sim_reason or ""),
+                            "sim_resolution_subreason": sim_resolution_payload.get(
+                                "resolution_subreason"
+                            ),
+                            **_resolution_trace_fields(sim_resolution_payload),
+                            "post_reanchor_resolved_table_index": after_identity.get(
+                                "resolved_table_index"
+                            ),
+                            "post_reanchor_source_peak_index": after_identity.get(
+                                "source_peak_index"
+                            ),
+                            "post_reanchor_source_row_index": after_identity.get(
+                                "source_row_index"
+                            ),
+                            "proposed_fixed_source_resolved_count_after": int(after_resolved),
+                            "proposed_missing_pair_count_after": int(1 - after_resolved),
+                            "lost_pair_ids": list(event_lost_pair_ids),
+                            "rematched_pair_ids": (
+                                [pair_id]
+                                if str(reanchor_rejection_reason) == "fixed_source_identity_changed"
+                                else []
+                            ),
+                            "fallback_pair_ids": (
+                                [pair_id]
+                                if str(reanchor_rejection_reason) == "fallback_created"
+                                else []
+                            ),
+                            "rejected_pair_ids": [pair_id],
+                            "rejected_pair_details": [rejected_record],
+                        }
+                    )
+                    dynamic_reanchor_trace.append(event)
+                    rebuilt_entry = None
+                else:
+                    try:
+                        reanchor_motion_px = float(
+                            rebuilt_entry.get("measured_reanchor_motion_px", np.nan)
+                        )
+                    except Exception:
+                        reanchor_motion_px = float("nan")
+                    if not np.isfinite(reanchor_motion_px):
+                        old_detector_anchor, _old_reason = _measured_detector_anchor(measured_entry)
+                        new_detector_anchor, _new_reason = _measured_detector_anchor(updated_entry)
+                        if old_detector_anchor is not None and new_detector_anchor is not None:
+                            reanchor_motion_px = float(
+                                math.hypot(
+                                    float(new_detector_anchor[0]) - float(old_detector_anchor[0]),
+                                    float(new_detector_anchor[1]) - float(old_detector_anchor[1]),
+                                )
+                            )
+                    measured_entry = updated_entry
+                    diag = _entry_diag(measured_entry, idx)
+                    pending_reanchor_acceptance = True
+                    pending_reanchor_after_resolved = int(after_resolved)
+                    pending_reanchor_after_identity = dict(after_identity)
+                    reanchor_status = "pending_acceptance"
             else:
                 measured_anchor_reanchor_fail_count += 1
+                event.update(
+                    {
+                        "sim_reason": str(sim_reason or ""),
+                        "sim_resolution_payload": _dynamic_reanchor_jsonable(
+                            sim_resolution_payload
+                        ),
+                        "sim_resolution_reason": str(sim_reason or ""),
+                        "sim_resolution_subreason": sim_resolution_payload.get(
+                            "resolution_subreason"
+                        ),
+                        **_resolution_trace_fields(sim_resolution_payload),
+                    }
+                )
+                dynamic_reanchor_trace.append(event)
 
+        reanchor_diag_fields = {
+            "measured_reanchor_event_index": reanchor_event_index,
+            "reanchor_update_rejected": bool(reanchor_update_rejected),
+            "reanchor_rejection_reason": reanchor_rejection_reason,
+            "reanchor_identity_mismatch_fields": list(reanchor_identity_mismatch_fields),
+        }
         measured_fit_anchor, measured_reason, measured_anchor_metadata = _measured_fit_space_anchor(
             measured_entry,
             center=fit_center,
@@ -4320,6 +5428,97 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
+            if (
+                dynamic_reanchor_enabled
+                and pending_reanchor_acceptance
+                and event is not None
+                and original_entry is not None
+            ):
+                pair_id = _dynamic_reanchor_pair_id(original_entry, idx)
+                reanchor_update_rejected = True
+                reanchor_rejection_reason = "missing_after_reanchor"
+                reanchor_status = "rejected"
+                measured_anchor_reanchor_rejected_count += 1
+                _append_unique(dynamic_reanchor_rejected_pair_ids, pair_id)
+                after_identity = pending_reanchor_after_identity or (
+                    _dynamic_reanchor_identity_payload(measured_entry, idx)
+                )
+                rejected_record = _dynamic_reanchor_pair_trace_record(
+                    pair_index=idx,
+                    before_entry=original_entry,
+                    after_entry=measured_entry,
+                    sim_point=sim_point,
+                    reason="missing_after_reanchor",
+                    raw_reason=measured_reason,
+                    resolution_payload=sim_resolution_payload,
+                )
+                rejected_record["identity_mismatch_fields"] = list(
+                    reanchor_identity_mismatch_fields
+                )
+                dynamic_reanchor_rejected_pairs.append(rejected_record)
+                _append_unique(dynamic_reanchor_lost_pair_ids, pair_id)
+                _mark_lost_pair(
+                    idx,
+                    original_entry,
+                    measured_entry,
+                    sim_point,
+                    "missing_after_reanchor",
+                    raw_reason=measured_reason,
+                    resolution_payload=sim_resolution_payload,
+                )
+                event.update(
+                    {
+                        "status": "rejected",
+                        "rejection_reason": "missing_after_reanchor",
+                        "raw_rejection_reason": str(measured_reason or ""),
+                        "sim_reason": str(sim_reason or ""),
+                        "sim_resolution_payload": _dynamic_reanchor_jsonable(
+                            sim_resolution_payload
+                        ),
+                        "sim_resolution_reason": str(sim_reason or ""),
+                        "sim_resolution_subreason": sim_resolution_payload.get(
+                            "resolution_subreason"
+                        ),
+                        **_resolution_trace_fields(sim_resolution_payload),
+                        "post_reanchor_resolved_table_index": after_identity.get(
+                            "resolved_table_index"
+                        ),
+                        "post_reanchor_source_peak_index": after_identity.get("source_peak_index"),
+                        "post_reanchor_source_row_index": after_identity.get("source_row_index"),
+                        "proposed_fixed_source_resolved_count_after": int(
+                            pending_reanchor_after_resolved
+                        ),
+                        "proposed_missing_pair_count_after": int(
+                            1 - pending_reanchor_after_resolved
+                        ),
+                        "lost_pair_ids": [pair_id],
+                        "rematched_pair_ids": [],
+                        "fallback_pair_ids": [],
+                        "rejected_pair_ids": [pair_id],
+                        "rejected_pair_details": [rejected_record],
+                    }
+                )
+                dynamic_reanchor_trace.append(event)
+                reanchor_diag_fields.update(
+                    {
+                        "reanchor_update_rejected": True,
+                        "reanchor_rejection_reason": "missing_after_reanchor",
+                        "reanchor_identity_mismatch_fields": list(
+                            reanchor_identity_mismatch_fields
+                        ),
+                    }
+                )
+                pending_reanchor_acceptance = False
+            elif dynamic_reanchor_enabled:
+                _mark_lost_pair(
+                    idx,
+                    measured_entry,
+                    measured_entry,
+                    sim_point,
+                    "missing_after_reanchor",
+                    raw_reason=measured_reason,
+                    resolution_payload=sim_resolution_payload,
+                )
             if collect_diagnostics:
                 diagnostics.append(
                     {
@@ -4337,6 +5536,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "measured_reanchor_attempted": bool(reanchor_attempted),
                         "measured_reanchor_status": str(reanchor_status),
                         "measured_reanchor_motion_px": float(reanchor_motion_px),
+                        **reanchor_diag_fields,
                         "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
@@ -4388,6 +5588,16 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
+            if dynamic_reanchor_enabled:
+                _mark_lost_pair(
+                    idx,
+                    measured_entry,
+                    measured_entry,
+                    sim_point,
+                    "missing_after_reanchor",
+                    raw_reason=sim_reason,
+                    resolution_payload=sim_resolution_payload,
+                )
             if collect_diagnostics:
                 diagnostics.append(
                     {
@@ -4405,6 +5615,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "measured_reanchor_attempted": bool(reanchor_attempted),
                         "measured_reanchor_status": str(reanchor_status),
                         "measured_reanchor_motion_px": float(reanchor_motion_px),
+                        **reanchor_diag_fields,
                         "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
@@ -4493,6 +5704,105 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
+            if dynamic_reanchor_enabled:
+                projection_payload = dict(sim_resolution_payload)
+                projection_payload["pre_rejection_resolution_reason"] = str(sim_reason)
+                projection_payload["resolution_reason"] = "non_finite_point"
+                projection_payload["resolution_subreason"] = str(
+                    simulated_diag_fields.get("simulated_invalid_projection_reason")
+                    or simulated_projection_meta.get("invalid_reason")
+                    or "invalid_fit_space"
+                )
+                projection_payload["projection_available"] = True
+                projection_payload["projection_finite"] = False
+                projection_payload["off_detector"] = bool(
+                    projection_payload.get("off_detector", False)
+                )
+                if pending_reanchor_acceptance and event is not None and original_entry is not None:
+                    pair_id = _dynamic_reanchor_pair_id(original_entry, idx)
+                    reanchor_update_rejected = True
+                    reanchor_rejection_reason = "non_finite_point"
+                    reanchor_status = "rejected"
+                    measured_anchor_reanchor_rejected_count += 1
+                    _append_unique(dynamic_reanchor_rejected_pair_ids, pair_id)
+                    after_identity = pending_reanchor_after_identity or (
+                        _dynamic_reanchor_identity_payload(measured_entry, idx)
+                    )
+                    rejected_record = _dynamic_reanchor_pair_trace_record(
+                        pair_index=idx,
+                        before_entry=original_entry,
+                        after_entry=measured_entry,
+                        sim_point=sim_point,
+                        reason="non_finite_point",
+                        resolution_payload=projection_payload,
+                    )
+                    rejected_record["identity_mismatch_fields"] = list(
+                        reanchor_identity_mismatch_fields
+                    )
+                    dynamic_reanchor_rejected_pairs.append(rejected_record)
+                    _mark_lost_pair(
+                        idx,
+                        original_entry,
+                        measured_entry,
+                        sim_point,
+                        "non_finite_point",
+                        resolution_payload=projection_payload,
+                    )
+                    event.update(
+                        {
+                            "status": "rejected",
+                            "rejection_reason": "non_finite_point",
+                            "sim_reason": "non_finite_point",
+                            "sim_resolution_payload": _dynamic_reanchor_jsonable(
+                                projection_payload
+                            ),
+                            "sim_resolution_reason": "non_finite_point",
+                            "sim_resolution_subreason": projection_payload.get(
+                                "resolution_subreason"
+                            ),
+                            **_resolution_trace_fields(projection_payload),
+                            "post_reanchor_resolved_table_index": after_identity.get(
+                                "resolved_table_index"
+                            ),
+                            "post_reanchor_source_peak_index": after_identity.get(
+                                "source_peak_index"
+                            ),
+                            "post_reanchor_source_row_index": after_identity.get(
+                                "source_row_index"
+                            ),
+                            "proposed_fixed_source_resolved_count_after": int(
+                                pending_reanchor_after_resolved
+                            ),
+                            "proposed_missing_pair_count_after": int(
+                                1 - pending_reanchor_after_resolved
+                            ),
+                            "lost_pair_ids": [pair_id],
+                            "rematched_pair_ids": [],
+                            "fallback_pair_ids": [],
+                            "rejected_pair_ids": [pair_id],
+                            "rejected_pair_details": [rejected_record],
+                        }
+                    )
+                    dynamic_reanchor_trace.append(event)
+                    reanchor_diag_fields.update(
+                        {
+                            "reanchor_update_rejected": True,
+                            "reanchor_rejection_reason": "non_finite_point",
+                            "reanchor_identity_mismatch_fields": list(
+                                reanchor_identity_mismatch_fields
+                            ),
+                        }
+                    )
+                    pending_reanchor_acceptance = False
+                else:
+                    _mark_lost_pair(
+                        idx,
+                        measured_entry,
+                        measured_entry,
+                        sim_point,
+                        "non_finite_point",
+                        resolution_payload=projection_payload,
+                    )
             if collect_diagnostics:
                 diagnostics.append(
                     {
@@ -4510,6 +5820,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         "measured_reanchor_attempted": bool(reanchor_attempted),
                         "measured_reanchor_status": str(reanchor_status),
                         "measured_reanchor_motion_px": float(reanchor_motion_px),
+                        **reanchor_diag_fields,
                         "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                         "measured_x": (
                             float(measured_detector_anchor[0])
@@ -4555,12 +5866,49 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 )
             continue
 
+        if pending_reanchor_acceptance and event is not None:
+            after_identity = pending_reanchor_after_identity or (
+                _dynamic_reanchor_identity_payload(measured_entry, idx)
+            )
+            event.update(
+                {
+                    "status": "accepted",
+                    "rejection_reason": None,
+                    "sim_reason": str(sim_reason or ""),
+                    "sim_resolution_payload": _dynamic_reanchor_jsonable(sim_resolution_payload),
+                    "sim_resolution_reason": str(sim_reason or ""),
+                    "sim_resolution_subreason": sim_resolution_payload.get("resolution_subreason"),
+                    **_resolution_trace_fields(sim_resolution_payload),
+                    "post_reanchor_resolved_table_index": after_identity.get(
+                        "resolved_table_index"
+                    ),
+                    "post_reanchor_source_peak_index": after_identity.get("source_peak_index"),
+                    "post_reanchor_source_row_index": after_identity.get("source_row_index"),
+                    "fixed_source_resolved_count_after": int(pending_reanchor_after_resolved),
+                    "fixed_source_resolved_count_after_reanchor": int(
+                        pending_reanchor_after_resolved
+                    ),
+                    "missing_pair_count_after": int(1 - pending_reanchor_after_resolved),
+                    "missing_pair_count_after_reanchor": int(1 - pending_reanchor_after_resolved),
+                }
+            )
+            dynamic_reanchor_trace.append(event)
+            if np.isfinite(reanchor_motion_px):
+                measured_anchor_motion_px.append(float(reanchor_motion_px))
+            measured_anchor_reanchor_count += 1
+            reanchor_status = "updated"
+            pending_reanchor_acceptance = False
+
         sim_two_theta = float(sim_two_theta_arr[0])
         sim_phi = float(sim_phi_arr[0])
         delta_two_theta = float(sim_two_theta - measured_two_theta)
         delta_phi = float(_angular_difference_deg(sim_phi, measured_phi))
-        residual_components[idx, 0] = float(priority_weight) * float(delta_two_theta)
-        residual_components[idx, 1] = float(priority_weight) * float(delta_phi)
+        measured_phi_wrapped = float(_angular_difference_deg(measured_phi, 0.0))
+        projected_phi_wrapped = float(_angular_difference_deg(sim_phi, 0.0))
+        weighted_delta_two_theta = float(priority_weight) * float(delta_two_theta)
+        weighted_delta_phi = float(priority_weight) * float(delta_phi)
+        residual_components[idx, 0] = float(weighted_delta_two_theta)
+        residual_components[idx, 1] = float(weighted_delta_phi)
         matched_pair_count += 1
         if measured_detector_anchor is not None:
             pixel_dx = float(sim_col - float(measured_detector_anchor[0]))
@@ -4571,9 +5919,25 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             pixel_dy = float("nan")
             pixel_distance = float("nan")
         angular_distance = float(math.hypot(delta_two_theta, delta_phi))
+        weighted_angular_distance = float(math.hypot(weighted_delta_two_theta, weighted_delta_phi))
         if np.isfinite(pixel_distance):
             pixel_distances.append(pixel_distance)
         angular_distances.append(angular_distance)
+        measured_two_theta_deg_values.append(float(measured_two_theta))
+        measured_phi_deg_values.append(float(measured_phi_wrapped))
+        projected_two_theta_deg_values.append(float(sim_two_theta))
+        projected_phi_deg_values.append(float(projected_phi_wrapped))
+        raw_delta_two_theta_deg_values.append(float(delta_two_theta))
+        raw_wrapped_delta_phi_deg_values.append(float(delta_phi))
+        weighted_delta_two_theta_deg_values.append(float(weighted_delta_two_theta))
+        weighted_delta_phi_deg_values.append(float(weighted_delta_phi))
+        priority_weight_values.append(float(priority_weight))
+        optimizer_point_residual_values.extend(
+            (
+                float(residual_components[idx, 0]),
+                float(residual_components[idx, 1]),
+            )
+        )
         if eligible_line_group_ids:
             line_match_records.append(
                 {
@@ -4620,6 +5984,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     "measured_reanchor_attempted": bool(reanchor_attempted),
                     "measured_reanchor_status": str(reanchor_status),
                     "measured_reanchor_motion_px": float(reanchor_motion_px),
+                    **reanchor_diag_fields,
                     "two_theta_adjustment_deg": float(two_theta_adjustment_deg),
                     "measured_x": (
                         float(measured_detector_anchor[0])
@@ -4636,13 +6001,35 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     "dx_px": float(pixel_dx),
                     "dy_px": float(pixel_dy),
                     "distance_px": float(pixel_distance),
+                    "manual_pair_id": str(
+                        diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}"
+                    ),
                     "measured_two_theta_deg": float(measured_two_theta),
-                    "measured_phi_deg": float(measured_phi),
+                    "measured_phi_deg": float(measured_phi_wrapped),
                     "simulated_two_theta_deg": float(sim_two_theta),
                     "simulated_phi_deg": float(sim_phi),
+                    "projected_two_theta_deg": float(sim_two_theta),
+                    "projected_phi_deg": float(projected_phi_wrapped),
                     "delta_two_theta_deg": float(delta_two_theta),
                     "delta_phi_deg": float(delta_phi),
+                    "wrapped_delta_phi_deg": float(delta_phi),
                     "angular_distance_deg": float(angular_distance),
+                    "raw_angular_norm_deg": float(angular_distance),
+                    "raw_angular_component_max_abs_deg": float(
+                        max(abs(delta_two_theta), abs(delta_phi))
+                    ),
+                    "weight": float(priority_weight),
+                    "weighted_delta_two_theta_deg": float(weighted_delta_two_theta),
+                    "weighted_delta_phi_deg": float(weighted_delta_phi),
+                    "weighted_angular_norm_weighted_deg": float(weighted_angular_distance),
+                    "solver_residual_vector": [
+                        float(weighted_delta_two_theta),
+                        float(weighted_delta_phi),
+                    ],
+                    "metric_name": RAW_ANGULAR_METRIC_NAME,
+                    "metric_unit": RAW_ANGULAR_METRIC_UNIT,
+                    "weighted_metric_name": WEIGHTED_ANGULAR_METRIC_NAME,
+                    "weighted_metric_unit": WEIGHTED_ANGULAR_METRIC_UNIT,
                     **measured_diag_fields,
                     **simulated_diag_fields,
                     "fit_space_projector_kind": (
@@ -4728,6 +6115,23 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "measured_anchor_reanchor_attempt_count": int(measured_anchor_reanchor_attempt_count),
         "measured_anchor_reanchor_count": int(measured_anchor_reanchor_count),
         "measured_anchor_reanchor_fail_count": int(measured_anchor_reanchor_fail_count),
+        "measured_anchor_reanchor_rejected_count": int(measured_anchor_reanchor_rejected_count),
+        "dynamic_reanchor_policy": DYNAMIC_REANCHOR_POLICY,
+        "dynamic_reanchor_trace": dynamic_reanchor_trace,
+        "dynamic_reanchor_rejected_pairs": dynamic_reanchor_rejected_pairs,
+        "dynamic_reanchor_lost_pairs": dynamic_reanchor_lost_pairs,
+        "lost_pair_ids": list(dynamic_reanchor_lost_pair_ids),
+        "rematched_pair_ids": list(dynamic_reanchor_rematched_pair_ids),
+        "fallback_pair_ids": list(dynamic_reanchor_fallback_pair_ids),
+        "rejected_pair_ids": list(dynamic_reanchor_rejected_pair_ids),
+        "reanchor_update_rejected": bool(dynamic_reanchor_rejected_pair_ids),
+        "reanchor_rejection_reasons": sorted(
+            {
+                str(record.get("reason"))
+                for record in dynamic_reanchor_rejected_pairs
+                if str(record.get("reason", "") or "")
+            }
+        ),
         "manual_caked_residual_row_count": int(manual_caked_residual_row_count),
         "dataset_fit_space_projector_row_count": int(dataset_fit_space_projector_row_count),
         "invalid_dataset_fit_space_projector_row_count": int(
@@ -4790,6 +6194,27 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         summary["unweighted_peak_rms_deg"] = float("nan")
         summary["unweighted_peak_mean_deg"] = float("nan")
         summary["unweighted_peak_max_deg"] = float("nan")
+    summary.update(
+        _angular_degree_residual_audit_summary(
+            measured_two_theta_deg=measured_two_theta_deg_values,
+            measured_phi_deg=measured_phi_deg_values,
+            projected_two_theta_deg=projected_two_theta_deg_values,
+            projected_phi_deg=projected_phi_deg_values,
+            delta_two_theta_deg=raw_delta_two_theta_deg_values,
+            wrapped_delta_phi_deg=raw_wrapped_delta_phi_deg_values,
+            weighted_delta_two_theta_deg=weighted_delta_two_theta_deg_values,
+            weighted_delta_phi_deg=weighted_delta_phi_deg_values,
+            priority_weights=priority_weight_values,
+            solver_residual_vector=residual_arr,
+            optimizer_point_residual_vector=optimizer_point_residual_values,
+        )
+    )
+    summary.setdefault("raw_angular_rms_deg", summary.get("unweighted_peak_rms_deg"))
+    summary.setdefault("raw_angular_max_deg", summary.get("unweighted_peak_max_deg"))
+    summary["detector_pixel_rms_px"] = summary.get("unweighted_peak_rms_px", float("nan"))
+    summary["detector_pixel_max_px"] = summary.get("unweighted_peak_max_px", float("nan"))
+    summary.setdefault("caked_pixel_rms_px", float("nan"))
+    summary.setdefault("caked_pixel_max_px", float("nan"))
     if measured_anchor_motion_px:
         motion_arr = np.asarray(measured_anchor_motion_px, dtype=float)
         motion_arr = motion_arr[np.isfinite(motion_arr)]
@@ -10534,6 +11959,7 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
         "source_reflection_is_full": entry.get("source_reflection_is_full"),
         "source_reflection_index_namespace": str(reflection_namespace_label or "unset"),
         "source_table_index": entry.get("source_table_index"),
+        "resolved_table_index": entry.get("resolved_table_index"),
         "source_table_index_namespace": str(table_row_namespace_label),
         "source_row_index": entry.get("source_row_index"),
         "source_row_index_namespace": str(table_row_namespace_label),
@@ -10541,7 +11967,262 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
         "source_branch_index_namespace": str(branch_namespace_label),
         "source_peak_index": source_peak_index,
         "source_peak_index_namespace": str(peak_namespace_label),
+        "q_group_key": entry.get("q_group_key"),
+        "branch_group_key": entry.get("branch_group_key"),
+        "selected_source_identity_canonical": entry.get("selected_source_identity_canonical"),
+        "provider_selected_source_identity_canonical": entry.get(
+            "provider_selected_source_identity_canonical"
+        ),
     }
+
+
+DYNAMIC_REANCHOR_POLICY = "preserve_manual_fixed_source_identity"
+
+_DYNAMIC_REANCHOR_IDENTITY_FIELDS = (
+    "pair_id",
+    "normalized_hkl",
+    "frame",
+    "source_branch_index",
+    "q_group_key",
+    "branch_group_key",
+    "provider_source_identity",
+    "selected_source_identity_canonical",
+    "provider_selected_source_identity_canonical",
+    "source_table_index",
+    "resolved_table_index",
+    "source_peak_index",
+    "source_row_index",
+)
+
+
+def _dynamic_reanchor_jsonable(value: object) -> object:
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_dynamic_reanchor_jsonable(item) for item in value.tolist()]
+    if isinstance(value, Mapping):
+        return {
+            str(key): _dynamic_reanchor_jsonable(value[key])
+            for key in sorted(value.keys(), key=lambda item: str(item))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_dynamic_reanchor_jsonable(item) for item in value]
+    return value
+
+
+def _dynamic_reanchor_pair_id(entry: Mapping[str, object], pair_index: int) -> str:
+    pair_id = str(entry.get("pair_id", "") or "").strip()
+    return pair_id if pair_id else f"pair[{int(pair_index)}]"
+
+
+def _dynamic_reanchor_provider_identity(entry: Mapping[str, object]) -> object:
+    for key in (
+        "provider_selected_source_identity_canonical",
+        "selected_source_identity_canonical",
+        "manual_picker_selected_source_identity_canonical",
+    ):
+        value = entry.get(key)
+        if value not in (None, ""):
+            return _dynamic_reanchor_jsonable(value)
+    return None
+
+
+def _dynamic_reanchor_identity_payload(
+    entry: Mapping[str, object],
+    pair_index: int,
+) -> Dict[str, object]:
+    normalized_hkl = _normalized_hkl_key(entry.get("hkl"))
+    if isinstance(normalized_hkl, tuple) and len(normalized_hkl) == 3:
+        normalized_hkl_payload: object = [int(v) for v in normalized_hkl]
+    else:
+        normalized_hkl_payload = _dynamic_reanchor_jsonable(entry.get("hkl"))
+    return {
+        "pair_id": _dynamic_reanchor_pair_id(entry, pair_index),
+        "pair_index": int(pair_index),
+        "hkl": _dynamic_reanchor_jsonable(entry.get("hkl")),
+        "normalized_hkl": normalized_hkl_payload,
+        "frame": _dynamic_reanchor_jsonable(
+            entry.get("frame", entry.get("frame_index", entry.get("dataset_index")))
+        ),
+        "source_branch_index": _nonnegative_index(entry.get("source_branch_index")),
+        "q_group_key": _dynamic_reanchor_jsonable(entry.get("q_group_key")),
+        "branch_group_key": _dynamic_reanchor_jsonable(entry.get("branch_group_key")),
+        "provider_source_identity": _dynamic_reanchor_provider_identity(entry),
+        "selected_source_identity_canonical": _dynamic_reanchor_jsonable(
+            entry.get("selected_source_identity_canonical")
+        ),
+        "provider_selected_source_identity_canonical": _dynamic_reanchor_jsonable(
+            entry.get("provider_selected_source_identity_canonical")
+        ),
+        "source_table_index": _dynamic_reanchor_jsonable(entry.get("source_table_index")),
+        "resolved_table_index": _dynamic_reanchor_jsonable(entry.get("resolved_table_index")),
+        "source_peak_index": _nonnegative_index(entry.get("source_peak_index")),
+        "source_row_index": _dynamic_reanchor_jsonable(entry.get("source_row_index")),
+        "fit_source_resolution_kind": _dynamic_reanchor_jsonable(
+            entry.get("fit_source_resolution_kind")
+        ),
+    }
+
+
+def _dynamic_reanchor_identity_mismatches(
+    before_entry: Mapping[str, object],
+    after_entry: Mapping[str, object],
+    pair_index: int,
+) -> List[str]:
+    before = _dynamic_reanchor_identity_payload(before_entry, pair_index)
+    after = _dynamic_reanchor_identity_payload(after_entry, pair_index)
+    return [
+        field
+        for field in _DYNAMIC_REANCHOR_IDENTITY_FIELDS
+        if before.get(field) != after.get(field)
+    ]
+
+
+def _dynamic_reanchor_fallback_created(entry: Mapping[str, object]) -> bool:
+    for key in (
+        "fit_source_resolution_kind",
+        "resolution_kind",
+        "resolution_reason",
+        "optimizer_request_source",
+    ):
+        text = str(entry.get(key, "") or "").strip().lower()
+        if "fallback" in text or "hkl_search" in text or "rematch" in text:
+            return True
+    return bool(entry.get("optimizer_request_fallback_row", False))
+
+
+def _dynamic_reanchor_has_nonfinite_point(entry: Mapping[str, object]) -> bool:
+    for key in (
+        "x",
+        "y",
+        "measured_x",
+        "measured_y",
+        "fit_detector_x",
+        "fit_detector_y",
+        "background_detector_x",
+        "background_detector_y",
+        "detector_x",
+        "detector_y",
+        "caked_x",
+        "caked_y",
+    ):
+        if key not in entry:
+            continue
+        try:
+            value = float(entry.get(key))
+        except Exception:
+            return True
+        if not np.isfinite(value):
+            return True
+    return False
+
+
+def _dynamic_reanchor_detector_point(entry: Mapping[str, object]) -> object:
+    anchor, _reason = _measured_detector_anchor(entry)
+    if anchor is None:
+        return None
+    return [float(anchor[0]), float(anchor[1])]
+
+
+def _dynamic_reanchor_sim_point_payload(sim_point: object) -> object:
+    if sim_point is None:
+        return None
+    try:
+        col = float(sim_point[0])  # type: ignore[index]
+        row = float(sim_point[1])  # type: ignore[index]
+    except Exception:
+        return None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return [float(col), float(row)]
+
+
+def _dynamic_reanchor_pair_trace_record(
+    *,
+    pair_index: int,
+    before_entry: Mapping[str, object],
+    after_entry: Mapping[str, object] | None,
+    sim_point: object,
+    reason: str,
+    raw_reason: object | None = None,
+    resolution_payload: Mapping[str, object] | None = None,
+) -> Dict[str, object]:
+    after_mapping = after_entry if isinstance(after_entry, Mapping) else {}
+    before_identity = _dynamic_reanchor_identity_payload(before_entry, pair_index)
+    after_identity = (
+        _dynamic_reanchor_identity_payload(after_mapping, pair_index) if after_mapping else None
+    )
+    record = {
+        "pair_id": before_identity.get("pair_id"),
+        "pair_index": int(pair_index),
+        "hkl": before_identity.get("hkl"),
+        "normalized_hkl": before_identity.get("normalized_hkl"),
+        "source_branch_index": before_identity.get("source_branch_index"),
+        "q_group_key": before_identity.get("q_group_key"),
+        "branch_group_key": before_identity.get("branch_group_key"),
+        "provider_identity_before": before_identity.get("provider_source_identity"),
+        "provider_identity_after": (
+            after_identity.get("provider_source_identity")
+            if isinstance(after_identity, Mapping)
+            else None
+        ),
+        "provider_identity": before_identity.get("provider_source_identity"),
+        "pre_reanchor_resolved_table_index": before_identity.get("resolved_table_index"),
+        "post_reanchor_resolved_table_index": (
+            after_identity.get("resolved_table_index")
+            if isinstance(after_identity, Mapping)
+            else None
+        ),
+        "pre_reanchor_source_peak_index": before_identity.get("source_peak_index"),
+        "pre_reanchor_source_row_index": before_identity.get("source_row_index"),
+        "post_reanchor_source_peak_index": (
+            after_identity.get("source_peak_index") if isinstance(after_identity, Mapping) else None
+        ),
+        "post_reanchor_source_row_index": (
+            after_identity.get("source_row_index") if isinstance(after_identity, Mapping) else None
+        ),
+        "source_identity_before": before_identity,
+        "source_identity_after": after_identity,
+        "original_background_point": _dynamic_reanchor_detector_point(before_entry),
+        "original_simulated_point": _dynamic_reanchor_sim_point_payload(sim_point),
+        "reanchored_background_point": (
+            _dynamic_reanchor_detector_point(after_mapping) if after_mapping else None
+        ),
+        "reanchored_simulated_point": _dynamic_reanchor_sim_point_payload(sim_point),
+        "reason": str(reason),
+        "exact_reason": str(reason),
+    }
+    if raw_reason is not None:
+        record["raw_reason"] = str(raw_reason)
+        record["sim_reason"] = str(raw_reason)
+    if isinstance(resolution_payload, Mapping):
+        payload = dict(resolution_payload)
+        record["resolution_payload"] = _dynamic_reanchor_jsonable(payload)
+        resolution_reason = str(payload.get("resolution_reason", reason))
+        record["resolution_reason"] = resolution_reason
+        record["sim_reason"] = resolution_reason
+        if "resolution_subreason" in payload:
+            record["resolution_subreason"] = str(payload.get("resolution_subreason"))
+            record["exact_subreason"] = str(payload.get("resolution_subreason"))
+        for key in (
+            "requested_source_peak_index",
+            "requested_source_row_index",
+            "requested_branch_index",
+            "requested_branch_exists",
+            "requested_peak_exists",
+            "legacy_peak_exists",
+            "hit_table_row_count",
+            "valid_row_count",
+            "hkl_exists_in_table",
+            "branch_filtered_row_count",
+            "branch_table_filtered_out",
+            "projection_available",
+            "projection_finite",
+            "off_detector",
+        ):
+            if key in payload:
+                record[key] = _dynamic_reanchor_jsonable(payload.get(key))
+    return record
 
 
 def _entry_explicit_trusted_full_reflection_identity(
@@ -10733,6 +12414,158 @@ def _measured_source_peak_indices(
     return int(table_idx), int(peak_idx)
 
 
+def _provider_local_subset_provenance(entry: Mapping[str, object]) -> bool:
+    fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+    if fit_kind != "provider_fixed_source_local":
+        return False
+    if bool(entry.get("optimizer_request_fallback_row", False)):
+        return False
+    if not bool(entry.get("optimizer_request_has_fixed_source", False)):
+        return False
+    source_marker = str(entry.get("optimizer_request_source", "") or "").strip()
+    canonical_identity = entry.get("provider_selected_source_identity_canonical")
+    if source_marker != "provider_pair" and not isinstance(canonical_identity, Mapping):
+        return False
+    if _nonnegative_index(entry.get("resolved_table_index")) is None:
+        return False
+    if _normalized_hkl_key(entry.get("hkl")) is None:
+        return False
+    if not bool(entry.get("provider_local_subset_provenance", False)):
+        return False
+    assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
+    return assignment.startswith("provider_local_")
+
+
+def _provider_local_branch_identity_conflict(entry: Mapping[str, object]) -> bool:
+    fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+    if fit_kind != "provider_fixed_source_local":
+        return False
+    requested_values = [
+        int(value)
+        for value in (
+            _nonnegative_index(entry.get("source_branch_index")),
+            _nonnegative_index(entry.get("source_peak_index")),
+            _nonnegative_index(entry.get("resolved_peak_index")),
+        )
+        if value in {0, 1}
+    ]
+    return len(set(requested_values)) > 1
+
+
+def _hit_row_hkl(row: object) -> Optional[Tuple[int, int, int]]:
+    try:
+        row_arr = np.asarray(row, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if row_arr.shape[0] < 7:
+        return None
+    try:
+        return tuple(int(round(float(v))) for v in row_arr[4:7])
+    except Exception:
+        return None
+
+
+def _hit_table_row_count(hit_table: object) -> int:
+    try:
+        hits = np.asarray(hit_table)
+    except Exception:
+        return 0
+    if hits.ndim != 2:
+        return 0
+    return int(hits.shape[0])
+
+
+def _provider_local_singleton_row(
+    entry: Mapping[str, object],
+    row_records: Sequence[Mapping[str, object]],
+    *,
+    row_reason: str,
+    allowed_reasons: Sequence[str] = ("source_row_out_of_range",),
+    success_reason: str = "provider_local_singleton_resolved_table",
+    require_row_branch_metadata: bool = False,
+) -> Tuple[Optional[np.ndarray], Optional[Dict[str, object]], str]:
+    if str(row_reason) not in {str(reason) for reason in allowed_reasons}:
+        return None, None, str(row_reason)
+    if not _provider_local_subset_provenance(entry):
+        return None, None, "provider_local_subset_provenance_missing"
+    assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
+    branch_provenance = bool(entry.get("provider_local_subset_branch_provenance", False))
+    if assignment == "provider_local_duplicate_hkl_unproven":
+        return None, None, "provider_local_duplicate_hkl_unproven"
+    if len(row_records) != 1:
+        return None, None, "provider_local_singleton_row_count_mismatch"
+    row_record = row_records[0]
+    try:
+        row = np.asarray(row_record.get("row"), dtype=float).reshape(-1)
+    except Exception:
+        return None, None, "provider_local_singleton_row_parse_failed"
+    if row.shape[0] < 7:
+        return None, None, "provider_local_singleton_row_parse_failed"
+    try:
+        sim_col = float(row[1])
+        sim_row = float(row[2])
+    except Exception:
+        return None, None, "provider_local_singleton_row_parse_failed"
+    sim_hkl = _hit_row_hkl(row)
+    if sim_hkl is None:
+        return None, None, "provider_local_singleton_row_parse_failed"
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return None, None, "provider_local_singleton_invalid_simulated_point"
+    measured_hkl_key = _normalized_hkl_key(entry.get("hkl"))
+    if measured_hkl_key is None or tuple(sim_hkl) != tuple(measured_hkl_key):
+        return None, None, "provider_local_singleton_hkl_mismatch"
+    requested_branch = _nonnegative_index(entry.get("source_branch_index"))
+    requested_peak = _nonnegative_index(entry.get("source_peak_index"))
+    requested_resolved_peak = _nonnegative_index(entry.get("resolved_peak_index"))
+    row_branch = source_branch_index_from_phi_deg(row[3])
+    if require_row_branch_metadata and row_branch not in {0, 1}:
+        return None, None, "provider_local_missing_branch_metadata"
+    requested_branch_values = [
+        int(value)
+        for value in (requested_branch, requested_peak, requested_resolved_peak)
+        if value in {0, 1}
+    ]
+    if len(set(requested_branch_values)) > 1:
+        return None, None, "provider_local_branch_identity_conflict"
+    if row_branch in {0, 1}:
+        if (
+            requested_branch_values
+            and int(row_branch) not in set(requested_branch_values)
+            and not branch_provenance
+        ):
+            return None, None, "provider_local_branch_mismatch"
+    if (
+        entry.get("q_group_key") is not None or entry.get("branch_group_key") is not None
+    ) and not branch_provenance:
+        return None, None, "provider_local_group_unproven"
+    resolved_peak_idx = _nonnegative_index(entry.get("resolved_peak_index"))
+    if resolved_peak_idx is None:
+        resolved_peak_idx = _measured_source_peak_index(entry)
+    if resolved_peak_idx not in {0, 1} and row_branch in {0, 1}:
+        resolved_peak_idx = int(row_branch)
+    stale_row_idx = _nonnegative_index(entry.get("source_row_index"))
+    row_position = _nonnegative_index(row_record.get("row_position"))
+    singleton_row_branch_index = int(row_branch) if row_branch in {0, 1} else None
+    payload = {
+        "resolution_kind": "fixed_source",
+        "resolution_reason": str(success_reason),
+        "resolved_table_index": entry.get("resolved_table_index"),
+        "resolved_peak_index": (int(resolved_peak_idx) if resolved_peak_idx in {0, 1} else None),
+        "resolved_source_row_position": (int(row_position) if row_position is not None else None),
+        "singleton_row_branch_index": singleton_row_branch_index,
+        "stale_source_row_index": (int(stale_row_idx) if stale_row_idx is not None else None),
+        "source_row_count": 1,
+        "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
+        "provider_local_subset_provenance": True,
+        "provider_local_subset_assignment": str(assignment),
+        "provider_local_subset_branch_provenance": bool(branch_provenance),
+        "provider_local_subset_duplicate_hkl_count": _nonnegative_index(
+            entry.get("provider_local_subset_duplicate_hkl_count")
+        ),
+    }
+    return np.asarray(row[:7], dtype=float), payload, str(success_reason)
+
+
 def _resolve_fixed_source_matches(
     measured_entries: Sequence[Dict[str, object]],
     hit_tables: Sequence[object],
@@ -10774,129 +12607,6 @@ def _resolve_fixed_source_matches(
             seam="_resolve_fixed_source_matches",
         )
 
-    def _provider_local_subset_provenance(entry: Mapping[str, object]) -> bool:
-        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
-        if fit_kind != "provider_fixed_source_local":
-            return False
-        if bool(entry.get("optimizer_request_fallback_row", False)):
-            return False
-        if not bool(entry.get("optimizer_request_has_fixed_source", False)):
-            return False
-        source_marker = str(entry.get("optimizer_request_source", "") or "").strip()
-        canonical_identity = entry.get("provider_selected_source_identity_canonical")
-        if source_marker != "provider_pair" and not isinstance(canonical_identity, Mapping):
-            return False
-        if _nonnegative_index(entry.get("resolved_table_index")) is None:
-            return False
-        if _normalized_hkl_key(entry.get("hkl")) is None:
-            return False
-        if not bool(entry.get("provider_local_subset_provenance", False)):
-            return False
-        assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
-        return assignment.startswith("provider_local_")
-
-    def _provider_local_branch_identity_conflict(entry: Mapping[str, object]) -> bool:
-        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
-        if fit_kind != "provider_fixed_source_local":
-            return False
-        requested_values = [
-            int(value)
-            for value in (
-                _nonnegative_index(entry.get("source_branch_index")),
-                _nonnegative_index(entry.get("source_peak_index")),
-                _nonnegative_index(entry.get("resolved_peak_index")),
-            )
-            if value in {0, 1}
-        ]
-        return len(set(requested_values)) > 1
-
-    def _provider_local_singleton_row(
-        entry: Mapping[str, object],
-        row_records: Sequence[Mapping[str, object]],
-        *,
-        row_reason: str,
-    ) -> Tuple[Optional[np.ndarray], Optional[Dict[str, object]], str]:
-        if str(row_reason) != "source_row_out_of_range":
-            return None, None, str(row_reason)
-        if not _provider_local_subset_provenance(entry):
-            return None, None, "provider_local_subset_provenance_missing"
-        assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
-        branch_provenance = bool(entry.get("provider_local_subset_branch_provenance", False))
-        if assignment == "provider_local_duplicate_hkl_unproven":
-            return None, None, "provider_local_duplicate_hkl_unproven"
-        if len(row_records) != 1:
-            return None, None, "provider_local_singleton_row_count_mismatch"
-        row_record = row_records[0]
-        try:
-            row = np.asarray(row_record.get("row"), dtype=float).reshape(-1)
-        except Exception:
-            return None, None, "provider_local_singleton_row_parse_failed"
-        if row.shape[0] < 7:
-            return None, None, "provider_local_singleton_row_parse_failed"
-        try:
-            sim_col = float(row[1])
-            sim_row = float(row[2])
-            sim_hkl = tuple(int(round(float(v))) for v in row[4:7])
-        except Exception:
-            return None, None, "provider_local_singleton_row_parse_failed"
-        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-            return None, None, "provider_local_singleton_invalid_simulated_point"
-        measured_hkl_key = _normalized_hkl_key(entry.get("hkl"))
-        if measured_hkl_key is None or tuple(sim_hkl) != tuple(measured_hkl_key):
-            return None, None, "provider_local_singleton_hkl_mismatch"
-        requested_branch = _nonnegative_index(entry.get("source_branch_index"))
-        requested_peak = _nonnegative_index(entry.get("source_peak_index"))
-        requested_resolved_peak = _nonnegative_index(entry.get("resolved_peak_index"))
-        row_branch = source_branch_index_from_phi_deg(row[3])
-        requested_branch_values = [
-            int(value)
-            for value in (requested_branch, requested_peak, requested_resolved_peak)
-            if value in {0, 1}
-        ]
-        if len(set(requested_branch_values)) > 1:
-            return None, None, "provider_local_branch_identity_conflict"
-        if row_branch in {0, 1}:
-            if (
-                requested_branch_values
-                and int(row_branch) not in set(requested_branch_values)
-                and not branch_provenance
-            ):
-                return None, None, "provider_local_branch_mismatch"
-        if (
-            entry.get("q_group_key") is not None or entry.get("branch_group_key") is not None
-        ) and not branch_provenance:
-            return None, None, "provider_local_group_unproven"
-        resolved_peak_idx = _nonnegative_index(entry.get("resolved_peak_index"))
-        if resolved_peak_idx is None:
-            resolved_peak_idx = _measured_source_peak_index(entry)
-        if resolved_peak_idx not in {0, 1} and row_branch in {0, 1}:
-            resolved_peak_idx = int(row_branch)
-        stale_row_idx = _nonnegative_index(entry.get("source_row_index"))
-        row_position = _nonnegative_index(row_record.get("row_position"))
-        singleton_row_branch_index = int(row_branch) if row_branch in {0, 1} else None
-        payload = {
-            "resolution_kind": "fixed_source",
-            "resolution_reason": "provider_local_singleton_resolved_table",
-            "resolved_table_index": entry.get("resolved_table_index"),
-            "resolved_peak_index": (
-                int(resolved_peak_idx) if resolved_peak_idx in {0, 1} else None
-            ),
-            "resolved_source_row_position": (
-                int(row_position) if row_position is not None else None
-            ),
-            "singleton_row_branch_index": singleton_row_branch_index,
-            "stale_source_row_index": (int(stale_row_idx) if stale_row_idx is not None else None),
-            "source_row_count": 1,
-            "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
-            "provider_local_subset_provenance": True,
-            "provider_local_subset_assignment": str(assignment),
-            "provider_local_subset_branch_provenance": bool(branch_provenance),
-            "provider_local_subset_duplicate_hkl_count": _nonnegative_index(
-                entry.get("provider_local_subset_duplicate_hkl_count")
-            ),
-        }
-        return np.asarray(row[:7], dtype=float), payload, "provider_local_singleton_resolved_table"
-
     for match_input_index, entry in enumerate(measured_entries):
         overlay_match_index = _overlay_index(entry, match_input_index)
         base_diag = {
@@ -10907,6 +12617,12 @@ def _resolve_fixed_source_matches(
             "resolved_table_index": entry.get("resolved_table_index"),
             "resolved_peak_index": entry.get("resolved_peak_index"),
             "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
+            "optimizer_request_has_fixed_source": entry.get("optimizer_request_has_fixed_source"),
+            "optimizer_request_source": entry.get("optimizer_request_source"),
+            "optimizer_request_fallback_row": entry.get("optimizer_request_fallback_row"),
+            "manual_picker_selected_source_identity_canonical": entry.get(
+                "manual_picker_selected_source_identity_canonical"
+            ),
             **_copy_source_identity_payload(entry),
         }
         if _provider_local_branch_identity_conflict(entry):
@@ -11382,6 +13098,203 @@ def _resolve_geometry_fit_correspondence(
         except Exception:
             return fallback
 
+    def _assigned_table_branch_trace(
+        *,
+        table_idx_value: Optional[int],
+        peak_idx_value: Optional[int],
+    ) -> Dict[str, object]:
+        hit_table = (
+            hit_tables[int(table_idx_value)]
+            if table_idx_value is not None and 0 <= int(table_idx_value) < len(hit_tables)
+            else None
+        )
+        row_records_local = (
+            _row_records_for_table(int(table_idx_value))
+            if table_idx_value is not None and 0 <= int(table_idx_value) < len(hit_tables)
+            else []
+        )
+        requested_hkl = _normalized_hkl_key(correspondence.get("hkl"))
+        requested_peak = (
+            int(peak_idx_value) if _nonnegative_index(peak_idx_value) in {0, 1} else None
+        )
+        hkl_match_count = 0
+        branch_filtered_count = 0
+        for record in row_records_local:
+            row = record.get("row") if isinstance(record, Mapping) else None
+            row_hkl = _hit_row_hkl(row)
+            if requested_hkl is not None and row_hkl == requested_hkl:
+                hkl_match_count += 1
+            try:
+                row_arr = np.asarray(row, dtype=float).reshape(-1)
+                row_branch = source_branch_index_from_phi_deg(row_arr[3])
+            except Exception:
+                row_branch = None
+            if requested_peak in {0, 1} and row_branch == requested_peak:
+                branch_filtered_count += 1
+
+        legacy_peak_exists = False
+        try:
+            max_position_row_count = int(max_positions.shape[0])
+        except Exception:
+            max_position_row_count = 0
+        if (
+            requested_peak in {0, 1}
+            and table_idx_value is not None
+            and 0 <= int(table_idx_value) < max_position_row_count
+        ):
+            try:
+                if requested_peak == 0:
+                    legacy_peak_exists = bool(
+                        np.isfinite(max_positions[int(table_idx_value), 0])
+                        and float(max_positions[int(table_idx_value), 0]) > 0.0
+                    )
+                else:
+                    legacy_peak_exists = bool(
+                        np.isfinite(max_positions[int(table_idx_value), 3])
+                        and float(max_positions[int(table_idx_value), 3]) > 0.0
+                    )
+            except Exception:
+                legacy_peak_exists = False
+
+        hit_table_rows = _hit_table_row_count(hit_table)
+        valid_rows = int(len(row_records_local))
+        requested_branch_exists = bool(branch_filtered_count > 0)
+        return {
+            "requested_source_peak_index": _nonnegative_index(
+                correspondence.get("source_peak_index")
+            ),
+            "requested_source_row_index": _nonnegative_index(
+                correspondence.get("source_row_index")
+            ),
+            "requested_branch_index": requested_peak,
+            "hit_table_row_count": int(hit_table_rows),
+            "valid_row_count": int(valid_rows),
+            "branch_filtered_row_count": int(branch_filtered_count),
+            "requested_branch_exists": bool(requested_branch_exists),
+            "requested_peak_exists": bool(requested_branch_exists or legacy_peak_exists),
+            "legacy_peak_exists": bool(legacy_peak_exists),
+            "hkl_exists_in_table": bool(hkl_match_count > 0),
+            "branch_table_filtered_out": bool(hit_table_rows > 0 and valid_rows == 0),
+            "projection_available": False,
+            "projection_finite": False,
+            "off_detector": False,
+        }
+
+    def _provider_local_branch_identity_row(
+        row_records_value: Sequence[Mapping[str, object]],
+        *,
+        requested_branch: Optional[int],
+    ) -> Tuple[Optional[np.ndarray], Dict[str, object], str]:
+        payload: Dict[str, object] = {
+            "provider_local_branch_requested_index": (
+                int(requested_branch) if requested_branch in {0, 1} else None
+            ),
+            "provider_local_branch_hkl_row_count": 0,
+            "provider_local_branch_match_row_count": 0,
+            "provider_local_branch_missing_metadata_count": 0,
+        }
+        if not _provider_local_subset_provenance(correspondence):
+            return None, payload, "provider_local_subset_provenance_missing"
+        if requested_branch not in {0, 1}:
+            return None, payload, "missing_provider_local_branch_identity"
+        if _provider_local_branch_identity_conflict(correspondence):
+            return None, payload, "provider_local_branch_identity_conflict"
+
+        assignment = (
+            str(correspondence.get("provider_local_subset_assignment", "") or "").strip().lower()
+        )
+        branch_provenance = bool(
+            correspondence.get("provider_local_subset_branch_provenance", False)
+        )
+        payload.update(
+            {
+                "provider_local_subset_assignment": str(assignment),
+                "provider_local_subset_branch_provenance": bool(branch_provenance),
+                "provider_local_subset_duplicate_hkl_count": _nonnegative_index(
+                    correspondence.get("provider_local_subset_duplicate_hkl_count")
+                ),
+            }
+        )
+        if assignment == "provider_local_duplicate_hkl_unproven":
+            return None, payload, "provider_local_duplicate_hkl_unproven"
+        if (
+            correspondence.get("q_group_key") is not None
+            or correspondence.get("branch_group_key") is not None
+        ) and not branch_provenance:
+            return None, payload, "provider_local_group_unproven"
+
+        requested_hkl = _normalized_hkl_key(correspondence.get("hkl"))
+        if requested_hkl is None:
+            return None, payload, "provider_local_branch_hkl_missing"
+
+        hkl_records: List[Mapping[str, object]] = []
+        branch_records: List[Tuple[Mapping[str, object], np.ndarray]] = []
+        missing_branch_metadata_count = 0
+        for record in row_records_value:
+            row_obj = record.get("row") if isinstance(record, Mapping) else None
+            try:
+                row = np.asarray(row_obj, dtype=float).reshape(-1)
+            except Exception:
+                continue
+            if row.shape[0] < 7:
+                continue
+            if _hit_row_hkl(row) != requested_hkl:
+                continue
+            hkl_records.append(record)
+            row_branch = source_branch_index_from_phi_deg(row[3])
+            if row_branch not in {0, 1}:
+                missing_branch_metadata_count += 1
+                continue
+            if int(row_branch) == int(requested_branch):
+                branch_records.append((record, np.asarray(row[:7], dtype=float)))
+
+        payload.update(
+            {
+                "provider_local_branch_hkl_row_count": int(len(hkl_records)),
+                "provider_local_branch_match_row_count": int(len(branch_records)),
+                "provider_local_branch_missing_metadata_count": int(missing_branch_metadata_count),
+            }
+        )
+        if not hkl_records:
+            return None, payload, "provider_local_branch_hkl_mismatch"
+        if missing_branch_metadata_count:
+            return None, payload, "provider_local_branch_ambiguous_missing_metadata"
+        if not branch_records:
+            return None, payload, "provider_local_branch_match_zero"
+        if len(branch_records) > 1:
+            return None, payload, "provider_local_branch_match_multiple"
+
+        record, row = branch_records[0]
+        try:
+            sim_col = float(row[1])
+            sim_row = float(row[2])
+        except Exception:
+            return None, payload, "provider_local_branch_row_parse_failed"
+        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+            return None, payload, "provider_local_branch_invalid_simulated_point"
+
+        row_position = _nonnegative_index(record.get("row_position"))
+        source_row_index = _nonnegative_index(record.get("source_row_index"))
+        stale_row_idx = _nonnegative_index(correspondence.get("source_row_index"))
+        payload.update(
+            {
+                "resolution_kind": "fixed_source",
+                "resolution_reason": "provider_local_branch_recovered_stale_peak_index",
+                "resolved_peak_index": int(requested_branch),
+                "resolved_source_row_position": (
+                    int(row_position) if row_position is not None else None
+                ),
+                "resolved_source_row_index": (
+                    int(source_row_index) if source_row_index is not None else None
+                ),
+                "stale_source_row_index": (
+                    int(stale_row_idx) if stale_row_idx is not None else None
+                ),
+                "resolved_sim_hkl": tuple(int(v) for v in requested_hkl),
+            }
+        )
+        return row, payload, "provider_local_branch_identity_unique"
+
     trusted_full_reflection = _entry_trusted_full_reflection_identity(correspondence)
     prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(correspondence)
     frozen_kind = str(correspondence.get("frozen_locator_kind", "") or "").strip().lower()
@@ -11391,6 +13304,7 @@ def _resolve_geometry_fit_correspondence(
     peak_idx: Optional[int] = None
     row_idx: Optional[int] = None
     trusted_full_reflection_remapped = False
+    local_branch_frozen_index_recovered = False
 
     def _maybe_remap_trusted_full_reflection_index(
         table_idx_value: Optional[int],
@@ -11475,7 +13389,61 @@ def _resolve_geometry_fit_correspondence(
                 )
             peak_idx = _nonnegative_index(correspondence.get("frozen_branch_index"))
             if peak_idx not in {0, 1}:
-                return None, _payload("missing_source_peak_index", table_idx=table_idx)
+                if not _provider_local_subset_provenance(correspondence):
+                    return None, _payload("missing_source_peak_index", table_idx=table_idx)
+                if _provider_local_branch_identity_conflict(correspondence):
+                    trace = _assigned_table_branch_trace(
+                        table_idx_value=table_idx,
+                        peak_idx_value=_nonnegative_index(
+                            correspondence.get("source_branch_index")
+                        ),
+                    )
+                    trace.update(
+                        {
+                            "branch_resolution_reason": "missing_source_peak_index",
+                            "resolution_subreason": "provider_local_branch_identity_conflict",
+                            "frozen_branch_index": _dynamic_reanchor_jsonable(
+                                correspondence.get("frozen_branch_index")
+                            ),
+                            "projection_available": False,
+                            "projection_finite": False,
+                            "off_detector": False,
+                        }
+                    )
+                    return None, _payload(
+                        "missing_source_peak_not_recoverable",
+                        table_idx=table_idx,
+                        extra=trace,
+                    )
+                recovered_peak_idx = _nonnegative_index(correspondence.get("source_branch_index"))
+                if recovered_peak_idx not in {0, 1}:
+                    recovered_peak_idx = _nonnegative_index(
+                        correspondence.get("resolved_peak_index")
+                    )
+                if recovered_peak_idx not in {0, 1}:
+                    trace = _assigned_table_branch_trace(
+                        table_idx_value=table_idx,
+                        peak_idx_value=None,
+                    )
+                    trace.update(
+                        {
+                            "branch_resolution_reason": "missing_source_peak_index",
+                            "resolution_subreason": "missing_provider_local_branch_identity",
+                            "frozen_branch_index": _dynamic_reanchor_jsonable(
+                                correspondence.get("frozen_branch_index")
+                            ),
+                            "projection_available": False,
+                            "projection_finite": False,
+                            "off_detector": False,
+                        }
+                    )
+                    return None, _payload(
+                        "missing_source_peak_not_recoverable",
+                        table_idx=table_idx,
+                        extra=trace,
+                    )
+                peak_idx = int(recovered_peak_idx)
+                local_branch_frozen_index_recovered = True
         elif frozen_kind == "local_row":
             if frozen_namespace != "current_full_local":
                 return None, _payload("invalid_frozen_locator")
@@ -11548,11 +13516,80 @@ def _resolve_geometry_fit_correspondence(
     rows = _rows_for_table(int(table_idx))
     row_records = _row_records_for_table(int(table_idx))
     if frozen_kind in {"trusted_branch", "local_branch"}:
+        branch_trace = _assigned_table_branch_trace(
+            table_idx_value=table_idx,
+            peak_idx_value=peak_idx,
+        )
+        if local_branch_frozen_index_recovered:
+            (
+                recovered_branch_row,
+                recovered_branch_payload,
+                recovered_branch_reason,
+            ) = _provider_local_branch_identity_row(
+                row_records,
+                requested_branch=peak_idx,
+            )
+            if recovered_branch_row is not None:
+                recovered_branch_extra = dict(branch_trace)
+                recovered_branch_extra.update(dict(recovered_branch_payload))
+                recovered_branch_extra.update(
+                    {
+                        "branch_resolution_reason": "resolved_source_peak",
+                        "resolution_subreason": str(recovered_branch_reason),
+                        "projection_available": True,
+                        "projection_finite": True,
+                        "off_detector": False,
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                        "frozen_branch_index_recovered_from_provider_identity": True,
+                    }
+                )
+                return (
+                    float(recovered_branch_row[1]),
+                    float(recovered_branch_row[2]),
+                ), _payload(
+                    "provider_local_branch_recovered_stale_peak_index",
+                    table_idx=table_idx,
+                    peak_idx=peak_idx,
+                    sim_hkl=_branch_sim_hkl(recovered_branch_row),
+                    extra=recovered_branch_extra,
+                )
+            recovered_branch_extra = dict(branch_trace)
+            recovered_branch_extra.update(dict(recovered_branch_payload))
+            recovered_branch_extra.update(
+                {
+                    "branch_resolution_reason": "missing_source_peak_index",
+                    "resolution_subreason": str(recovered_branch_reason),
+                    "projection_available": False,
+                    "projection_finite": False,
+                    "off_detector": False,
+                    "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                    "frozen_branch_index_recovered_from_provider_identity": True,
+                }
+            )
+            return None, _payload(
+                "missing_source_peak_not_recoverable",
+                table_idx=table_idx,
+                peak_idx=peak_idx,
+                extra=recovered_branch_extra,
+            )
+
         branch_row, branch_reason = _branch_representative_row(
             rows,
             branch_index=int(peak_idx),
         )
         if branch_row is not None:
+            branch_extra = dict(branch_trace)
+            branch_extra.update(
+                {
+                    "projection_available": True,
+                    "projection_finite": True,
+                    "off_detector": False,
+                    "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                    "frozen_branch_index_recovered_from_provider_identity": bool(
+                        local_branch_frozen_index_recovered
+                    ),
+                }
+            )
             return (
                 float(branch_row[1]),
                 float(branch_row[2]),
@@ -11561,9 +13598,66 @@ def _resolve_geometry_fit_correspondence(
                 table_idx=table_idx,
                 peak_idx=peak_idx,
                 sim_hkl=_branch_sim_hkl(branch_row),
-                extra={
+                extra=branch_extra,
+            )
+        if frozen_kind == "local_branch" and _provider_local_subset_provenance(correspondence):
+            (
+                recovered_row,
+                recovered_payload,
+                recovered_reason,
+            ) = _provider_local_singleton_row(
+                correspondence,
+                row_records,
+                row_reason=str(branch_reason),
+                allowed_reasons=(str(branch_reason), "missing_source_peak"),
+                success_reason="provider_local_branch_recovered_stale_peak_index",
+                require_row_branch_metadata=True,
+            )
+            if recovered_row is not None and recovered_payload is not None:
+                recovered_extra = dict(branch_trace)
+                recovered_extra.update(dict(recovered_payload))
+                recovered_extra.update(
+                    {
+                        "branch_resolution_reason": str(branch_reason),
+                        "resolution_subreason": str(recovered_reason),
+                        "projection_available": True,
+                        "projection_finite": True,
+                        "off_detector": False,
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                        "frozen_branch_index_recovered_from_provider_identity": bool(
+                            local_branch_frozen_index_recovered
+                        ),
+                    }
+                )
+                return (
+                    float(recovered_row[1]),
+                    float(recovered_row[2]),
+                ), _payload(
+                    "provider_local_branch_recovered_stale_peak_index",
+                    table_idx=table_idx,
+                    peak_idx=peak_idx,
+                    sim_hkl=_branch_sim_hkl(recovered_row),
+                    extra=recovered_extra,
+                )
+            failure_extra = dict(branch_trace)
+            failure_extra.update(
+                {
+                    "branch_resolution_reason": str(branch_reason),
+                    "resolution_subreason": str(recovered_reason),
+                    "projection_available": False,
+                    "projection_finite": False,
+                    "off_detector": False,
                     "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
-                },
+                    "frozen_branch_index_recovered_from_provider_identity": bool(
+                        local_branch_frozen_index_recovered
+                    ),
+                }
+            )
+            return None, _payload(
+                "missing_source_peak_not_recoverable",
+                table_idx=table_idx,
+                peak_idx=peak_idx,
+                extra=failure_extra,
             )
         if frozen_kind != "trusted_branch":
             legacy_peak_point, legacy_peak_reason = _resolve_max_position_peak(
@@ -11573,14 +13667,22 @@ def _resolve_geometry_fit_correspondence(
             )
             if legacy_peak_point is not None:
                 fallback_hkl = correspondence.get("hkl")
+                legacy_extra = dict(branch_trace)
+                legacy_extra.update(
+                    {
+                        "legacy_peak_reason": str(legacy_peak_reason),
+                        "projection_available": True,
+                        "projection_finite": True,
+                        "off_detector": False,
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                    }
+                )
                 return legacy_peak_point, _payload(
                     str(legacy_peak_reason),
                     table_idx=table_idx,
                     peak_idx=peak_idx,
                     sim_hkl=fallback_hkl,
-                    extra={
-                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
-                    },
+                    extra=legacy_extra,
                 )
         elif frozen_kind == "trusted_branch":
             trusted_row, trusted_reason = _trusted_source_row_fallback(
@@ -11589,6 +13691,15 @@ def _resolve_geometry_fit_correspondence(
                 measured_hkl=correspondence.get("hkl"),
             )
             if trusted_row is not None:
+                trusted_extra = dict(branch_trace)
+                trusted_extra.update(
+                    {
+                        "projection_available": True,
+                        "projection_finite": True,
+                        "off_detector": False,
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                    }
+                )
                 return (
                     float(trusted_row[1]),
                     float(trusted_row[2]),
@@ -11597,17 +13708,22 @@ def _resolve_geometry_fit_correspondence(
                     table_idx=table_idx,
                     peak_idx=peak_idx,
                     sim_hkl=_branch_sim_hkl(trusted_row),
-                    extra={
-                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
-                    },
+                    extra=trusted_extra,
                 )
+        failure_extra = dict(branch_trace)
+        failure_extra.update(
+            {
+                "projection_available": False,
+                "projection_finite": False,
+                "off_detector": False,
+                "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+            }
+        )
         return None, _payload(
             str(branch_reason),
             table_idx=table_idx,
             peak_idx=peak_idx,
-            extra={
-                "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
-            },
+            extra=failure_extra,
         )
 
     if row_idx is None:
@@ -11645,6 +13761,24 @@ def _resolve_geometry_fit_correspondence(
     )
 
 
+def _geometry_fit_correspondence_simulated_point_payload(
+    correspondence: Mapping[str, object],
+    *,
+    hit_tables: Sequence[object],
+    max_positions: np.ndarray,
+    trusted_full_reflection_local_index_map: Optional[Mapping[int, int]] = None,
+) -> Tuple[Optional[Tuple[float, float]], Dict[str, object]]:
+    """Resolve one frozen correspondence and keep full recovery diagnostics."""
+
+    sim_point, resolution_payload = _resolve_geometry_fit_correspondence(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=max_positions,
+        trusted_full_reflection_local_index_map=trusted_full_reflection_local_index_map,
+    )
+    return sim_point, dict(resolution_payload)
+
+
 def _geometry_fit_correspondence_simulated_point(
     correspondence: Mapping[str, object],
     *,
@@ -11654,7 +13788,7 @@ def _geometry_fit_correspondence_simulated_point(
 ) -> Tuple[Optional[Tuple[float, float]], str]:
     """Resolve one frozen correspondence back to the current simulated point."""
 
-    sim_point, resolution_payload = _resolve_geometry_fit_correspondence(
+    sim_point, resolution_payload = _geometry_fit_correspondence_simulated_point_payload(
         correspondence,
         hit_tables=hit_tables,
         max_positions=max_positions,
@@ -12279,6 +14413,66 @@ def _merge_exact_fit_space_provenance_counts(
             None,
         )
     )
+    projector_kinds = [
+        str(item.get("fit_space_projector_kind") or "").strip()
+        for item in dataset_summaries
+        if str(item.get("fit_space_projector_kind") or "").strip()
+    ]
+    unique_projector_kinds = list(dict.fromkeys(projector_kinds))
+    if len(unique_projector_kinds) == 1:
+        summary["fit_space_projector_kind"] = unique_projector_kinds[0]
+    elif "exact_caked_bundle" in unique_projector_kinds:
+        summary["fit_space_projector_kind"] = "exact_caked_bundle"
+
+
+def _merge_dynamic_reanchor_summary_fields(
+    summary: Dict[str, object],
+    dataset_summary: Mapping[str, object],
+) -> None:
+    dataset_index = dataset_summary.get("dataset_index")
+    dataset_label = dataset_summary.get("dataset_label")
+    for key in (
+        "dynamic_reanchor_trace",
+        "dynamic_reanchor_rejected_pairs",
+        "dynamic_reanchor_lost_pairs",
+    ):
+        current_values = summary.get(key)
+        if not isinstance(current_values, list):
+            current_values = []
+            summary[key] = current_values
+        for item in dataset_summary.get(key, ()) or ():
+            if not isinstance(item, Mapping):
+                current_values.append(item)
+                continue
+            record = dict(item)
+            if dataset_index is not None:
+                record.setdefault("dataset_index", dataset_index)
+            if dataset_label is not None:
+                record.setdefault("dataset_label", dataset_label)
+            if key == "dynamic_reanchor_trace":
+                record.setdefault(
+                    "dataset_reanchor_event_index",
+                    record.get("reanchor_event_index"),
+                )
+                record["reanchor_event_index"] = int(len(current_values))
+            current_values.append(record)
+
+    for key in (
+        "lost_pair_ids",
+        "rematched_pair_ids",
+        "fallback_pair_ids",
+        "rejected_pair_ids",
+    ):
+        current_values = summary.get(key)
+        if not isinstance(current_values, list):
+            current_values = []
+            summary[key] = current_values
+        seen = {str(existing) for existing in current_values}
+        for item in dataset_summary.get(key, ()) or ():
+            text = str(item)
+            if text not in seen:
+                current_values.append(text)
+                seen.add(text)
 
 
 def _measured_fit_space_anchor(
@@ -14126,6 +16320,21 @@ def fit_geometry_parameters(
                     "line_offset_rms_deg": float("nan"),
                     "line_fit_space_span_deg_mean": float("nan"),
                     "line_constraints_enabled": bool(q_group_line_constraints_enabled),
+                    "measured_anchor_reanchor_enabled": False,
+                    "measured_anchor_reanchor_attempt_count": 0,
+                    "measured_anchor_reanchor_count": 0,
+                    "measured_anchor_reanchor_fail_count": 0,
+                    "measured_anchor_reanchor_rejected_count": 0,
+                    "dynamic_reanchor_policy": DYNAMIC_REANCHOR_POLICY,
+                    "dynamic_reanchor_trace": [],
+                    "dynamic_reanchor_rejected_pairs": [],
+                    "dynamic_reanchor_lost_pairs": [],
+                    "lost_pair_ids": [],
+                    "rematched_pair_ids": [],
+                    "fallback_pair_ids": [],
+                    "rejected_pair_ids": [],
+                    "reanchor_update_rejected": False,
+                    "reanchor_rejection_reasons": [],
                     "_live_cache_records": [],
                     **fit_space_summary_defaults,
                 },
@@ -14168,6 +16377,21 @@ def fit_geometry_parameters(
             "line_offset_rms_deg": float("nan"),
             "line_fit_space_span_deg_mean": float("nan"),
             "line_constraints_enabled": bool(q_group_line_constraints_enabled),
+            "measured_anchor_reanchor_enabled": False,
+            "measured_anchor_reanchor_attempt_count": 0,
+            "measured_anchor_reanchor_count": 0,
+            "measured_anchor_reanchor_fail_count": 0,
+            "measured_anchor_reanchor_rejected_count": 0,
+            "dynamic_reanchor_policy": DYNAMIC_REANCHOR_POLICY,
+            "dynamic_reanchor_trace": [],
+            "dynamic_reanchor_rejected_pairs": [],
+            "dynamic_reanchor_lost_pairs": [],
+            "lost_pair_ids": [],
+            "rematched_pair_ids": [],
+            "fallback_pair_ids": [],
+            "rejected_pair_ids": [],
+            "reanchor_update_rejected": False,
+            "reanchor_rejection_reasons": [],
             **fit_space_summary_defaults,
         }
         live_cache_records: List[Dict[str, object]] = []
@@ -14176,6 +16400,8 @@ def fit_geometry_parameters(
             item: Tuple[Dict[str, object], GeometryFitDatasetContext],
         ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
             local_item, dataset_ctx = item
+            local_item = dict(local_item)
+            local_item["_active_fit_param_names"] = [str(name) for name in var_names]
             theta_value = _theta_initial_for_dataset(local_item, dataset_ctx)
             return _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 local_item,
@@ -14219,6 +16445,10 @@ def fit_geometry_parameters(
                 "line_group_count",
                 "resolved_line_group_count",
                 "missing_line_group_count",
+                "measured_anchor_reanchor_attempt_count",
+                "measured_anchor_reanchor_count",
+                "measured_anchor_reanchor_fail_count",
+                "measured_anchor_reanchor_rejected_count",
             ):
                 summary[key] = int(summary.get(key, 0)) + int(summary_i.get(key, 0))
             summary["subset_reduced"] = bool(
@@ -14232,6 +16462,11 @@ def fit_geometry_parameters(
                 summary.get("line_constraints_enabled", False)
                 or bool(summary_i.get("line_constraints_enabled", False))
             )
+            summary["measured_anchor_reanchor_enabled"] = bool(
+                summary.get("measured_anchor_reanchor_enabled", False)
+                or bool(summary_i.get("measured_anchor_reanchor_enabled", False))
+            )
+            _merge_dynamic_reanchor_summary_fields(summary, summary_i)
             for record in summary_i.get("_live_cache_records", ()) or ():
                 if isinstance(record, Mapping):
                     live_cache_records.append(dict(record))
@@ -14306,6 +16541,17 @@ def fit_geometry_parameters(
             else:
                 summary[mean_key] = float("nan")
             summary[max_key] = float(matched_max)
+        summary.update(
+            _merged_angular_degree_residual_audit_summary(
+                per_dataset_summaries,
+                diagnostics,
+                solver_residual_vector=residual_arr,
+            )
+        )
+        summary["detector_pixel_rms_px"] = summary.get("unweighted_peak_rms_px", float("nan"))
+        summary["detector_pixel_max_px"] = summary.get("unweighted_peak_max_px", float("nan"))
+        summary.setdefault("caked_pixel_rms_px", float("nan"))
+        summary.setdefault("caked_pixel_max_px", float("nan"))
         line_resolved_total = int(summary.get("resolved_line_group_count", 0))
         for rms_key in (
             "line_angle_rms_px",
@@ -14419,6 +16665,14 @@ def fit_geometry_parameters(
             fit_space_two_theta_adjustment_max_abs_deg
         )
         summary["_live_cache_records"] = live_cache_records
+        summary["reanchor_update_rejected"] = bool(summary.get("rejected_pair_ids") or [])
+        summary["reanchor_rejection_reasons"] = sorted(
+            {
+                str(record.get("reason"))
+                for record in summary.get("dynamic_reanchor_rejected_pairs", []) or []
+                if isinstance(record, Mapping) and str(record.get("reason", "") or "")
+            }
+        )
         return residual_arr, diagnostics, summary
 
     fixed_correspondence_groups: Dict[int, List[Dict[str, object]]] = {}
@@ -17007,6 +19261,16 @@ def fit_geometry_parameters(
             frozen_locator = _frozen_locator_fields(entry, dataset_index=int(dataset_index))
             if not isinstance(frozen_locator, dict):
                 continue
+            manual_contract_payload = {
+                key: copy.deepcopy(entry[key])
+                for key in (
+                    "optimizer_request_has_fixed_source",
+                    "optimizer_request_source",
+                    "optimizer_request_fallback_row",
+                    "manual_picker_selected_source_identity_canonical",
+                )
+                if key in entry
+            }
             effective_match_status = str(
                 entry.get(
                     "match_status",
@@ -17031,6 +19295,7 @@ def fit_geometry_parameters(
                 "resolution_reason": str(entry.get("resolution_reason", "")),
                 "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
                 **_copy_source_identity_payload(entry),
+                **manual_contract_payload,
                 "hkl": normalized_hkl,
                 "source_table_index": _diagnostic_source_table_index(entry),
                 "source_reflection_index": source_reflection_index,
@@ -17332,6 +19597,14 @@ def fit_geometry_parameters(
                     "resolved_peak_index": entry.get("resolved_peak_index"),
                     "resolution_kind": str(entry.get("resolution_kind", "")),
                     "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
+                    "optimizer_request_has_fixed_source": entry.get(
+                        "optimizer_request_has_fixed_source"
+                    ),
+                    "optimizer_request_source": entry.get("optimizer_request_source"),
+                    "optimizer_request_fallback_row": entry.get("optimizer_request_fallback_row"),
+                    "manual_picker_selected_source_identity_canonical": entry.get(
+                        "manual_picker_selected_source_identity_canonical"
+                    ),
                     "trusted_full_reflection_remapped": False,
                     "correspondence_resolution_reason": (
                         None
@@ -17722,6 +19995,29 @@ def fit_geometry_parameters(
             "accepted": False,
             "match_radius_px": float(full_beam_polish_match_radius_px),
             "max_nfev": int(full_beam_polish_max_nfev),
+            "polish_started": False,
+            "polish_completed": False,
+            "polish_candidate_param_names": [str(name) for name in all_candidate_param_names],
+            "polish_var_names": [str(name) for name in var_names],
+            "polish_effective_var_names_seen_by_solver": [str(name) for name in var_names],
+            "manual_fixed_source_pair_count_before": 0,
+            "polish_manual_fixed_source_pair_count_before": 0,
+            "polish_fixed_source_resolved_count_before": 0,
+            "polish_fixed_source_resolved_count_after": 0,
+            "polish_matched_pair_count_before": 0,
+            "polish_matched_pair_count_after": 0,
+            "polish_fallback_entry_count_before": 0,
+            "polish_fallback_entry_count_after": 0,
+            "polish_missing_pair_count_before": 0,
+            "polish_missing_pair_count_after": 0,
+            "polish_branch_mismatch_count_before": 0,
+            "polish_branch_mismatch_count_after": 0,
+            "polish_lost_pair_ids": [],
+            "polish_missing_pair_ids": [],
+            "polish_fallback_pair_ids": [],
+            "polish_rematched_pair_ids": [],
+            "polish_lost_pair_details": [],
+            "polish_rejection_reason": None,
         }
         if not point_match_mode:
             summary["reason"] = "point_match_mode_disabled"
@@ -17793,6 +20089,246 @@ def fit_geometry_parameters(
         ) -> Dict[str, object]:
             return copy.deepcopy(dict(summary_in)) if isinstance(summary_in, Mapping) else {}
 
+        def _polish_safe_int(value: object, default: int = 0) -> int:
+            try:
+                return int(value)
+            except Exception:
+                return int(default)
+
+        def _polish_safe_point(entry: Mapping[str, object]) -> list[float] | None:
+            for x_key, y_key in (
+                ("simulated_x", "simulated_y"),
+                ("matched_x", "matched_y"),
+                ("x_sim", "y_sim"),
+            ):
+                if x_key in entry and y_key in entry:
+                    try:
+                        x_val = float(entry.get(x_key))
+                        y_val = float(entry.get(y_key))
+                    except Exception:
+                        continue
+                    if np.isfinite(x_val) and np.isfinite(y_val):
+                        return [float(x_val), float(y_val)]
+            point = entry.get("simulated_point", entry.get("matched_point"))
+            if isinstance(point, Sequence) and not isinstance(point, (str, bytes)):
+                try:
+                    values = [float(point[0]), float(point[1])]  # type: ignore[index]
+                except Exception:
+                    return None
+                if all(np.isfinite(value) for value in values):
+                    return values
+            return None
+
+        def _polish_pair_id(entry: Mapping[str, object], fallback_index: int) -> str:
+            for key in (
+                "pair_id",
+                "provider_pair_id",
+                "manual_pair_id",
+                "source_pair_id",
+                "fixed_pair_id",
+            ):
+                value = entry.get(key)
+                if value not in (None, ""):
+                    return str(value)
+            hkl = entry.get("hkl")
+            if isinstance(hkl, Sequence) and not isinstance(hkl, (str, bytes)):
+                hkl_text = ",".join(str(part) for part in hkl)
+            else:
+                hkl_text = str(hkl or "")
+            return "|".join(
+                (
+                    str(entry.get("dataset_index", "")),
+                    str(entry.get("match_input_index", entry.get("overlay_match_index", ""))),
+                    hkl_text,
+                    str(entry.get("source_reflection_index", "")),
+                    str(entry.get("source_branch_index", "")),
+                    str(fallback_index),
+                )
+            )
+
+        def _polish_jsonable(value: object) -> object:
+            if isinstance(value, np.generic):
+                return value.item()
+            if isinstance(value, np.ndarray):
+                return [_polish_jsonable(item) for item in value.tolist()]
+            if isinstance(value, tuple):
+                return [_polish_jsonable(item) for item in value]
+            if isinstance(value, list):
+                return [_polish_jsonable(item) for item in value]
+            if isinstance(value, dict):
+                return {str(key): _polish_jsonable(val) for key, val in value.items()}
+            return value
+
+        def _polish_pair_identity(entry: Mapping[str, object]) -> tuple[object, ...]:
+            hkl = entry.get("hkl")
+            if isinstance(hkl, Sequence) and not isinstance(hkl, (str, bytes)):
+                hkl_value: object = tuple(hkl)
+            else:
+                hkl_value = hkl
+            return (
+                hkl_value,
+                entry.get("source_reflection_namespace"),
+                entry.get("source_reflection_index"),
+                entry.get("source_branch_index"),
+                entry.get("source_peak_index"),
+                entry.get("q_group_key"),
+                entry.get("branch_group_key"),
+            )
+
+        def _polish_pair_record(
+            entry: Mapping[str, object],
+            *,
+            pair_id: str,
+            missing_reason: object = None,
+            post_entry: Mapping[str, object] | None = None,
+        ) -> Dict[str, object]:
+            hkl = entry.get("hkl")
+            if isinstance(hkl, Sequence) and not isinstance(hkl, (str, bytes)):
+                hkl_value: object = [
+                    int(value) if isinstance(value, (int, np.integer)) else value for value in hkl
+                ]
+            else:
+                hkl_value = hkl
+            post_mapping = post_entry if isinstance(post_entry, Mapping) else entry
+            return {
+                "pair_id": str(pair_id),
+                "hkl": _polish_jsonable(hkl_value),
+                "source_branch_index": _polish_jsonable(entry.get("source_branch_index")),
+                "q_group_key": _polish_jsonable(entry.get("q_group_key")),
+                "branch_group_key": _polish_jsonable(entry.get("branch_group_key")),
+                "provider_identity": _polish_jsonable(_copy_source_identity_payload(entry)),
+                "pre_polish_simulated_point": _polish_safe_point(entry),
+                "post_polish_simulated_point": _polish_safe_point(post_mapping),
+                "missing_reason": str(
+                    missing_reason
+                    or post_mapping.get("resolution_reason")
+                    or post_mapping.get("match_status")
+                    or ""
+                ),
+            }
+
+        def _polish_pair_sets(
+            diagnostics_in: Sequence[object] | None,
+        ) -> Dict[str, object]:
+            records: Dict[str, Dict[str, object]] = {}
+            identities: Dict[str, tuple[object, ...]] = {}
+            matched_ids: set[str] = set()
+            missing_ids: set[str] = set()
+            fallback_ids: set[str] = set()
+            for fallback_index, raw_entry in enumerate(diagnostics_in or ()):
+                if not isinstance(raw_entry, Mapping):
+                    continue
+                entry = dict(raw_entry)
+                pair_id = _polish_pair_id(entry, fallback_index)
+                records[pair_id] = _polish_pair_record(entry, pair_id=pair_id)
+                identities[pair_id] = _polish_pair_identity(entry)
+                status = str(entry.get("match_status", "")).strip().lower()
+                resolution_kind = str(entry.get("resolution_kind", "")).strip().lower()
+                source_kind = str(entry.get("fit_source_resolution_kind", "")).strip().lower()
+                locator_kind = str(entry.get("frozen_locator_kind", "")).strip().lower()
+                fallback_seen = bool(
+                    (resolution_kind not in {"", "fixed_source"})
+                    or "fallback" in source_kind
+                    or "fallback" in locator_kind
+                )
+                if fallback_seen:
+                    fallback_ids.add(pair_id)
+                if status == "matched" and resolution_kind == "fixed_source" and not fallback_seen:
+                    matched_ids.add(pair_id)
+                else:
+                    missing_ids.add(pair_id)
+            return {
+                "records": records,
+                "identities": identities,
+                "matched_ids": matched_ids,
+                "missing_ids": missing_ids,
+                "fallback_ids": fallback_ids,
+            }
+
+        def _polish_manual_fixed_source_contract_entry(
+            entry: Mapping[str, object],
+        ) -> bool:
+            if bool(entry.get("optimizer_request_fallback_row", False)):
+                return False
+            fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+            if "fallback" in fit_kind:
+                return False
+            optimizer_source = str(entry.get("optimizer_request_source", "") or "").strip().lower()
+            has_fixed_request = bool(entry.get("optimizer_request_has_fixed_source", False))
+            provider_kind = fit_kind in {"provider_fixed_source", "provider_fixed_source_local"}
+            provider_identity = isinstance(
+                entry.get("provider_selected_source_identity_canonical"),
+                Mapping,
+            )
+            manual_identity = isinstance(
+                entry.get("manual_picker_selected_source_identity_canonical"),
+                Mapping,
+            )
+            if provider_identity or manual_identity:
+                return True
+            if optimizer_source == "provider_pair":
+                return True
+            if has_fixed_request:
+                return True
+            return bool(provider_kind)
+
+        def _polish_manual_fixed_source_contract_pair_count(
+            diagnostics_in: Sequence[object] | None,
+        ) -> int:
+            pair_ids: set[str] = set()
+            for fallback_index, raw_entry in enumerate(diagnostics_in or ()):
+                if not isinstance(raw_entry, Mapping):
+                    continue
+                entry = dict(raw_entry)
+                if not _polish_manual_fixed_source_contract_entry(entry):
+                    continue
+                status = str(entry.get("match_status", "")).strip().lower()
+                resolution_kind = str(entry.get("resolution_kind", "")).strip().lower()
+                if status == "matched" and resolution_kind == "fixed_source":
+                    pair_ids.add(_polish_pair_id(entry, fallback_index))
+            return int(len(pair_ids))
+
+        def _polish_pair_delta(
+            before_diagnostics: Sequence[object] | None,
+            after_diagnostics: Sequence[object] | None,
+        ) -> Dict[str, object]:
+            before_sets = _polish_pair_sets(before_diagnostics)
+            after_sets = _polish_pair_sets(after_diagnostics)
+            before_matched = set(before_sets["matched_ids"])
+            after_matched = set(after_sets["matched_ids"])
+            after_missing = set(after_sets["missing_ids"])
+            lost_ids = sorted((before_matched - after_matched) | (before_matched & after_missing))
+            fallback_ids = sorted(set(after_sets["fallback_ids"]) & before_matched)
+            rematched_ids = sorted(
+                pair_id
+                for pair_id in before_matched & after_matched
+                if before_sets["identities"].get(pair_id) != after_sets["identities"].get(pair_id)
+            )
+            before_records = before_sets["records"]
+            after_records = after_sets["records"]
+            lost_details = []
+            for pair_id in lost_ids:
+                before_record = dict(before_records.get(pair_id, {"pair_id": pair_id}))
+                after_record = dict(after_records.get(pair_id, {}))
+                detail = dict(before_record)
+                detail["post_polish_simulated_point"] = after_record.get(
+                    "post_polish_simulated_point",
+                    after_record.get("pre_polish_simulated_point"),
+                )
+                detail["missing_reason"] = str(
+                    after_record.get("missing_reason")
+                    or before_record.get("missing_reason")
+                    or "missing_after_polish"
+                )
+                lost_details.append(detail)
+            return {
+                "lost_pair_ids": lost_ids,
+                "missing_pair_ids": sorted(after_missing & before_matched),
+                "fallback_pair_ids": fallback_ids,
+                "rematched_pair_ids": rematched_ids,
+                "lost_pair_details": lost_details,
+            }
+
         def _full_beam_acceptance_metrics(
             point_match_residual_in: Sequence[float] | None,
             point_match_diagnostics_in: Sequence[object] | None,
@@ -17815,12 +20351,19 @@ def fit_geometry_parameters(
             )
             point_match_residual = np.asarray(point_match_residual_in, dtype=float).reshape(-1)
             missing_pair_count = 0
+            fallback_entry_count = 0
             total_fixed_pair_count = int(len(matched_entries))
             if isinstance(point_match_summary_in, Mapping):
                 try:
                     missing_pair_count = int(point_match_summary_in.get("missing_pair_count", 0))
                 except Exception:
                     missing_pair_count = 0
+                try:
+                    fallback_entry_count = int(
+                        point_match_summary_in.get("fallback_entry_count", 0)
+                    )
+                except Exception:
+                    fallback_entry_count = 0
                 total_fixed_pair_count = int(
                     point_match_summary_in.get(
                         "measured_count",
@@ -17875,6 +20418,7 @@ def fit_geometry_parameters(
                 "matched_pair_count": int(len(matched_entries)),
                 "missing_fixed_pair_count": int(max(0, int(missing_pair_count))),
                 "missing_pair_count": int(max(0, int(missing_pair_count))),
+                "fallback_entry_count": int(max(0, int(fallback_entry_count))),
                 "total_fixed_pair_count": int(
                     max(
                         len(matched_entries) + max(0, int(missing_pair_count)),
@@ -18520,6 +21064,32 @@ def fit_geometry_parameters(
         summary["start_missing_pair_count"] = int(start_missing_pair_count)
         summary["start_total_fixed_pair_count"] = int(start_total_fixed_pair_count)
         summary["start_resolved_fixed_matched_pair_count"] = int(start_fixed_source_resolved_count)
+        polish_before_fixed_source_resolved = _polish_safe_int(
+            start_pm_summary.get("fixed_source_resolved_count", start_fixed_source_resolved_count),
+            start_fixed_source_resolved_count,
+        )
+        polish_before_fallback_entry_count = _polish_safe_int(
+            start_pm_summary.get("fallback_entry_count", 0),
+            0,
+        )
+        manual_fixed_source_pair_count_before = _polish_manual_fixed_source_contract_pair_count(
+            start_pm_diagnostics_summary
+        )
+        manual_fixed_source_polish = bool(manual_fixed_source_pair_count_before == 7)
+        summary["manual_fixed_source_mode"] = bool(manual_fixed_source_polish)
+        summary["manual_fixed_source_pair_count_before"] = int(
+            manual_fixed_source_pair_count_before
+        )
+        summary["polish_manual_fixed_source_pair_count_before"] = int(
+            manual_fixed_source_pair_count_before
+        )
+        summary["polish_fixed_source_resolved_count_before"] = int(
+            polish_before_fixed_source_resolved
+        )
+        summary["polish_matched_pair_count_before"] = int(start_matched)
+        summary["polish_missing_pair_count_before"] = int(start_missing_pair_count)
+        summary["polish_fallback_entry_count_before"] = int(polish_before_fallback_entry_count)
+        summary["polish_branch_mismatch_count_before"] = int(start_branch_mismatch_count)
 
         if int(start_matched) <= 0:
             summary.update(
@@ -18548,6 +21118,7 @@ def fit_geometry_parameters(
 
         _emit_status("Geometry fit: running full-beam polish")
         polish_started_at = time.monotonic()
+        summary["polish_started"] = True
         try:
             polish_result = _run_solver_with_max_nfev(
                 start_x,
@@ -18580,6 +21151,7 @@ def fit_geometry_parameters(
             else:
                 trial_fun = np.asarray(trial_residual, dtype=float)
             trial_cost = float(_robust_cost(trial_fun, loss=solver_loss, f_scale=solver_f_scale))
+            summary["polish_completed"] = True
         except Exception as exc:
             summary.update(
                 {
@@ -18683,8 +21255,18 @@ def fit_geometry_parameters(
         candidate_fixed_source_resolved_count = int(
             trial_acceptance_metrics.get("resolved_fixed_matched_pair_count", trial_matched)
         )
+        polish_after_fixed_source_resolved_count = int(
+            trial_pm_summary.get(
+                "fixed_source_resolved_count", candidate_fixed_source_resolved_count
+            )
+        )
+        candidate_fallback_entry_count = _polish_safe_int(
+            trial_pm_summary.get("fallback_entry_count", 0),
+            0,
+        )
         candidate_missing_fixed_pair_count = max(
             0,
+            int(candidate_missing_pair_count) if manual_fixed_source_polish else 0,
             int(reference_start_fixed_source_resolved_count)
             - int(candidate_fixed_source_resolved_count),
         )
@@ -18698,6 +21280,53 @@ def fit_geometry_parameters(
         candidate_branch_mismatch_count = int(
             trial_acceptance_metrics.get("branch_mismatch_count", 0)
         )
+        polish_pair_delta = _polish_pair_delta(start_pm_diagnostics_summary, trial_pm_diagnostics)
+        polish_lost_pair_ids = [str(value) for value in polish_pair_delta["lost_pair_ids"]]
+        polish_missing_pair_ids = [str(value) for value in polish_pair_delta["missing_pair_ids"]]
+        polish_fallback_pair_ids = [str(value) for value in polish_pair_delta["fallback_pair_ids"]]
+        polish_rematched_pair_ids = [
+            str(value) for value in polish_pair_delta["rematched_pair_ids"]
+        ]
+        polish_lost_pair_details = [
+            dict(value)
+            for value in polish_pair_delta["lost_pair_details"]
+            if isinstance(value, Mapping)
+        ]
+        summary["polish_fixed_source_resolved_count_after"] = int(
+            polish_after_fixed_source_resolved_count
+        )
+        summary["polish_matched_pair_count_after"] = int(trial_matched)
+        summary["polish_missing_pair_count_after"] = int(candidate_missing_pair_count)
+        summary["polish_fallback_entry_count_after"] = int(candidate_fallback_entry_count)
+        summary["polish_branch_mismatch_count_after"] = int(candidate_branch_mismatch_count)
+        summary["polish_lost_pair_ids"] = list(polish_lost_pair_ids)
+        summary["polish_missing_pair_ids"] = list(polish_missing_pair_ids)
+        summary["polish_fallback_pair_ids"] = list(polish_fallback_pair_ids)
+        summary["polish_rematched_pair_ids"] = list(polish_rematched_pair_ids)
+        summary["polish_lost_pair_details"] = list(polish_lost_pair_details)
+        manual_fixed_pair_gate_ok = bool(
+            not manual_fixed_source_polish
+            or (
+                int(candidate_fixed_source_resolved_count) == 7
+                and int(polish_after_fixed_source_resolved_count) == 7
+                and int(trial_matched) == 7
+                and int(candidate_missing_pair_count) == 0
+                and int(candidate_branch_mismatch_count) == 0
+                and int(candidate_fallback_entry_count) == 0
+                and not polish_lost_pair_ids
+                and not polish_fallback_pair_ids
+                and not polish_rematched_pair_ids
+            )
+        )
+        manual_fixed_pair_gate_failed = bool(
+            manual_fixed_source_polish and not manual_fixed_pair_gate_ok
+        )
+        if manual_fixed_pair_gate_failed:
+            summary["polish_rejection_reason"] = (
+                "full_beam_polish_incompatible_with_fixed_manual_pairs"
+            )
+            summary["failure_reason"] = "full_beam_polish_incompatible_with_fixed_manual_pairs"
+            summary["diagnosis_classification"] = "fixed_source_or_pair_integrity_lost"
         candidate_zero_fixed_pair_guard_ok = bool(
             int(reference_start_fixed_source_resolved_count) <= 0
             or int(candidate_fixed_source_resolved_count) > 0
@@ -18710,6 +21339,10 @@ def fit_geometry_parameters(
         matched_ok = bool(
             int(candidate_fixed_source_resolved_count)
             >= int(reference_start_fixed_source_resolved_count)
+            and (
+                not manual_fixed_source_polish
+                or int(trial_matched) >= int(reference_start_fixed_source_resolved_count)
+            )
         )
         weighted_rms_ok = bool(
             not np.isfinite(reference_start_point_rms)
@@ -18741,10 +21374,21 @@ def fit_geometry_parameters(
             candidate_outside_radius_count <= reference_start_outside_radius_count
         )
         branch_mismatch_ok = bool(candidate_branch_mismatch_count == 0)
+        fallback_ok = bool(not manual_fixed_source_polish or candidate_fallback_entry_count == 0)
         matched_nonzero_ok = bool(int(trial_matched) > 0)
         missing_fixed_pairs_ok = bool(
-            candidate_total_fixed_pair_count <= 0
-            or int(candidate_missing_fixed_pair_count) < int(candidate_total_fixed_pair_count)
+            (
+                candidate_total_fixed_pair_count <= 0
+                or (
+                    int(candidate_missing_fixed_pair_count) == 0
+                    and int(candidate_missing_pair_count) == 0
+                )
+            )
+            if manual_fixed_source_polish
+            else (
+                candidate_total_fixed_pair_count <= 0
+                or int(candidate_missing_fixed_pair_count) < int(candidate_total_fixed_pair_count)
+            )
         )
         accepted = bool(
             candidate_zero_fixed_pair_guard_ok
@@ -18754,8 +21398,10 @@ def fit_geometry_parameters(
             and match_radius_ok
             and outside_radius_ok
             and branch_mismatch_ok
+            and fallback_ok
             and matched_nonzero_ok
             and missing_fixed_pairs_ok
+            and manual_fixed_pair_gate_ok
         )
         trial_pm_diagnostics_summary = _copy_point_match_diagnostics_for_summary(
             trial_pm_diagnostics
@@ -18791,6 +21437,9 @@ def fit_geometry_parameters(
             )
             trial_missing_local = max(
                 0,
+                int(acceptance_metrics.get("missing_pair_count", 0))
+                if manual_fixed_source_polish
+                else 0,
                 int(reference_fixed_total_local) - int(trial_matched_local),
             )
             trial_total_local = int(
@@ -18800,6 +21449,9 @@ def fit_geometry_parameters(
                 )
             )
             trial_branch_mismatch_local = int(acceptance_metrics.get("branch_mismatch_count", 0))
+            trial_fallback_entry_count_local = int(
+                acceptance_metrics.get("fallback_entry_count", 0)
+            )
             trial_outside_radius_local = int(
                 acceptance_metrics.get(
                     "outside_radius_count",
@@ -18838,7 +21490,9 @@ def fit_geometry_parameters(
                 reference_raw_max_local = float("nan")
             matched_nonzero_local = bool(trial_matched_local > 0)
             missing_fixed_pairs_local = bool(
-                trial_total_local <= 0 or trial_missing_local < trial_total_local
+                (trial_total_local <= 0 or trial_missing_local == 0)
+                if manual_fixed_source_polish
+                else (trial_total_local <= 0 or trial_missing_local < trial_total_local)
             )
             raw_peak_rms_local = bool(
                 not np.isfinite(reference_raw_rms_local)
@@ -18868,6 +21522,9 @@ def fit_geometry_parameters(
                 trial_outside_radius_local <= reference_outside_radius_local
             )
             branch_mismatch_local = bool(trial_branch_mismatch_local == 0)
+            fallback_free_local = bool(
+                not manual_fixed_source_polish or trial_fallback_entry_count_local == 0
+            )
             checks = {
                 "matched_nonzero_ok": bool(matched_nonzero_local),
                 "missing_fixed_pairs_ok": bool(missing_fixed_pairs_local),
@@ -18875,6 +21532,7 @@ def fit_geometry_parameters(
                 "raw_peak_max_ok": bool(raw_peak_max_local),
                 "outside_radius_ok": bool(outside_radius_local),
                 "branch_mismatch_ok": bool(branch_mismatch_local),
+                "fallback_free_ok": bool(fallback_free_local),
             }
             rejection_reason = ", ".join(
                 part
@@ -18885,6 +21543,7 @@ def fit_geometry_parameters(
                     (raw_peak_max_local, "raw_peak_max_regressed"),
                     (outside_radius_local, "outside_radius_regressed"),
                     (branch_mismatch_local, "branch_mismatch_detected"),
+                    (fallback_free_local, "fallback_created"),
                 )
                 if not ok
             )
@@ -18923,6 +21582,9 @@ def fit_geometry_parameters(
             )
             normalized_missing_fixed_pair_count = max(
                 0,
+                int(acceptance_metrics.get("missing_pair_count", 0))
+                if manual_fixed_source_polish
+                else 0,
                 int(reference_start_fixed_source_resolved_count)
                 - int(normalized_matched_fixed_pair_count),
             )
@@ -18967,6 +21629,7 @@ def fit_geometry_parameters(
                     )
                 ),
                 "branch_mismatch_count": int(acceptance_metrics.get("branch_mismatch_count", 0)),
+                "fallback_entry_count": int(acceptance_metrics.get("fallback_entry_count", 0)),
                 "weighted_rms_px": float(acceptance_metrics.get("weighted_rms_px", np.nan)),
                 "point_match_cost": float(acceptance_metrics.get("point_match_cost", np.nan)),
                 "unweighted_peak_rms_px": float(
@@ -18999,6 +21662,7 @@ def fit_geometry_parameters(
                     "missing_pair_count": 0,
                     "outside_radius_count": 0,
                     "branch_mismatch_count": 0,
+                    "fallback_entry_count": 0,
                     "matched_fixed_pair_count": 0,
                     "missing_fixed_pair_count": 0,
                     "weighted_rms_px": float("nan"),
@@ -19074,6 +21738,12 @@ def fit_geometry_parameters(
                         fallback_acceptance_metrics.get("branch_mismatch_count", 0),
                     )
                 ),
+                "fallback_entry_count": int(
+                    fixed_summary.get(
+                        "fallback_entry_count",
+                        fallback_acceptance_metrics.get("fallback_entry_count", 0),
+                    )
+                ),
                 "weighted_rms_px": float(fixed_summary.get("weighted_rms_px", np.nan)),
                 "point_match_cost": float(fixed_summary.get("point_match_cost", np.nan)),
                 "unweighted_peak_rms_px": float(
@@ -19115,10 +21785,15 @@ def fit_geometry_parameters(
                 "accepted": bool(accepted_flag),
                 "matched_pair_count": int(trial_matched),
                 "missing_pair_count": int(candidate_missing_pair_count),
-                "matched_fixed_pair_count": int(candidate_fixed_source_resolved_count),
+                "matched_fixed_pair_count": int(
+                    trial_matched
+                    if manual_fixed_source_polish
+                    else candidate_fixed_source_resolved_count
+                ),
                 "missing_fixed_pair_count": int(candidate_missing_fixed_pair_count),
                 "outside_radius_count": int(candidate_outside_radius_count),
                 "branch_mismatch_count": int(candidate_branch_mismatch_count),
+                "fallback_entry_count": int(candidate_fallback_entry_count),
                 "weighted_rms_px": float(trial_point_rms),
                 "point_match_cost": float(trial_point_match_cost),
                 "unweighted_peak_rms_px": float(trial_unweighted_peak_rms),
@@ -19129,6 +21804,11 @@ def fit_geometry_parameters(
                 "point_match_diagnostics": trial_pm_diagnostics_summary,
                 "point_match_summary": trial_pm_summary_public,
                 "acceptance_metrics": dict(trial_acceptance_metrics),
+                "polish_lost_pair_ids": list(polish_lost_pair_ids),
+                "polish_missing_pair_ids": list(polish_missing_pair_ids),
+                "polish_fallback_pair_ids": list(polish_fallback_pair_ids),
+                "polish_rematched_pair_ids": list(polish_rematched_pair_ids),
+                "polish_lost_pair_details": list(polish_lost_pair_details),
             }
 
         current_detector_fallback_summary = {}
@@ -19272,19 +21952,35 @@ def fit_geometry_parameters(
                     summary_in.get("missing_pair_count", 0),
                 )
             )
+            matched_pair_count = int(summary_in.get("matched_pair_count", 0))
+            fallback_entry_count = int(summary_in.get("fallback_entry_count", 0))
             branch_mismatch_count = int(summary_in.get("branch_mismatch_count", 0))
             raw_rms = _detector_summary_metric(summary_in, "unweighted_peak_rms_px")
             raw_max = _detector_summary_metric(summary_in, "unweighted_peak_max_px")
             preserves_fixed_correspondences = bool(
-                int(reference_start_fixed_source_resolved_count) <= 0
-                or (
-                    missing_fixed_pair_count == 0
-                    and matched_fixed_pair_count >= int(reference_start_fixed_source_resolved_count)
+                (
+                    int(reference_start_fixed_source_resolved_count) <= 0
+                    or (
+                        missing_fixed_pair_count == 0
+                        and matched_fixed_pair_count
+                        >= int(reference_start_fixed_source_resolved_count)
+                        and matched_pair_count >= int(reference_start_fixed_source_resolved_count)
+                    )
+                )
+                if manual_fixed_source_polish
+                else (
+                    int(reference_start_fixed_source_resolved_count) <= 0
+                    or (
+                        missing_fixed_pair_count == 0
+                        and matched_fixed_pair_count
+                        >= int(reference_start_fixed_source_resolved_count)
+                    )
                 )
             )
             return {
                 "preserves_fixed_correspondences": preserves_fixed_correspondences,
                 "branch_mismatch_free": bool(branch_mismatch_count == 0),
+                "fallback_free": bool(not manual_fixed_source_polish or fallback_entry_count == 0),
                 "finite_raw_rms": bool(np.isfinite(raw_rms)),
                 "finite_raw_max": bool(np.isfinite(raw_max)),
             }
@@ -19301,6 +21997,7 @@ def fit_geometry_parameters(
                         bool(checks.get("branch_mismatch_free", False)),
                         "branch_mismatch_detected",
                     ),
+                    (bool(checks.get("fallback_free", False)), "fallback_created"),
                     (bool(checks.get("finite_raw_rms", False)), "raw_peak_rms_nonfinite"),
                     (bool(checks.get("finite_raw_max", False)), "raw_peak_max_nonfinite"),
                 )
@@ -19334,7 +22031,15 @@ def fit_geometry_parameters(
                         )
                         or 0
                     ),
+                    "missing_fixed_pair_count": int(
+                        summary_in.get(
+                            "missing_fixed_pair_count",
+                            summary_in.get("missing_pair_count", 0),
+                        )
+                        or 0
+                    ),
                     "branch_mismatch_count": int(summary_in.get("branch_mismatch_count", 0)),
+                    "fallback_entry_count": int(summary_in.get("fallback_entry_count", 0)),
                     "rms_px": _detector_summary_metric(summary_in, "unweighted_peak_rms_px"),
                     "median_px": _detector_summary_metric(
                         summary_in,
@@ -19373,6 +22078,9 @@ def fit_geometry_parameters(
             )
 
         best_valid_raw_candidate = _best_valid_raw_detector_candidate(candidate_ledger)
+        if manual_fixed_pair_gate_failed:
+            best_valid_raw_candidate = None
+            preserve_rejected_start = False
 
         selected_candidate_name = (
             "full_beam_polish_result"
@@ -19382,6 +22090,9 @@ def fit_geometry_parameters(
         selected_candidate_source = (
             "full_beam_polish" if accepted else str(retained_detector_source or "")
         )
+        if manual_fixed_pair_gate_failed:
+            selected_candidate_name = None
+            selected_candidate_source = None
         selected_entry: dict[str, object] | None = None
         start_candidate_name = _candidate_name_from_source(
             selected_start_bundle.get("vector_source", "start_vector")
@@ -19389,11 +22100,12 @@ def fit_geometry_parameters(
         start_candidate_source = str(selected_start_bundle.get("vector_source", "start_vector"))
         for entry in candidate_ledger:
             entry["selected"] = False
-        selected_entry = _find_candidate_ledger_entry(
-            candidate_ledger,
-            candidate_name=selected_candidate_name,
-            x_vector_source=selected_candidate_source,
-        )
+        if not manual_fixed_pair_gate_failed:
+            selected_entry = _find_candidate_ledger_entry(
+                candidate_ledger,
+                candidate_name=str(selected_candidate_name),
+                x_vector_source=str(selected_candidate_source),
+            )
         start_entry, no_op_optimum = _should_select_no_op_start_candidate(
             candidate_ledger,
             start_candidate_name=start_candidate_name,
@@ -19445,26 +22157,38 @@ def fit_geometry_parameters(
             final_metric_point_match_evaluator = _full_beam_point_match_evaluator
         for entry in candidate_ledger:
             entry["selected"] = bool(
-                str(entry.get("candidate_name", "")) == str(selected_candidate_name)
+                not manual_fixed_pair_gate_failed
+                and str(entry.get("candidate_name", "")) == str(selected_candidate_name)
                 and str(entry.get("x_vector_source", "")) == str(selected_candidate_source)
             )
         selection_status = (
-            "accepted"
-            if accepted or selected_best_valid_full_beam
+            "blocked_manual_fixed_pairs"
+            if manual_fixed_pair_gate_failed
             else (
-                "no_op_optimum"
-                if no_op_optimum
-                else ("retained_start_safe_fallback" if preserve_rejected_start else "rejected")
+                "accepted"
+                if accepted or selected_best_valid_full_beam
+                else (
+                    "no_op_optimum"
+                    if no_op_optimum
+                    else ("retained_start_safe_fallback" if preserve_rejected_start else "rejected")
+                )
             )
         )
-        fit_quality_passed = bool(accepted or selected_best_valid_full_beam or no_op_optimum)
+        fit_quality_passed = bool(
+            not manual_fixed_pair_gate_failed
+            and (accepted or selected_best_valid_full_beam or no_op_optimum)
+        )
         summary.update(
             {
                 "status": str(selection_status),
                 "selection_status": str(selection_status),
                 "fit_quality_passed": bool(fit_quality_passed),
-                "selected_candidate_name": str(selected_candidate_name),
-                "selected_candidate_source": str(selected_candidate_source),
+                "selected_candidate_name": (
+                    None if selected_candidate_name is None else str(selected_candidate_name)
+                ),
+                "selected_candidate_source": (
+                    None if selected_candidate_source is None else str(selected_candidate_source)
+                ),
                 "best_valid_raw_detector_candidate_name": (
                     str(best_valid_raw_candidate.get("candidate_name", ""))
                     if isinstance(best_valid_raw_candidate, Mapping)
@@ -19477,32 +22201,52 @@ def fit_geometry_parameters(
                 ),
                 "candidate_ledger": [dict(entry) for entry in candidate_ledger],
                 "reason": (
-                    "accepted"
-                    if accepted or selected_best_valid_full_beam
+                    "full_beam_polish_incompatible_with_fixed_manual_pairs"
+                    if manual_fixed_pair_gate_failed
                     else (
-                        "no_valid_candidate_improved_raw_detector_alignment"
-                        if no_op_optimum
-                        else ", ".join(
-                            part
-                            for ok, part in (
-                                (
-                                    candidate_zero_fixed_pair_guard_ok,
-                                    "candidate_lost_all_fixed_pairs",
-                                ),
-                                (matched_ok, "resolved_fixed_pairs_decreased"),
-                                (raw_peak_rms_ok, "raw_peak_rms_regressed"),
-                                (raw_peak_max_ok, "raw_peak_max_regressed"),
-                                (match_radius_ok, "match_radius_exceeded_regressed"),
-                                (outside_radius_ok, "outside_radius_regressed"),
-                                (branch_mismatch_ok, "branch_mismatch_detected"),
-                                (matched_nonzero_ok, "no_resolved_fixed_pairs"),
-                                (missing_fixed_pairs_ok, "all_fixed_pairs_missing"),
+                        "accepted"
+                        if accepted or selected_best_valid_full_beam
+                        else (
+                            "no_valid_candidate_improved_raw_detector_alignment"
+                            if no_op_optimum
+                            else ", ".join(
+                                part
+                                for ok, part in (
+                                    (
+                                        candidate_zero_fixed_pair_guard_ok,
+                                        "candidate_lost_all_fixed_pairs",
+                                    ),
+                                    (matched_ok, "resolved_fixed_pairs_decreased"),
+                                    (raw_peak_rms_ok, "raw_peak_rms_regressed"),
+                                    (raw_peak_max_ok, "raw_peak_max_regressed"),
+                                    (match_radius_ok, "match_radius_exceeded_regressed"),
+                                    (outside_radius_ok, "outside_radius_regressed"),
+                                    (branch_mismatch_ok, "branch_mismatch_detected"),
+                                    (fallback_ok, "fallback_created"),
+                                    (matched_nonzero_ok, "no_resolved_fixed_pairs"),
+                                    (missing_fixed_pairs_ok, "fixed_pairs_missing"),
+                                )
+                                if not ok
                             )
-                            if not ok
                         )
                     )
                 ),
                 "accepted": bool(accepted or selected_best_valid_full_beam),
+                "failure_reason": (
+                    "full_beam_polish_incompatible_with_fixed_manual_pairs"
+                    if manual_fixed_pair_gate_failed
+                    else summary.get("failure_reason")
+                ),
+                "diagnosis_classification": (
+                    "fixed_source_or_pair_integrity_lost"
+                    if manual_fixed_pair_gate_failed
+                    else summary.get("diagnosis_classification")
+                ),
+                "polish_rejection_reason": (
+                    "full_beam_polish_incompatible_with_fixed_manual_pairs"
+                    if manual_fixed_pair_gate_failed
+                    else summary.get("polish_rejection_reason")
+                ),
                 "start_cost": float(start_cost),
                 "final_cost": float(selected_cost),
                 "candidate_cost": float(trial_cost),
@@ -19555,6 +22299,8 @@ def fit_geometry_parameters(
                 "candidate_match_radius_exceeded_count": int(candidate_match_radius_exceeded_count),
                 "candidate_outside_radius_count": int(candidate_outside_radius_count),
                 "candidate_branch_mismatch_count": int(candidate_branch_mismatch_count),
+                "candidate_fallback_entry_count": int(candidate_fallback_entry_count),
+                "candidate_missing_fixed_pair_count": int(candidate_missing_fixed_pair_count),
                 "candidate_resolved_fixed_matched_pair_count": int(
                     trial_acceptance_metrics.get(
                         "resolved_fixed_matched_pair_count",
@@ -20792,6 +23538,725 @@ def fit_geometry_parameters(
     }
     geometry_fit_debug_summary["discrete_modes"] = [dict(mode) for mode in discrete_modes]
 
+    def _seed_trace_int(value: object, default: int = 0) -> int:
+        try:
+            if value is None:
+                return int(default)
+            return int(value)
+        except Exception:
+            return int(default)
+
+    def _seed_trace_float(value: object, default: float = float("nan")) -> float:
+        try:
+            result_value = float(value)
+        except Exception:
+            return float(default)
+        return float(result_value)
+
+    def _seed_trace_point_from_entry(
+        entry: Mapping[str, object],
+        *,
+        x_keys: Sequence[str],
+        y_keys: Sequence[str],
+    ) -> object:
+        for x_key, y_key in zip(x_keys, y_keys):
+            if x_key not in entry or y_key not in entry:
+                continue
+            try:
+                x_value = float(entry.get(x_key))
+                y_value = float(entry.get(y_key))
+            except Exception:
+                continue
+            if np.isfinite(x_value) and np.isfinite(y_value):
+                return [float(x_value), float(y_value)]
+        return None
+
+    def _seed_trace_background_point(entry: Mapping[str, object]) -> object:
+        return _seed_trace_point_from_entry(
+            entry,
+            x_keys=(
+                "background_detector_x",
+                "fit_detector_x",
+                "measured_x",
+                "detector_x",
+                "x",
+            ),
+            y_keys=(
+                "background_detector_y",
+                "fit_detector_y",
+                "measured_y",
+                "detector_y",
+                "y",
+            ),
+        )
+
+    def _seed_trace_simulated_point(entry: Mapping[str, object]) -> object:
+        return _seed_trace_point_from_entry(
+            entry,
+            x_keys=("simulated_x", "sim_x", "source_x", "x_sim"),
+            y_keys=("simulated_y", "sim_y", "source_y", "y_sim"),
+        )
+
+    def _seed_trace_identity(entry: Mapping[str, object], pair_index: int) -> Dict[str, object]:
+        identity = _dynamic_reanchor_identity_payload(entry, pair_index)
+        identity["background_point"] = _seed_trace_background_point(entry)
+        identity["simulated_point"] = _seed_trace_simulated_point(entry)
+        identity.setdefault(
+            "frame",
+            _dynamic_reanchor_jsonable(
+                entry.get("frame", entry.get("frame_index", entry.get("dataset_index")))
+            ),
+        )
+        return identity
+
+    def _seed_trace_diag_pair_id(entry: Mapping[str, object], pair_index: int) -> str:
+        return _dynamic_reanchor_pair_id(entry, pair_index)
+
+    def _seed_trace_fixed_diag(entry: Mapping[str, object]) -> bool:
+        return (
+            str(entry.get("resolution_kind", "") or "").strip().lower() == "fixed_source"
+            and str(entry.get("match_status", "matched") or "").strip().lower() == "matched"
+        )
+
+    def _seed_trace_fixed_provider_diag(entry: Mapping[str, object]) -> bool:
+        if _seed_trace_fixed_diag(entry):
+            return True
+        resolution_kind = str(entry.get("resolution_kind", "") or "").strip().lower()
+        fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+        optimizer_source = str(entry.get("optimizer_request_source", "") or "").strip().lower()
+        match_status = str(entry.get("match_status", "") or "").strip().lower()
+        if fit_kind == "provider_fixed_source_local":
+            return True
+        if bool(entry.get("optimizer_request_has_fixed_source", False)):
+            return True
+        if optimizer_source == "provider_pair":
+            return True
+        if resolution_kind == "fixed_source":
+            return True
+        if (
+            match_status == "missing_pair"
+            and _dynamic_reanchor_provider_identity(entry) is not None
+        ):
+            return True
+        return False
+
+    def _seed_trace_fallback_diag(entry: Mapping[str, object]) -> bool:
+        if _dynamic_reanchor_fallback_created(entry):
+            return True
+        resolution_kind = str(entry.get("resolution_kind", "") or "").strip().lower()
+        match_kind = str(entry.get("match_kind", "") or "").strip().lower()
+        return (
+            resolution_kind not in {"", "fixed_source"}
+            or "fallback" in match_kind
+            or "fallback" in resolution_kind
+        )
+
+    def _seed_trace_pair_map(
+        diagnostics: Sequence[Mapping[str, object]],
+    ) -> Dict[str, Dict[str, object]]:
+        pair_map: Dict[str, Dict[str, object]] = {}
+        for pair_index, diag in enumerate(diagnostics):
+            if not isinstance(diag, Mapping):
+                continue
+            pair_id = _seed_trace_diag_pair_id(diag, pair_index)
+            identity = _seed_trace_identity(diag, pair_index)
+            hkl = identity.get("hkl", identity.get("normalized_hkl"))
+            branch_group_key = identity.get(
+                "branch_group_key",
+                identity.get("q_group_key"),
+            )
+            pair_map[pair_id] = {
+                "pair_id": pair_id,
+                "pair_index": int(pair_index),
+                "hkl": _dynamic_reanchor_jsonable(hkl),
+                "branch_group_key": _dynamic_reanchor_jsonable(branch_group_key),
+                "q_group_key": _dynamic_reanchor_jsonable(identity.get("q_group_key")),
+                "source_branch_index": _dynamic_reanchor_jsonable(
+                    identity.get("source_branch_index")
+                ),
+                "frame": _dynamic_reanchor_jsonable(identity.get("frame")),
+                "identity": identity,
+                "resolution_kind": str(diag.get("resolution_kind", "") or ""),
+                "match_kind": str(diag.get("match_kind", "") or ""),
+                "match_status": str(diag.get("match_status", "") or ""),
+                "branch_mismatch": bool(diag.get("branch_mismatch", False)),
+                "fallback": bool(_seed_trace_fallback_diag(diag)),
+                "background_point": _seed_trace_background_point(diag),
+                "simulated_point": _seed_trace_simulated_point(diag),
+            }
+        return pair_map
+
+    def _seed_trace_synthetic_missing_invariant(
+        pair_id: str,
+        pair_index: int,
+    ) -> Dict[str, object]:
+        return {
+            "pair_id": str(pair_id),
+            "pair_index": int(pair_index),
+            "hkl": None,
+            "branch_group_key": None,
+            "q_group_key": None,
+            "source_branch_index": None,
+            "frame": None,
+            "identity": {
+                "pair_id": str(pair_id),
+                "pair_index": int(pair_index),
+                "normalized_hkl": None,
+                "frame": None,
+            },
+            "resolution_kind": "fixed_source",
+            "match_kind": "fixed_source",
+            "match_status": "missing_pair",
+            "branch_mismatch": False,
+            "fallback": False,
+            "background_point": None,
+            "simulated_point": None,
+            "synthetic_missing_invariant": True,
+        }
+
+    def _seed_trace_eval_x(
+        x_values: Sequence[float],
+    ) -> Tuple[np.ndarray, List[Mapping[str, object]], Dict[str, object]]:
+        x_arr = np.asarray(x_values, dtype=float).reshape(-1)
+        if not point_match_mode:
+            residual_arr = np.asarray(cost_fn(x_arr), dtype=float)
+            return residual_arr, [], {}
+        local = _apply_trial_params(x_arr)
+        residual_arr, diagnostics, point_match_summary = point_match_evaluator(
+            local,
+            collect_diagnostics=True,
+        )
+        public_summary = _public_point_match_summary(point_match_summary)
+        diag_list = [dict(diag) for diag in (diagnostics or []) if isinstance(diag, Mapping)]
+        return np.asarray(residual_arr, dtype=float), diag_list, public_summary
+
+    def _seed_trace_cost_and_rms(
+        residual_arr: Sequence[float],
+        x_values: Sequence[float],
+    ) -> Tuple[float, float]:
+        residual_np = np.asarray(residual_arr, dtype=float)
+        prior_residual = _parameter_prior_residuals(np.asarray(x_values, dtype=float))
+        if prior_residual.size:
+            residual_np = (
+                np.concatenate([residual_np, np.asarray(prior_residual, dtype=float)])
+                if residual_np.size
+                else np.asarray(prior_residual, dtype=float)
+            )
+        return (
+            float(
+                _robust_cost(
+                    residual_np,
+                    loss=solver_loss,
+                    f_scale=solver_f_scale,
+                )
+            ),
+            float(_weighted_rms_px(residual_np)),
+        )
+
+    seed_trace_var_names = [str(name) for name in var_names]
+    seed_trace_candidate_names = list(all_candidate_param_names)
+    seed_trace_effective_names = [str(name) for name in var_names]
+    seed_trace_variable_contract_clean = (
+        seed_trace_candidate_names == seed_trace_var_names
+        and seed_trace_effective_names == seed_trace_var_names
+    )
+    seed_trace_reference_residual: np.ndarray = np.asarray([], dtype=float)
+    seed_trace_reference_diagnostics: List[Mapping[str, object]] = []
+    seed_trace_reference_summary: Dict[str, object] = {}
+    seed_trace_reference_pair_map: Dict[str, Dict[str, object]] = {}
+    seed_trace_reference_pair_ids: List[str] = []
+    seed_trace_expected_pair_count = 0
+    seed_trace_integrity_enabled = bool(point_match_mode and manual_point_fit_mode)
+    if seed_trace_integrity_enabled:
+        try:
+            (
+                seed_trace_reference_residual,
+                seed_trace_reference_diagnostics,
+                seed_trace_reference_summary,
+            ) = _seed_trace_eval_x(np.asarray(x0_arr, dtype=float))
+            fixed_reference_diags = [
+                diag
+                for diag in seed_trace_reference_diagnostics
+                if isinstance(diag, Mapping) and _seed_trace_fixed_provider_diag(diag)
+            ]
+            seed_trace_reference_pair_map = _seed_trace_pair_map(fixed_reference_diags)
+            seed_trace_reference_pair_ids = list(seed_trace_reference_pair_map.keys())
+            summary_expected_pair_count = _seed_trace_int(
+                seed_trace_reference_summary.get("fixed_source_reflection_count"),
+                default=0,
+            )
+            seed_trace_expected_pair_count = max(
+                int(summary_expected_pair_count),
+                int(len(seed_trace_reference_pair_ids)),
+            )
+            synthetic_index = 0
+            while len(seed_trace_reference_pair_ids) < int(seed_trace_expected_pair_count):
+                pair_id = f"fixed_source_expected:{int(synthetic_index)}"
+                synthetic_index += 1
+                if pair_id in seed_trace_reference_pair_map:
+                    continue
+                seed_trace_reference_pair_map[pair_id] = _seed_trace_synthetic_missing_invariant(
+                    pair_id,
+                    len(seed_trace_reference_pair_ids),
+                )
+                seed_trace_reference_pair_ids.append(pair_id)
+        except Exception:
+            seed_trace_reference_residual = np.asarray([], dtype=float)
+            seed_trace_reference_diagnostics = []
+            seed_trace_reference_summary = {}
+            seed_trace_reference_pair_map = {}
+            seed_trace_reference_pair_ids = []
+            seed_trace_expected_pair_count = 0
+
+    seed_multistart_trace: Dict[str, object] = {
+        "enabled": bool(active_specs),
+        "enabled_features": ["seed_multistart"] if active_specs else [],
+        "fixed_manual_pair_integrity_enabled": bool(
+            seed_trace_integrity_enabled and seed_trace_expected_pair_count > 0
+        ),
+        "fixed_manual_pair_invariants": [
+            dict(seed_trace_reference_pair_map[pair_id])
+            for pair_id in seed_trace_reference_pair_ids
+            if pair_id in seed_trace_reference_pair_map
+        ],
+        "fixed_source_pair_count": int(seed_trace_expected_pair_count),
+        "candidate_param_names": list(seed_trace_candidate_names),
+        "var_names": list(seed_trace_var_names),
+        "effective_var_names_seen_by_solver": list(seed_trace_effective_names),
+        "solver_variable_contract_clean": bool(seed_trace_variable_contract_clean),
+        "seed_count": 0,
+        "seeds_prescored": 0,
+        "seeds_solved": 0,
+        "seeds_rejected_for_pair_integrity": 0,
+        "selected_seed_index": None,
+        "selected_seed_cost": float("nan"),
+        "selected_seed_clean": False,
+        "selected_seed_fixed_source_resolved_count": 0,
+        "selected_seed_matched_pair_count": 0,
+        "selected_seed_preserved_fixed_pairs": False,
+        "lost_pair_ids_by_seed": {},
+        "fallback_pair_ids_by_seed": {},
+        "rematched_pair_ids_by_seed": {},
+        "missing_pair_ids_by_seed": {},
+        "seed_records": [],
+    }
+    geometry_fit_debug_summary["seed_multistart_trace"] = seed_multistart_trace
+    seed_trace_records: List[Dict[str, object]] = []
+    seed_trace_records_by_index: Dict[int, Dict[str, object]] = {}
+    next_seed_trace_index = 0
+
+    def _seed_trace_make_record(
+        *,
+        seed_index: int,
+        mode_index: int,
+        mode_label: str,
+        seed_entry: Mapping[str, object],
+        seed_x: Sequence[float],
+        seed_u: Sequence[float],
+    ) -> Dict[str, object]:
+        record: Dict[str, object] = {
+            "seed_index": int(seed_index),
+            "mode_index": int(mode_index),
+            "mode_label": str(mode_label),
+            "seed_type": str(seed_entry.get("seed_kind", "")),
+            "seed_kind": str(seed_entry.get("seed_kind", "")),
+            "seed_label": str(seed_entry.get("seed_label", "")),
+            "initial_parameter_vector": np.asarray(seed_x, dtype=float).tolist(),
+            "initial_u_vector": np.asarray(seed_u, dtype=float).tolist(),
+            "enabled_features": ["seed_multistart"],
+            "candidate_param_names": list(seed_trace_candidate_names),
+            "var_names": list(seed_trace_var_names),
+            "effective_var_names_seen_by_solver": list(seed_trace_effective_names),
+            "fixed_source_pair_count": int(seed_trace_expected_pair_count),
+            "fixed_source_resolved_count": 0,
+            "fallback_row_count": 0,
+            "fallback_entry_count": 0,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "matched_pair_count": 0,
+            "provider_to_optimizer_identity_match": True,
+            "provider_to_optimizer_point_match": True,
+            "rejection_stage": None,
+            "rejection_reason": None,
+            "failure_reason": None,
+            "lost_pair_ids": [],
+            "fallback_pair_ids": [],
+            "rematched_pair_ids": [],
+            "missing_pair_ids": [],
+            "branch_mismatch_pair_ids": [],
+            "cost": float("nan"),
+            "rms": float("nan"),
+            "weighted_rms_px": float("nan"),
+            "clean": True,
+            "eligible": True,
+            "selected": False,
+            "stages": [],
+        }
+        seed_trace_records.append(record)
+        seed_trace_records_by_index[int(seed_index)] = record
+        seed_multistart_trace["seed_records"] = seed_trace_records
+        seed_multistart_trace["seed_count"] = int(len(seed_trace_records))
+        return record
+
+    def _seed_trace_rejection_reason(record: Mapping[str, object]) -> str | None:
+        if bool(record.get("clean", True)):
+            return None
+        if not bool(seed_trace_variable_contract_clean):
+            return "unexpected_solver_variable_set"
+        return "fixed_source_or_pair_integrity_lost"
+
+    def _seed_trace_sorted_union(
+        first: object,
+        second: object,
+    ) -> List[str]:
+        values: List[str] = []
+        for raw_values in (first, second):
+            if not isinstance(raw_values, Sequence) or isinstance(raw_values, (str, bytes)):
+                continue
+            for raw_value in raw_values:
+                text = str(raw_value)
+                if text and text not in values:
+                    values.append(text)
+        return sorted(values)
+
+    def _seed_trace_finite_or_existing(
+        new_value: object,
+        old_value: object,
+    ) -> float:
+        try:
+            candidate = float(new_value)
+        except Exception:
+            try:
+                return float(old_value)
+            except Exception:
+                return float("nan")
+        if np.isfinite(candidate):
+            return float(candidate)
+        try:
+            return float(old_value)
+        except Exception:
+            return float(candidate)
+
+    def _seed_trace_apply_stage_to_record(
+        record: Dict[str, object],
+        stage_record: Mapping[str, object],
+    ) -> None:
+        was_clean = bool(record.get("clean", True))
+        stage_clean = bool(stage_record.get("clean", True))
+        preserve_first_dirty = not was_clean
+        for key in (
+            "fixed_source_resolved_count",
+            "fallback_row_count",
+            "fallback_entry_count",
+            "missing_pair_count",
+            "branch_mismatch_count",
+            "matched_pair_count",
+        ):
+            if key in stage_record and not preserve_first_dirty:
+                record[key] = copy.deepcopy(stage_record[key])
+        for key in (
+            "provider_to_optimizer_identity_match",
+            "provider_to_optimizer_point_match",
+        ):
+            if key in stage_record:
+                record[key] = bool(record.get(key, True)) and bool(stage_record.get(key, True))
+        for key in (
+            "lost_pair_ids",
+            "fallback_pair_ids",
+            "rematched_pair_ids",
+            "missing_pair_ids",
+            "branch_mismatch_pair_ids",
+        ):
+            if key in stage_record:
+                record[key] = _seed_trace_sorted_union(record.get(key, []), stage_record[key])
+        for key in ("cost", "rms", "weighted_rms_px"):
+            if key in stage_record:
+                record[key] = _seed_trace_finite_or_existing(
+                    stage_record[key],
+                    record.get(key, float("nan")),
+                )
+        cumulative_clean = bool(was_clean and stage_clean)
+        record["clean"] = bool(cumulative_clean)
+        record["eligible"] = bool(cumulative_clean)
+        if not stage_clean and record.get("rejection_stage") is None:
+            record["rejection_stage"] = str(stage_record.get("stage", ""))
+            record["rejection_reason"] = _seed_trace_rejection_reason(record)
+            record["failure_reason"] = record.get("rejection_reason")
+
+    def _seed_trace_stage_record(
+        *,
+        record: Dict[str, object],
+        stage: str,
+        x_values: Sequence[float],
+        u_values: Sequence[float] | None,
+        cost: float | None = None,
+        rms: float | None = None,
+        selected: bool | None = None,
+    ) -> Dict[str, object]:
+        x_arr = np.asarray(x_values, dtype=float).reshape(-1)
+        residual_arr, diagnostics, point_summary = _seed_trace_eval_x(x_arr)
+        stage_cost, stage_rms = _seed_trace_cost_and_rms(residual_arr, x_arr)
+        if cost is not None:
+            stage_cost = float(cost)
+        if rms is not None:
+            stage_rms = float(rms)
+        fixed_provider_diags = [
+            diag
+            for diag in diagnostics
+            if isinstance(diag, Mapping) and _seed_trace_fixed_provider_diag(diag)
+        ]
+        fixed_diags = [
+            diag
+            for diag in fixed_provider_diags
+            if isinstance(diag, Mapping) and _seed_trace_fixed_diag(diag)
+        ]
+        current_candidate_pair_map = _seed_trace_pair_map(fixed_provider_diags)
+        current_pair_map = _seed_trace_pair_map(fixed_diags)
+        current_pair_ids = set(current_pair_map.keys())
+        expected_pair_ids = set(seed_trace_reference_pair_ids)
+
+        missing_pair_ids = sorted(expected_pair_ids.difference(current_pair_ids))
+        fallback_pair_ids: Set[str] = set()
+        branch_mismatch_pair_ids: Set[str] = set()
+        for pair_id, pair_record in current_candidate_pair_map.items():
+            if pair_id not in expected_pair_ids:
+                continue
+            if bool(pair_record.get("fallback", False)):
+                fallback_pair_ids.add(pair_id)
+            if bool(pair_record.get("branch_mismatch", False)):
+                branch_mismatch_pair_ids.add(pair_id)
+
+        rematched_pair_ids: List[str] = []
+        point_mismatch_pair_ids: List[str] = []
+        for pair_id in sorted(expected_pair_ids.intersection(current_pair_ids)):
+            reference_identity = dict(
+                seed_trace_reference_pair_map.get(pair_id, {}).get("identity", {})
+                if isinstance(seed_trace_reference_pair_map.get(pair_id), Mapping)
+                else {}
+            )
+            current_identity = dict(current_pair_map[pair_id].get("identity", {}))
+            for field in _DYNAMIC_REANCHOR_IDENTITY_FIELDS:
+                if reference_identity.get(field) != current_identity.get(field):
+                    rematched_pair_ids.append(pair_id)
+                    break
+            if reference_identity.get("background_point") != current_identity.get(
+                "background_point"
+            ):
+                point_mismatch_pair_ids.append(pair_id)
+            if current_identity.get("simulated_point") is None:
+                point_mismatch_pair_ids.append(pair_id)
+
+        fixed_source_resolved_count = _seed_trace_int(
+            point_summary.get("fixed_source_resolved_count"),
+            default=len(current_pair_ids),
+        )
+        matched_pair_count = _seed_trace_int(
+            point_summary.get("matched_pair_count"),
+            default=len(current_pair_ids),
+        )
+        fallback_entry_count = _seed_trace_int(point_summary.get("fallback_entry_count"), 0)
+        fallback_row_count = _seed_trace_int(
+            point_summary.get("fallback_row_count", fallback_entry_count),
+            fallback_entry_count,
+        )
+        missing_pair_count = _seed_trace_int(
+            point_summary.get("missing_pair_count"),
+            default=len(missing_pair_ids),
+        )
+        branch_mismatch_count = _seed_trace_int(
+            point_summary.get("branch_mismatch_count"),
+            default=len(branch_mismatch_pair_ids),
+        )
+        provider_identity_match = (
+            not missing_pair_ids
+            and not fallback_pair_ids
+            and not rematched_pair_ids
+            and fixed_source_resolved_count == seed_trace_expected_pair_count
+        )
+        provider_point_match = (
+            provider_identity_match
+            and not point_mismatch_pair_ids
+            and matched_pair_count == seed_trace_expected_pair_count
+        )
+        clean = (not seed_trace_integrity_enabled or seed_trace_expected_pair_count <= 0) or (
+            seed_trace_variable_contract_clean
+            and fixed_source_resolved_count == seed_trace_expected_pair_count
+            and matched_pair_count == seed_trace_expected_pair_count
+            and missing_pair_count == 0
+            and branch_mismatch_count == 0
+            and fallback_entry_count == 0
+            and provider_identity_match
+            and provider_point_match
+        )
+        lost_pair_ids = sorted(
+            set(missing_pair_ids)
+            | set(fallback_pair_ids)
+            | set(rematched_pair_ids)
+            | set(branch_mismatch_pair_ids)
+            | set(point_mismatch_pair_ids)
+        )
+        if not clean and not lost_pair_ids and seed_trace_expected_pair_count > 0:
+            lost_pair_ids = list(seed_trace_reference_pair_ids)
+
+        stage_record: Dict[str, object] = {
+            "stage": str(stage),
+            "seed_index": int(record["seed_index"]),
+            "seed_type": str(record.get("seed_type", "")),
+            "seed_label": str(record.get("seed_label", "")),
+            "initial_parameter_vector": list(record.get("initial_parameter_vector", [])),
+            "parameter_vector": x_arr.tolist(),
+            "u_vector": (
+                np.asarray(u_values, dtype=float).tolist() if u_values is not None else []
+            ),
+            "enabled_features": ["seed_multistart"],
+            "candidate_param_names": list(seed_trace_candidate_names),
+            "var_names": list(seed_trace_var_names),
+            "effective_var_names_seen_by_solver": list(seed_trace_effective_names),
+            "fixed_source_pair_count": int(seed_trace_expected_pair_count),
+            "fixed_source_resolved_count": int(fixed_source_resolved_count),
+            "fallback_row_count": int(fallback_row_count),
+            "fallback_entry_count": int(fallback_entry_count),
+            "missing_pair_count": int(missing_pair_count),
+            "branch_mismatch_count": int(branch_mismatch_count),
+            "matched_pair_count": int(matched_pair_count),
+            "provider_to_optimizer_identity_match": bool(provider_identity_match),
+            "provider_to_optimizer_point_match": bool(provider_point_match),
+            "lost_pair_ids": list(lost_pair_ids),
+            "fallback_pair_ids": sorted(fallback_pair_ids),
+            "rematched_pair_ids": sorted(set(rematched_pair_ids)),
+            "missing_pair_ids": list(missing_pair_ids),
+            "branch_mismatch_pair_ids": sorted(branch_mismatch_pair_ids),
+            "cost": float(stage_cost),
+            "rms": float(stage_rms),
+            "weighted_rms_px": float(stage_rms),
+            "clean": bool(clean),
+            "eligible": bool(clean),
+            "selected": bool(selected) if selected is not None else False,
+            "rejection_reason": None,
+            "failure_reason": None,
+        }
+        if not clean:
+            stage_record["rejection_reason"] = (
+                "unexpected_solver_variable_set"
+                if not seed_trace_variable_contract_clean
+                else "fixed_source_or_pair_integrity_lost"
+            )
+            stage_record["failure_reason"] = stage_record["rejection_reason"]
+        record.setdefault("stages", []).append(stage_record)
+        _seed_trace_apply_stage_to_record(record, stage_record)
+        return stage_record
+
+    def _seed_trace_last_stage(record: Mapping[str, object]) -> Mapping[str, object]:
+        stages = record.get("stages")
+        if isinstance(stages, Sequence) and stages:
+            last_stage = stages[-1]
+            if isinstance(last_stage, Mapping):
+                return last_stage
+        return record
+
+    def _seed_trace_add_final_selection(
+        *,
+        selected_seed_index: int | None,
+        selected_cost: float,
+        selected_x: Sequence[float] | None = None,
+        selected_u: Sequence[float] | None = None,
+    ) -> None:
+        for record in seed_trace_records:
+            seed_index = int(record.get("seed_index", -1))
+            is_selected = selected_seed_index is not None and seed_index == selected_seed_index
+            if is_selected and selected_x is not None:
+                _seed_trace_stage_record(
+                    record=record,
+                    stage="final_selection",
+                    x_values=selected_x,
+                    u_values=selected_u,
+                    cost=float(selected_cost),
+                    selected=True,
+                )
+                record["selected"] = True
+                continue
+            last_stage = _seed_trace_last_stage(record)
+            integrity_source = record if not bool(record.get("clean", True)) else last_stage
+            final_record = {
+                key: copy.deepcopy(integrity_source.get(key))
+                for key in (
+                    "fixed_source_resolved_count",
+                    "fallback_row_count",
+                    "fallback_entry_count",
+                    "missing_pair_count",
+                    "branch_mismatch_count",
+                    "matched_pair_count",
+                    "provider_to_optimizer_identity_match",
+                    "provider_to_optimizer_point_match",
+                    "lost_pair_ids",
+                    "fallback_pair_ids",
+                    "rematched_pair_ids",
+                    "missing_pair_ids",
+                    "branch_mismatch_pair_ids",
+                    "cost",
+                    "rms",
+                    "weighted_rms_px",
+                    "clean",
+                    "eligible",
+                )
+                if key in integrity_source
+            }
+            final_record.update(
+                {
+                    "stage": "final_selection",
+                    "seed_index": seed_index,
+                    "seed_type": str(record.get("seed_type", "")),
+                    "seed_label": str(record.get("seed_label", "")),
+                    "initial_parameter_vector": list(record.get("initial_parameter_vector", [])),
+                    "enabled_features": ["seed_multistart"],
+                    "candidate_param_names": list(seed_trace_candidate_names),
+                    "var_names": list(seed_trace_var_names),
+                    "effective_var_names_seen_by_solver": list(seed_trace_effective_names),
+                    "fixed_source_pair_count": int(seed_trace_expected_pair_count),
+                    "selected": bool(is_selected),
+                    "selection_cost": float(selected_cost) if is_selected else float("nan"),
+                }
+            )
+            if is_selected:
+                final_record["cost"] = float(selected_cost)
+            if not bool(final_record.get("clean", True)):
+                final_record["rejection_reason"] = _seed_trace_rejection_reason(final_record)
+                final_record["failure_reason"] = final_record.get("rejection_reason")
+            record.setdefault("stages", []).append(final_record)
+            if is_selected:
+                record["selected"] = True
+                _seed_trace_apply_stage_to_record(record, final_record)
+
+    def _seed_trace_refresh_summary() -> None:
+        rejected_records = [
+            record
+            for record in seed_trace_records
+            if record.get("rejection_reason")
+            in {
+                "fixed_source_or_pair_integrity_lost",
+                "unexpected_solver_variable_set",
+            }
+        ]
+        seed_multistart_trace["seed_records"] = seed_trace_records
+        seed_multistart_trace["seed_count"] = int(len(seed_trace_records))
+        seed_multistart_trace["seeds_rejected_for_pair_integrity"] = int(len(rejected_records))
+        seed_multistart_trace["lost_pair_ids_by_seed"] = {
+            str(int(record.get("seed_index", -1))): list(record.get("lost_pair_ids", []))
+            for record in seed_trace_records
+        }
+        seed_multistart_trace["fallback_pair_ids_by_seed"] = {
+            str(int(record.get("seed_index", -1))): list(record.get("fallback_pair_ids", []))
+            for record in seed_trace_records
+        }
+        seed_multistart_trace["rematched_pair_ids_by_seed"] = {
+            str(int(record.get("seed_index", -1))): list(record.get("rematched_pair_ids", []))
+            for record in seed_trace_records
+        }
+        seed_multistart_trace["missing_pair_ids_by_seed"] = {
+            str(int(record.get("seed_index", -1))): list(record.get("missing_pair_ids", []))
+            for record in seed_trace_records
+        }
+
     def _seed_entry_distance(
         first: np.ndarray,
         second: np.ndarray,
@@ -20879,6 +24344,7 @@ def fit_geometry_parameters(
         dict(discrete_modes[0]) if discrete_modes else {"label": "identity"}
     )
     best_mode_contexts = list(base_dataset_contexts)
+    best_seed_index: int | None = None
     solve_record_count = 0
     prescore_record_count = 0
 
@@ -20934,15 +24400,82 @@ def fit_geometry_parameters(
                 ] or mode_seeds[:1]
             scored_seeds: List[Dict[str, object]] = []
             for seed_entry in mode_seeds:
+                seed_entry = dict(seed_entry)
                 seed_u = np.asarray(seed_entry["u"], dtype=float)
+                seed_x = _physical_from_u(active_specs, seed_u)
+                seed_index = int(next_seed_trace_index)
+                next_seed_trace_index += 1
+                seed_entry["seed_index"] = int(seed_index)
+                seed_record = _seed_trace_make_record(
+                    seed_index=seed_index,
+                    mode_index=mode_index,
+                    mode_label=str(mode_label),
+                    seed_entry=seed_entry,
+                    seed_x=seed_x,
+                    seed_u=seed_u,
+                )
+                generation_stage = _seed_trace_stage_record(
+                    record=seed_record,
+                    stage="generation",
+                    x_values=seed_x,
+                    u_values=seed_u,
+                )
                 seed_residual, seed_cost = _evaluate_cost_at_u(
                     seed_u,
                     specs=active_specs,
                     include_priors=True,
                 )
+                prescore_record_count += 1
+                seed_multistart_trace["seeds_prescored"] = int(prescore_record_count)
+                prescore_stage = _seed_trace_stage_record(
+                    record=seed_record,
+                    stage="prescore",
+                    x_values=seed_x,
+                    u_values=seed_u,
+                    cost=float(seed_cost),
+                    rms=float(_weighted_rms_px(seed_residual)),
+                )
+                if not bool(generation_stage.get("clean", True)) or not bool(
+                    prescore_stage.get("clean", True)
+                ):
+                    rejection_reason = str(
+                        seed_record.get("rejection_reason")
+                        or prescore_stage.get("rejection_reason")
+                        or generation_stage.get("rejection_reason")
+                        or "fixed_source_or_pair_integrity_lost"
+                    )
+                    restart_history.append(
+                        {
+                            "restart": len(restart_history),
+                            "mode_index": int(mode_index),
+                            "mode_label": str(mode_label),
+                            "start_u": seed_u.tolist(),
+                            "start_x": seed_x.tolist(),
+                            "end_u": seed_u.tolist(),
+                            "end_x": seed_x.tolist(),
+                            "cost": float(seed_cost),
+                            "success": False,
+                            "seed_index": int(seed_index),
+                            "seed_kind": str(seed_entry.get("seed_kind", "")),
+                            "seed_label": str(seed_entry.get("seed_label", "")),
+                            "message": f"prescore rejected: {rejection_reason}",
+                            "rejection_stage": str(seed_record.get("rejection_stage") or ""),
+                            "rejection_reason": rejection_reason,
+                            "failure_reason": rejection_reason,
+                            "lost_pair_ids": list(seed_record.get("lost_pair_ids", [])),
+                            "fallback_pair_ids": list(seed_record.get("fallback_pair_ids", [])),
+                            "rematched_pair_ids": list(seed_record.get("rematched_pair_ids", [])),
+                            "missing_pair_ids": list(seed_record.get("missing_pair_ids", [])),
+                            "branch_mismatch_pair_ids": list(
+                                seed_record.get("branch_mismatch_pair_ids", [])
+                            ),
+                        }
+                    )
+                    continue
                 scored_seeds.append(
                     {
                         "u": seed_u,
+                        "seed_index": int(seed_index),
                         "seed_kind": str(seed_entry.get("seed_kind", "")),
                         "seed_label": str(seed_entry.get("seed_label", "")),
                         "residual": np.asarray(seed_residual, dtype=float),
@@ -20995,7 +24528,6 @@ def fit_geometry_parameters(
             )
 
             for seed_entry in selected_seeds:
-                prescore_record_count += 1
                 seed_u = np.asarray(seed_entry["u"], dtype=float)
                 seed_x = _physical_from_u(active_specs, seed_u)
                 restart_history.append(
@@ -21009,6 +24541,7 @@ def fit_geometry_parameters(
                         "end_x": seed_x.tolist(),
                         "cost": float(seed_entry.get("cost", np.nan)),
                         "success": False,
+                        "seed_index": int(seed_entry.get("seed_index", -1)),
                         "seed_kind": str(seed_entry.get("seed_kind", "")),
                         "seed_label": str(seed_entry.get("seed_label", "")),
                         "message": "prescore",
@@ -21016,8 +24549,65 @@ def fit_geometry_parameters(
                 )
 
             for solve_idx, seed_entry in enumerate(selected_seeds, start=1):
-                solve_record_count += 1
                 seed_u = np.asarray(seed_entry["u"], dtype=float)
+                seed_index = int(seed_entry.get("seed_index", -1))
+                seed_record = seed_trace_records_by_index.get(seed_index)
+                seed_x = _physical_from_u(active_specs, seed_u)
+                if seed_record is not None:
+                    solve_start_stage = _seed_trace_stage_record(
+                        record=seed_record,
+                        stage="solve_start",
+                        x_values=seed_x,
+                        u_values=seed_u,
+                        cost=float(seed_entry.get("cost", np.nan)),
+                        rms=float(
+                            _weighted_rms_px(
+                                np.asarray(seed_entry.get("residual", []), dtype=float)
+                            )
+                        ),
+                    )
+                    if not bool(solve_start_stage.get("clean", True)):
+                        rejection_reason = str(
+                            solve_start_stage.get("rejection_reason")
+                            or "fixed_source_or_pair_integrity_lost"
+                        )
+                        restart_history.append(
+                            {
+                                "restart": len(restart_history),
+                                "mode_index": int(mode_index),
+                                "mode_label": str(mode_label),
+                                "start_u": seed_u.tolist(),
+                                "start_x": seed_x.tolist(),
+                                "end_u": seed_u.tolist(),
+                                "end_x": seed_x.tolist(),
+                                "cost": float(seed_entry.get("cost", np.nan)),
+                                "seed_cost": float(seed_entry.get("cost", np.nan)),
+                                "success": False,
+                                "seed_index": int(seed_index),
+                                "seed_kind": str(seed_entry.get("seed_kind", "")),
+                                "seed_label": str(seed_entry.get("seed_label", "")),
+                                "message": f"solve_start rejected: {rejection_reason}",
+                                "rejection_stage": "solve_start",
+                                "rejection_reason": rejection_reason,
+                                "failure_reason": rejection_reason,
+                                "lost_pair_ids": list(solve_start_stage.get("lost_pair_ids", [])),
+                                "fallback_pair_ids": list(
+                                    solve_start_stage.get("fallback_pair_ids", [])
+                                ),
+                                "rematched_pair_ids": list(
+                                    solve_start_stage.get("rematched_pair_ids", [])
+                                ),
+                                "missing_pair_ids": list(
+                                    solve_start_stage.get("missing_pair_ids", [])
+                                ),
+                                "branch_mismatch_pair_ids": list(
+                                    solve_start_stage.get("branch_mismatch_pair_ids", [])
+                                ),
+                            }
+                        )
+                        continue
+                solve_record_count += 1
+                seed_multistart_trace["seeds_solved"] = int(solve_record_count)
                 trial_u_result = _run_solver_u(
                     seed_u,
                     specs=active_specs,
@@ -21049,6 +24639,16 @@ def fit_geometry_parameters(
                     )
                     trial_result.x_u = np.asarray(seed_u, dtype=float)
                     trial_cost = seed_cost
+                solve_end_stage: Mapping[str, object] = {}
+                if seed_record is not None:
+                    solve_end_stage = _seed_trace_stage_record(
+                        record=seed_record,
+                        stage="solve_end",
+                        x_values=np.asarray(trial_result.x, dtype=float),
+                        u_values=np.asarray(getattr(trial_result, "x_u", []), dtype=float),
+                        cost=float(trial_cost),
+                        rms=float(_weighted_rms_px(np.asarray(trial_result.fun, dtype=float))),
+                    )
                 restart_history.append(
                     {
                         "restart": len(restart_history),
@@ -21061,27 +24661,56 @@ def fit_geometry_parameters(
                         "cost": float(trial_cost),
                         "seed_cost": float(seed_cost),
                         "success": bool(getattr(trial_result, "success", False)),
+                        "seed_index": int(seed_index),
                         "seed_kind": str(seed_entry.get("seed_kind", "")),
                         "seed_label": str(seed_entry.get("seed_label", "")),
                         "message": str(getattr(trial_result, "message", "")),
+                        "rejection_stage": (
+                            "solve_end"
+                            if solve_end_stage and not bool(solve_end_stage.get("clean", True))
+                            else None
+                        ),
+                        "rejection_reason": (
+                            str(solve_end_stage.get("rejection_reason"))
+                            if solve_end_stage and solve_end_stage.get("rejection_reason")
+                            else None
+                        ),
                     }
                 )
+                if solve_end_stage and not bool(solve_end_stage.get("clean", True)):
+                    continue
                 if best_result is None or float(trial_cost) < float(best_cost):
                     best_result = trial_result
                     best_cost = float(trial_cost)
                     best_mode = dict(mode)
                     best_mode_contexts = list(dataset_contexts)
+                    best_seed_index = int(seed_index)
         geometry_fit_stage_timings["dynamic_seed"] = float(
             max(0.0, time.monotonic() - dynamic_seed_started_at)
         )
 
     if best_result is None:
+        seed_failure_reason = (
+            "unexpected_solver_variable_set"
+            if seed_trace_integrity_enabled
+            and seed_trace_expected_pair_count > 0
+            and not seed_trace_variable_contract_clean
+            else "seed_multistart_incompatible_with_fixed_manual_pairs"
+            if seed_trace_integrity_enabled and seed_trace_expected_pair_count > 0 and active_specs
+            else "normalized_u_solver_failed_to_generate_result"
+        )
         best_result = _build_probe_result(
             np.asarray(x0_arr, dtype=float),
             np.asarray(residual_fn(np.asarray(x0_arr, dtype=float)), dtype=float),
-            message="normalized_u_solver_failed_to_generate_result",
+            message=str(seed_failure_reason),
         )
         best_result.x_u = np.asarray(u0_arr, dtype=float)
+        if seed_failure_reason != "normalized_u_solver_failed_to_generate_result":
+            best_result.success = False
+            best_result.status = 0
+            best_result.seed_multistart_failure_reason = str(seed_failure_reason)
+            seed_multistart_trace["failure_reason"] = str(seed_failure_reason)
+            seed_multistart_trace["all_seeds_dirty"] = True
         best_cost = _robust_cost(
             np.asarray(best_result.fun, dtype=float),
             loss=solver_loss,
@@ -21090,6 +24719,58 @@ def fit_geometry_parameters(
 
     dataset_contexts = list(best_mode_contexts)
     result = best_result
+    if seed_trace_records:
+        selected_u = getattr(result, "x_u", None)
+        _seed_trace_add_final_selection(
+            selected_seed_index=best_seed_index,
+            selected_cost=float(best_cost),
+            selected_x=np.asarray(getattr(result, "x", []), dtype=float),
+            selected_u=(
+                np.asarray(selected_u, dtype=float)
+                if selected_u is not None
+                else np.asarray([], dtype=float)
+            ),
+        )
+        selected_record = (
+            seed_trace_records_by_index.get(int(best_seed_index))
+            if best_seed_index is not None
+            else None
+        )
+        selected_clean = bool(
+            selected_record is not None and bool(selected_record.get("clean", False))
+        )
+        seed_multistart_trace["selected_seed_index"] = (
+            int(best_seed_index) if best_seed_index is not None else None
+        )
+        seed_multistart_trace["selected_seed_cost"] = (
+            float(best_cost) if best_seed_index is not None else float("nan")
+        )
+        seed_multistart_trace["selected_seed_clean"] = bool(selected_clean)
+        seed_multistart_trace["selected_seed_preserved_fixed_pairs"] = bool(selected_clean)
+        seed_multistart_trace["selected_seed_fixed_source_resolved_count"] = int(
+            selected_record.get("fixed_source_resolved_count", 0)
+            if isinstance(selected_record, Mapping)
+            else 0
+        )
+        seed_multistart_trace["selected_seed_matched_pair_count"] = int(
+            selected_record.get("matched_pair_count", 0)
+            if isinstance(selected_record, Mapping)
+            else 0
+        )
+        if (
+            seed_trace_integrity_enabled
+            and seed_trace_expected_pair_count > 0
+            and not selected_clean
+        ):
+            failure_reason = str(
+                seed_multistart_trace.get("failure_reason") or "fixed_source_or_pair_integrity_lost"
+            )
+            result.success = False
+            result.status = 0
+            result.message = failure_reason
+            result.seed_multistart_failure_reason = failure_reason
+            seed_multistart_trace["failure_reason"] = failure_reason
+        _seed_trace_refresh_summary()
     geometry_fit_debug_summary["main_solve_seed"] = {
         "seed_kind": "u=0",
         "seed_label": "normalized-zero",
@@ -21869,6 +25550,7 @@ def fit_geometry_parameters(
     )
 
     result.restart_history = restart_history
+    result.seed_multistart_trace = copy.deepcopy(seed_multistart_trace)
     result.reparameterization_summary = reparameterization_summary
     result.staged_release_summary = staged_release_summary
     result.adaptive_regularization_summary = adaptive_regularization_summary
@@ -21957,7 +25639,9 @@ def fit_geometry_parameters(
                 collect_diagnostics=True,
             )
             point_match_summary = _public_point_match_summary(point_match_summary)
-            point_match_summary["metric_name"] = str(result.final_metric_name)
+            point_match_summary["final_metric_name"] = str(result.final_metric_name)
+            point_match_summary.setdefault("metric_name", str(result.final_metric_name))
+            point_match_summary.setdefault("metric_unit", "px")
             point_match_summary["single_ray_coarse_enabled"] = False
             point_match_summary["full_beam_polish_enabled"] = bool(
                 full_beam_polish_summary.get("enabled", False)
@@ -21965,6 +25649,34 @@ def fit_geometry_parameters(
             point_match_summary["full_beam_polish_accepted"] = bool(
                 full_beam_polish_summary.get("accepted", False)
             )
+            point_match_summary["full_beam_polish_failure_reason"] = full_beam_polish_summary.get(
+                "failure_reason"
+            )
+            for key in (
+                "polish_started",
+                "polish_completed",
+                "polish_candidate_param_names",
+                "polish_var_names",
+                "polish_effective_var_names_seen_by_solver",
+                "polish_fixed_source_resolved_count_before",
+                "polish_fixed_source_resolved_count_after",
+                "polish_matched_pair_count_before",
+                "polish_matched_pair_count_after",
+                "polish_fallback_entry_count_before",
+                "polish_fallback_entry_count_after",
+                "polish_missing_pair_count_before",
+                "polish_missing_pair_count_after",
+                "polish_branch_mismatch_count_before",
+                "polish_branch_mismatch_count_after",
+                "polish_lost_pair_ids",
+                "polish_missing_pair_ids",
+                "polish_fallback_pair_ids",
+                "polish_rematched_pair_ids",
+                "polish_lost_pair_details",
+                "polish_rejection_reason",
+            ):
+                if key in full_beam_polish_summary:
+                    point_match_summary[key] = copy.deepcopy(full_beam_polish_summary[key])
             point_match_summary["seed_correspondence_count"] = int(
                 full_beam_polish_summary.get("seed_correspondence_count", 0)
             )
@@ -21973,8 +25685,8 @@ def fit_geometry_parameters(
             )
             point_match_summary["matched_fixed_pair_count"] = int(
                 point_match_summary.get(
-                    "fixed_source_resolved_count",
-                    point_match_summary.get("matched_pair_count", 0),
+                    "matched_pair_count",
+                    point_match_summary.get("fixed_source_resolved_count", 0),
                 )
             )
             point_match_summary["missing_fixed_pair_count"] = int(
@@ -21983,6 +25695,32 @@ def fit_geometry_parameters(
             point_match_summary["final_full_beam_rms_px"] = float(
                 point_match_summary.get("unweighted_peak_rms_px", np.nan)
             )
+            seed_trace_summary = geometry_fit_debug_summary.get("seed_multistart_trace")
+            if isinstance(seed_trace_summary, Mapping):
+                public_seed_trace = copy.deepcopy(seed_trace_summary)
+                point_match_summary["seed_multistart_trace"] = public_seed_trace
+                for key in (
+                    "seed_count",
+                    "seeds_prescored",
+                    "seeds_solved",
+                    "seeds_rejected_for_pair_integrity",
+                    "selected_seed_index",
+                    "selected_seed_cost",
+                    "selected_seed_clean",
+                    "selected_seed_fixed_source_resolved_count",
+                    "selected_seed_matched_pair_count",
+                    "selected_seed_preserved_fixed_pairs",
+                    "lost_pair_ids_by_seed",
+                    "fallback_pair_ids_by_seed",
+                    "rematched_pair_ids_by_seed",
+                    "missing_pair_ids_by_seed",
+                    "failure_reason",
+                ):
+                    if key in public_seed_trace:
+                        summary_key = (
+                            "seed_multistart_failure_reason" if key == "failure_reason" else key
+                        )
+                        point_match_summary[summary_key] = copy.deepcopy(public_seed_trace[key])
             result.point_match_diagnostics = point_match_diagnostics
             result.point_match_summary = point_match_summary
             try:

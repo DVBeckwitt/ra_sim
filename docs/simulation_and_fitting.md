@@ -2410,6 +2410,20 @@ degenerate, the local angular transform is invalid, there are too few support
 pixels in the profile window, or the measured profile is empty after background
 subtraction.
 
+A newer scaffold in
+[`optimization_mosaic_profiles.py`](../ra_sim/fitting/optimization_mosaic_profiles.py)
+starts the selected-Qr/profile route more directly. It pairs user-selected Qr
+metadata with the corresponding background point, integrates a local ROI into
+intensity versus `phi`, fits each integration with an additive Lorentzian plus
+Gaussian peak model, centers the fitted peaks at a common zero, and exposes a
+least-squares wrapper that varies only chosen parameters through a caller-supplied
+simulation callback. This scaffold agrees with the geometry-locked, selected-peak
+strategy above, but differs from the current production path in three ways: it
+keeps the full selected pair list rather than reducing off-specular peaks to the
+top three groups, it currently focuses on `phi` profiles rather than the existing
+specular `2theta` branch, and its per-profile fit is not the pseudo-Voigt-style
+`eta` mixture still used by the forward mosaic kernel.
+
 Each dataset block is scaled by `1 / sqrt(num_rois_in_dataset)` so one
 selected background cannot dominate just because it contributed more peaks.
 

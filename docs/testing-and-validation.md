@@ -54,6 +54,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | CLI and launcher | `tests/test_cli_cif_parse.py` | `python -m ra_sim.dev test-fast` | CIF cell parsing used by CLI paths. | Fast manifest in ra_sim/test_tiers.py. |
 | CLI and launcher | `tests/test_cli_geometry_fit.py` | `python -m ra_sim.dev test-fast` | Geometry and mosaic-shape CLI parser and saved-state fit behavior. | Fast manifest in ra_sim/test_tiers.py. |
 | CLI and launcher | `tests/test_cli_headless.py` | `python -m ra_sim.dev test-integration` | Headless simulation CLI request construction. | Integration manifest in ra_sim/test_tiers.py. |
+| CLI and launcher | `tests/test_compare_bi2se3_reference_tool.py` | `python -m pytest tests/test_compare_bi2se3_reference_tool.py` | Bi2Se3 VESTA comparison CLI defaults and wavelength reporting. | Untiered; direct pytest or full suite. |
+| CLI and launcher | `tests/test_compare_single_hkl_debug_script.py` | `python -m pytest tests/test_compare_single_hkl_debug_script.py` | Single-HKL debug script defaults and payload reporting. | Untiered; direct pytest or full suite. |
 | CLI and launcher | `tests/test_dev_cli.py` | `python -m ra_sim.dev test-fast` | Regression coverage for dev cli. | Fast manifest in ra_sim/test_tiers.py. |
 | CLI and launcher | `tests/test_launcher_routing.py` | `python -m pytest tests/test_launcher_routing.py` | Regression coverage for launcher routing. | Untiered; direct pytest or full suite. |
 | CLI and launcher | `tests/test_main_entrypoint_import_safe.py` | `python -m pytest tests/test_main_entrypoint_import_safe.py` | Regression coverage for main entrypoint import safe. | Untiered; direct pytest or full suite. |
@@ -74,6 +76,7 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Developer tooling and runtime infrastructure | `tests/test_numba_cache_env.py` | `python -m pytest tests/test_numba_cache_env.py` | Regression coverage for numba cache env. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_parallel_utils.py` | `python -m pytest tests/test_parallel_utils.py` | Regression coverage for parallel utils. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_sitecustomize.py` | `python -m pytest tests/test_sitecustomize.py` | Regression coverage for sitecustomize. | Untiered; direct pytest or full suite. |
+| Developer tooling and runtime infrastructure | `tests/test_structure_factor_environment.py` | `python -m pytest tests/test_structure_factor_environment.py` | Structure-factor parity environment snapshots and explicit wavelength checks. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_testing_validation_index.py` | `python -m pytest tests/test_testing_validation_index.py` | Static guard for this testing and validation index. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_timing.py` | `python -m pytest tests/test_timing.py` | Timing JSONL events and GUI timing summary helpers. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_utils_notifications.py` | `python -m pytest tests/test_utils_notifications.py` | Regression coverage for utils notifications. | Untiered; direct pytest or full suite. |
@@ -158,18 +161,29 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Simulation and diffraction engine | `tests/test_intensities.py` | `python -m pytest tests/test_intensities.py` | Regression coverage for intensities. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_intersection_analysis.py` | `python -m pytest tests/test_intersection_analysis.py` | Regression coverage for intersection analysis. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_intersection_cache_schema.py` | `python -m pytest tests/test_intersection_cache_schema.py` | Regression coverage for intersection cache schema. | Untiered; direct pytest or full suite. |
+| Simulation and diffraction engine | `tests/test_mosaic_intensity_conservation.py` | `python -m pytest tests/test_mosaic_intensity_conservation.py` | Mosaic normalization and pre-detector intensity conservation validation. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_peak_multiplicity_cache.py` | `python -m pytest tests/test_peak_multiplicity_cache.py` | Regression coverage for peak multiplicity cache. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_simulation.py` | `python -m ra_sim.dev test-integration` | Regression coverage for simulation. | Integration manifest in ra_sim/test_tiers.py. |
 | Simulation and diffraction engine | `tests/test_simulation_engine.py` | `python -m ra_sim.dev test-integration` | Regression coverage for simulation engine. | Integration manifest in ra_sim/test_tiers.py. |
+| Materials, structure factors, and mosaic models | `tests/test_atomic_scattering_factors.py` | `python -m pytest tests/test_atomic_scattering_factors.py` | Atomic scattering factor helpers and debug table coverage. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_bi2se3_residual_diagnostics.py` | `python -m pytest tests/test_bi2se3_residual_diagnostics.py` | Bi2Se3 VESTA residual summary and worst-HKL diagnostics. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_bi2se3_structure_factor.py` | `python -m pytest tests/test_bi2se3_structure_factor.py` | Regression coverage for bi2se3 structure factor. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_bi2se3_validation_doc_consistency.py` | `python -m pytest tests/test_bi2se3_validation_doc_consistency.py` | Bi2Se3 validation documentation consistency with fixture metadata. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_bi2se3_vesta_geometry.py` | `python -m pytest tests/test_bi2se3_vesta_geometry.py` | Bi2Se3 d-spacing and two-theta parity against VESTA references. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_bi2se3_vesta_reference_regression.py` | `python -m pytest tests/test_bi2se3_vesta_reference_regression.py` | Bi2Se3 VESTA reference regression guards and debug artifacts. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_ht_analytical.py` | `python -m pytest tests/test_ht_analytical.py` | Regression coverage for ht analytical. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_mosaic_profiles_rng.py` | `python -m pytest tests/test_mosaic_profiles_rng.py` | Regression coverage for mosaic profiles rng. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_mosaic_shape_optimization.py` | `python -m pytest tests/test_mosaic_shape_optimization.py` | Regression coverage for mosaic shape optimization. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_mosaic_width_optimization.py` | `python -m pytest tests/test_mosaic_width_optimization.py` | Regression coverage for mosaic width optimization. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_raw_structure_factor_api.py` | `python -m pytest tests/test_raw_structure_factor_api.py` | Raw complex structure-factor API semantics and debug payload rules. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_single_hkl_debug_payload.py` | `python -m pytest tests/test_single_hkl_debug_payload.py` | Single-HKL debug payload terms, JSON serialization, and NaN two-theta cases. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_stacking_fault_cache_invalidation.py` | `python -m pytest tests/test_stacking_fault_cache_invalidation.py` | Regression coverage for stacking fault cache invalidation. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_stacking_fault_diffuse_f2_q.py` | `python -m pytest tests/test_stacking_fault_diffuse_f2_q.py` | Regression coverage for stacking fault diffuse f2 q. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_stacking_fault_redundancy.py` | `python -m pytest tests/test_stacking_fault_redundancy.py` | Regression coverage for stacking fault redundancy. | Untiered; direct pytest or full suite. |
 | Materials, structure factors, and mosaic models | `tests/test_structure_factor_atomic_coordinates.py` | `python -m ra_sim.dev test-fast` | Regression coverage for structure factor atomic coordinates. | Fast manifest in ra_sim/test_tiers.py. |
+| Materials, structure factors, and mosaic models | `tests/test_structure_factor_sites.py` | `python -m pytest tests/test_structure_factor_sites.py` | Expanded structure-factor site list determinism and occupancy checks. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_structure_factor_switch_sweep.py` | `python -m pytest tests/test_structure_factor_switch_sweep.py` | Structure-factor one-knob sweep diagnostics and error summaries. | Untiered; direct pytest or full suite. |
+| Materials, structure factors, and mosaic models | `tests/test_vesta_reference_parser.py` | `python -m pytest tests/test_vesta_reference_parser.py` | VESTA TXT parser, fixture metadata, and implied wavelength checks. | Untiered; direct pytest or full suite. |
 | Utilities and smoke tests | `tests/test_background_theta_helpers.py` | `python -m ra_sim.dev test-fast` | Regression coverage for background theta helpers. | Fast manifest in ra_sim/test_tiers.py. |
 | Utilities and smoke tests | `tests/test_compare_intensity.py` | `python -m ra_sim.dev test-fast` | Regression coverage for compare intensity. | Fast manifest in ra_sim/test_tiers.py. |
 | Utilities and smoke tests | `tests/test_hbn_fitter_bundle_export.py` | `python -m ra_sim.dev test-integration` | Regression coverage for hbn fitter bundle export. | Integration manifest in ra_sim/test_tiers.py. |
@@ -183,6 +197,10 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | `tests/Diffuse/PbI2_2H.cif` | CIF fixture | Diffuse CIF viewer support | 2H PbI2 reference structure. |
 | `tests/Diffuse/PbI2_6H.cif` | CIF fixture | Diffuse CIF viewer support | 6H PbI2 reference structure. |
 | `tests/config.json` | JSON fixture | Config loader and CLI tests | Minimal configuration fixture. |
+| `tests/fixtures/Bi2Se3.cif` | CIF fixture | Bi2Se3 VESTA parity tests | Bi2Se3 reference structure fixture. |
+| `tests/fixtures/Bi2Se3_vesta_cu_ka1_dmin_0p7.metadata.json` | JSON fixture | Bi2Se3 VESTA parity tests | VESTA export metadata and expected validation settings. |
+| `tests/fixtures/Bi2Se3_vesta_cu_ka1_dmin_0p7.txt` | TXT reference | Bi2Se3 VESTA parity tests | VESTA exported structure-factor reference rows. |
+| `tests/fixtures/bi2se3_reference_comparison_baseline.csv` | CSV baseline | Bi2Se3 residual diagnostics | Baseline comparison output for no-silent-update guards. |
 | `tests/local_geometry.poni` | PONI fixture | Geometry and CLI tests | Local detector geometry sample. |
 | `tests/local_test.cif` | CIF fixture | CIF parsing and simulation tests | Small local structure sample. |
 | `tests/local_test2.cif` | CIF fixture | CIF parsing and structure tests | Second local structure sample. |
@@ -200,6 +218,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Path | Type | Command shape | Purpose |
 |---|---|---|---|
 | `tests/Diffuse/diffuse_cif_toggle.py` | Support script | `python tests/Diffuse/diffuse_cif_toggle.py --l-max <value>` | Interactive PbI2 diffuse CIF viewer used as test-adjacent support, not a pytest file. |
+| `tests/helpers/__init__.py` | Support package marker | Not direct CLI. | Package marker for shared test helpers. |
+| `tests/helpers/vesta_reference.py` | Support helper | Imported by tests. | Test import shim for VESTA parity helpers. |
 
 ## Validation, diagnostic, benchmark, and timing scripts
 
@@ -211,6 +231,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Benchmarks | `scripts/benchmarks/benchmark_mosaic_profiles.py` | `python scripts/benchmarks/benchmark_mosaic_profiles.py --samples <n> --iterations <n>` | Stdout timing summary. | Benchmarks random mosaic profile generation. |
 | Geometry landscape and fitting performance | `scripts/debug/analyze_geometry_fit_jacobians.py` | `python scripts/debug/analyze_geometry_fit_jacobians.py <scenario_file> --output <report>` | JSON or YAML aggregate report. | Aggregates geometry-fit Jacobian diagnostics. |
 | Debug and analysis tools | `scripts/debug/analyze_simulation_debug.py` | `python scripts/debug/analyze_simulation_debug.py` | Reads generated artifact scripts/debug/simulation.npz and shows a plot. | Analyzes missed diffracted ray directions. |
+| Validation probes | `scripts/debug/bi2se3_vesta_switch_sweep.py` | `python scripts/debug/bi2se3_vesta_switch_sweep.py --help` | JSON switch-sweep report on stdout. | Runs Bi2Se3 structure-factor switch-sweep diagnostics. |
+| Validation probes | `scripts/debug/compare_single_hkl_vesta_vs_sim.py` | `python scripts/debug/compare_single_hkl_vesta_vs_sim.py --help` | JSON comparison output or optional output file. | Compares one HKL between VESTA reference data and simulated raw factors. |
 | Geometry recovery diagnostics | `scripts/debug/diagnose_new4_visual_backend_coordinates.py` | `python scripts/debug/diagnose_new4_visual_backend_coordinates.py --output-dir <dir>` | coordinate_transform_diagnosis.json. | Compares New4 visual and backend coordinate transforms. |
 | Debug and analysis tools | `scripts/debug/optimization.py` | `python scripts/debug/optimization.py` | Configured plots and fit summaries. | Legacy global/local diffraction optimization diagnostic. |
 | Debug and analysis tools | `scripts/debug/plot_mosaic_omega_and_bragg_sphere.py` | `python scripts/debug/plot_mosaic_omega_and_bragg_sphere.py --H <h> --K <k> --L <l>` | Interactive Matplotlib plot. | Visualizes mosaic omega distribution and Bragg sphere geometry. |
@@ -239,8 +261,25 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 | Path | Command shape | Purpose |
 |---|---|---|
+| `ra_sim/tools/compare_bi2se3_reference.py` | `python -m ra_sim.tools.compare_bi2se3_reference --help` | Compares Bi2Se3 VESTA reference exports against raw structure factors. |
 | `ra_sim/tools/compare_intensity.py` | `python -m ra_sim.tools.compare_intensity <excel_path> --sheet <name>` | Compares CIF intensities against numeric Hendricks-Teller areas and plots metrics. |
 | `ra_sim/tools/plot_excel_scatter.py` | `python -m ra_sim.tools.plot_excel_scatter <excel_path> --sheet <name> --intensity <column>` | Plots Excel intensity columns against L with optional interactive controls. |
+
+## Validation support and dependency modules
+
+These modules are not stand-alone test commands, but they are validation-critical support code used by the indexed parity and conservation checks.
+
+| Path | Purpose |
+|---|---|
+| `ra_sim/simulation/mosaic_normalization.py` | Pre-detector mosaic mass conservation validation helpers. |
+| `ra_sim/structure_factors/__init__.py` | Package exports for raw structure-factor helpers. |
+| `ra_sim/structure_factors/options.py` | Options dataclass for raw structure-factor calculations. |
+| `ra_sim/structure_factors/raw_f.py` | Raw complex structure-factor calculation and debug payloads. |
+| `ra_sim/structure_factors/sweep.py` | One-knob structure-factor switch-sweep diagnostics. |
+| `ra_sim/structure_factors/vesta_like_atomic_factors.py` | VESTA-parity atomic factor helpers. |
+| `ra_sim/validation/__init__.py` | Package exports for validation helpers. |
+| `ra_sim/validation/environment.py` | Environment snapshots for structure-factor parity tests. |
+| `ra_sim/validation/vesta_reference.py` | VESTA TXT parsing and HKL comparison helpers. |
 
 ## Automation gates
 

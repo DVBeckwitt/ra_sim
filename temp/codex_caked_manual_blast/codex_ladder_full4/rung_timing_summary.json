@@ -1,0 +1,45 @@
+{
+  "completed_rung_count": 3,
+  "finished_at_iso": "2026-04-22T22:11:47.766504Z",
+  "missing_expected_rungs": [
+    "3",
+    "4",
+    "5"
+  ],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\codex_ladder_full4",
+  "run_id": "codex_ladder_full4",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.008257000001322012,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\codex_ladder_full4\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 0.978427100002591,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\codex_ladder_full4\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 14.294235500001378,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\codex_ladder_full4\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "sensitivity_scan",
+  "slowest_rung_elapsed_s": 14.294235500001378,
+  "started_at_iso": "2026-04-22T22:10:21.390628Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 86.37588479999977
+}

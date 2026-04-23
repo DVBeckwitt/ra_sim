@@ -1,0 +1,12 @@
+{
+  "active_params": [
+    "zs"
+  ],
+  "diagnostic_logging": false,
+  "heartbeat_updated_at": 1776896698.0850282,
+  "rung": 3,
+  "rung_name": "one_param_zs",
+  "solver_context_reused": false,
+  "state_sha256_before": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "status": "starting"
+}

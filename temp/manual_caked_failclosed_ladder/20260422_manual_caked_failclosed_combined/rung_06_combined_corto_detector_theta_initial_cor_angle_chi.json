@@ -1,0 +1,120 @@
+{
+  "active_params": [
+    "corto_detector",
+    "theta_initial",
+    "cor_angle",
+    "chi"
+  ],
+  "adaptive_regularization": false,
+  "auto_freeze": false,
+  "base_parameter_values": {
+    "chi": 0.0,
+    "cor_angle": 0.0,
+    "corto_detector": 0.075,
+    "theta_initial": 5.0
+  },
+  "baseline": false,
+  "caked_guard_failures": [],
+  "caked_point_reprojection_guard_ok": false,
+  "caked_point_reprojection_report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03b_caked_point_reprojection\\rung_03b_caked_point_reprojection.json",
+  "caked_reprojection_guard_ok": false,
+  "candidate": [
+    "corto_detector",
+    "theta_initial",
+    "cor_angle",
+    "chi"
+  ],
+  "candidate_name": "corto_detector_theta_initial_cor_angle_chi",
+  "candidate_param_names": [
+    "corto_detector",
+    "theta_initial",
+    "cor_angle",
+    "chi"
+  ],
+  "combined_guard_failures": [
+    "missing_block_evidence"
+  ],
+  "discrete_modes": false,
+  "dynamic_reanchor": false,
+  "effective_var_names_seen_by_solver": [],
+  "elapsed_s": 0.0,
+  "elapsed_seconds": 0.0,
+  "failure_reason": "missing_block_evidence",
+  "feature_flags_disabled": {
+    "adaptive_regularization": false,
+    "auto_freeze": false,
+    "baseline": false,
+    "discrete_modes": false,
+    "dynamic_reanchor": false,
+    "full_beam_polish": false,
+    "multistart": false,
+    "selective_thaw": false
+  },
+  "finished_at_iso": "2026-04-22T23:45:04.108895Z",
+  "full_beam_polish": false,
+  "full_fitter_validated": false,
+  "least_squares_called": false,
+  "missing_block_evidence": [
+    [
+      "corto_detector",
+      "theta_initial",
+      "cor_angle"
+    ],
+    [
+      "chi",
+      "cor_angle",
+      "theta_initial"
+    ]
+  ],
+  "multistart": false,
+  "optimizer_solve_called": false,
+  "parameter_after": {
+    "chi": null,
+    "cor_angle": null,
+    "corto_detector": null,
+    "theta_initial": null
+  },
+  "parameter_before": {
+    "chi": 0.0,
+    "cor_angle": 0.0,
+    "corto_detector": 0.075,
+    "theta_initial": 5.0
+  },
+  "parameter_bounds": {
+    "chi": null,
+    "cor_angle": null,
+    "corto_detector": null,
+    "theta_initial": null
+  },
+  "parameter_delta": {
+    "chi": null,
+    "cor_angle": null,
+    "corto_detector": null,
+    "theta_initial": null
+  },
+  "pass": false,
+  "provider_guard_after_ok": false,
+  "real_solve_called": false,
+  "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_combined\\rung_06_combined_corto_detector_theta_initial_cor_angle_chi.json",
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_combined",
+  "run_id": "20260422_manual_caked_failclosed_combined",
+  "rung": 6,
+  "rung_id": "6",
+  "rung_index": "6",
+  "rung_name": "combined_corto_detector_theta_initial_cor_angle_chi",
+  "selective_thaw": false,
+  "skip_reason": null,
+  "started_at_iso": "2026-04-22T23:45:04.108895Z",
+  "state_hash_after": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "state_hash_before": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "state_hash_unchanged": true,
+  "state_sha256_after": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "state_sha256_before": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "status": "failed",
+  "var_names": [
+    "corto_detector",
+    "theta_initial",
+    "cor_angle",
+    "chi"
+  ]
+}

@@ -2080,9 +2080,10 @@ def _one_param_metric_failures(report: Mapping[str, object]) -> list[str]:
 def _rung_passed(report: Mapping[str, object]) -> bool:
     if str(report.get("status", "")) not in {"ok", "pass"}:
         return False
-    if report.get("residuals_finite") is not True:
-        return False
     rung = int(report.get("rung", 0) or 0)
+    if report.get("residuals_finite") is not True:
+        if not (rung == 1 and report.get("objective_dry_run_residual_finite") is True):
+            return False
     if not _report_selected_metrics_finite(
         report,
         require_before=False,
@@ -2758,19 +2759,114 @@ def _caked_summary_fit_space_guard_failures(
         failures.append("fit_space_projector_kind_not_exact_caked_bundle")
     if bool(summary.get("same_manual_pair_ids_before_after", True)) is not True:
         failures.append("same_manual_pair_ids_before_after_false")
-    for raw_dataset in summary.get("per_dataset", ()) or ():
+    per_dataset_entries = [
+        raw_dataset
+        for raw_dataset in (summary.get("per_dataset", ()) or ())
+        if isinstance(raw_dataset, Mapping)
+    ]
+    if not per_dataset_entries:
+        failures.append("per_dataset_missing")
+    dataset_count_sums = {
+        "manual_caked_residual_row_count": 0,
+        "dataset_fit_space_projector_row_count": 0,
+        "raw_angular_row_count": 0,
+        "raw_angular_range_row_count": 0,
+        "weighted_angular_row_count": 0,
+        "optimizer_point_component_count": 0,
+    }
+    for raw_dataset in per_dataset_entries:
         if not isinstance(raw_dataset, Mapping):
             continue
         if str(raw_dataset.get("fit_space_projector_kind") or "") != "exact_caked_bundle":
             failures.append("dataset_fit_space_projector_kind_not_exact_caked_bundle")
-        if _safe_int(raw_dataset.get("manual_caked_residual_row_count"), default=0) <= 0:
+        dataset_manual_rows = _safe_int(
+            raw_dataset.get("manual_caked_residual_row_count"),
+            default=0,
+        )
+        dataset_raw_rows = _safe_int(raw_dataset.get("raw_angular_row_count"), default=0)
+        dataset_projector_rows = _safe_int(
+            raw_dataset.get("dataset_fit_space_projector_row_count"),
+            default=0,
+        )
+        if dataset_manual_rows <= 0:
             failures.append("dataset_manual_caked_residual_rows_missing")
-        if _safe_int(raw_dataset.get("dataset_fit_space_projector_row_count"), default=0) <= 0:
+        if dataset_projector_rows <= 0:
             failures.append("dataset_projector_rows_missing")
+        elif dataset_manual_rows > 0 and dataset_projector_rows != dataset_manual_rows:
+            failures.append(
+                "dataset_fit_space_projector_row_count_"
+                f"{dataset_projector_rows}_expected_{dataset_manual_rows}"
+            )
         if _safe_int(raw_dataset.get("invalid_dataset_fit_space_projector_row_count"), default=0):
             failures.append("dataset_invalid_projector_rows_present")
         if _safe_int(raw_dataset.get("analytic_detector_fit_space_row_count"), default=0):
             failures.append("dataset_analytic_detector_fit_space_rows_present")
+        dataset_audit_count_keys = (
+            "raw_angular_row_count",
+            "raw_angular_delta_failure_count",
+            "raw_angular_range_row_count",
+            "raw_angular_range_failure_count",
+            "weighted_angular_failure_count",
+            "weighted_angular_row_count",
+            "weighted_angular_recompute_failure_count",
+            "optimizer_point_component_count",
+            "optimizer_point_component_failure_count",
+        )
+        dataset_audit_bool_keys = (
+            "raw_angular_sanity_ok",
+            "raw_angular_range_sanity_ok",
+        )
+        for key in dataset_audit_count_keys:
+            if key not in raw_dataset:
+                failures.append(f"dataset_{key}_missing")
+            elif (
+                key.endswith("_count")
+                and key
+                not in {
+                    "raw_angular_range_row_count",
+                    "raw_angular_row_count",
+                    "weighted_angular_row_count",
+                    "optimizer_point_component_count",
+                }
+                and _safe_int(raw_dataset.get(key), default=-1) != 0
+            ):
+                failures.append(f"dataset_{key}_nonzero")
+        for key in ("raw_angular_row_count", "raw_angular_range_row_count"):
+            if key in raw_dataset:
+                value = _safe_int(raw_dataset.get(key), default=0)
+                if dataset_manual_rows > 0 and value != dataset_manual_rows:
+                    failures.append(f"dataset_{key}_{value}_expected_{dataset_manual_rows}")
+        if "weighted_angular_row_count" in raw_dataset:
+            weighted_rows = _safe_int(raw_dataset.get("weighted_angular_row_count"), default=0)
+            if dataset_raw_rows > 0 and weighted_rows != dataset_raw_rows:
+                failures.append(
+                    "dataset_weighted_angular_row_count_"
+                    f"{weighted_rows}_expected_{dataset_raw_rows}"
+                )
+        if "optimizer_point_component_count" in raw_dataset:
+            component_count = _safe_int(
+                raw_dataset.get("optimizer_point_component_count"),
+                default=0,
+            )
+            if dataset_raw_rows > 0 and component_count != 2 * dataset_raw_rows:
+                failures.append(
+                    "dataset_optimizer_point_component_count_"
+                    f"{component_count}_expected_{2 * dataset_raw_rows}"
+                )
+        for key in dataset_audit_bool_keys:
+            if key not in raw_dataset:
+                failures.append(f"dataset_{key}_missing")
+            elif raw_dataset.get(key) is not True:
+                failures.append(f"dataset_{key}_not_true")
+        for key in dataset_count_sums:
+            if key in raw_dataset:
+                dataset_count_sums[key] += _safe_int(raw_dataset.get(key), default=0)
+    for key, dataset_total in dataset_count_sums.items():
+        if key not in summary:
+            continue
+        top_level_count = _safe_int(summary.get(key), default=0)
+        if top_level_count > 0 and int(dataset_total) != top_level_count:
+            failures.append(f"per_dataset_{key}_sum_{dataset_total}_expected_{top_level_count}")
     return list(dict.fromkeys(failures))
 
 
@@ -3002,6 +3098,9 @@ def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
     failures: list[str] = []
     if str(report.get("status", "")) != "ok" or bool(report.get("pass", False)) is not True:
         failures.append("rung_1_status_not_ok")
+    dry_run_residual_finite = report.get("objective_dry_run_residual_finite") is True
+    if report.get("residuals_finite") is not True and not dry_run_residual_finite:
+        failures.append("residuals_not_finite")
     expected_counts = {
         "provider_pair_count": 7,
         "dataset_pair_count": 7,
@@ -3025,7 +3124,7 @@ def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
         actual = report.get(key)
         if actual is not True:
             failures.append(f"{key}_{actual}_expected_True")
-    if bool(report.get("objective_dry_run_residual_finite", False)) is not True:
+    if not dry_run_residual_finite:
         failures.append("objective_dry_run_residual_not_finite")
     if bool(report.get("least_squares_called", True)):
         failures.append("least_squares_called")

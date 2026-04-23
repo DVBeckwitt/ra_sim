@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 from ra_sim.debug_controls import register_run_input_paths, register_run_output_path
+from ra_sim.timing import timing_span
 
 SOLVE_Q_STEPS_MIN = 32
 SOLVE_Q_STEPS_MAX = 8192
@@ -168,27 +169,40 @@ def _legacy_gui_state_payload_from_object(payload: dict[str, Any]) -> dict[str, 
 def load_gui_state_file(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Read and validate a JSON GUI-state snapshot."""
 
+    state_path = Path(path)
+    timing_fields: dict[str, object] = {
+        "state_path_basename": state_path.name,
+    }
+    try:
+        timing_fields["state_file_size_bytes"] = int(state_path.stat().st_size)
+    except OSError:
+        timing_fields["state_file_size_bytes"] = None
+
     register_run_input_paths(path)
-    with open(path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, dict):
-        raise ValueError("GUI state file must contain a JSON object.")
-    payload_type = str(payload.get("type", "")).strip()
-    if payload_type:
-        if payload_type != GUI_STATE_FILE_TYPE:
+    with timing_span("saved_state.file_read", phase="startup", **timing_fields):
+        with open(path, "r", encoding="utf-8") as handle:
+            raw_text = handle.read()
+    with timing_span("saved_state.json_parse", phase="startup", **timing_fields):
+        payload = json.loads(raw_text)
+    with timing_span("saved_state.snapshot_import", phase="startup", **timing_fields):
+        if not isinstance(payload, dict):
+            raise ValueError("GUI state file must contain a JSON object.")
+        payload_type = str(payload.get("type", "")).strip()
+        if payload_type:
+            if payload_type != GUI_STATE_FILE_TYPE:
+                raise ValueError("Unsupported GUI state file type.")
+            state = payload.get("state")
+            if not isinstance(state, dict):
+                raise ValueError("GUI state file is missing a valid 'state' object.")
+            return payload
+
+        normalized_payload = _legacy_gui_state_payload_from_object(payload)
+        if normalized_payload is None:
             raise ValueError("Unsupported GUI state file type.")
-        state = payload.get("state")
+        state = normalized_payload.get("state")
         if not isinstance(state, dict):
             raise ValueError("GUI state file is missing a valid 'state' object.")
-        return payload
-
-    normalized_payload = _legacy_gui_state_payload_from_object(payload)
-    if normalized_payload is None:
-        raise ValueError("Unsupported GUI state file type.")
-    state = normalized_payload.get("state")
-    if not isinstance(state, dict):
-        raise ValueError("GUI state file is missing a valid 'state' object.")
-    return normalized_payload
+        return normalized_payload
 
 
 def load_geometry_placements_file(path: str | os.PathLike[str]) -> dict[str, Any]:

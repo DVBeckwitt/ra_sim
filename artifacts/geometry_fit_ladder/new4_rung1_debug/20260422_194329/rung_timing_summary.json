@@ -1,0 +1,41 @@
+{
+  "completed_rung_count": 3,
+  "finished_at_iso": "2026-04-23T00:44:09.037447Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4_rung1_debug\\20260422_194329",
+  "run_id": "20260422_194329",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.007707600001594983,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4_rung1_debug\\20260422_194329\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 1.052988399998867,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4_rung1_debug\\20260422_194329\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 15.364371399999072,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4_rung1_debug\\20260422_194329\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "sensitivity_scan",
+  "slowest_rung_elapsed_s": 15.364371399999072,
+  "started_at_iso": "2026-04-23T00:43:29.635960Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 39.40149409999867
+}

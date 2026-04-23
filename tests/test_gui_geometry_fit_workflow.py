@@ -4270,6 +4270,7 @@ def _green_rung1_report() -> dict[str, object]:
         "matched_pair_count": 7,
         "missing_pair_count": 0,
         "branch_mismatch_count": 0,
+        "residuals_finite": True,
         "objective_dry_run_residual_finite": True,
         "least_squares_called": False,
         "optimizer_solve_called": False,
@@ -4502,6 +4503,7 @@ def _write_pair_evidence(
         ladder._write_json(diagnosis_path, diagnosis)
 
     caked = {
+        **_exact_caked_point_summary(),
         "status": str(caked_status),
         "background_index": 0,
         "state_hash_before": state_hash,
@@ -6653,6 +6655,27 @@ def _green_combined_report(
     return payload
 
 
+def _exact_caked_per_dataset_summary(rows: int = 7) -> dict[str, object]:
+    return {
+        "fit_space_projector_kind": "exact_caked_bundle",
+        "manual_caked_residual_row_count": int(rows),
+        "dataset_fit_space_projector_row_count": int(rows),
+        "invalid_dataset_fit_space_projector_row_count": 0,
+        "analytic_detector_fit_space_row_count": 0,
+        "raw_angular_row_count": int(rows),
+        "raw_angular_delta_failure_count": 0,
+        "raw_angular_range_row_count": int(rows),
+        "raw_angular_range_failure_count": 0,
+        "raw_angular_sanity_ok": True,
+        "raw_angular_range_sanity_ok": True,
+        "weighted_angular_row_count": int(rows),
+        "weighted_angular_failure_count": 0,
+        "weighted_angular_recompute_failure_count": 0,
+        "optimizer_point_component_count": int(2 * rows),
+        "optimizer_point_component_failure_count": 0,
+    }
+
+
 def _exact_caked_point_summary(
     *,
     raw_rms=30.0,
@@ -6682,6 +6705,7 @@ def _exact_caked_point_summary(
         "raw_angular_range_sanity_ok": True,
         "metric_name": str(metric_name),
         "metric_unit": str(metric_unit),
+        "weighted_angular_row_count": 7,
         "weighted_angular_failure_count": 0,
         "weighted_angular_recompute_failure_count": 0,
         "weighted_angular_rms_weighted_deg": float(weighted_rms),
@@ -6691,15 +6715,7 @@ def _exact_caked_point_summary(
         "optimizer_component_count": 14,
         "optimizer_component_nonfinite_count": 0,
         "optimizer_component_rms_weighted_deg": 1.0,
-        "per_dataset": [
-            {
-                "fit_space_projector_kind": "exact_caked_bundle",
-                "manual_caked_residual_row_count": 7,
-                "dataset_fit_space_projector_row_count": 7,
-                "invalid_dataset_fit_space_projector_row_count": 0,
-                "analytic_detector_fit_space_row_count": 0,
-            }
-        ],
+        "per_dataset": [_exact_caked_per_dataset_summary()],
     }
 
 
@@ -7243,6 +7259,7 @@ def test_new4_ladder_block_default_builds_same_run_evidence(
         calls.append("caked")
         state_hash = _hash_file(Path(state_path))
         report = {
+            **_exact_caked_point_summary(),
             "status": "pass",
             "background_index": int(background_index),
             "state_hash_before": state_hash,
@@ -7410,6 +7427,7 @@ def test_new4_ladder_fresh_blocks_nonusable_a_runs_unrelated_blocks(
         calls.append("caked")
         state_hash = _hash_file(Path(state_path))
         report = {
+            **_exact_caked_point_summary(),
             "status": "pass",
             "background_index": int(background_index),
             "state_hash_before": state_hash,
@@ -9135,6 +9153,19 @@ def test_new4_ladder_caked_manual_report_guard_rejects_raw_degree_1000() -> None
                     "dataset_fit_space_projector_row_count": 7,
                     "invalid_dataset_fit_space_projector_row_count": 0,
                     "analytic_detector_fit_space_row_count": 0,
+                    "matched_pair_count": 7,
+                    "raw_angular_row_count": 7,
+                    "raw_angular_delta_failure_count": 0,
+                    "raw_angular_range_row_count": 7,
+                    "raw_angular_range_failure_count": 0,
+                    "raw_angular_component_max_abs_deg": 80.0,
+                    "weighted_angular_row_count": 7,
+                    "weighted_angular_failure_count": 0,
+                    "weighted_angular_recompute_failure_count": 0,
+                    "optimizer_point_component_count": 14,
+                    "optimizer_point_component_failure_count": 0,
+                    "raw_angular_range_sanity_ok": True,
+                    "raw_angular_sanity_ok": True,
                 }
             ],
         },
@@ -9199,6 +9230,19 @@ def test_new4_ladder_caked_manual_report_guard_rejects_metric_mismatch() -> None
                     "dataset_fit_space_projector_row_count": 7,
                     "invalid_dataset_fit_space_projector_row_count": 0,
                     "analytic_detector_fit_space_row_count": 0,
+                    "matched_pair_count": 7,
+                    "raw_angular_row_count": 7,
+                    "raw_angular_delta_failure_count": 0,
+                    "raw_angular_range_row_count": 7,
+                    "raw_angular_range_failure_count": 0,
+                    "raw_angular_component_max_abs_deg": 80.0,
+                    "weighted_angular_row_count": 7,
+                    "weighted_angular_failure_count": 0,
+                    "weighted_angular_recompute_failure_count": 0,
+                    "optimizer_point_component_count": 14,
+                    "optimizer_point_component_failure_count": 0,
+                    "raw_angular_range_sanity_ok": True,
+                    "raw_angular_sanity_ok": True,
                 }
             ],
         },
@@ -9252,6 +9296,19 @@ def test_new4_ladder_caked_manual_report_guard_rejects_missing_selected_metric()
                     "dataset_fit_space_projector_row_count": 7,
                     "invalid_dataset_fit_space_projector_row_count": 0,
                     "analytic_detector_fit_space_row_count": 0,
+                    "matched_pair_count": 7,
+                    "raw_angular_row_count": 7,
+                    "raw_angular_delta_failure_count": 0,
+                    "raw_angular_range_row_count": 7,
+                    "raw_angular_range_failure_count": 0,
+                    "raw_angular_component_max_abs_deg": 80.0,
+                    "weighted_angular_row_count": 7,
+                    "weighted_angular_failure_count": 0,
+                    "weighted_angular_recompute_failure_count": 0,
+                    "optimizer_point_component_count": 14,
+                    "optimizer_point_component_failure_count": 0,
+                    "raw_angular_range_sanity_ok": True,
+                    "raw_angular_sanity_ok": True,
                 }
             ],
         },
@@ -9350,6 +9407,19 @@ def test_new4_ladder_caked_manual_report_guard_rejects_missing_before_metric() -
                     "dataset_fit_space_projector_row_count": 7,
                     "invalid_dataset_fit_space_projector_row_count": 0,
                     "analytic_detector_fit_space_row_count": 0,
+                    "matched_pair_count": 7,
+                    "raw_angular_row_count": 7,
+                    "raw_angular_delta_failure_count": 0,
+                    "raw_angular_range_row_count": 7,
+                    "raw_angular_range_failure_count": 0,
+                    "raw_angular_component_max_abs_deg": 80.0,
+                    "weighted_angular_row_count": 7,
+                    "weighted_angular_failure_count": 0,
+                    "weighted_angular_recompute_failure_count": 0,
+                    "optimizer_point_component_count": 14,
+                    "optimizer_point_component_failure_count": 0,
+                    "raw_angular_range_sanity_ok": True,
+                    "raw_angular_sanity_ok": True,
                 }
             ],
         },
@@ -9399,15 +9469,7 @@ def test_new4_ladder_caked_manual_report_guard_rejects_implicit_missing_before_m
             "raw_angular_sanity_ok": True,
             "metric_name": "raw_angular_rms_deg",
             "metric_unit": "deg",
-            "per_dataset": [
-                {
-                    "fit_space_projector_kind": "exact_caked_bundle",
-                    "manual_caked_residual_row_count": 7,
-                    "dataset_fit_space_projector_row_count": 7,
-                    "invalid_dataset_fit_space_projector_row_count": 0,
-                    "analytic_detector_fit_space_row_count": 0,
-                }
-            ],
+            "per_dataset": [_exact_caked_per_dataset_summary()],
         },
     }
 
@@ -9460,15 +9522,7 @@ def test_new4_ladder_caked_manual_report_guard_rejects_selected_raw_1000() -> No
             "raw_angular_sanity_ok": True,
             "metric_name": "raw_angular_rms_deg",
             "metric_unit": "deg",
-            "per_dataset": [
-                {
-                    "fit_space_projector_kind": "exact_caked_bundle",
-                    "manual_caked_residual_row_count": 7,
-                    "dataset_fit_space_projector_row_count": 7,
-                    "invalid_dataset_fit_space_projector_row_count": 0,
-                    "analytic_detector_fit_space_row_count": 0,
-                }
-            ],
+            "per_dataset": [_exact_caked_per_dataset_summary()],
         },
     }
 
@@ -9514,6 +9568,7 @@ def test_new4_ladder_caked_manual_report_guard_allows_small_max_regression() -> 
             "raw_angular_range_row_count": 7,
             "raw_angular_range_failure_count": 0,
             "raw_angular_component_max_abs_deg": 80.0,
+            "weighted_angular_row_count": 7,
             "weighted_angular_failure_count": 0,
             "weighted_angular_recompute_failure_count": 0,
             "optimizer_point_component_count": 14,
@@ -9529,6 +9584,19 @@ def test_new4_ladder_caked_manual_report_guard_allows_small_max_regression() -> 
                     "dataset_fit_space_projector_row_count": 7,
                     "invalid_dataset_fit_space_projector_row_count": 0,
                     "analytic_detector_fit_space_row_count": 0,
+                    "matched_pair_count": 7,
+                    "raw_angular_row_count": 7,
+                    "raw_angular_delta_failure_count": 0,
+                    "raw_angular_range_row_count": 7,
+                    "raw_angular_range_failure_count": 0,
+                    "raw_angular_component_max_abs_deg": 80.0,
+                    "weighted_angular_row_count": 7,
+                    "weighted_angular_failure_count": 0,
+                    "weighted_angular_recompute_failure_count": 0,
+                    "optimizer_point_component_count": 14,
+                    "optimizer_point_component_failure_count": 0,
+                    "raw_angular_range_sanity_ok": True,
+                    "raw_angular_sanity_ok": True,
                 }
             ],
         },
@@ -9574,6 +9642,7 @@ def test_new4_ladder_caked_manual_report_guard_rejects_large_max_regression() ->
             "raw_angular_range_row_count": 7,
             "raw_angular_range_failure_count": 0,
             "raw_angular_component_max_abs_deg": 80.0,
+            "weighted_angular_row_count": 7,
             "weighted_angular_failure_count": 0,
             "weighted_angular_recompute_failure_count": 0,
             "optimizer_point_component_count": 14,
@@ -9589,6 +9658,19 @@ def test_new4_ladder_caked_manual_report_guard_rejects_large_max_regression() ->
                     "dataset_fit_space_projector_row_count": 7,
                     "invalid_dataset_fit_space_projector_row_count": 0,
                     "analytic_detector_fit_space_row_count": 0,
+                    "matched_pair_count": 7,
+                    "raw_angular_row_count": 7,
+                    "raw_angular_delta_failure_count": 0,
+                    "raw_angular_range_row_count": 7,
+                    "raw_angular_range_failure_count": 0,
+                    "raw_angular_component_max_abs_deg": 80.0,
+                    "weighted_angular_row_count": 7,
+                    "weighted_angular_failure_count": 0,
+                    "weighted_angular_recompute_failure_count": 0,
+                    "optimizer_point_component_count": 14,
+                    "optimizer_point_component_failure_count": 0,
+                    "raw_angular_range_sanity_ok": True,
+                    "raw_angular_sanity_ok": True,
                 }
             ],
         },
@@ -9666,15 +9748,7 @@ def test_new4_ladder_objective_dry_run_caked_gate_uses_after_raw_metric_without_
             "raw_angular_range_sanity_ok": True,
             "metric_name": "raw_angular_rms_deg",
             "metric_unit": "deg",
-            "per_dataset": [
-                {
-                    "fit_space_projector_kind": "exact_caked_bundle",
-                    "manual_caked_residual_row_count": 7,
-                    "dataset_fit_space_projector_row_count": 7,
-                    "invalid_dataset_fit_space_projector_row_count": 0,
-                    "analytic_detector_fit_space_row_count": 0,
-                }
-            ],
+            "per_dataset": [_exact_caked_per_dataset_summary()],
         },
     }
 
@@ -9731,15 +9805,7 @@ def test_new4_ladder_pair_caked_gate_uses_selected_metric_without_px() -> None:
             "raw_angular_sanity_ok": True,
             "metric_name": "raw_angular_rms_deg",
             "metric_unit": "deg",
-            "per_dataset": [
-                {
-                    "fit_space_projector_kind": "exact_caked_bundle",
-                    "manual_caked_residual_row_count": 7,
-                    "dataset_fit_space_projector_row_count": 7,
-                    "invalid_dataset_fit_space_projector_row_count": 0,
-                    "analytic_detector_fit_space_row_count": 0,
-                }
-            ],
+            "per_dataset": [_exact_caked_per_dataset_summary()],
         },
     }
 
@@ -9960,7 +10026,7 @@ def test_new4_ladder_rung1_rejects_nonfinite_residual_with_false_dry_run_flag() 
     assert ladder._rung_passed(report) is False
 
 
-def test_new4_ladder_rung1_rejects_nonfinite_residual_with_true_dry_run_flag() -> None:
+def test_new4_ladder_rung1_allows_nonfinite_residual_with_true_dry_run_flag() -> None:
     ladder = _load_new4_ladder_module()
     report = _exact_caked_ladder_report(
         rung=1,
@@ -9978,7 +10044,26 @@ def test_new4_ladder_rung1_rejects_nonfinite_residual_with_true_dry_run_flag() -
         }
     )
 
-    assert ladder._rung_passed(report) is False
+    assert ladder._rung_passed(report) is True
+
+
+def test_new4_ladder_rung1_green_failures_allow_true_dry_run_flag() -> None:
+    ladder = _load_new4_ladder_module()
+    report = _exact_caked_ladder_report(rung=1, names=("center_x",))
+    report.update(
+        {
+            "pass": True,
+            "least_squares_called": False,
+            "optimizer_solve_called": False,
+            "residuals_finite": False,
+            "objective_dry_run_residual_finite": True,
+        }
+    )
+
+    failures = ladder._rung1_green_failures(report)
+
+    assert "residuals_not_finite" not in failures
+    assert "objective_dry_run_residual_not_finite" not in failures
 
 
 def test_new4_ladder_rung_passed_rejects_missing_residual_flag() -> None:
@@ -10068,6 +10153,205 @@ def test_new4_ladder_caked_guard_rejects_raw_row_count_mismatch(
     )
 
     assert expected_failure in failures
+    assert ladder._rung_passed(report) is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_failure"),
+    [
+        (
+            "raw_angular_range_failure_count",
+            1,
+            "dataset_raw_angular_range_failure_count_nonzero",
+        ),
+        (
+            "weighted_angular_recompute_failure_count",
+            1,
+            "dataset_weighted_angular_recompute_failure_count_nonzero",
+        ),
+        (
+            "optimizer_point_component_failure_count",
+            1,
+            "dataset_optimizer_point_component_failure_count_nonzero",
+        ),
+        (
+            "raw_angular_range_sanity_ok",
+            False,
+            "dataset_raw_angular_range_sanity_ok_not_true",
+        ),
+    ],
+)
+def test_new4_ladder_caked_guard_rejects_per_dataset_audit_failures(
+    field,
+    value,
+    expected_failure,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    report = _exact_caked_ladder_report()
+    point_summary = dict(report["point_match_summary"])
+    per_dataset = [dict(item) for item in point_summary["per_dataset"]]
+    per_dataset[0][field] = value
+    point_summary["per_dataset"] = per_dataset
+    report["point_match_summary"] = point_summary
+
+    failures = ladder._caked_manual_report_guard_failures(
+        report,
+        require_improvement=False,
+    )
+
+    assert expected_failure in failures
+    assert ladder._rung_passed(report) is False
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_failure"),
+    [
+        ("raw_angular_row_count", "dataset_raw_angular_row_count_missing"),
+        ("raw_angular_delta_failure_count", "dataset_raw_angular_delta_failure_count_missing"),
+        ("raw_angular_range_row_count", "dataset_raw_angular_range_row_count_missing"),
+        ("raw_angular_range_failure_count", "dataset_raw_angular_range_failure_count_missing"),
+        ("raw_angular_sanity_ok", "dataset_raw_angular_sanity_ok_missing"),
+        ("raw_angular_range_sanity_ok", "dataset_raw_angular_range_sanity_ok_missing"),
+        ("weighted_angular_row_count", "dataset_weighted_angular_row_count_missing"),
+        ("weighted_angular_failure_count", "dataset_weighted_angular_failure_count_missing"),
+        (
+            "weighted_angular_recompute_failure_count",
+            "dataset_weighted_angular_recompute_failure_count_missing",
+        ),
+        ("optimizer_point_component_count", "dataset_optimizer_point_component_count_missing"),
+        (
+            "optimizer_point_component_failure_count",
+            "dataset_optimizer_point_component_failure_count_missing",
+        ),
+    ],
+)
+def test_new4_ladder_caked_guard_rejects_missing_per_dataset_audit_fields(
+    field,
+    expected_failure,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    report = _exact_caked_ladder_report()
+    point_summary = dict(report["point_match_summary"])
+    per_dataset = [dict(item) for item in point_summary["per_dataset"]]
+    per_dataset[0].pop(field)
+    point_summary["per_dataset"] = per_dataset
+    report["point_match_summary"] = point_summary
+
+    failures = ladder._caked_manual_report_guard_failures(
+        report,
+        require_improvement=False,
+    )
+
+    assert expected_failure in failures
+    assert ladder._rung_passed(report) is False
+
+
+def test_new4_ladder_caked_gate_rejects_legacy_per_dataset_without_audit_fields() -> None:
+    ladder = _load_new4_ladder_module()
+    report = _exact_caked_ladder_report()
+    point_summary = dict(report["point_match_summary"])
+    point_summary["per_dataset"] = [
+        {
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "manual_caked_residual_row_count": 7,
+            "dataset_fit_space_projector_row_count": 7,
+            "invalid_dataset_fit_space_projector_row_count": 0,
+            "analytic_detector_fit_space_row_count": 0,
+        }
+    ]
+    report["point_match_summary"] = point_summary
+
+    failures = ladder._caked_manual_report_guard_failures(
+        report,
+        require_improvement=False,
+    )
+
+    assert "dataset_raw_angular_row_count_missing" in failures
+    assert "dataset_raw_angular_range_sanity_ok_missing" in failures
+    assert "dataset_weighted_angular_recompute_failure_count_missing" in failures
+    assert ladder._rung_passed(report) is False
+
+
+def test_new4_ladder_caked_gate_rejects_missing_per_dataset_summary() -> None:
+    ladder = _load_new4_ladder_module()
+    report = _exact_caked_ladder_report()
+    point_summary = dict(report["point_match_summary"])
+    point_summary.pop("per_dataset")
+    report["point_match_summary"] = point_summary
+
+    failures = ladder._caked_manual_report_guard_failures(
+        report,
+        require_improvement=False,
+    )
+
+    assert "per_dataset_missing" in failures
+    assert ladder._rung_passed(report) is False
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_failure"),
+    [
+        (
+            "manual_caked_residual_row_count",
+            "per_dataset_manual_caked_residual_row_count_sum_1_expected_7",
+        ),
+        (
+            "raw_angular_row_count",
+            "per_dataset_raw_angular_row_count_sum_1_expected_7",
+        ),
+        (
+            "raw_angular_range_row_count",
+            "per_dataset_raw_angular_range_row_count_sum_1_expected_7",
+        ),
+        (
+            "weighted_angular_row_count",
+            "per_dataset_weighted_angular_row_count_sum_1_expected_7",
+        ),
+        (
+            "optimizer_point_component_count",
+            "per_dataset_optimizer_point_component_count_sum_2_expected_14",
+        ),
+    ],
+)
+def test_new4_ladder_caked_gate_rejects_per_dataset_count_sum_mismatch(
+    field,
+    expected_failure,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    report = _exact_caked_ladder_report()
+    point_summary = dict(report["point_match_summary"])
+    top_level = point_summary[field]
+    point_summary["per_dataset"] = [_exact_caked_per_dataset_summary(rows=1)]
+    point_summary[field] = top_level
+    report["point_match_summary"] = point_summary
+
+    failures = ladder._caked_manual_report_guard_failures(
+        report,
+        require_improvement=False,
+    )
+
+    assert expected_failure in failures
+    assert ladder._rung_passed(report) is False
+
+
+def test_new4_ladder_caked_gate_rejects_per_dataset_projector_manual_mismatch() -> None:
+    ladder = _load_new4_ladder_module()
+    report = _exact_caked_ladder_report()
+    point_summary = dict(report["point_match_summary"])
+    left = _exact_caked_per_dataset_summary(rows=3)
+    left["dataset_fit_space_projector_row_count"] = 4
+    right = _exact_caked_per_dataset_summary(rows=4)
+    right["dataset_fit_space_projector_row_count"] = 3
+    point_summary["per_dataset"] = [left, right]
+    report["point_match_summary"] = point_summary
+
+    failures = ladder._caked_manual_report_guard_failures(
+        report,
+        require_improvement=False,
+    )
+
+    assert "dataset_fit_space_projector_row_count_4_expected_3" in failures
+    assert "dataset_fit_space_projector_row_count_3_expected_4" in failures
     assert ladder._rung_passed(report) is False
 
 
@@ -10387,15 +10671,7 @@ def test_new4_ladder_pair_caked_gate_uses_weighted_selected_metric() -> None:
             "metric_unit": "weighted_deg",
             "weighted_angular_rms_weighted_deg": 70.0,
             "weighted_angular_max_weighted_deg": 85.0,
-            "per_dataset": [
-                {
-                    "fit_space_projector_kind": "exact_caked_bundle",
-                    "manual_caked_residual_row_count": 7,
-                    "dataset_fit_space_projector_row_count": 7,
-                    "invalid_dataset_fit_space_projector_row_count": 0,
-                    "analytic_detector_fit_space_row_count": 0,
-                }
-            ],
+            "per_dataset": [_exact_caked_per_dataset_summary()],
         },
     }
 
@@ -10457,15 +10733,7 @@ def test_new4_ladder_one_param_caked_gate_uses_caked_metric() -> None:
             "optimizer_point_component_failure_count": 0,
             "raw_angular_range_sanity_ok": True,
             "raw_angular_sanity_ok": True,
-            "per_dataset": [
-                {
-                    "fit_space_projector_kind": "exact_caked_bundle",
-                    "manual_caked_residual_row_count": 7,
-                    "dataset_fit_space_projector_row_count": 7,
-                    "invalid_dataset_fit_space_projector_row_count": 0,
-                    "analytic_detector_fit_space_row_count": 0,
-                }
-            ],
+            "per_dataset": [_exact_caked_per_dataset_summary()],
         },
     }
 
@@ -10530,15 +10798,7 @@ def test_new4_ladder_pair_caked_gate_uses_caked_metric() -> None:
             "optimizer_point_component_failure_count": 0,
             "raw_angular_range_sanity_ok": True,
             "raw_angular_sanity_ok": True,
-            "per_dataset": [
-                {
-                    "fit_space_projector_kind": "exact_caked_bundle",
-                    "manual_caked_residual_row_count": 7,
-                    "dataset_fit_space_projector_row_count": 7,
-                    "invalid_dataset_fit_space_projector_row_count": 0,
-                    "analytic_detector_fit_space_row_count": 0,
-                }
-            ],
+            "per_dataset": [_exact_caked_per_dataset_summary()],
         },
     }
 

@@ -1,0 +1,57 @@
+{
+  "completed_rung_count": 5,
+  "finished_at_iso": "2026-04-22T22:08:04.440989Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_r3_probe_nfev20_after",
+  "run_id": "codex_r3_probe_nfev20_after",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.015505300001677824,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_r3_probe_nfev20_after\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 1.142204399999173,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_r3_probe_nfev20_after\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.09114530000078958,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_r3_probe_nfev20_after\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 28.68802869999854,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_r3_probe_nfev20_after\\rung_03_one_param_center_x.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_center_x",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 28.735187599999335,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_r3_probe_nfev20_after\\rung_03_one_param_summary.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_summary",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "one_param_summary",
+  "slowest_rung_elapsed_s": 28.735187599999335,
+  "started_at_iso": "2026-04-22T22:07:07.369643Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 57.071358999997756
+}

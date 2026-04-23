@@ -1,0 +1,121 @@
+{
+  "completed_rung_count": 13,
+  "finished_at_iso": "2026-04-22T19:46:31.013667Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param",
+  "run_id": "codex_seed_multistart_integrity_one_param",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.007138699998904485,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 0.07947489999969548,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 1.2308778999995411,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5605846999987989,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_a.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_a",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5471877999989374,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_c.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_c",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5663077000008343,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_chi.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_chi",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5966248000004271,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_cor_angle.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5829343000004883,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_corto_detector.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_corto_detector",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5843650999995589,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_psi_z.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 5.122273399998448,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_summary.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_summary",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5806542999998783,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_theta_initial.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_theta_initial",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5273732000005111,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_zb.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.5257084999993822,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_seed_multistart_integrity_one_param\\rung_03_one_param_zs.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zs",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "one_param_summary",
+  "slowest_rung_elapsed_s": 5.122273399998448,
+  "started_at_iso": "2026-04-22T19:46:19.210572Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 11.803102799998669
+}

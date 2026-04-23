@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import math
 import threading
 
 import numpy as np
@@ -324,6 +325,74 @@ def test_dynamic_point_match_reanchors_measured_anchor_and_reports_motion(
     assert summary["measured_anchor_motion_max_px"] > 0.0
 
 
+def test_dynamic_point_match_reanchor_callback_failure_reports_legacy_status(
+    monkeypatch,
+):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "label": "peak-0",
+                "hkl": (1, 0, 0),
+                "overlay_match_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "detector_x": 6.0,
+                "detector_y": 6.0,
+                "x": 6.0,
+                "y": 6.0,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        dynamic_reanchor_enabled=True,
+        dynamic_reanchor_callback=lambda *args, **kwargs: None,
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+
+    residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=32,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert residual.shape == (2,)
+    assert diagnostics[0]["measured_reanchor_attempted"] is True
+    assert diagnostics[0]["measured_reanchor_status"] == "callback_failed"
+    assert summary["measured_anchor_reanchor_attempt_count"] == 1
+    assert summary["measured_anchor_reanchor_count"] == 0
+    assert summary["measured_anchor_reanchor_fail_count"] == 1
+
+
 def test_dynamic_point_match_exact_projector_blocks_analytic_fallback_and_ignores_stale_sim_display(
     monkeypatch,
 ):
@@ -451,6 +520,629 @@ def test_dynamic_point_match_exact_projector_blocks_analytic_fallback_and_ignore
             "local_params": dict(local),
         },
     ]
+
+
+def test_angular_difference_deg_wraps_phi_edge() -> None:
+    assert opt._angular_difference_deg(-179.0, 179.0) == pytest.approx(2.0)
+    assert opt._angular_difference_deg(179.0, -179.0) == pytest.approx(-2.0)
+
+
+def test_exact_caked_manual_residual_audit_reports_degree_units(monkeypatch) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 0.0, 0.0, 1.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        del local_params
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        count = cols_arr.size
+        if anchor_kind == "measured":
+            two_theta = np.full(count, 30.0, dtype=np.float64)
+            phi = np.full(count, 179.0, dtype=np.float64)
+        else:
+            two_theta = np.full(count, 33.0, dtype=np.float64)
+            phi = np.full(count, -179.0, dtype=np.float64)
+        return {
+            "two_theta_deg": two_theta,
+            "phi_deg": phi,
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": f"sig-{anchor_kind}",
+            "fit_space_local_params_signature": "lp-test",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": f"test-{input_frame}",
+            "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+            "caked_projection_source": "fit_space_projector_native_detector",
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(
+        opt,
+        "_detector_pixels_to_fit_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("analytic detector fit-space path must not run")
+        ),
+    )
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[0.0, 0.0, 1.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "label": "c2-row-0",
+                "pair_id": "manual-0",
+                "hkl": (0, 0, 1),
+                "overlay_match_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "fit_source_identity_only": True,
+                "native_col": 30.0,
+                "native_row": 40.0,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+    local["_hk0_peak_priority_weight"] = 2.0
+
+    residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=32,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    expected_raw_norm = np.sqrt(3.0**2 + 2.0**2)
+    expected_weighted_norm = np.sqrt(6.0**2 + 4.0**2)
+    assert residual.tolist() == pytest.approx([6.0, 4.0])
+    diag = diagnostics[0]
+    assert diag["manual_pair_id"] == "manual-0"
+    assert diag["measured_two_theta_deg"] == pytest.approx(30.0)
+    assert diag["measured_phi_deg"] == pytest.approx(179.0)
+    assert diag["projected_two_theta_deg"] == pytest.approx(33.0)
+    assert diag["projected_phi_deg"] == pytest.approx(-179.0)
+    assert 0.0 <= diag["measured_two_theta_deg"] <= 90.0
+    assert 0.0 <= diag["projected_two_theta_deg"] <= 90.0
+    assert -180.0 <= diag["measured_phi_deg"] <= 180.0
+    assert -180.0 <= diag["projected_phi_deg"] <= 180.0
+    assert diag["delta_two_theta_deg"] == pytest.approx(3.0)
+    assert diag["wrapped_delta_phi_deg"] == pytest.approx(2.0)
+    assert diag["raw_angular_norm_deg"] == pytest.approx(expected_raw_norm)
+    assert diag["weight"] == pytest.approx(2.0)
+    assert diag["weighted_delta_two_theta_deg"] == pytest.approx(6.0)
+    assert diag["weighted_delta_phi_deg"] == pytest.approx(4.0)
+    assert diag["solver_residual_vector"] == pytest.approx([6.0, 4.0])
+    assert diag["metric_name"] == "raw_angular_rms_deg"
+    assert diag["metric_unit"] == "deg"
+    assert diag["weighted_metric_unit"] == "weighted_deg"
+    assert summary["raw_angular_rms_deg"] == pytest.approx(expected_raw_norm)
+    assert summary["raw_angular_max_deg"] == pytest.approx(expected_raw_norm)
+    assert summary["raw_angular_component_max_abs_deg"] == pytest.approx(3.0)
+    assert summary["raw_angular_max_deg"] <= opt.RAW_ANGULAR_VECTOR_NORM_BOUND_DEG
+    assert summary["raw_angular_component_max_abs_deg"] <= opt.RAW_ANGULAR_COMPONENT_BOUND_DEG
+    assert summary["raw_angular_delta_sanity_ok"] is True
+    assert summary["raw_angular_range_sanity_ok"] is True
+    assert summary["raw_angular_range_failure_count"] == 0
+    assert summary["raw_angular_sanity_ok"] is True
+    assert summary["measured_two_theta_min_deg"] == pytest.approx(30.0)
+    assert summary["measured_two_theta_max_deg"] == pytest.approx(30.0)
+    assert summary["projected_two_theta_min_deg"] == pytest.approx(33.0)
+    assert summary["projected_two_theta_max_deg"] == pytest.approx(33.0)
+    assert summary["measured_phi_wrapped_min_deg"] == pytest.approx(179.0)
+    assert summary["projected_phi_wrapped_min_deg"] == pytest.approx(-179.0)
+    assert summary["weighted_angular_rms_weighted_deg"] == pytest.approx(
+        expected_weighted_norm
+    )
+    assert summary["weighted_angular_max_weighted_deg"] == pytest.approx(
+        expected_weighted_norm
+    )
+    assert summary["optimizer_component_rms_weighted_deg"] == pytest.approx(np.sqrt(26.0))
+    assert summary["metric_name"] == "raw_angular_rms_deg"
+    assert summary["metric_unit"] == "deg"
+    assert summary["weighted_metric_name"] == "weighted_angular_rms_weighted_deg"
+    assert summary["weighted_metric_unit"] == "weighted_deg"
+    assert summary["optimizer_component_count"] == residual.size
+    assert summary["detector_pixel_rms_px"] == pytest.approx(
+        summary["unweighted_peak_rms_px"]
+    )
+    assert np.isnan(float(summary["caked_pixel_rms_px"]))
+    assert summary["manual_caked_residual_row_count"] == 1
+    assert summary["dataset_fit_space_projector_row_count"] == 2
+    assert summary["invalid_dataset_fit_space_projector_row_count"] == 0
+    assert summary["analytic_detector_fit_space_row_count"] == 0
+    assert summary["fallback_entry_count"] == 0
+    assert summary["subset_fallback_hkl_count"] == 0
+
+
+def test_exact_caked_manual_residual_audit_rejects_out_of_range_angles(monkeypatch) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 12.0, 12.0, 0.0, 0.0, 0.0, 1.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        del rows, local_params
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        if anchor_kind == "measured":
+            two_theta = np.full(cols_arr.size, 300.0, dtype=np.float64)
+            phi = np.full(cols_arr.size, 10.0, dtype=np.float64)
+        else:
+            two_theta = np.full(cols_arr.size, 303.0, dtype=np.float64)
+            phi = np.full(cols_arr.size, 12.0, dtype=np.float64)
+        return {
+            "two_theta_deg": two_theta,
+            "phi_deg": phi,
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": f"sig-{anchor_kind}",
+            "fit_space_local_params_signature": "lp-test",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": f"test-{input_frame}",
+            "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
+            "native_cols": cols_arr,
+            "native_rows": np.asarray(cols, dtype=np.float64).reshape(-1),
+            "caked_projection_source": "fit_space_projector_native_detector",
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[0.0, 0.0, 1.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[
+            {
+                "label": "c2-row-0",
+                "pair_id": "manual-0",
+                "hkl": (0, 0, 1),
+                "overlay_match_index": 0,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "fit_source_identity_only": True,
+                "native_col": 30.0,
+                "native_row": 40.0,
+            }
+        ],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=32,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert residual.tolist() == pytest.approx([3.0, 2.0])
+    assert summary["raw_angular_delta_sanity_ok"] is True
+    assert summary["raw_angular_range_sanity_ok"] is False
+    assert summary["raw_angular_range_failure_count"] == 1
+    assert summary["raw_angular_sanity_ok"] is False
+    assert summary["measured_two_theta_max_deg"] == pytest.approx(300.0)
+    assert summary["projected_two_theta_max_deg"] == pytest.approx(303.0)
+
+
+def test_exact_caked_optimizer_component_rms_includes_line_residuals(monkeypatch) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array([[1.0, 12.0, 12.0, 0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+            np.array([[1.0, 14.0, 12.0, 0.0, 0.0, 0.0, 2.0]], dtype=np.float64),
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        del rows, local_params
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        if anchor_kind == "measured":
+            two_theta = np.where(cols_arr < 21.0, 30.0, 40.0)
+            phi = np.where(cols_arr < 21.0, 0.0, 10.0)
+        else:
+            two_theta = np.where(cols_arr < 13.0, 31.0, 41.0)
+            phi = np.where(cols_arr < 13.0, 0.0, 12.0)
+        return {
+            "two_theta_deg": two_theta.astype(np.float64),
+            "phi_deg": phi.astype(np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": f"sig-{anchor_kind}",
+            "fit_space_local_params_signature": "lp-test",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": f"test-{input_frame}",
+            "native_frame_conversion_count": 0 if input_frame == "native_detector" else 1,
+            "native_cols": cols_arr,
+            "native_rows": cols_arr,
+            "caked_projection_source": "fit_space_projector_native_detector",
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    entries = [
+        {
+            "label": f"c2-row-{idx}",
+            "pair_id": f"manual-{idx}",
+            "hkl": (0, 0, idx + 1),
+            "overlay_match_index": idx,
+            "source_table_index": idx,
+            "source_row_index": 0,
+            "fit_source_identity_only": True,
+            "native_col": 20.0 + 2.0 * idx,
+            "native_row": 40.0,
+        }
+        for idx in range(2)
+    ]
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 2.0]], dtype=np.float64),
+        intensities=np.array([1.0, 1.0], dtype=np.float64),
+        measured_entries=entries,
+        original_indices=np.array([0, 1], dtype=np.int64),
+        total_reflection_count=2,
+        fixed_source_reflection_count=2,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=np.zeros((32, 32), dtype=np.float64),
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+    )
+    local = _base_params(32)
+    local["pixel_size"] = 1.0
+    local["corto_detector"] = 100.0
+    local["_q_group_line_constraints_enabled"] = True
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=32,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert summary["matched_pair_count"] == 2
+    assert residual.size > 2 * summary["matched_pair_count"]
+    assert summary["optimizer_component_count"] == residual.size
+    assert summary["optimizer_component_rms_weighted_deg"] == pytest.approx(
+        float(np.sqrt(np.mean(residual * residual)))
+    )
+
+
+def test_exact_caked_optimizer_component_rms_rejects_nonfinite_vector() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0],
+        measured_phi_deg=[179.0],
+        projected_two_theta_deg=[33.0],
+        projected_phi_deg=[-179.0],
+        delta_two_theta_deg=[3.0],
+        wrapped_delta_phi_deg=[2.0],
+        weighted_delta_two_theta_deg=[6.0],
+        weighted_delta_phi_deg=[4.0],
+        priority_weights=[2.0],
+        solver_residual_vector=[6.0, float("nan"), 4.0],
+    )
+
+    assert summary["optimizer_component_count"] == 3
+    assert summary["optimizer_component_nonfinite_count"] == 1
+    assert math.isnan(summary["optimizer_component_rms_weighted_deg"])
+    merged = opt._merged_angular_degree_residual_audit_summary([summary])
+    assert merged["optimizer_component_count"] == 3
+    assert merged["optimizer_component_nonfinite_count"] == 1
+    assert math.isnan(merged["optimizer_component_rms_weighted_deg"])
+
+
+def test_exact_caked_residual_audit_rejects_missing_or_nonfinite_rows() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0],
+        measured_phi_deg=[0.0],
+        projected_two_theta_deg=[31.0],
+        projected_phi_deg=[1.0],
+        delta_two_theta_deg=[1.0, 2.0],
+        wrapped_delta_phi_deg=[1.0, float("nan")],
+        weighted_delta_two_theta_deg=[1.0, 2.0],
+        weighted_delta_phi_deg=[1.0, 2.0],
+        priority_weights=[1.0, 1.0],
+        solver_residual_vector=[1.0, 1.0, 2.0, 2.0],
+    )
+
+    assert summary["raw_angular_row_count"] == 2
+    assert summary["raw_angular_delta_failure_count"] == 1
+    assert summary["raw_angular_range_row_count"] == 2
+    assert summary["raw_angular_range_failure_count"] == 1
+    assert summary["raw_angular_delta_sanity_ok"] is False
+    assert summary["raw_angular_range_sanity_ok"] is False
+    assert summary["raw_angular_sanity_ok"] is False
+    assert math.isnan(summary["raw_angular_rms_deg"])
+    assert math.isnan(summary["raw_angular_max_deg"])
+    assert summary["weighted_angular_recompute_failure_count"] == 1
+    assert math.isnan(summary["weighted_angular_rms_weighted_deg"])
+    merged = opt._merged_angular_degree_residual_audit_summary([summary])
+    assert merged["raw_angular_row_count"] == 2
+    assert merged["raw_angular_delta_failure_count"] == 1
+    assert merged["raw_angular_range_failure_count"] == 1
+    assert merged["raw_angular_sanity_ok"] is False
+    assert math.isnan(merged["raw_angular_rms_deg"])
+    assert merged["weighted_angular_recompute_failure_count"] == 1
+    assert math.isnan(merged["weighted_angular_rms_weighted_deg"])
+
+
+def test_exact_caked_residual_audit_rejects_extra_angle_rows() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0, 31.0],
+        measured_phi_deg=[0.0, 1.0],
+        projected_two_theta_deg=[31.0, 32.0],
+        projected_phi_deg=[1.0, 2.0],
+        delta_two_theta_deg=[1.0],
+        wrapped_delta_phi_deg=[1.0],
+        weighted_delta_two_theta_deg=[1.0],
+        weighted_delta_phi_deg=[1.0],
+        priority_weights=[1.0],
+        solver_residual_vector=[1.0, 1.0],
+    )
+
+    assert summary["raw_angular_row_count"] == 1
+    assert summary["raw_angular_range_row_count"] == 1
+    assert summary["raw_angular_range_failure_count"] == 1
+    assert summary["raw_angular_delta_sanity_ok"] is True
+    assert summary["raw_angular_range_sanity_ok"] is False
+    assert summary["raw_angular_sanity_ok"] is False
+    assert summary["measured_two_theta_max_deg"] == pytest.approx(31.0)
+    assert summary["projected_phi_wrapped_max_deg"] == pytest.approx(2.0)
+
+
+def test_exact_caked_residual_audit_rejects_delta_recompute_mismatch() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0],
+        measured_phi_deg=[0.0],
+        projected_two_theta_deg=[31.0],
+        projected_phi_deg=[1.0],
+        delta_two_theta_deg=[180.0],
+        wrapped_delta_phi_deg=[0.0],
+        weighted_delta_two_theta_deg=[180.0],
+        weighted_delta_phi_deg=[0.0],
+        priority_weights=[1.0],
+        solver_residual_vector=[180.0, 0.0],
+    )
+
+    assert summary["raw_angular_delta_recompute_failure_count"] == 1
+    assert summary["raw_angular_delta_failure_count"] == 1
+    assert summary["raw_angular_range_sanity_ok"] is True
+    assert summary["raw_angular_delta_sanity_ok"] is False
+    assert summary["raw_angular_sanity_ok"] is False
+    assert math.isnan(summary["raw_angular_rms_deg"])
+
+
+def test_exact_caked_residual_audit_rejects_weighted_recompute_mismatch() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0],
+        measured_phi_deg=[179.0],
+        projected_two_theta_deg=[33.0],
+        projected_phi_deg=[-179.0],
+        delta_two_theta_deg=[3.0],
+        wrapped_delta_phi_deg=[2.0],
+        weighted_delta_two_theta_deg=[7.0],
+        weighted_delta_phi_deg=[4.0],
+        priority_weights=[2.0],
+        solver_residual_vector=[6.0, 4.0],
+    )
+
+    assert summary["weighted_angular_recompute_failure_count"] == 1
+    assert summary["weighted_angular_failure_count"] == 1
+    assert math.isnan(summary["weighted_angular_rms_weighted_deg"])
+    assert math.isnan(summary["weighted_angular_max_weighted_deg"])
+
+
+def test_exact_caked_residual_audit_rejects_solver_point_component_mismatch() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0],
+        measured_phi_deg=[179.0],
+        projected_two_theta_deg=[33.0],
+        projected_phi_deg=[-179.0],
+        delta_two_theta_deg=[3.0],
+        wrapped_delta_phi_deg=[2.0],
+        weighted_delta_two_theta_deg=[6.0],
+        weighted_delta_phi_deg=[4.0],
+        priority_weights=[2.0],
+        solver_residual_vector=[6.0, 5.0],
+    )
+
+    assert summary["optimizer_point_component_count"] == 2
+    assert summary["optimizer_point_component_failure_count"] == 1
+    assert summary["weighted_angular_failure_count"] == 1
+    assert math.isnan(summary["weighted_angular_rms_weighted_deg"])
+
+
+def test_exact_caked_residual_audit_compares_solver_points_to_recomputed_weighted() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0],
+        measured_phi_deg=[179.0],
+        projected_two_theta_deg=[33.0],
+        projected_phi_deg=[-179.0],
+        delta_two_theta_deg=[3.0],
+        wrapped_delta_phi_deg=[2.0],
+        weighted_delta_two_theta_deg=[7.0],
+        weighted_delta_phi_deg=[4.0],
+        priority_weights=[2.0],
+        solver_residual_vector=[7.0, 4.0],
+    )
+
+    assert summary["weighted_angular_recompute_failure_count"] == 1
+    assert summary["optimizer_point_component_failure_count"] == 1
+    assert summary["weighted_angular_failure_count"] == 2
+    assert math.isnan(summary["weighted_angular_rms_weighted_deg"])
+
+
+def test_exact_caked_residual_audit_uses_matched_point_components_not_full_prefix() -> None:
+    summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0],
+        measured_phi_deg=[179.0],
+        projected_two_theta_deg=[33.0],
+        projected_phi_deg=[-179.0],
+        delta_two_theta_deg=[3.0],
+        wrapped_delta_phi_deg=[2.0],
+        weighted_delta_two_theta_deg=[6.0],
+        weighted_delta_phi_deg=[4.0],
+        priority_weights=[2.0],
+        solver_residual_vector=[50.0, 0.0, 6.0, 4.0],
+        optimizer_point_residual_vector=[6.0, 4.0],
+    )
+
+    assert summary["optimizer_component_count"] == 4
+    assert summary["optimizer_point_component_count"] == 2
+    assert summary["optimizer_point_component_failure_count"] == 0
+    assert summary["weighted_angular_failure_count"] == 0
+    assert summary["weighted_angular_rms_weighted_deg"] == pytest.approx(
+        math.hypot(6.0, 4.0)
+    )
+
+
+def test_exact_caked_merged_diagnostics_reject_weighted_recompute_mismatch() -> None:
+    summary = opt._merged_angular_degree_residual_audit_summary(
+        [],
+        [
+            {
+                "match_status": "matched",
+                "measured_two_theta_deg": 30.0,
+                "measured_phi_deg": 179.0,
+                "projected_two_theta_deg": 33.0,
+                "projected_phi_deg": -179.0,
+                "delta_two_theta_deg": 3.0,
+                "wrapped_delta_phi_deg": 2.0,
+                "weighted_delta_two_theta_deg": 7.0,
+                "weighted_delta_phi_deg": 4.0,
+                "weight": 2.0,
+                "solver_residual_vector": [6.0, 4.0],
+            }
+        ],
+    )
+
+    assert summary["weighted_angular_recompute_failure_count"] == 1
+    assert summary["weighted_angular_failure_count"] == 1
+    assert math.isnan(summary["weighted_angular_rms_weighted_deg"])
+
+
+def test_exact_caked_merged_diagnostics_uses_diagnostic_point_components() -> None:
+    summary = opt._merged_angular_degree_residual_audit_summary(
+        [],
+        [
+            {
+                "match_status": "matched",
+                "measured_two_theta_deg": 30.0,
+                "measured_phi_deg": 179.0,
+                "projected_two_theta_deg": 33.0,
+                "projected_phi_deg": -179.0,
+                "delta_two_theta_deg": 3.0,
+                "wrapped_delta_phi_deg": 2.0,
+                "weighted_delta_two_theta_deg": 6.0,
+                "weighted_delta_phi_deg": 4.0,
+                "weight": 2.0,
+                "solver_residual_vector": [6.0, 4.0],
+            }
+        ],
+        solver_residual_vector=[50.0, 0.0, 6.0, 4.0],
+    )
+
+    assert summary["optimizer_component_count"] == 4
+    assert summary["optimizer_point_component_count"] == 2
+    assert summary["optimizer_point_component_failure_count"] == 0
+    assert summary["weighted_angular_failure_count"] == 0
+
+
+def test_exact_caked_merged_diagnostics_preserve_dataset_audit_failures() -> None:
+    dataset_summary = opt._angular_degree_residual_audit_summary(
+        measured_two_theta_deg=[30.0, 31.0],
+        measured_phi_deg=[0.0, 1.0],
+        projected_two_theta_deg=[31.0, 32.0],
+        projected_phi_deg=[1.0, 2.0],
+        delta_two_theta_deg=[1.0],
+        wrapped_delta_phi_deg=[1.0],
+        weighted_delta_two_theta_deg=[1.0],
+        weighted_delta_phi_deg=[1.0],
+        priority_weights=[1.0],
+        solver_residual_vector=[1.0, 1.0],
+    )
+    summary = opt._merged_angular_degree_residual_audit_summary(
+        [dataset_summary],
+        [
+            {
+                "match_status": "matched",
+                "measured_two_theta_deg": 30.0,
+                "measured_phi_deg": 0.0,
+                "projected_two_theta_deg": 31.0,
+                "projected_phi_deg": 1.0,
+                "delta_two_theta_deg": 1.0,
+                "wrapped_delta_phi_deg": 1.0,
+                "weighted_delta_two_theta_deg": 1.0,
+                "weighted_delta_phi_deg": 1.0,
+                "weight": 1.0,
+                "solver_residual_vector": [1.0, 1.0],
+            }
+        ],
+        solver_residual_vector=[1.0, 1.0],
+    )
+
+    assert dataset_summary["raw_angular_range_failure_count"] == 1
+    assert summary["raw_angular_range_failure_count"] == 1
+    assert summary["raw_angular_range_sanity_ok"] is False
+    assert summary["raw_angular_sanity_ok"] is False
 
 
 def test_native_detector_projector_shape_mismatch_returns_invalid_payload() -> None:
@@ -2750,6 +3442,303 @@ def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives
         assert resolution_lookup[id(entry)]["resolution_reason"] == expected_reason
 
 
+def test_geometry_fit_correspondence_dynamic_payload_recovers_stale_provider_branch() -> None:
+    correspondence = _provider_local_singleton_entry(q_group_key=("q", 2))
+    hit_tables = [
+        np.asarray([[1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+    ]
+    max_positions = np.zeros((1, 6), dtype=np.float64)
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=max_positions,
+    )
+
+    assert point == (4.0, 4.0)
+    assert payload["resolution_reason"] == (
+        "provider_local_branch_recovered_stale_peak_index"
+    )
+    assert payload["resolved_table_index"] == 0
+    assert payload["requested_source_peak_index"] == 1
+    assert payload["requested_source_row_index"] == 24
+    assert payload["hit_table_row_count"] == 1
+    assert payload["valid_row_count"] == 1
+    assert payload["hkl_exists_in_table"] is True
+    assert payload["branch_filtered_row_count"] == 0
+    assert payload["requested_branch_exists"] is False
+    assert payload["requested_peak_exists"] is False
+    assert payload["legacy_peak_exists"] is False
+    assert payload["projection_available"] is True
+    assert payload["projection_finite"] is True
+    assert payload["off_detector"] is False
+    assert "fallback" not in str(payload).lower()
+
+
+def test_geometry_fit_correspondence_dynamic_payload_marks_peak_from_branch_row() -> None:
+    correspondence = _provider_local_singleton_entry()
+    hit_tables = [
+        np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+    ]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point == (4.0, 4.0)
+    assert payload["resolution_reason"] == "resolved_source_peak"
+    assert payload["requested_branch_exists"] is True
+    assert payload["requested_peak_exists"] is True
+    assert payload["legacy_peak_exists"] is False
+    assert payload["branch_filtered_row_count"] == 1
+
+
+def test_geometry_fit_correspondence_local_branch_invalid_frozen_recovers_provider_branch() -> None:
+    correspondence = _provider_local_singleton_entry(
+        frozen_locator_kind="local_branch",
+        frozen_table_namespace="current_full_local",
+        frozen_table_index=0,
+        frozen_branch_index=99,
+    )
+    hit_tables = [
+        np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+    ]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point == (4.0, 4.0)
+    assert payload["resolution_reason"] == (
+        "provider_local_branch_recovered_stale_peak_index"
+    )
+    assert payload["resolution_subreason"] == "provider_local_branch_identity_unique"
+    assert payload["resolved_peak_index"] == 1
+    assert payload["requested_branch_exists"] is True
+    assert payload["requested_peak_exists"] is True
+    assert payload["legacy_peak_exists"] is False
+    assert payload["frozen_branch_index_recovered_from_provider_identity"] is True
+    assert "fallback" not in str(payload).lower()
+
+
+def test_geometry_fit_correspondence_local_branch_invalid_frozen_rejects_ambiguous_branch() -> None:
+    correspondence = _provider_local_singleton_entry(
+        frozen_locator_kind="local_branch",
+        frozen_table_namespace="current_full_local",
+        frozen_table_index=0,
+        frozen_branch_index=99,
+    )
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+                    [2.0, 5.0, 5.0, 12.0, 2.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
+    assert payload["resolution_subreason"] == "provider_local_branch_match_multiple"
+    assert payload["provider_local_branch_match_row_count"] == 2
+    assert "fallback" not in str(payload).lower()
+
+
+def test_geometry_fit_correspondence_local_branch_invalid_frozen_rejects_wrong_branch() -> None:
+    correspondence = _provider_local_singleton_entry(
+        frozen_locator_kind="local_branch",
+        frozen_table_namespace="current_full_local",
+        frozen_table_index=0,
+        frozen_branch_index=99,
+    )
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=[
+            np.asarray([[1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+        ],
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
+    assert payload["resolution_subreason"] == "provider_local_branch_match_zero"
+    assert payload["provider_local_branch_hkl_row_count"] == 1
+    assert payload["provider_local_branch_match_row_count"] == 0
+    assert "fallback" not in str(payload).lower()
+
+
+def test_geometry_fit_correspondence_local_branch_invalid_frozen_rejects_unknown_branch() -> None:
+    correspondence = _provider_local_singleton_entry(
+        frozen_locator_kind="local_branch",
+        frozen_table_namespace="current_full_local",
+        frozen_table_index=0,
+        frozen_branch_index=99,
+    )
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=[
+            np.asarray(
+                [
+                    [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+                    [2.0, 5.0, 5.0, 0.0, 2.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            )
+        ],
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
+    assert payload["resolution_subreason"] == (
+        "provider_local_branch_ambiguous_missing_metadata"
+    )
+    assert payload["provider_local_branch_hkl_row_count"] == 2
+    assert payload["provider_local_branch_match_row_count"] == 1
+    assert payload["provider_local_branch_missing_metadata_count"] == 1
+    assert "fallback" not in str(payload).lower()
+
+
+def test_geometry_fit_correspondence_local_branch_invalid_frozen_missing_identity_fails() -> None:
+    correspondence = _provider_local_singleton_entry(
+        frozen_locator_kind="local_branch",
+        frozen_table_namespace="current_full_local",
+        frozen_table_index=0,
+        frozen_branch_index=99,
+        source_branch_index=None,
+        source_peak_index=None,
+        resolved_peak_index=None,
+    )
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=[
+            np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+        ],
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
+    assert payload["resolution_subreason"] == "missing_provider_local_branch_identity"
+    assert payload["requested_peak_exists"] is False
+    assert payload["legacy_peak_exists"] is False
+    assert "fallback" not in str(payload).lower()
+
+
+def test_geometry_fit_correspondence_local_branch_invalid_frozen_non_provider_unchanged() -> None:
+    correspondence = {
+        "hkl": (2, 0, 0),
+        "resolved_table_index": 0,
+        "frozen_locator_kind": "local_branch",
+        "frozen_table_namespace": "current_full_local",
+        "frozen_table_index": 0,
+        "frozen_branch_index": 99,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "resolved_peak_index": 1,
+    }
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=[
+            np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)
+        ],
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "missing_source_peak_index"
+    assert "missing_source_peak_not_recoverable" not in str(payload)
+
+
+@pytest.mark.parametrize(
+    ("correspondence", "hit_tables", "expected_subreason"),
+    [
+        (
+            _provider_local_singleton_entry(),
+            [
+                np.asarray(
+                    [
+                        [1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0],
+                        [1.0, 5.0, 5.0, -12.0, 2.0, 0.0, 0.0],
+                    ],
+                    dtype=np.float64,
+                )
+            ],
+            "provider_local_singleton_row_count_mismatch",
+        ),
+        (
+            _provider_local_singleton_entry(),
+            [np.asarray([[1.0, 4.0, 4.0, 0.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
+            "provider_local_missing_branch_metadata",
+        ),
+        (
+            _provider_local_singleton_entry(),
+            [np.asarray([[1.0, 4.0, 4.0, -10.0, 3.0, 0.0, 0.0]], dtype=np.float64)],
+            "provider_local_singleton_hkl_mismatch",
+        ),
+        (
+            _provider_local_singleton_entry(
+                provider_local_subset_assignment="provider_local_unique_hkl",
+                provider_local_subset_branch_provenance=False,
+            ),
+            [np.asarray([[1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
+            "provider_local_branch_mismatch",
+        ),
+    ],
+)
+def test_geometry_fit_correspondence_dynamic_payload_rejects_unsafe_provider_recovery(
+    correspondence: dict[str, object],
+    hit_tables: list[np.ndarray],
+    expected_subreason: str,
+) -> None:
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
+    assert payload["resolution_subreason"] == expected_subreason
+    assert payload["resolved_table_index"] == 0
+    assert "fallback" not in str(payload).lower()
+
+
+def test_geometry_fit_correspondence_dynamic_payload_does_not_search_hkl_wide() -> None:
+    correspondence = _provider_local_singleton_entry()
+    hit_tables = [
+        np.empty((0, 7), dtype=np.float64),
+        np.asarray([[1.0, 8.0, 8.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64),
+    ]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((2, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
+    assert payload["resolution_subreason"] == "provider_local_singleton_row_count_mismatch"
+    assert payload["resolved_table_index"] == 0
+    assert payload["hit_table_row_count"] == 0
+    assert payload["hkl_exists_in_table"] is False
+
+
 def test_geometry_fit_correspondence_simulated_point_prefers_branch_identity() -> None:
     correspondence = {
         "source_reflection_index": 0,
@@ -4718,6 +5707,366 @@ def test_fit_geometry_parameters_pixel_path_broad_restart_seed_escapes_far_coupl
     )
 
 
+def _seed_multistart_fixed_pair_measured_entry(
+    *,
+    hkl=(1, 0, 0),
+    pair_id="fixed-provider-pair-0",
+    source_table_index=0,
+    source_peak_index=0,
+    source_branch_index=0,
+    x=5.0,
+    y=4.0,
+) -> dict:
+    return {
+        "hkl": tuple(hkl),
+        "label": f"{int(hkl[0])},{int(hkl[1])},{int(hkl[2])}",
+        "x": float(x),
+        "y": float(y),
+        "background_detector_x": float(x),
+        "background_detector_y": float(y),
+        "pair_id": str(pair_id),
+        "source_table_index": int(source_table_index),
+        "resolved_table_index": int(source_table_index),
+        "source_row_index": 0,
+        "source_branch_index": int(source_branch_index),
+        "source_peak_index": int(source_peak_index),
+        "resolved_peak_index": int(source_peak_index),
+        "fit_source_resolution_kind": "provider_fixed_source_local",
+        "optimizer_request_source": "provider_pair",
+        "optimizer_request_has_fixed_source": True,
+        "optimizer_request_fallback_row": False,
+        "provider_selected_source_identity_canonical": {
+            "normalized_hkl": [int(hkl[0]), int(hkl[1]), int(hkl[2])],
+            "source_table_index": int(source_table_index),
+            "source_peak_index": int(source_peak_index),
+        },
+    }
+
+
+def _run_seed_multistart_fixed_pair_case(
+    monkeypatch,
+    fake_process,
+    *,
+    measured_peaks=None,
+    miller=None,
+    intensities=None,
+):
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="flat-local-solver",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    if miller is None:
+        miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    else:
+        miller = np.asarray(miller, dtype=np.float64)
+    if intensities is None:
+        intensities = np.ones(int(miller.shape[0]), dtype=np.float64)
+    else:
+        intensities = np.asarray(intensities, dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    if measured_peaks is None:
+        measured_peaks = [_seed_multistart_fixed_pair_measured_entry()]
+
+    return opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured_peaks,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "bounds": {
+                "gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+            },
+            "solver": {
+                "manual_point_fit_mode": True,
+                "weighted_matching": False,
+                "missing_pair_penalty_px": 0.0,
+                "missing_pair_penalty_deg": 0.0,
+                "q_group_line_constraints": False,
+                "use_measurement_uncertainty": False,
+            },
+            "seed_search": {
+                "prescore_top_k": 6,
+                "n_global": 4,
+                "n_jitter": 0,
+                "min_seed_separation_u": 0.1,
+            },
+            "full_beam_polish": {"enabled": False},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+
+def _seed_multistart_clean_when_gamma_small(*args, **kwargs):
+    image_size = int(args[2])
+    gamma = float(args[8])
+    image = np.zeros((image_size, image_size), dtype=np.float64)
+    if gamma <= 0.25:
+        hit_tables = [
+            np.array(
+                [[1.0, 6.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+    else:
+        hit_tables = [np.empty((0, 7), dtype=np.float64)]
+    return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+
+def _seed_multistart_only_first_fixed_pair_available(*args, **kwargs):
+    image_size = int(args[2])
+    image = np.zeros((image_size, image_size), dtype=np.float64)
+    hit_tables = [
+        np.array(
+            [[1.0, 6.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+            dtype=np.float64,
+        )
+    ]
+    return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+
+def test_seed_multistart_rejects_seed_that_loses_fixed_pairs(monkeypatch):
+    result = _run_seed_multistart_fixed_pair_case(
+        monkeypatch,
+        _seed_multistart_clean_when_gamma_small,
+    )
+
+    trace = result.seed_multistart_trace
+    rejected = [
+        record
+        for record in trace["seed_records"]
+        if record.get("rejection_reason") == "fixed_source_or_pair_integrity_lost"
+    ]
+    assert rejected
+    assert all(record["lost_pair_ids"] for record in rejected)
+    assert int(trace["seeds_rejected_for_pair_integrity"]) >= 1
+
+
+def test_seed_multistart_expected_count_does_not_shrink_when_reference_missing(monkeypatch):
+    measured_peaks = [
+        _seed_multistart_fixed_pair_measured_entry(
+            hkl=(1, 0, 0),
+            pair_id="fixed-provider-pair-0",
+            source_table_index=0,
+            x=5.0,
+            y=4.0,
+        ),
+        _seed_multistart_fixed_pair_measured_entry(
+            hkl=(2, 0, 0),
+            pair_id="fixed-provider-pair-1",
+            source_table_index=1,
+            x=7.0,
+            y=4.0,
+        ),
+    ]
+
+    result = _run_seed_multistart_fixed_pair_case(
+        monkeypatch,
+        _seed_multistart_only_first_fixed_pair_available,
+        measured_peaks=measured_peaks,
+        miller=np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=np.float64),
+    )
+
+    trace = result.seed_multistart_trace
+    assert not result.success
+    assert int(trace["fixed_source_pair_count"]) == 2
+    assert len(trace["fixed_manual_pair_invariants"]) == 2
+    assert str(trace["failure_reason"]) == "seed_multistart_incompatible_with_fixed_manual_pairs"
+    assert any(
+        "fixed-provider-pair-1" in record.get("missing_pair_ids", [])
+        or "fixed-provider-pair-1" in record.get("lost_pair_ids", [])
+        for record in trace["seed_records"]
+    )
+
+
+def test_seed_multistart_dirty_generation_is_not_overwritten_by_clean_prescore(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_process(*args, **kwargs):
+        calls["count"] += 1
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        if calls["count"] == 2:
+            hit_tables = [np.empty((0, 7), dtype=np.float64)]
+        else:
+            hit_tables = [
+                np.array(
+                    [[1.0, 6.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                )
+            ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    result = _run_seed_multistart_fixed_pair_case(monkeypatch, fake_process)
+
+    trace = result.seed_multistart_trace
+    dirty_then_clean = None
+    for record in trace["seed_records"]:
+        stages = {str(stage["stage"]): stage for stage in record.get("stages", [])}
+        if (
+            stages.get("generation", {}).get("clean") is False
+            and stages.get("prescore", {}).get("clean") is True
+        ):
+            dirty_then_clean = record
+            break
+    assert dirty_then_clean is not None
+    assert bool(dirty_then_clean["clean"]) is False
+    assert str(dirty_then_clean["rejection_stage"]) == "generation"
+    assert dirty_then_clean["lost_pair_ids"]
+    final_stage = [
+        stage
+        for stage in dirty_then_clean["stages"]
+        if str(stage.get("stage")) == "final_selection"
+    ][-1]
+    assert bool(final_stage["clean"]) is False
+    assert final_stage["lost_pair_ids"]
+
+
+def test_seed_multistart_rejects_seed_when_fixed_pair_frame_changes(monkeypatch):
+    original_identity_payload = opt._dynamic_reanchor_identity_payload
+    matched_payload_calls = {"count": 0}
+
+    def frame_shifting_identity_payload(entry, pair_index):
+        payload = original_identity_payload(entry, pair_index)
+        if (
+            str(payload.get("pair_id")) == "fixed-provider-pair-0"
+            and str(entry.get("match_status", "")).lower() == "matched"
+        ):
+            matched_payload_calls["count"] += 1
+            payload["frame"] = 0 if matched_payload_calls["count"] == 1 else 1
+        return payload
+
+    monkeypatch.setattr(
+        opt,
+        "_dynamic_reanchor_identity_payload",
+        frame_shifting_identity_payload,
+    )
+
+    result = _run_seed_multistart_fixed_pair_case(
+        monkeypatch,
+        _seed_multistart_clean_when_gamma_small,
+    )
+
+    trace = result.seed_multistart_trace
+    rejected = [
+        record
+        for record in trace["seed_records"]
+        if "fixed-provider-pair-0" in record.get("rematched_pair_ids", [])
+    ]
+    assert rejected
+    assert all(
+        record.get("rejection_reason") == "fixed_source_or_pair_integrity_lost"
+        for record in rejected
+    )
+
+
+def test_seed_multistart_selects_only_seed_with_clean_fixed_pairs(monkeypatch):
+    result = _run_seed_multistart_fixed_pair_case(
+        monkeypatch,
+        _seed_multistart_clean_when_gamma_small,
+    )
+
+    trace = result.seed_multistart_trace
+    invariant = trace["fixed_manual_pair_invariants"][0]
+    assert invariant["hkl"] == [1, 0, 0]
+    assert invariant["source_branch_index"] == 0
+    assert "branch_group_key" in invariant
+    assert "frame" in invariant
+    selected_index = int(trace["selected_seed_index"])
+    selected_record = next(
+        record for record in trace["seed_records"] if int(record["seed_index"]) == selected_index
+    )
+    dirty_costs = [
+        float(record["cost"])
+        for record in trace["seed_records"]
+        if record.get("rejection_reason") == "fixed_source_or_pair_integrity_lost"
+        and np.isfinite(float(record["cost"]))
+    ]
+    assert dirty_costs
+    assert min(dirty_costs) < float(trace["selected_seed_cost"])
+    assert bool(selected_record["clean"]) is True
+    assert bool(trace["selected_seed_clean"]) is True
+    assert int(trace["selected_seed_fixed_source_resolved_count"]) == 1
+    assert int(trace["selected_seed_matched_pair_count"]) == 1
+
+
+def test_seed_multistart_fails_when_all_seeds_dirty(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_process(*args, **kwargs):
+        calls["count"] += 1
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        if calls["count"] == 1:
+            hit_tables = [
+                np.array(
+                    [[1.0, 6.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                )
+            ]
+        else:
+            hit_tables = [np.empty((0, 7), dtype=np.float64)]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    result = _run_seed_multistart_fixed_pair_case(monkeypatch, fake_process)
+
+    trace = result.seed_multistart_trace
+    assert not result.success
+    assert str(trace["failure_reason"]) == "seed_multistart_incompatible_with_fixed_manual_pairs"
+    assert bool(trace["selected_seed_clean"]) is False
+    assert int(trace["seeds_solved"]) == 0
+    assert all(
+        record.get("rejection_reason") == "fixed_source_or_pair_integrity_lost"
+        for record in trace["seed_records"]
+    )
+
+
+def test_seed_multistart_trace_reports_per_seed_pair_counters(monkeypatch):
+    result = _run_seed_multistart_fixed_pair_case(
+        monkeypatch,
+        _seed_multistart_clean_when_gamma_small,
+    )
+
+    trace = result.seed_multistart_trace
+    selected_index = int(trace["selected_seed_index"])
+    selected_record = next(
+        record for record in trace["seed_records"] if int(record["seed_index"]) == selected_index
+    )
+    stages = {str(stage["stage"]) for stage in selected_record["stages"]}
+    assert {"generation", "prescore", "solve_start", "solve_end", "final_selection"} <= stages
+    for key in (
+        "fixed_source_resolved_count",
+        "matched_pair_count",
+        "fallback_entry_count",
+        "missing_pair_count",
+        "branch_mismatch_count",
+        "provider_to_optimizer_identity_match",
+        "provider_to_optimizer_point_match",
+    ):
+        assert key in selected_record
+    assert "lost_pair_ids_by_seed" in trace
+    assert "fallback_pair_ids_by_seed" in trace
+    assert "rematched_pair_ids_by_seed" in trace
+    assert "missing_pair_ids_by_seed" in trace
+    assert isinstance(result.point_match_summary["seed_multistart_trace"], dict)
+
+
 def test_fit_geometry_parameters_records_prescore_and_local_seed_history(monkeypatch):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
@@ -5107,6 +6456,296 @@ def test_full_beam_polish_rejects_match_count_regression(monkeypatch):
     assert int(result.full_beam_polish_summary["matched_pair_count_before"]) == 2
     assert int(result.full_beam_polish_summary["candidate_matched_pair_count"]) == 1
     assert int(result.point_match_summary["matched_pair_count"]) == 2
+
+
+def _run_manual_seven_pair_full_beam_polish_case(
+    monkeypatch,
+    *,
+    drop_after_polish: bool,
+    manual_fixed_source: bool = True,
+    manual_marker_style: str = "provider_identity",
+):
+    solve_calls = []
+
+    def fake_process(*args, **kwargs):
+        miller_arg = np.asarray(args[0], dtype=np.float64)
+        image_size = int(args[2])
+        gamma = float(args[8])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = []
+        for idx in range(len(miller_arg)):
+            if drop_after_polish and gamma >= 0.5 and idx >= 5:
+                hit_tables.append(np.empty((0, 7), dtype=np.float64))
+                continue
+            measured_x = 4.0 + float(idx) * 2.0
+            measured_y = 4.0 + float(idx)
+            offset = 5.0 if gamma < 0.5 else 0.0
+            hit_tables.append(
+                np.array(
+                    [
+                        [
+                            10.0,
+                            measured_x + offset,
+                            measured_y,
+                            0.0,
+                            float(idx + 1),
+                            0.0,
+                            0.0,
+                        ]
+                    ],
+                    dtype=np.float64,
+                )
+            )
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        call_index = len(solve_calls)
+        x = np.array([0.0], dtype=float) if call_index == 0 else np.array([1.0], dtype=float)
+        solve_calls.append(x.copy())
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 32
+    miller = np.array([[float(idx + 1), 0.0, 0.0] for idx in range(7)], dtype=np.float64)
+    intensities = np.linspace(25.0, 19.0, 7, dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"] = {
+        "beam_x_array": np.array([0.0, 0.1], dtype=np.float64),
+        "beam_y_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(2, dtype=np.float64),
+        "phi_array": np.zeros(2, dtype=np.float64),
+        "sigma_mosaic_deg": 0.2,
+        "gamma_mosaic_deg": 0.1,
+        "eta": 0.05,
+        "wavelength_array": np.ones(2, dtype=np.float64),
+    }
+    measured = []
+    for idx in range(7):
+        entry = {
+            "label": f"{idx + 1},0,0",
+            "pair_id": f"pair-{idx}",
+            "hkl": (idx + 1, 0, 0),
+            "x": 4.0 + float(idx) * 2.0,
+            "y": 4.0 + float(idx),
+            "source_table_index": idx,
+            "source_row_index": 0,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_index": idx,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "frozen_locator_kind": "trusted_row",
+            "frozen_table_namespace": "full_reflection",
+            "frozen_table_index": idx,
+            "frozen_row_index": 0,
+            "resolved_table_index": idx,
+            "resolved_peak_index": 0,
+            "resolution_kind": "fixed_source",
+            "q_group_key": ("q", idx),
+            "branch_group_key": ("branch", idx),
+            "sigma_px": 1.0,
+        }
+        if manual_fixed_source:
+            identity = {
+                "pair_id": f"pair-{idx}",
+                "hkl": [idx + 1, 0, 0],
+                "source_table_index": idx,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+            if manual_marker_style == "optimizer_request_only":
+                entry.update(
+                    {
+                        "optimizer_request_source": "provider_pair",
+                        "optimizer_request_has_fixed_source": True,
+                        "optimizer_request_fallback_row": False,
+                    }
+                )
+            elif manual_marker_style == "manual_identity_only":
+                entry.update(
+                    {
+                        "optimizer_request_fallback_row": False,
+                        "manual_picker_selected_source_identity_canonical": dict(identity),
+                    }
+                )
+            else:
+                entry.update(
+                    {
+                    "fit_source_resolution_kind": "provider_fixed_source_local",
+                    "optimizer_request_source": "provider_pair",
+                    "optimizer_request_has_fixed_source": True,
+                    "optimizer_request_fallback_row": False,
+                    "provider_selected_source_identity_canonical": dict(identity),
+                    "manual_picker_selected_source_identity_canonical": dict(identity),
+                    "selected_source_identity_canonical": dict(identity),
+                    }
+                )
+        measured.append(entry)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "loss": "linear",
+                "weighted_matching": False,
+                "use_measurement_uncertainty": True,
+                "stagnation_probe": False,
+            },
+            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "identifiability": {"enabled": False},
+        },
+    )
+    return result, solve_calls
+
+
+def test_full_beam_polish_manual_fixed_source_clean_seven_pairs_pass(monkeypatch):
+    result, solve_calls = _run_manual_seven_pair_full_beam_polish_case(
+        monkeypatch,
+        drop_after_polish=False,
+    )
+
+    summary = dict(result.full_beam_polish_summary)
+    assert result.success
+    assert len(solve_calls) >= 2
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0]))
+    assert bool(summary["accepted"]) is True
+    assert bool(summary["fit_quality_passed"]) is True
+    assert bool(summary["manual_fixed_source_mode"]) is True
+    assert int(summary["polish_manual_fixed_source_pair_count_before"]) == 7
+    assert int(summary["polish_fixed_source_resolved_count_before"]) == 7
+    assert int(summary["polish_fixed_source_resolved_count_after"]) == 7
+    assert int(summary["polish_matched_pair_count_before"]) == 7
+    assert int(summary["polish_matched_pair_count_after"]) == 7
+    assert int(summary["polish_missing_pair_count_after"]) == 0
+    assert int(summary["polish_fallback_entry_count_after"]) == 0
+    assert int(summary["polish_branch_mismatch_count_after"]) == 0
+    assert summary["polish_lost_pair_ids"] == []
+
+
+def test_full_beam_polish_manual_fixed_source_missing_pairs_blocks_even_if_metrics_improve(
+    monkeypatch,
+):
+    result, solve_calls = _run_manual_seven_pair_full_beam_polish_case(
+        monkeypatch,
+        drop_after_polish=True,
+    )
+
+    summary = dict(result.full_beam_polish_summary)
+    assert result.success
+    assert len(solve_calls) >= 2
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.0]))
+    assert bool(summary["accepted"]) is False
+    assert bool(summary["fit_quality_passed"]) is False
+    assert bool(summary["manual_fixed_source_mode"]) is True
+    assert summary["selected_candidate_name"] is None
+    assert summary["selected_candidate_source"] is None
+    assert str(summary["selection_status"]) == "blocked_manual_fixed_pairs"
+    assert str(summary["failure_reason"]) == (
+        "full_beam_polish_incompatible_with_fixed_manual_pairs"
+    )
+    assert str(summary["diagnosis_classification"]) == "fixed_source_or_pair_integrity_lost"
+    assert bool(summary["polish_started"]) is True
+    assert bool(summary["polish_completed"]) is True
+    assert int(summary["polish_fixed_source_resolved_count_before"]) == 7
+    assert int(summary["polish_fixed_source_resolved_count_after"]) == 7
+    assert int(summary["polish_matched_pair_count_before"]) == 7
+    assert int(summary["polish_matched_pair_count_after"]) == 5
+    assert int(summary["polish_missing_pair_count_after"]) == 2
+    assert int(summary["polish_fallback_entry_count_after"]) == 0
+    assert int(summary["polish_branch_mismatch_count_after"]) == 0
+    assert float(summary["candidate_unweighted_peak_rms_px"]) < float(
+        summary["start_unweighted_peak_rms_px"]
+    )
+    assert summary["polish_lost_pair_ids"] == ["pair-5", "pair-6"]
+    assert summary["polish_missing_pair_ids"] == ["pair-5", "pair-6"]
+    assert summary["polish_fallback_pair_ids"] == []
+    assert summary["polish_rematched_pair_ids"] == []
+    details = list(summary["polish_lost_pair_details"])
+    assert [detail["pair_id"] for detail in details] == ["pair-5", "pair-6"]
+    for detail in details:
+        for key in (
+            "pair_id",
+            "hkl",
+            "source_branch_index",
+            "q_group_key",
+            "branch_group_key",
+            "provider_identity",
+            "pre_polish_simulated_point",
+            "post_polish_simulated_point",
+            "missing_reason",
+        ):
+            assert key in detail
+    ledger = list(summary["candidate_ledger"])
+    polish_entries = [
+        entry
+        for entry in ledger
+        if str(entry.get("candidate_name")) == "full_beam_polish_result"
+    ]
+    assert polish_entries
+    assert all(entry.get("selected") is False for entry in polish_entries)
+    assert all(entry.get("selected") is False for entry in ledger)
+
+
+def test_full_beam_polish_count_only_seven_pairs_does_not_trigger_manual_block(
+    monkeypatch,
+):
+    result, solve_calls = _run_manual_seven_pair_full_beam_polish_case(
+        monkeypatch,
+        drop_after_polish=True,
+        manual_fixed_source=False,
+    )
+
+    summary = dict(result.full_beam_polish_summary)
+    assert result.success
+    assert len(solve_calls) >= 2
+    assert bool(summary["manual_fixed_source_mode"]) is False
+    assert int(summary["polish_manual_fixed_source_pair_count_before"]) == 0
+    assert str(summary.get("failure_reason") or "") != (
+        "full_beam_polish_incompatible_with_fixed_manual_pairs"
+    )
+    assert str(summary.get("diagnosis_classification") or "") != (
+        "fixed_source_or_pair_integrity_lost"
+    )
+    assert bool(summary["fit_quality_passed"]) is True
+    assert str(summary["selection_status"]) == "no_op_optimum"
+
+
+def test_full_beam_polish_manual_request_markers_survive_full_beam_correspondence_copy(
+    monkeypatch,
+):
+    result, _solve_calls = _run_manual_seven_pair_full_beam_polish_case(
+        monkeypatch,
+        drop_after_polish=True,
+        manual_marker_style="optimizer_request_only",
+    )
+
+    summary = dict(result.full_beam_polish_summary)
+    assert bool(summary["manual_fixed_source_mode"]) is True
+    assert int(summary["polish_manual_fixed_source_pair_count_before"]) == 7
+    assert bool(summary["fit_quality_passed"]) is False
+    assert summary["selected_candidate_name"] is None
+    assert str(summary["failure_reason"]) == (
+        "full_beam_polish_incompatible_with_fixed_manual_pairs"
+    )
+    assert summary["polish_lost_pair_ids"] == ["pair-5", "pair-6"]
 
 
 def test_full_beam_polish_selects_best_valid_raw_candidate_when_fixed_pairs_hold():

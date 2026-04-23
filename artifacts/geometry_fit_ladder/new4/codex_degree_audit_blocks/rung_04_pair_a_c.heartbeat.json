@@ -1,0 +1,189 @@
+{
+  "active_params": [
+    "a",
+    "c"
+  ],
+  "adaptive_regularization": false,
+  "adaptive_regularization_enabled": false,
+  "auto_freeze": false,
+  "auto_freeze_enabled": false,
+  "baseline": false,
+  "branch_mismatch_count": 0,
+  "dataset_pair_count": 7,
+  "diagnostic_logging": false,
+  "discrete_modes": false,
+  "discrete_modes_enabled": false,
+  "dynamic_reanchor": true,
+  "dynamic_reanchor_enabled": true,
+  "enabled_features": [
+    "dynamic_reanchor"
+  ],
+  "fallback_row_count": 0,
+  "fixed_source_pair_count": 7,
+  "fixed_source_resolution_fallback_count": 0,
+  "full_beam_polish": false,
+  "full_beam_polish_enabled": false,
+  "handoff_row_count": 7,
+  "handoff_source_identity_row_count": 7,
+  "handoff_trusted_full_source_row_count": 7,
+  "heartbeat_updated_at": 1776901892.1529331,
+  "missing_fixed_source_count": 0,
+  "multistart": false,
+  "optimizer_request_pair_count": 7,
+  "optimizer_request_pair_handoff": [
+    {
+      "fallback_reason": null,
+      "fallback_row": false,
+      "fit_source_resolution_kind": "provider_fixed_source_local",
+      "hkl": [
+        0,
+        0,
+        3
+      ],
+      "identity_match": true,
+      "optimizer_request_has_fixed_source": true,
+      "pair_index": 0,
+      "point_match": true,
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_reflection_index": 410,
+      "source_row_index": 0,
+      "source_table_index": 410
+    },
+    {
+      "fallback_reason": null,
+      "fallback_row": false,
+      "fit_source_resolution_kind": "provider_fixed_source_local",
+      "hkl": [
+        -1,
+        0,
+        5
+      ],
+      "identity_match": true,
+      "optimizer_request_has_fixed_source": true,
+      "pair_index": 1,
+      "point_match": true,
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_reflection_index": null,
+      "source_row_index": 24,
+      "source_table_index": 105
+    },
+    {
+      "fallback_reason": null,
+      "fallback_row": false,
+      "fit_source_resolution_kind": "provider_fixed_source_local",
+      "hkl": [
+        -1,
+        0,
+        5
+      ],
+      "identity_match": true,
+      "optimizer_request_has_fixed_source": true,
+      "pair_index": 2,
+      "point_match": true,
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_reflection_index": null,
+      "source_row_index": 24,
+      "source_table_index": 107
+    },
+    {
+      "fallback_reason": null,
+      "fallback_row": false,
+      "fit_source_resolution_kind": "provider_fixed_source_local",
+      "hkl": [
+        -1,
+        0,
+        10
+      ],
+      "identity_match": true,
+      "optimizer_request_has_fixed_source": true,
+      "pair_index": 3,
+      "point_match": true,
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_reflection_index": null,
+      "source_row_index": 24,
+      "source_table_index": 160
+    },
+    {
+      "fallback_reason": null,
+      "fallback_row": false,
+      "fit_source_resolution_kind": "provider_fixed_source_local",
+      "hkl": [
+        -1,
+        0,
+        10
+      ],
+      "identity_match": true,
+      "optimizer_request_has_fixed_source": true,
+      "pair_index": 4,
+      "point_match": true,
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_reflection_index": null,
+      "source_row_index": 24,
+      "source_table_index": 167
+    },
+    {
+      "fallback_reason": null,
+      "fallback_row": false,
+      "fit_source_resolution_kind": "provider_fixed_source_local",
+      "hkl": [
+        -1,
+        0,
+        16
+      ],
+      "identity_match": true,
+      "optimizer_request_has_fixed_source": true,
+      "pair_index": 5,
+      "point_match": true,
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_reflection_index": null,
+      "source_row_index": 24,
+      "source_table_index": 215
+    },
+    {
+      "fallback_reason": null,
+      "fallback_row": false,
+      "fit_source_resolution_kind": "provider_fixed_source_local",
+      "hkl": [
+        -1,
+        0,
+        16
+      ],
+      "identity_match": true,
+      "optimizer_request_has_fixed_source": true,
+      "pair_index": 6,
+      "point_match": true,
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_reflection_index": null,
+      "source_row_index": 24,
+      "source_table_index": 213
+    }
+  ],
+  "provider_pair_count": 7,
+  "provider_row_fallback_count": 0,
+  "provider_row_fallbacks": [],
+  "provider_to_optimizer_identity_match": true,
+  "provider_to_optimizer_point_match": true,
+  "requested_candidate_param_names": [
+    "a",
+    "c"
+  ],
+  "requested_var_names": [
+    "a",
+    "c"
+  ],
+  "rung": 4,
+  "rung_name": "pair_a_c",
+  "seed_multistart_enabled": false,
+  "selective_thaw": false,
+  "selective_thaw_enabled": false,
+  "solver_context_reused": false,
+  "state_sha256_before": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "status": "starting"
+}

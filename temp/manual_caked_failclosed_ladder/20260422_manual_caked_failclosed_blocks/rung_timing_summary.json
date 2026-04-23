@@ -1,0 +1,249 @@
+{
+  "completed_rung_count": 29,
+  "finished_at_iso": "2026-04-22T23:44:18.559317Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks",
+  "run_id": "20260422_manual_caked_failclosed_blocks",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.005827200002386235,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 1.0852352000001702,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 14.465752000000066,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.166592699999455,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_a.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_a",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.015272699998604,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_c.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_c",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.3170836999997846,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_center_x.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_center_x",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 5.210269499999413,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_center_y.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_center_y",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.638778999997157,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_chi.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_chi",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.759519900002488,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_cor_angle.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.1920446999974956,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_corto_detector.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_corto_detector",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.7330255000015313,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_psi_z.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 44.79992480000146,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_summary.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_summary",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.7252507000011974,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_theta_initial.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_theta_initial",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.9454335999980685,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_zb.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.733809700002894,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03_one_param_zs.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zs",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 18.95284729999912,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_03b_caked_point_reprojection\\rung_03b_caked_point_reprojection.json",
+      "rung_id": "3B",
+      "rung_index": "3B",
+      "rung_name": "caked_point_reprojection",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 4.3993432999996,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_a_c.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_a_c",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.4751770999973814,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_a_psi_z.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_a_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.142204600000696,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_c_psi_z.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_c_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 6.857229900000675,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_chi_cor_angle.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_chi_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.6045607999985805,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_corto_detector_theta_initial.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_corto_detector_theta_initial",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 37.311720899997454,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_summary.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_summary",
+      "status": "ok_with_failures"
+    },
+    {
+      "elapsed_s": 6.353391000000556,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_theta_initial_cor_angle.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_theta_initial_cor_angle",
+      "status": "failed"
+    },
+    {
+      "elapsed_s": 6.867719099998794,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_04_pair_zs_zb.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_zs_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.515896900000371,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_05_block_a_c_psi_z.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_a_c_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.001651899998250883,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_05_block_chi_cor_angle_theta_initial.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_chi_cor_angle_theta_initial",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 0.0026866000007430557,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_05_block_corto_detector_theta_initial_cor_angle.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_corto_detector_theta_initial_cor_angle",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 5.727819899999304,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_05_block_corto_detector_theta_initial_zs_zb.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_corto_detector_theta_initial_zs_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 10.346380099999806,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\manual_caked_failclosed_ladder\\20260422_manual_caked_failclosed_blocks\\rung_05_block_summary.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_summary",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "one_param_summary",
+  "slowest_rung_elapsed_s": 44.79992480000146,
+  "started_at_iso": "2026-04-22T23:41:49.556158Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 149.00316680000105
+}

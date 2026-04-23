@@ -1,0 +1,36 @@
+{
+  "completed_rung_count": 2,
+  "finished_at_iso": "2026-04-23T00:05:01.517276Z",
+  "missing_expected_rungs": [
+    "2",
+    "6"
+  ],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_caked_prereq_fix_combined",
+  "run_id": "codex_caked_prereq_fix_combined",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.009901999997964595,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_caked_prereq_fix_combined\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 1.0647663000017928,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_caked_prereq_fix_combined\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "fail"
+    }
+  ],
+  "slowest_rung": "objective_dry_run",
+  "slowest_rung_elapsed_s": 1.0647663000017928,
+  "started_at_iso": "2026-04-23T00:04:38.064114Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 23.453170199998567
+}

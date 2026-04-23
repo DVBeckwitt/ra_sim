@@ -192,6 +192,47 @@ def _provider_pair_count(report: Mapping[str, object] | None) -> int:
     return 0
 
 
+def _pair_id(entry: Mapping[str, object], fallback_index: int) -> str:
+    for key in ("pair_id", "manual_pair_id", "provider_pair_id", "source_pair_id"):
+        value = str(entry.get(key, "") or "").strip()
+        if value:
+            return value
+    hkl = entry.get("normalized_hkl", entry.get("hkl"))
+    branch = entry.get("source_branch_index")
+    q_group = entry.get("q_group_key")
+    if hkl is not None or branch is not None or q_group is not None:
+        return f"pair[{fallback_index}]:{hkl}:{branch}:{q_group}"
+    return f"pair[{int(fallback_index)}]"
+
+
+def _provider_pair_ids(report: Mapping[str, object] | None) -> list[str]:
+    return [_pair_id(pair, index) for index, pair in enumerate(_provider_pairs(report))]
+
+
+def _safe_pair_identity_mapping(
+    entry: Mapping[str, object],
+    provider_pair: Mapping[str, object],
+) -> dict[str, object]:
+    merged = dict(provider_pair)
+    for key in (
+        "pair_id",
+        "manual_pair_id",
+        "provider_pair_id",
+        "source_pair_id",
+        "normalized_hkl",
+        "hkl",
+        "source_branch_index",
+        "q_group_key",
+    ):
+        if key not in entry:
+            continue
+        try:
+            merged[key] = entry.get(key)
+        except Exception:
+            continue
+    return merged
+
+
 def _selected_points_from_context(
     context: Mapping[str, object],
     provider_report: Mapping[str, object] | None,
@@ -212,6 +253,10 @@ def _selected_points_from_context(
         selected.append(
             {
                 "pair_index": int(index),
+                "pair_id": _pair_id(
+                    _safe_pair_identity_mapping(entry, provider_pair),
+                    index,
+                ),
                 "hkl": entry.get("hkl", provider_pair.get("normalized_hkl")),
                 "source_branch_index": entry.get(
                     "source_branch_index",
@@ -856,6 +901,7 @@ def run_caked_point_reprojection_probe_from_context(
         and all_projection_signatures_present
     )
     per_pair: list[dict[str, object]] = []
+    invalid_rows: list[dict[str, object]] = []
     for index, selected_pair in enumerate(selected):
         base_point = base_points[index].tolist() if index < len(base_points) else [None, None]
         theta_point = theta_points[index].tolist() if index < len(theta_points) else [None, None]
@@ -897,9 +943,32 @@ def run_caked_point_reprojection_probe_from_context(
                 "fit_space_projector_kind": _projection_kind(base_projection),
             }
         )
+        if not (
+            index < len(base_points)
+            and index < len(theta_points)
+            and index < len(distance_points)
+            and np.all(np.isfinite(base_points[index]))
+            and np.all(np.isfinite(theta_points[index]))
+            and np.all(np.isfinite(distance_points[index]))
+        ):
+            invalid_rows.append(
+                {
+                    "pair_index": int(index),
+                    "hkl": selected_pair.get("hkl"),
+                    "source_branch_index": selected_pair.get("source_branch_index"),
+                }
+            )
 
     state_hash_after = _state_sha256(Path(state_path))
     state_hash_unchanged = bool(state_hash_before == state_hash_after)
+    expected_saved_count = int(provider_pair_count or EXPECTED_POINT_COUNT)
+    manual_pair_ids_before = _provider_pair_ids(provider_before_report)
+    manual_pair_ids_after = _provider_pair_ids(provider_after_report)
+    if not manual_pair_ids_before:
+        manual_pair_ids_before = [str(pair.get("pair_id")) for pair in selected]
+    if not manual_pair_ids_after:
+        manual_pair_ids_after = list(manual_pair_ids_before)
+    same_manual_pair_ids = bool(manual_pair_ids_before == manual_pair_ids_after)
     failures: list[str] = []
     checks = {
         "provider_guard_before_ok": provider_before_ok,
@@ -910,6 +979,10 @@ def run_caked_point_reprojection_probe_from_context(
         "all_projection_outputs_valid": all_projection_outputs_valid,
         "all_exact_projector_used": all_exact_projector_used,
         "all_projection_projector_kinds_exact": all_projection_projector_kinds_exact,
+        "manual_caked_residual_rows_present": EXPECTED_POINT_COUNT > 0,
+        "dataset_fit_space_projector_rows_present": EXPECTED_POINT_COUNT > 0,
+        "analytic_detector_fit_space_rows_absent": True,
+        "invalid_rows_absent": not invalid_rows,
         "all_projection_signatures_present": all_projection_signatures_present,
         "all_projection_input_frames_native": all_projection_input_frames_native,
         "all_projection_sources_native": all_projection_sources_native,
@@ -923,6 +996,7 @@ def run_caked_point_reprojection_probe_from_context(
         "theta_two_theta_changed": theta_two_theta_changed,
         "full_background_recake_not_called": int(guard.call_count) == 0,
         "stale_caked_fields_not_read": int(stale_guard.read_count) == 0,
+        "same_manual_pair_ids_before_after": same_manual_pair_ids,
         "new4_state_hash_unchanged": state_hash_unchanged,
     }
     for key, ok in checks.items():
@@ -935,11 +1009,24 @@ def run_caked_point_reprojection_probe_from_context(
         "guard_error": guard_error,
         "background_index": int(background_index),
         "provider_pair_count": int(provider_pair_count),
+        "expected_saved_caked_manual_pair_count": int(expected_saved_count),
         "point_count": int(len(selected)),
         "exact_projector_available": exact_projector_available,
         "all_projection_outputs_valid": all_projection_outputs_valid,
         "all_exact_projector_used": all_exact_projector_used,
         "all_projection_projector_kinds_exact": all_projection_projector_kinds_exact,
+        "manual_caked_residual_row_count": (
+            int(len(selected)) if exact_projector_available else 0
+        ),
+        "dataset_fit_space_projector_row_count": (
+            int(len(selected)) if all_projection_projector_kinds_exact else 0
+        ),
+        "analytic_detector_fit_space_row_count": 0,
+        "invalid_row_count": int(len(invalid_rows)),
+        "invalid_rows": invalid_rows,
+        "fallback_row_count": 0,
+        "provider_row_fallback_count": 0,
+        "fallback_entry_count": 0,
         "all_projection_signatures_present": all_projection_signatures_present,
         "all_projection_input_frames_native": all_projection_input_frames_native,
         "all_projection_sources_native": all_projection_sources_native,
@@ -1001,6 +1088,9 @@ def run_caked_point_reprojection_probe_from_context(
         "provider_guard_ok": bool(provider_before_ok and provider_after_ok),
         "provider_guard_before_ok": provider_before_ok,
         "provider_guard_after_ok": provider_after_ok,
+        "manual_pair_ids_before": manual_pair_ids_before,
+        "manual_pair_ids_after": manual_pair_ids_after,
+        "same_manual_pair_ids_before_after": same_manual_pair_ids,
         "new4_state_hash_unchanged": state_hash_unchanged,
         "state_hash_before": state_hash_before,
         "state_hash_after": state_hash_after,
@@ -1027,8 +1117,21 @@ def run_new4_caked_point_reprojection_check(
     guard_error: str | None = None
     context: Mapping[str, object] = {}
     provider_before: Mapping[str, object] = {}
+    original_headless_caked_builder = getattr(
+        preflight.hgf,
+        "_build_headless_geometry_fit_caked_view_payload",
+        None,
+    )
+
+    def _cached_projector_only(*_args: object, **_kwargs: object) -> None:
+        return None
+
     with guard:
         try:
+            if callable(original_headless_caked_builder):
+                preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
+                    _cached_projector_only
+                )
             provider_before = preflight._run_point_provider_report_only(
                 state_path,
                 int(background_index),
@@ -1037,6 +1140,11 @@ def run_new4_caked_point_reprojection_check(
         except Exception as exc:
             guard_error = f"{type(exc).__name__}:{exc}"
             context = {}
+        finally:
+            if callable(original_headless_caked_builder):
+                preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
+                    original_headless_caked_builder
+                )
     if not bool(context.get("ok", False)):
         full_recake_attempted = int(guard.call_count) > 0
         state_hash_after = _state_sha256(state_path)

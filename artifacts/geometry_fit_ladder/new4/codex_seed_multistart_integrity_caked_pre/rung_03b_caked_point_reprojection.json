@@ -1,0 +1,491 @@
+{
+  "all_distance_reprojected_points_finite": true,
+  "all_exact_projector_used": true,
+  "all_projection_input_frames_native": true,
+  "all_projection_outputs_valid": true,
+  "all_projection_projector_kinds_exact": true,
+  "all_projection_signatures_present": true,
+  "all_projection_sources_native": true,
+  "all_theta_reprojected_points_finite": true,
+  "any_distance_point_shifted": true,
+  "any_theta_point_shifted": true,
+  "background_index": 0,
+  "cake_bundle_signature_base": "f1c32459cef0f909678c0cab3dd4d80cbda4add0",
+  "cake_bundle_signature_distance_perturbed": "b428b9d0c6f178931dadb737354bed426dea3b40",
+  "cake_bundle_signature_theta_perturbed": "dd5963d8fbe0c5940743d149d75b4b0e04a55859",
+  "corto_detector_base": 0.075,
+  "corto_detector_delta": 0.001,
+  "corto_detector_delta_applied": 0.001,
+  "distance_projector_signature_changed": true,
+  "exact_projector_available": true,
+  "failures": [],
+  "full_background_recake_call_count": 0,
+  "full_background_recake_called": false,
+  "full_recake_guard_installed": true,
+  "guard_error": null,
+  "max_distance_caked_shift_px_or_deg": 0.36511956899725817,
+  "max_theta_caked_shift_px_or_deg": 0.0005000000000023874,
+  "mean_distance_caked_shift_px_or_deg": 0.2981825539210109,
+  "mean_theta_caked_shift_px_or_deg": 0.0005000000000009917,
+  "min_distance_caked_shift_px_or_deg": 0.05591665852230147,
+  "min_theta_caked_shift_px_or_deg": 0.0004999999999988347,
+  "new4_state_hash_unchanged": true,
+  "pairs": [
+    {
+      "base_caked_point": [
+        4.2690679751526215,
+        -21.283348573790022
+      ],
+      "base_two_theta_phi": [
+        4.2690679751526215,
+        -21.283348573790022
+      ],
+      "branch_group_key": null,
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "detector_point": [
+        1472.9363426415914,
+        1543.753336102723
+      ],
+      "detector_point_frame": "native_detector",
+      "distance_caked_delta": [
+        -0.05589707602787275,
+        0.0014797269457176299
+      ],
+      "distance_perturbed_caked_point": [
+        4.213170899124749,
+        -21.281868846844304
+      ],
+      "distance_perturbed_two_theta_phi": [
+        4.213170899124749,
+        -21.281868846844304
+      ],
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "hkl": [
+        0,
+        0,
+        3
+      ],
+      "pair_index": 0,
+      "projection_input_frame": "native_detector",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        0,
+        3
+      ],
+      "source_branch_index": 0,
+      "stale_caked_fields_present": true,
+      "stale_caked_fields_used": false,
+      "theta_caked_delta": [
+        0.0004999999999997229,
+        0.0
+      ],
+      "theta_perturbed_caked_point": [
+        4.269567975152621,
+        -21.283348573790022
+      ],
+      "theta_perturbed_two_theta_phi": [
+        4.269567975152621,
+        -21.283348573790022
+      ]
+    },
+    {
+      "base_caked_point": [
+        22.809189191291036,
+        164.26472603187585
+      ],
+      "base_two_theta_phi": [
+        22.809189191291036,
+        164.26472603187585
+      ],
+      "branch_group_key": null,
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "detector_point": [
+        1367.2678777680248,
+        1899.5519925821675
+      ],
+      "detector_point_frame": "native_detector",
+      "distance_caked_delta": [
+        -0.2686568403914542,
+        -0.00043038328004740833
+      ],
+      "distance_perturbed_caked_point": [
+        22.540532350899582,
+        164.2642956485958
+      ],
+      "distance_perturbed_two_theta_phi": [
+        22.540532350899582,
+        164.2642956485958
+      ],
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "hkl": [
+        -1,
+        0,
+        5
+      ],
+      "pair_index": 1,
+      "projection_input_frame": "native_detector",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "source_branch_index": 0,
+      "stale_caked_fields_present": true,
+      "stale_caked_fields_used": false,
+      "theta_caked_delta": [
+        0.0004999999999988347,
+        0.0
+      ],
+      "theta_perturbed_caked_point": [
+        22.809689191291035,
+        164.26472603187585
+      ],
+      "theta_perturbed_two_theta_phi": [
+        22.809689191291035,
+        164.26472603187585
+      ]
+    },
+    {
+      "base_caked_point": [
+        29.60088811675532,
+        10.58636255737872
+      ],
+      "base_two_theta_phi": [
+        29.60088811675532,
+        10.58636255737872
+      ],
+      "branch_group_key": null,
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "detector_point": [
+        1374.6236621955957,
+        1177.0063162526621
+      ],
+      "detector_point_frame": "native_detector",
+      "distance_caked_delta": [
+        -0.32773225308064013,
+        -0.003953970205913038
+      ],
+      "distance_perturbed_caked_point": [
+        29.27315586367468,
+        10.582408587172807
+      ],
+      "distance_perturbed_two_theta_phi": [
+        29.27315586367468,
+        10.582408587172807
+      ],
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "hkl": [
+        -1,
+        0,
+        5
+      ],
+      "pair_index": 2,
+      "projection_input_frame": "native_detector",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "source_branch_index": 1,
+      "stale_caked_fields_present": true,
+      "stale_caked_fields_used": false,
+      "theta_caked_delta": [
+        0.0004999999999988347,
+        0.0
+      ],
+      "theta_perturbed_caked_point": [
+        29.60138811675532,
+        10.58636255737872
+      ],
+      "theta_perturbed_two_theta_phi": [
+        29.60138811675532,
+        10.58636255737872
+      ]
+    },
+    {
+      "base_caked_point": [
+        33.106366367785235,
+        130.74660242483208
+      ],
+      "base_two_theta_phi": [
+        33.106366367785235,
+        130.74660242483208
+      ],
+      "branch_group_key": null,
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "detector_point": [
+        1081.4190956439036,
+        1914.2781176331991
+      ],
+      "detector_point_frame": "native_detector",
+      "distance_caked_delta": [
+        -0.3480609421977192,
+        0.0033975751679236055
+      ],
+      "distance_perturbed_caked_point": [
+        32.758305425587515,
+        130.75
+      ],
+      "distance_perturbed_two_theta_phi": [
+        32.758305425587515,
+        130.75
+      ],
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "hkl": [
+        -1,
+        0,
+        10
+      ],
+      "pair_index": 3,
+      "projection_input_frame": "native_detector",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "source_branch_index": 0,
+      "stale_caked_fields_present": true,
+      "stale_caked_fields_used": false,
+      "theta_caked_delta": [
+        0.0005000000000023874,
+        0.0
+      ],
+      "theta_perturbed_caked_point": [
+        33.10686636778524,
+        130.74660242483208
+      ],
+      "theta_perturbed_two_theta_phi": [
+        33.10686636778524,
+        130.74660242483208
+      ]
+    },
+    {
+      "base_caked_point": [
+        37.676606620735434,
+        39.75
+      ],
+      "base_two_theta_phi": [
+        37.676606620735434,
+        39.75
+      ],
+      "branch_group_key": null,
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "detector_point": [
+        1081.8154342999576,
+        1150.9534330484562
+      ],
+      "detector_point_frame": "native_detector",
+      "distance_caked_delta": [
+        -0.36511956899725817,
+        0.0
+      ],
+      "distance_perturbed_caked_point": [
+        37.311487051738176,
+        39.75
+      ],
+      "distance_perturbed_two_theta_phi": [
+        37.311487051738176,
+        39.75
+      ],
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "hkl": [
+        -1,
+        0,
+        10
+      ],
+      "pair_index": 4,
+      "projection_input_frame": "native_detector",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "source_branch_index": 1,
+      "stale_caked_fields_present": true,
+      "stale_caked_fields_used": false,
+      "theta_caked_delta": [
+        0.0005000000000023874,
+        0.0
+      ],
+      "theta_perturbed_caked_point": [
+        37.67710662073544,
+        39.75
+      ],
+      "theta_perturbed_two_theta_phi": [
+        37.67710662073544,
+        39.75
+      ]
+    },
+    {
+      "base_caked_point": [
+        54.0979893417425,
+        100.75
+      ],
+      "base_two_theta_phi": [
+        54.0979893417425,
+        100.75
+      ],
+      "branch_group_key": null,
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "detector_point": [
+        434.5785917171996,
+        1787.5466911435806
+      ],
+      "detector_point_frame": "native_detector",
+      "distance_caked_delta": [
+        -0.3631515223235837,
+        0.0
+      ],
+      "distance_perturbed_caked_point": [
+        53.734837819418914,
+        100.75
+      ],
+      "distance_perturbed_two_theta_phi": [
+        53.734837819418914,
+        100.75
+      ],
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "hkl": [
+        -1,
+        0,
+        16
+      ],
+      "pair_index": 5,
+      "projection_input_frame": "native_detector",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "source_branch_index": 0,
+      "stale_caked_fields_present": true,
+      "stale_caked_fields_used": false,
+      "theta_caked_delta": [
+        0.0005000000000023874,
+        0.0
+      ],
+      "theta_perturbed_caked_point": [
+        54.0984893417425,
+        100.75
+      ],
+      "theta_perturbed_two_theta_phi": [
+        54.0984893417425,
+        100.75
+      ]
+    },
+    {
+      "base_caked_point": [
+        55.26511323264827,
+        71.75000000000003
+      ],
+      "base_two_theta_phi": [
+        55.26511323264827,
+        71.75000000000003
+      ],
+      "branch_group_key": null,
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "detector_point": [
+        424.4430928190797,
+        1260.132709090202
+      ],
+      "detector_point_frame": "native_detector",
+      "distance_caked_delta": [
+        -0.3585993142503554,
+        0.0
+      ],
+      "distance_perturbed_caked_point": [
+        54.90651391839791,
+        71.75000000000003
+      ],
+      "distance_perturbed_two_theta_phi": [
+        54.90651391839791,
+        71.75000000000003
+      ],
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "hkl": [
+        -1,
+        0,
+        16
+      ],
+      "pair_index": 6,
+      "projection_input_frame": "native_detector",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "source_branch_index": 1,
+      "stale_caked_fields_present": true,
+      "stale_caked_fields_used": false,
+      "theta_caked_delta": [
+        0.0005000000000023874,
+        0.0
+      ],
+      "theta_perturbed_caked_point": [
+        55.26561323264827,
+        71.75000000000003
+      ],
+      "theta_perturbed_two_theta_phi": [
+        55.26561323264827,
+        71.75000000000003
+      ]
+    }
+  ],
+  "point_count": 7,
+  "point_only_reprojection_call_count": 3,
+  "point_only_reprojection_called": true,
+  "projection_metadata": {
+    "base": {
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "projection_input_frame": "native_detector",
+      "valid": true
+    },
+    "distance": {
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "projection_input_frame": "native_detector",
+      "valid": true
+    },
+    "theta": {
+      "caked_projection_source": "fit_space_projector_native_detector",
+      "exact_projector_used": true,
+      "fit_space_projector_kind": "exact_caked_bundle",
+      "projection_input_frame": "native_detector",
+      "valid": true
+    }
+  },
+  "provider_guard_after_ok": true,
+  "provider_guard_before_ok": true,
+  "provider_guard_ok": true,
+  "provider_pair_count": 7,
+  "stale_alias_guard_installed": true,
+  "stale_caked_field_read_count": 0,
+  "stale_caked_field_read_fields": [],
+  "stale_caked_fields_used": false,
+  "state_hash_after": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "state_hash_before": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "status": "pass",
+  "theta_base": 5.0,
+  "theta_delta": 0.0005,
+  "theta_delta_applied": 0.0005,
+  "theta_param_name": "theta_initial",
+  "theta_projector_signature_changed": true,
+  "theta_two_theta_changed": true
+}

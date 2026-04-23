@@ -28,13 +28,6 @@ GENERATED_OR_EXAMPLE_PATTERNS = (
     re.compile(r"^coverage\.xml$"),
     re.compile(r"^scripts/debug/simulation\.npz$"),
 )
-LOCAL_PATCH_PATHS = {
-    # These paths are introduced by the same change as this guard. They are
-    # tracked once the patch lands, but local pre-commit test runs see them
-    # before git ls-files can inventory them.
-    "tests/README.md",
-    "tests/test_testing_validation_index.py",
-}
 PATH_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9_./-])"
     r"((?:\.agents|\.github|artifacts|config|docs|ra_sim|scripts|tests)/[A-Za-z0-9_./{}<>*?-]+"
@@ -73,7 +66,7 @@ def _expected_index_paths(tracked: list[str]) -> list[str]:
         if path.startswith("tests/")
         and path.endswith(".py")
         and not Path(path).name.startswith("test_")
-        and path != "tests/conftest.py"
+        and path not in {"tests/conftest.py", "tests/__init__.py"}
     )
     expected.update(
         path for path in tracked if path.startswith("scripts/") and path.endswith(".py")
@@ -101,6 +94,18 @@ def _expected_index_paths(tracked: list[str]) -> list[str]:
     expected.update(
         path for path in tracked if path.startswith(".agents/skills/") and path.endswith(".py")
     )
+    expected.update(
+        path
+        for path in tracked
+        if path.startswith("ra_sim/validation/") and path.endswith(".py")
+    )
+    expected.update(
+        path
+        for path in tracked
+        if path.startswith("ra_sim/structure_factors/") and path.endswith(".py")
+    )
+    if "ra_sim/simulation/mosaic_normalization.py" in tracked:
+        expected.add("ra_sim/simulation/mosaic_normalization.py")
     return sorted(expected)
 
 
@@ -134,10 +139,6 @@ def _is_generated_or_example(path: str) -> bool:
     return any(pattern.search(path) for pattern in GENERATED_OR_EXAMPLE_PATTERNS)
 
 
-def _is_local_patch_path(path: str) -> bool:
-    return path in LOCAL_PATCH_PATHS and (ROOT / path).exists()
-
-
 def _looks_like_repo_path(path: str) -> bool:
     return path in TOP_LEVEL_FILES or path.startswith(PATH_PREFIXES)
 
@@ -159,8 +160,6 @@ def test_testing_validation_index_path_references_are_tracked_or_allowed() -> No
         if _is_placeholder_or_glob(path) or _is_generated_or_example(path):
             continue
         if path in tracked:
-            continue
-        if _is_local_patch_path(path):
             continue
         bad_paths.append(path)
 

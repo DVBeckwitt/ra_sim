@@ -3391,6 +3391,109 @@ def test_export_geometry_manual_pairs_runs_dialog_and_save_callback(tmp_path) ->
     assert statuses[-1] == f"Saved manual geometry placements to {save_path}"
 
 
+def test_manual_picker_truth_pairs_keep_detector_frame_for_caked_saved_pick() -> None:
+    saved_entry = {
+        "label": "3,0,4",
+        "hkl": (3, 0, 4),
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "source_reflection_index": 16,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 2,
+        "source_row_index": 5,
+        "x": 102.0,
+        "y": 204.0,
+        "background_detector_x": 2.0,
+        "background_detector_y": 4.0,
+        "caked_x": 12.0,
+        "caked_y": 24.0,
+        "background_two_theta_deg": 12.0,
+        "background_phi_deg": 24.0,
+        "refined_sim_x": 102.0,
+        "refined_sim_y": 204.0,
+        "refined_sim_native_x": 2.0,
+        "refined_sim_native_y": 4.0,
+        "refined_sim_caked_x": 12.0,
+        "refined_sim_caked_y": 24.0,
+        "simulated_two_theta_deg": 12.0,
+        "simulated_phi_deg": 24.0,
+    }
+
+    truth_pairs = mg.build_geometry_manual_picker_truth_pairs(0, [saved_entry])
+
+    assert len(truth_pairs) == 1
+    truth = truth_pairs[0]
+    assert truth["manual_background_frame"] == "display"
+    assert truth["manual_background_point"] == [102.0, 204.0]
+    assert truth["manual_selected_simulated_frame"] == "display"
+    assert truth["manual_selected_simulated_point"] == [102.0, 204.0]
+    assert truth["manual_selected_to_background_distance_px"] == 0.0
+    assert truth["manual_picker_truth_available"] is True
+
+
+def test_refresh_geometry_manual_pair_entry_preserves_caked_pick_visual_coords() -> None:
+    candidate = {
+        "label": "-3,0,4",
+        "hkl": (-3, 0, 4),
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "source_reflection_index": 17,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_table_index": 2,
+        "source_row_index": 17,
+        "sim_col": 103.0,
+        "sim_row": 204.0,
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "caked_x": 13.0,
+        "caked_y": 24.0,
+    }
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        candidate,
+        103.0,
+        204.0,
+        group_key=("q_group", "primary", 3, 4),
+        detector_col=3.0,
+        detector_row=4.0,
+        caked_col=13.0,
+        caked_row=24.0,
+        raw_caked_col=13.0,
+        raw_caked_row=24.0,
+    )
+    assert entry is not None
+
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        entry,
+        background_display_shape=(64, 64),
+        caked_angles_to_background_display_coords=lambda two_theta, phi: (
+            float(two_theta) + 100.0,
+            float(phi) + 200.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 0.25,
+            float(row) + 0.25,
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+    )
+
+    assert refreshed is not None
+    assert refreshed["caked_x"] == 13.0
+    assert refreshed["caked_y"] == 24.0
+    assert refreshed["background_two_theta_deg"] == 13.0
+    assert refreshed["background_phi_deg"] == 24.0
+    assert refreshed["detector_x"] == 13.0
+    assert refreshed["detector_y"] == 24.0
+    assert refreshed["x"] == 113.0
+    assert refreshed["y"] == 224.0
+
+
 def test_import_geometry_manual_pairs_loads_snapshot_and_reports_caked_view_warning(
     tmp_path,
 ) -> None:
@@ -11840,6 +11943,27 @@ def test_caked_manual_seed_returns_to_same_detector_visual_position() -> None:
     assert refreshed["y"] == 204.0
     assert refreshed["sim_col"] == 103.0
     assert refreshed["sim_row"] == 204.0
+
+    displayed_caked = mg.geometry_manual_session_initial_pairs_display(
+        {
+            "group_key": group_key,
+            "group_entries": [dict(caked_candidate)],
+            "pending_entries": [dict(saved)],
+            "target_count": 1,
+            "background_index": 0,
+        },
+        current_background_index=0,
+        use_caked_display=True,
+        refresh_entry_geometry=callbacks.refresh_entry_geometry,
+        project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        entry_display_coords=lambda entry: (
+            float(entry["caked_x"]),
+            float(entry["caked_y"]),
+        ),
+    )
+    assert len(displayed_caked) == 1
+    assert displayed_caked[0]["sim_display"] == (13.0, 24.0)
+    assert displayed_caked[0]["bg_display"] == (13.0, 24.0)
 
     use_caked["value"] = False
     displayed = mg.geometry_manual_session_initial_pairs_display(

@@ -1,0 +1,41 @@
+{
+  "completed_rung_count": 3,
+  "finished_at_iso": "2026-04-22T21:32:29.046617Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_probe_sensitivity2\\codex_probe_sensitivity2",
+  "run_id": "codex_probe_sensitivity2",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.00956679999944754,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_probe_sensitivity2\\codex_probe_sensitivity2\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 9.947774000000209,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_probe_sensitivity2\\codex_probe_sensitivity2\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 167.83913980000216,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_probe_sensitivity2\\codex_probe_sensitivity2\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "sensitivity_scan",
+  "slowest_rung_elapsed_s": 167.83913980000216,
+  "started_at_iso": "2026-04-22T21:29:05.762624Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 203.28400369999872
+}

@@ -1,0 +1,65 @@
+{
+  "completed_rung_count": 6,
+  "finished_at_iso": "2026-04-22T23:59:17.146782Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_degree_audit_combined2",
+  "run_id": "codex_degree_audit_combined2",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.006557500000781147,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_degree_audit_combined2\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 1.0549619000012171,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_degree_audit_combined2\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 15.138989799997944,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_degree_audit_combined2\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.0,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_degree_audit_combined2\\rung_06_combined_corto_detector_theta_initial_cor_angle_chi.json",
+      "rung_id": "6",
+      "rung_index": "6",
+      "rung_name": "combined_corto_detector_theta_initial_cor_angle_chi",
+      "status": "failed"
+    },
+    {
+      "elapsed_s": 28.811016000003292,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_degree_audit_combined2\\rung_06_combined_corto_detector_theta_initial_cor_angle_chi_zs_zb.json",
+      "rung_id": "6",
+      "rung_index": "6",
+      "rung_name": "combined_corto_detector_theta_initial_cor_angle_chi_zs_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.0,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4\\codex_degree_audit_combined2\\rung_06_combined_summary.json",
+      "rung_id": "6",
+      "rung_index": "6",
+      "rung_name": "combined_summary",
+      "status": "ok_with_failures"
+    }
+  ],
+  "slowest_rung": "combined_corto_detector_theta_initial_cor_angle_chi_zs_zb",
+  "slowest_rung_elapsed_s": 28.811016000003292,
+  "started_at_iso": "2026-04-22T23:58:07.289199Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 69.85759300000063
+}

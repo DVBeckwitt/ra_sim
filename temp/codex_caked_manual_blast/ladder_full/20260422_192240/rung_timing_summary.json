@@ -1,0 +1,249 @@
+{
+  "completed_rung_count": 29,
+  "finished_at_iso": "2026-04-23T00:25:18.307326Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240",
+  "run_id": "20260422_192240",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.007813000003807247,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 0.9744557999947574,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 14.481283299995994,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.201415199997427,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_a.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_a",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.7932942999977968,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_c.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_c",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.194285300000047,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_center_x.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_center_x",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.930695800001558,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_center_y.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_center_y",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.298363599998993,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_chi.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_chi",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.227598800003761,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_cor_angle.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.051057899996522,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_corto_detector.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_corto_detector",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.268574900001113,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_psi_z.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 43.38936800000374,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_summary.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_summary",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.919262700001127,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_theta_initial.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_theta_initial",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.17405979999603,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_zb.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.978179199999431,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03_one_param_zs.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zs",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 18.62583870000526,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_03b_caked_point_reprojection\\rung_03b_caked_point_reprojection.json",
+      "rung_id": "3B",
+      "rung_index": "3B",
+      "rung_name": "caked_point_reprojection",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 3.946080300003814,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_a_c.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_a_c",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 2.899329099993338,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_a_psi_z.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_a_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.221576600000844,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_c_psi_z.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_c_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.018155600002501,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_chi_cor_angle.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_chi_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.94530400000076,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_corto_detector_theta_initial.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_corto_detector_theta_initial",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 29.898396899996442,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_summary.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_summary",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 2.9822782000046573,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_theta_initial_cor_angle.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_theta_initial_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 6.3930099999997765,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_04_pair_zs_zb.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_zs_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.1948692000005394,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_05_block_a_c_psi_z.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_a_c_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 5.078990800000611,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_05_block_chi_cor_angle_theta_initial.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_chi_cor_angle_theta_initial",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 8.284300500003155,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_05_block_corto_detector_theta_initial_cor_angle.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_corto_detector_theta_initial_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 5.897156200000609,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_05_block_corto_detector_theta_initial_zs_zb.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_corto_detector_theta_initial_zs_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 22.6908431999982,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\codex_caked_manual_blast\\ladder_full\\20260422_192240\\rung_05_block_summary.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_summary",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "one_param_summary",
+  "slowest_rung_elapsed_s": 43.38936800000374,
+  "started_at_iso": "2026-04-23T00:22:40.494302Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 157.8130336000031
+}

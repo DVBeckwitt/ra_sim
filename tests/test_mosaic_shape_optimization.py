@@ -8,7 +8,17 @@ from ra_sim.fitting.optimization import (
     fit_mosaic_shape_parameters,
     focus_mosaic_profile_dataset_specs,
 )
-from ra_sim.fitting.optimization_mosaic_profiles import _mosaic_profile_entry_priority
+from ra_sim.fitting.optimization_mosaic_profiles import (
+    MosaicPhiProfile,
+    MosaicPointPair,
+    _mosaic_profile_entry_priority,
+    compare_centered_phi_profiles,
+    fit_lorentzian_plus_gaussian_profile,
+    fit_mosaic_parameters_from_centered_phi_profiles,
+    integrate_selected_qr_phi_profiles,
+    lorentzian_plus_gaussian_profile,
+    pair_selected_qr_and_background_points,
+)
 
 TT_SCALE = 0.06
 PHI_SCALE = 0.08
@@ -184,7 +194,7 @@ def _make_fake_process_peaks(
         del kwargs
         recorded_theta_values.append(float(theta_initial))
         if recorded_subsets is not None:
-            recorded_subsets.append(np.asarray(miller_subset, dtype=np.float64, copy=True))
+            recorded_subsets.append(np.array(miller_subset, dtype=np.float64, copy=True))
         image = _render_image(
             miller_subset,
             intens_subset,
@@ -1140,3 +1150,253 @@ def test_fit_mosaic_shape_parameters_requires_one_active_parameter(monkeypatch):
             fit_gamma_mosaic=False,
             fit_eta=False,
         )
+
+
+def test_pair_selected_qr_and_background_points_matches_duplicate_q_groups_by_peak_index():
+    selected = [
+        {"q_group_key": ("q_group", "primary", 1, 5), "source_peak_index": 0},
+        {"q_group_key": ("q_group", "primary", 1, 5), "source_peak_index": 1},
+    ]
+    background = [
+        {"q_group_key": ("q_group", "primary", 1, 5), "source_peak_index": 1, "x": 2, "y": 3},
+        {"q_group_key": ("q_group", "primary", 1, 5), "source_peak_index": 0, "x": 4, "y": 5},
+    ]
+
+    pairs = pair_selected_qr_and_background_points(selected, background)
+
+    assert len(pairs) == 2
+    assert pairs[0].background_point["x"] == 4
+    assert pairs[1].background_point["x"] == 2
+
+
+def test_fit_lorentzian_plus_gaussian_profile_recovers_center_and_widths():
+    phi = np.linspace(-2.0, 2.0, 161, dtype=np.float64)
+    expected = lorentzian_plus_gaussian_profile(
+        phi,
+        center_deg=0.23,
+        gaussian_amplitude=12.0,
+        gaussian_sigma_deg=0.18,
+        lorentzian_amplitude=5.0,
+        lorentzian_gamma_deg=0.42,
+        baseline=0.7,
+    )
+
+    fit = fit_lorentzian_plus_gaussian_profile(phi, expected)
+
+    assert fit.success
+    assert fit.center_deg == pytest.approx(0.23, abs=0.02)
+    assert fit.gaussian_sigma_deg > 0.0
+    assert fit.lorentzian_gamma_deg > 0.0
+    assert fit.area > 0.0
+
+
+def test_integrate_selected_qr_phi_profiles_uses_background_anchor_roi_and_fit():
+    image_size = 41
+    rows = np.arange(image_size, dtype=np.float64)
+    cols = np.arange(image_size, dtype=np.float64)
+    phi_axis = np.linspace(-2.0, 2.0, image_size, dtype=np.float64)
+    yy, xx = np.meshgrid(rows, cols, indexing="ij")
+    phi_line = lorentzian_plus_gaussian_profile(
+        phi_axis,
+        center_deg=0.20,
+        gaussian_amplitude=9.0,
+        gaussian_sigma_deg=0.16,
+        lorentzian_amplitude=4.0,
+        lorentzian_gamma_deg=0.32,
+        baseline=0.0,
+    )
+    orthogonal = np.exp(-0.5 * ((xx - 20.0) / 1.6) ** 2)
+    image = 2.0 + phi_line[:, None] * orthogonal
+    manual_entry = {
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_peak_index": 0,
+        "hkl": (1, 0, 0),
+        "x": 20.0,
+        "y": 20.0,
+        "background_phi_deg": 0.0,
+    }
+
+    profiles, rejected = integrate_selected_qr_phi_profiles(
+        image,
+        [manual_entry],
+        phi_deg_map=phi_axis,
+        phi_axis="row",
+        roi_half_width_px=14,
+        orthogonal_half_width_px=3,
+        phi_bin_count=61,
+    )
+
+    assert rejected == []
+    assert len(profiles) == 1
+    assert profiles[0].pair.q_group_key == ("q_group", "primary", 1, 5)
+    assert profiles[0].fit is not None
+    assert profiles[0].fit.center_deg == pytest.approx(0.20, abs=0.08)
+    assert float(np.sum(profiles[0].intensity)) > 0.0
+
+
+def test_integrate_selected_qr_phi_profiles_rejects_ambiguous_square_1d_phi_axis():
+    image = np.ones((21, 21), dtype=np.float64)
+    manual_entry = {
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_peak_index": 0,
+        "hkl": (1, 0, 0),
+        "x": 10.0,
+        "y": 10.0,
+        "background_phi_deg": 0.0,
+    }
+
+    profiles, rejected = integrate_selected_qr_phi_profiles(
+        image,
+        [manual_entry],
+        phi_deg_map=np.linspace(-1.0, 1.0, 21, dtype=np.float64),
+        roi_half_width_px=6,
+    )
+
+    assert profiles == []
+    assert len(rejected) == 1
+    assert "ambiguous 1D phi_deg_map" in rejected[0]["reason"]
+
+
+def test_integrate_selected_qr_phi_profiles_accepts_explicit_column_axis_for_square_map():
+    image_size = 41
+    rows = np.arange(image_size, dtype=np.float64)
+    cols = np.arange(image_size, dtype=np.float64)
+    phi_axis = np.linspace(-2.0, 2.0, image_size, dtype=np.float64)
+    yy, xx = np.meshgrid(rows, cols, indexing="ij")
+    phi_line = lorentzian_plus_gaussian_profile(
+        phi_axis,
+        center_deg=0.20,
+        gaussian_amplitude=9.0,
+        gaussian_sigma_deg=0.16,
+        lorentzian_amplitude=4.0,
+        lorentzian_gamma_deg=0.32,
+        baseline=0.0,
+    )
+    orthogonal = np.exp(-0.5 * ((yy - 20.0) / 1.6) ** 2)
+    image = 2.0 + phi_line[None, :] * orthogonal
+    manual_entry = {
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_peak_index": 0,
+        "hkl": (1, 0, 0),
+        "x": 20.0,
+        "y": 20.0,
+        "background_phi_deg": 0.0,
+    }
+
+    profiles, rejected = integrate_selected_qr_phi_profiles(
+        image,
+        [manual_entry],
+        phi_deg_map=phi_axis,
+        phi_axis="col",
+        roi_half_width_px=14,
+        orthogonal_half_width_px=3,
+        phi_bin_count=61,
+    )
+
+    assert rejected == []
+    assert len(profiles) == 1
+    assert profiles[0].fit is not None
+    assert profiles[0].fit.center_deg == pytest.approx(0.20, abs=0.08)
+
+
+def _scaffold_profile(width: float, *, center: float = 0.0) -> MosaicPhiProfile:
+    phi = np.linspace(-2.0, 2.0, 121, dtype=np.float64)
+    intensity = lorentzian_plus_gaussian_profile(
+        phi,
+        center_deg=float(center),
+        gaussian_amplitude=1.0,
+        gaussian_sigma_deg=float(width),
+        lorentzian_amplitude=0.45,
+        lorentzian_gamma_deg=float(width) * 1.7,
+        baseline=0.0,
+    )
+    pair = MosaicPointPair(
+        pair_index=0,
+        pair_key=("q_group", "primary", 1, 5),
+        selected_qr_point={"q_group_key": ("q_group", "primary", 1, 5)},
+        background_point={"q_group_key": ("q_group", "primary", 1, 5), "x": 0.0, "y": 0.0},
+        q_group_key=("q_group", "primary", 1, 5),
+        hkl=(1, 0, 0),
+    )
+    profile = MosaicPhiProfile(
+        pair=pair,
+        phi_deg=phi,
+        intensity=intensity,
+        signal_counts=np.ones_like(phi),
+        background_level=np.zeros_like(phi),
+        center_col=0.0,
+        center_row=0.0,
+        phi_anchor_deg=0.0,
+        row_bounds=(0, 1),
+        col_bounds=(0, 1),
+        weight=1.0,
+    )
+    profile.fit = fit_lorentzian_plus_gaussian_profile(profile.phi_deg, profile.intensity)
+    return profile
+
+
+def test_compare_centered_phi_profiles_aligns_fitted_peak_centers():
+    measured = _scaffold_profile(0.35, center=0.35)
+    candidate = _scaffold_profile(0.35, center=-0.45)
+
+    comparison = compare_centered_phi_profiles([measured], [candidate])
+
+    assert comparison.profile_count == 1
+    assert comparison.residual_rms < 2.0e-3
+    assert comparison.per_profile[0]["matched"] is True
+
+
+def test_compare_centered_phi_profiles_consumes_duplicate_pair_keys_in_order():
+    measured = [
+        _scaffold_profile(0.26, center=0.35),
+        _scaffold_profile(0.62, center=-0.25),
+    ]
+    candidate = [
+        _scaffold_profile(0.26, center=-0.45),
+        _scaffold_profile(0.62, center=0.55),
+    ]
+
+    comparison = compare_centered_phi_profiles(measured, candidate)
+
+    assert comparison.profile_count == 2
+    assert comparison.residual_rms < 2.0e-3
+    assert [entry["matched"] for entry in comparison.per_profile] == [True, True]
+
+
+def test_compare_centered_phi_profiles_penalizes_extra_candidate_profiles():
+    measured = [_scaffold_profile(0.35, center=0.1)]
+    matching_candidate = _scaffold_profile(0.35, center=-0.2)
+    extra_candidate = _scaffold_profile(0.62, center=0.45)
+
+    baseline = compare_centered_phi_profiles(measured, [matching_candidate])
+    comparison = compare_centered_phi_profiles(
+        measured,
+        [matching_candidate, extra_candidate],
+    )
+
+    assert baseline.profile_count == 1
+    assert baseline.residual_rms < 2.0e-3
+    assert comparison.profile_count == 2
+    assert comparison.residual_rms > baseline.residual_rms
+    assert comparison.per_profile[-1]["matched"] is False
+    assert comparison.per_profile[-1]["extra_candidate"] is True
+
+
+def test_fit_mosaic_parameters_from_centered_phi_profiles_refines_active_width():
+    measured = [_scaffold_profile(0.46, center=0.15)]
+
+    def simulate(params):
+        return [_scaffold_profile(float(params["width"]), center=-0.2)]
+
+    result = fit_mosaic_parameters_from_centered_phi_profiles(
+        measured,
+        {"width": 0.20, "fixed": 3.0},
+        ["width"],
+        simulate,
+        bounds={"width": (0.05, 1.0)},
+        max_nfev=40,
+    )
+
+    assert result.best_parameters["width"] == pytest.approx(0.46, abs=0.04)
+    assert result.best_parameters["fixed"] == 3.0
+    assert result.final_cost < result.initial_cost

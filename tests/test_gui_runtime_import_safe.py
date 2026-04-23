@@ -14282,7 +14282,7 @@ def test_prepare_caked_manual_fit_requires_exact_projector() -> None:
     assert "Rebuild the caked/source cache" in missing_result.error_text
 
 
-def test_prepare_caked_manual_fit_fails_if_exact_projector_cannot_be_prepared() -> None:
+def test_prepare_caked_manual_fit_fails_without_exact_projector_no_recake() -> None:
     geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
     caked_pairs = [
         {"pair_id": "caked", "background_two_theta_deg": 12.0, "background_phi_deg": 3.0}
@@ -14292,6 +14292,9 @@ def test_prepare_caked_manual_fit_fails_if_exact_projector_cannot_be_prepared() 
     def _ensure_caked_view() -> None:
         events.append("ensure")
         raise RuntimeError("no exact payload")
+
+    def _build_dataset(*_args, **_kwargs):
+        pytest.fail("caked ensure failure must stop before dataset build")
 
     result = geometry_fit.prepare_geometry_fit_run(
         params={"theta_initial": 0.0},
@@ -14309,9 +14312,7 @@ def test_prepare_caked_manual_fit_fails_if_exact_projector_cannot_be_prepared() 
         current_geometry_theta_offset=lambda **_kwargs: 0.0,
         geometry_manual_pairs_for_index=lambda _idx: caked_pairs,
         ensure_geometry_fit_caked_view=_ensure_caked_view,
-        build_dataset=lambda *_args, **_kwargs: pytest.fail(
-            "caked ensure failure must stop before dataset build"
-        ),
+        build_dataset=_build_dataset,
         build_runtime_config=lambda _params: {"solver": {}},
     )
 
