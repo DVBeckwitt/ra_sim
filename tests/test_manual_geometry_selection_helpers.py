@@ -3677,62 +3677,57 @@ def test_refine_detector_pick_via_caked_background_uses_caked_candidate_seed() -
     assert seen["match_cfg"] == {"search_radius_px": 6.0}
 
 
-def test_resolve_background_pick_to_caked_angles_converts_display_before_reverse_lut() -> None:
+def test_resolve_background_pick_to_caked_angles_binds_refined_angles_not_raw_click() -> None:
     reverse_calls: list[tuple[float, float]] = []
-    refine_calls: list[tuple[float, float, bool]] = []
+    refine_calls: list[tuple[float, float]] = []
 
     def _reverse_lut(two_theta, phi):
         reverse_calls.append((float(two_theta), float(phi)))
         return float(two_theta) + 100.0, float(phi) + 200.0
 
     def _refine_detector(_candidate, raw_col, raw_row, **kwargs):
-        refine_calls.append(
-            (
-                float(raw_col),
-                float(raw_row),
-                bool(kwargs.get("force_detector_space", False)),
-            )
-        )
+        refine_calls.append((float(raw_col), float(raw_row)))
         return float(raw_col) + 1.0, float(raw_row) + 2.0
 
+    caked_image = np.zeros((3, 3), dtype=float)
+    caked_image[2, 2] = 10.0
     resolved = mg.resolve_background_pick_to_caked_angles(
         {"label": "1,0,0"},
         1.0,
         1.0,
         active_view="caked",
-        display_background=np.zeros((3, 3), dtype=float),
+        display_background=caked_image,
         refine_detector_pick_fn=_refine_detector,
         caked_angles_to_background_display_coords=_reverse_lut,
         background_display_to_native_detector_coords=lambda col, row: (
             float(col) - 100.0,
             float(row) - 200.0,
         ),
-        native_detector_coords_to_caked_display_coords=lambda col, row: (
-            float(col) + 10.0,
-            float(row) + 20.0,
-        ),
-        radial_axis=np.array([10.0, 20.0, 30.0], dtype=float),
-        azimuth_axis=np.array([20.0, 30.0, 40.0], dtype=float),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (float(col), float(row)),
+        radial_axis=np.array([18.0, 20.0, 22.0], dtype=float),
+        azimuth_axis=np.array([28.0, 30.0, 32.0], dtype=float),
     )
 
     assert resolved is not None
-    assert reverse_calls == [(20.0, 30.0)]
-    assert refine_calls == [(120.0, 230.0, True)]
+    assert reverse_calls == [(22.0, 32.0)]
+    assert refine_calls == []
     assert resolved["raw_caked_display_col"] == 1.0
     assert resolved["raw_caked_display_row"] == 1.0
     assert resolved["raw_caked_two_theta_deg"] == 20.0
     assert resolved["raw_caked_phi_deg"] == 30.0
-    assert resolved["detector_seed_col"] == 120.0
-    assert resolved["detector_seed_row"] == 230.0
-    assert resolved["refined_detector_display_col"] == 121.0
+    assert "detector_seed_col" not in resolved
+    assert "detector_seed_row" not in resolved
+    assert resolved["refined_detector_display_col"] == 122.0
     assert resolved["refined_detector_display_row"] == 232.0
-    assert resolved["refined_detector_native_col"] == 21.0
+    assert resolved["refined_detector_native_col"] == 22.0
     assert resolved["refined_detector_native_row"] == 32.0
-    assert resolved["refined_background_two_theta_deg"] == 31.0
-    assert resolved["refined_background_phi_deg"] == 52.0
+    assert resolved["background_detector_x"] == 22.0
+    assert resolved["background_detector_y"] == 32.0
+    assert resolved["refined_background_two_theta_deg"] == 22.0
+    assert resolved["refined_background_phi_deg"] == 32.0
 
 
-def test_caked_background_pick_matches_detector_oracle_and_redraws_from_angles() -> None:
+def test_caked_background_pick_refines_locally_binds_lut_and_separates_display() -> None:
     group_key = ("q_group", "primary", 1, 0)
     candidate = {
         "label": "1,0,0",
@@ -3753,10 +3748,12 @@ def test_caked_background_pick_matches_detector_oracle_and_redraws_from_angles()
         "simulated_two_theta_deg": 500.0,
         "simulated_phi_deg": 600.0,
     }
-    radial_axis = np.array([10.0, 20.0, 30.0], dtype=float)
-    azimuth_axis = np.array([20.0, 30.0, 40.0], dtype=float)
+    radial_axis = np.array([18.0, 20.0, 22.0], dtype=float)
+    azimuth_axis = np.array([28.0, 30.0, 32.0], dtype=float)
+    caked_image = np.zeros((3, 3), dtype=float)
+    caked_image[2, 2] = 10.0
     reverse_calls: list[tuple[float, float]] = []
-    refine_calls: list[tuple[float, float, bool]] = []
+    refine_calls: list[tuple[float, float]] = []
 
     def _reverse_lut(two_theta, phi):
         reverse_calls.append((float(two_theta), float(phi)))
@@ -3766,17 +3763,11 @@ def test_caked_background_pick_matches_detector_oracle_and_redraws_from_angles()
         return float(col) - 100.0, float(row) - 200.0
 
     def _native_to_caked(col, row):
-        return float(col) + 10.0, float(row) + 20.0
+        return float(col), float(row)
 
     def _refine_detector(_candidate, raw_col, raw_row, **kwargs):
-        refine_calls.append(
-            (
-                float(raw_col),
-                float(raw_row),
-                bool(kwargs.get("force_detector_space", False)),
-            )
-        )
-        return 121.0, 202.0
+        refine_calls.append((float(raw_col), float(raw_row)))
+        return float(raw_col) + 1.0, float(raw_row) + 2.0
 
     def _pick_session() -> dict[str, object]:
         return {
@@ -3804,68 +3795,54 @@ def test_caked_background_pick_matches_detector_oracle_and_redraws_from_angles()
             projected.append(projected_row)
         return projected
 
-    def _place(seed_col: float, seed_row: float, *, use_caked_space: bool) -> dict[str, object]:
-        saved_entry_sets: list[list[dict[str, object]]] = []
-        handled, next_session = mg.geometry_manual_place_selection_at(
-            seed_col,
-            seed_row,
-            pick_session=_pick_session(),
-            current_background_index=0,
-            display_background=np.zeros((3, 3), dtype=float),
-            get_cache_data=lambda **_kwargs: {},
-            refine_preview_point=_refine_detector,
-            set_pairs_for_index_fn=lambda _idx, entries: (
-                saved_entry_sets.append([dict(entry) for entry in (entries or [])])
-                or list(entries or [])
-            ),
-            set_pick_session_fn=lambda _session: None,
-            clear_preview_artists_fn=lambda **_kwargs: None,
-            restore_view_fn=lambda **_kwargs: None,
-            render_current_pairs_fn=lambda **_kwargs: None,
-            update_button_label_fn=lambda: None,
-            set_status_text=lambda _text: None,
-            push_undo_state_fn=lambda: None,
-            use_caked_space=use_caked_space,
-            caked_angles_to_background_display_coords=_reverse_lut,
-            background_display_to_native_detector_coords=_display_to_native,
-            native_detector_coords_to_caked_display_coords=_native_to_caked,
-            radial_axis=radial_axis,
-            azimuth_axis=azimuth_axis,
-        )
-        assert handled is True
-        assert next_session == {}
-        return saved_entry_sets[-1][0]
-
-    detector_entry = _place(120.0, 230.0, use_caked_space=False)
-    caked_entry = _place(1.0, 1.0, use_caked_space=True)
-
-    np.testing.assert_allclose(
-        [
-            detector_entry["background_two_theta_deg"],
-            detector_entry["background_phi_deg"],
-        ],
-        [31.0, 22.0],
-        rtol=0.0,
-        atol=1.0e-9,
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        1.0,
+        1.0,
+        pick_session=_pick_session(),
+        current_background_index=0,
+        display_background=caked_image,
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=_refine_detector,
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=_reverse_lut,
+        background_display_to_native_detector_coords=_display_to_native,
+        native_detector_coords_to_caked_display_coords=_native_to_caked,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
     )
+
+    assert handled is True
+    assert next_session == {}
+    caked_entry = saved_entry_sets[-1][0]
     np.testing.assert_allclose(
         [
             caked_entry["background_two_theta_deg"],
             caked_entry["background_phi_deg"],
         ],
-        [
-            detector_entry["background_two_theta_deg"],
-            detector_entry["background_phi_deg"],
-        ],
+        [22.0, 32.0],
         rtol=0.0,
         atol=1.0e-9,
     )
-    assert (120.0, 230.0, True) in refine_calls
-    assert reverse_calls[0] == (20.0, 30.0)
+    assert refine_calls == []
+    assert reverse_calls == [(22.0, 32.0)]
     assert caked_entry["raw_caked_display_col"] == 1.0
     assert caked_entry["raw_caked_display_row"] == 1.0
     assert caked_entry["raw_caked_two_theta_deg"] == 20.0
     assert caked_entry["raw_caked_phi_deg"] == 30.0
+    assert caked_entry["background_detector_x"] == 22.0
+    assert caked_entry["background_detector_y"] == 32.0
 
     poisoned = {
         **dict(caked_entry),
@@ -3896,7 +3873,7 @@ def test_caked_background_pick_matches_detector_oracle_and_redraws_from_angles()
         entry_display_coords=lambda _entry: (-1.0, -1.0),
     )
     assert active_display[0]["sim_display"] == (500.0, 600.0)
-    assert active_display[0]["bg_display"] == (31.0, 22.0)
+    assert active_display[0]["bg_display"] == (22.0, 32.0)
 
     detector_reverse_calls: list[tuple[float, float]] = []
     detector_refreshed = mg.refresh_geometry_manual_pair_entry(
@@ -3907,13 +3884,13 @@ def test_caked_background_pick_matches_detector_oracle_and_redraws_from_angles()
             or (float(two_theta) + 100.0, float(phi) + 200.0)
         ),
         background_display_to_native_detector_coords=_display_to_native,
-        native_detector_coords_to_caked_display_coords=None,
+        native_detector_coords_to_caked_display_coords=_native_to_caked,
     )
-    assert detector_reverse_calls == [(31.0, 22.0)]
-    assert detector_refreshed["x"] == 131.0
-    assert detector_refreshed["y"] == 222.0
-    assert detector_refreshed["background_two_theta_deg"] == 31.0
-    assert detector_refreshed["background_phi_deg"] == 22.0
+    assert detector_reverse_calls == []
+    assert detector_refreshed["x"] == 122.0
+    assert detector_refreshed["y"] == 232.0
+    assert detector_refreshed["background_two_theta_deg"] == 22.0
+    assert detector_refreshed["background_phi_deg"] == 32.0
 
     def _lookup(rows):
         lookup: dict[tuple[object, ...], list[dict[str, object]]] = {}
@@ -3938,6 +3915,272 @@ def test_caked_background_pick_matches_detector_oracle_and_redraws_from_angles()
         entry_display_coords=lambda _entry: (-1.0, -1.0),
     )
     assert saved_display[0]["bg_display"] == active_display[0]["bg_display"]
+
+
+def test_refresh_geometry_manual_pair_entry_recomputes_stale_detector_anchor_once() -> None:
+    reverse_calls: list[tuple[float, float]] = []
+
+    def _reverse_lut(two_theta, phi):
+        reverse_calls.append((float(two_theta), float(phi)))
+        return float(two_theta) + 100.0, float(phi) + 200.0
+
+    stale_entry = {
+        "label": "1,0,0",
+        "x": 999.0,
+        "y": 999.0,
+        "background_two_theta_deg": 22.0,
+        "background_phi_deg": 32.0,
+        "background_detector_x": 0.0,
+        "background_detector_y": 0.0,
+    }
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        stale_entry,
+        background_display_shape=(),
+        caked_angles_to_background_display_coords=_reverse_lut,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+    )
+
+    assert refreshed is not None
+    assert reverse_calls == [(22.0, 32.0)]
+    assert refreshed["background_detector_x"] == 22.0
+    assert refreshed["background_detector_y"] == 32.0
+    assert refreshed["x"] == 122.0
+    assert refreshed["y"] == 232.0
+
+    reverse_calls.clear()
+    refreshed_again = mg.refresh_geometry_manual_pair_entry(
+        refreshed,
+        background_display_shape=(),
+        caked_angles_to_background_display_coords=_reverse_lut,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+    )
+
+    assert refreshed_again is not None
+    assert reverse_calls == []
+    assert refreshed_again["background_detector_x"] == 22.0
+    assert refreshed_again["background_detector_y"] == 32.0
+
+
+def test_caked_background_branch_association_uses_refined_peak_before_save() -> None:
+    group_key = ("q_group", "primary", 1, 0)
+    branch_zero = {
+        "label": "branch-0",
+        "q_group_key": group_key,
+        "source_table_index": 7,
+        "source_row_index": 0,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "branch_id": "+x",
+        "caked_x": 20.0,
+        "caked_y": 30.0,
+    }
+    branch_one = {
+        "label": "branch-1",
+        "q_group_key": group_key,
+        "source_table_index": 7,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "branch_id": "-x",
+        "caked_x": 22.0,
+        "caked_y": 32.0,
+    }
+    radial_axis = np.array([18.0, 20.0, 22.0], dtype=float)
+    azimuth_axis = np.array([28.0, 30.0, 32.0], dtype=float)
+    caked_image = np.zeros((3, 3), dtype=float)
+    caked_image[2, 2] = 10.0
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        1.0,
+        1.0,
+        pick_session={
+            "group_key": group_key,
+            "group_entries": [dict(branch_zero), dict(branch_one)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+        },
+        current_background_index=0,
+        display_background=caked_image,
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked background must not refine in detector space")
+        ),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda tth, phi: (
+            float(tth) + 100.0,
+            float(phi) + 200.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    saved = saved_entry_sets[-1][0]
+    assert saved["source_branch_index"] == 1
+    assert saved["source_row_index"] == 1
+    assert saved["branch_id"] == "-x"
+    assert saved["background_two_theta_deg"] == 22.0
+    assert saved["background_phi_deg"] == 32.0
+
+    measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved)],
+        get_cache_data=lambda **_kwargs: {},
+        source_rows_for_background=lambda *_args, **_kwargs: [
+            dict(branch_zero),
+            dict(branch_one),
+        ],
+        build_simulated_lookup=_build_lookup,
+        project_peaks_to_current_view=lambda rows: [dict(row) for row in (rows or [])],
+        entry_display_coords=lambda _entry: (-1.0, -1.0),
+    )
+
+    assert measured[0]["source_branch_index"] == 1
+    assert displayed[0]["bg_display"] == (22.0, 32.0)
+
+
+def test_caked_background_same_branch_pick_replaces_existing_branch_only() -> None:
+    group_key = ("q_group", "primary", 1, 0)
+    old_branch_zero = {
+        "label": "branch-0",
+        "x": 110.0,
+        "y": 210.0,
+        "q_group_key": group_key,
+        "source_table_index": 7,
+        "source_row_index": 0,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "branch_id": "+x",
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 20.0,
+        "background_detector_x": 10.0,
+        "background_detector_y": 20.0,
+    }
+    old_branch_one = {
+        "label": "branch-1",
+        "x": 150.0,
+        "y": 250.0,
+        "q_group_key": group_key,
+        "source_table_index": 7,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "branch_id": "-x",
+        "background_two_theta_deg": 50.0,
+        "background_phi_deg": 60.0,
+        "background_detector_x": 50.0,
+        "background_detector_y": 60.0,
+    }
+    candidate = {
+        "label": "branch-0",
+        "q_group_key": group_key,
+        "source_table_index": 7,
+        "source_row_index": 0,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "branch_id": "+x",
+        "caked_x": 22.0,
+        "caked_y": 32.0,
+    }
+    radial_axis = np.array([18.0, 20.0, 22.0], dtype=float)
+    azimuth_axis = np.array([28.0, 30.0, 32.0], dtype=float)
+    caked_image = np.zeros((3, 3), dtype=float)
+    caked_image[2, 2] = 10.0
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        1.0,
+        1.0,
+        pick_session={
+            "group_key": group_key,
+            "group_entries": [dict(candidate)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [dict(old_branch_zero), dict(old_branch_one)],
+            "q_label": "selected group",
+            "background_index": 0,
+        },
+        current_background_index=0,
+        display_background=caked_image,
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked background must not refine in detector space")
+        ),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda tth, phi: (
+            float(tth) + 100.0,
+            float(phi) + 200.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    saved_entries = saved_entry_sets[-1]
+    assert len(saved_entries) == 2
+    by_branch = {int(entry["source_branch_index"]): entry for entry in saved_entries}
+    assert by_branch[0]["background_two_theta_deg"] == 22.0
+    assert by_branch[0]["background_phi_deg"] == 32.0
+    assert by_branch[1]["background_two_theta_deg"] == 50.0
+    assert by_branch[1]["background_phi_deg"] == 60.0
 
 
 def test_update_geometry_manual_peak_record_cache_updates_cached_positions() -> None:
