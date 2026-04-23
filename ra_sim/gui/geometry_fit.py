@@ -11529,14 +11529,14 @@ def prepare_geometry_fit_run(
             joint_background_mode=joint_background_mode,
         )
 
-    manual_fit_space_by_background = geometry_manual_fit_space_by_background(
-        required_indices,
+    selected_manual_fit_space_by_background = geometry_manual_fit_space_by_background(
+        selected_background_indices,
         geometry_manual_pairs_for_index,
         pick_uses_caked_space=bool(manual_fit_pick_uses_caked_space),
         current_background_index=int(current_index),
     )
     fit_space_error = manual_geometry_fit_space_preflight_error(
-        manual_fit_space_by_background,
+        selected_manual_fit_space_by_background,
         osc_files=osc_files,
     )
     if fit_space_error:
@@ -11545,9 +11545,35 @@ def prepare_geometry_fit_run(
             selected_background_indices=selected_background_indices,
             joint_background_mode=joint_background_mode,
         )
-    manual_pairs_use_caked_space = any(
-        str(kind) == "caked" for kind in manual_fit_space_by_background.values()
+    selected_caked_background_indices = sorted(
+        {
+            int(idx)
+            for idx in selected_background_indices
+            if str(selected_manual_fit_space_by_background.get(int(idx), "")).strip().lower()
+            == "caked"
+        }
     )
+    manual_pairs_use_caked_space = bool(selected_caked_background_indices)
+    if manual_pairs_use_caked_space:
+        try:
+            ensure_geometry_fit_caked_view()
+        except Exception as exc:
+            unavailable_backgrounds = ", ".join(
+                f"background {int(idx) + 1}" for idx in selected_caked_background_indices
+            )
+            error_text = (
+                "Geometry fit unavailable: exact caked fit-space projector could not be "
+                "prepared. Rebuild the caked/source cache and rerun the fit. "
+                f"exact caked projector unavailable for {unavailable_backgrounds}."
+            )
+            detail = str(exc).strip()
+            if detail:
+                error_text = f"{error_text} Details: {detail}"
+            return _failure_result(
+                error_text,
+                selected_background_indices=selected_background_indices,
+                joint_background_mode=joint_background_mode,
+            )
 
     def _theta_base_for_index(dataset_index: int) -> float:
         if build_all_selected_backgrounds:

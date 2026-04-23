@@ -1115,20 +1115,8 @@ def run_new4_caked_point_reprojection_check(
     guard_error: str | None = None
     context: Mapping[str, object] = {}
     provider_before: Mapping[str, object] = {}
-    original_headless_caked_builder = getattr(
-        preflight.hgf,
-        "_build_headless_geometry_fit_caked_view_payload",
-        None,
-    )
-
-    def _cached_projector_only(*_args: object, **_kwargs: object) -> None:
-        return None
 
     try:
-        if callable(original_headless_caked_builder):
-            preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
-                _cached_projector_only
-            )
         provider_before = preflight._run_point_provider_report_only(
             state_path,
             int(background_index),
@@ -1137,11 +1125,6 @@ def run_new4_caked_point_reprojection_check(
     except Exception as exc:
         guard_error = f"{type(exc).__name__}:{exc}"
         context = {}
-    finally:
-        if callable(original_headless_caked_builder):
-            preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
-                original_headless_caked_builder
-            )
     if not bool(context.get("ok", False)):
         full_recake_attempted = int(guard.call_count) > 0
         state_hash_after = _state_sha256(state_path)

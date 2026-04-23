@@ -426,42 +426,22 @@ def test_prepare_geometry_fit_run_caked_pairs_use_existing_exact_projector_no_re
 
     assert result.error_text is None
     assert result.prepared_run is not None
-    assert calls["ensure_caked"] == 0
+    assert calls["ensure_caked"] == 1
     assert result.prepared_run.geometry_runtime_cfg["projection_view_mode"] == "caked"
     assert result.prepared_run.geometry_runtime_cfg["solver"]["dynamic_point_geometry_fit"] is True
 
 
 def test_prepare_geometry_fit_run_caked_pairs_fail_without_exact_projector_no_recake() -> None:
-    calls = {"ensure_caked": 0}
+    calls = {"ensure_caked": 0, "build_dataset": 0}
 
     def _build_dataset(background_index, *, theta_base, base_fit_params, orientation_cfg):
-        del theta_base, base_fit_params, orientation_cfg
-        return {
-            "dataset_index": int(background_index),
-            "label": "bg0.osc",
-            "pair_count": 1,
-            "group_count": 1,
-            "resolved_source_pair_count": 1,
-            "summary_line": "bg[0]",
-            "spec": {
-                "dataset_index": int(background_index),
-                "label": "bg0.osc",
-                "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
-            },
-            "orientation_choice": {"label": "identity"},
-            "orientation_diag": {"pairs": 1},
-            "measured_for_fit": [
-                {
-                    "x": 10.0,
-                    "y": 20.0,
-                    "background_two_theta_deg": 30.0,
-                    "background_phi_deg": -5.0,
-                }
-            ],
-            "experimental_image_for_fit": "image-0",
-            "initial_pairs_display": [],
-            "native_background": np.zeros((2, 2)),
-        }
+        del background_index, theta_base, base_fit_params, orientation_cfg
+        calls["build_dataset"] = int(calls["build_dataset"]) + 1
+        pytest.fail("caked ensure failure must stop before dataset build")
+
+    def _ensure_caked_view() -> None:
+        calls["ensure_caked"] = 1
+        raise RuntimeError("exact_caked_view_unavailable")
 
     result = geometry_fit.prepare_geometry_fit_run(
         params={"theta_initial": 4.0, "theta_offset": 0.0},
@@ -486,19 +466,138 @@ def test_prepare_geometry_fit_run_caked_pairs_fail_without_exact_projector_no_re
                 "background_phi_deg": -5.0,
             }
         ],
-        ensure_geometry_fit_caked_view=lambda: calls.__setitem__("ensure_caked", 1),
+        ensure_geometry_fit_caked_view=_ensure_caked_view,
         build_dataset=_build_dataset,
         build_runtime_config=lambda fit_params: dict(fit_params),
         manual_fit_pick_uses_caked_space=True,
     )
 
     assert result.prepared_run is None
-    assert calls["ensure_caked"] == 0
+    assert calls["ensure_caked"] == 1
+    assert calls["build_dataset"] == 0
     assert result.error_text is not None
-    assert "caked manual Qr/Qz pairs require an exact caked fit-space projector" in (
-        result.error_text
+    assert "exact caked fit-space projector could not be prepared" in result.error_text
+    assert "background 1" in result.error_text
+
+
+def test_prepare_geometry_fit_run_ignores_unselected_caked_pairs_for_gate() -> None:
+    calls = {"ensure_caked": 0, "build_dataset": 0}
+    pairs_by_background = {
+        0: [{"pair_id": "bg0:pair0", "x": 10.0, "y": 20.0}],
+        1: [
+            {
+                "pair_id": "bg1:pair0",
+                "background_two_theta_deg": 30.0,
+                "background_phi_deg": -5.0,
+            }
+        ],
+    }
+
+    def _build_dataset(background_index, *, theta_base, base_fit_params, orientation_cfg):
+        del theta_base, base_fit_params, orientation_cfg
+        calls["build_dataset"] = int(calls["build_dataset"]) + 1
+        return {
+            "dataset_index": int(background_index),
+            "label": "bg0.osc",
+            "pair_count": 1,
+            "group_count": 1,
+            "resolved_source_pair_count": 1,
+            "summary_line": "bg[0]",
+            "spec": {
+                "dataset_index": int(background_index),
+                "label": "bg0.osc",
+            },
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {"pairs": 1},
+            "measured_for_fit": [dict(pairs_by_background[0][0])],
+            "experimental_image_for_fit": "image-0",
+            "initial_pairs_display": [],
+            "native_background": np.zeros((2, 2)),
+        }
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0, "theta_offset": 0.0},
+        var_names=["gamma"],
+        fit_config={},
+        osc_files=["C:/data/bg0.osc", "C:/data/bg1.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [4.0, 5.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: list(pairs_by_background.get(int(idx), [])),
+        ensure_geometry_fit_caked_view=(
+            lambda: calls.__setitem__("ensure_caked", int(calls["ensure_caked"]) + 1)
+        ),
+        build_dataset=_build_dataset,
+        build_runtime_config=lambda fit_params: dict(fit_params),
     )
-    assert "bg0.osc (exact_caked_view_unavailable)" in result.error_text
+
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    assert calls["ensure_caked"] == 0
+    assert calls["build_dataset"] == 1
+
+
+def test_prepare_geometry_fit_run_selected_caked_gate_stops_before_dataset_build() -> None:
+    calls = {"ensure_caked": 0, "build_dataset": 0}
+    pairs_by_background = {
+        0: [
+            {
+                "pair_id": "bg0:pair0",
+                "background_two_theta_deg": 30.0,
+                "background_phi_deg": -5.0,
+            }
+        ],
+        1: [
+            {
+                "pair_id": "bg1:pair0",
+                "background_two_theta_deg": 31.0,
+                "background_phi_deg": -6.0,
+            }
+        ],
+    }
+
+    def _build_dataset(background_index, *, theta_base, base_fit_params, orientation_cfg):
+        del background_index, theta_base, base_fit_params, orientation_cfg
+        calls["build_dataset"] = int(calls["build_dataset"]) + 1
+        pytest.fail("selected caked ensure failure must stop before dataset build")
+
+    def _ensure_caked_view() -> None:
+        calls["ensure_caked"] = 1
+        raise RuntimeError("exact_caked_view_unavailable")
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0, "theta_offset": 0.0},
+        var_names=["gamma"],
+        fit_config={},
+        osc_files=["C:/data/bg0.osc", "C:/data/bg1.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [4.0, 5.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: list(pairs_by_background.get(int(idx), [])),
+        ensure_geometry_fit_caked_view=_ensure_caked_view,
+        build_dataset=_build_dataset,
+        build_runtime_config=lambda fit_params: dict(fit_params),
+    )
+
+    assert result.prepared_run is None
+    assert calls["ensure_caked"] == 1
+    assert calls["build_dataset"] == 0
+    assert result.error_text is not None
+    assert "exact caked fit-space projector could not be prepared" in result.error_text
+    assert "background 1" in result.error_text
+    assert "background 2" in result.error_text
 
 
 def test_prepare_geometry_fit_run_rejects_selection_without_active_background() -> None:
@@ -29932,8 +30031,20 @@ def test_new4_caked_point_reprojection_allows_context_recake_before_point_guard(
         lambda *_args, **_kwargs: dict(provider_report),
     )
 
+    monkeypatch.setattr(
+        module.preflight.hgf,
+        "_build_headless_geometry_fit_caked_view_payload",
+        lambda *_args, **_kwargs: (
+            module.exact_cake_portable.convert_image_to_angle_space() or {"payload": "context"}
+        ),
+    )
+
     def prepare_context_with_allowed_recake(*_args, **_kwargs):
-        module.exact_cake_portable.convert_image_to_angle_space()
+        module.preflight.hgf._build_headless_geometry_fit_caked_view_payload(
+            np.ones((2, 2), dtype=np.float64),
+            params=dict(context.get("params", {})),
+            pixel_size_m=1.0,
+        )
         return dict(context)
 
     monkeypatch.setattr(
