@@ -1,0 +1,60 @@
+{
+  "active_params": [
+    "corto_detector",
+    "theta_initial"
+  ],
+  "base_parameter_values": {
+    "corto_detector": 0.075,
+    "theta_initial": 5.0
+  },
+  "caked_point_reprojection_report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_verify_rungs_1_7_blocks_20260423\\rung_03b_caked_point_reprojection\\rung_03b_caked_point_reprojection.json",
+  "candidate_param_names": [
+    "corto_detector",
+    "theta_initial"
+  ],
+  "effective_var_names_seen_by_solver": [],
+  "elapsed_s": 8.740545900000143,
+  "elapsed_seconds": 8.740545900000143,
+  "failure_reason": "caked_point_reprojection_guard_failed",
+  "finished_at_iso": "2026-04-23T16:36:24.763809Z",
+  "least_squares_called": false,
+  "optimizer_solve_called": false,
+  "pair": [
+    "corto_detector",
+    "theta_initial"
+  ],
+  "pair_guard_failures": [
+    "status_not_pass",
+    "point_count_not_7",
+    "exact_projector_available_not_True",
+    "all_projection_projector_kinds_exact_not_True",
+    "theta_projector_signature_changed_not_True",
+    "distance_projector_signature_changed_not_True",
+    "provider_guard_after_ok_not_True",
+    "manual_caked_residual_row_count_not_positive",
+    "dataset_fit_space_projector_row_count_not_positive",
+    "analytic_detector_fit_space_row_count_not_0",
+    "base_projection_metadata_missing",
+    "theta_projection_metadata_missing",
+    "distance_projection_metadata_missing"
+  ],
+  "pair_name": "corto_detector_theta_initial",
+  "pass": false,
+  "real_solve_called": false,
+  "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_verify_rungs_1_7_blocks_20260423\\rung_04_pair_corto_detector_theta_initial.json",
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_verify_rungs_1_7_blocks_20260423",
+  "run_id": "codex_verify_rungs_1_7_blocks_20260423",
+  "rung": 4,
+  "rung_id": "4",
+  "rung_index": "4",
+  "rung_name": "pair_corto_detector_theta_initial",
+  "started_at_iso": "2026-04-23T16:36:16.023267Z",
+  "state_hash_unchanged": true,
+  "state_sha256_after": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "state_sha256_before": "f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36",
+  "status": "failed",
+  "var_names": [
+    "corto_detector",
+    "theta_initial"
+  ]
+}

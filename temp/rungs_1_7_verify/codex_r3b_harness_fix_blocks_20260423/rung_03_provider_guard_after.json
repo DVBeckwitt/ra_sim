@@ -1,0 +1,2468 @@
+{
+  "all_dataset_surfaces_match_provider_points": true,
+  "all_point_sources_picker_owned": true,
+  "background_index": 0,
+  "background_point_mismatch_count": 0,
+  "branch_mismatch_count": 0,
+  "classification": "point_provider_parity_ok",
+  "dataset_provider_mismatch_count": 0,
+  "distance_mismatch_count": 0,
+  "elapsed_seconds": 0.005345499987015501,
+  "extra_surface_row_count": 0,
+  "fallback_pair_count": 0,
+  "frame_mismatch_count": 0,
+  "headless_preflight_called": false,
+  "initial_pairs_display_count": 7,
+  "initial_pairs_match_provider_points": true,
+  "manual_picker_pair_count": 7,
+  "manual_point_pair_count": 7,
+  "manual_point_pairs_match_provider_points": true,
+  "measured_for_fit_count": 7,
+  "measured_for_fit_match_provider_points": true,
+  "mismatches": [],
+  "missing_pair_count": 0,
+  "missing_surface_row_count": 0,
+  "missing_truth_pair_count": 0,
+  "ok": true,
+  "optimizer_call_count": 0,
+  "optimizer_called": false,
+  "optimizer_entrypoints_called": [],
+  "optimizer_entrypoints_guarded": [],
+  "optimizer_guard_installed": false,
+  "optimizer_path_entered": false,
+  "ordered_pairs_match": true,
+  "pair_count_match": true,
+  "pair_count_mismatch_count": 0,
+  "pairs": [
+    {
+      "background_frame_match": true,
+      "background_point_match": true,
+      "branch_group_key": null,
+      "dataset_background_frame": "display",
+      "dataset_background_point": [
+        1455.246663897277,
+        1472.9363426415914
+      ],
+      "dataset_background_point_source": "manual_picker_saved",
+      "dataset_pair_fingerprint": "dde42819711eb91d77ae8337431ca0de548c7b17eae96660f8d78852f05958ec",
+      "dataset_pair_index": 0,
+      "dataset_point_sources_match_provider": true,
+      "dataset_point_sources_picker_owned": true,
+      "dataset_points_match_provider_points": true,
+      "dataset_simulated_frame": "display",
+      "dataset_simulated_point": [
+        1474.0310239213761,
+        1545.9999590133846
+      ],
+      "dataset_simulated_point_source": "manual_picker_saved",
+      "fallback_reason": null,
+      "initial_pairs_match_provider_points": true,
+      "initial_pairs_point_sources_match_provider": true,
+      "initial_pairs_point_sources_picker_owned": true,
+      "manual_background_frame": "display",
+      "manual_background_point": [
+        1455.246663897277,
+        1472.9363426415914
+      ],
+      "manual_background_point_source": "manual_picker_saved",
+      "manual_pair_order_key": [
+        0,
+        0
+      ],
+      "manual_picker_selected_source_identity_canonical": {
+        "label": "0,0,3",
+        "normalized_hkl": [
+          0,
+          0,
+          3
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          0,
+          3
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_index": 10,
+        "source_reflection_is_full": true,
+        "source_reflection_namespace": "full_reflection",
+        "source_row_index": 24,
+        "source_table_index": 10
+      },
+      "manual_picker_truth_available": true,
+      "manual_point_pairs_match_provider_points": true,
+      "manual_point_pairs_point_sources_match_provider": true,
+      "manual_point_pairs_point_sources_picker_owned": true,
+      "manual_selected_simulated_frame": "display",
+      "manual_selected_simulated_point": [
+        1474.0310239213761,
+        1545.9999590133846
+      ],
+      "manual_selected_to_background_distance_px": 75.43967271164118,
+      "manual_simulated_point_source": "manual_picker_saved",
+      "manual_truth_mutated_by_refresh": false,
+      "measured_for_fit_match_provider_points": true,
+      "measured_for_fit_point_sources_match_provider": true,
+      "measured_for_fit_point_sources_picker_owned": true,
+      "mismatch_reasons": [],
+      "missing_truth_fields": [],
+      "normalized_hkl": [
+        0,
+        0,
+        3
+      ],
+      "pair_index": 0,
+      "parity_mode": "picker_saved_value_preserved",
+      "post_refresh_manual_background_point": null,
+      "post_refresh_manual_simulated_point": null,
+      "pre_refresh_manual_background_point": [
+        1455.246663897277,
+        1472.9363426415914
+      ],
+      "pre_refresh_manual_simulated_point": [
+        1474.0310239213761,
+        1545.9999590133846
+      ],
+      "provider_background_frame": "display",
+      "provider_background_point": [
+        1455.246663897277,
+        1472.9363426415914
+      ],
+      "provider_background_point_source": "manual_picker_saved",
+      "provider_dataset_fingerprint_match": true,
+      "provider_pair_fingerprint": "dde42819711eb91d77ae8337431ca0de548c7b17eae96660f8d78852f05958ec",
+      "provider_pair_index": 0,
+      "provider_point_sources_picker_owned": true,
+      "provider_selected_simulated_frame": "display",
+      "provider_selected_simulated_point": [
+        1474.0310239213761,
+        1545.9999590133846
+      ],
+      "provider_selected_source_identity_canonical": {
+        "label": "0,0,3",
+        "normalized_hkl": [
+          0,
+          0,
+          3
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          0,
+          3
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_index": 10,
+        "source_reflection_is_full": true,
+        "source_reflection_namespace": "full_reflection",
+        "source_row_index": 24,
+        "source_table_index": 10
+      },
+      "provider_selected_to_background_distance_px": 75.43967271164118,
+      "provider_simulated_point_source": "manual_picker_saved",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        0,
+        3
+      ],
+      "rebinding_fallback_used": false,
+      "selected_to_background_distance_match": true,
+      "semantic_pair_key": {
+        "background_index": 0,
+        "normalized_hkl": [
+          0,
+          0,
+          3
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          0,
+          3
+        ],
+        "source_branch_index": 0
+      },
+      "simulated_frame_match": true,
+      "simulated_point_match": true,
+      "source_branch_index": 0,
+      "source_identity_match": true,
+      "source_locator_identity_match": false,
+      "source_q_group_key": [
+        "q_group",
+        "primary",
+        0,
+        3
+      ],
+      "source_semantic_identity_match": false,
+      "spec_measured_peaks_match_provider_points": true,
+      "spec_measured_peaks_point_sources_match_provider": true,
+      "spec_measured_peaks_point_sources_picker_owned": true,
+      "stale_saved_source_identity": null,
+      "stale_source_identity_diagnostic": false
+    },
+    {
+      "background_frame_match": true,
+      "background_point_match": true,
+      "branch_group_key": null,
+      "dataset_background_frame": "display",
+      "dataset_background_point": [
+        1099.4480074178325,
+        1367.2678777680248
+      ],
+      "dataset_background_point_source": "manual_picker_saved",
+      "dataset_pair_fingerprint": "1d92046a02b92b2d79b70a109340f85569dc4b4dfd858bf315bed1af17a3f3ef",
+      "dataset_pair_index": 1,
+      "dataset_point_sources_match_provider": true,
+      "dataset_point_sources_picker_owned": true,
+      "dataset_points_match_provider_points": true,
+      "dataset_simulated_frame": "display",
+      "dataset_simulated_point": [
+        1371.6919259574572,
+        1902.689057235203
+      ],
+      "dataset_simulated_point_source": "manual_picker_saved",
+      "fallback_reason": null,
+      "initial_pairs_match_provider_points": true,
+      "initial_pairs_point_sources_match_provider": true,
+      "initial_pairs_point_sources_picker_owned": true,
+      "manual_background_frame": "display",
+      "manual_background_point": [
+        1099.4480074178325,
+        1367.2678777680248
+      ],
+      "manual_background_point_source": "manual_picker_saved",
+      "manual_pair_order_key": [
+        0,
+        1
+      ],
+      "manual_picker_selected_source_identity_canonical": {
+        "label": "-1,0,5",
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 105
+      },
+      "manual_picker_truth_available": true,
+      "manual_point_pairs_match_provider_points": true,
+      "manual_point_pairs_point_sources_match_provider": true,
+      "manual_point_pairs_point_sources_picker_owned": true,
+      "manual_selected_simulated_frame": "display",
+      "manual_selected_simulated_point": [
+        1371.6919259574572,
+        1902.689057235203
+      ],
+      "manual_selected_to_background_distance_px": 600.6601290279172,
+      "manual_simulated_point_source": "manual_picker_saved",
+      "manual_truth_mutated_by_refresh": false,
+      "measured_for_fit_match_provider_points": true,
+      "measured_for_fit_point_sources_match_provider": true,
+      "measured_for_fit_point_sources_picker_owned": true,
+      "mismatch_reasons": [],
+      "missing_truth_fields": [],
+      "normalized_hkl": [
+        -1,
+        0,
+        5
+      ],
+      "pair_index": 1,
+      "parity_mode": "picker_saved_value_preserved",
+      "post_refresh_manual_background_point": null,
+      "post_refresh_manual_simulated_point": null,
+      "pre_refresh_manual_background_point": [
+        1099.4480074178325,
+        1367.2678777680248
+      ],
+      "pre_refresh_manual_simulated_point": [
+        1371.6919259574572,
+        1902.689057235203
+      ],
+      "provider_background_frame": "display",
+      "provider_background_point": [
+        1099.4480074178325,
+        1367.2678777680248
+      ],
+      "provider_background_point_source": "manual_picker_saved",
+      "provider_dataset_fingerprint_match": true,
+      "provider_pair_fingerprint": "1d92046a02b92b2d79b70a109340f85569dc4b4dfd858bf315bed1af17a3f3ef",
+      "provider_pair_index": 1,
+      "provider_point_sources_picker_owned": true,
+      "provider_selected_simulated_frame": "display",
+      "provider_selected_simulated_point": [
+        1371.6919259574572,
+        1902.689057235203
+      ],
+      "provider_selected_source_identity_canonical": {
+        "label": "-1,0,5",
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 105
+      },
+      "provider_selected_to_background_distance_px": 600.6601290279172,
+      "provider_simulated_point_source": "manual_picker_saved",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "rebinding_fallback_used": false,
+      "selected_to_background_distance_match": true,
+      "semantic_pair_key": {
+        "background_index": 0,
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_branch_index": 0
+      },
+      "simulated_frame_match": true,
+      "simulated_point_match": true,
+      "source_branch_index": 0,
+      "source_identity_match": true,
+      "source_locator_identity_match": false,
+      "source_q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "source_semantic_identity_match": false,
+      "spec_measured_peaks_match_provider_points": true,
+      "spec_measured_peaks_point_sources_match_provider": true,
+      "spec_measured_peaks_point_sources_picker_owned": true,
+      "stale_saved_source_identity": null,
+      "stale_source_identity_diagnostic": false
+    },
+    {
+      "background_frame_match": true,
+      "background_point_match": true,
+      "branch_group_key": null,
+      "dataset_background_frame": "display",
+      "dataset_background_point": [
+        1821.9936837473379,
+        1374.6236621955957
+      ],
+      "dataset_background_point_source": "manual_picker_saved",
+      "dataset_pair_fingerprint": "c80f0cc36f9ac82a14171897f838a3cd1083e36bf030f23effbfed6d834a27a8",
+      "dataset_pair_index": 2,
+      "dataset_point_sources_match_provider": true,
+      "dataset_point_sources_picker_owned": true,
+      "dataset_points_match_provider_points": true,
+      "dataset_simulated_frame": "display",
+      "dataset_simulated_point": [
+        1374.1436080914107,
+        1188.877062574429
+      ],
+      "dataset_simulated_point_source": "manual_picker_saved",
+      "fallback_reason": null,
+      "initial_pairs_match_provider_points": true,
+      "initial_pairs_point_sources_match_provider": true,
+      "initial_pairs_point_sources_picker_owned": true,
+      "manual_background_frame": "display",
+      "manual_background_point": [
+        1821.9936837473379,
+        1374.6236621955957
+      ],
+      "manual_background_point_source": "manual_picker_saved",
+      "manual_pair_order_key": [
+        0,
+        2
+      ],
+      "manual_picker_selected_source_identity_canonical": {
+        "label": "-1,0,5",
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_branch_index": 1,
+        "source_label": "primary",
+        "source_peak_index": 1,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 107
+      },
+      "manual_picker_truth_available": true,
+      "manual_point_pairs_match_provider_points": true,
+      "manual_point_pairs_point_sources_match_provider": true,
+      "manual_point_pairs_point_sources_picker_owned": true,
+      "manual_selected_simulated_frame": "display",
+      "manual_selected_simulated_point": [
+        1374.1436080914107,
+        1188.877062574429
+      ],
+      "manual_selected_to_background_distance_px": 484.8417159608337,
+      "manual_simulated_point_source": "manual_picker_saved",
+      "manual_truth_mutated_by_refresh": false,
+      "measured_for_fit_match_provider_points": true,
+      "measured_for_fit_point_sources_match_provider": true,
+      "measured_for_fit_point_sources_picker_owned": true,
+      "mismatch_reasons": [],
+      "missing_truth_fields": [],
+      "normalized_hkl": [
+        -1,
+        0,
+        5
+      ],
+      "pair_index": 2,
+      "parity_mode": "picker_saved_value_preserved",
+      "post_refresh_manual_background_point": null,
+      "post_refresh_manual_simulated_point": null,
+      "pre_refresh_manual_background_point": [
+        1821.9936837473379,
+        1374.6236621955957
+      ],
+      "pre_refresh_manual_simulated_point": [
+        1374.1436080914107,
+        1188.877062574429
+      ],
+      "provider_background_frame": "display",
+      "provider_background_point": [
+        1821.9936837473379,
+        1374.6236621955957
+      ],
+      "provider_background_point_source": "manual_picker_saved",
+      "provider_dataset_fingerprint_match": true,
+      "provider_pair_fingerprint": "c80f0cc36f9ac82a14171897f838a3cd1083e36bf030f23effbfed6d834a27a8",
+      "provider_pair_index": 2,
+      "provider_point_sources_picker_owned": true,
+      "provider_selected_simulated_frame": "display",
+      "provider_selected_simulated_point": [
+        1374.1436080914107,
+        1188.877062574429
+      ],
+      "provider_selected_source_identity_canonical": {
+        "label": "-1,0,5",
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_branch_index": 1,
+        "source_label": "primary",
+        "source_peak_index": 1,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 107
+      },
+      "provider_selected_to_background_distance_px": 484.8417159608337,
+      "provider_simulated_point_source": "manual_picker_saved",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "rebinding_fallback_used": false,
+      "selected_to_background_distance_match": true,
+      "semantic_pair_key": {
+        "background_index": 0,
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_branch_index": 1
+      },
+      "simulated_frame_match": true,
+      "simulated_point_match": true,
+      "source_branch_index": 1,
+      "source_identity_match": true,
+      "source_locator_identity_match": false,
+      "source_q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "source_semantic_identity_match": false,
+      "spec_measured_peaks_match_provider_points": true,
+      "spec_measured_peaks_point_sources_match_provider": true,
+      "spec_measured_peaks_point_sources_picker_owned": true,
+      "stale_saved_source_identity": null,
+      "stale_source_identity_diagnostic": false
+    },
+    {
+      "background_frame_match": true,
+      "background_point_match": true,
+      "branch_group_key": null,
+      "dataset_background_frame": "display",
+      "dataset_background_point": [
+        1084.7218823668009,
+        1081.4190956439036
+      ],
+      "dataset_background_point_source": "manual_picker_saved",
+      "dataset_pair_fingerprint": "20f6f35bfbf99e16e284261fe5030f6ca37f403eb8febb79530c1da063931318",
+      "dataset_pair_index": 3,
+      "dataset_point_sources_match_provider": true,
+      "dataset_point_sources_picker_owned": true,
+      "dataset_points_match_provider_points": true,
+      "dataset_simulated_frame": "display",
+      "dataset_simulated_point": [
+        1085.9487092625825,
+        1924.1215642301422
+      ],
+      "dataset_simulated_point_source": "manual_picker_saved",
+      "fallback_reason": null,
+      "initial_pairs_match_provider_points": true,
+      "initial_pairs_point_sources_match_provider": true,
+      "initial_pairs_point_sources_picker_owned": true,
+      "manual_background_frame": "display",
+      "manual_background_point": [
+        1084.7218823668009,
+        1081.4190956439036
+      ],
+      "manual_background_point_source": "manual_picker_saved",
+      "manual_pair_order_key": [
+        0,
+        3
+      ],
+      "manual_picker_selected_source_identity_canonical": {
+        "label": "-1,0,10",
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 160
+      },
+      "manual_picker_truth_available": true,
+      "manual_point_pairs_match_provider_points": true,
+      "manual_point_pairs_point_sources_match_provider": true,
+      "manual_point_pairs_point_sources_picker_owned": true,
+      "manual_selected_simulated_frame": "display",
+      "manual_selected_simulated_point": [
+        1085.9487092625825,
+        1924.1215642301422
+      ],
+      "manual_selected_to_background_distance_px": 842.7033616080885,
+      "manual_simulated_point_source": "manual_picker_saved",
+      "manual_truth_mutated_by_refresh": false,
+      "measured_for_fit_match_provider_points": true,
+      "measured_for_fit_point_sources_match_provider": true,
+      "measured_for_fit_point_sources_picker_owned": true,
+      "mismatch_reasons": [],
+      "missing_truth_fields": [],
+      "normalized_hkl": [
+        -1,
+        0,
+        10
+      ],
+      "pair_index": 3,
+      "parity_mode": "picker_saved_value_preserved",
+      "post_refresh_manual_background_point": null,
+      "post_refresh_manual_simulated_point": null,
+      "pre_refresh_manual_background_point": [
+        1084.7218823668009,
+        1081.4190956439036
+      ],
+      "pre_refresh_manual_simulated_point": [
+        1085.9487092625825,
+        1924.1215642301422
+      ],
+      "provider_background_frame": "display",
+      "provider_background_point": [
+        1084.7218823668009,
+        1081.4190956439036
+      ],
+      "provider_background_point_source": "manual_picker_saved",
+      "provider_dataset_fingerprint_match": true,
+      "provider_pair_fingerprint": "20f6f35bfbf99e16e284261fe5030f6ca37f403eb8febb79530c1da063931318",
+      "provider_pair_index": 3,
+      "provider_point_sources_picker_owned": true,
+      "provider_selected_simulated_frame": "display",
+      "provider_selected_simulated_point": [
+        1085.9487092625825,
+        1924.1215642301422
+      ],
+      "provider_selected_source_identity_canonical": {
+        "label": "-1,0,10",
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 160
+      },
+      "provider_selected_to_background_distance_px": 842.7033616080885,
+      "provider_simulated_point_source": "manual_picker_saved",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "rebinding_fallback_used": false,
+      "selected_to_background_distance_match": true,
+      "semantic_pair_key": {
+        "background_index": 0,
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_branch_index": 0
+      },
+      "simulated_frame_match": true,
+      "simulated_point_match": true,
+      "source_branch_index": 0,
+      "source_identity_match": true,
+      "source_locator_identity_match": false,
+      "source_q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "source_semantic_identity_match": false,
+      "spec_measured_peaks_match_provider_points": true,
+      "spec_measured_peaks_point_sources_match_provider": true,
+      "spec_measured_peaks_point_sources_picker_owned": true,
+      "stale_saved_source_identity": null,
+      "stale_source_identity_diagnostic": false
+    },
+    {
+      "background_frame_match": true,
+      "background_point_match": true,
+      "branch_group_key": null,
+      "dataset_background_frame": "display",
+      "dataset_background_point": [
+        1848.0465669515438,
+        1081.8154342999576
+      ],
+      "dataset_background_point_source": "manual_picker_saved",
+      "dataset_pair_fingerprint": "14d36f3b19fd3dd5bbfadfb7e601a0e3be64f583f47d800b7775a7e9c45a32ff",
+      "dataset_pair_index": 4,
+      "dataset_point_sources_match_provider": true,
+      "dataset_point_sources_picker_owned": true,
+      "dataset_points_match_provider_points": true,
+      "dataset_simulated_frame": "display",
+      "dataset_simulated_point": [
+        1083.7327123257794,
+        1164.444900444942
+      ],
+      "dataset_simulated_point_source": "manual_picker_saved",
+      "fallback_reason": null,
+      "initial_pairs_match_provider_points": true,
+      "initial_pairs_point_sources_match_provider": true,
+      "initial_pairs_point_sources_picker_owned": true,
+      "manual_background_frame": "display",
+      "manual_background_point": [
+        1848.0465669515438,
+        1081.8154342999576
+      ],
+      "manual_background_point_source": "manual_picker_saved",
+      "manual_pair_order_key": [
+        0,
+        4
+      ],
+      "manual_picker_selected_source_identity_canonical": {
+        "label": "-1,0,10",
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_branch_index": 1,
+        "source_label": "primary",
+        "source_peak_index": 1,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 167
+      },
+      "manual_picker_truth_available": true,
+      "manual_point_pairs_match_provider_points": true,
+      "manual_point_pairs_point_sources_match_provider": true,
+      "manual_point_pairs_point_sources_picker_owned": true,
+      "manual_selected_simulated_frame": "display",
+      "manual_selected_simulated_point": [
+        1083.7327123257794,
+        1164.444900444942
+      ],
+      "manual_selected_to_background_distance_px": 768.7673881274487,
+      "manual_simulated_point_source": "manual_picker_saved",
+      "manual_truth_mutated_by_refresh": false,
+      "measured_for_fit_match_provider_points": true,
+      "measured_for_fit_point_sources_match_provider": true,
+      "measured_for_fit_point_sources_picker_owned": true,
+      "mismatch_reasons": [],
+      "missing_truth_fields": [],
+      "normalized_hkl": [
+        -1,
+        0,
+        10
+      ],
+      "pair_index": 4,
+      "parity_mode": "picker_saved_value_preserved",
+      "post_refresh_manual_background_point": null,
+      "post_refresh_manual_simulated_point": null,
+      "pre_refresh_manual_background_point": [
+        1848.0465669515438,
+        1081.8154342999576
+      ],
+      "pre_refresh_manual_simulated_point": [
+        1083.7327123257794,
+        1164.444900444942
+      ],
+      "provider_background_frame": "display",
+      "provider_background_point": [
+        1848.0465669515438,
+        1081.8154342999576
+      ],
+      "provider_background_point_source": "manual_picker_saved",
+      "provider_dataset_fingerprint_match": true,
+      "provider_pair_fingerprint": "14d36f3b19fd3dd5bbfadfb7e601a0e3be64f583f47d800b7775a7e9c45a32ff",
+      "provider_pair_index": 4,
+      "provider_point_sources_picker_owned": true,
+      "provider_selected_simulated_frame": "display",
+      "provider_selected_simulated_point": [
+        1083.7327123257794,
+        1164.444900444942
+      ],
+      "provider_selected_source_identity_canonical": {
+        "label": "-1,0,10",
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_branch_index": 1,
+        "source_label": "primary",
+        "source_peak_index": 1,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 167
+      },
+      "provider_selected_to_background_distance_px": 768.7673881274487,
+      "provider_simulated_point_source": "manual_picker_saved",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "rebinding_fallback_used": false,
+      "selected_to_background_distance_match": true,
+      "semantic_pair_key": {
+        "background_index": 0,
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_branch_index": 1
+      },
+      "simulated_frame_match": true,
+      "simulated_point_match": true,
+      "source_branch_index": 1,
+      "source_identity_match": true,
+      "source_locator_identity_match": false,
+      "source_q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "source_semantic_identity_match": false,
+      "spec_measured_peaks_match_provider_points": true,
+      "spec_measured_peaks_point_sources_match_provider": true,
+      "spec_measured_peaks_point_sources_picker_owned": true,
+      "stale_saved_source_identity": null,
+      "stale_source_identity_diagnostic": false
+    },
+    {
+      "background_frame_match": true,
+      "background_point_match": true,
+      "branch_group_key": null,
+      "dataset_background_frame": "display",
+      "dataset_background_point": [
+        1211.4533088564194,
+        434.5785917171996
+      ],
+      "dataset_background_point_source": "manual_picker_saved",
+      "dataset_pair_fingerprint": "f2443c6a4fbd0b9ca56e5518369f8f9a1503d870334c073b572c6bd58fc4b889",
+      "dataset_pair_index": 5,
+      "dataset_point_sources_match_provider": true,
+      "dataset_point_sources_picker_owned": true,
+      "dataset_points_match_provider_points": true,
+      "dataset_simulated_frame": "display",
+      "dataset_simulated_point": [
+        461.6461295062367,
+        1802.7784013786472
+      ],
+      "dataset_simulated_point_source": "manual_picker_saved",
+      "fallback_reason": null,
+      "initial_pairs_match_provider_points": true,
+      "initial_pairs_point_sources_match_provider": true,
+      "initial_pairs_point_sources_picker_owned": true,
+      "manual_background_frame": "display",
+      "manual_background_point": [
+        1211.4533088564194,
+        434.5785917171996
+      ],
+      "manual_background_point_source": "manual_picker_saved",
+      "manual_pair_order_key": [
+        0,
+        5
+      ],
+      "manual_picker_selected_source_identity_canonical": {
+        "label": "-1,0,16",
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 215
+      },
+      "manual_picker_truth_available": true,
+      "manual_point_pairs_match_provider_points": true,
+      "manual_point_pairs_point_sources_match_provider": true,
+      "manual_point_pairs_point_sources_picker_owned": true,
+      "manual_selected_simulated_frame": "display",
+      "manual_selected_simulated_point": [
+        461.6461295062367,
+        1802.7784013786472
+      ],
+      "manual_selected_to_background_distance_px": 1560.1863752009563,
+      "manual_simulated_point_source": "manual_picker_saved",
+      "manual_truth_mutated_by_refresh": false,
+      "measured_for_fit_match_provider_points": true,
+      "measured_for_fit_point_sources_match_provider": true,
+      "measured_for_fit_point_sources_picker_owned": true,
+      "mismatch_reasons": [],
+      "missing_truth_fields": [],
+      "normalized_hkl": [
+        -1,
+        0,
+        16
+      ],
+      "pair_index": 5,
+      "parity_mode": "picker_saved_value_preserved",
+      "post_refresh_manual_background_point": null,
+      "post_refresh_manual_simulated_point": null,
+      "pre_refresh_manual_background_point": [
+        1211.4533088564194,
+        434.5785917171996
+      ],
+      "pre_refresh_manual_simulated_point": [
+        461.6461295062367,
+        1802.7784013786472
+      ],
+      "provider_background_frame": "display",
+      "provider_background_point": [
+        1211.4533088564194,
+        434.5785917171996
+      ],
+      "provider_background_point_source": "manual_picker_saved",
+      "provider_dataset_fingerprint_match": true,
+      "provider_pair_fingerprint": "f2443c6a4fbd0b9ca56e5518369f8f9a1503d870334c073b572c6bd58fc4b889",
+      "provider_pair_index": 5,
+      "provider_point_sources_picker_owned": true,
+      "provider_selected_simulated_frame": "display",
+      "provider_selected_simulated_point": [
+        461.6461295062367,
+        1802.7784013786472
+      ],
+      "provider_selected_source_identity_canonical": {
+        "label": "-1,0,16",
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_branch_index": 0,
+        "source_label": "primary",
+        "source_peak_index": 0,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 215
+      },
+      "provider_selected_to_background_distance_px": 1560.1863752009563,
+      "provider_simulated_point_source": "manual_picker_saved",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "rebinding_fallback_used": false,
+      "selected_to_background_distance_match": true,
+      "semantic_pair_key": {
+        "background_index": 0,
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_branch_index": 0
+      },
+      "simulated_frame_match": true,
+      "simulated_point_match": true,
+      "source_branch_index": 0,
+      "source_identity_match": true,
+      "source_locator_identity_match": false,
+      "source_q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "source_semantic_identity_match": false,
+      "spec_measured_peaks_match_provider_points": true,
+      "spec_measured_peaks_point_sources_match_provider": true,
+      "spec_measured_peaks_point_sources_picker_owned": true,
+      "stale_saved_source_identity": null,
+      "stale_source_identity_diagnostic": false
+    },
+    {
+      "background_frame_match": true,
+      "background_point_match": true,
+      "branch_group_key": null,
+      "dataset_background_frame": "display",
+      "dataset_background_point": [
+        1738.867290909798,
+        424.4430928190797
+      ],
+      "dataset_background_point_source": "manual_picker_saved",
+      "dataset_pair_fingerprint": "26ffbe8c39f4eae93505c95b849e5948c9f2c46c6e04dd12de11124e47df51b9",
+      "dataset_pair_index": 6,
+      "dataset_point_sources_match_provider": true,
+      "dataset_point_sources_picker_owned": true,
+      "dataset_points_match_provider_points": true,
+      "dataset_simulated_frame": "display",
+      "dataset_simulated_point": [
+        460.5644301688071,
+        1303.5754002437886
+      ],
+      "dataset_simulated_point_source": "manual_picker_saved",
+      "fallback_reason": null,
+      "initial_pairs_match_provider_points": true,
+      "initial_pairs_point_sources_match_provider": true,
+      "initial_pairs_point_sources_picker_owned": true,
+      "manual_background_frame": "display",
+      "manual_background_point": [
+        1738.867290909798,
+        424.4430928190797
+      ],
+      "manual_background_point_source": "manual_picker_saved",
+      "manual_pair_order_key": [
+        0,
+        6
+      ],
+      "manual_picker_selected_source_identity_canonical": {
+        "label": "-1,0,16",
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_branch_index": 1,
+        "source_label": "primary",
+        "source_peak_index": 1,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 213
+      },
+      "manual_picker_truth_available": true,
+      "manual_point_pairs_match_provider_points": true,
+      "manual_point_pairs_point_sources_match_provider": true,
+      "manual_point_pairs_point_sources_picker_owned": true,
+      "manual_selected_simulated_frame": "display",
+      "manual_selected_simulated_point": [
+        460.5644301688071,
+        1303.5754002437886
+      ],
+      "manual_selected_to_background_distance_px": 1551.4289599387057,
+      "manual_simulated_point_source": "manual_picker_saved",
+      "manual_truth_mutated_by_refresh": false,
+      "measured_for_fit_match_provider_points": true,
+      "measured_for_fit_point_sources_match_provider": true,
+      "measured_for_fit_point_sources_picker_owned": true,
+      "mismatch_reasons": [],
+      "missing_truth_fields": [],
+      "normalized_hkl": [
+        -1,
+        0,
+        16
+      ],
+      "pair_index": 6,
+      "parity_mode": "picker_saved_value_preserved",
+      "post_refresh_manual_background_point": null,
+      "post_refresh_manual_simulated_point": null,
+      "pre_refresh_manual_background_point": [
+        1738.867290909798,
+        424.4430928190797
+      ],
+      "pre_refresh_manual_simulated_point": [
+        460.5644301688071,
+        1303.5754002437886
+      ],
+      "provider_background_frame": "display",
+      "provider_background_point": [
+        1738.867290909798,
+        424.4430928190797
+      ],
+      "provider_background_point_source": "manual_picker_saved",
+      "provider_dataset_fingerprint_match": true,
+      "provider_pair_fingerprint": "26ffbe8c39f4eae93505c95b849e5948c9f2c46c6e04dd12de11124e47df51b9",
+      "provider_pair_index": 6,
+      "provider_point_sources_picker_owned": true,
+      "provider_selected_simulated_frame": "display",
+      "provider_selected_simulated_point": [
+        460.5644301688071,
+        1303.5754002437886
+      ],
+      "provider_selected_source_identity_canonical": {
+        "label": "-1,0,16",
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_branch_index": 1,
+        "source_label": "primary",
+        "source_peak_index": 1,
+        "source_reflection_is_full": false,
+        "source_row_index": 24,
+        "source_table_index": 213
+      },
+      "provider_selected_to_background_distance_px": 1551.4289599387057,
+      "provider_simulated_point_source": "manual_picker_saved",
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "rebinding_fallback_used": false,
+      "selected_to_background_distance_match": true,
+      "semantic_pair_key": {
+        "background_index": 0,
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_branch_index": 1
+      },
+      "simulated_frame_match": true,
+      "simulated_point_match": true,
+      "source_branch_index": 1,
+      "source_identity_match": true,
+      "source_locator_identity_match": false,
+      "source_q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "source_semantic_identity_match": false,
+      "spec_measured_peaks_match_provider_points": true,
+      "spec_measured_peaks_point_sources_match_provider": true,
+      "spec_measured_peaks_point_sources_picker_owned": true,
+      "stale_saved_source_identity": null,
+      "stale_source_identity_diagnostic": false
+    }
+  ],
+  "point_provider_pair_count": 7,
+  "point_provider_parity_gate": {
+    "ok": true,
+    "reason_codes": []
+  },
+  "point_provider_report": {
+    "all_dataset_surfaces_match_provider_points": true,
+    "all_point_sources_picker_owned": true,
+    "background_index": 0,
+    "background_point_mismatch_count": 0,
+    "branch_mismatch_count": 0,
+    "dataset_provider_mismatch_count": 0,
+    "distance_mismatch_count": 0,
+    "extra_surface_row_count": 0,
+    "fallback_pair_count": 0,
+    "frame_mismatch_count": 0,
+    "initial_pairs_display_count": 7,
+    "initial_pairs_match_provider_points": true,
+    "manual_picker_pair_count": 7,
+    "manual_point_pair_count": 7,
+    "manual_point_pairs_match_provider_points": true,
+    "measured_for_fit_count": 7,
+    "measured_for_fit_match_provider_points": true,
+    "mismatches": [],
+    "missing_pair_count": 0,
+    "missing_surface_row_count": 0,
+    "missing_truth_pair_count": 0,
+    "ok": true,
+    "optimizer_call_count": 0,
+    "optimizer_called": false,
+    "optimizer_entrypoints_called": [],
+    "optimizer_entrypoints_guarded": [],
+    "optimizer_guard_installed": false,
+    "optimizer_path_entered": false,
+    "ordered_pairs_match": true,
+    "pair_count_match": true,
+    "pair_count_mismatch_count": 0,
+    "pairs": [
+      {
+        "background_frame_match": true,
+        "background_point_match": true,
+        "branch_group_key": null,
+        "dataset_background_frame": "display",
+        "dataset_background_point": [
+          1455.246663897277,
+          1472.9363426415914
+        ],
+        "dataset_background_point_source": "manual_picker_saved",
+        "dataset_pair_fingerprint": "dde42819711eb91d77ae8337431ca0de548c7b17eae96660f8d78852f05958ec",
+        "dataset_pair_index": 0,
+        "dataset_point_sources_match_provider": true,
+        "dataset_point_sources_picker_owned": true,
+        "dataset_points_match_provider_points": true,
+        "dataset_simulated_frame": "display",
+        "dataset_simulated_point": [
+          1474.0310239213761,
+          1545.9999590133846
+        ],
+        "dataset_simulated_point_source": "manual_picker_saved",
+        "fallback_reason": null,
+        "initial_pairs_match_provider_points": true,
+        "initial_pairs_point_sources_match_provider": true,
+        "initial_pairs_point_sources_picker_owned": true,
+        "manual_background_frame": "display",
+        "manual_background_point": [
+          1455.246663897277,
+          1472.9363426415914
+        ],
+        "manual_background_point_source": "manual_picker_saved",
+        "manual_pair_order_key": [
+          0,
+          0
+        ],
+        "manual_picker_selected_source_identity_canonical": {
+          "label": "0,0,3",
+          "normalized_hkl": [
+            0,
+            0,
+            3
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            0,
+            3
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_index": 10,
+          "source_reflection_is_full": true,
+          "source_reflection_namespace": "full_reflection",
+          "source_row_index": 24,
+          "source_table_index": 10
+        },
+        "manual_picker_truth_available": true,
+        "manual_point_pairs_match_provider_points": true,
+        "manual_point_pairs_point_sources_match_provider": true,
+        "manual_point_pairs_point_sources_picker_owned": true,
+        "manual_selected_simulated_frame": "display",
+        "manual_selected_simulated_point": [
+          1474.0310239213761,
+          1545.9999590133846
+        ],
+        "manual_selected_to_background_distance_px": 75.43967271164118,
+        "manual_simulated_point_source": "manual_picker_saved",
+        "manual_truth_mutated_by_refresh": false,
+        "measured_for_fit_match_provider_points": true,
+        "measured_for_fit_point_sources_match_provider": true,
+        "measured_for_fit_point_sources_picker_owned": true,
+        "mismatch_reasons": [],
+        "missing_truth_fields": [],
+        "normalized_hkl": [
+          0,
+          0,
+          3
+        ],
+        "pair_index": 0,
+        "parity_mode": "picker_saved_value_preserved",
+        "post_refresh_manual_background_point": null,
+        "post_refresh_manual_simulated_point": null,
+        "pre_refresh_manual_background_point": [
+          1455.246663897277,
+          1472.9363426415914
+        ],
+        "pre_refresh_manual_simulated_point": [
+          1474.0310239213761,
+          1545.9999590133846
+        ],
+        "provider_background_frame": "display",
+        "provider_background_point": [
+          1455.246663897277,
+          1472.9363426415914
+        ],
+        "provider_background_point_source": "manual_picker_saved",
+        "provider_dataset_fingerprint_match": true,
+        "provider_pair_fingerprint": "dde42819711eb91d77ae8337431ca0de548c7b17eae96660f8d78852f05958ec",
+        "provider_pair_index": 0,
+        "provider_point_sources_picker_owned": true,
+        "provider_selected_simulated_frame": "display",
+        "provider_selected_simulated_point": [
+          1474.0310239213761,
+          1545.9999590133846
+        ],
+        "provider_selected_source_identity_canonical": {
+          "label": "0,0,3",
+          "normalized_hkl": [
+            0,
+            0,
+            3
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            0,
+            3
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_index": 10,
+          "source_reflection_is_full": true,
+          "source_reflection_namespace": "full_reflection",
+          "source_row_index": 24,
+          "source_table_index": 10
+        },
+        "provider_selected_to_background_distance_px": 75.43967271164118,
+        "provider_simulated_point_source": "manual_picker_saved",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          0,
+          3
+        ],
+        "rebinding_fallback_used": false,
+        "selected_to_background_distance_match": true,
+        "semantic_pair_key": {
+          "background_index": 0,
+          "normalized_hkl": [
+            0,
+            0,
+            3
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            0,
+            3
+          ],
+          "source_branch_index": 0
+        },
+        "simulated_frame_match": true,
+        "simulated_point_match": true,
+        "source_branch_index": 0,
+        "source_identity_match": true,
+        "source_locator_identity_match": false,
+        "source_q_group_key": [
+          "q_group",
+          "primary",
+          0,
+          3
+        ],
+        "source_semantic_identity_match": false,
+        "spec_measured_peaks_match_provider_points": true,
+        "spec_measured_peaks_point_sources_match_provider": true,
+        "spec_measured_peaks_point_sources_picker_owned": true,
+        "stale_saved_source_identity": null,
+        "stale_source_identity_diagnostic": false
+      },
+      {
+        "background_frame_match": true,
+        "background_point_match": true,
+        "branch_group_key": null,
+        "dataset_background_frame": "display",
+        "dataset_background_point": [
+          1099.4480074178325,
+          1367.2678777680248
+        ],
+        "dataset_background_point_source": "manual_picker_saved",
+        "dataset_pair_fingerprint": "1d92046a02b92b2d79b70a109340f85569dc4b4dfd858bf315bed1af17a3f3ef",
+        "dataset_pair_index": 1,
+        "dataset_point_sources_match_provider": true,
+        "dataset_point_sources_picker_owned": true,
+        "dataset_points_match_provider_points": true,
+        "dataset_simulated_frame": "display",
+        "dataset_simulated_point": [
+          1371.6919259574572,
+          1902.689057235203
+        ],
+        "dataset_simulated_point_source": "manual_picker_saved",
+        "fallback_reason": null,
+        "initial_pairs_match_provider_points": true,
+        "initial_pairs_point_sources_match_provider": true,
+        "initial_pairs_point_sources_picker_owned": true,
+        "manual_background_frame": "display",
+        "manual_background_point": [
+          1099.4480074178325,
+          1367.2678777680248
+        ],
+        "manual_background_point_source": "manual_picker_saved",
+        "manual_pair_order_key": [
+          0,
+          1
+        ],
+        "manual_picker_selected_source_identity_canonical": {
+          "label": "-1,0,5",
+          "normalized_hkl": [
+            -1,
+            0,
+            5
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            5
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 105
+        },
+        "manual_picker_truth_available": true,
+        "manual_point_pairs_match_provider_points": true,
+        "manual_point_pairs_point_sources_match_provider": true,
+        "manual_point_pairs_point_sources_picker_owned": true,
+        "manual_selected_simulated_frame": "display",
+        "manual_selected_simulated_point": [
+          1371.6919259574572,
+          1902.689057235203
+        ],
+        "manual_selected_to_background_distance_px": 600.6601290279172,
+        "manual_simulated_point_source": "manual_picker_saved",
+        "manual_truth_mutated_by_refresh": false,
+        "measured_for_fit_match_provider_points": true,
+        "measured_for_fit_point_sources_match_provider": true,
+        "measured_for_fit_point_sources_picker_owned": true,
+        "mismatch_reasons": [],
+        "missing_truth_fields": [],
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "pair_index": 1,
+        "parity_mode": "picker_saved_value_preserved",
+        "post_refresh_manual_background_point": null,
+        "post_refresh_manual_simulated_point": null,
+        "pre_refresh_manual_background_point": [
+          1099.4480074178325,
+          1367.2678777680248
+        ],
+        "pre_refresh_manual_simulated_point": [
+          1371.6919259574572,
+          1902.689057235203
+        ],
+        "provider_background_frame": "display",
+        "provider_background_point": [
+          1099.4480074178325,
+          1367.2678777680248
+        ],
+        "provider_background_point_source": "manual_picker_saved",
+        "provider_dataset_fingerprint_match": true,
+        "provider_pair_fingerprint": "1d92046a02b92b2d79b70a109340f85569dc4b4dfd858bf315bed1af17a3f3ef",
+        "provider_pair_index": 1,
+        "provider_point_sources_picker_owned": true,
+        "provider_selected_simulated_frame": "display",
+        "provider_selected_simulated_point": [
+          1371.6919259574572,
+          1902.689057235203
+        ],
+        "provider_selected_source_identity_canonical": {
+          "label": "-1,0,5",
+          "normalized_hkl": [
+            -1,
+            0,
+            5
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            5
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 105
+        },
+        "provider_selected_to_background_distance_px": 600.6601290279172,
+        "provider_simulated_point_source": "manual_picker_saved",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "rebinding_fallback_used": false,
+        "selected_to_background_distance_match": true,
+        "semantic_pair_key": {
+          "background_index": 0,
+          "normalized_hkl": [
+            -1,
+            0,
+            5
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            5
+          ],
+          "source_branch_index": 0
+        },
+        "simulated_frame_match": true,
+        "simulated_point_match": true,
+        "source_branch_index": 0,
+        "source_identity_match": true,
+        "source_locator_identity_match": false,
+        "source_q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_semantic_identity_match": false,
+        "spec_measured_peaks_match_provider_points": true,
+        "spec_measured_peaks_point_sources_match_provider": true,
+        "spec_measured_peaks_point_sources_picker_owned": true,
+        "stale_saved_source_identity": null,
+        "stale_source_identity_diagnostic": false
+      },
+      {
+        "background_frame_match": true,
+        "background_point_match": true,
+        "branch_group_key": null,
+        "dataset_background_frame": "display",
+        "dataset_background_point": [
+          1821.9936837473379,
+          1374.6236621955957
+        ],
+        "dataset_background_point_source": "manual_picker_saved",
+        "dataset_pair_fingerprint": "c80f0cc36f9ac82a14171897f838a3cd1083e36bf030f23effbfed6d834a27a8",
+        "dataset_pair_index": 2,
+        "dataset_point_sources_match_provider": true,
+        "dataset_point_sources_picker_owned": true,
+        "dataset_points_match_provider_points": true,
+        "dataset_simulated_frame": "display",
+        "dataset_simulated_point": [
+          1374.1436080914107,
+          1188.877062574429
+        ],
+        "dataset_simulated_point_source": "manual_picker_saved",
+        "fallback_reason": null,
+        "initial_pairs_match_provider_points": true,
+        "initial_pairs_point_sources_match_provider": true,
+        "initial_pairs_point_sources_picker_owned": true,
+        "manual_background_frame": "display",
+        "manual_background_point": [
+          1821.9936837473379,
+          1374.6236621955957
+        ],
+        "manual_background_point_source": "manual_picker_saved",
+        "manual_pair_order_key": [
+          0,
+          2
+        ],
+        "manual_picker_selected_source_identity_canonical": {
+          "label": "-1,0,5",
+          "normalized_hkl": [
+            -1,
+            0,
+            5
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            5
+          ],
+          "source_branch_index": 1,
+          "source_label": "primary",
+          "source_peak_index": 1,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 107
+        },
+        "manual_picker_truth_available": true,
+        "manual_point_pairs_match_provider_points": true,
+        "manual_point_pairs_point_sources_match_provider": true,
+        "manual_point_pairs_point_sources_picker_owned": true,
+        "manual_selected_simulated_frame": "display",
+        "manual_selected_simulated_point": [
+          1374.1436080914107,
+          1188.877062574429
+        ],
+        "manual_selected_to_background_distance_px": 484.8417159608337,
+        "manual_simulated_point_source": "manual_picker_saved",
+        "manual_truth_mutated_by_refresh": false,
+        "measured_for_fit_match_provider_points": true,
+        "measured_for_fit_point_sources_match_provider": true,
+        "measured_for_fit_point_sources_picker_owned": true,
+        "mismatch_reasons": [],
+        "missing_truth_fields": [],
+        "normalized_hkl": [
+          -1,
+          0,
+          5
+        ],
+        "pair_index": 2,
+        "parity_mode": "picker_saved_value_preserved",
+        "post_refresh_manual_background_point": null,
+        "post_refresh_manual_simulated_point": null,
+        "pre_refresh_manual_background_point": [
+          1821.9936837473379,
+          1374.6236621955957
+        ],
+        "pre_refresh_manual_simulated_point": [
+          1374.1436080914107,
+          1188.877062574429
+        ],
+        "provider_background_frame": "display",
+        "provider_background_point": [
+          1821.9936837473379,
+          1374.6236621955957
+        ],
+        "provider_background_point_source": "manual_picker_saved",
+        "provider_dataset_fingerprint_match": true,
+        "provider_pair_fingerprint": "c80f0cc36f9ac82a14171897f838a3cd1083e36bf030f23effbfed6d834a27a8",
+        "provider_pair_index": 2,
+        "provider_point_sources_picker_owned": true,
+        "provider_selected_simulated_frame": "display",
+        "provider_selected_simulated_point": [
+          1374.1436080914107,
+          1188.877062574429
+        ],
+        "provider_selected_source_identity_canonical": {
+          "label": "-1,0,5",
+          "normalized_hkl": [
+            -1,
+            0,
+            5
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            5
+          ],
+          "source_branch_index": 1,
+          "source_label": "primary",
+          "source_peak_index": 1,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 107
+        },
+        "provider_selected_to_background_distance_px": 484.8417159608337,
+        "provider_simulated_point_source": "manual_picker_saved",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "rebinding_fallback_used": false,
+        "selected_to_background_distance_match": true,
+        "semantic_pair_key": {
+          "background_index": 0,
+          "normalized_hkl": [
+            -1,
+            0,
+            5
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            5
+          ],
+          "source_branch_index": 1
+        },
+        "simulated_frame_match": true,
+        "simulated_point_match": true,
+        "source_branch_index": 1,
+        "source_identity_match": true,
+        "source_locator_identity_match": false,
+        "source_q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "source_semantic_identity_match": false,
+        "spec_measured_peaks_match_provider_points": true,
+        "spec_measured_peaks_point_sources_match_provider": true,
+        "spec_measured_peaks_point_sources_picker_owned": true,
+        "stale_saved_source_identity": null,
+        "stale_source_identity_diagnostic": false
+      },
+      {
+        "background_frame_match": true,
+        "background_point_match": true,
+        "branch_group_key": null,
+        "dataset_background_frame": "display",
+        "dataset_background_point": [
+          1084.7218823668009,
+          1081.4190956439036
+        ],
+        "dataset_background_point_source": "manual_picker_saved",
+        "dataset_pair_fingerprint": "20f6f35bfbf99e16e284261fe5030f6ca37f403eb8febb79530c1da063931318",
+        "dataset_pair_index": 3,
+        "dataset_point_sources_match_provider": true,
+        "dataset_point_sources_picker_owned": true,
+        "dataset_points_match_provider_points": true,
+        "dataset_simulated_frame": "display",
+        "dataset_simulated_point": [
+          1085.9487092625825,
+          1924.1215642301422
+        ],
+        "dataset_simulated_point_source": "manual_picker_saved",
+        "fallback_reason": null,
+        "initial_pairs_match_provider_points": true,
+        "initial_pairs_point_sources_match_provider": true,
+        "initial_pairs_point_sources_picker_owned": true,
+        "manual_background_frame": "display",
+        "manual_background_point": [
+          1084.7218823668009,
+          1081.4190956439036
+        ],
+        "manual_background_point_source": "manual_picker_saved",
+        "manual_pair_order_key": [
+          0,
+          3
+        ],
+        "manual_picker_selected_source_identity_canonical": {
+          "label": "-1,0,10",
+          "normalized_hkl": [
+            -1,
+            0,
+            10
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            10
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 160
+        },
+        "manual_picker_truth_available": true,
+        "manual_point_pairs_match_provider_points": true,
+        "manual_point_pairs_point_sources_match_provider": true,
+        "manual_point_pairs_point_sources_picker_owned": true,
+        "manual_selected_simulated_frame": "display",
+        "manual_selected_simulated_point": [
+          1085.9487092625825,
+          1924.1215642301422
+        ],
+        "manual_selected_to_background_distance_px": 842.7033616080885,
+        "manual_simulated_point_source": "manual_picker_saved",
+        "manual_truth_mutated_by_refresh": false,
+        "measured_for_fit_match_provider_points": true,
+        "measured_for_fit_point_sources_match_provider": true,
+        "measured_for_fit_point_sources_picker_owned": true,
+        "mismatch_reasons": [],
+        "missing_truth_fields": [],
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "pair_index": 3,
+        "parity_mode": "picker_saved_value_preserved",
+        "post_refresh_manual_background_point": null,
+        "post_refresh_manual_simulated_point": null,
+        "pre_refresh_manual_background_point": [
+          1084.7218823668009,
+          1081.4190956439036
+        ],
+        "pre_refresh_manual_simulated_point": [
+          1085.9487092625825,
+          1924.1215642301422
+        ],
+        "provider_background_frame": "display",
+        "provider_background_point": [
+          1084.7218823668009,
+          1081.4190956439036
+        ],
+        "provider_background_point_source": "manual_picker_saved",
+        "provider_dataset_fingerprint_match": true,
+        "provider_pair_fingerprint": "20f6f35bfbf99e16e284261fe5030f6ca37f403eb8febb79530c1da063931318",
+        "provider_pair_index": 3,
+        "provider_point_sources_picker_owned": true,
+        "provider_selected_simulated_frame": "display",
+        "provider_selected_simulated_point": [
+          1085.9487092625825,
+          1924.1215642301422
+        ],
+        "provider_selected_source_identity_canonical": {
+          "label": "-1,0,10",
+          "normalized_hkl": [
+            -1,
+            0,
+            10
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            10
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 160
+        },
+        "provider_selected_to_background_distance_px": 842.7033616080885,
+        "provider_simulated_point_source": "manual_picker_saved",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "rebinding_fallback_used": false,
+        "selected_to_background_distance_match": true,
+        "semantic_pair_key": {
+          "background_index": 0,
+          "normalized_hkl": [
+            -1,
+            0,
+            10
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            10
+          ],
+          "source_branch_index": 0
+        },
+        "simulated_frame_match": true,
+        "simulated_point_match": true,
+        "source_branch_index": 0,
+        "source_identity_match": true,
+        "source_locator_identity_match": false,
+        "source_q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_semantic_identity_match": false,
+        "spec_measured_peaks_match_provider_points": true,
+        "spec_measured_peaks_point_sources_match_provider": true,
+        "spec_measured_peaks_point_sources_picker_owned": true,
+        "stale_saved_source_identity": null,
+        "stale_source_identity_diagnostic": false
+      },
+      {
+        "background_frame_match": true,
+        "background_point_match": true,
+        "branch_group_key": null,
+        "dataset_background_frame": "display",
+        "dataset_background_point": [
+          1848.0465669515438,
+          1081.8154342999576
+        ],
+        "dataset_background_point_source": "manual_picker_saved",
+        "dataset_pair_fingerprint": "14d36f3b19fd3dd5bbfadfb7e601a0e3be64f583f47d800b7775a7e9c45a32ff",
+        "dataset_pair_index": 4,
+        "dataset_point_sources_match_provider": true,
+        "dataset_point_sources_picker_owned": true,
+        "dataset_points_match_provider_points": true,
+        "dataset_simulated_frame": "display",
+        "dataset_simulated_point": [
+          1083.7327123257794,
+          1164.444900444942
+        ],
+        "dataset_simulated_point_source": "manual_picker_saved",
+        "fallback_reason": null,
+        "initial_pairs_match_provider_points": true,
+        "initial_pairs_point_sources_match_provider": true,
+        "initial_pairs_point_sources_picker_owned": true,
+        "manual_background_frame": "display",
+        "manual_background_point": [
+          1848.0465669515438,
+          1081.8154342999576
+        ],
+        "manual_background_point_source": "manual_picker_saved",
+        "manual_pair_order_key": [
+          0,
+          4
+        ],
+        "manual_picker_selected_source_identity_canonical": {
+          "label": "-1,0,10",
+          "normalized_hkl": [
+            -1,
+            0,
+            10
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            10
+          ],
+          "source_branch_index": 1,
+          "source_label": "primary",
+          "source_peak_index": 1,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 167
+        },
+        "manual_picker_truth_available": true,
+        "manual_point_pairs_match_provider_points": true,
+        "manual_point_pairs_point_sources_match_provider": true,
+        "manual_point_pairs_point_sources_picker_owned": true,
+        "manual_selected_simulated_frame": "display",
+        "manual_selected_simulated_point": [
+          1083.7327123257794,
+          1164.444900444942
+        ],
+        "manual_selected_to_background_distance_px": 768.7673881274487,
+        "manual_simulated_point_source": "manual_picker_saved",
+        "manual_truth_mutated_by_refresh": false,
+        "measured_for_fit_match_provider_points": true,
+        "measured_for_fit_point_sources_match_provider": true,
+        "measured_for_fit_point_sources_picker_owned": true,
+        "mismatch_reasons": [],
+        "missing_truth_fields": [],
+        "normalized_hkl": [
+          -1,
+          0,
+          10
+        ],
+        "pair_index": 4,
+        "parity_mode": "picker_saved_value_preserved",
+        "post_refresh_manual_background_point": null,
+        "post_refresh_manual_simulated_point": null,
+        "pre_refresh_manual_background_point": [
+          1848.0465669515438,
+          1081.8154342999576
+        ],
+        "pre_refresh_manual_simulated_point": [
+          1083.7327123257794,
+          1164.444900444942
+        ],
+        "provider_background_frame": "display",
+        "provider_background_point": [
+          1848.0465669515438,
+          1081.8154342999576
+        ],
+        "provider_background_point_source": "manual_picker_saved",
+        "provider_dataset_fingerprint_match": true,
+        "provider_pair_fingerprint": "14d36f3b19fd3dd5bbfadfb7e601a0e3be64f583f47d800b7775a7e9c45a32ff",
+        "provider_pair_index": 4,
+        "provider_point_sources_picker_owned": true,
+        "provider_selected_simulated_frame": "display",
+        "provider_selected_simulated_point": [
+          1083.7327123257794,
+          1164.444900444942
+        ],
+        "provider_selected_source_identity_canonical": {
+          "label": "-1,0,10",
+          "normalized_hkl": [
+            -1,
+            0,
+            10
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            10
+          ],
+          "source_branch_index": 1,
+          "source_label": "primary",
+          "source_peak_index": 1,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 167
+        },
+        "provider_selected_to_background_distance_px": 768.7673881274487,
+        "provider_simulated_point_source": "manual_picker_saved",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "rebinding_fallback_used": false,
+        "selected_to_background_distance_match": true,
+        "semantic_pair_key": {
+          "background_index": 0,
+          "normalized_hkl": [
+            -1,
+            0,
+            10
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            10
+          ],
+          "source_branch_index": 1
+        },
+        "simulated_frame_match": true,
+        "simulated_point_match": true,
+        "source_branch_index": 1,
+        "source_identity_match": true,
+        "source_locator_identity_match": false,
+        "source_q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "source_semantic_identity_match": false,
+        "spec_measured_peaks_match_provider_points": true,
+        "spec_measured_peaks_point_sources_match_provider": true,
+        "spec_measured_peaks_point_sources_picker_owned": true,
+        "stale_saved_source_identity": null,
+        "stale_source_identity_diagnostic": false
+      },
+      {
+        "background_frame_match": true,
+        "background_point_match": true,
+        "branch_group_key": null,
+        "dataset_background_frame": "display",
+        "dataset_background_point": [
+          1211.4533088564194,
+          434.5785917171996
+        ],
+        "dataset_background_point_source": "manual_picker_saved",
+        "dataset_pair_fingerprint": "f2443c6a4fbd0b9ca56e5518369f8f9a1503d870334c073b572c6bd58fc4b889",
+        "dataset_pair_index": 5,
+        "dataset_point_sources_match_provider": true,
+        "dataset_point_sources_picker_owned": true,
+        "dataset_points_match_provider_points": true,
+        "dataset_simulated_frame": "display",
+        "dataset_simulated_point": [
+          461.6461295062367,
+          1802.7784013786472
+        ],
+        "dataset_simulated_point_source": "manual_picker_saved",
+        "fallback_reason": null,
+        "initial_pairs_match_provider_points": true,
+        "initial_pairs_point_sources_match_provider": true,
+        "initial_pairs_point_sources_picker_owned": true,
+        "manual_background_frame": "display",
+        "manual_background_point": [
+          1211.4533088564194,
+          434.5785917171996
+        ],
+        "manual_background_point_source": "manual_picker_saved",
+        "manual_pair_order_key": [
+          0,
+          5
+        ],
+        "manual_picker_selected_source_identity_canonical": {
+          "label": "-1,0,16",
+          "normalized_hkl": [
+            -1,
+            0,
+            16
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            16
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 215
+        },
+        "manual_picker_truth_available": true,
+        "manual_point_pairs_match_provider_points": true,
+        "manual_point_pairs_point_sources_match_provider": true,
+        "manual_point_pairs_point_sources_picker_owned": true,
+        "manual_selected_simulated_frame": "display",
+        "manual_selected_simulated_point": [
+          461.6461295062367,
+          1802.7784013786472
+        ],
+        "manual_selected_to_background_distance_px": 1560.1863752009563,
+        "manual_simulated_point_source": "manual_picker_saved",
+        "manual_truth_mutated_by_refresh": false,
+        "measured_for_fit_match_provider_points": true,
+        "measured_for_fit_point_sources_match_provider": true,
+        "measured_for_fit_point_sources_picker_owned": true,
+        "mismatch_reasons": [],
+        "missing_truth_fields": [],
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "pair_index": 5,
+        "parity_mode": "picker_saved_value_preserved",
+        "post_refresh_manual_background_point": null,
+        "post_refresh_manual_simulated_point": null,
+        "pre_refresh_manual_background_point": [
+          1211.4533088564194,
+          434.5785917171996
+        ],
+        "pre_refresh_manual_simulated_point": [
+          461.6461295062367,
+          1802.7784013786472
+        ],
+        "provider_background_frame": "display",
+        "provider_background_point": [
+          1211.4533088564194,
+          434.5785917171996
+        ],
+        "provider_background_point_source": "manual_picker_saved",
+        "provider_dataset_fingerprint_match": true,
+        "provider_pair_fingerprint": "f2443c6a4fbd0b9ca56e5518369f8f9a1503d870334c073b572c6bd58fc4b889",
+        "provider_pair_index": 5,
+        "provider_point_sources_picker_owned": true,
+        "provider_selected_simulated_frame": "display",
+        "provider_selected_simulated_point": [
+          461.6461295062367,
+          1802.7784013786472
+        ],
+        "provider_selected_source_identity_canonical": {
+          "label": "-1,0,16",
+          "normalized_hkl": [
+            -1,
+            0,
+            16
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            16
+          ],
+          "source_branch_index": 0,
+          "source_label": "primary",
+          "source_peak_index": 0,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 215
+        },
+        "provider_selected_to_background_distance_px": 1560.1863752009563,
+        "provider_simulated_point_source": "manual_picker_saved",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "rebinding_fallback_used": false,
+        "selected_to_background_distance_match": true,
+        "semantic_pair_key": {
+          "background_index": 0,
+          "normalized_hkl": [
+            -1,
+            0,
+            16
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            16
+          ],
+          "source_branch_index": 0
+        },
+        "simulated_frame_match": true,
+        "simulated_point_match": true,
+        "source_branch_index": 0,
+        "source_identity_match": true,
+        "source_locator_identity_match": false,
+        "source_q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_semantic_identity_match": false,
+        "spec_measured_peaks_match_provider_points": true,
+        "spec_measured_peaks_point_sources_match_provider": true,
+        "spec_measured_peaks_point_sources_picker_owned": true,
+        "stale_saved_source_identity": null,
+        "stale_source_identity_diagnostic": false
+      },
+      {
+        "background_frame_match": true,
+        "background_point_match": true,
+        "branch_group_key": null,
+        "dataset_background_frame": "display",
+        "dataset_background_point": [
+          1738.867290909798,
+          424.4430928190797
+        ],
+        "dataset_background_point_source": "manual_picker_saved",
+        "dataset_pair_fingerprint": "26ffbe8c39f4eae93505c95b849e5948c9f2c46c6e04dd12de11124e47df51b9",
+        "dataset_pair_index": 6,
+        "dataset_point_sources_match_provider": true,
+        "dataset_point_sources_picker_owned": true,
+        "dataset_points_match_provider_points": true,
+        "dataset_simulated_frame": "display",
+        "dataset_simulated_point": [
+          460.5644301688071,
+          1303.5754002437886
+        ],
+        "dataset_simulated_point_source": "manual_picker_saved",
+        "fallback_reason": null,
+        "initial_pairs_match_provider_points": true,
+        "initial_pairs_point_sources_match_provider": true,
+        "initial_pairs_point_sources_picker_owned": true,
+        "manual_background_frame": "display",
+        "manual_background_point": [
+          1738.867290909798,
+          424.4430928190797
+        ],
+        "manual_background_point_source": "manual_picker_saved",
+        "manual_pair_order_key": [
+          0,
+          6
+        ],
+        "manual_picker_selected_source_identity_canonical": {
+          "label": "-1,0,16",
+          "normalized_hkl": [
+            -1,
+            0,
+            16
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            16
+          ],
+          "source_branch_index": 1,
+          "source_label": "primary",
+          "source_peak_index": 1,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 213
+        },
+        "manual_picker_truth_available": true,
+        "manual_point_pairs_match_provider_points": true,
+        "manual_point_pairs_point_sources_match_provider": true,
+        "manual_point_pairs_point_sources_picker_owned": true,
+        "manual_selected_simulated_frame": "display",
+        "manual_selected_simulated_point": [
+          460.5644301688071,
+          1303.5754002437886
+        ],
+        "manual_selected_to_background_distance_px": 1551.4289599387057,
+        "manual_simulated_point_source": "manual_picker_saved",
+        "manual_truth_mutated_by_refresh": false,
+        "measured_for_fit_match_provider_points": true,
+        "measured_for_fit_point_sources_match_provider": true,
+        "measured_for_fit_point_sources_picker_owned": true,
+        "mismatch_reasons": [],
+        "missing_truth_fields": [],
+        "normalized_hkl": [
+          -1,
+          0,
+          16
+        ],
+        "pair_index": 6,
+        "parity_mode": "picker_saved_value_preserved",
+        "post_refresh_manual_background_point": null,
+        "post_refresh_manual_simulated_point": null,
+        "pre_refresh_manual_background_point": [
+          1738.867290909798,
+          424.4430928190797
+        ],
+        "pre_refresh_manual_simulated_point": [
+          460.5644301688071,
+          1303.5754002437886
+        ],
+        "provider_background_frame": "display",
+        "provider_background_point": [
+          1738.867290909798,
+          424.4430928190797
+        ],
+        "provider_background_point_source": "manual_picker_saved",
+        "provider_dataset_fingerprint_match": true,
+        "provider_pair_fingerprint": "26ffbe8c39f4eae93505c95b849e5948c9f2c46c6e04dd12de11124e47df51b9",
+        "provider_pair_index": 6,
+        "provider_point_sources_picker_owned": true,
+        "provider_selected_simulated_frame": "display",
+        "provider_selected_simulated_point": [
+          460.5644301688071,
+          1303.5754002437886
+        ],
+        "provider_selected_source_identity_canonical": {
+          "label": "-1,0,16",
+          "normalized_hkl": [
+            -1,
+            0,
+            16
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            16
+          ],
+          "source_branch_index": 1,
+          "source_label": "primary",
+          "source_peak_index": 1,
+          "source_reflection_is_full": false,
+          "source_row_index": 24,
+          "source_table_index": 213
+        },
+        "provider_selected_to_background_distance_px": 1551.4289599387057,
+        "provider_simulated_point_source": "manual_picker_saved",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "rebinding_fallback_used": false,
+        "selected_to_background_distance_match": true,
+        "semantic_pair_key": {
+          "background_index": 0,
+          "normalized_hkl": [
+            -1,
+            0,
+            16
+          ],
+          "q_group_key": [
+            "q_group",
+            "primary",
+            1,
+            16
+          ],
+          "source_branch_index": 1
+        },
+        "simulated_frame_match": true,
+        "simulated_point_match": true,
+        "source_branch_index": 1,
+        "source_identity_match": true,
+        "source_locator_identity_match": false,
+        "source_q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "source_semantic_identity_match": false,
+        "spec_measured_peaks_match_provider_points": true,
+        "spec_measured_peaks_point_sources_match_provider": true,
+        "spec_measured_peaks_point_sources_picker_owned": true,
+        "stale_saved_source_identity": null,
+        "stale_source_identity_diagnostic": false
+      }
+    ],
+    "point_provider_pair_count": 7,
+    "point_provider_parity_gate": {
+      "ok": true,
+      "reason_codes": []
+    },
+    "provider_dataset_fingerprint_match": true,
+    "recomputed_refinement_tolerance_px": 0.001,
+    "simulated_point_mismatch_count": 0,
+    "source_identity_mismatch_count": 0,
+    "spec_measured_peaks_count": 7,
+    "spec_measured_peaks_match_provider_points": true,
+    "stored_point_abs_tolerance_px": 1e-06,
+    "surface_pair_count_match": true,
+    "surface_pair_count_mismatch_count": 0,
+    "targeted_preflight_gate": {
+      "ok": false,
+      "unrelated_projected_row_count_for_rebinding": 0,
+      "unrelated_scored_row_count_for_rebinding": 0
+    },
+    "unordered_pairs_match": true
+  },
+  "point_provider_report_only": true,
+  "provider_dataset_fingerprint_match": true,
+  "provider_guard_failures": [],
+  "provider_guard_ok": true,
+  "provider_only_saved_state_dataset": true,
+  "recomputed_refinement_tolerance_px": 0.001,
+  "rung": 0,
+  "rung_name": "provider_guard",
+  "saved_pair_count": 7,
+  "simulated_point_mismatch_count": 0,
+  "source_identity_mismatch_count": 0,
+  "spec_measured_peaks_count": 7,
+  "spec_measured_peaks_match_provider_points": true,
+  "state_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_gui_states\\new4.json",
+  "status": "pass",
+  "stored_point_abs_tolerance_px": 1e-06,
+  "surface_pair_count_match": true,
+  "surface_pair_count_mismatch_count": 0,
+  "targeted_preflight_gate": {
+    "ok": false,
+    "unrelated_projected_row_count_for_rebinding": 0,
+    "unrelated_scored_row_count_for_rebinding": 0
+  },
+  "unordered_pairs_match": true
+}

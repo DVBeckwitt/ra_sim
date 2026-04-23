@@ -1,0 +1,249 @@
+{
+  "completed_rung_count": 29,
+  "finished_at_iso": "2026-04-23T17:20:52.685992Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423",
+  "run_id": "codex_exact_caked_preflight_blocks_20260423",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.0074115000024903566,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 1.1931030999985524,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 16.10380530000839,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.408788100001402,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_a.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_a",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.098113400003058,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_c.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_c",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.2625050000060583,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_center_x.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_center_x",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 5.356176300003426,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_center_y.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_center_y",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.6105211000103736,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_chi.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_chi",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 5.146663199993782,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_cor_angle.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.576273099999526,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_corto_detector.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_corto_detector",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.593189399995026,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_psi_z.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 47.90064619999612,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_summary.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_summary",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.501662800001213,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_theta_initial.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_theta_initial",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.4132911000051536,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_zb.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.352852700001677,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03_one_param_zs.json",
+      "rung_id": "3",
+      "rung_index": "3",
+      "rung_name": "one_param_zs",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 5.454052799992496,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_03b_caked_point_reprojection\\rung_03b_caked_point_reprojection.json",
+      "rung_id": "3B",
+      "rung_index": "3B",
+      "rung_name": "caked_point_reprojection",
+      "status": "skip"
+    },
+    {
+      "elapsed_s": 4.974071899996488,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_a_c.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_a_c",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.176547199997003,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_a_psi_z.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_a_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.75824530000682,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_c_psi_z.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_c_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 4.629641999999876,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_chi_cor_angle.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_chi_cor_angle",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 10.089154699991923,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_corto_detector_theta_initial.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_corto_detector_theta_initial",
+      "status": "failed"
+    },
+    {
+      "elapsed_s": 24.665491799998563,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_summary.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_summary",
+      "status": "ok_with_failures"
+    },
+    {
+      "elapsed_s": 10.085045399988303,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_theta_initial_cor_angle.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_theta_initial_cor_angle",
+      "status": "failed"
+    },
+    {
+      "elapsed_s": 6.449235399995814,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_04_pair_zs_zb.json",
+      "rung_id": "4",
+      "rung_index": "4",
+      "rung_name": "pair_zs_zb",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 3.385465400002431,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_05_block_a_c_psi_z.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_a_c_psi_z",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.0015952999965520576,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_05_block_chi_cor_angle_theta_initial.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_chi_cor_angle_theta_initial",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 0.0018848000036086887,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_05_block_corto_detector_theta_initial_cor_angle.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_corto_detector_theta_initial_cor_angle",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 0.001523099999758415,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_05_block_corto_detector_theta_initial_zs_zb.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_corto_detector_theta_initial_zs_zb",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 3.4184506999881705,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_exact_caked_preflight_blocks_20260423\\rung_05_block_summary.json",
+      "rung_id": "5",
+      "rung_index": "5",
+      "rung_name": "block_summary",
+      "status": "ok"
+    }
+  ],
+  "slowest_rung": "one_param_summary",
+  "slowest_rung_elapsed_s": 47.90064619999612,
+  "started_at_iso": "2026-04-23T17:18:37.535516Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 135.15048360000947
+}

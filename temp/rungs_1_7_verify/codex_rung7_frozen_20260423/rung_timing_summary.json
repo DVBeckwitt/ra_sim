@@ -1,0 +1,89 @@
+{
+  "completed_rung_count": 9,
+  "finished_at_iso": "2026-04-23T19:30:06.816044Z",
+  "missing_expected_rungs": [],
+  "run_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423",
+  "run_id": "codex_rung7_frozen_20260423",
+  "rung_timings": [
+    {
+      "elapsed_s": 0.006050600000889972,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_00_provider_guard.json",
+      "rung_id": "0",
+      "rung_index": "0",
+      "rung_name": "provider_guard",
+      "status": "pass"
+    },
+    {
+      "elapsed_s": 1.3739624000008916,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_01_objective_dry_run.json",
+      "rung_id": "1",
+      "rung_index": "1",
+      "rung_name": "objective_dry_run",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 17.244914800001425,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_02_sensitivity_scan.json",
+      "rung_id": "2",
+      "rung_index": "2",
+      "rung_name": "sensitivity_scan",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 10.78659719999996,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_07_feature_discrete_modes.json",
+      "rung_id": "7",
+      "rung_index": "7",
+      "rung_name": "feature_discrete_modes",
+      "status": "failed"
+    },
+    {
+      "elapsed_s": 10.749431700009154,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_07_feature_dynamic_reanchor.json",
+      "rung_id": "7",
+      "rung_index": "7",
+      "rung_name": "feature_dynamic_reanchor",
+      "status": "ok"
+    },
+    {
+      "elapsed_s": 0.001407199990353547,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_07_feature_full_beam_polish.json",
+      "rung_id": "7",
+      "rung_index": "7",
+      "rung_name": "feature_full_beam_polish",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 0.001597299997229129,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_07_feature_identifiability_features.json",
+      "rung_id": "7",
+      "rung_index": "7",
+      "rung_name": "feature_identifiability_features",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 0.0016819000011309981,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_07_feature_seed_multistart.json",
+      "rung_id": "7",
+      "rung_index": "7",
+      "rung_name": "feature_seed_multistart",
+      "status": "skipped"
+    },
+    {
+      "elapsed_s": 0.0,
+      "report_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\temp\\rungs_1_7_verify\\codex_rung7_frozen_20260423\\rung_07_feature_summary.json",
+      "rung_id": "7",
+      "rung_index": "7",
+      "rung_name": "feature_summary",
+      "status": "ok_with_failures"
+    }
+  ],
+  "slowest_rung": "sensitivity_scan",
+  "slowest_rung_elapsed_s": 17.244914800001425,
+  "started_at_iso": "2026-04-23T19:28:43.793744Z",
+  "timing_collection_mode": "current_run",
+  "timing_threshold_exceeded_rungs": [],
+  "timing_threshold_max_s": null,
+  "timing_threshold_status": "not_configured",
+  "total_elapsed_s": 83.02231250000477
+}
