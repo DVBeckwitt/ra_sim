@@ -4157,6 +4157,78 @@ def test_refresh_geometry_manual_pair_entry_sim_replay_recomputes_stale_anchor_o
     assert refreshed_again["sim_detector_display_row"] == -6.0
 
 
+def test_refresh_geometry_manual_pair_entry_sim_replay_drops_stale_saved_display_aliases_without_current_detector_display_projection() -> None:
+    saved_entry = {
+        "label": "3,0,4",
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "sim_native_x": 3.0,
+        "sim_native_y": 4.0,
+        "sim_detector_anchor_x": 3.0,
+        "sim_detector_anchor_y": 4.0,
+        "x": 901.0,
+        "y": 902.0,
+        "display_col": 903.0,
+        "display_row": 904.0,
+        "sim_col_raw": 905.0,
+        "sim_row_raw": 906.0,
+        "sim_col": 907.0,
+        "sim_row": 908.0,
+    }
+    projected_sim_entry = {
+        "_caked_qr_projection_cache": True,
+        "label": "3,0,4",
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "caked_x": 23.0,
+        "caked_y": -26.0,
+        "two_theta_deg": 23.0,
+        "phi_deg": -26.0,
+    }
+
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        saved_entry,
+        background_display_shape=(),
+        background_display_to_native_detector_coords=None,
+        caked_angles_to_background_display_coords=None,
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 20.0,
+            float(row) - 30.0,
+        ),
+        native_detector_coords_to_detector_display_coords=None,
+        current_projected_sim_entry=projected_sim_entry,
+    )
+
+    assert refreshed is not None
+    assert refreshed["detector_x"] == 3.0
+    assert refreshed["detector_y"] == 4.0
+    assert refreshed["sim_detector_anchor_x"] == 3.0
+    assert refreshed["sim_detector_anchor_y"] == 4.0
+    assert refreshed["sim_detector_frame_provenance"] == "sim_reverse_lut_replay_cache"
+    assert "x" not in refreshed
+    assert "y" not in refreshed
+    assert "display_col" not in refreshed
+    assert "display_row" not in refreshed
+    assert "sim_col_raw" not in refreshed
+    assert "sim_row_raw" not in refreshed
+    assert "sim_col" not in refreshed
+    assert "sim_row" not in refreshed
+    assert "sim_detector_display_col" not in refreshed
+    assert "sim_detector_display_row" not in refreshed
+
+
 def test_caked_background_branch_association_uses_refined_peak_before_save() -> None:
     group_key = ("q_group", "primary", 1, 0)
     branch_zero = {
@@ -13685,6 +13757,72 @@ def test_project_peaks_to_current_view_detector_replay_recomputes_stale_display_
     assert projected_entry["display_row"] == 4.0
     assert projected_entry["sim_col_raw"] == 3.0
     assert projected_entry["sim_row_raw"] == 4.0
+
+
+def test_project_peaks_to_current_view_detector_replay_drops_stale_display_cache_without_detector_display_callback(
+    monkeypatch,
+) -> None:
+    reverse_calls: list[tuple[float, float]] = []
+
+    def _reverse_lut(two_theta_deg, phi_deg, **_kwargs):
+        reverse_calls.append((float(two_theta_deg), float(phi_deg)))
+        return float(two_theta_deg) - 20.0, float(phi_deg) + 30.0
+
+    monkeypatch.setattr(mg, "caked_angles_to_background_display_coords", _reverse_lut)
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([-30.0, -26.0, 0.0, 23.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([-30.0, -26.0, 0.0, 23.0], dtype=float),
+        current_background_display=lambda: np.zeros((256, 256), dtype=float),
+        current_background_native=lambda: np.zeros((256, 256), dtype=float),
+        image_size=64,
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 1000.0,
+            float(row) + 1000.0,
+        ),
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 20.0,
+            float(row) - 30.0,
+        ),
+        display_rotate_k=1,
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "label": "-3,0,4",
+                "q_group_key": ("q_group", "primary", 3, 4),
+                "branch_id": "-x",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "source_reflection_index": 17,
+                "source_branch_index": 1,
+                "source_ray_id": "minus-ray",
+                "coordinate_frame": "simulation_native",
+                "refined_sim_native_x": 3.0,
+                "refined_sim_native_y": 4.0,
+                "sim_detector_anchor_x": 3.0,
+                "sim_detector_anchor_y": 4.0,
+                "sim_detector_display_col": 903.0,
+                "sim_detector_display_row": 904.0,
+                "sim_detector_frame_provenance": "stale-display-cache",
+            }
+        ]
+    )
+
+    assert reverse_calls == []
+    assert len(projected) == 1
+    projected_entry = projected[0]
+    assert projected_entry["sim_detector_anchor_x"] == 3.0
+    assert projected_entry["sim_detector_anchor_y"] == 4.0
+    assert "sim_detector_display_col" not in projected_entry
+    assert "sim_detector_display_row" not in projected_entry
+    assert projected_entry["display_col"] == 251.0
+    assert projected_entry["display_row"] == 3.0
+    assert projected_entry["sim_col_raw"] == 251.0
+    assert projected_entry["sim_row_raw"] == 3.0
 
 
 def test_geometry_manual_session_initial_pairs_display_uses_projected_caked_live_row() -> None:

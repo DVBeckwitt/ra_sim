@@ -38,6 +38,9 @@ What changed:
   point and refreshed once when needed;
 - stale replay detector display cache is recomputed from the anchor/current
   detector display transform instead of being trusted blindly;
+- replay helper no longer preserves stale saved detector display aliases when
+  only a valid replay anchor is available and no current detector-display
+  projection can be built;
 - initial saved detector overlay now prefers source identity plus current caked
   projection replay over conflicting detector lookup rows;
 - background replay path was left separate.
@@ -48,6 +51,8 @@ Bug/error status:
   detector projection;
 - adjacent replay regressions found in review were patched in the same blast
   zone;
+- helper-level stale-display regressions and initial-build detector-lookup
+  conflicts are covered in targeted tests;
 - validation is still pending.
 
 Feature status:

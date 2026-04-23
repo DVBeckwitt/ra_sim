@@ -612,6 +612,9 @@ def refresh_geometry_manual_pair_entry(
             raw_detector_display = cached_sim_display
             if display_point is None:
                 display_point = cached_sim_display
+        else:
+            raw_detector_display = None
+            display_point = None
     elif caked_background_is_authoritative:
         detector_point = _finite_pair(
             "background_detector_x",
@@ -839,8 +842,19 @@ def refresh_geometry_manual_pair_entry(
             normalized["sim_detector_display_col"] = float(display_point[0])
             normalized["sim_detector_display_row"] = float(display_point[1])
     elif sim_detector_replay is not None:
-        normalized.pop("sim_detector_display_col", None)
-        normalized.pop("sim_detector_display_row", None)
+        for stale_key in (
+            "x",
+            "y",
+            "display_col",
+            "display_row",
+            "sim_col_raw",
+            "sim_row_raw",
+            "sim_col",
+            "sim_row",
+            "sim_detector_display_col",
+            "sim_detector_display_row",
+        ):
+            normalized.pop(stale_key, None)
 
     recomputed_caked = None
     if callable(native_detector_coords_to_caked_display_coords):
