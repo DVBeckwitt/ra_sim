@@ -44,9 +44,7 @@ EXPECTED_FIT_SPACE_PROJECTOR_KIND = "exact_caked_bundle"
 
 def _is_stale_caked_field(key: object) -> bool:
     key_text = str(key)
-    return key_text in STALE_CAKED_FIELD_NAMES or key_text.startswith(
-        "refined_sim_caked_"
-    )
+    return key_text in STALE_CAKED_FIELD_NAMES or key_text.startswith("refined_sim_caked_")
 
 
 class StaleAliasAccessGuard:
@@ -269,9 +267,7 @@ def _selected_points_from_context(
                 ),
                 "detector_point": detector_point,
                 "detector_point_frame": frame,
-                "stale_caked_fields_present": any(
-                    _is_stale_caked_field(key) for key in entry
-                ),
+                "stale_caked_fields_present": any(_is_stale_caked_field(key) for key in entry),
             }
         )
     return selected
@@ -614,7 +610,9 @@ def _active_theta_param_name(params: Mapping[str, object]) -> str:
     return "theta_initial"
 
 
-def _bounds_for_param(context: Mapping[str, object], param_name: str) -> tuple[float | None, float | None]:
+def _bounds_for_param(
+    context: Mapping[str, object], param_name: str
+) -> tuple[float | None, float | None]:
     candidates: list[object] = []
     cfg = context.get("geometry_runtime_cfg")
     if isinstance(cfg, Mapping):
@@ -706,7 +704,9 @@ def _wrapped_phi_delta(phi_a: float, phi_b: float) -> float:
     return float((float(phi_b) - float(phi_a) + 180.0) % 360.0 - 180.0)
 
 
-def _shift_stats(base: np.ndarray, changed: np.ndarray) -> tuple[list[float], float | None, float | None, float | None]:
+def _shift_stats(
+    base: np.ndarray, changed: np.ndarray
+) -> tuple[list[float], float | None, float | None, float | None]:
     if base.shape != changed.shape or base.size <= 0:
         return [], None, None, None
     shifts: list[float] = []
@@ -906,9 +906,7 @@ def run_caked_point_reprojection_probe_from_context(
         base_point = base_points[index].tolist() if index < len(base_points) else [None, None]
         theta_point = theta_points[index].tolist() if index < len(theta_points) else [None, None]
         distance_point = (
-            distance_points[index].tolist()
-            if index < len(distance_points)
-            else [None, None]
+            distance_points[index].tolist() if index < len(distance_points) else [None, None]
         )
         theta_delta_pair = [None, None]
         distance_delta_pair = [None, None]
@@ -1015,9 +1013,7 @@ def run_caked_point_reprojection_probe_from_context(
         "all_projection_outputs_valid": all_projection_outputs_valid,
         "all_exact_projector_used": all_exact_projector_used,
         "all_projection_projector_kinds_exact": all_projection_projector_kinds_exact,
-        "manual_caked_residual_row_count": (
-            int(len(selected)) if exact_projector_available else 0
-        ),
+        "manual_caked_residual_row_count": (int(len(selected)) if exact_projector_available else 0),
         "dataset_fit_space_projector_row_count": (
             int(len(selected)) if all_projection_projector_kinds_exact else 0
         ),
@@ -1052,7 +1048,9 @@ def run_caked_point_reprojection_probe_from_context(
                 "projection_input_frame": _projection_input_frame(distance_projection),
                 "caked_projection_source": _projection_source(distance_projection),
                 "fit_space_projector_kind": _projection_kind(distance_projection),
-                "exact_projector_used": bool(distance_projection.get("exact_projector_used", False)),
+                "exact_projector_used": bool(
+                    distance_projection.get("exact_projector_used", False)
+                ),
                 "valid": bool(distance_projection.get("valid", False)),
             },
         },
@@ -1126,25 +1124,24 @@ def run_new4_caked_point_reprojection_check(
     def _cached_projector_only(*_args: object, **_kwargs: object) -> None:
         return None
 
-    with guard:
-        try:
-            if callable(original_headless_caked_builder):
-                preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
-                    _cached_projector_only
-                )
-            provider_before = preflight._run_point_provider_report_only(
-                state_path,
-                int(background_index),
+    try:
+        if callable(original_headless_caked_builder):
+            preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
+                _cached_projector_only
             )
-            context = preflight._prepare_validation_context(state_path, int(background_index))
-        except Exception as exc:
-            guard_error = f"{type(exc).__name__}:{exc}"
-            context = {}
-        finally:
-            if callable(original_headless_caked_builder):
-                preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
-                    original_headless_caked_builder
-                )
+        provider_before = preflight._run_point_provider_report_only(
+            state_path,
+            int(background_index),
+        )
+        context = preflight._prepare_validation_context(state_path, int(background_index))
+    except Exception as exc:
+        guard_error = f"{type(exc).__name__}:{exc}"
+        context = {}
+    finally:
+        if callable(original_headless_caked_builder):
+            preflight.hgf._build_headless_geometry_fit_caked_view_payload = (  # type: ignore[attr-defined]
+                original_headless_caked_builder
+            )
     if not bool(context.get("ok", False)):
         full_recake_attempted = int(guard.call_count) > 0
         state_hash_after = _state_sha256(state_path)

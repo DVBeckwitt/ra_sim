@@ -21845,7 +21845,7 @@ def test_manual_fit_space_classification_scopes_caked_pairs_to_background() -> N
     assert fit_spaces == {0: "detector"}
 
 
-def test_manual_picker_truth_pairs_prefer_caked_anchors_over_detector_points() -> None:
+def test_manual_picker_truth_pairs_keep_detector_anchors_over_caked_aliases() -> None:
     truth_pairs = manual_geometry.build_geometry_manual_picker_truth_pairs(
         0,
         [
@@ -21868,17 +21868,17 @@ def test_manual_picker_truth_pairs_prefer_caked_anchors_over_detector_points() -
         ],
     )
 
-    assert truth_pairs[0]["manual_background_frame"] == "caked_2theta_phi"
+    assert truth_pairs[0]["manual_background_frame"] == "display"
     assert truth_pairs[0]["manual_background_point"] == [
-        40.85301991187549,
-        -37.56585507558714,
+        1083.7344,
+        1152.3796,
     ]
-    assert truth_pairs[0]["manual_selected_simulated_frame"] == "caked_2theta_phi"
+    assert truth_pairs[0]["manual_selected_simulated_frame"] == "display"
     assert truth_pairs[0]["manual_selected_simulated_point"] == [
-        40.42724742532755,
-        -36.71166362847427,
+        1083.7327,
+        1164.4449,
     ]
-    assert truth_pairs[0]["manual_selected_to_background_distance_px"] < 1.0
+    assert truth_pairs[0]["manual_selected_to_background_distance_px"] > 12.0
 
 
 def _assert_targeted_preflight_filters_required_groups_only() -> None:

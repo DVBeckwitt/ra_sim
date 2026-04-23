@@ -432,6 +432,7 @@ def _enrich_manual_overlay_identity(
     saved_entries: Sequence[Mapping[str, object]],
     *,
     background_index: int,
+    use_caked_display: bool = False,
 ) -> list[dict[str, object]]:
     enriched_rows: list[dict[str, object]] = []
     saved = [dict(entry) for entry in saved_entries if isinstance(entry, Mapping)]
@@ -460,7 +461,9 @@ def _enrich_manual_overlay_identity(
         ):
             if row.get(key) is None and source.get(key) is not None:
                 row[key] = source.get(key)
-        if geometry_fit.geometry_manual_pairs_use_caked_fit_space([source]):
+        if bool(use_caked_display) and geometry_fit.geometry_manual_pairs_use_caked_fit_space(
+            [source]
+        ):
             row["background_frame"] = "caked_2theta_phi"
             row["simulated_frame"] = "caked_2theta_phi"
         row["visual_overlay_input_source"] = "manual_geometry.render_current_geometry_manual_pairs"
@@ -472,16 +475,61 @@ def capture_manual_geometry_overlay_input_from_render_path(
     saved_entries: Sequence[Mapping[str, object]] | None,
     *,
     background_index: int,
+    use_caked_display: bool | None = None,
 ) -> dict[str, object]:
     """Capture the exact overlay input handed to the real manual render path."""
 
     saved = [dict(entry) for entry in saved_entries or () if isinstance(entry, Mapping)]
     captured_rows: list[dict[str, object]] | None = None
     captured_marker_limit: int | None = None
-    use_caked_display = geometry_fit.geometry_manual_pairs_use_caked_fit_space(saved)
+    use_caked_display = bool(use_caked_display) if use_caked_display is not None else False
 
     def _pairs_for_index(index: int) -> list[dict[str, object]]:
         return [dict(entry) for entry in saved] if int(index) == int(background_index) else []
+
+    saved_projection_rows = {
+        key: dict(entry)
+        for entry in saved
+        if (
+            key := manual_geometry._geometry_manual_caked_qr_projection_key(entry)  # noqa: SLF001
+        )
+        is not None
+    }
+
+    def _project_saved_rows_for_manual_render(
+        rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        projected_rows: list[dict[str, object]] = []
+        for raw_row in rows or ():
+            if not isinstance(raw_row, Mapping):
+                continue
+            row = dict(raw_row)
+            source = saved_projection_rows.get(
+                manual_geometry._geometry_manual_caked_qr_projection_key(row)  # noqa: SLF001
+            )
+            if isinstance(source, Mapping):
+                sim_display = _point_from_keys(source, ("refined_sim_x", "refined_sim_y"))
+                if sim_display is not None:
+                    row["sim_col_raw"] = float(sim_display[0])
+                    row["sim_row_raw"] = float(sim_display[1])
+                    row["sim_col"] = float(sim_display[0])
+                    row["sim_row"] = float(sim_display[1])
+                caked_sim = _point_from_keys(
+                    source,
+                    ("refined_sim_caked_x", "refined_sim_caked_y"),
+                )
+                if caked_sim is not None:
+                    row["caked_x"] = float(caked_sim[0])
+                    row["caked_y"] = float(caked_sim[1])
+                    row["raw_caked_x"] = float(caked_sim[0])
+                    row["raw_caked_y"] = float(caked_sim[1])
+                    row["two_theta_deg"] = float(caked_sim[0])
+                    row["phi_deg"] = float(caked_sim[1])
+                    row["display_col"] = float(caked_sim[0])
+                    row["display_row"] = float(caked_sim[1])
+                    row["display_frame"] = "caked_display"
+            projected_rows.append(row)
+        return projected_rows
 
     def _build_initial_pairs_display(
         index: int,
@@ -503,9 +551,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
             ),
             simulated_peaks_for_params=lambda **_kwargs: [dict(entry) for entry in saved],
             build_simulated_lookup=_manual_render_simulated_lookup,
-            project_peaks_to_current_view=lambda rows: [
-                dict(row) for row in rows or () if isinstance(row, Mapping)
-            ],
+            project_peaks_to_current_view=_project_saved_rows_for_manual_render,
             entry_display_coords=(
                 lambda entry: _manual_render_entry_display_coords(
                     entry,
@@ -529,6 +575,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
             raw_rows,
             saved,
             background_index=int(background_index),
+            use_caked_display=bool(use_caked_display),
         )
         captured_marker_limit = int(max_display_markers)
 
