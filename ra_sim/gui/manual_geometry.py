@@ -531,14 +531,22 @@ def refresh_geometry_manual_pair_entry(
         current_projected_sim_entry
     )
     sim_detector_replay = None
-    if (
-        saved_background_caked_point is None
-        and projected_sim_entry is not None
+    sim_replay_caked_point = _geometry_manual_finite_point(
+        projected_sim_entry,
+        (
+            ("caked_x", "caked_y"),
+            ("two_theta_deg", "phi_deg"),
+        ),
+    )
+    sim_replay_eligible = bool(
+        projected_sim_entry is not None
+        and sim_replay_caked_point is not None
         and _geometry_manual_caked_qr_projection_source(
             raw_entry if raw_entry is not None else normalized
         )
         is not None
-    ):
+    )
+    if sim_replay_eligible:
         sim_detector_replay = resolve_sim_detector_replay_from_caked_projection(
             raw_entry if raw_entry is not None else normalized,
             projected_sim_entry,
@@ -564,8 +572,12 @@ def refresh_geometry_manual_pair_entry(
                 "display_row",
                 "detector_x",
                 "detector_y",
+                "refined_sim_x",
+                "refined_sim_y",
                 "native_col",
                 "native_row",
+                "refined_sim_native_x",
+                "refined_sim_native_y",
                 "sim_native_x",
                 "sim_native_y",
                 "sim_col",
@@ -697,7 +709,10 @@ def refresh_geometry_manual_pair_entry(
         return normalized
 
     anchor_refresh_needed = False
-    if caked_point is not None:
+    anchor_caked_point = (
+        sim_replay_caked_point if sim_detector_replay is not None else caked_point
+    )
+    if anchor_caked_point is not None:
         anchor_refresh_needed = detector_point is None
         if detector_point is not None and callable(native_detector_coords_to_caked_display_coords):
             anchor_caked = _finite_tuple_pair(
@@ -711,8 +726,8 @@ def refresh_geometry_manual_pair_entry(
             else:
                 anchor_error = float(
                     np.hypot(
-                        float(anchor_caked[0]) - float(caked_point[0]),
-                        float(anchor_caked[1]) - float(caked_point[1]),
+                        float(anchor_caked[0]) - float(anchor_caked_point[0]),
+                        float(anchor_caked[1]) - float(anchor_caked_point[1]),
                     )
                 )
                 if anchor_error > float(stale_caked_tolerance_px):
@@ -720,15 +735,15 @@ def refresh_geometry_manual_pair_entry(
 
     if anchor_refresh_needed:
         if not (
-            caked_point is not None
+            anchor_caked_point is not None
             and callable(caked_angles_to_background_display_coords)
             and callable(background_display_to_native_detector_coords)
         ):
             return _mark_detector_anchor_stale()
         mapped_display_point = _finite_tuple_pair(
             caked_angles_to_background_display_coords(
-                float(caked_point[0]),
-                float(caked_point[1]),
+                float(anchor_caked_point[0]),
+                float(anchor_caked_point[1]),
             )
         )
         mapped_detector_point = (
@@ -754,8 +769,8 @@ def refresh_geometry_manual_pair_entry(
                 return _mark_detector_anchor_stale()
             closure_error = float(
                 np.hypot(
-                    float(roundtrip_caked[0]) - float(caked_point[0]),
-                    float(roundtrip_caked[1]) - float(caked_point[1]),
+                    float(roundtrip_caked[0]) - float(anchor_caked_point[0]),
+                    float(roundtrip_caked[1]) - float(anchor_caked_point[1]),
                 )
             )
             if closure_error > float(stale_caked_tolerance_px):
@@ -7624,6 +7639,7 @@ def build_geometry_manual_initial_pairs_display(
             sim_source_entry = _geometry_manual_caked_qr_projection_source(entry)
         if (
             not bool(use_caked_display)
+            and not detector_replay_from_caked_projection
             and bg_coords is not None
             and not _geometry_manual_entry_has_explicit_branch_identity(entry)
             and _geometry_manual_entry_normalized_hkl(entry) is None
@@ -8411,6 +8427,7 @@ def make_runtime_geometry_manual_projection_callbacks(
             detector_replay_from_caked_projection = False
             sim_detector_replay = None
             if not use_caked:
+                replay_source_entry = _geometry_manual_caked_qr_projection_source(entry)
                 current_projected_caked_entry = (
                     _geometry_manual_current_sim_caked_projection_entry(
                         entry,
@@ -8419,7 +8436,10 @@ def make_runtime_geometry_manual_projection_callbacks(
                         ),
                     )
                 )
-                if current_projected_caked_entry is not None:
+                if (
+                    current_projected_caked_entry is not None
+                    and replay_source_entry is not None
+                ):
                     detector_replay_from_caked_projection = True
                     caked_projection_point = _entry_point(
                         current_projected_caked_entry,

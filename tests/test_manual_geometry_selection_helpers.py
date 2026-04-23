@@ -4065,6 +4065,97 @@ def test_refresh_geometry_manual_pair_entry_sim_replay_uses_current_projected_ca
     assert "background_detector_frame_provenance" not in refreshed
 
 
+def test_refresh_geometry_manual_pair_entry_sim_replay_ignores_saved_background_angles_and_poisoned_aliases() -> None:
+    reverse_calls: list[tuple[float, float]] = []
+
+    def _reverse_lut(two_theta, phi):
+        reverse_calls.append((float(two_theta), float(phi)))
+        return float(two_theta) + 100.0, float(phi) + 200.0
+
+    saved_entry = {
+        "label": "3,0,4",
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "background_two_theta_deg": -7.0,
+        "background_phi_deg": 8.0,
+        "background_detector_x": 1001.0,
+        "background_detector_y": 1002.0,
+        "refined_sim_x": 901.0,
+        "refined_sim_y": 902.0,
+        "refined_sim_native_x": 903.0,
+        "refined_sim_native_y": 904.0,
+        "native_col": 905.0,
+        "native_row": 906.0,
+        "sim_native_x": 907.0,
+        "sim_native_y": 908.0,
+        "display_col": 909.0,
+        "display_row": 910.0,
+        "sim_col": 911.0,
+        "sim_row": 912.0,
+        "sim_col_raw": 913.0,
+        "sim_row_raw": 914.0,
+        "detector_x": 915.0,
+        "detector_y": 916.0,
+        "caked_x": -999.0,
+        "caked_y": -998.0,
+        "raw_caked_x": -997.0,
+        "raw_caked_y": -996.0,
+    }
+    projected_sim_entry = {
+        "_caked_qr_projection_cache": True,
+        "label": "3,0,4",
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "caked_x": 23.0,
+        "caked_y": -26.0,
+        "two_theta_deg": 23.0,
+        "phi_deg": -26.0,
+    }
+
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        saved_entry,
+        background_display_shape=(256, 256),
+        caked_angles_to_background_display_coords=_reverse_lut,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+        current_projected_sim_entry=projected_sim_entry,
+    )
+
+    assert refreshed is not None
+    assert reverse_calls == [(23.0, -26.0)]
+    assert refreshed["detector_x"] == 23.0
+    assert refreshed["detector_y"] == -26.0
+    assert refreshed["sim_detector_anchor_x"] == 23.0
+    assert refreshed["sim_detector_anchor_y"] == -26.0
+    assert refreshed["x"] == 33.0
+    assert refreshed["y"] == -6.0
+    assert refreshed["display_col"] == 33.0
+    assert refreshed["display_row"] == -6.0
+    assert refreshed["sim_detector_display_col"] == 33.0
+    assert refreshed["sim_detector_display_row"] == -6.0
+    assert refreshed["sim_detector_frame_provenance"] == "sim_reverse_lut_replay_cache"
+
+
 def test_refresh_geometry_manual_pair_entry_sim_replay_recomputes_stale_anchor_once() -> None:
     reverse_calls: list[tuple[float, float]] = []
 
@@ -4223,6 +4314,112 @@ def test_refresh_geometry_manual_pair_entry_sim_replay_drops_stale_saved_display
     assert "display_row" not in refreshed
     assert "sim_col_raw" not in refreshed
     assert "sim_row_raw" not in refreshed
+
+
+def test_refresh_geometry_manual_pair_entry_sim_replay_reverse_lut_failure_leaves_unresolved_without_fallback() -> None:
+    reverse_calls: list[tuple[float, float]] = []
+
+    def _reverse_lut(two_theta, phi):
+        reverse_calls.append((float(two_theta), float(phi)))
+        return None
+
+    saved_entry = {
+        "label": "3,0,4",
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "background_two_theta_deg": -7.0,
+        "background_phi_deg": 8.0,
+        "background_detector_x": 1001.0,
+        "background_detector_y": 1002.0,
+        "refined_sim_x": 901.0,
+        "refined_sim_y": 902.0,
+        "refined_sim_native_x": 903.0,
+        "refined_sim_native_y": 904.0,
+        "native_col": 905.0,
+        "native_row": 906.0,
+        "sim_native_x": 907.0,
+        "sim_native_y": 908.0,
+        "display_col": 909.0,
+        "display_row": 910.0,
+        "sim_col": 911.0,
+        "sim_row": 912.0,
+        "sim_col_raw": 913.0,
+        "sim_row_raw": 914.0,
+        "detector_x": 915.0,
+        "detector_y": 916.0,
+        "sim_detector_anchor_x": 917.0,
+        "sim_detector_anchor_y": 918.0,
+        "sim_detector_display_col": 919.0,
+        "sim_detector_display_row": 920.0,
+    }
+    projected_sim_entry = {
+        "_caked_qr_projection_cache": True,
+        "label": "3,0,4",
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "branch_id": "-x",
+        "source_table_index": 0,
+        "source_row_index": 1,
+        "source_branch_index": 1,
+        "source_reflection_index": 17,
+        "source_ray_id": "minus-ray",
+        "caked_x": 23.0,
+        "caked_y": -26.0,
+        "two_theta_deg": 23.0,
+        "phi_deg": -26.0,
+    }
+
+    refreshed = mg.refresh_geometry_manual_pair_entry(
+        saved_entry,
+        background_display_shape=(256, 256),
+        caked_angles_to_background_display_coords=_reverse_lut,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 100.0,
+            float(row) - 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+        current_projected_sim_entry=projected_sim_entry,
+    )
+
+    assert refreshed is not None
+    assert reverse_calls == [(23.0, -26.0)]
+    for missing_key in (
+        "x",
+        "y",
+        "display_col",
+        "display_row",
+        "detector_x",
+        "detector_y",
+        "refined_sim_x",
+        "refined_sim_y",
+        "native_col",
+        "native_row",
+        "refined_sim_native_x",
+        "refined_sim_native_y",
+        "sim_native_x",
+        "sim_native_y",
+        "sim_col",
+        "sim_row",
+        "sim_col_raw",
+        "sim_row_raw",
+        "sim_detector_anchor_x",
+        "sim_detector_anchor_y",
+        "sim_detector_display_col",
+        "sim_detector_display_row",
+        "sim_detector_frame_provenance",
+    ):
+        assert missing_key not in refreshed
     assert "sim_col" not in refreshed
     assert "sim_row" not in refreshed
     assert "sim_detector_display_col" not in refreshed

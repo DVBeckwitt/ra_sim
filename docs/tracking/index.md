@@ -27,6 +27,11 @@ and downstream of accepted geometry-cache provenance.
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-23 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-22 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 
+Replay status note: `Sim caked detector replay` remains in progress. Latest
+replay-only patch removed saved-background gating, tightened replay eligibility
+to current caked-projection evidence, and leaves replay-eligible sim rows
+unresolved on reverse-LUT failure. Validation is still pending.
+
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
 one-param solves, `a` diagnosis, caked point reprojection, initial Rung 4 paired

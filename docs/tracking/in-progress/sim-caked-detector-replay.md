@@ -29,11 +29,16 @@ What changed:
 - added `resolve_sim_detector_replay_from_caked_projection(...)`;
 - detector replay now triggers only for source-backed sim rows with current
   caked projection evidence;
+- replay eligibility no longer depends on saved background angles or caked
+  background fields;
 - detector replay cache is stored in `sim_detector_anchor_x/y`,
   `sim_detector_display_col/row`, and `sim_detector_frame_provenance`;
 - detector redraw/runtime projection no longer falls back to direct
   `refined_sim_*`, `native_*`, `sim_*`, or stale detector display aliases for
   caked-resolved replay rows;
+- reverse-LUT failure for replay-eligible rows now clears replay aliases and
+  leaves detector sim replay unresolved instead of falling through to detector,
+  native, display, or background fields;
 - stale replay anchors are closure-checked against the current projected caked
   point and refreshed once when needed;
 - stale replay detector display cache is recomputed from the anchor/current
@@ -43,6 +48,8 @@ What changed:
   projection can be built;
 - initial saved detector overlay now prefers source identity plus current caked
   projection replay over conflicting detector lookup rows;
+- detector initial-build replay no longer lets detector candidate ranking
+  overwrite the current caked-projection replay source once replay is eligible;
 - background replay path was left separate.
 
 Bug/error status:
@@ -53,6 +60,8 @@ Bug/error status:
   zone;
 - helper-level stale-display regressions and initial-build detector-lookup
   conflicts are covered in targeted tests;
+- saved-background-gating and reverse-LUT-failure replay regressions are now
+  covered in targeted tests;
 - validation is still pending.
 
 Feature status:
