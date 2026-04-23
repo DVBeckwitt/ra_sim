@@ -134,9 +134,12 @@ def test_make_runtime_geometry_manual_cache_callbacks_uses_live_peak_records() -
 
     assert cache_data["cache_metadata"]["cache_source"] == "peak_records"
     assert cache_state["signature"] == cache_data["signature"]
-    assert cache_state["data"]["grouped_candidates"][("q_group", "primary", 1, 2)][0][
-        "source_row_index"
-    ] == 8
+    assert (
+        cache_state["data"]["grouped_candidates"][("q_group", "primary", 1, 2)][0][
+            "source_row_index"
+        ]
+        == 8
+    )
 
 
 def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_preview_cache() -> None:
@@ -203,14 +206,17 @@ def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_previe
     assert ("q_group", "primary", 3, 1) in cache_data["grouped_candidates"]
     assert ("q_group", "primary", 1, 2) not in cache_data["grouped_candidates"]
     assert cache_state["signature"] == cache_data["signature"]
-    assert cache_state["data"]["simulated_lookup"][
-        _source_key(
-            {
-                "source_table_index": 7,
-                "source_row_index": 9,
-            }
-        )
-    ]["sim_col"] == 44.0
+    assert (
+        cache_state["data"]["simulated_lookup"][
+            _source_key(
+                {
+                    "source_table_index": 7,
+                    "source_row_index": 9,
+                }
+            )
+        ]["sim_col"]
+        == 44.0
+    )
 
 
 def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analytic_forward_path(
@@ -296,9 +302,7 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analy
             ),
             "simulated_peaks": [dict(cached_entry)],
             "simulated_lookup": {_source_key(cached_entry): dict(cached_entry)},
-            "grouped_candidates": {
-                ("q_group", "primary", 1, 0): [dict(cached_entry)]
-            },
+            "grouped_candidates": {("q_group", "primary", 1, 0): [dict(cached_entry)]},
         },
         cache_signature_fn=lambda **_kwargs: (
             ("sim", 7),
@@ -330,7 +334,9 @@ def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analy
     assert cache_entry["sim_row_raw"] == 4.0
 
 
-def test_build_geometry_manual_pick_cache_peak_record_fallback_uses_peak_lookup_projection_when_available() -> None:
+def test_build_geometry_manual_pick_cache_peak_record_fallback_uses_peak_lookup_projection_when_available() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: None,
@@ -406,7 +412,9 @@ def test_build_geometry_manual_pick_cache_peak_record_fallback_uses_peak_lookup_
     assert grouped_entry["display_row"] == 207.0
 
 
-def test_build_geometry_manual_pick_cache_peak_record_fallback_reprojects_detector_from_native_fields() -> None:
+def test_build_geometry_manual_pick_cache_peak_record_fallback_reprojects_detector_from_native_fields() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: None,
@@ -478,7 +486,9 @@ def test_build_geometry_manual_pick_cache_peak_record_fallback_reprojects_detect
     assert "caked_x" not in grouped_entry
 
 
-def test_geometry_manual_live_peak_candidates_from_records_does_not_promote_caked_display_into_detector_truth() -> None:
+def test_geometry_manual_live_peak_candidates_from_records_does_not_promote_caked_display_into_detector_truth() -> (
+    None
+):
     peak_record = {
         "display_col": 30.25,
         "display_row": -57.5,
@@ -508,7 +518,9 @@ def test_geometry_manual_live_peak_candidates_from_records_does_not_promote_cake
     assert "native_row" not in candidate
 
 
-def test_geometry_manual_live_peak_candidates_from_records_preserves_native_and_display_without_detector_truth() -> None:
+def test_geometry_manual_live_peak_candidates_from_records_preserves_native_and_display_without_detector_truth() -> (
+    None
+):
     peak_record = {
         "display_col": 13.0,
         "display_row": 2.0,
@@ -557,7 +569,9 @@ def test_geometry_manual_live_peak_candidates_from_records_skips_display_only_re
     assert mg.geometry_manual_live_peak_candidates_from_records([peak_record]) == []
 
 
-def test_project_peaks_to_current_view_does_not_promote_transient_display_into_detector_truth() -> None:
+def test_project_peaks_to_current_view_does_not_promote_transient_display_into_detector_truth() -> (
+    None
+):
     callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: None,
@@ -741,7 +755,9 @@ def test_build_geometry_manual_pick_cache_preserves_mirrored_branch_lookup_entri
     assert set(next_state["simulated_lookup"]) == {left_key, right_key}
 
 
-def test_build_geometry_manual_pick_cache_preserves_colliding_legacy_branch_lookup_entries() -> None:
+def test_build_geometry_manual_pick_cache_preserves_colliding_legacy_branch_lookup_entries() -> (
+    None
+):
     legacy_rows = [
         {
             "label": "other-right",
@@ -883,15 +899,15 @@ def test_build_geometry_manual_pick_cache_resolves_legacy_peak_only_branch_entry
 def test_geometry_manual_live_peak_candidates_normalize_branch_and_full_provenance() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-                {
-                    "display_col": 21.0,
-                    "display_row": 34.0,
-                    "native_col": 21.0,
-                    "native_row": 34.0,
-                    "hkl": (1, 0, 2),
-                    "q_group_key": ("q_group", "primary", 1, 2),
-                    "source_table_index": 0,
-                    "source_row_index": 8,
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "native_col": 21.0,
+                "native_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
                 "source_peak_index": 13,
                 "phi": 15.0,
             }
@@ -912,15 +928,15 @@ def test_geometry_manual_live_peak_candidates_normalize_branch_and_full_provenan
 def test_geometry_manual_live_peak_candidates_fail_closed_when_provenance_does_not_match() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-                {
-                    "display_col": 21.0,
-                    "display_row": 34.0,
-                    "native_col": 21.0,
-                    "native_row": 34.0,
-                    "hkl": (1, 0, 2),
-                    "q_group_key": ("q_group", "primary", 1, 2),
-                    "source_table_index": 0,
-                    "source_row_index": 8,
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "native_col": 21.0,
+                "native_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
                 "source_peak_index": 19,
                 "phi": -15.0,
             }
@@ -1014,7 +1030,11 @@ def test_mixed_background_manual_projection_groups_by_background() -> None:
             projection_calls.append(
                 (
                     int(background_index),
-                    [str(dict(entry).get("label")) for entry in rows or () if isinstance(entry, dict)],
+                    [
+                        str(dict(entry).get("label"))
+                        for entry in rows or ()
+                        if isinstance(entry, dict)
+                    ],
                 )
             )
             or [
@@ -1074,7 +1094,11 @@ def test_manual_projection_defaults_missing_background_to_current_view() -> None
             projection_calls.append(
                 (
                     int(background_index),
-                    [str(dict(entry).get("label")) for entry in rows or () if isinstance(entry, dict)],
+                    [
+                        str(dict(entry).get("label"))
+                        for entry in rows or ()
+                        if isinstance(entry, dict)
+                    ],
                 )
             )
             or [
@@ -1207,15 +1231,15 @@ def test_mixed_background_manual_projection_drops_missing_payload_groups() -> No
 def test_geometry_manual_live_peak_candidates_restore_trust_on_revision_match() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-                {
-                    "display_col": 21.0,
-                    "display_row": 34.0,
-                    "native_col": 21.0,
-                    "native_row": 34.0,
-                    "hkl": (1, 0, 2),
-                    "q_group_key": ("q_group", "primary", 1, 2),
-                    "source_table_index": 0,
-                    "source_row_index": 8,
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "native_col": 21.0,
+                "native_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
                 "source_peak_index": 13,
                 "phi": 15.0,
             }
@@ -1238,15 +1262,15 @@ def test_geometry_manual_live_peak_candidates_restore_trust_on_revision_match() 
 def test_geometry_manual_live_peak_candidates_drop_trust_when_map_length_mismatches() -> None:
     candidates = mg.geometry_manual_live_peak_candidates_from_records(
         [
-                {
-                    "display_col": 21.0,
-                    "display_row": 34.0,
-                    "native_col": 21.0,
-                    "native_row": 34.0,
-                    "hkl": (1, 0, 2),
-                    "q_group_key": ("q_group", "primary", 1, 2),
-                    "source_table_index": 0,
-                    "source_row_index": 8,
+            {
+                "display_col": 21.0,
+                "display_row": 34.0,
+                "native_col": 21.0,
+                "native_row": 34.0,
+                "hkl": (1, 0, 2),
+                "q_group_key": ("q_group", "primary", 1, 2),
+                "source_table_index": 0,
+                "source_row_index": 8,
                 "source_peak_index": 13,
                 "phi": 15.0,
             }
@@ -1325,7 +1349,9 @@ def test_geometry_manual_live_peak_candidates_are_permutation_invariant() -> Non
     assert _digest(forward) == _digest(reversed_order)
 
 
-def test_geometry_manual_canonicalize_live_source_entry_only_repairs_trust_from_explicit_proof() -> None:
+def test_geometry_manual_canonicalize_live_source_entry_only_repairs_trust_from_explicit_proof() -> (
+    None
+):
     entry = {
         "display_col": 21.0,
         "display_row": 34.0,
@@ -1353,7 +1379,9 @@ def test_geometry_manual_canonicalize_live_source_entry_only_repairs_trust_from_
     assert "source_reflection_is_full" not in unrepaired
 
 
-def test_refresh_geometry_manual_pair_entry_keeps_detector_truth_and_refreshes_caked_fields() -> None:
+def test_refresh_geometry_manual_pair_entry_keeps_detector_truth_and_refreshes_caked_fields() -> (
+    None
+):
     refreshed = mg.refresh_geometry_manual_pair_entry(
         {
             "label": "0,0,3",
@@ -1404,7 +1432,7 @@ def test_refresh_geometry_manual_pair_entry_keeps_detector_truth_and_refreshes_c
     assert display_point == (30.0, 40.0)
 
 
-def test_refresh_geometry_manual_pair_entry_keeps_detector_truth_over_canonical_background_angles() -> None:
+def test_refresh_geometry_manual_pair_entry_uses_canonical_background_angles_as_truth() -> None:
     refreshed = mg.refresh_geometry_manual_pair_entry(
         {
             "label": "0,0,3",
@@ -1436,14 +1464,14 @@ def test_refresh_geometry_manual_pair_entry_keeps_detector_truth_over_canonical_
     )
 
     assert refreshed is not None
-    assert refreshed["detector_x"] == 30.0
-    assert refreshed["detector_y"] == 40.0
-    assert refreshed["background_two_theta_deg"] == 40.0
-    assert refreshed["background_phi_deg"] == 60.0
-    assert refreshed["caked_x"] == 40.0
-    assert refreshed["caked_y"] == 60.0
-    assert refreshed["x"] == 30.0
-    assert refreshed["y"] == 40.0
+    assert refreshed["detector_x"] == 140.0
+    assert refreshed["detector_y"] == 140.0
+    assert refreshed["background_two_theta_deg"] == 150.0
+    assert refreshed["background_phi_deg"] == 160.0
+    assert refreshed["caked_x"] == 150.0
+    assert refreshed["caked_y"] == 160.0
+    assert refreshed["x"] == 140.0
+    assert refreshed["y"] == 140.0
 
 
 def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_for_caked_only_entries(
@@ -1543,7 +1571,9 @@ def test_refresh_geometry_manual_pair_entry_uses_inverse_lut_for_caked_only_entr
     ]
 
 
-def test_refresh_geometry_manual_pair_entry_marks_stale_caked_fields_when_roundtrip_breaks() -> None:
+def test_refresh_geometry_manual_pair_entry_marks_stale_caked_fields_when_roundtrip_breaks() -> (
+    None
+):
     refreshed = mg.refresh_geometry_manual_pair_entry(
         {
             "label": "0,0,3",

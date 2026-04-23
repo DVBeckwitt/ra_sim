@@ -504,17 +504,12 @@ def refresh_geometry_manual_pair_entry(
     except Exception:
         shape = ()
 
-    refined_caked_point = _finite_pair("refined_sim_caked_x", "refined_sim_caked_y")
     saved_background_caked_point = _finite_pair(
         "background_two_theta_deg",
         "background_phi_deg",
+        source=raw_entry,
     )
-    manual_background_frame = normalize_geometry_point_frame(
-        normalized.get("manual_background_input_frame")
-    )
-    caked_background_is_authoritative = bool(
-        manual_background_frame == "caked_2theta_phi" and saved_background_caked_point is not None
-    )
+    caked_background_is_authoritative = saved_background_caked_point is not None
     source_backed_saved_point = bool(
         raw_entry is not None
         and (
@@ -524,13 +519,10 @@ def refresh_geometry_manual_pair_entry(
         )
         and saved_background_caked_point is not None
     )
-    caked_point_forces_detector = bool(refined_caked_point is not None or source_backed_saved_point)
-    authoritative_caked_point = (
-        saved_background_caked_point
-        if caked_background_is_authoritative
-        else refined_caked_point or saved_background_caked_point
+    caked_point_forces_detector = bool(
+        saved_background_caked_point is not None or source_backed_saved_point
     )
-    caked_point = authoritative_caked_point
+    caked_point = saved_background_caked_point
     if caked_point is None:
         caked_point = _finite_pair("caked_x", "caked_y")
     if caked_point is None:
@@ -1815,6 +1807,77 @@ def caked_image_index_to_axis(
     return float(np.interp(float(index_value), idx_used, axis_used))
 
 
+def caked_display_coords_to_angles(
+    col: float,
+    row: float,
+    *,
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+    image_shape: Sequence[int] | None = None,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
+) -> tuple[float, float] | None:
+    """Convert one caked display point into caked 2theta/phi coordinates."""
+
+    if radial_axis is None or azimuth_axis is None:
+        return None
+    try:
+        radial_axis_arr = np.asarray(radial_axis, dtype=float).reshape(-1)
+        azimuth_axis_arr = np.asarray(azimuth_axis, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if radial_axis_arr.size <= 0 or azimuth_axis_arr.size <= 0:
+        return None
+    try:
+        col_val = float(col)
+        row_val = float(row)
+    except Exception:
+        return None
+    if not (np.isfinite(col_val) and np.isfinite(row_val)):
+        return None
+
+    def _axis_contains(value: float, axis_values: np.ndarray) -> bool:
+        finite_axis = axis_values[np.isfinite(axis_values)]
+        if finite_axis.size <= 0:
+            return False
+        axis_min = float(np.nanmin(finite_axis))
+        axis_max = float(np.nanmax(finite_axis))
+        return bool(min(axis_min, axis_max) <= float(value) <= max(axis_min, axis_max))
+
+    def _image_index_candidate(value: float, axis_values: np.ndarray, size: int) -> float:
+        if (
+            int(size) > 0
+            and 0.0 <= float(value) <= float(size - 1)
+            and not _axis_contains(
+                float(value),
+                axis_values,
+            )
+        ):
+            return float(value)
+        return float(caked_axis_to_image_index_fn(float(value), axis_values))
+
+    try:
+        shape = tuple(int(v) for v in (image_shape or ())[:2])
+    except Exception:
+        shape = ()
+    height = int(shape[0]) if len(shape) >= 2 and int(shape[0]) > 0 else int(azimuth_axis_arr.size)
+    width = int(shape[1]) if len(shape) >= 2 and int(shape[1]) > 0 else int(radial_axis_arr.size)
+
+    col_index = _image_index_candidate(col_val, radial_axis_arr, width)
+    row_index = _image_index_candidate(row_val, azimuth_axis_arr, height)
+    if not (np.isfinite(col_index) and np.isfinite(row_index)):
+        return None
+    two_theta = caked_image_index_to_axis_fn(float(col_index), radial_axis_arr)
+    phi = caked_image_index_to_axis_fn(float(row_index), azimuth_axis_arr)
+    if not (np.isfinite(two_theta) and np.isfinite(phi)):
+        return None
+    return float(two_theta), float(phi)
+
+
 def refine_profile_peak_index(
     profile: Sequence[float] | None,
     seed_index: float,
@@ -2616,11 +2679,7 @@ def _geometry_manual_saved_caked_background_display_point(
         return None
     return _geometry_manual_finite_point(
         entry,
-        (
-            ("caked_x", "caked_y"),
-            ("background_two_theta_deg", "background_phi_deg"),
-            ("raw_caked_x", "raw_caked_y"),
-        ),
+        (("background_two_theta_deg", "background_phi_deg"),),
     )
 
 
@@ -5965,6 +6024,172 @@ def refine_detector_pick_via_caked_background(
     }
 
 
+def resolve_background_pick_to_caked_angles(
+    candidate: dict[str, object] | None,
+    seed_col: float,
+    seed_row: float,
+    *,
+    active_view: str,
+    display_background: np.ndarray | None = None,
+    cache_data: dict[str, object] | None = None,
+    refine_detector_pick_fn: Callable[..., tuple[float, float]] | None,
+    caked_angles_to_background_display_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
+    background_display_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
+) -> dict[str, float] | None:
+    """Resolve one detector/caked background seed through the detector oracle."""
+
+    if (
+        not callable(refine_detector_pick_fn)
+        or not callable(background_display_to_native_detector_coords)
+        or not callable(native_detector_coords_to_caked_display_coords)
+    ):
+        return None
+    try:
+        seed_col_val = float(seed_col)
+        seed_row_val = float(seed_row)
+    except Exception:
+        return None
+    if not (np.isfinite(seed_col_val) and np.isfinite(seed_row_val)):
+        return None
+
+    view_token = str(active_view).strip().lower()
+    if view_token not in {"detector", "caked"}:
+        return None
+
+    def _finite_tuple_pair(value: object) -> tuple[float, float] | None:
+        if isinstance(value, (str, bytes)):
+            return None
+        try:
+            if len(value) < 2:  # type: ignore[arg-type]
+                return None
+            col_val = float(value[0])
+            row_val = float(value[1])
+        except Exception:
+            return None
+        if not (np.isfinite(col_val) and np.isfinite(row_val)):
+            return None
+        return float(col_val), float(row_val)
+
+    try:
+        image_shape = tuple(int(v) for v in np.asarray(display_background).shape[:2])
+    except Exception:
+        image_shape = ()
+
+    result: dict[str, float] = {}
+    raw_caked_angles: tuple[float, float] | None = None
+    if view_token == "caked":
+        raw_caked_angles = caked_display_coords_to_angles(
+            seed_col_val,
+            seed_row_val,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            image_shape=image_shape,
+            caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+            caked_image_index_to_axis_fn=caked_image_index_to_axis_fn,
+        )
+        if raw_caked_angles is None or not callable(caked_angles_to_background_display_coords):
+            return None
+        detector_seed = _finite_tuple_pair(
+            caked_angles_to_background_display_coords(
+                float(raw_caked_angles[0]),
+                float(raw_caked_angles[1]),
+            )
+        )
+        if detector_seed is None:
+            return None
+        result["raw_caked_display_col"] = float(seed_col_val)
+        result["raw_caked_display_row"] = float(seed_row_val)
+    else:
+        detector_seed = (float(seed_col_val), float(seed_row_val))
+        seed_native = _finite_tuple_pair(
+            background_display_to_native_detector_coords(
+                float(detector_seed[0]),
+                float(detector_seed[1]),
+            )
+        )
+        if seed_native is not None:
+            raw_caked_angles = _finite_tuple_pair(
+                native_detector_coords_to_caked_display_coords(
+                    float(seed_native[0]),
+                    float(seed_native[1]),
+                )
+            )
+
+    result["detector_seed_col"] = float(detector_seed[0])
+    result["detector_seed_row"] = float(detector_seed[1])
+    if raw_caked_angles is not None:
+        result["raw_caked_two_theta_deg"] = float(raw_caked_angles[0])
+        result["raw_caked_phi_deg"] = float(raw_caked_angles[1])
+
+    try:
+        refined_detector = refine_detector_pick_fn(
+            dict(candidate) if isinstance(candidate, dict) else None,
+            float(detector_seed[0]),
+            float(detector_seed[1]),
+            display_background=display_background,
+            cache_data=cache_data,
+            force_detector_space=True,
+        )
+    except TypeError:
+        refined_detector = refine_detector_pick_fn(
+            dict(candidate) if isinstance(candidate, dict) else None,
+            float(detector_seed[0]),
+            float(detector_seed[1]),
+            display_background=display_background,
+            cache_data=cache_data,
+        )
+    refined_detector_point = _finite_tuple_pair(refined_detector)
+    if refined_detector_point is None:
+        return None
+
+    refined_native = _finite_tuple_pair(
+        background_display_to_native_detector_coords(
+            float(refined_detector_point[0]),
+            float(refined_detector_point[1]),
+        )
+    )
+    if refined_native is None:
+        return None
+
+    refined_angles = _finite_tuple_pair(
+        native_detector_coords_to_caked_display_coords(
+            float(refined_native[0]),
+            float(refined_native[1]),
+        )
+    )
+    if refined_angles is None:
+        return None
+
+    result["refined_detector_display_col"] = float(refined_detector_point[0])
+    result["refined_detector_display_row"] = float(refined_detector_point[1])
+    result["refined_detector_native_col"] = float(refined_native[0])
+    result["refined_detector_native_row"] = float(refined_native[1])
+    result["refined_background_two_theta_deg"] = float(refined_angles[0])
+    result["refined_background_phi_deg"] = float(refined_angles[1])
+    return result
+
+
 def restore_geometry_manual_pick_view(
     pick_session: dict[str, object] | None,
     *,
@@ -6131,6 +6356,9 @@ def geometry_manual_pick_preview_state(
     caked_axis_to_image_index_fn: Callable[
         [float, Sequence[float] | None], float
     ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
 ) -> dict[str, object] | None:
     """Return preview state for one manual placement cursor position."""
 
@@ -6568,11 +6796,7 @@ def build_geometry_manual_initial_pairs_display(
         ) -> tuple[float, float] | None:
             return _geometry_manual_finite_point(
                 candidate,
-                (
-                    ("caked_x", "caked_y"),
-                    ("background_two_theta_deg", "background_phi_deg"),
-                    ("raw_caked_x", "raw_caked_y"),
-                ),
+                (("background_two_theta_deg", "background_phi_deg"),),
             )
 
         def _caked_point_matches_saved_background(
@@ -7656,9 +7880,6 @@ def make_runtime_geometry_manual_projection_callbacks(
                 if caked_point is not None:
                     caked_point_source = "angles"
 
-            if use_caked and native_point is None:
-                continue
-
             display_detector_candidate = _entry_point(
                 entry,
                 "display_col",
@@ -7671,10 +7892,10 @@ def make_runtime_geometry_manual_projection_callbacks(
             raw_detector_display_source = (
                 "sim_col_raw" if raw_sim_detector_point is not None else None
             )
-            if refined_detector_display is not None and native_point_source in {
-                None,
-                "refined_native",
-            }:
+            if refined_detector_display is not None and (
+                native_point_source == "refined_native"
+                or (not use_caked and native_point_source is None)
+            ):
                 raw_detector_display = refined_detector_display
                 raw_detector_display_source = "refined_sim_x"
             elif (
@@ -7683,6 +7904,13 @@ def make_runtime_geometry_manual_projection_callbacks(
                 and refined_caked_point is not None
             ):
                 raw_detector_display = None
+            if (
+                use_caked
+                and native_point is None
+                and raw_detector_display is None
+                and caked_point_source != "angles"
+            ):
+                continue
             # display_col/display_row are active-view coordinates. After a GUI
             # state restore they may be detector display pixels, caked axes, or
             # stale overlay coordinates. They are therefore not stable detector
@@ -8318,15 +8546,25 @@ def make_runtime_geometry_manual_projection_callbacks(
     def _caked_projection_signature() -> object:
         if not _pick_uses_caked_space():
             return None
+
+        def _image_token(value: object) -> tuple[tuple[int, ...], str] | None:
+            try:
+                arr = np.asarray(value)
+                return tuple(int(v) for v in arr.shape), str(arr.dtype)
+            except Exception:
+                return None
+
         background_image = _resolve_runtime_value(last_caked_background_image_unscaled)
-        try:
-            background_arr = np.asarray(background_image)
-            background_token = (
-                tuple(int(v) for v in background_arr.shape),
-                str(background_arr.dtype),
-            )
-        except Exception:
-            background_token = None
+        background_token = _image_token(background_image)
+        detector_display_token = (
+            int(display_rotate_k),
+            _image_token(_resolve_runtime_value(current_background_display)),
+            _image_token(_resolve_runtime_value(current_background_native)),
+            id(rotate_point_for_display) if callable(rotate_point_for_display) else None,
+            id(native_detector_coords_to_detector_display_coords)
+            if callable(native_detector_coords_to_detector_display_coords)
+            else None,
+        )
         bundle = _resolve_runtime_value(caked_transform_bundle)
         bundle_token = None
         if isinstance(bundle, CakeTransformBundle):
@@ -8338,6 +8576,7 @@ def make_runtime_geometry_manual_projection_callbacks(
         return (
             "caked_qr_projection",
             background_token,
+            detector_display_token,
             _axis_signature(_resolve_runtime_value(last_caked_radial_values)),
             _axis_signature(_resolve_runtime_value(last_caked_azimuth_values)),
             bundle_token,
@@ -8519,9 +8758,17 @@ def make_runtime_geometry_manual_callbacks(
     caked_axis_to_image_index_fn: Callable[
         [float, Sequence[float] | None], float
     ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
     last_caked_radial_values: Callable[[], object] | object = (),
     last_caked_azimuth_values: Callable[[], object] | object = (),
     background_display_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
+    native_detector_coords_to_caked_display_coords: Callable[
         [float, float],
         tuple[float, float] | None,
     ]
@@ -8637,6 +8884,19 @@ def make_runtime_geometry_manual_callbacks(
             background_display_to_native_detector_coords=(
                 background_display_to_native_detector_coords
             ),
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+            radial_axis=np.asarray(
+                _resolve_runtime_value(last_caked_radial_values),
+                dtype=float,
+            ),
+            azimuth_axis=np.asarray(
+                _resolve_runtime_value(last_caked_azimuth_values),
+                dtype=float,
+            ),
+            caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+            caked_image_index_to_axis_fn=caked_image_index_to_axis_fn,
             nearest_candidate_to_point_fn=nearest_candidate_to_point,
             position_error_px=position_error_px,
             position_sigma_px=position_sigma_px,
@@ -8674,6 +8934,7 @@ def make_runtime_geometry_manual_callbacks(
             ),
             profile_cache=_profile_cache(),
             caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+            caked_image_index_to_axis_fn=caked_image_index_to_axis_fn,
         )
         if preview_state is None:
             return
@@ -8854,7 +9115,7 @@ def geometry_manual_toggle_selection_at(
     shared_tagged_candidate = None
     shared_seed_dist = float("nan")
 
-    if callable(find_peak_record_for_click_fn):
+    if not use_caked_space and callable(find_peak_record_for_click_fn):
         try:
             (
                 _shared_peak_index,
@@ -9104,6 +9365,21 @@ def geometry_manual_place_selection_at(
         tuple[float, float] | None,
     ]
     | None = None,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
+    resolve_background_pick_fn: Callable[..., dict[str, float] | None]
+    | None = resolve_background_pick_to_caked_angles,
     candidate_source_key: Callable[
         [dict[str, object] | None],
         tuple[object, ...] | None,
@@ -9192,95 +9468,184 @@ def geometry_manual_place_selection_at(
                 "Manual geometry picking could not find an unassigned simulated peak for that background point."
             )
         return False, current_session
-    peak_col, peak_row = refine_preview_point(
-        candidate,
-        float(col),
-        float(row),
-        display_background=display_background,
-        cache_data=cache_data,
-    )
-    candidate_dist = geometry_manual_candidate_distance_to_point(
-        float(peak_col),
-        float(peak_row),
-        candidate,
-        use_caked_display=use_caked_space,
-    )
+    resolved_background_pick = None
+    if callable(resolve_background_pick_fn):
+        try:
+            resolved_background_pick = resolve_background_pick_fn(
+                candidate,
+                float(col),
+                float(row),
+                active_view="caked" if use_caked_space else "detector",
+                display_background=display_background,
+                cache_data=cache_data,
+                refine_detector_pick_fn=refine_preview_point,
+                caked_angles_to_background_display_coords=(
+                    caked_angles_to_background_display_coords
+                ),
+                background_display_to_native_detector_coords=(
+                    background_display_to_native_detector_coords
+                ),
+                native_detector_coords_to_caked_display_coords=(
+                    native_detector_coords_to_caked_display_coords
+                ),
+                radial_axis=radial_axis,
+                azimuth_axis=azimuth_axis,
+                caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+                caked_image_index_to_axis_fn=caked_image_index_to_axis_fn,
+            )
+        except Exception:
+            resolved_background_pick = None
 
-    pair_kwargs: dict[str, object] = {
-        "peak_col": float(peak_col),
-        "peak_row": float(peak_row),
-        "raw_col": float(col),
-        "raw_row": float(row),
-    }
-    placement_error_px_value = position_error_px(
-        float(col),
-        float(row),
-        float(peak_col),
-        float(peak_row),
-    )
-    if use_caked_space:
-        raw_display = (
-            caked_angles_to_background_display_coords(float(col), float(row))
-            if callable(caked_angles_to_background_display_coords)
-            else (None, None)
+    pair_kwargs: dict[str, object]
+    detector_col = None
+    detector_row = None
+    placement_error_px_value: float
+    if isinstance(resolved_background_pick, dict):
+        peak_col = (
+            float(resolved_background_pick["refined_background_two_theta_deg"])
+            if use_caked_space
+            else float(resolved_background_pick["refined_detector_display_col"])
         )
-        peak_display = (
-            caked_angles_to_background_display_coords(float(peak_col), float(peak_row))
-            if callable(caked_angles_to_background_display_coords)
-            else (None, None)
+        peak_row = (
+            float(resolved_background_pick["refined_background_phi_deg"])
+            if use_caked_space
+            else float(resolved_background_pick["refined_detector_display_row"])
         )
+        candidate_dist = geometry_manual_candidate_distance_to_point(
+            float(peak_col),
+            float(peak_row),
+            candidate,
+            use_caked_display=use_caked_space,
+        )
+        placement_error_px_value = position_error_px(
+            float(resolved_background_pick["detector_seed_col"]),
+            float(resolved_background_pick["detector_seed_row"]),
+            float(resolved_background_pick["refined_detector_display_col"]),
+            float(resolved_background_pick["refined_detector_display_row"]),
+        )
+        pair_kwargs = {
+            "peak_col": float(resolved_background_pick["refined_detector_display_col"]),
+            "peak_row": float(resolved_background_pick["refined_detector_display_row"]),
+            "raw_col": float(resolved_background_pick["detector_seed_col"]),
+            "raw_row": float(resolved_background_pick["detector_seed_row"]),
+            "caked_col": float(resolved_background_pick["refined_background_two_theta_deg"]),
+            "caked_row": float(resolved_background_pick["refined_background_phi_deg"]),
+            "raw_caked_col": float(
+                resolved_background_pick.get(
+                    "raw_caked_two_theta_deg",
+                    resolved_background_pick["refined_background_two_theta_deg"],
+                )
+            ),
+            "raw_caked_row": float(
+                resolved_background_pick.get(
+                    "raw_caked_phi_deg",
+                    resolved_background_pick["refined_background_phi_deg"],
+                )
+            ),
+        }
+        detector_col = float(resolved_background_pick["refined_detector_native_col"])
+        detector_row = float(resolved_background_pick["refined_detector_native_row"])
+    else:
         if (
-            raw_display[0] is None
-            or raw_display[1] is None
-            or peak_display[0] is None
-            or peak_display[1] is None
+            use_caked_space
+            and callable(caked_angles_to_background_display_coords)
+            and callable(background_display_to_native_detector_coords)
+            and callable(native_detector_coords_to_caked_display_coords)
         ):
             if callable(set_status_text):
                 set_status_text(
-                    "Manual geometry picking could not back-project the selected caked peak onto the detector."
+                    "Manual geometry picking could not resolve the selected caked background point through the detector oracle."
                 )
             return False, current_session
-        placement_error_px_value = position_error_px(
-            float(raw_display[0]),
-            float(raw_display[1]),
-            float(peak_display[0]),
-            float(peak_display[1]),
+
+        peak_col, peak_row = refine_preview_point(
+            candidate,
+            float(col),
+            float(row),
+            display_background=display_background,
+            cache_data=cache_data,
         )
+        candidate_dist = geometry_manual_candidate_distance_to_point(
+            float(peak_col),
+            float(peak_row),
+            candidate,
+            use_caked_display=use_caked_space,
+        )
+
         pair_kwargs = {
-            "peak_col": float(peak_display[0]),
-            "peak_row": float(peak_display[1]),
-            "raw_col": float(raw_display[0]),
-            "raw_row": float(raw_display[1]),
-            "caked_col": float(peak_col),
-            "caked_row": float(peak_row),
-            "raw_caked_col": float(col),
-            "raw_caked_row": float(row),
+            "peak_col": float(peak_col),
+            "peak_row": float(peak_row),
+            "raw_col": float(col),
+            "raw_row": float(row),
         }
+        placement_error_px_value = position_error_px(
+            float(col),
+            float(row),
+            float(peak_col),
+            float(peak_row),
+        )
+        if use_caked_space:
+            raw_display = (
+                caked_angles_to_background_display_coords(float(col), float(row))
+                if callable(caked_angles_to_background_display_coords)
+                else (None, None)
+            )
+            peak_display = (
+                caked_angles_to_background_display_coords(float(peak_col), float(peak_row))
+                if callable(caked_angles_to_background_display_coords)
+                else (None, None)
+            )
+            if (
+                raw_display[0] is None
+                or raw_display[1] is None
+                or peak_display[0] is None
+                or peak_display[1] is None
+            ):
+                if callable(set_status_text):
+                    set_status_text(
+                        "Manual geometry picking could not back-project the selected caked peak onto the detector."
+                    )
+                return False, current_session
+            placement_error_px_value = position_error_px(
+                float(raw_display[0]),
+                float(raw_display[1]),
+                float(peak_display[0]),
+                float(peak_display[1]),
+            )
+            pair_kwargs = {
+                "peak_col": float(peak_display[0]),
+                "peak_row": float(peak_display[1]),
+                "raw_col": float(raw_display[0]),
+                "raw_row": float(raw_display[1]),
+                "caked_col": float(peak_col),
+                "caked_row": float(peak_row),
+                "raw_caked_col": float(col),
+                "raw_caked_row": float(row),
+            }
 
     sigma_px_value = position_sigma_px(float(placement_error_px_value))
-    detector_anchor = (
-        background_display_to_native_detector_coords(
-            float(pair_kwargs["peak_col"]),
-            float(pair_kwargs["peak_row"]),
+    if detector_col is None or detector_row is None:
+        detector_anchor = (
+            background_display_to_native_detector_coords(
+                float(pair_kwargs["peak_col"]),
+                float(pair_kwargs["peak_row"]),
+            )
+            if callable(background_display_to_native_detector_coords)
+            else None
         )
-        if callable(background_display_to_native_detector_coords)
-        else None
-    )
-    detector_col = None
-    detector_row = None
-    if (
-        isinstance(detector_anchor, tuple)
-        and len(detector_anchor) >= 2
-        and np.isfinite(float(detector_anchor[0]))
-        and np.isfinite(float(detector_anchor[1]))
-    ):
-        detector_col = float(detector_anchor[0])
-        detector_row = float(detector_anchor[1])
-    elif np.isfinite(float(pair_kwargs["peak_col"])) and np.isfinite(
-        float(pair_kwargs["peak_row"])
-    ):
-        detector_col = float(pair_kwargs["peak_col"])
-        detector_row = float(pair_kwargs["peak_row"])
+        if (
+            isinstance(detector_anchor, tuple)
+            and len(detector_anchor) >= 2
+            and np.isfinite(float(detector_anchor[0]))
+            and np.isfinite(float(detector_anchor[1]))
+        ):
+            detector_col = float(detector_anchor[0])
+            detector_row = float(detector_anchor[1])
+        elif np.isfinite(float(pair_kwargs["peak_col"])) and np.isfinite(
+            float(pair_kwargs["peak_row"])
+        ):
+            detector_col = float(pair_kwargs["peak_col"])
+            detector_row = float(pair_kwargs["peak_row"])
     pair_entry = pair_entry_from_candidate_fn(
         candidate,
         float(pair_kwargs["peak_col"]),
@@ -9305,6 +9670,48 @@ def geometry_manual_place_selection_at(
         if callable(set_status_text):
             set_status_text("Failed to build the manual geometry pair entry.")
         return False, current_session
+
+    def _apply_resolved_background_fields(entry: dict[str, object]) -> None:
+        if not isinstance(resolved_background_pick, dict):
+            return
+        optional_fields = (
+            "raw_caked_display_col",
+            "raw_caked_display_row",
+            "raw_caked_two_theta_deg",
+            "raw_caked_phi_deg",
+        )
+        for field_name in optional_fields:
+            if field_name in resolved_background_pick:
+                entry[field_name] = float(resolved_background_pick[field_name])
+        entry["detector_seed_col"] = float(resolved_background_pick["detector_seed_col"])
+        entry["detector_seed_row"] = float(resolved_background_pick["detector_seed_row"])
+        entry["refined_detector_display_col"] = float(
+            resolved_background_pick["refined_detector_display_col"]
+        )
+        entry["refined_detector_display_row"] = float(
+            resolved_background_pick["refined_detector_display_row"]
+        )
+        entry["refined_detector_native_col"] = float(
+            resolved_background_pick["refined_detector_native_col"]
+        )
+        entry["refined_detector_native_row"] = float(
+            resolved_background_pick["refined_detector_native_row"]
+        )
+        entry["refined_background_two_theta_deg"] = float(
+            resolved_background_pick["refined_background_two_theta_deg"]
+        )
+        entry["refined_background_phi_deg"] = float(
+            resolved_background_pick["refined_background_phi_deg"]
+        )
+        entry["background_two_theta_deg"] = float(
+            resolved_background_pick["refined_background_two_theta_deg"]
+        )
+        entry["background_phi_deg"] = float(resolved_background_pick["refined_background_phi_deg"])
+        entry["caked_x"] = float(resolved_background_pick["refined_background_two_theta_deg"])
+        entry["caked_y"] = float(resolved_background_pick["refined_background_phi_deg"])
+        entry["manual_background_input_frame"] = "caked_2theta_phi"
+
+    _apply_resolved_background_fields(pair_entry)
     if callable(refine_saved_pair_entry_fn):
         try:
             refined_pair_entry = refine_saved_pair_entry_fn(
@@ -9315,6 +9722,7 @@ def geometry_manual_place_selection_at(
             refined_pair_entry = pair_entry
         if isinstance(refined_pair_entry, dict):
             pair_entry = dict(refined_pair_entry)
+            _apply_resolved_background_fields(pair_entry)
 
     if callable(push_undo_state_fn):
         push_undo_state_fn()

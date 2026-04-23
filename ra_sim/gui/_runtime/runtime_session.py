@@ -5095,6 +5095,7 @@ def _geometry_manual_refine_preview_point(
     *,
     display_background: np.ndarray | None = None,
     cache_data: dict[str, object] | None = None,
+    force_detector_space: bool = False,
 ) -> tuple[float, float]:
     """Refine one manual raw click/release position to the best background peak."""
     background_local = (
@@ -5102,7 +5103,46 @@ def _geometry_manual_refine_preview_point(
         if display_background is None
         else display_background
     )
-    use_caked_space = _geometry_manual_pick_uses_caked_space()
+    use_caked_space = (
+        False if bool(force_detector_space) else _geometry_manual_pick_uses_caked_space()
+    )
+    if use_caked_space:
+        resolved_pick = gui_manual_geometry.resolve_background_pick_to_caked_angles(
+            candidate,
+            float(raw_col),
+            float(raw_row),
+            active_view="caked",
+            display_background=background_local,
+            cache_data=cache_data,
+            refine_detector_pick_fn=_geometry_manual_refine_preview_point,
+            caked_angles_to_background_display_coords=(_caked_angles_to_background_display_coords),
+            background_display_to_native_detector_coords=(
+                _background_display_to_native_detector_coords
+            ),
+            native_detector_coords_to_caked_display_coords=(
+                _native_detector_coords_to_caked_display_coords
+            ),
+            radial_axis=np.asarray(
+                simulation_runtime_state.last_caked_radial_values,
+                dtype=float,
+            ),
+            azimuth_axis=np.asarray(
+                simulation_runtime_state.last_caked_azimuth_values,
+                dtype=float,
+            ),
+            caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+            caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+        )
+        if isinstance(resolved_pick, Mapping):
+            try:
+                refined_tth = float(resolved_pick["refined_background_two_theta_deg"])
+                refined_phi = float(resolved_pick["refined_background_phi_deg"])
+            except Exception:
+                refined_tth = float("nan")
+                refined_phi = float("nan")
+            if np.isfinite(refined_tth) and np.isfinite(refined_phi):
+                return float(refined_tth), float(refined_phi)
+        return float(raw_col), float(raw_row)
     if not use_caked_space:
         try:
             caked_background = np.asarray(
@@ -7975,10 +8015,14 @@ def _initialize_runtime_controls_block_10() -> None:
             position_sigma_px=_geometry_manual_position_sigma_px,
             caked_angles_to_background_display_coords=(_caked_angles_to_background_display_coords),
             caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+            caked_image_index_to_axis_fn=_caked_image_index_to_axis,
             last_caked_radial_values=(lambda: simulation_runtime_state.last_caked_radial_values),
             last_caked_azimuth_values=(lambda: simulation_runtime_state.last_caked_azimuth_values),
             background_display_to_native_detector_coords=(
                 _background_display_to_native_detector_coords
+            ),
+            native_detector_coords_to_caked_display_coords=(
+                _native_detector_coords_to_caked_display_coords
             ),
             refine_saved_pair_entry=(
                 lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
