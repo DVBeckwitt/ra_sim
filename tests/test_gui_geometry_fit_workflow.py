@@ -12387,6 +12387,8 @@ def test_new4_ladder_caked_evidence_prefers_clean_selected_summary_over_stale_re
         "fit_space_projector_kind": "exact_caked_bundle",
         "matched_pair_count": 6,
         "missing_pair_count": 1,
+        "fallback_entry_count": 2,
+        "branch_mismatch_count": 1,
         "point_match_summary": {
             "exact_fit_space_projector_available": True,
             "manual_caked_residual_row_count": 6,
@@ -12394,21 +12396,14 @@ def test_new4_ladder_caked_evidence_prefers_clean_selected_summary_over_stale_re
             "fit_space_projector_kind": "exact_caked_bundle",
             "matched_pair_count": 6,
             "missing_pair_count": 1,
+            "fallback_entry_count": 2,
+            "branch_mismatch_count": 1,
         },
         "last_point_match_summary": {
             "exact_fit_space_projector_available": True,
             "manual_caked_residual_row_count": 7,
-            "dataset_fit_space_projector_row_count": 7,
-            "invalid_dataset_fit_space_projector_row_count": 0,
-            "analytic_detector_fit_space_row_count": 0,
             "fit_space_projector_kind": "exact_caked_bundle",
-            "matched_pair_count": 7,
-            "missing_pair_count": 0,
             "fixed_source_resolved_count": 7,
-            "fallback_entry_count": 0,
-            "fixed_source_resolution_fallback_count": 0,
-            "branch_mismatch_count": 0,
-            "missing_fixed_source_count": 0,
             "expected_saved_caked_manual_pair_count": 7,
             "metric_name": "raw_angular_rms_deg",
             "metric_unit": "deg",
@@ -12417,20 +12412,27 @@ def test_new4_ladder_caked_evidence_prefers_clean_selected_summary_over_stale_re
         },
     }
     assert report["manual_caked_residual_row_count"] == 6
+    assert report["dataset_fit_space_projector_row_count"] == 6
     assert report["matched_pair_count"] == 6
     assert report["missing_pair_count"] == 1
+    assert report["fallback_entry_count"] == 2
+    assert report["branch_mismatch_count"] == 1
 
     ladder._apply_caked_fit_space_evidence_fields(report)
 
     assert report["manual_caked_residual_row_count"] == 7
-    assert report["dataset_fit_space_projector_row_count"] == 7
+    assert report["dataset_fit_space_projector_row_count"] == 0
     assert report["matched_pair_count"] == 7
     assert report["missing_pair_count"] == 0
+    assert report["fallback_entry_count"] == 0
+    assert report["branch_mismatch_count"] == 0
     assert report["fixed_source_resolved_count"] == 7
     assert report["point_match_summary"]["manual_caked_residual_row_count"] == 7
-    assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 7
+    assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 0
     assert report["point_match_summary"]["matched_pair_count"] == 7
     assert report["point_match_summary"]["missing_pair_count"] == 0
+    assert report["point_match_summary"]["fallback_entry_count"] == 0
+    assert report["point_match_summary"]["branch_mismatch_count"] == 0
     assert report["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
 
 
@@ -12574,6 +12576,109 @@ def test_new4_ladder_full_beam_finalizer_prefers_clean_exact_caked_summary(
     assert finalized["point_match_summary"]["exact_fit_space_projector_available"] is True
     assert finalized["point_match_summary"]["manual_caked_residual_row_count"] == 7
     assert finalized["point_match_summary"]["dataset_fit_space_projector_row_count"] == 7
+    assert finalized["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
+
+
+def test_new4_ladder_full_beam_finalizer_accepts_sparse_exact_caked_summary(
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    caked_path = tmp_path / "rung_03b.json"
+    caked_path.write_text("{}\n", encoding="utf-8")
+    names = list(ladder.RUNG7_BASE_CANDIDATE)
+    base_parameter_values = {str(name): 0.0 for name in names}
+    report = _green_feature_report(ladder, names, "full_beam_polish")
+    report["requires_caked_manual_exact_fit_space"] = True
+    report["exact_fit_space_projector_available"] = True
+    report["manual_caked_residual_row_count"] = 6
+    report["dataset_fit_space_projector_row_count"] = 6
+    report["fit_space_projector_kind"] = "exact_caked_bundle"
+    report["matched_pair_count"] = 6
+    report["missing_pair_count"] = 1
+    report["fallback_entry_count"] = 2
+    report["branch_mismatch_count"] = 1
+    report["same_manual_pair_ids_before_after"] = False
+    report["before_caked_metric_name"] = "full_beam_fixed_correspondence"
+    report["before_caked_metric_unit"] = "px"
+    report["before_caked_metric_rms"] = float("nan")
+    report["before_caked_metric_max"] = float("nan")
+    report["after_caked_metric_name"] = "full_beam_fixed_correspondence"
+    report["after_caked_metric_unit"] = "px"
+    report["after_caked_metric_rms"] = float("nan")
+    report["after_caked_metric_max"] = float("nan")
+    report["point_match_summary"] = {
+        "exact_fit_space_projector_available": True,
+        "manual_caked_residual_row_count": 6,
+        "dataset_fit_space_projector_row_count": 6,
+        "matched_pair_count": 6,
+        "missing_pair_count": 1,
+        "fallback_entry_count": 2,
+        "branch_mismatch_count": 1,
+    }
+    report["last_point_match_summary"] = {
+        "exact_fit_space_projector_available": True,
+        "manual_caked_residual_row_count": 7,
+        "fit_space_projector_kind": "exact_caked_bundle",
+        "fixed_source_resolved_count": 7,
+        "expected_saved_caked_manual_pair_count": 7,
+        "metric_name": "raw_angular_rms_deg",
+        "metric_unit": "deg",
+        "raw_angular_rms_deg": 37.94181761069639,
+        "raw_angular_max_deg": 99.26056304870461,
+        "raw_angular_row_count": 7,
+        "raw_angular_range_row_count": 7,
+        "raw_angular_delta_failure_count": 0,
+        "raw_angular_range_failure_count": 0,
+        "raw_angular_sanity_ok": True,
+        "raw_angular_range_sanity_ok": True,
+        "raw_angular_component_max_abs_deg": 98.95681670658456,
+        "optimizer_point_component_count": 14,
+        "optimizer_point_component_failure_count": 0,
+        "optimizer_component_count": 20,
+        "optimizer_component_nonfinite_count": 0,
+        "optimizer_component_rms_weighted_deg": 23.01333161098431,
+        "weighted_angular_row_count": 7,
+        "weighted_angular_failure_count": 0,
+        "weighted_angular_recompute_failure_count": 0,
+        "weighted_metric_name": "weighted_angular_rms_weighted_deg",
+        "weighted_metric_unit": "weighted_deg",
+    }
+    report["full_beam_polish_summary"] = {
+        "selection_status": "rejected",
+        "accepted": False,
+        "candidate_point_match_diagnostics": [],
+    }
+
+    finalized = ladder._finalize_feature_report(
+        report,
+        feature="full_beam_polish",
+        candidate=names,
+        state_path=state_path,
+        state_hash_before=_hash_file(state_path),
+        timeout_seconds=120.0,
+        base_parameter_values=base_parameter_values,
+        provider_after={
+            "provider_guard_ok": True,
+            "classification": "point_provider_parity_ok",
+        },
+        caked_point_reprojection_report_path=caked_path,
+    )
+
+    assert finalized["status"] == "ok"
+    assert finalized["pass"] is True
+    assert finalized["failure_reason"] is None
+    assert finalized["feature_guard_failures"] == []
+    assert finalized["residuals_finite"] is True
+    assert finalized["matched_pair_count"] == 7
+    assert finalized["missing_pair_count"] == 0
+    assert finalized["fallback_entry_count"] == 0
+    assert finalized["branch_mismatch_count"] == 0
+    assert finalized["manual_caked_residual_row_count"] == 7
+    assert finalized["dataset_fit_space_projector_row_count"] == 0
+    assert finalized["point_match_summary"]["manual_caked_residual_row_count"] == 7
+    assert finalized["point_match_summary"]["dataset_fit_space_projector_row_count"] == 0
     assert finalized["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
 
 
