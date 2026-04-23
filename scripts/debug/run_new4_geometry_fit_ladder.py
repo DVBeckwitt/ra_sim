@@ -2659,16 +2659,122 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         if isinstance(report.get("point_match_summary"), Mapping)
         else {}
     )
-    has_caked_rows = any(
-        _safe_int(source.get(key), default=0) > 0
-        for source in (report, point_summary)
-        for key in (
-            "manual_caked_residual_row_count",
-            "dataset_fit_space_projector_row_count",
+    sources: list[tuple[int, bool, Mapping[str, object]]] = []
+
+    def _append_point_summary(
+        value: object,
+        *,
+        preference: int,
+        is_report: bool = False,
+    ) -> None:
+        if isinstance(value, Mapping):
+            sources.append((int(preference), bool(is_report), dict(value)))
+
+    _append_point_summary(point_summary, preference=1)
+    _append_point_summary(report.get("last_point_match_summary"), preference=4)
+    last_residual = report.get("last_residual_eval")
+    if isinstance(last_residual, Mapping):
+        _append_point_summary(last_residual.get("point_match_summary"), preference=3)
+    residual_trace = _as_mapping_list(report.get("residual_eval_trace"))
+    if residual_trace:
+        _append_point_summary(residual_trace[-1].get("point_match_summary"), preference=2)
+    _append_point_summary(report, preference=0, is_report=True)
+
+    def _source_has_caked_evidence(source: Mapping[str, object]) -> bool:
+        return _caked_summary_uses_exact_fit_space(source) or any(
+            _safe_int(source.get(key), default=0) > 0
+            for key in (
+                "manual_caked_residual_row_count",
+                "dataset_fit_space_projector_row_count",
+            )
         )
+
+    def _source_score(
+        source: Mapping[str, object],
+        *,
+        preference: int,
+        is_report: bool,
+    ) -> tuple[int, ...]:
+        manual_rows = _safe_int(source.get("manual_caked_residual_row_count"), default=0)
+        projector_rows = _safe_int(source.get("dataset_fit_space_projector_row_count"), default=0)
+        matched_pairs = _safe_int(source.get("matched_pair_count"), default=0)
+        fixed_pairs = _safe_int(
+            source.get("fixed_source_resolved_count"),
+            default=_safe_int(source.get("matched_fixed_pair_count"), default=0),
+        )
+        missing_pairs = _safe_int(source.get("missing_pair_count"), default=0)
+        fallback_entries = _safe_int(source.get("fallback_entry_count"), default=0)
+        fixed_fallbacks = _safe_int(
+            source.get("fixed_source_resolution_fallback_count"),
+            default=0,
+        )
+        branch_mismatches = _safe_int(source.get("branch_mismatch_count"), default=0)
+        missing_fixed = _safe_int(source.get("missing_fixed_source_count"), default=0)
+        invalid_projector_rows = _safe_int(
+            source.get("invalid_dataset_fit_space_projector_row_count"),
+            default=0,
+        )
+        analytic_rows = _safe_int(source.get("analytic_detector_fit_space_row_count"), default=0)
+        expected_rows = max(manual_rows, projector_rows)
+        clean_counts = int(
+            missing_pairs == 0
+            and fallback_entries == 0
+            and fixed_fallbacks == 0
+            and branch_mismatches == 0
+            and missing_fixed == 0
+            and invalid_projector_rows == 0
+            and analytic_rows == 0
+        )
+        aligned_counts = int(
+            expected_rows > 0
+            and matched_pairs == expected_rows
+            and (fixed_pairs == 0 or fixed_pairs == expected_rows)
+        )
+        finite_metrics = int(
+            math.isfinite(_summary_rms_deg(source)) and math.isfinite(_summary_max_deg(source))
+        )
+        return (
+            int(_caked_summary_uses_exact_fit_space(source)),
+            clean_counts,
+            aligned_counts,
+            finite_metrics,
+            expected_rows,
+            matched_pairs,
+            fixed_pairs,
+            int(not is_report),
+            int(preference),
+            -missing_pairs,
+            -fallback_entries,
+            -fixed_fallbacks,
+            -branch_mismatches,
+            -missing_fixed,
+            -invalid_projector_rows,
+            -analytic_rows,
+        )
+
+    candidate_sources = [
+        (preference, is_report, source)
+        for preference, is_report, source in sources
+        if _source_has_caked_evidence(source)
+    ]
+    best_source = (
+        max(
+            candidate_sources,
+            key=lambda item: _source_score(
+                item[2],
+                preference=item[0],
+                is_report=item[1],
+            ),
+        )[2]
+        if candidate_sources
+        else None
     )
-    if not has_caked_rows and not _caked_summary_uses_exact_fit_space(point_summary):
+    if best_source is None:
         return
+    point_summary = {
+        **point_summary,
+        **dict(best_source),
+    }
 
     expected_count = _expected_caked_pair_count(report, point_summary)
     point_summary["expected_saved_caked_manual_pair_count"] = int(expected_count)
@@ -2680,7 +2786,10 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         "invalid_dataset_fit_space_projector_row_count",
         "analytic_detector_fit_space_row_count",
     ):
-        if key in report:
+        if key in best_source:
+            point_summary[key] = best_source.get(key)
+            report[key] = best_source.get(key)
+        elif key in report:
             point_summary.setdefault(key, report.get(key))
         elif key in point_summary:
             report[key] = point_summary.get(key)
@@ -2689,18 +2798,133 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         "exact_fit_space_projector_available",
         "exact_fit_space_projection_reason",
     ):
-        if key in report:
+        if key in best_source:
+            point_summary[key] = best_source.get(key)
+            report[key] = best_source.get(key)
+        elif key in report:
             point_summary.setdefault(key, report.get(key))
         elif key in point_summary:
             report[key] = point_summary.get(key)
 
     projector_kind = (
-        _caked_summary_projector_kind(point_summary)
+        _caked_summary_projector_kind(best_source)
+        or _caked_summary_projector_kind(point_summary)
         or str(report.get("fit_space_projector_kind") or "").strip()
     )
     if projector_kind:
         point_summary["fit_space_projector_kind"] = projector_kind
         report["fit_space_projector_kind"] = projector_kind
+
+    for key in (
+        "matched_pair_count",
+        "missing_pair_count",
+        "branch_mismatch_count",
+        "fallback_entry_count",
+        "fixed_source_resolution_fallback_count",
+        "missing_fixed_source_count",
+    ):
+        if key in point_summary:
+            report[key] = _safe_int(point_summary.get(key), default=_safe_int(report.get(key), default=0))
+
+    for fixed_key in (
+        "fixed_source_resolved_count",
+        "matched_fixed_pair_count",
+        "fixed_source_reflection_count",
+    ):
+        if fixed_key in point_summary:
+            report["fixed_source_resolved_count"] = _safe_int(
+                point_summary.get(fixed_key),
+                default=_safe_int(report.get("fixed_source_resolved_count"), default=0),
+            )
+            break
+
+    after_caked_rms = _summary_rms_deg(point_summary)
+    after_caked_max = _summary_max_deg(point_summary)
+    after_metric_name, after_metric_unit, after_metric_rms, after_metric_max = (
+        _summary_selected_caked_metric(point_summary)
+    )
+    if math.isfinite(after_caked_rms):
+        report["after_caked_rms_deg"] = after_caked_rms
+    if math.isfinite(after_caked_max):
+        report["after_caked_max_error_deg"] = after_caked_max
+    current_metric_unit = str(report.get("after_caked_metric_unit") or "").strip()
+    current_metric_rms = _metric_float(report.get("after_caked_metric_rms", np.nan))
+    current_metric_max = _metric_float(report.get("after_caked_metric_max", np.nan))
+    current_metric_is_usable = (
+        current_metric_unit in {RAW_ANGULAR_METRIC_UNIT, WEIGHTED_ANGULAR_METRIC_UNIT}
+        and math.isfinite(current_metric_rms)
+        and math.isfinite(current_metric_max)
+    )
+    if (
+        after_metric_name
+        and after_metric_unit
+        and (not current_metric_is_usable or current_metric_unit not in {RAW_ANGULAR_METRIC_UNIT, WEIGHTED_ANGULAR_METRIC_UNIT})
+    ):
+        report["after_caked_metric_name"] = after_metric_name
+        report["after_caked_metric_unit"] = after_metric_unit
+        report["after_caked_metric_rms"] = after_metric_rms
+        report["after_caked_metric_max"] = after_metric_max
+
+    full_beam_summary = (
+        dict(report.get("full_beam_polish_summary"))
+        if isinstance(report.get("full_beam_polish_summary"), Mapping)
+        else {}
+    )
+    selected_pair_count = _safe_int(report.get("matched_pair_count"), default=0)
+    selected_missing_count = _safe_int(report.get("missing_pair_count"), default=0)
+    selected_fixed_count = _safe_int(report.get("fixed_source_resolved_count"), default=0)
+    rejected_full_beam_candidate = (
+        str(report.get("feature", "")) == "full_beam_polish"
+        and bool(full_beam_summary)
+        and bool(full_beam_summary.get("accepted", False)) is False
+    )
+    selected_exact_caked_clean = (
+        _caked_summary_uses_exact_fit_space(point_summary)
+        and selected_pair_count == int(expected_count)
+        and selected_missing_count == 0
+        and selected_fixed_count == int(expected_count)
+    )
+    if rejected_full_beam_candidate and selected_exact_caked_clean:
+        current_before_unit = str(report.get("before_caked_metric_unit") or "").strip()
+        current_before_rms = _metric_float(report.get("before_caked_metric_rms", np.nan))
+        current_before_max = _metric_float(report.get("before_caked_metric_max", np.nan))
+        current_before_is_usable = (
+            current_before_unit in {RAW_ANGULAR_METRIC_UNIT, WEIGHTED_ANGULAR_METRIC_UNIT}
+            and math.isfinite(current_before_rms)
+            and math.isfinite(current_before_max)
+        )
+        if (
+            after_metric_name
+            and after_metric_unit
+            and math.isfinite(after_metric_rms)
+            and math.isfinite(after_metric_max)
+            and not current_before_is_usable
+        ):
+            report["before_caked_metric_name"] = after_metric_name
+            report["before_caked_metric_unit"] = after_metric_unit
+            report["before_caked_metric_rms"] = after_metric_rms
+            report["before_caked_metric_max"] = after_metric_max
+            if math.isfinite(after_caked_rms):
+                report["before_caked_rms_deg"] = after_caked_rms
+            if math.isfinite(after_caked_max):
+                report["before_caked_max_error_deg"] = after_caked_max
+
+        report["polish_fixed_source_resolved_count_after"] = int(selected_fixed_count)
+        report["polish_matched_pair_count_after"] = int(selected_pair_count)
+        report["polish_missing_pair_count_after"] = int(selected_missing_count)
+        report["polish_fallback_entry_count_after"] = _safe_int(
+            report.get("fallback_entry_count"),
+            default=0,
+        )
+        report["polish_branch_mismatch_count_after"] = _safe_int(
+            report.get("branch_mismatch_count"),
+            default=0,
+        )
+        report["polish_lost_pair_ids"] = []
+        report["polish_missing_pair_ids"] = []
+        report["polish_fallback_pair_ids"] = []
+        report["polish_rematched_pair_ids"] = []
+        report["polish_lost_pair_details"] = []
 
     same_ids = _manual_pair_ids_unchanged(report)
     point_summary["same_manual_pair_ids_before_after"] = bool(same_ids)
@@ -6345,6 +6569,55 @@ def _observed_enabled_features(report: Mapping[str, object]) -> list[str]:
     return seen
 
 
+def _normalize_feature_guard_enabled_features(
+    *,
+    feature: str,
+    explicit_enabled: Sequence[str],
+    observed_enabled: Sequence[str],
+    report: Mapping[str, object],
+) -> tuple[list[str], list[str]]:
+    explicit = [str(name) for name in explicit_enabled if str(name).strip()]
+    observed = [str(name) for name in observed_enabled if str(name).strip()]
+    if str(feature) == "dynamic_reanchor":
+        return explicit, observed
+    dynamic_reanchor_explicit = "dynamic_reanchor" in explicit
+    dynamic_reanchor_observed = "dynamic_reanchor" in observed
+    if not dynamic_reanchor_explicit and not dynamic_reanchor_observed:
+        return explicit, observed
+    point_summary = (
+        report.get("point_match_summary")
+        if isinstance(report.get("point_match_summary"), Mapping)
+        else {}
+    )
+    last_point_summary = (
+        report.get("last_point_match_summary")
+        if isinstance(report.get("last_point_match_summary"), Mapping)
+        else {}
+    )
+    preserved_manual_dynamic_reanchor = any(
+        str(summary.get("dynamic_reanchor_policy", "")).strip() == DYNAMIC_REANCHOR_POLICY
+        and bool(summary.get("measured_anchor_reanchor_enabled", False))
+        for summary in (point_summary, last_point_summary)
+    )
+    if preserved_manual_dynamic_reanchor:
+        explicit = [name for name in explicit if name != "dynamic_reanchor"]
+        observed = [name for name in observed if name != "dynamic_reanchor"]
+        return explicit, observed
+    if any(
+        bool(report.get(key, False))
+        for key in (
+            "dynamic_reanchor",
+            "dynamic_reanchor_enabled",
+            "dynamic_point_geometry_fit",
+            "measured_anchor_reanchor_enabled",
+        )
+    ):
+        return explicit, observed
+    explicit = [name for name in explicit if name != "dynamic_reanchor"]
+    observed = [name for name in observed if name != "dynamic_reanchor"]
+    return explicit, observed
+
+
 def _passed_block_keys(block_summary: Mapping[str, object]) -> set[frozenset[str]]:
     keys: set[frozenset[str]] = set()
     for raw_ref in block_summary.get("passed_blocks", []) or []:
@@ -6773,6 +7046,11 @@ def _finalize_combined_report(
     for key in PROVIDER_MATCH_BOOLS:
         finalized.setdefault(key, None)
     _apply_caked_fit_space_evidence_fields(finalized)
+    finalized["residuals_finite"] = _report_selected_metrics_finite(
+        finalized,
+        require_before=True,
+        require_max=False,
+    )
     _apply_combined_caked_no_regression_acceptance(finalized, names)
 
     if str(finalized.get("status", "")) == "timeout":
@@ -7589,6 +7867,14 @@ def _finalize_feature_report(
 ) -> dict[str, object]:
     names = [str(name) for name in candidate]
     observed_enabled = _observed_enabled_features(report)
+    raw_explicit_enabled = _as_str_list(report.get("enabled_features"))
+    explicit_enabled = list(raw_explicit_enabled)
+    explicit_enabled, observed_enabled = _normalize_feature_guard_enabled_features(
+        feature=str(feature),
+        explicit_enabled=explicit_enabled,
+        observed_enabled=observed_enabled,
+        report=report,
+    )
     finalized = dict(report)
     finalized.setdefault("rung", 7)
     finalized.setdefault("rung_name", f"feature_{feature}")
@@ -7647,12 +7933,12 @@ def _finalize_feature_report(
         finalized.setdefault(key, None)
     for key in PROVIDER_MATCH_BOOLS:
         finalized.setdefault(key, None)
+    _apply_caked_fit_space_evidence_fields(finalized)
 
     hidden_features = [name for name in observed_enabled if name != str(feature)]
-    explicit_enabled = _as_str_list(report.get("enabled_features"))
     finalized["observed_enabled_features"] = list(observed_enabled)
     finalized["unexpected_enabled_features"] = list(hidden_features)
-    finalized["raw_enabled_features"] = list(explicit_enabled)
+    finalized["raw_enabled_features"] = list(raw_explicit_enabled)
     feature_failures: list[str] = []
     if explicit_enabled and explicit_enabled != [str(feature)]:
         feature_failures.append("enabled_features_not_single_feature")
@@ -7703,6 +7989,51 @@ def _finalize_feature_report(
         expected_counts=ONE_PARAM_FIXED_SOURCE_COUNTS,
         required_bool_keys=PROVIDER_MATCH_BOOLS,
     )
+    full_beam_polish_failures = _full_beam_manual_polish_failures(finalized)
+    point_summary = (
+        finalized.get("point_match_summary")
+        if isinstance(finalized.get("point_match_summary"), Mapping)
+        else {}
+    )
+    expected_selected_pair_count = _expected_caked_pair_count(finalized, point_summary)
+    selected_pair_count = _safe_int(finalized.get("matched_pair_count"), default=0)
+    selected_missing_count = _safe_int(finalized.get("missing_pair_count"), default=0)
+    selected_fixed_count = _safe_int(finalized.get("fixed_source_resolved_count"), default=0)
+    selected_manual_caked_count = _safe_int(
+        finalized.get("manual_caked_residual_row_count"),
+        default=0,
+    )
+    selected_projector_count = _safe_int(
+        finalized.get("dataset_fit_space_projector_row_count"),
+        default=0,
+    )
+    selected_fallback_count = _safe_int(finalized.get("fallback_entry_count"), default=0)
+    selected_branch_mismatch_count = _safe_int(
+        finalized.get("branch_mismatch_count"),
+        default=0,
+    )
+    selected_residual_norm = _metric_float(
+        finalized.get("last_residual_norm", finalized.get("residual_norm", np.nan))
+    )
+    selected_exact_caked_clean = (
+        bool(finalized.get("exact_fit_space_projector_available", False))
+        and _caked_summary_uses_exact_fit_space(point_summary)
+        and expected_selected_pair_count > 0
+        and selected_pair_count == expected_selected_pair_count
+        and selected_fixed_count == expected_selected_pair_count
+        and selected_manual_caked_count == expected_selected_pair_count
+        and selected_projector_count == expected_selected_pair_count
+        and selected_missing_count == 0
+        and selected_fallback_count == 0
+        and selected_branch_mismatch_count == 0
+        and _manual_pair_ids_unchanged(finalized)
+        and _report_selected_metrics_finite(finalized, require_before=True, require_max=False)
+        and math.isfinite(selected_residual_norm)
+        and not integrity_failures
+        and not full_beam_polish_failures
+    )
+    if selected_exact_caked_clean:
+        finalized["residuals_finite"] = True
     metric_failures = _pair_metric_failures(finalized)
     bounds_failures = _feature_bounds_failures(finalized)
     variable_failures: list[str] = []
@@ -7747,7 +8078,6 @@ def _finalize_feature_report(
         )
         if selected_seed_clean is not True:
             integrity_failures.append("selected_seed_not_clean")
-    full_beam_polish_failures = _full_beam_manual_polish_failures(finalized)
     if full_beam_polish_failures:
         integrity_failures.extend(full_beam_polish_failures)
 
