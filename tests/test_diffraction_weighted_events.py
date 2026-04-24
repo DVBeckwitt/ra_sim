@@ -140,6 +140,126 @@ def _flatten_hit_tables(hit_tables):
     return np.vstack(rows)
 
 
+def _install_streaming_fast_outer_backend(
+    monkeypatch,
+    *,
+    pass1_masses: dict[int | tuple[int, int], float],
+    pass2_masses: dict[int | tuple[int, int], float] | None = None,
+):
+    pass2_masses = pass1_masses if pass2_masses is None else pass2_masses
+
+    def mass_for(mapping, peak_idx, sample_idx):
+        if (peak_idx, sample_idx) in mapping:
+            return float(mapping[(peak_idx, sample_idx)])
+        return float(mapping.get(peak_idx, 0.0))
+
+    def fake_precompute(
+        wavelength_array,
+        _n2,
+        n2_sample_array,
+        beam_x_array,
+        _beam_y_array,
+        _theta_array,
+        _phi_array,
+        _zb,
+        _thickness,
+        _sample_width_m,
+        _sample_length_m,
+        _optics_mode,
+        _theta_initial_deg,
+        _cor_angle_deg,
+        _psi_z_deg,
+        _R_z_R_y,
+        _R_ZY_n,
+        _P0,
+    ):
+        n_samp = int(np.asarray(beam_x_array, dtype=np.float64).shape[0])
+        sample_terms = np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64)
+        sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(n_samp)
+        sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_L_IN] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_N2_REAL] = 1.0
+        return (
+            np.eye(3, dtype=np.float64),
+            sample_terms,
+            np.asarray(n2_sample_array, dtype=np.complex128).copy(),
+            np.ones(n_samp, dtype=np.complex128),
+            0,
+        )
+
+    def fake_solve_q(*_args, **_kwargs):
+        return np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0
+
+    def fake_pass1(*args):
+        peak_idx = int(args[1])
+        sample_idx = int(args[2])
+        mass = mass_for(pass1_masses, peak_idx, sample_idx)
+        return mass, int(mass > 0.0), 1
+
+    def fake_pass2(*args):
+        peak_idx = int(args[1])
+        sample_idx = int(args[2])
+        H = float(args[3])
+        K = float(args[4])
+        L = float(args[5])
+        targets = np.asarray(args[-15], dtype=np.float64)
+        target_idx = int(args[-14])
+        cumulative_mass = float(args[-13])
+        deposit = float(args[-12])
+        collect_tables = bool(args[-11])
+        flat_event_rows = args[-10]
+        flat_event_peak_indices = args[-9]
+        flat_event_count = int(args[-8])
+        event_counts = args[-7]
+
+        mass = mass_for(pass2_masses, peak_idx, sample_idx)
+        cumulative_mass += mass
+        hit_count = 0
+        while target_idx < targets.shape[0] and cumulative_mass > float(targets[target_idx]):
+            hit_count += 1
+            target_idx += 1
+        event_counts[peak_idx, sample_idx] += hit_count
+        if collect_tables:
+            for _event_idx in range(hit_count):
+                flat_event_peak_indices[flat_event_count] = peak_idx
+                flat_event_rows[flat_event_count, 0] = deposit
+                flat_event_rows[flat_event_count, 1] = 10.0 + peak_idx
+                flat_event_rows[flat_event_count, 2] = 0.0
+                flat_event_rows[flat_event_count, 3] = 0.0
+                flat_event_rows[flat_event_count, 4] = H
+                flat_event_rows[flat_event_count, 5] = K
+                flat_event_rows[flat_event_count, 6] = L
+                flat_event_rows[flat_event_count, 7] = np.nan
+                flat_event_rows[flat_event_count, 8] = np.nan
+                flat_event_rows[flat_event_count, 9] = float(sample_idx)
+                flat_event_count += 1
+        return (
+            target_idx,
+            cumulative_mass,
+            flat_event_count,
+            int(args[-2]),
+            1,
+            mass,
+            hit_count,
+            bool(mass > 0.0),
+            0.0,
+            10.0 + peak_idx,
+            0.0,
+            peak_idx,
+            H,
+            K,
+            L,
+        )
+
+    monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute)
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+    monkeypatch.setattr(diffraction, "_weighted_event_pass1_for_qset", fake_pass1)
+    monkeypatch.setattr(diffraction, "_weighted_event_pass2_for_qset", fake_pass2)
+
+
 def _new_representative_slot_state(n_slots):
     return (
         np.zeros(n_slots, dtype=np.uint8),
@@ -360,6 +480,139 @@ def test_events_per_beam_phase_counts_draws_for_whole_phase_not_per_peak(monkeyp
     )
     total_rows = sum(np.asarray(table, dtype=np.float64).shape[0] for table in result[1])
     assert total_rows == 50
+    targets = diffraction._weighted_event_targets(2.0, 50, sample_idx=0)
+    expected_indices = diffraction._select_weighted_event_indices_from_targets(
+        np.array([1.0, 1.0], dtype=np.float64),
+        targets,
+    )
+    expected_counts = np.bincount(expected_indices, minlength=2)
+    actual_counts = np.array(
+        [np.asarray(table, dtype=np.float64).shape[0] for table in result[1]],
+        dtype=np.int64,
+    )
+    np.testing.assert_array_equal(actual_counts, expected_counts)
+
+
+def test_weighted_event_pass2_does_not_tail_fill_inside_qset(monkeypatch):
+    def fake_project_fast(*args):
+        Qx = float(args[0])
+        return True, 0.0, Qx, 0.0, 1.0
+
+    monkeypatch.setattr(diffraction, "_project_weighted_candidate_fast", fake_project_fast)
+
+    sample_terms = np.zeros((1, diffraction._SAMPLE_COLS), dtype=np.float64)
+    sample_n2_array = np.ones(1, dtype=np.complex128)
+    sample_eps2_array = np.ones(1, dtype=np.complex128)
+    flat_event_rows = np.full(
+        (3, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH),
+        np.nan,
+        dtype=np.float64,
+    )
+    flat_event_peak_indices = np.full(3, -1, dtype=np.int64)
+    event_counts = np.zeros((1, 1), dtype=np.int64)
+
+    result = diffraction._weighted_event_pass2_for_qset.py_func(
+        np.array([[10.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        0,
+        0,
+        1.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        np.eye(3, dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        sample_terms,
+        sample_n2_array,
+        sample_eps2_array,
+        0.0,
+        diffraction.OPTICS_MODE_FAST,
+        1.0,
+        64,
+        diffraction.EXIT_PROJECTION_INTERNAL,
+        0,
+        np.zeros((diffraction._FAST_OPTICS_LUT_SIZE, diffraction._FAST_OPTICS_LUT_COLS)),
+        np.array([0.5, 1.5, 2.5], dtype=np.float64),
+        0,
+        0.0,
+        1.0,
+        True,
+        flat_event_rows,
+        flat_event_peak_indices,
+        0,
+        event_counts,
+        False,
+        np.zeros((64, 64), dtype=np.float64),
+        np.empty(0, dtype=np.int64),
+        np.empty(0, dtype=np.float64),
+        0,
+        0,
+    )
+
+    assert int(result[0]) == 1
+    assert int(result[2]) == 1
+    assert int(result[6]) == 1
+    assert int(event_counts[0, 0]) == 1
+    assert int(flat_event_peak_indices[0]) == 0
+    assert np.all(flat_event_peak_indices[1:] == -1)
+
+
+def test_fast_outer_loop_streams_targets_across_all_peaks_before_tail_fill(monkeypatch):
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={0: 0.1, 1: 9.9},
+    )
+    result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(
+            miller=np.array([[1.0, 0.0, 1.0], [2.0, 0.0, 1.0]], dtype=np.float64),
+            intensities=np.array([1.0, 1.0], dtype=np.float64),
+        ),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=10,
+    )
+
+    rows = _flatten_hit_tables(result[1])
+    assert rows.shape[0] == 10
+    assert 1.0 not in set(rows[:, 4].tolist())
+    assert np.count_nonzero(rows[:, 4] == 2.0) == 10
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["pass2_mass_mismatch_count"] == 0
+    assert stats["tail_fill_events"] == 0
+
+
+def test_fast_outer_loop_reports_pass2_mass_mismatch_and_skips_tail_fill(monkeypatch):
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={0: 10.0},
+        pass2_masses={0: 9.0},
+    )
+    result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=10,
+    )
+
+    rows = _flatten_hit_tables(result[1])
+    expected_rows = int(
+        np.count_nonzero(diffraction._weighted_event_targets(10.0, 10, sample_idx=0) < 9.0)
+    )
+    assert rows.shape[0] == expected_rows
+    assert rows.shape[0] < 10
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["pass2_mass_mismatch_count"] == 1
+    assert stats["pass2_mass_mismatch_max_abs"] == pytest.approx(1.0)
+    assert stats["tail_fill_events"] == 0
 
 
 def test_image_level_conservation_uses_constant_event_deposit(monkeypatch):

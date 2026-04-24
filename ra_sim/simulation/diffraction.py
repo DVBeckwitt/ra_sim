@@ -548,6 +548,9 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "n_project_candidate_calls": 0,
     "n_valid_candidates": 0,
     "n_selected_events": 0,
+    "pass2_mass_mismatch_count": 0,
+    "pass2_mass_mismatch_max_abs": 0.0,
+    "tail_fill_events": 0,
     "time_precompute": 0.0,
     "time_solve_q": 0.0,
     "time_project": 0.0,
@@ -4323,6 +4326,10 @@ def _weighted_event_pass2_for_qset(
     last_row_f = np.nan
     last_col_f = np.nan
     last_phi_f = np.nan
+    last_peak_idx = -1
+    last_H = np.nan
+    last_K = np.nan
+    last_L = np.nan
 
     I_plane_x = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_X]
     I_plane_y = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Y]
@@ -4392,6 +4399,10 @@ def _weighted_event_pass2_for_qset(
         last_row_f = row_f
         last_col_f = col_f
         last_phi_f = phi_f
+        last_peak_idx = peak_idx
+        last_H = H
+        last_K = K
+        last_L = L
 
         hit_count = 0
         while target_idx < targets.shape[0] and cumulative_mass > targets[target_idx]:
@@ -4459,75 +4470,6 @@ def _weighted_event_pass2_for_qset(
                 flat_event_rows[flat_event_count, 9] = float(sample_idx)
                 flat_event_count += 1
 
-    if target_idx < targets.shape[0] and have_last_valid:
-        hit_count = targets.shape[0] - target_idx
-        selected_events += hit_count
-        event_counts[peak_idx, sample_idx] += hit_count
-        target_idx = targets.shape[0]
-
-        if accumulate_image:
-            deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
-                image_size,
-                last_row_f,
-                last_col_f,
-                float(hit_count) * deposit,
-                cache_keys,
-                cache_values,
-                cache_entry_count,
-                cache_flush_limit,
-            )
-            if needs_flush:
-                cache_entry_count = _flush_local_pixel_cache(
-                    image,
-                    image_size,
-                    cache_keys,
-                    cache_values,
-                )
-                deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
-                    image_size,
-                    last_row_f,
-                    last_col_f,
-                    float(hit_count) * deposit,
-                    cache_keys,
-                    cache_values,
-                    cache_entry_count,
-                    cache_flush_limit,
-                )
-                if needs_flush:
-                    deposited = _accumulate_bilinear_hit(
-                        image,
-                        image_size,
-                        last_row_f,
-                        last_col_f,
-                        float(hit_count) * deposit,
-                    )
-                    cache_entry_count = 0
-            if not deposited:
-                return (
-                    target_idx,
-                    cumulative_mass,
-                    flat_event_count,
-                    cache_entry_count,
-                    project_calls,
-                    pass2_total_mass,
-                    selected_events,
-                )
-
-        if collect_tables:
-            for event_idx in range(hit_count):
-                flat_event_peak_indices[flat_event_count] = peak_idx
-                flat_event_rows[flat_event_count, 0] = deposit
-                flat_event_rows[flat_event_count, 1] = last_col_f
-                flat_event_rows[flat_event_count, 2] = last_row_f
-                flat_event_rows[flat_event_count, 3] = last_phi_f
-                flat_event_rows[flat_event_count, 4] = H
-                flat_event_rows[flat_event_count, 5] = K
-                flat_event_rows[flat_event_count, 6] = L
-                flat_event_rows[flat_event_count, 7] = np.nan
-                flat_event_rows[flat_event_count, 8] = np.nan
-                flat_event_rows[flat_event_count, 9] = float(sample_idx)
-                flat_event_count += 1
-
     return (
         target_idx,
         cumulative_mass,
@@ -4536,6 +4478,14 @@ def _weighted_event_pass2_for_qset(
         project_calls,
         pass2_total_mass,
         selected_events,
+        have_last_valid,
+        last_row_f,
+        last_col_f,
+        last_phi_f,
+        last_peak_idx,
+        last_H,
+        last_K,
+        last_L,
     )
 
 
@@ -6062,6 +6012,9 @@ def _process_peaks_parallel_weighted_events_fast(
     n_selected_events = 0
     pass1_total_mass = 0.0
     pass2_total_mass = 0.0
+    pass2_mass_mismatch_count = 0
+    pass2_mass_mismatch_max_abs = 0.0
+    tail_fill_events = 0
 
     precompute_start = time.perf_counter()
     (
@@ -6309,6 +6262,14 @@ def _process_peaks_parallel_weighted_events_fast(
 
         target_idx = 0
         cumulative_mass = 0.0
+        phase_have_last_valid = False
+        phase_last_row_f = np.nan
+        phase_last_col_f = np.nan
+        phase_last_phi_f = np.nan
+        phase_last_peak_idx = -1
+        phase_last_H = np.nan
+        phase_last_K = np.nan
+        phase_last_L = np.nan
         for peak_idx in range(num_peaks):
             if int(peak_valid[peak_idx]) == 0:
                 continue
@@ -6331,6 +6292,14 @@ def _process_peaks_parallel_weighted_events_fast(
                 project_calls,
                 peak_pass2_mass,
                 selected_events,
+                qset_have_last_valid,
+                qset_last_row_f,
+                qset_last_col_f,
+                qset_last_phi_f,
+                qset_last_peak_idx,
+                qset_last_H,
+                qset_last_K,
+                qset_last_L,
             ) = _weighted_event_pass2_for_qset(
                 all_q,
                 peak_idx,
@@ -6379,6 +6348,91 @@ def _process_peaks_parallel_weighted_events_fast(
             pass2_total_mass += float(peak_pass2_mass)
             n_project_candidate_calls += int(project_calls)
             n_selected_events += int(selected_events)
+            if bool(qset_have_last_valid):
+                phase_have_last_valid = True
+                phase_last_row_f = float(qset_last_row_f)
+                phase_last_col_f = float(qset_last_col_f)
+                phase_last_phi_f = float(qset_last_phi_f)
+                phase_last_peak_idx = int(qset_last_peak_idx)
+                phase_last_H = float(qset_last_H)
+                phase_last_K = float(qset_last_K)
+                phase_last_L = float(qset_last_L)
+
+        sample_pass2_mass_delta = abs(float(cumulative_mass) - float(sample_total_mass))
+        sample_pass2_mass_tol = max(
+            1.0e-10,
+            1.0e-9 * max(1.0, abs(float(sample_total_mass))),
+        )
+        if (not np.isfinite(sample_pass2_mass_delta)) or sample_pass2_mass_delta > sample_pass2_mass_tol:
+            pass2_mass_mismatch_count += 1
+            if np.isfinite(sample_pass2_mass_delta):
+                pass2_mass_mismatch_max_abs = max(
+                    float(pass2_mass_mismatch_max_abs),
+                    float(sample_pass2_mass_delta),
+                )
+            else:
+                pass2_mass_mismatch_max_abs = float("inf")
+        elif target_idx < targets.shape[0] and phase_have_last_valid:
+            hit_count = int(targets.shape[0] - target_idx)
+            n_selected_events += int(hit_count)
+            tail_fill_events += int(hit_count)
+            if 0 <= phase_last_peak_idx < event_counts.shape[0]:
+                event_counts[phase_last_peak_idx, sample_idx] += int(hit_count)
+            target_idx = targets.shape[0]
+
+            deposited = True
+            if accumulate_image_flag:
+                deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                    int(image_size),
+                    float(phase_last_row_f),
+                    float(phase_last_col_f),
+                    float(hit_count) * float(deposit),
+                    cache_keys,
+                    cache_values,
+                    int(cache_entry_count),
+                    int(cache_flush_limit),
+                )
+                if needs_flush:
+                    cache_entry_count = _flush_local_pixel_cache(
+                        image,
+                        int(image_size),
+                        cache_keys,
+                        cache_values,
+                    )
+                    deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                        int(image_size),
+                        float(phase_last_row_f),
+                        float(phase_last_col_f),
+                        float(hit_count) * float(deposit),
+                        cache_keys,
+                        cache_values,
+                        int(cache_entry_count),
+                        int(cache_flush_limit),
+                    )
+                    if needs_flush:
+                        deposited = _accumulate_bilinear_hit(
+                            image,
+                            int(image_size),
+                            float(phase_last_row_f),
+                            float(phase_last_col_f),
+                            float(hit_count) * float(deposit),
+                        )
+                        cache_entry_count = 0
+
+            if collect_tables and deposited:
+                for _event_idx in range(hit_count):
+                    flat_event_peak_indices[flat_event_count] = phase_last_peak_idx
+                    flat_event_rows[flat_event_count, 0] = float(deposit)
+                    flat_event_rows[flat_event_count, 1] = float(phase_last_col_f)
+                    flat_event_rows[flat_event_count, 2] = float(phase_last_row_f)
+                    flat_event_rows[flat_event_count, 3] = float(phase_last_phi_f)
+                    flat_event_rows[flat_event_count, 4] = float(phase_last_H)
+                    flat_event_rows[flat_event_count, 5] = float(phase_last_K)
+                    flat_event_rows[flat_event_count, 6] = float(phase_last_L)
+                    flat_event_rows[flat_event_count, 7] = np.nan
+                    flat_event_rows[flat_event_count, 8] = np.nan
+                    flat_event_rows[flat_event_count, 9] = float(sample_idx)
+                    flat_event_count += 1
 
         if accumulate_image_flag and cache_entry_count > 0:
             flush_start = time.perf_counter()
@@ -6422,6 +6476,9 @@ def _process_peaks_parallel_weighted_events_fast(
         n_project_candidate_calls=int(n_project_candidate_calls),
         n_valid_candidates=int(n_valid_candidates),
         n_selected_events=int(n_selected_events),
+        pass2_mass_mismatch_count=int(pass2_mass_mismatch_count),
+        pass2_mass_mismatch_max_abs=float(pass2_mass_mismatch_max_abs),
+        tail_fill_events=int(tail_fill_events),
         time_precompute=float(time_precompute),
         time_solve_q=float(time_solve_q),
         time_project=float(time_project),
