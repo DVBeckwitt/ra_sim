@@ -713,6 +713,7 @@ def run_headless_geometry_fit(
     output_dir: str | Path | None = None,
     run_mosaic_shape_fit: bool = False,
     active_var_names: Sequence[str] | str | None = None,
+    seed_policy: str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting directly from one saved GUI-state payload."""
 
@@ -732,6 +733,7 @@ def run_headless_geometry_fit(
             state_path=source_path,
             downloads_dir=output_dir,
             active_var_names=resolved_active_var_names,
+            seed_policy=seed_policy,
         )
         report: dict[str, object] = {
             "accepted": bool(shared_result.accepted),
@@ -2714,6 +2716,16 @@ def _normalize_fit_geometry_active_var_names(
     )
 
 
+def _normalize_fit_geometry_seed_policy(seed_policy: object | None) -> str | None:
+    """Normalize one optional CLI/programmatic headless seed-policy override."""
+
+    if seed_policy is None:
+        return None
+    return _load_shared_headless_geometry_fit().normalize_headless_geometry_fit_seed_policy(
+        seed_policy
+    )
+
+
 def _cmd_fit_geometry(args: argparse.Namespace) -> None:
     """Run geometry fitting from a saved GUI state without launching the GUI."""
 
@@ -2724,6 +2736,9 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
         active_var_names = _normalize_fit_geometry_active_var_names(
             getattr(args, "active_vars", None)
         )
+        seed_policy = _normalize_fit_geometry_seed_policy(
+            getattr(args, "seed_policy", None)
+        )
         payload = load_gui_state_file(input_path)
         state_result, report = _extract_fit_geometry_state_result(
             run_headless_geometry_fit(
@@ -2731,6 +2746,7 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
                 source_path=input_path,
                 output_dir=output_path.parent,
                 active_var_names=active_var_names,
+                seed_policy=seed_policy,
             )
         )
         save_gui_state_file(output_path, state_result)
@@ -2890,6 +2906,13 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="active_vars",
         default=None,
         help="Optional comma-separated ordered geometry-fit active variable override.",
+    )
+    fit_geometry_parser.add_argument(
+        "--seed-policy",
+        dest="seed_policy",
+        choices=("ladder-multistart",),
+        default=None,
+        help="Optional headless seed policy override.",
     )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
 

@@ -654,3 +654,61 @@ def test_cmd_fit_mosaic_shape_loads_saved_state_runs_fit_and_saves(monkeypatch, 
     assert events[2] == ("save", str(output_path), {})
     assert saved_payload["path"] == str(output_path)
     assert saved_payload["state"]["geometry"]["fit_result"] == "ok"
+
+
+def test_cli_build_parser_accepts_fit_geometry_seed_policy_option() -> None:
+    if getattr(cli, "_cmd_fit_geometry", None) is None:
+        pytest.skip("fit-geometry CLI command is not available in this checkout")
+
+    parser = cli._build_parser()
+    args = parser.parse_args(
+        [
+            "fit-geometry",
+            "saved_state.json",
+            "--seed-policy",
+            "ladder-multistart",
+        ]
+    )
+
+    assert args.seed_policy == "ladder-multistart"
+
+
+def test_cmd_fit_geometry_passes_seed_policy_to_runner(monkeypatch, tmp_path) -> None:
+    cmd = _require_fit_geometry_command()
+
+    input_path = tmp_path / "saved_gui_state.json"
+    output_path = tmp_path / "fit_gui_state.json"
+    loaded_payload = {"type": "ra_sim.gui_state", "state": {"geometry": {}}}
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "load_gui_state_file", lambda path: loaded_payload)
+    monkeypatch.setattr(cli, "save_gui_state_file", lambda path, state: None)
+    monkeypatch.setattr(
+        cli,
+        "_normalize_fit_geometry_seed_policy",
+        lambda seed_policy: seed_policy,
+    )
+
+    def _fake_runner(*args, **kwargs):
+        captured["kwargs"] = dict(kwargs)
+        return loaded_payload["state"], {"accepted": True}
+
+    monkeypatch.setattr(cli, "run_headless_geometry_fit", _fake_runner)
+
+    cmd(
+        SimpleNamespace(
+            state=str(input_path),
+            input_state=str(input_path),
+            gui_state=str(input_path),
+            source_state=str(input_path),
+            out_state=str(output_path),
+            output_state=str(output_path),
+            output=str(output_path),
+            in_place=False,
+            overwrite=False,
+            active_vars=None,
+            seed_policy="ladder-multistart",
+        )
+    )
+
+    assert captured["kwargs"]["seed_policy"] == "ladder-multistart"

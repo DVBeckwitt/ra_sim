@@ -1515,6 +1515,54 @@ def _logged_cache_matches_params(
     return matched_checks > 0
 
 
+HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART = "ladder-multistart"
+_HEADLESS_GEOMETRY_FIT_SEED_POLICIES = frozenset(
+    {HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART}
+)
+_HEADLESS_GEOMETRY_FIT_LADDER_SEED_SEARCH = {
+    "prescore_top_k": 4,
+    "n_global": 4,
+    "n_jitter": 2,
+    "min_seed_separation_u": 0.5,
+}
+
+
+def normalize_headless_geometry_fit_seed_policy(seed_policy: object | None) -> str | None:
+    """Normalize one optional headless seed-policy override."""
+
+    if seed_policy is None:
+        return None
+    seed_policy_text = str(seed_policy).strip()
+    if not seed_policy_text:
+        raise ValueError("Headless geometry-fit seed policy cannot be empty.")
+    if seed_policy_text not in _HEADLESS_GEOMETRY_FIT_SEED_POLICIES:
+        allowed = ", ".join(sorted(_HEADLESS_GEOMETRY_FIT_SEED_POLICIES))
+        raise ValueError(
+            f"Unsupported headless geometry-fit seed policy {seed_policy_text!r}; "
+            f"expected one of: {allowed}."
+        )
+    return seed_policy_text
+
+
+def _apply_headless_geometry_fit_seed_policy(
+    runtime_cfg: dict[str, object],
+    seed_policy: str | None,
+) -> None:
+    """Apply one opt-in headless seed policy without changing saved-state defaults."""
+
+    if seed_policy is None:
+        return
+    if seed_policy != HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
+        raise ValueError(f"Unsupported headless geometry-fit seed policy {seed_policy!r}.")
+    seed_search_cfg = runtime_cfg.get("seed_search")
+    if isinstance(seed_search_cfg, Mapping):
+        seed_search = dict(seed_search_cfg)
+    else:
+        seed_search = {}
+    seed_search.update(_HEADLESS_GEOMETRY_FIT_LADDER_SEED_SEARCH)
+    runtime_cfg["seed_search"] = seed_search
+
+
 def run_headless_geometry_fit(
     saved_state: dict[str, object],
     *,
@@ -1522,6 +1570,7 @@ def run_headless_geometry_fit(
     downloads_dir: str | Path | None = None,
     stamp: str | None = None,
     active_var_names: Sequence[object] | str | None = None,
+    seed_policy: object | None = None,
 ) -> HeadlessGeometryFitResult:
     """Run the geometry fit described by ``saved_state`` and return the updated state."""
 
@@ -1530,6 +1579,7 @@ def run_headless_geometry_fit(
     resolved_active_var_names = normalize_headless_geometry_fit_active_var_names(
         active_var_names
     )
+    resolved_seed_policy = normalize_headless_geometry_fit_seed_policy(seed_policy)
 
     diffraction = _load_simulation_diffraction()
     fit_runtime = _load_fitting_runtime()
@@ -2952,6 +3002,7 @@ def run_headless_geometry_fit(
         if isinstance(prepared_run.geometry_runtime_cfg, Mapping)
         else {}
     )
+    _apply_headless_geometry_fit_seed_policy(headless_geometry_cfg, resolved_seed_policy)
     prepared_run = replace(
         prepared_run,
         start_log_sections=gui_geometry_fit.build_geometry_fit_start_log_sections(

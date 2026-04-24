@@ -16403,6 +16403,7 @@ def _run_headless_active_var_contract_capture(
     tmp_path,
     *,
     active_var_names=None,
+    seed_policy=None,
     fit_geometry_cfg=None,
     use_shared_theta_offset=False,
     theta_offset_value=0.0,
@@ -16653,7 +16654,12 @@ def _run_headless_active_var_contract_capture(
     def _fake_prepare_runtime_geometry_fit_run(*, params, var_names, preserve_live_theta, bindings):
         captured["prepare_var_names"] = list(var_names)
         captured["preserve_live_theta"] = bool(preserve_live_theta)
-        captured["runtime_cfg"] = bindings.build_runtime_config(params)
+        runtime_cfg = bindings.build_runtime_config(params)
+        seed_search_cfg = runtime_cfg.get("seed_search")
+        seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, dict) else {}
+        seed_search.update({"prescore_top_k": 1, "n_global": 0, "n_jitter": 0})
+        runtime_cfg["seed_search"] = seed_search
+        captured["runtime_cfg"] = runtime_cfg
         return geometry_fit.GeometryFitPreparationResult(
             prepared_run=geometry_fit.GeometryFitPreparedRun(
                 fit_params=dict(params),
@@ -16692,6 +16698,7 @@ def _run_headless_active_var_contract_capture(
 
     def _fake_execute_runtime_geometry_fit(*, prepared_run, var_names, **kwargs):
         captured["execute_var_names"] = list(var_names)
+        captured["execute_runtime_cfg"] = dict(prepared_run.geometry_runtime_cfg)
         captured["execute_candidate_param_names"] = list(
             prepared_run.geometry_runtime_cfg.get("candidate_param_names", [])
         )
@@ -16718,6 +16725,7 @@ def _run_headless_active_var_contract_capture(
         downloads_dir=tmp_path,
         stamp="headless_active_var_test",
         active_var_names=active_var_names,
+        seed_policy=seed_policy,
     )
 
     return saved_state, saved_state_before, captured, result
@@ -31449,3 +31457,61 @@ def test_build_geometry_fit_caked_roi_selection_falls_back_when_roi_is_too_large
     assert selection["fallback_reason"] == "roi_too_large"
     assert selection["pixel_count"] > 0
     assert selection["fraction"] > 0.05
+
+
+def test_headless_geometry_fit_ladder_seed_policy_overrides_lean_seed_config(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    override_names = [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+        "chi",
+        "zs",
+        "zb",
+    ]
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=override_names,
+        seed_policy="ladder-multistart",
+    )
+
+    assert result.accepted is True
+    seed_search = captured["execute_runtime_cfg"]["seed_search"]
+    assert seed_search["prescore_top_k"] == 4
+    assert seed_search["n_global"] == 4
+    assert seed_search["n_jitter"] == 2
+    assert seed_search["min_seed_separation_u"] == 0.5
+    assert captured["execute_var_names"] == override_names
+    assert captured["execute_candidate_param_names"] == override_names
+    assert saved_state == saved_state_before
+
+
+def test_headless_geometry_fit_active_var_override_keeps_lean_seed_policy_by_default(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    override_names = [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+        "chi",
+        "zs",
+        "zb",
+    ]
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=override_names,
+    )
+
+    assert result.accepted is True
+    seed_search = captured["execute_runtime_cfg"]["seed_search"]
+    assert seed_search["prescore_top_k"] == 1
+    assert seed_search["n_global"] == 0
+    assert seed_search["n_jitter"] == 0
+    assert captured["execute_var_names"] == override_names
+    assert captured["execute_candidate_param_names"] == override_names
+    assert saved_state == saved_state_before
