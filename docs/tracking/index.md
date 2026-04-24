@@ -35,12 +35,14 @@ unresolved on reverse-LUT failure. Validation is still pending.
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
 one-param solves, `a` diagnosis, caked point reprojection, initial Rung 4 paired
-solves, fresh same-run Rung 5 blocks, Rung 6 C2, and the full Rung 7 feature
-chain are now validated for ladder work. Final frozen runs
-`codex_final_blocks_20260423`, `codex_final_combined_20260423`, and
-`codex_final_features_20260423` kept provider/caked/Rung 5/Rung 6 guards green
-and passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
-`full_beam_polish`, and `identifiability_features`. Current New4 Rung 2
+solves, fresh same-run Rung 5 blocks, Rung 6 C2, and the bounded Rung 7 feature
+chain are now validated for ladder work. Final frozen block/combined runs
+`codex_final_blocks_20260423` and `codex_final_combined_20260423` stayed green,
+and the passing on-disk Rung 7 feature comparator is
+`codex_restore_rung7_features_fix_20260423`
+(`codex_final_features_fullseq_20260423`). The older
+`codex_final_features_20260423` artifact is stale and still shows the pre-fix
+`full_beam_polish` failure. Current New4 Rung 2
 expected baseline is `active_param_count=11`, `near_zero_param_count=2`;
 `center_x` and `center_y` are active under the unchanged threshold rule because
 `residual_norm_base` dropped `17.32x`, shrinking the classifier threshold
@@ -79,10 +81,18 @@ affected blocks, stale external evidence remains rejected, manual selected-point
 fits no longer inherit heavy solver defaults, and stale heartbeat traces are
 reset before solve-rung writes. No full fitter, baseline, GUI fit, unrestricted
 feature combination, feature-combo solve, identifiability feature run, or full
-fitter validation was run; full-beam polish was attempted only as the controlled
-Rung 7 feature and failed. GUI manual selected-point runtime behavior is
-updated, but it does not validate full GUI fitter convergence. Next solve
-project is the `full_beam_polish` fixed-source/pair-integrity failure.
+fitter validation was run; GUI manual selected-point runtime behavior is
+updated, but it does not validate full GUI fitter convergence. Real headless
+`python -m ra_sim fit-geometry artifacts/geometry_fit_gui_states/new4.json`
+smoke is now run and failing. Exact-caked request invariants stayed green, but
+the run rejected with `accepted == false`, `detector_rms_px ==
+914.4948551954421`, and `unweighted_peak_max_px == 1698.2499036720524`. First
+divergence versus the passing ladder comparator is a seed/start-state split:
+real headless fit uses the 9-variable GUI/runtime contract and selected
+`axis:zb-1`, while the passing ladder comparator uses the 6-variable New4
+candidate bundle and a different seed family. `full_beam_polish` is disabled in
+the real headless path, so candidate-selection is not the first divergence. No
+patch is claimed yet.
 
 ## Known bugs
 

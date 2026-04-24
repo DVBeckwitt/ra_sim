@@ -29,13 +29,15 @@ Last updated: 2026-04-23
   `20260422_rung7_feature_gate_combined` passed both Rung 6 combined
   candidates, including C2
   `corto_detector/theta_initial/cor_angle/chi/zs/zb`.
-- Controlled Rung 7 feature gate is now green end-to-end. The final frozen
-  chain `codex_final_blocks_20260423`, `codex_final_combined_20260423`, and
-  `codex_final_features_20260423` kept provider/caked/Rung 5/Rung 6 guards
-  green and passed `dynamic_reanchor`, `discrete_modes`,
-  `seed_multistart`, `full_beam_polish`, and `identifiability_features`.
-  Exact-caked evidence stayed present in the feature report, and the finalizer
-  normalized `residuals_finite` without masking unrelated guard failures.
+- Controlled Rung 7 feature gate is green end-to-end as bounded ladder
+  evidence. The passing on-disk feature-sequence comparator is
+  `codex_restore_rung7_features_fix_20260423`, mirrored under
+  `codex_final_features_fullseq_20260423`; the older
+  `codex_final_features_20260423` artifact is stale and still carries the
+  pre-fix `full_beam_polish` failure. Provider/caked/Rung 5/Rung 6 guards
+  stayed green, all five Rung 7 features passed in the fixed comparator, exact
+  caked evidence stayed present, and the finalizer normalized
+  `residuals_finite` without masking unrelated guard failures.
 - Rung 0-5 timing observability is implemented. Each current-run rung report
   gets finite timing metadata, the run directory gets `rung_timing_summary.json`,
   `--timing-report` can write an explicit copy, and timing thresholds are
@@ -72,8 +74,21 @@ Last updated: 2026-04-23
   shrinking the unchanged classifier threshold faster than their delta norms
   fell (`1.37x` and `2.15x`). This is expected, not a fitting regression. Do
   not mix it with the exact-caked path.
-- No full fitter, baseline, GUI fit, or unrestricted feature combination run
-  should be treated as validated.
+- Real full headless geometric-fit smoke is now run for
+  `artifacts/geometry_fit_gui_states/new4.json`, background `0`. The optimizer
+  request stayed exact-caked and pair/source identity stayed clean, but the run
+  still rejected with `accepted == false`, `detector_rms_px ==
+  914.4948551954421`, and `unweighted_peak_max_px == 1698.2499036720524`.
+  First divergence versus the passing ladder comparator is a seed/start-state
+  split: real headless fit uses the 9-variable GUI/runtime contract
+  (`zb,zs,theta_initial,psi_z,chi,cor_angle,gamma,Gamma,corto_detector`) with
+  13 identity-mode seeds and selected `axis:zb-1`, while the passing ladder
+  comparator uses the 6-variable New4 candidate bundle
+  (`corto_detector,theta_initial,cor_angle,chi,zs,zb`) and a different seed
+  family. `full_beam_polish` is disabled in the real headless run, so
+  candidate-selection is not the first divergence.
+- Baseline, GUI fit button, and unrestricted feature-combination runs should
+  still be treated as unvalidated.
 
 This handoff is the bounded-through-Rung-7 feature-gate recovery state for
 `new4`. Do not use it as approval for full fitter, GUI, baseline, or unrestricted
@@ -82,11 +97,17 @@ feature-combination solves.
 Status by work type:
 
 - Feature: controlled Rung 7 passed `dynamic_reanchor`, `discrete_modes`,
-  `seed_multistart`, `full_beam_polish`, and `identifiability_features`; the
-  exact-caked path is green through Rung 7.
+  `seed_multistart`, `full_beam_polish`, and `identifiability_features` in the
+  fixed comparator `codex_restore_rung7_features_fix_20260423`; the exact-caked
+  path is green through bounded Rung 7 ladder evidence.
 - Bug/error: exact-caked preflight ordering/harness blockers are closed; current
   Rung 2 expected baseline is `11/2` under the unchanged threshold rule and
   does not require solver, residual, runtime, or caked-routing changes.
+- Full headless fit bug/error: request construction is still clean, but the
+  real `fit-geometry` path fails before the ladder's passing
+  candidate-selection/full-beam stage. Current classification is
+  `seed/start state issue`; optimizer convergence, acceptance thresholds, and
+  detector-space reporting are not the first divergence.
 - Timing feature: current-run Rung 0-5 timing JSON and stdout table are
   available for opt-in ladder runs.
 - Timing bug/error: review follow-up is closed. Timing collection excludes
@@ -109,9 +130,10 @@ Status by work type:
 - GUI timing harness: gated smoke and 10-trial evidence was collected under
   `artifacts/gui_timing/20260422_130625`; 30-trial evidence stopped at a
   focused `theta10` child timeout after `defaults_30` passed.
-- Not validated: full fitter, baseline, GUI fit, and unrestricted feature
-  combinations remain unclaimed. Full-beam validation is now green as bounded
-  ladder evidence, but it is not the same as full fitter acceptance.
+- Not validated: baseline, GUI fit, and unrestricted feature combinations
+  remain unclaimed. Full-beam validation is green only as bounded ladder
+  evidence, and the real full headless fit is now smoke-tested but still
+  failing with the seed/start-state split above.
 
 ## GUI timing harness checkpoint
 
@@ -492,21 +514,33 @@ Fixed behavior: failed optimizer-request capture leaves the optimizer request un
 
 ## Remaining work
 
-Next project: no separate Rung 2 code follow-up in this track. Current
-expected baseline is `active_param_count=11`, `near_zero_param_count=2` under
-the unchanged threshold rule. Do not reopen the exact-caked preflight, 3B
-harness, or full_beam_polish paths in this track unless a guard regresses.
+Next project: compare the real headless start-state/feature-toggle contract
+against the passing 6-variable ladder candidate. Current expected Rung 2
+baseline is `active_param_count=11`, `near_zero_param_count=2` under the
+unchanged threshold rule. Do not reopen the exact-caked preflight, 3B harness,
+or Rung 7 finalizer in this track unless a guard regresses.
 
 Final frozen New4 chain:
-`codex_final_blocks_20260423`, `codex_final_combined_20260423`, and
-`codex_final_features_20260423` kept provider/caked/Rung 5/Rung 6 guards green
-and passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
-`full_beam_polish`, and `identifiability_features`. Exact-caked evidence stayed
-present and the finalizer normalized `residuals_finite` without masking other
-guard failures. `new4.json` stayed unchanged
+`codex_final_blocks_20260423`, `codex_final_combined_20260423`, and passing
+feature-sequence comparator `codex_restore_rung7_features_fix_20260423`
+(`codex_final_features_fullseq_20260423`) kept provider/caked/Rung 5/Rung 6
+guards green and passed `dynamic_reanchor`, `discrete_modes`,
+`seed_multistart`, `full_beam_polish`, and `identifiability_features`. The
+older `codex_final_features_20260423` artifact is stale and still shows the
+pre-fix `full_beam_polish` failure. Exact-caked evidence stayed present and the
+finalizer normalized `residuals_finite` without masking other guard failures.
+`new4.json` stayed unchanged
 (`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`), and
 `full_fitter_validated == false` because the full fitter itself is still not
 claimed.
+
+Real full headless smoke `python -m ra_sim fit-geometry artifacts/geometry_fit_gui_states/new4.json`
+was run separately on 2026-04-23 for background `0`. Exact-caked request
+invariants stayed green, but the run rejected with `accepted == false`,
+`detector_rms_px == 914.4948551954421`, and `unweighted_peak_max_px ==
+1698.2499036720524`. The first divergence versus the passing ladder comparator
+is a seed/start-state split, not request construction, acceptance-threshold
+logic, candidate selection, or detector-space reporting.
 
 Opt-in timing check `20260422_123330` measured the approved fresh Rung 5 blocks
 path only (`--max-rung blocks`, `--timing-report`). It wrote
@@ -529,16 +563,29 @@ Do not treat RMS/max baseline or full fitter behavior as validated yet.
 Issue [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) was updated with this checkpoint:
 
 ```text
-New4 Rung 7 final frozen feature-gate checkpoint:
+New4 bounded ladder plus real headless-fit checkpoint:
 
 - Provider/caked/Rung 5/Rung 6 guards stayed green across the final frozen
   ladder chain.
-- Rung 7 `codex_final_features_20260423`: full controlled feature sequence,
-  no `--feature`, no full fit, no baseline, no GUI fit.
+- Passing Rung 7 feature-sequence comparator is
+  `codex_restore_rung7_features_fix_20260423`
+  (`codex_final_features_fullseq_20260423`); the older
+  `codex_final_features_20260423` artifact is stale and still shows the
+  pre-fix `full_beam_polish` failure.
 - Passed: `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
   `full_beam_polish`, `identifiability_features`.
 - Exact-caked evidence stayed present and `residuals_finite` normalized
   without masking unrelated guard failures.
+- Real `fit-geometry` smoke on `artifacts/geometry_fit_gui_states/new4.json`
+  background `0` still rejected with `accepted == false`,
+  `detector_rms_px == 914.4948551954421`, and `unweighted_peak_max_px ==
+  1698.2499036720524`.
+- First divergence versus the passing ladder comparator is a seed/start-state
+  split: real headless fit uses the 9-variable GUI/runtime contract and
+  selected `axis:zb-1`, while the passing ladder comparator uses the 6-variable
+  New4 candidate bundle and a different seed family.
+- `full_beam_polish` is disabled in the real headless run, so
+  candidate-selection is not the first divergence.
 - `new4.json` hash stayed
   `f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`.
 - `full_fitter_validated == false`; current Rung 2 expected baseline is `11/2`

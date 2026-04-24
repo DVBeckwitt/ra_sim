@@ -54,6 +54,17 @@ chain passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
 `full_beam_polish`, and `identifiability_features` with exact-caked evidence
 preserved in the finalizer.
 
+Real full headless `fit-geometry` smoke is now run and still failing after a
+clean exact-caked request. The first divergence from passing ladder evidence is
+not routing or pair identity but seed/start state: real headless fit uses the
+9-variable GUI/runtime contract
+(`zb,zs,theta_initial,psi_z,chi,cor_angle,gamma,Gamma,corto_detector`) and
+selected 13-seed identity multistart `axis:zb-1`, while the passing ladder
+comparator uses the 6-variable New4 candidate bundle
+(`corto_detector,theta_initial,cor_angle,chi,zs,zb`) and a different seed
+family. `full_beam_polish` is disabled in the real headless path, so
+candidate-selection is downstream of the first failure.
+
 The adjacent startup/list-refresh bug is closed: normal simulation updates now
 request the same hit-table/selection cache needed by Qr/Qz picking and refresh
 the listed Qr/Qz peaks automatically when the grouped row content changes, so
