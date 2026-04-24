@@ -2860,6 +2860,39 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
     after_metric_name, after_metric_unit, after_metric_rms, after_metric_max = (
         _summary_selected_caked_metric(point_summary)
     )
+    angular_metric_names = {
+        RAW_ANGULAR_METRIC_NAME,
+        WEIGHTED_ANGULAR_METRIC_NAME,
+    }
+    angular_metric_units = {
+        RAW_ANGULAR_METRIC_UNIT,
+        WEIGHTED_ANGULAR_METRIC_UNIT,
+    }
+
+    def _phase_metric_fields_stale(phase_name: str) -> bool:
+        current_name = str(report.get(f"{phase_name}_caked_metric_name") or "").strip()
+        current_unit = str(report.get(f"{phase_name}_caked_metric_unit") or "").strip()
+        current_rms = _metric_float(report.get(f"{phase_name}_caked_metric_rms", np.nan))
+        current_max = _metric_float(report.get(f"{phase_name}_caked_metric_max", np.nan))
+        return (
+            current_name != after_metric_name
+            or current_unit != after_metric_unit
+            or current_name not in angular_metric_names
+            or current_unit not in angular_metric_units
+            or not math.isfinite(current_rms)
+            or not math.isfinite(current_max)
+        )
+
+    def _apply_selected_metric_payload(phase_name: str) -> None:
+        report[f"{phase_name}_caked_metric_name"] = after_metric_name
+        report[f"{phase_name}_caked_metric_unit"] = after_metric_unit
+        report[f"{phase_name}_caked_metric_rms"] = after_metric_rms
+        report[f"{phase_name}_caked_metric_max"] = after_metric_max
+        if math.isfinite(after_caked_rms):
+            report[f"{phase_name}_caked_rms_deg"] = after_caked_rms
+        if math.isfinite(after_caked_max):
+            report[f"{phase_name}_caked_max_error_deg"] = after_caked_max
+
     if math.isfinite(after_caked_rms):
         report["after_caked_rms_deg"] = after_caked_rms
     if math.isfinite(after_caked_max):
@@ -2890,58 +2923,77 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
     selected_pair_count = _safe_int(report.get("matched_pair_count"), default=0)
     selected_missing_count = _safe_int(report.get("missing_pair_count"), default=0)
     selected_fixed_count = _safe_int(report.get("fixed_source_resolved_count"), default=0)
-    rejected_full_beam_candidate = (
-        str(report.get("feature", "")) == "full_beam_polish"
-        and bool(full_beam_summary)
-        and bool(full_beam_summary.get("accepted", False)) is False
+    selected_manual_count = _safe_int(
+        report.get("manual_caked_residual_row_count"),
+        default=0,
     )
-    selected_exact_caked_clean = (
-        _caked_summary_uses_exact_fit_space(point_summary)
+    selected_projector_count = _safe_int(
+        report.get("dataset_fit_space_projector_row_count"),
+        default=0,
+    )
+    selected_fallback_count = _safe_int(report.get("fallback_entry_count"), default=0)
+    selected_branch_mismatch_count = _safe_int(
+        report.get("branch_mismatch_count"),
+        default=0,
+    )
+    selected_exact_counts_agree = (
+        int(expected_count) > 0
         and selected_pair_count == int(expected_count)
-        and selected_missing_count == 0
+        and selected_manual_count == int(expected_count)
+        and selected_projector_count == int(expected_count)
         and selected_fixed_count == int(expected_count)
     )
-    if rejected_full_beam_candidate and selected_exact_caked_clean:
-        current_before_unit = str(report.get("before_caked_metric_unit") or "").strip()
-        current_before_rms = _metric_float(report.get("before_caked_metric_rms", np.nan))
-        current_before_max = _metric_float(report.get("before_caked_metric_max", np.nan))
-        current_before_is_usable = (
-            current_before_unit in {RAW_ANGULAR_METRIC_UNIT, WEIGHTED_ANGULAR_METRIC_UNIT}
-            and math.isfinite(current_before_rms)
-            and math.isfinite(current_before_max)
-        )
-        if (
-            after_metric_name
-            and after_metric_unit
-            and math.isfinite(after_metric_rms)
-            and math.isfinite(after_metric_max)
-            and not current_before_is_usable
-        ):
-            report["before_caked_metric_name"] = after_metric_name
-            report["before_caked_metric_unit"] = after_metric_unit
-            report["before_caked_metric_rms"] = after_metric_rms
-            report["before_caked_metric_max"] = after_metric_max
-            if math.isfinite(after_caked_rms):
-                report["before_caked_rms_deg"] = after_caked_rms
-            if math.isfinite(after_caked_max):
-                report["before_caked_max_error_deg"] = after_caked_max
+    selected_metric_payload_clean = (
+        after_metric_name in angular_metric_names
+        and after_metric_unit in angular_metric_units
+        and math.isfinite(after_metric_rms)
+        and math.isfinite(after_metric_max)
+    )
+    selected_exact_caked_report_clean = (
+        bool(report.get("exact_fit_space_projector_available", False))
+        and _caked_summary_uses_exact_fit_space(point_summary)
+        and selected_exact_counts_agree
+        and selected_missing_count == 0
+        and selected_fallback_count == 0
+        and selected_branch_mismatch_count == 0
+        and selected_metric_payload_clean
+    )
+    if selected_exact_caked_report_clean:
+        for phase_name in ("before", "after"):
+            if _phase_metric_fields_stale(phase_name):
+                _apply_selected_metric_payload(phase_name)
 
-        report["polish_fixed_source_resolved_count_after"] = int(selected_fixed_count)
-        report["polish_matched_pair_count_after"] = int(selected_pair_count)
-        report["polish_missing_pair_count_after"] = int(selected_missing_count)
-        report["polish_fallback_entry_count_after"] = _safe_int(
-            report.get("fallback_entry_count"),
-            default=0,
-        )
-        report["polish_branch_mismatch_count_after"] = _safe_int(
-            report.get("branch_mismatch_count"),
-            default=0,
-        )
-        report["polish_lost_pair_ids"] = []
-        report["polish_missing_pair_ids"] = []
-        report["polish_fallback_pair_ids"] = []
-        report["polish_rematched_pair_ids"] = []
-        report["polish_lost_pair_details"] = []
+    if (
+        str(report.get("feature", "")) == "full_beam_polish"
+        and bool(full_beam_summary)
+        and selected_exact_caked_report_clean
+    ):
+        polish_selected_fields = {
+            "polish_fixed_source_resolved_count_after": int(selected_fixed_count),
+            "polish_matched_pair_count_after": int(selected_pair_count),
+            "polish_missing_pair_count_after": int(selected_missing_count),
+            "polish_fallback_entry_count_after": int(selected_fallback_count),
+            "polish_branch_mismatch_count_after": int(selected_branch_mismatch_count),
+        }
+        polish_state_stale = any(
+            _safe_int(report.get(key), default=-999999) != expected_value
+            for key, expected_value in polish_selected_fields.items()
+        ) or any(
+            _as_str_list(report.get(key))
+            for key in (
+                "polish_lost_pair_ids",
+                "polish_missing_pair_ids",
+                "polish_fallback_pair_ids",
+                "polish_rematched_pair_ids",
+            )
+        ) or bool(report.get("polish_lost_pair_details"))
+        if polish_state_stale:
+            report.update(polish_selected_fields)
+            report["polish_lost_pair_ids"] = []
+            report["polish_missing_pair_ids"] = []
+            report["polish_fallback_pair_ids"] = []
+            report["polish_rematched_pair_ids"] = []
+            report["polish_lost_pair_details"] = []
 
     same_ids = _manual_pair_ids_unchanged(report)
     point_summary["same_manual_pair_ids_before_after"] = bool(same_ids)
