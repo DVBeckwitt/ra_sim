@@ -30,6 +30,25 @@ DISPLAY_ROTATE_K = -1
 SIM_DISPLAY_ROTATE_K = 0
 HEADLESS_GEOMETRY_CAKED_RADIAL_BINS = 1000
 HEADLESS_GEOMETRY_CAKED_AZIMUTH_BINS = 720
+HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES = (
+    "zb",
+    "zs",
+    "theta_initial",
+    "theta_offset",
+    "psi_z",
+    "chi",
+    "cor_angle",
+    "gamma",
+    "Gamma",
+    "corto_detector",
+    "a",
+    "c",
+    "center_x",
+    "center_y",
+)
+HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET = set(
+    HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +92,46 @@ class _HeadlessVar:
 
     def set(self, value: object) -> None:
         self._value = value
+
+
+def normalize_headless_geometry_fit_active_var_names(
+    active_var_names: Sequence[object] | str | None,
+) -> list[str] | None:
+    """Normalize one optional ordered active-variable override for headless fits."""
+
+    if active_var_names is None:
+        return None
+    if isinstance(active_var_names, str):
+        if not active_var_names.strip():
+            raise ValueError("Geometry fit active-vars override cannot be empty.")
+        raw_names = active_var_names.split(",")
+    else:
+        raw_names = list(active_var_names)
+        if not raw_names:
+            raise ValueError("Geometry fit active-vars override cannot be empty.")
+
+    normalized_names: list[str] = []
+    seen_names: set[str] = set()
+    for raw_name in raw_names:
+        name = str(raw_name).strip()
+        if not name:
+            raise ValueError("Geometry fit active-vars override contains an empty name.")
+        if name not in HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET:
+            supported = ", ".join(HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES)
+            raise ValueError(
+                f"Unknown geometry fit active var '{name}'. Supported names: {supported}."
+            )
+        if name in seen_names:
+            raise ValueError(f"Duplicate geometry fit active var '{name}'.")
+        seen_names.add(name)
+        normalized_names.append(name)
+
+    if {"theta_initial", "theta_offset"}.issubset(seen_names):
+        raise ValueError(
+            "Geometry fit active-vars override cannot include both 'theta_initial' and "
+            "'theta_offset'."
+        )
+    return normalized_names
 
 
 def _read_first_cif_block(path: str) -> tuple[object, object]:
@@ -1306,11 +1365,15 @@ def run_headless_geometry_fit(
     state_path: str | Path,
     downloads_dir: str | Path | None = None,
     stamp: str | None = None,
+    active_var_names: Sequence[object] | str | None = None,
 ) -> HeadlessGeometryFitResult:
     """Run the geometry fit described by ``saved_state`` and return the updated state."""
 
     if not isinstance(saved_state, dict):
         raise ValueError("Saved GUI state must be a dictionary.")
+    resolved_active_var_names = normalize_headless_geometry_fit_active_var_names(
+        active_var_names
+    )
 
     diffraction = _load_simulation_diffraction()
     fit_runtime = _load_fitting_runtime()
@@ -2664,8 +2727,24 @@ def run_headless_geometry_fit(
     )
 
     params = value_callbacks.current_params()
-    var_names = list(value_callbacks.current_var_names())
+    var_names = (
+        list(resolved_active_var_names)
+        if resolved_active_var_names is not None
+        else list(value_callbacks.current_var_names())
+    )
     preserve_live_theta = "theta_initial" not in var_names and "theta_offset" not in var_names
+
+    def _build_headless_runtime_config(_fit_params: Mapping[str, object]) -> dict[str, object]:
+        runtime_cfg = copy.deepcopy(
+            defaults.fit_config.get("geometry", {})
+            if isinstance(defaults.fit_config, dict)
+            else {}
+        )
+        if not isinstance(runtime_cfg, dict):
+            runtime_cfg = {}
+        if resolved_active_var_names is not None:
+            runtime_cfg["candidate_param_names"] = list(var_names)
+        return runtime_cfg
 
     preflight_started_at = time.monotonic()
     preparation = gui_geometry_fit.prepare_runtime_geometry_fit_run(
@@ -2683,11 +2762,7 @@ def run_headless_geometry_fit(
             current_geometry_theta_offset=_current_geometry_theta_offset,
             ensure_geometry_fit_caked_view=_ensure_geometry_fit_caked_view,
             manual_dataset_bindings=manual_dataset_bindings,
-            build_runtime_config=lambda _fit_params: copy.deepcopy(
-                defaults.fit_config.get("geometry", {})
-                if isinstance(defaults.fit_config, dict)
-                else {}
-            ),
+            build_runtime_config=_build_headless_runtime_config,
         ),
     )
     if preparation.prepared_run is None:

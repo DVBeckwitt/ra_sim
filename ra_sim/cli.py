@@ -712,17 +712,26 @@ def run_headless_geometry_fit(
     source_path: str | Path,
     output_dir: str | Path | None = None,
     run_mosaic_shape_fit: bool = False,
+    active_var_names: Sequence[str] | str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting directly from one saved GUI-state payload."""
 
     state = payload.get("state") if isinstance(payload, Mapping) else None
     if not isinstance(state, Mapping):
         raise ValueError("GUI state payload is missing a valid 'state' object.")
+    resolved_active_var_names = (
+        _load_shared_headless_geometry_fit().normalize_headless_geometry_fit_active_var_names(
+            active_var_names
+        )
+        if active_var_names is not None
+        else None
+    )
     if not run_mosaic_shape_fit:
         shared_result = _load_shared_headless_geometry_fit().run_headless_geometry_fit(
             copy.deepcopy(dict(state)),
             state_path=source_path,
             downloads_dir=output_dir,
+            active_var_names=resolved_active_var_names,
         )
         report: dict[str, object] = {
             "accepted": bool(shared_result.accepted),
@@ -2693,6 +2702,18 @@ def _extract_fit_geometry_state_result(
     raise ValueError("Headless geometry fit did not return a GUI-state mapping.")
 
 
+def _normalize_fit_geometry_active_var_names(
+    active_vars: Sequence[str] | str | None,
+) -> list[str] | None:
+    """Normalize one optional CLI/programmatic active-variable override."""
+
+    if active_vars is None:
+        return None
+    return _load_shared_headless_geometry_fit().normalize_headless_geometry_fit_active_var_names(
+        active_vars
+    )
+
+
 def _cmd_fit_geometry(args: argparse.Namespace) -> None:
     """Run geometry fitting from a saved GUI state without launching the GUI."""
 
@@ -2700,12 +2721,16 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
     output_path = _resolve_fit_geometry_output_path(args, input_path=input_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        active_var_names = _normalize_fit_geometry_active_var_names(
+            getattr(args, "active_vars", None)
+        )
         payload = load_gui_state_file(input_path)
         state_result, report = _extract_fit_geometry_state_result(
             run_headless_geometry_fit(
                 payload,
                 source_path=input_path,
                 output_dir=output_path.parent,
+                active_var_names=active_var_names,
             )
         )
         save_gui_state_file(output_path, state_result)
@@ -2859,6 +2884,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--in-place",
         action="store_true",
         help="Overwrite the input GUI state instead of writing a new file.",
+    )
+    fit_geometry_parser.add_argument(
+        "--active-vars",
+        dest="active_vars",
+        default=None,
+        help="Optional comma-separated ordered geometry-fit active variable override.",
     )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
 

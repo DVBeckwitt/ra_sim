@@ -38,6 +38,23 @@ def test_cli_build_parser_includes_fit_geometry_command() -> None:
     assert "fit-geometry" in _get_subparser_choices(parser)
 
 
+def test_cli_build_parser_accepts_fit_geometry_active_vars_option() -> None:
+    if getattr(cli, "_cmd_fit_geometry", None) is None:
+        pytest.skip("fit-geometry CLI command is not available in this checkout")
+
+    parser = cli._build_parser()
+    args = parser.parse_args(
+        [
+            "fit-geometry",
+            "saved_state.json",
+            "--active-vars",
+            "corto_detector,theta_initial,cor_angle,chi,zs,zb",
+        ]
+    )
+
+    assert args.active_vars == "corto_detector,theta_initial,cor_angle,chi,zs,zb"
+
+
 def test_cli_build_parser_includes_fit_mosaic_shape_command() -> None:
     if getattr(cli, "_cmd_fit_mosaic_shape", None) is None:
         pytest.skip("fit-mosaic-shape CLI command is not available in this checkout")
@@ -170,6 +187,95 @@ def test_cmd_fit_geometry_supports_in_place_saves(monkeypatch, tmp_path) -> None
     assert save_calls == [(str(input_path), loaded_payload["state"])]
 
 
+def test_cmd_fit_geometry_passes_active_vars_to_runner(monkeypatch, tmp_path) -> None:
+    cmd = _require_fit_geometry_command()
+
+    input_path = tmp_path / "saved_gui_state.json"
+    output_path = tmp_path / "fit_gui_state.json"
+    loaded_payload = {"type": "ra_sim.gui_state", "state": {"geometry": {}}}
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "load_gui_state_file", lambda path: loaded_payload)
+
+    def _fake_runner(*args, **kwargs):
+        captured["kwargs"] = dict(kwargs)
+        return loaded_payload["state"], {"accepted": True}
+
+    monkeypatch.setattr(cli, "run_headless_geometry_fit", _fake_runner)
+    monkeypatch.setattr(cli, "save_gui_state_file", lambda path, state, **kwargs: None)
+
+    args = SimpleNamespace(
+        state=str(input_path),
+        input_state=str(input_path),
+        gui_state=str(input_path),
+        source_state=str(input_path),
+        out_state=str(output_path),
+        output_state=str(output_path),
+        output=str(output_path),
+        in_place=False,
+        overwrite=False,
+        active_vars="corto_detector,theta_initial,cor_angle,chi,zs,zb",
+    )
+
+    cmd(args)
+
+    assert captured["kwargs"]["active_var_names"] == [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+        "chi",
+        "zs",
+        "zb",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw_active_vars", "expected_message"),
+    [
+        ("", "cannot be empty"),
+        ("gamma,,a", "contains an empty name"),
+        ("gamma,gamma", "Duplicate geometry fit active var 'gamma'."),
+        ("gamma,not_real", "Unknown geometry fit active var 'not_real'."),
+        (
+            "theta_initial,theta_offset",
+            "cannot include both 'theta_initial' and 'theta_offset'",
+        ),
+    ],
+)
+def test_cmd_fit_geometry_rejects_invalid_active_vars(
+    monkeypatch,
+    tmp_path,
+    raw_active_vars,
+    expected_message,
+) -> None:
+    cmd = _require_fit_geometry_command()
+
+    input_path = tmp_path / "saved_gui_state.json"
+    output_path = tmp_path / "fit_gui_state.json"
+
+    monkeypatch.setattr(
+        cli,
+        "load_gui_state_file",
+        lambda path: pytest.fail("invalid active-vars should fail before loading saved state"),
+    )
+
+    args = SimpleNamespace(
+        state=str(input_path),
+        input_state=str(input_path),
+        gui_state=str(input_path),
+        source_state=str(input_path),
+        out_state=str(output_path),
+        output_state=str(output_path),
+        output=str(output_path),
+        in_place=False,
+        overwrite=False,
+        active_vars=raw_active_vars,
+    )
+
+    with pytest.raises(SystemExit, match=expected_message):
+        cmd(args)
+
+
 def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
     monkeypatch,
     tmp_path,
@@ -181,10 +287,10 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
             "geometry": {"manual_pairs": [{"background_index": 0, "entries": []}]},
         },
     }
-    calls: list[tuple[object, object, object]] = []
+    calls: list[tuple[object, object, object, object]] = []
 
-    def _fake_shared_runner(state_arg, *, state_path, downloads_dir):
-        calls.append((state_arg, state_path, downloads_dir))
+    def _fake_shared_runner(state_arg, *, state_path, downloads_dir, active_var_names=None):
+        calls.append((state_arg, state_path, downloads_dir, active_var_names))
         return SimpleNamespace(
             state={
                 "files": {"background_files": ["bg0.osc"]},
@@ -206,6 +312,7 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
         payload,
         source_path=tmp_path / "state.json",
         output_dir=tmp_path / "artifacts",
+        active_var_names=["corto_detector", "theta_initial"],
     )
 
     assert calls == [
@@ -213,6 +320,7 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
             payload["state"],
             tmp_path / "state.json",
             tmp_path / "artifacts",
+            ["corto_detector", "theta_initial"],
         )
     ]
     assert state_result["geometry"]["fit_result"] == "shared"

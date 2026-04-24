@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import json
 import hashlib
 import math
@@ -16395,6 +16396,380 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
     assert bool(headless_runtime_cfg["solver"]["manual_point_fit_mode"]) is True
     assert "dynamic_point_geometry_fit" not in headless_runtime_cfg["solver"]
     assert headless_runtime_cfg.get("projection_view_mode") != "caked"
+
+
+def _run_headless_active_var_contract_capture(
+    monkeypatch,
+    tmp_path,
+    *,
+    active_var_names=None,
+):
+    from ra_sim import headless_geometry_fit
+
+    defaults = headless_geometry_fit._RuntimeDefaults(
+        primary_cif_path="C:/tmp/primary.cif",
+        secondary_cif_path=None,
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        pixel_size_m=1.2e-4,
+        lambda_angstrom=1.54,
+        psi_deg=12.0,
+        defaults={
+            "theta_initial": 5.0,
+            "cor_angle": 0.6,
+            "gamma": 0.8,
+            "Gamma": 0.9,
+            "chi": 0.5,
+            "psi_z": 0.7,
+            "zs": 0.2,
+            "zb": 0.1,
+            "sample_width_m": 0.0,
+            "sample_length_m": 0.0,
+            "sample_depth_m": 0.0,
+            "debye_x": 0.0,
+            "debye_y": 0.0,
+            "corto_detector": 0.075,
+            "a": 4.2,
+            "b": 4.2,
+            "c": 32.1,
+            "a2": None,
+            "c2": None,
+            "center_x": 100.0,
+            "center_y": 200.0,
+            "sigma_mosaic_deg": 0.2,
+            "gamma_mosaic_deg": 0.3,
+            "eta": 0.0,
+            "bandwidth_percent": 0.0,
+            "solve_q_steps": 64,
+            "solve_q_rel_tol": 1.0e-4,
+            "solve_q_mode": 1,
+            "optics_mode": 0,
+            "p0": 0.0,
+            "p1": 0.0,
+            "p2": 0.0,
+            "w0": 1.0,
+            "w1": 0.0,
+            "w2": 0.0,
+            "finite_stack": False,
+            "stack_layers": 1,
+            "phase_delta_expression": "0.0",
+            "phi_l_divisor": 1.0,
+            "weight1": 1.0,
+            "weight2": 1.0,
+        },
+        fit_config={
+            "geometry": {
+                "solver": {"manual_point_fit_mode": True},
+                "bounds": {
+                    "corto_detector": [0.05, 0.1],
+                    "theta_initial": [0.0, 10.0],
+                    "cor_angle": [-5.0, 5.0],
+                    "chi": [-5.0, 5.0],
+                    "zs": [-0.01, 0.01],
+                    "zb": [-0.01, 0.01],
+                    "gamma": [-5.0, 5.0],
+                    "Gamma": [-5.0, 5.0],
+                    "psi_z": [-5.0, 5.0],
+                },
+            }
+        },
+        intensity_threshold=0.0,
+        include_rods_flag=False,
+        two_theta_range=(0.0, 90.0),
+        mx=4,
+        background_flags={
+            "backend_rotation_k": 0,
+            "backend_flip_x": False,
+            "backend_flip_y": False,
+        },
+    )
+
+    saved_state = {
+        "files": {
+            "background_files": ["C:/tmp/bg0.osc"],
+            "current_background_index": 0,
+        },
+        "geometry": {
+            "manual_pairs": [{"background_index": 0, "entries": []}],
+            "peak_records": [],
+        },
+        "variables": {
+            "fit_zb_var": True,
+            "fit_zs_var": True,
+            "fit_theta_var": True,
+            "fit_psi_z_var": True,
+            "fit_chi_var": True,
+            "fit_cor_var": True,
+            "fit_gamma_var": True,
+            "fit_Gamma_var": True,
+            "fit_dist_var": True,
+            "fit_a_var": False,
+            "fit_c_var": False,
+            "fit_center_x_var": False,
+            "fit_center_y_var": False,
+        },
+    }
+    saved_state_before = copy.deepcopy(saved_state)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        headless_geometry_fit, "_build_runtime_defaults", lambda saved_state_arg: defaults
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_restore_manual_pairs",
+        lambda osc_files, saved_rows: {0: []},
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_load_structure_model",
+        lambda defaults_arg, saved_state_arg, var_store, simulation_runtime_state: (
+            SimpleNamespace(
+                miller=np.asarray([[0, 0, 1]], dtype=np.int64),
+                intensities=np.asarray([1.0], dtype=np.float64),
+            ),
+            None,
+            "C:/tmp/primary.cif",
+            complex(1.0, 0.0),
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background,
+        "load_background_image_by_index",
+        lambda index, **kwargs: {
+            "background_images": [np.zeros((4, 5), dtype=np.float64)],
+            "background_images_native": [np.zeros((4, 5), dtype=np.float64)],
+            "background_images_display": [np.zeros((4, 5), dtype=np.float64)],
+            "background_image": np.zeros((4, 5), dtype=np.float64),
+            "background_display": np.zeros((4, 5), dtype=np.float64),
+        },
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "current_geometry_fit_background_indices",
+        lambda **kwargs: [0],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "geometry_fit_uses_shared_theta_offset",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "current_geometry_theta_offset",
+        lambda **kwargs: 0.0,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "current_background_theta_values",
+        lambda **kwargs: [5.0],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "background_theta_for_index",
+        lambda index, **kwargs: 5.0,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "apply_background_theta_metadata",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_background_theta,
+        "apply_geometry_fit_background_selection",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_q_group_manager,
+        "make_runtime_geometry_fit_simulation_callbacks",
+        lambda **kwargs: SimpleNamespace(
+            simulate_hit_tables=lambda *args, **kwargs: [],
+            last_simulation_diagnostics=lambda: {},
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **kwargs: SimpleNamespace(
+            simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+            simulated_lookup=lambda simulated_peaks: {},
+            entry_display_coords=lambda entry: None,
+            refresh_entry_geometry=lambda entry: dict(entry) if entry is not None else None,
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "select_fit_orientation",
+        lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "apply_orientation_to_entries",
+        lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "orient_image_for_fit",
+        lambda image, **kwargs: image,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "unrotate_display_peaks",
+        lambda entries, rotated_shape, *, k=None, default_display_rotate_k=0: [
+            dict(entry) for entry in entries
+        ],
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "display_to_native_sim_coords",
+        lambda col, row, image_shape, sim_display_rotate_k=0: (float(col), float(row)),
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_overlay,
+        "native_sim_to_display_coords",
+        lambda col, row, image_shape, sim_display_rotate_k=0: (float(col), float(row)),
+    )
+    monkeypatch.setattr(headless_geometry_fit, "get_dir", lambda name: str(tmp_path))
+
+    def _fake_prepare_runtime_geometry_fit_run(*, params, var_names, preserve_live_theta, bindings):
+        captured["prepare_var_names"] = list(var_names)
+        captured["preserve_live_theta"] = bool(preserve_live_theta)
+        captured["runtime_cfg"] = bindings.build_runtime_config(params)
+        return geometry_fit.GeometryFitPreparationResult(
+            prepared_run=geometry_fit.GeometryFitPreparedRun(
+                fit_params=dict(params),
+                selected_background_indices=[0],
+                background_theta_values=[float(params["theta_initial"])],
+                joint_background_mode=False,
+                current_dataset={
+                    "dataset_index": 0,
+                    "measured_for_fit": [],
+                    "experimental_image_for_fit": np.zeros((4, 5), dtype=np.float64),
+                    "initial_pairs_display": [],
+                    "native_background": np.zeros((4, 5), dtype=np.float64),
+                    "orientation_choice": {"label": "identity"},
+                    "pair_count": 0,
+                    "group_count": 0,
+                },
+                dataset_infos=[{"dataset_index": 0, "summary_line": "bg[0]"}],
+                dataset_specs=[{"dataset_index": 0, "theta_initial": float(params["theta_initial"])}],
+                start_cmd_line="start",
+                start_log_sections=[],
+                max_display_markers=10,
+                geometry_runtime_cfg=dict(captured["runtime_cfg"]),
+            )
+        )
+
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_fit,
+        "prepare_runtime_geometry_fit_run",
+        _fake_prepare_runtime_geometry_fit_run,
+    )
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_fit,
+        "build_runtime_geometry_fit_execution_setup",
+        lambda **kwargs: SimpleNamespace(),
+    )
+
+    def _fake_execute_runtime_geometry_fit(*, prepared_run, var_names, **kwargs):
+        captured["execute_var_names"] = list(var_names)
+        captured["execute_candidate_param_names"] = list(
+            prepared_run.geometry_runtime_cfg.get("candidate_param_names", [])
+        )
+        return geometry_fit.GeometryFitRuntimeExecutionResult(
+            log_path=tmp_path / "headless_geometry_fit.log",
+            apply_result=geometry_fit.GeometryFitRuntimeApplyResult(
+                accepted=True,
+                rejection_reason=None,
+                rms=0.0,
+                fitted_params=None,
+                postprocess=None,
+            ),
+        )
+
+    monkeypatch.setattr(
+        headless_geometry_fit.gui_geometry_fit,
+        "execute_runtime_geometry_fit",
+        _fake_execute_runtime_geometry_fit,
+    )
+
+    result = headless_geometry_fit.run_headless_geometry_fit(
+        saved_state,
+        state_path=tmp_path / "saved_state.json",
+        downloads_dir=tmp_path,
+        stamp="headless_active_var_test",
+        active_var_names=active_var_names,
+    )
+
+    return saved_state, saved_state_before, captured, result
+
+
+def test_headless_geometry_fit_without_override_keeps_saved_state_active_var_contract(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=None,
+    )
+
+    assert result.accepted is True
+    assert captured["prepare_var_names"] == [
+        "zb",
+        "zs",
+        "theta_initial",
+        "psi_z",
+        "chi",
+        "cor_angle",
+        "gamma",
+        "Gamma",
+        "corto_detector",
+    ]
+    assert captured["execute_var_names"] == captured["prepare_var_names"]
+    assert "candidate_param_names" not in captured["runtime_cfg"]
+    assert saved_state == saved_state_before
+    for name, value in saved_state_before["variables"].items():
+        assert result.state["variables"][name] == value
+
+
+def test_headless_geometry_fit_active_var_override_uses_ordered_contract_without_mutating_state(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    override_names = [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+        "chi",
+        "zs",
+        "zb",
+    ]
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=override_names,
+    )
+
+    assert result.accepted is True
+    assert captured["prepare_var_names"] == override_names
+    assert captured["runtime_cfg"]["candidate_param_names"] == override_names
+    assert captured["execute_var_names"] == override_names
+    assert captured["execute_candidate_param_names"] == override_names
+    assert saved_state == saved_state_before
+    for name, value in saved_state_before["variables"].items():
+        assert result.state["variables"][name] == value
 
 
 def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -> None:
