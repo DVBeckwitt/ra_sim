@@ -82,6 +82,40 @@ payload for hit testing and selected-marker placement. If either picker
 regresses, first check whether the failing path bypassed that shared candidate
 payload or treated detector/display aliases as caked coordinates.
 
+## Weighted-event diffraction status
+
+Current status:
+
+- feature status: active normal runtime path
+- bug status: slow Python raw-candidate enumeration fixed
+- error status: covered invariants green in weighted-event regression tests
+
+What changed:
+
+- `process_peaks_parallel(...)` and `process_peaks_parallel_safe(...)` now run the
+  weighted-event path through `_process_peaks_parallel_impl(...)`, which calls
+  Numba pass-1/pass-2 helpers instead of enumerating raw candidates with Python
+  lists and dicts in the hot loop
+- off-detector, non-finite, or bilinear-unsupported candidates are rejected
+  before they enter `V`, so they cannot affect event selection or image mass
+- duplicate sampled ordinals still produce duplicate hit rows, duplicate sampled
+  cache rows, and duplicate best-sample event counts; only image deposition may
+  aggregate repeated ordinals internally
+- branch representatives stay separate from sampled events; fitter-facing
+  `get_last_intersection_cache()` still returns representative rows, while
+  `get_last_intersection_cache_views()` exposes both sampled event rows and
+  branch representative rows
+- `get_last_process_peaks_weighted_event_stats()` exposes weighted-event debug
+  counters and timers, including solve/project/select counts and pass-1/pass-2
+  mass totals for test assertions
+
+Still intentionally disabled for weighted events:
+
+- source-template replay
+- clustered beam replacement
+- grouped event emission by `(Gr, Gz)`
+- sampling from representative/cache rows
+
 ## Numba on-disk compilation cache
 
 RA-SIM sets `NUMBA_CACHE_DIR` at package import time for stable startup behavior.

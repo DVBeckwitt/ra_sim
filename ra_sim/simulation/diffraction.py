@@ -30,6 +30,7 @@ from ra_sim.debug_controls import (
 )
 from ra_sim.utils.calculations import (
     IndexofRefraction,
+    SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
     complex_sqrt,
     fresnel_transmission,
 )
@@ -291,6 +292,7 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "default_solve_q_cos",
     "default_solve_q_sin",
     "numba_thread_count",
+    "events_per_beam_phase",
 )
 
 _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
@@ -320,7 +322,32 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "default_solve_q_cos": None,
     "default_solve_q_sin": None,
     "numba_thread_count": None,
+    "events_per_beam_phase": 50,
 }
+
+
+def normalize_events_per_beam_phase_backend(
+    value,
+    default=50,
+    minimum=1,
+    maximum=1000,
+):
+    """Normalize weighted-event count for backend execution."""
+
+    try:
+        count = int(value)
+    except Exception:
+        try:
+            count = int(default)
+        except Exception:
+            count = 50
+    lower = max(int(minimum), 1)
+    upper = max(lower, int(maximum))
+    if count < lower:
+        return lower
+    if count > upper:
+        return upper
+    return int(count)
 
 
 @njit(fastmath=True, cache=True)
@@ -509,6 +536,25 @@ _SOURCE_TEMPLATE_CACHE = {}
 _Q_VECTOR_CACHE = {}
 _LAST_PROCESS_PEAKS_SAFE_STATS = dict(_EMPTY_PROCESS_PEAKS_SAFE_STATS)
 _LAST_INTERSECTION_CACHE = []
+_LAST_INTERSECTION_CACHE_VIEWS = {
+    "sampled_event_rows": [],
+    "branch_representative_rows": [],
+}
+_LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES = None
+_EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
+    "n_solve_q_calls": 0,
+    "n_project_candidate_calls": 0,
+    "n_valid_candidates": 0,
+    "n_selected_events": 0,
+    "time_precompute": 0.0,
+    "time_solve_q": 0.0,
+    "time_project": 0.0,
+    "time_select": 0.0,
+    "time_emit_cache": 0.0,
+    "pass1_total_mass": 0.0,
+    "pass2_total_mass": 0.0,
+}
+_LAST_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = dict(_EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS)
 
 
 def _retain_diffraction_safe_cache() -> bool:
@@ -520,6 +566,17 @@ def _retain_last_intersection_cache() -> bool:
         "diffraction_last_intersection",
         feature_needed=False,
     )
+
+
+def _set_last_process_peaks_weighted_event_stats(**updates):
+    global _LAST_PROCESS_PEAKS_WEIGHTED_EVENT_STATS
+    stats = dict(_EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS)
+    stats.update(updates)
+    _LAST_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = stats
+
+
+def get_last_process_peaks_weighted_event_stats():
+    return dict(_LAST_PROCESS_PEAKS_WEIGHTED_EVENT_STATS)
 
 
 # =============================================================================
@@ -2659,6 +2716,24 @@ def _bind_process_peaks_parallel_call(args, kwargs):
     return bound, extras
 
 
+def _normalize_bound_process_peaks_parallel_call(args, kwargs):
+    bound_result = _bind_process_peaks_parallel_call(args, kwargs)
+    if bound_result is None:
+        return args, dict(kwargs)
+    bound, extra_kwargs = bound_result
+    bound["events_per_beam_phase"] = normalize_events_per_beam_phase_backend(
+        bound.get("events_per_beam_phase", 50)
+    )
+    positional_count = len(args)
+    normalized_args = tuple(
+        bound[name] for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[:positional_count]
+    )
+    normalized_kwargs = dict(extra_kwargs)
+    for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[positional_count:]:
+        normalized_kwargs[name] = bound[name]
+    return normalized_args, normalized_kwargs
+
+
 def _get_phase_entry_n_samp(phase_entry, fallback_n_samp):
     if isinstance(phase_entry, dict):
         n_samp = phase_entry.get("n_samp", fallback_n_samp)
@@ -2791,163 +2866,7 @@ def _safe_cache_hooks_active(enable_safe_cache):
 
 
 def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
-    if not _safe_cache_hooks_active(enable_safe_cache):
-        return None
-
-    bound_result = _bind_process_peaks_parallel_call(args, kwargs)
-    if bound_result is None:
-        return None
-    bound, extra_kwargs = bound_result
-    if extra_kwargs:
-        return None
-    if int(bound["save_flag"]) != 0:
-        return None
-    if bool(bound["sample_qr_ring_once"]):
-        return None
-
-    miller = np.asarray(bound["miller"], dtype=np.float64)
-    intensities = np.asarray(bound["intensities"], dtype=np.float64).reshape(-1)
-    beam_x_array = np.asarray(bound["beam_x_array"], dtype=np.float64).reshape(-1)
-    image = np.array(bound["image"], copy=True)
-    phase_params = {
-        "beam_x_array": beam_x_array,
-        "beam_y_array": np.asarray(bound["beam_y_array"], dtype=np.float64).reshape(-1),
-        "theta_array": np.asarray(bound["theta_array"], dtype=np.float64).reshape(-1),
-        "phi_array": np.asarray(bound["phi_array"], dtype=np.float64).reshape(-1),
-        "wavelength_array": np.asarray(bound["wavelength_array"], dtype=np.float64).reshape(-1),
-        "lambda_": float(bound["lambda_"]),
-        "theta_initial_deg": float(bound["theta_initial_deg"]),
-        "sigma_pv_deg": float(bound["sigma_pv_deg"]),
-        "gamma_pv_deg": float(bound["gamma_pv_deg"]),
-        "eta_pv": float(bound["eta_pv"]),
-        "solve_q_steps": int(bound["solve_q_steps"]),
-        "solve_q_rel_tol": float(bound["solve_q_rel_tol"]),
-        "solve_q_mode": int(bound["solve_q_mode"]),
-        "default_solve_q_dtheta": float(bound["default_solve_q_dtheta"]),
-        "default_solve_q_cos": bound["default_solve_q_cos"],
-        "default_solve_q_sin": bound["default_solve_q_sin"],
-    }
-    phase_entry = _build_phase_space_entry(phase_params)
-    if _retain_diffraction_safe_cache():
-        _PHASE_SPACE_CACHE.clear()
-        _PHASE_SPACE_CACHE["last"] = phase_entry
-    else:
-        _PHASE_SPACE_CACHE.clear()
-
-    num_peaks = int(miller.shape[0])
-    n_samp = _get_phase_entry_n_samp(phase_entry, beam_x_array.size)
-    all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
-    q_data = np.zeros((1, 1, 5), dtype=np.float64)
-    q_count = np.zeros(1, dtype=np.int64)
-    source_template = None
-    source_templates_built = 0
-    rays_reused = 0
-    source_params = dict(phase_params)
-
-    source_peak_index = -1
-    for i_pk in range(num_peaks):
-        if miller[i_pk, 2] >= 0.0:
-            source_peak_index = i_pk
-            break
-
-    if source_peak_index >= 0:
-        H = float(miller[source_peak_index, 0])
-        K = float(miller[source_peak_index, 1])
-        L = float(miller[source_peak_index, 2])
-        source_template = _build_source_unit_template(
-            source_params,
-            phase_entry,
-            H,
-            K,
-            L,
-        )
-        if _retain_diffraction_safe_cache():
-            _SOURCE_TEMPLATE_CACHE.clear()
-            _SOURCE_TEMPLATE_CACHE["last"] = source_template
-        else:
-            _SOURCE_TEMPLATE_CACHE.clear()
-        source_templates_built = 1
-        rays_reused = int(source_template.get("q_cache_hits", 0))
-
-    collect_hit_tables = bool(bound["collect_hit_tables"])
-    accumulate_image = bool(bound["accumulate_image"])
-    hit_tables = []
-    miss_tables = []
-    best_sample_indices_out = bound["best_sample_indices_out"]
-    if best_sample_indices_out is not None:
-        best_sample_indices_out[:] = -1
-
-    image_flat = image.reshape(-1)
-    for i_pk in range(num_peaks):
-        H = float(miller[i_pk, 0])
-        K = float(miller[i_pk, 1])
-        L = float(miller[i_pk, 2])
-        refl_intensity = float(intensities[i_pk]) if i_pk < intensities.size else 0.0
-
-        if source_template is None or L < 0.0:
-            status_template = np.zeros(n_samp, dtype=np.int64)
-            hit_table = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
-            miss_table = np.empty((0, 3), dtype=np.float64)
-        else:
-            flat_indices = np.asarray(
-                source_template.get("flat_indices", np.empty(0, dtype=np.int64)),
-                dtype=np.int64,
-            ).reshape(-1)
-            flat_values = np.asarray(
-                source_template.get("flat_values", np.empty(0, dtype=np.float64)),
-                dtype=np.float64,
-            ).reshape(-1)
-            if accumulate_image and flat_indices.size > 0 and flat_values.size > 0:
-                n_values = min(flat_indices.size, flat_values.size)
-                np.add.at(
-                    image_flat, flat_indices[:n_values], refl_intensity * flat_values[:n_values]
-                )
-
-            hit_template = np.asarray(
-                source_template.get(
-                    "hit_template", np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
-                ),
-                dtype=np.float64,
-            )
-            if collect_hit_tables and hit_template.size > 0:
-                hit_table = np.array(hit_template, copy=True)
-                hit_table[:, 0] *= refl_intensity
-                if hit_table.shape[1] >= 7:
-                    hit_table[:, 4] = H
-                    hit_table[:, 5] = K
-                    hit_table[:, 6] = L
-            else:
-                hit_table = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
-
-            miss_template = np.asarray(
-                source_template.get("miss_template", np.empty((0, 3), dtype=np.float64)),
-                dtype=np.float64,
-            )
-            if miss_template.size > 0:
-                miss_table = np.array(miss_template, copy=True)
-            else:
-                miss_table = np.empty((0, 3), dtype=np.float64)
-
-            status_template = np.asarray(
-                source_template.get("status_template", np.zeros(n_samp, dtype=np.int64)),
-                dtype=np.int64,
-            ).reshape(-1)
-            if best_sample_indices_out is not None and i_pk < best_sample_indices_out.shape[0]:
-                best_sample_indices_out[i_pk] = int(source_template.get("best_sample_idx", -1))
-
-        if status_template.size > 0 and n_samp > 0:
-            n_status = min(status_template.size, n_samp)
-            all_status[i_pk, :n_status] = status_template[:n_status]
-        hit_tables.append(hit_table)
-        miss_tables.append(miss_table)
-
-    _set_last_process_peaks_safe_stats(
-        used_safe_cache=True,
-        source_templates_built=source_templates_built,
-        source_templates_reused=0,
-        rays_reused=rays_reused,
-    )
-    return image, hit_tables, q_data, q_count, all_status, miss_tables
+    return None
 
 
 @njit(fastmath=True, cache=True)
@@ -3541,6 +3460,1056 @@ def _accumulate_bilinear_hit(image, image_size, row_f, col_f, value):
             deposited = True
 
     return deposited
+
+
+@njit(fastmath=True, cache=True)
+def _candidate_has_detector_support(image_size, row_f, col_f):
+    """Return whether a floating detector hit reaches at least one image pixel."""
+
+    if not np.isfinite(row_f) or not np.isfinite(col_f):
+        return False
+
+    row0 = int(np.floor(row_f))
+    col0 = int(np.floor(col_f))
+    d_row = row_f - float(row0)
+    d_col = col_f - float(col0)
+
+    for row_offset in range(2):
+        rr = row0 + row_offset
+        if rr < 0 or rr >= image_size:
+            continue
+        w_row = 1.0 - d_row if row_offset == 0 else d_row
+        if w_row <= 0.0:
+            continue
+        for col_offset in range(2):
+            cc = col0 + col_offset
+            if cc < 0 or cc >= image_size:
+                continue
+            w_col = 1.0 - d_col if col_offset == 0 else d_col
+            if w_col > 0.0:
+                return True
+    return False
+
+
+@njit(cache=True)
+def _event_sample_unit_interval(sample_idx: int, event_idx: int, stream: int = 0) -> float:
+    x = (
+        0.5
+        + (sample_idx + 1) * 0.6180339887498949
+        + (event_idx + 1) * 0.41421356237309503
+        + (stream + 1) * 0.7320508075688772
+    )
+    return x - np.floor(x)
+
+
+def _weighted_event_targets(total_mass: float, event_count: int, sample_idx: int) -> np.ndarray:
+    total_mass_f = float(total_mass)
+    event_count_i = int(event_count)
+    if not np.isfinite(total_mass_f) or total_mass_f <= 0.0 or event_count_i <= 0:
+        return np.empty((0,), dtype=np.float64)
+    targets = np.empty(event_count_i, dtype=np.float64)
+    for event_idx in range(event_count_i):
+        targets[event_idx] = (
+            _event_sample_unit_interval(int(sample_idx), int(event_idx), stream=0) * total_mass_f
+        )
+    targets.sort()
+    return targets
+
+
+def _select_weighted_event_indices_from_targets(
+    masses: np.ndarray,
+    targets: np.ndarray,
+) -> np.ndarray:
+    mass_arr = np.asarray(masses, dtype=np.float64).reshape(-1)
+    target_arr = np.asarray(targets, dtype=np.float64).reshape(-1)
+    if mass_arr.size <= 0 or target_arr.size <= 0:
+        return np.empty((0,), dtype=np.int64)
+
+    selected = np.empty(target_arr.shape[0], dtype=np.int64)
+    cumulative = 0.0
+    target_idx = 0
+    for mass_idx, mass in enumerate(mass_arr):
+        if not np.isfinite(mass) or mass <= 0.0:
+            continue
+        cumulative += float(mass)
+        while target_idx < target_arr.shape[0] and cumulative > float(target_arr[target_idx]):
+            selected[target_idx] = int(mass_idx)
+            target_idx += 1
+    if target_idx <= 0:
+        return np.empty((0,), dtype=np.int64)
+    if target_idx < target_arr.shape[0]:
+        selected[target_idx:] = selected[target_idx - 1]
+    return selected
+
+
+def _weighted_event_deposit(total_mass: float, event_count: int) -> float:
+    total_mass_f = float(total_mass)
+    event_count_i = int(event_count)
+    if not np.isfinite(total_mass_f) or total_mass_f <= 0.0 or event_count_i <= 0:
+        return 0.0
+    return total_mass_f / float(event_count_i)
+
+
+def _candidate_branch_id(H: float, K: float, phi_f: float, qx: float) -> int:
+    if abs(float(H)) < 1.0e-12 and abs(float(K)) < 1.0e-12:
+        return 0
+    phi_deg = float(phi_f) * (180.0 / pi)
+    if phi_deg > SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG:
+        return 1
+    if phi_deg < -SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG:
+        return 0
+    return 1 if float(qx) > 0.0 else 0
+
+
+def _candidate_top_mosaic_distance(
+    sample_idx: int,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    wavelength_array,
+) -> float:
+    metric = 0.0
+    if beam_x_array is not None and sample_idx < np.asarray(beam_x_array).shape[0]:
+        beam_x_val = float(np.asarray(beam_x_array)[sample_idx])
+        if np.isfinite(beam_x_val):
+            metric += beam_x_val * beam_x_val
+    if beam_y_array is not None and sample_idx < np.asarray(beam_y_array).shape[0]:
+        beam_y_val = float(np.asarray(beam_y_array)[sample_idx])
+        if np.isfinite(beam_y_val):
+            metric += beam_y_val * beam_y_val
+    if theta_array is not None and sample_idx < np.asarray(theta_array).shape[0]:
+        theta_val = float(np.asarray(theta_array)[sample_idx])
+        if np.isfinite(theta_val):
+            metric += theta_val * theta_val
+    if phi_array is not None and sample_idx < np.asarray(phi_array).shape[0]:
+        phi_val = float(np.asarray(phi_array)[sample_idx])
+        if np.isfinite(phi_val):
+            metric += phi_val * phi_val
+    if wavelength_array is not None:
+        wavelength_arr = np.asarray(wavelength_array, dtype=np.float64).reshape(-1)
+        if sample_idx < wavelength_arr.shape[0]:
+            wavelength_val = float(wavelength_arr[sample_idx])
+            if np.isfinite(wavelength_val):
+                finite_wavelengths = wavelength_arr[np.isfinite(wavelength_arr)]
+                if finite_wavelengths.size > 0:
+                    metric += abs(wavelength_val - float(np.mean(finite_wavelengths)))
+    return float(metric)
+
+
+def _candidate_valid_mass(value: float) -> bool:
+    return bool(np.isfinite(value) and float(value) > 0.0)
+
+
+def _lookup_fast_optics(k0, n2_samp, n2_real, thickness, theta):
+    Tf_s = fresnel_transmission(theta, n2_samp, True, False)
+    Tf_p = fresnel_transmission(theta, n2_samp, False, False)
+    Tf2 = 0.5 * (
+        (np.real(Tf_s) * np.real(Tf_s) + np.imag(Tf_s) * np.imag(Tf_s))
+        + (np.real(Tf_p) * np.real(Tf_p) + np.imag(Tf_p) * np.imag(Tf_p))
+    )
+    Tf2 = _sanitize_transmission_power(Tf2)
+    _, im_k_z_f = ktz_components(k0, n2_samp, theta)
+    if thickness > 0.0:
+        L_out = thickness
+    else:
+        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
+    out_angle = acos(_clamp(cos(theta) * n2_real, -1.0, 1.0))
+    return float(Tf2), float(im_k_z_f), float(L_out), float(out_angle)
+
+
+def _project_weighted_candidate(
+    *,
+    H,
+    K,
+    L,
+    Qx,
+    Qy,
+    Qz,
+    I_Q,
+    reflection_intensity,
+    sample_weight,
+    debye_x_sq,
+    debye_y_sq,
+    center,
+    R_sample,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
+    I_plane,
+    k_x_scat,
+    k_y_scat,
+    re_k_z,
+    im_k_z,
+    k_scat,
+    k0,
+    Ti2,
+    L_in,
+    n2_real,
+    n2_samp,
+    eps2,
+    thickness,
+    optics_mode,
+    pixel_size_m,
+    image_size,
+    exit_projection_mode,
+    projection_debug_enabled=False,
+    projection_debug_counters=None,
+    projection_debug_reject_count=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
+):
+    pixel_size_eff = float(pixel_size_m)
+    if (not np.isfinite(pixel_size_eff)) or pixel_size_eff <= 0.0:
+        pixel_size_eff = 100e-6
+    pixel_scale = 1.0 / pixel_size_eff
+    use_exact_optics = int(optics_mode) == OPTICS_MODE_EXACT
+    eps3 = 1.0 + 0.0j
+
+    k_tx_prime = float(Qx) + float(k_x_scat)
+    k_ty_prime = float(Qy) + float(k_y_scat)
+    k_tz_prime = float(Qz) + float(re_k_z)
+    kr = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
+    if kr < 1e-12:
+        twotheta_t_prime = 0.0
+    else:
+        twotheta_t_prime = np.arctan(k_tz_prime / kr)
+
+    th_t_out = np.abs(twotheta_t_prime)
+    if use_exact_optics:
+        k0_sq = float(k0) * float(k0)
+        k_par_f = kr
+        k_par_f_sq = k_par_f * k_par_f
+        kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+        kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
+        Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+        Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+        Tf2 = 0.5 * (
+            _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+            + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+        )
+        Tf2 = _sanitize_transmission_power(Tf2)
+        im_k_z_f = np.abs(kz2_f.imag)
+        if thickness > 0.0:
+            L_out = thickness
+        else:
+            L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
+        cos_out = _clamp(kr / np.maximum(float(k0), 1.0e-30), -1.0, 1.0)
+        twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+        k_out_mag = float(k0)
+    else:
+        Tf2, im_k_z_f, L_out, twotheta_t_abs = _lookup_fast_optics(
+            float(k0),
+            n2_samp,
+            float(n2_real),
+            float(thickness),
+            float(th_t_out),
+        )
+        twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
+        k_out_mag = float(k_scat)
+
+    if projection_debug_enabled and projection_debug_counters is not None:
+        _projection_debug_log_ray(
+            projection_debug_counters,
+            twotheta_t_prime,
+            twotheta_t,
+            n2_real,
+        )
+
+    prop_att = np.exp(-2.0 * float(im_k_z) * float(L_in)) * np.exp(
+        -2.0 * float(im_k_z_f) * float(L_out)
+    )
+    if not np.isfinite(prop_att) or prop_att <= 0.0:
+        if (
+            projection_debug_enabled
+            and projection_debug_counters is not None
+            and projection_debug_reject_count is not None
+            and projection_debug_reject_records is not None
+        ):
+            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_PROP_ATT_REJECT] += 1
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                twotheta_t_prime,
+                np.nan,
+                kr,
+                k0,
+                n2_real,
+                _PROJECTION_DEBUG_REASON_PROP_ATT,
+            )
+        return False, np.nan, np.nan, np.nan, 0.0
+
+    prop_fac = float(Ti2) * float(Tf2) * float(prop_att)
+    if not np.isfinite(prop_fac) or prop_fac <= 0.0:
+        if (
+            projection_debug_enabled
+            and projection_debug_counters is not None
+            and projection_debug_reject_count is not None
+            and projection_debug_reject_records is not None
+        ):
+            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_PROP_FAC_REJECT] += 1
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                twotheta_t_prime,
+                np.nan,
+                kr,
+                k0,
+                n2_real,
+                _PROJECTION_DEBUG_REASON_PROP_FAC,
+            )
+        return False, np.nan, np.nan, np.nan, 0.0
+
+    phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+    if int(exit_projection_mode) == EXIT_PROJECTION_INTERNAL:
+        k_norm = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime)
+        if k_norm > 1.0e-30:
+            kf = np.array(
+                [k_tx_prime / k_norm, k_ty_prime / k_norm, k_tz_prime / k_norm],
+                dtype=np.float64,
+            )
+        elif k_out_mag > 1.0e-30:
+            kf = np.array(
+                [
+                    k_out_mag * np.cos(twotheta_t) * np.sin(phi_f),
+                    k_out_mag * np.cos(twotheta_t) * np.cos(phi_f),
+                    k_out_mag * np.sin(twotheta_t),
+                ],
+                dtype=np.float64,
+            )
+        else:
+            return False, np.nan, np.nan, np.nan, 0.0
+    else:
+        kf = np.array(
+            [
+                k_out_mag * np.cos(twotheta_t) * np.sin(phi_f),
+                k_out_mag * np.cos(twotheta_t) * np.cos(phi_f),
+                k_out_mag * np.sin(twotheta_t),
+            ],
+            dtype=np.float64,
+        )
+
+    kf_prime = np.asarray(R_sample, dtype=np.float64) @ kf
+    dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
+    if not valid_det:
+        return False, np.nan, np.nan, np.nan, 0.0
+
+    plane_to_det = np.array(
+        [dx - Detector_Pos[0], dy - Detector_Pos[1], dz - Detector_Pos[2]],
+        dtype=np.float64,
+    )
+    x_det = float(np.dot(plane_to_det, e1_det))
+    y_det = float(np.dot(plane_to_det, e2_det))
+    if not np.isfinite(x_det) or not np.isfinite(y_det):
+        return False, np.nan, np.nan, np.nan, 0.0
+
+    row_f = float(center[0]) - y_det * pixel_scale
+    col_f = float(center[1]) + x_det * pixel_scale
+    if not np.isfinite(row_f) or not np.isfinite(col_f):
+        return False, np.nan, np.nan, np.nan, 0.0
+    if not _candidate_has_detector_support(int(image_size), float(row_f), float(col_f)):
+        return False, row_f, col_f, np.nan, 0.0
+
+    mass = (
+        float(reflection_intensity)
+        * float(sample_weight)
+        * float(I_Q)
+        * float(prop_fac)
+        * exp(-float(Qz) * float(Qz) * float(debye_x_sq))
+        * exp(-(float(Qx) * float(Qx) + float(Qy) * float(Qy)) * float(debye_y_sq))
+    )
+    if not _candidate_valid_mass(mass):
+        return False, row_f, col_f, phi_f, 0.0
+
+    if projection_debug_enabled and projection_debug_row_hit_counts is not None:
+        row_idx = int(np.rint(row_f))
+        if 0 <= row_idx < projection_debug_row_hit_counts.shape[0]:
+            projection_debug_row_hit_counts[row_idx] += 1
+            projection_debug_row_tthp_sums[row_idx] += twotheta_t_prime
+            projection_debug_row_tth_sums[row_idx] += twotheta_t
+
+    return True, row_f, col_f, phi_f, float(mass)
+
+
+_DEFAULT_SOLVE_Q = solve_q
+_DEFAULT_PRECOMPUTE_SAMPLE_TERMS = _precompute_sample_terms
+_DEFAULT_PROJECT_WEIGHTED_CANDIDATE = _project_weighted_candidate
+
+
+@njit(fastmath=True, cache=True)
+def _candidate_branch_id_fast(H, K, phi_f, qx):
+    if abs(H) < 1.0e-12 and abs(K) < 1.0e-12:
+        return 0
+    phi_deg = phi_f * (180.0 / pi)
+    if phi_deg > SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG:
+        return 1
+    if phi_deg < -SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG:
+        return 0
+    return 1 if qx > 0.0 else 0
+
+
+@njit(fastmath=True, cache=True)
+def _project_weighted_candidate_fast(
+    Qx,
+    Qy,
+    Qz,
+    I_Q,
+    reflection_intensity,
+    sample_weight,
+    debye_x_sq,
+    debye_y_sq,
+    center_row,
+    center_col,
+    R_sample,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
+    I_plane_x,
+    I_plane_y,
+    I_plane_z,
+    k_x_scat,
+    k_y_scat,
+    re_k_z,
+    im_k_z,
+    k_scat,
+    k0,
+    Ti2,
+    L_in,
+    n2_real,
+    n2_samp,
+    eps2,
+    thickness,
+    optics_mode,
+    pixel_scale,
+    image_size,
+    exit_projection_mode,
+    fast_optics_lut_ready,
+    fast_optics_lut_row,
+):
+    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
+    eps3 = 1.0 + 0.0j
+
+    k_tx_prime = Qx + k_x_scat
+    k_ty_prime = Qy + k_y_scat
+    k_tz_prime = Qz + re_k_z
+    kr = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
+    if kr < 1e-12:
+        twotheta_t_prime = 0.0
+    else:
+        twotheta_t_prime = np.arctan(k_tz_prime / kr)
+
+    th_t_out = np.abs(twotheta_t_prime)
+    if use_exact_optics:
+        k0_sq = k0 * k0
+        k_par_f = kr
+        k_par_f_sq = k_par_f * k_par_f
+        kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+        kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
+        Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+        Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+        Tf2 = 0.5 * (
+            _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+            + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+        )
+        Tf2 = _sanitize_transmission_power(Tf2)
+        im_k_z_f = np.abs(kz2_f.imag)
+        if thickness > 0.0:
+            L_out = thickness
+        else:
+            L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
+        cos_out = _clamp(kr / np.maximum(k0, 1.0e-30), -1.0, 1.0)
+        twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+        k_out_mag = k0
+    else:
+        if fast_optics_lut_ready:
+            Tf2, im_k_z_f, L_out, twotheta_t_abs = _lookup_fast_optics_lut_row(
+                fast_optics_lut_row,
+                th_t_out,
+            )
+        else:
+            return False, np.nan, np.nan, np.nan, 0.0
+        twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
+        k_out_mag = k_scat
+
+    prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
+    if (not np.isfinite(prop_att)) or prop_att <= 0.0:
+        return False, np.nan, np.nan, np.nan, 0.0
+
+    prop_fac = Ti2 * Tf2 * prop_att
+    if (not np.isfinite(prop_fac)) or prop_fac <= 0.0:
+        return False, np.nan, np.nan, np.nan, 0.0
+
+    phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+    if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
+        k_norm = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime)
+        if k_norm > 1.0e-30:
+            kf_x = k_tx_prime / k_norm
+            kf_y = k_ty_prime / k_norm
+            kf_z = k_tz_prime / k_norm
+        elif k_out_mag > 1.0e-30:
+            kf_x = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+            kf_y = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+            kf_z = k_out_mag * np.sin(twotheta_t)
+        else:
+            return False, np.nan, np.nan, np.nan, 0.0
+    else:
+        kf_x = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+        kf_y = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+        kf_z = k_out_mag * np.sin(twotheta_t)
+
+    kf_prime_x = R_sample[0, 0] * kf_x + R_sample[0, 1] * kf_y + R_sample[0, 2] * kf_z
+    kf_prime_y = R_sample[1, 0] * kf_x + R_sample[1, 1] * kf_y + R_sample[1, 2] * kf_z
+    kf_prime_z = R_sample[2, 0] * kf_x + R_sample[2, 1] * kf_y + R_sample[2, 2] * kf_z
+
+    denom = (
+        kf_prime_x * n_det_rot[0]
+        + kf_prime_y * n_det_rot[1]
+        + kf_prime_z * n_det_rot[2]
+    )
+    if abs(denom) < 1e-14:
+        dist = (
+            (I_plane_x - Detector_Pos[0]) * n_det_rot[0]
+            + (I_plane_y - Detector_Pos[1]) * n_det_rot[1]
+            + (I_plane_z - Detector_Pos[2]) * n_det_rot[2]
+        )
+        if abs(dist) < 1e-6:
+            dx = I_plane_x
+            dy = I_plane_y
+            dz = I_plane_z
+        else:
+            return False, np.nan, np.nan, np.nan, 0.0
+    else:
+        num = (
+            (Detector_Pos[0] - I_plane_x) * n_det_rot[0]
+            + (Detector_Pos[1] - I_plane_y) * n_det_rot[1]
+            + (Detector_Pos[2] - I_plane_z) * n_det_rot[2]
+        )
+        t = num / denom
+        if t < -1e-9:
+            return False, np.nan, np.nan, np.nan, 0.0
+        if t < 0.0:
+            t = 0.0
+        dx = I_plane_x + t * kf_prime_x
+        dy = I_plane_y + t * kf_prime_y
+        dz = I_plane_z + t * kf_prime_z
+
+    plane_to_det_x = dx - Detector_Pos[0]
+    plane_to_det_y = dy - Detector_Pos[1]
+    plane_to_det_z = dz - Detector_Pos[2]
+    x_det = (
+        plane_to_det_x * e1_det[0]
+        + plane_to_det_y * e1_det[1]
+        + plane_to_det_z * e1_det[2]
+    )
+    y_det = (
+        plane_to_det_x * e2_det[0]
+        + plane_to_det_y * e2_det[1]
+        + plane_to_det_z * e2_det[2]
+    )
+    if (not np.isfinite(x_det)) or (not np.isfinite(y_det)):
+        return False, np.nan, np.nan, np.nan, 0.0
+
+    row_f = center_row - y_det * pixel_scale
+    col_f = center_col + x_det * pixel_scale
+    if (not np.isfinite(row_f)) or (not np.isfinite(col_f)):
+        return False, np.nan, np.nan, np.nan, 0.0
+    if not _candidate_has_detector_support(image_size, row_f, col_f):
+        return False, row_f, col_f, np.nan, 0.0
+
+    mass = (
+        reflection_intensity
+        * sample_weight
+        * I_Q
+        * prop_fac
+        * exp(-Qz * Qz * debye_x_sq)
+        * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq)
+    )
+    if (not np.isfinite(mass)) or mass <= 0.0:
+        return False, row_f, col_f, phi_f, 0.0
+    return True, row_f, col_f, phi_f, mass
+
+
+@njit(fastmath=True, cache=True)
+def _weighted_event_update_representative(
+    peak_idx,
+    branch_id,
+    sample_top_distance,
+    mass,
+    sample_idx,
+    q_idx,
+    row_f,
+    col_f,
+    phi_f,
+    H,
+    K,
+    L,
+    representative_valid,
+    representative_distance,
+    representative_neg_mass,
+    representative_sample_idx,
+    representative_q_idx,
+    representative_rows,
+):
+    slot = 0
+    if branch_id > 0:
+        slot = 1
+
+    better = False
+    if representative_valid[peak_idx, slot] == 0:
+        better = True
+    else:
+        current_distance = representative_distance[peak_idx, slot]
+        current_neg_mass = representative_neg_mass[peak_idx, slot]
+        current_sample_idx = representative_sample_idx[peak_idx, slot]
+        current_q_idx = representative_q_idx[peak_idx, slot]
+        neg_mass = -mass
+        if sample_top_distance < current_distance:
+            better = True
+        elif sample_top_distance == current_distance:
+            if neg_mass < current_neg_mass:
+                better = True
+            elif neg_mass == current_neg_mass:
+                if sample_idx < current_sample_idx:
+                    better = True
+                elif sample_idx == current_sample_idx and q_idx < current_q_idx:
+                    better = True
+
+    if not better:
+        return
+
+    representative_valid[peak_idx, slot] = 1
+    representative_distance[peak_idx, slot] = sample_top_distance
+    representative_neg_mass[peak_idx, slot] = -mass
+    representative_sample_idx[peak_idx, slot] = sample_idx
+    representative_q_idx[peak_idx, slot] = q_idx
+    representative_rows[peak_idx, slot, 0] = mass
+    representative_rows[peak_idx, slot, 1] = col_f
+    representative_rows[peak_idx, slot, 2] = row_f
+    representative_rows[peak_idx, slot, 3] = phi_f
+    representative_rows[peak_idx, slot, 4] = H
+    representative_rows[peak_idx, slot, 5] = K
+    representative_rows[peak_idx, slot, 6] = L
+    representative_rows[peak_idx, slot, 7] = np.nan
+    representative_rows[peak_idx, slot, 8] = np.nan
+    representative_rows[peak_idx, slot, 9] = float(sample_idx)
+
+
+@njit(fastmath=True, cache=True)
+def _weighted_event_pass1_for_qset(
+    all_q,
+    peak_idx,
+    sample_idx,
+    H,
+    K,
+    L,
+    reflection_intensity,
+    sample_weight,
+    sample_top_distance,
+    debye_x_sq,
+    debye_y_sq,
+    center_row,
+    center_col,
+    R_sample,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
+    sample_terms,
+    sample_n2_array,
+    sample_eps2_array,
+    thickness,
+    optics_mode,
+    pixel_scale,
+    image_size,
+    exit_projection_mode,
+    fast_optics_lut_ready,
+    fast_optics_lut_row,
+    save_flag,
+    q_data,
+    q_count,
+    representative_valid,
+    representative_distance,
+    representative_neg_mass,
+    representative_sample_idx,
+    representative_q_idx,
+    representative_rows,
+):
+    total_mass = 0.0
+    valid_count = 0
+    project_calls = 0
+
+    I_plane_x = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_X]
+    I_plane_y = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Y]
+    I_plane_z = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Z]
+    k_x_scat = sample_terms[sample_idx, _SAMPLE_COL_KX_SCAT]
+    k_y_scat = sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT]
+    re_k_z = sample_terms[sample_idx, _SAMPLE_COL_RE_KZ]
+    im_k_z = sample_terms[sample_idx, _SAMPLE_COL_IM_KZ]
+    k_scat = sample_terms[sample_idx, _SAMPLE_COL_K_SCAT]
+    k0 = sample_terms[sample_idx, _SAMPLE_COL_K0]
+    Ti2 = sample_terms[sample_idx, _SAMPLE_COL_TI2]
+    L_in = sample_terms[sample_idx, _SAMPLE_COL_L_IN]
+    n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
+    n2_samp = sample_n2_array[sample_idx]
+    eps2 = sample_eps2_array[sample_idx]
+
+    for q_idx in range(all_q.shape[0]):
+        Qx = all_q[q_idx, 0]
+        Qy = all_q[q_idx, 1]
+        Qz = all_q[q_idx, 2]
+        I_Q = all_q[q_idx, 3]
+        project_calls += 1
+        candidate_valid, row_f, col_f, phi_f, mass = _project_weighted_candidate_fast(
+            Qx,
+            Qy,
+            Qz,
+            I_Q,
+            reflection_intensity,
+            sample_weight,
+            debye_x_sq,
+            debye_y_sq,
+            center_row,
+            center_col,
+            R_sample,
+            n_det_rot,
+            Detector_Pos,
+            e1_det,
+            e2_det,
+            I_plane_x,
+            I_plane_y,
+            I_plane_z,
+            k_x_scat,
+            k_y_scat,
+            re_k_z,
+            im_k_z,
+            k_scat,
+            k0,
+            Ti2,
+            L_in,
+            n2_real,
+            n2_samp,
+            eps2,
+            thickness,
+            optics_mode,
+            pixel_scale,
+            image_size,
+            exit_projection_mode,
+            fast_optics_lut_ready,
+            fast_optics_lut_row,
+        )
+        if save_flag == 1 and np.isfinite(mass) and mass > 0.0 and q_count[peak_idx] < q_data.shape[1]:
+            q_store_idx = q_count[peak_idx]
+            q_data[peak_idx, q_store_idx, 0] = Qx
+            q_data[peak_idx, q_store_idx, 1] = Qy
+            q_data[peak_idx, q_store_idx, 2] = Qz
+            q_data[peak_idx, q_store_idx, 3] = mass
+            q_data[peak_idx, q_store_idx, 4] = float(sample_idx)
+            q_count[peak_idx] += 1
+        if not candidate_valid:
+            continue
+        total_mass += mass
+        valid_count += 1
+        branch_id = _candidate_branch_id_fast(H, K, phi_f, Qx)
+        _weighted_event_update_representative(
+            peak_idx,
+            branch_id,
+            sample_top_distance,
+            mass,
+            sample_idx,
+            q_idx,
+            row_f,
+            col_f,
+            phi_f,
+            H,
+            K,
+            L,
+            representative_valid,
+            representative_distance,
+            representative_neg_mass,
+            representative_sample_idx,
+            representative_q_idx,
+            representative_rows,
+        )
+
+    return total_mass, valid_count, project_calls
+
+
+@njit(fastmath=True, cache=True)
+def _weighted_event_pass2_for_qset(
+    all_q,
+    peak_idx,
+    sample_idx,
+    H,
+    K,
+    L,
+    reflection_intensity,
+    sample_weight,
+    debye_x_sq,
+    debye_y_sq,
+    center_row,
+    center_col,
+    R_sample,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
+    sample_terms,
+    sample_n2_array,
+    sample_eps2_array,
+    thickness,
+    optics_mode,
+    pixel_scale,
+    image_size,
+    exit_projection_mode,
+    fast_optics_lut_ready,
+    fast_optics_lut_row,
+    targets,
+    target_idx,
+    cumulative_mass,
+    deposit,
+    collect_tables,
+    flat_event_rows,
+    flat_event_peak_indices,
+    flat_event_count,
+    event_counts,
+    accumulate_image,
+    image,
+    cache_keys,
+    cache_values,
+    cache_entry_count,
+    cache_flush_limit,
+):
+    project_calls = 0
+    pass2_total_mass = 0.0
+    selected_events = 0
+    have_last_valid = False
+    last_row_f = np.nan
+    last_col_f = np.nan
+    last_phi_f = np.nan
+
+    I_plane_x = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_X]
+    I_plane_y = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Y]
+    I_plane_z = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Z]
+    k_x_scat = sample_terms[sample_idx, _SAMPLE_COL_KX_SCAT]
+    k_y_scat = sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT]
+    re_k_z = sample_terms[sample_idx, _SAMPLE_COL_RE_KZ]
+    im_k_z = sample_terms[sample_idx, _SAMPLE_COL_IM_KZ]
+    k_scat = sample_terms[sample_idx, _SAMPLE_COL_K_SCAT]
+    k0 = sample_terms[sample_idx, _SAMPLE_COL_K0]
+    Ti2 = sample_terms[sample_idx, _SAMPLE_COL_TI2]
+    L_in = sample_terms[sample_idx, _SAMPLE_COL_L_IN]
+    n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
+    n2_samp = sample_n2_array[sample_idx]
+    eps2 = sample_eps2_array[sample_idx]
+
+    for q_idx in range(all_q.shape[0]):
+        Qx = all_q[q_idx, 0]
+        Qy = all_q[q_idx, 1]
+        Qz = all_q[q_idx, 2]
+        I_Q = all_q[q_idx, 3]
+        project_calls += 1
+        candidate_valid, row_f, col_f, phi_f, mass = _project_weighted_candidate_fast(
+            Qx,
+            Qy,
+            Qz,
+            I_Q,
+            reflection_intensity,
+            sample_weight,
+            debye_x_sq,
+            debye_y_sq,
+            center_row,
+            center_col,
+            R_sample,
+            n_det_rot,
+            Detector_Pos,
+            e1_det,
+            e2_det,
+            I_plane_x,
+            I_plane_y,
+            I_plane_z,
+            k_x_scat,
+            k_y_scat,
+            re_k_z,
+            im_k_z,
+            k_scat,
+            k0,
+            Ti2,
+            L_in,
+            n2_real,
+            n2_samp,
+            eps2,
+            thickness,
+            optics_mode,
+            pixel_scale,
+            image_size,
+            exit_projection_mode,
+            fast_optics_lut_ready,
+            fast_optics_lut_row,
+        )
+        if not candidate_valid:
+            continue
+
+        cumulative_mass += mass
+        pass2_total_mass += mass
+        have_last_valid = True
+        last_row_f = row_f
+        last_col_f = col_f
+        last_phi_f = phi_f
+
+        hit_count = 0
+        while target_idx < targets.shape[0] and cumulative_mass > targets[target_idx]:
+            hit_count += 1
+            target_idx += 1
+
+        if hit_count <= 0:
+            continue
+
+        selected_events += hit_count
+        event_counts[peak_idx, sample_idx] += hit_count
+
+        if accumulate_image:
+            deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                image_size,
+                row_f,
+                col_f,
+                float(hit_count) * deposit,
+                cache_keys,
+                cache_values,
+                cache_entry_count,
+                cache_flush_limit,
+            )
+            if needs_flush:
+                cache_entry_count = _flush_local_pixel_cache(
+                    image,
+                    image_size,
+                    cache_keys,
+                    cache_values,
+                )
+                deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                    image_size,
+                    row_f,
+                    col_f,
+                    float(hit_count) * deposit,
+                    cache_keys,
+                    cache_values,
+                    cache_entry_count,
+                    cache_flush_limit,
+                )
+                if needs_flush:
+                    deposited = _accumulate_bilinear_hit(
+                        image,
+                        image_size,
+                        row_f,
+                        col_f,
+                        float(hit_count) * deposit,
+                    )
+                    cache_entry_count = 0
+            if not deposited:
+                continue
+
+        if collect_tables:
+            for event_idx in range(hit_count):
+                flat_event_peak_indices[flat_event_count] = peak_idx
+                flat_event_rows[flat_event_count, 0] = deposit
+                flat_event_rows[flat_event_count, 1] = col_f
+                flat_event_rows[flat_event_count, 2] = row_f
+                flat_event_rows[flat_event_count, 3] = phi_f
+                flat_event_rows[flat_event_count, 4] = H
+                flat_event_rows[flat_event_count, 5] = K
+                flat_event_rows[flat_event_count, 6] = L
+                flat_event_rows[flat_event_count, 7] = np.nan
+                flat_event_rows[flat_event_count, 8] = np.nan
+                flat_event_rows[flat_event_count, 9] = float(sample_idx)
+                flat_event_count += 1
+
+    if target_idx < targets.shape[0] and have_last_valid:
+        hit_count = targets.shape[0] - target_idx
+        selected_events += hit_count
+        event_counts[peak_idx, sample_idx] += hit_count
+        target_idx = targets.shape[0]
+
+        if accumulate_image:
+            deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                image_size,
+                last_row_f,
+                last_col_f,
+                float(hit_count) * deposit,
+                cache_keys,
+                cache_values,
+                cache_entry_count,
+                cache_flush_limit,
+            )
+            if needs_flush:
+                cache_entry_count = _flush_local_pixel_cache(
+                    image,
+                    image_size,
+                    cache_keys,
+                    cache_values,
+                )
+                deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                    image_size,
+                    last_row_f,
+                    last_col_f,
+                    float(hit_count) * deposit,
+                    cache_keys,
+                    cache_values,
+                    cache_entry_count,
+                    cache_flush_limit,
+                )
+                if needs_flush:
+                    deposited = _accumulate_bilinear_hit(
+                        image,
+                        image_size,
+                        last_row_f,
+                        last_col_f,
+                        float(hit_count) * deposit,
+                    )
+                    cache_entry_count = 0
+            if not deposited:
+                return (
+                    target_idx,
+                    cumulative_mass,
+                    flat_event_count,
+                    cache_entry_count,
+                    project_calls,
+                    pass2_total_mass,
+                    selected_events,
+                )
+
+        if collect_tables:
+            for event_idx in range(hit_count):
+                flat_event_peak_indices[flat_event_count] = peak_idx
+                flat_event_rows[flat_event_count, 0] = deposit
+                flat_event_rows[flat_event_count, 1] = last_col_f
+                flat_event_rows[flat_event_count, 2] = last_row_f
+                flat_event_rows[flat_event_count, 3] = last_phi_f
+                flat_event_rows[flat_event_count, 4] = H
+                flat_event_rows[flat_event_count, 5] = K
+                flat_event_rows[flat_event_count, 6] = L
+                flat_event_rows[flat_event_count, 7] = np.nan
+                flat_event_rows[flat_event_count, 8] = np.nan
+                flat_event_rows[flat_event_count, 9] = float(sample_idx)
+                flat_event_count += 1
+
+    return (
+        target_idx,
+        cumulative_mass,
+        flat_event_count,
+        cache_entry_count,
+        project_calls,
+        pass2_total_mass,
+        selected_events,
+    )
 
 
 @njit(fastmath=True, cache=True)
@@ -4731,7 +5700,669 @@ def calculate_phi(
 # =============================================================================
 
 
-@njit(parallel=True, fastmath=True, cache=True)
+def _weighted_event_fast_path_available(
+    *,
+    projection_debug_counters=None,
+    projection_debug_reject_counts=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
+):
+    if _project_weighted_candidate is not _DEFAULT_PROJECT_WEIGHTED_CANDIDATE:
+        return False
+    debug_args = (
+        projection_debug_counters,
+        projection_debug_reject_counts,
+        projection_debug_reject_records,
+        projection_debug_row_hit_counts,
+        projection_debug_row_tthp_sums,
+        projection_debug_row_tth_sums,
+    )
+    return all(arg is None for arg in debug_args)
+
+
+def _build_weighted_event_hit_tables(
+    flat_event_rows,
+    flat_event_peak_indices,
+    flat_event_count,
+    num_peaks,
+):
+    if int(num_peaks) <= 0:
+        return []
+    counts = np.zeros(int(num_peaks), dtype=np.int64)
+    for row_idx in range(int(flat_event_count)):
+        peak_idx = int(flat_event_peak_indices[row_idx])
+        if 0 <= peak_idx < counts.shape[0]:
+            counts[peak_idx] += 1
+    hit_tables = [
+        np.empty((int(counts[peak_idx]), HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+        if counts[peak_idx] > 0
+        else np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+        for peak_idx in range(int(num_peaks))
+    ]
+    offsets = np.zeros(int(num_peaks), dtype=np.int64)
+    for row_idx in range(int(flat_event_count)):
+        peak_idx = int(flat_event_peak_indices[row_idx])
+        if peak_idx < 0 or peak_idx >= int(num_peaks):
+            continue
+        out_idx = int(offsets[peak_idx])
+        hit_tables[peak_idx][out_idx, :] = flat_event_rows[row_idx, :]
+        offsets[peak_idx] += 1
+    return hit_tables
+
+
+def _build_weighted_event_representative_hit_tables(
+    representative_valid,
+    representative_rows,
+):
+    num_peaks = int(representative_valid.shape[0])
+    tables = []
+    for peak_idx in range(num_peaks):
+        count = int(representative_valid[peak_idx, 0]) + int(representative_valid[peak_idx, 1])
+        if count <= 0:
+            tables.append(np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64))
+            continue
+        table = np.empty((count, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+        out_idx = 0
+        for branch_idx in range(2):
+            if int(representative_valid[peak_idx, branch_idx]) <= 0:
+                continue
+            table[out_idx, :] = representative_rows[peak_idx, branch_idx, :]
+            out_idx += 1
+        tables.append(table)
+    return tables
+
+
+def _process_peaks_parallel_weighted_events_fast(
+    miller,
+    intensities,
+    image_size,
+    av,
+    cv,
+    lambda_,
+    image,
+    Distance_CoR_to_Detector,
+    gamma_deg,
+    Gamma_deg,
+    chi_deg,
+    psi_deg,
+    psi_z_deg,
+    zs,
+    zb,
+    n2,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    sigma_pv_deg,
+    gamma_pv_deg,
+    eta_pv,
+    wavelength_array,
+    debye_x,
+    debye_y,
+    center,
+    theta_initial_deg,
+    cor_angle_deg,
+    unit_x,
+    n_detector,
+    save_flag,
+    record_status=False,
+    thickness=50e-9,
+    optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    sample_weights=None,
+    best_sample_indices_out=None,
+    collect_hit_tables=True,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
+    n2_sample_array_override=None,
+    accumulate_image=True,
+    sample_qr_ring_once=True,
+    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    projection_debug_counters=None,
+    projection_debug_reject_counts=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
+    numba_thread_count=None,
+    events_per_beam_phase=50,
+):
+    del lambda_
+    del sample_qr_ring_once
+    del numba_thread_count
+
+    miller = np.asarray(miller, dtype=np.float64)
+    intensities = np.asarray(intensities, dtype=np.float64).reshape(-1)
+    image = np.asarray(image, dtype=np.float64)
+    beam_x_array = np.asarray(beam_x_array, dtype=np.float64).reshape(-1)
+    beam_y_array = np.asarray(beam_y_array, dtype=np.float64).reshape(-1)
+    theta_array = np.asarray(theta_array, dtype=np.float64).reshape(-1)
+    phi_array = np.asarray(phi_array, dtype=np.float64).reshape(-1)
+    wavelength_array = np.asarray(wavelength_array, dtype=np.float64).reshape(-1)
+    center = np.asarray(center, dtype=np.float64).reshape(-1)
+    unit_x = np.asarray(unit_x, dtype=np.float64).reshape(-1)
+    n_detector = np.asarray(n_detector, dtype=np.float64).reshape(-1)
+    events_per_beam_phase = normalize_events_per_beam_phase_backend(events_per_beam_phase)
+    _set_last_process_peaks_weighted_event_stats()
+
+    gamma_rad = float(gamma_deg) * (pi / 180.0)
+    Gamma_rad = float(Gamma_deg) * (pi / 180.0)
+    chi_rad = float(chi_deg) * (pi / 180.0)
+    psi_rad = float(psi_deg) * (pi / 180.0)
+    sigma_rad = float(sigma_pv_deg) * (pi / 180.0)
+    gamma_rad_m = float(gamma_pv_deg) * (pi / 180.0)
+    solve_q_steps_i = int(np.clip(int(solve_q_steps), MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS))
+    solve_q_rel_tol_i = float(
+        np.clip(float(solve_q_rel_tol), MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL)
+    )
+    solve_q_mode_i = (
+        SOLVE_Q_MODE_UNIFORM
+        if int(solve_q_mode) == SOLVE_Q_MODE_UNIFORM
+        else SOLVE_Q_MODE_ADAPTIVE
+    )
+
+    cg = cos(gamma_rad)
+    sg = sin(gamma_rad)
+    cG = cos(Gamma_rad)
+    sG = sin(Gamma_rad)
+    R_x_det = np.array([[1.0, 0.0, 0.0], [0.0, cg, sg], [0.0, -sg, cg]], dtype=np.float64)
+    R_z_det = np.array([[cG, sG, 0.0], [-sG, cG, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    nd_temp = R_x_det @ n_detector
+    n_det_rot = R_z_det @ nd_temp
+    nd_len = sqrt(float(np.dot(n_det_rot, n_det_rot)))
+    if nd_len > 1.0e-30:
+        n_det_rot = n_det_rot / nd_len
+
+    Detector_Pos = np.array([0.0, float(Distance_CoR_to_Detector), 0.0], dtype=np.float64)
+
+    dot_e1 = float(np.dot(unit_x, n_det_rot))
+    e1_det = unit_x - dot_e1 * n_det_rot
+    e1_len = sqrt(float(np.dot(e1_det, e1_det)))
+    if e1_len < 1.0e-14:
+        e1_det = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    else:
+        e1_det = e1_det / e1_len
+
+    e2_det = -np.cross(n_det_rot, e1_det)
+    e2_len = sqrt(float(np.dot(e2_det, e2_det)))
+    if e2_len < 1.0e-14:
+        e2_det = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    else:
+        e2_det = e2_det / e2_len
+
+    c_chi = cos(chi_rad)
+    s_chi = sin(chi_rad)
+    R_y = np.array([[c_chi, 0.0, s_chi], [0.0, 1.0, 0.0], [-s_chi, 0.0, c_chi]], dtype=np.float64)
+    c_psi = cos(psi_rad)
+    s_psi = sin(psi_rad)
+    R_z = np.array([[c_psi, s_psi, 0.0], [-s_psi, c_psi, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    R_z_R_y = R_z @ R_y
+
+    n1 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    R_ZY_n = R_z_R_y @ n1
+    nzy_len = sqrt(float(np.dot(R_ZY_n, R_ZY_n)))
+    if nzy_len > 1.0e-30:
+        R_ZY_n = R_ZY_n / nzy_len
+    P0 = np.array([0.0, 0.0, -float(zs)], dtype=np.float64)
+
+    num_peaks = int(miller.shape[0])
+    n_samp = int(beam_x_array.size)
+    collect_tables = bool(collect_hit_tables)
+    accumulate_image_flag = bool(accumulate_image)
+    all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
+    event_counts = np.zeros((num_peaks, n_samp), dtype=np.int64)
+
+    if save_flag == 1:
+        max_solutions = 2000000
+        q_data = np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
+        q_count = np.zeros(num_peaks, dtype=np.int64)
+    else:
+        q_data = np.zeros((1, 1, 5), dtype=np.float64)
+        q_count = np.zeros(1, dtype=np.int64)
+
+    if collect_tables:
+        flat_capacity = max(n_samp * int(events_per_beam_phase), 0)
+        flat_event_rows = np.empty(
+            (flat_capacity, HIT_ROW_WITH_PROVENANCE_WIDTH),
+            dtype=np.float64,
+        )
+        flat_event_peak_indices = np.empty(flat_capacity, dtype=np.int64)
+        miss_tables = [np.empty((0, 3), dtype=np.float64) for _ in range(num_peaks)]
+    else:
+        flat_event_rows = np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+        flat_event_peak_indices = np.empty(0, dtype=np.int64)
+        miss_tables = []
+    flat_event_count = 0
+
+    representative_valid = np.zeros((num_peaks, 2), dtype=np.uint8)
+    representative_distance = np.full((num_peaks, 2), np.inf, dtype=np.float64)
+    representative_neg_mass = np.full((num_peaks, 2), np.inf, dtype=np.float64)
+    representative_sample_idx = np.full((num_peaks, 2), -1, dtype=np.int64)
+    representative_q_idx = np.full((num_peaks, 2), -1, dtype=np.int64)
+    representative_rows = np.empty(
+        (num_peaks, 2, HIT_ROW_WITH_PROVENANCE_WIDTH),
+        dtype=np.float64,
+    )
+    representative_rows.fill(np.nan)
+
+    sample_weight_array = sample_weights
+    if sample_weight_array is not None:
+        sample_weight_array = np.asarray(sample_weight_array, dtype=np.float64).reshape(-1)
+        if sample_weight_array.shape[0] != n_samp:
+            sample_weight_array = None
+
+    n2_sample_array = np.empty(n_samp, dtype=np.complex128)
+    n2_override_array = np.empty(0, dtype=np.complex128)
+    has_n2_override = n2_sample_array_override is not None
+    if has_n2_override:
+        n2_override_array = np.asarray(n2_sample_array_override, dtype=np.complex128).reshape(-1)
+    if has_n2_override and n2_override_array.size == n_samp:
+        n2_sample_array[:] = n2_override_array
+    elif wavelength_array.size == n_samp:
+        for i_samp in range(n_samp):
+            lam_angstrom = wavelength_array[i_samp]
+            if np.isfinite(lam_angstrom) and lam_angstrom > 0.0:
+                n2_sample_array[i_samp] = IndexofRefraction(lam_angstrom * 1.0e-10)
+            else:
+                n2_sample_array[i_samp] = n2
+    else:
+        for i_samp in range(n_samp):
+            n2_sample_array[i_samp] = n2
+
+    time_precompute = 0.0
+    time_solve_q = 0.0
+    time_project = 0.0
+    time_select = 0.0
+    time_emit_cache = 0.0
+    n_solve_q_calls = 0
+    n_project_candidate_calls = 0
+    n_valid_candidates = 0
+    n_selected_events = 0
+    pass1_total_mass = 0.0
+    pass2_total_mass = 0.0
+
+    precompute_start = time.perf_counter()
+    (
+        R_sample_precomputed,
+        sample_terms,
+        sample_n2_array,
+        sample_eps2_array,
+        _best_idx_precomputed,
+    ) = _precompute_sample_terms(
+        wavelength_array,
+        n2,
+        n2_sample_array,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        zb,
+        thickness,
+        sample_width_m,
+        sample_length_m,
+        optics_mode,
+        theta_initial_deg,
+        cor_angle_deg,
+        psi_z_deg,
+        R_z_R_y,
+        R_ZY_n,
+        P0,
+    )
+    finite_wavelengths = wavelength_array[np.isfinite(wavelength_array)]
+    mean_wavelength = float(np.mean(finite_wavelengths)) if finite_wavelengths.size > 0 else np.nan
+    sample_top_distances = np.zeros(n_samp, dtype=np.float64)
+    if beam_x_array.size == n_samp:
+        sample_top_distances += np.where(np.isfinite(beam_x_array), beam_x_array * beam_x_array, 0.0)
+    if beam_y_array.size == n_samp:
+        sample_top_distances += np.where(np.isfinite(beam_y_array), beam_y_array * beam_y_array, 0.0)
+    if theta_array.size == n_samp:
+        sample_top_distances += np.where(np.isfinite(theta_array), theta_array * theta_array, 0.0)
+    if phi_array.size == n_samp:
+        sample_top_distances += np.where(np.isfinite(phi_array), phi_array * phi_array, 0.0)
+    if np.isfinite(mean_wavelength) and wavelength_array.size == n_samp:
+        sample_top_distances += np.where(
+            np.isfinite(wavelength_array),
+            np.abs(wavelength_array - mean_wavelength),
+            0.0,
+        )
+    use_exact_optics = int(optics_mode) == OPTICS_MODE_EXACT
+    fast_optics_ready = np.zeros(n_samp, dtype=np.uint8)
+    fast_optics_lut = np.zeros(
+        (max(n_samp, 1), _FAST_OPTICS_LUT_SIZE, _FAST_OPTICS_LUT_COLS),
+        dtype=np.float64,
+    )
+    if not use_exact_optics:
+        for i_samp in range(n_samp):
+            if sample_terms[i_samp, _SAMPLE_COL_VALID] <= 0.5:
+                continue
+            _build_fast_optics_lut_row(
+                fast_optics_lut[i_samp],
+                sample_terms[i_samp, _SAMPLE_COL_K0],
+                sample_n2_array[i_samp],
+                sample_terms[i_samp, _SAMPLE_COL_N2_REAL],
+                thickness,
+            )
+            fast_optics_ready[i_samp] = 1
+    time_precompute += time.perf_counter() - precompute_start
+
+    debye_x_sq = float(debye_x) * float(debye_x)
+    debye_y_sq = float(debye_y) * float(debye_y)
+    pixel_size_eff = float(pixel_size_m)
+    if (not np.isfinite(pixel_size_eff)) or pixel_size_eff <= 0.0:
+        pixel_size_eff = 100e-6
+    pixel_scale = 1.0 / pixel_size_eff
+    center_row = float(center[0]) if center.size > 0 else 0.0
+    center_col = float(center[1]) if center.size > 1 else center_row
+
+    peak_h = miller[:, 0].astype(np.float64, copy=False) if num_peaks > 0 else np.empty(0, dtype=np.float64)
+    peak_k = miller[:, 1].astype(np.float64, copy=False) if num_peaks > 0 else np.empty(0, dtype=np.float64)
+    peak_l = miller[:, 2].astype(np.float64, copy=False) if num_peaks > 0 else np.empty(0, dtype=np.float64)
+    peak_reflection_intensity = np.zeros(num_peaks, dtype=np.float64)
+    peak_gr0 = np.zeros(num_peaks, dtype=np.float64)
+    peak_gz0 = np.zeros(num_peaks, dtype=np.float64)
+    peak_valid = np.zeros(num_peaks, dtype=np.uint8)
+    for peak_idx in range(num_peaks):
+        reflection_intensity = float(intensities[peak_idx]) if peak_idx < intensities.shape[0] else 0.0
+        peak_reflection_intensity[peak_idx] = reflection_intensity
+        H = float(peak_h[peak_idx])
+        K = float(peak_k[peak_idx])
+        L = float(peak_l[peak_idx])
+        if np.isfinite(reflection_intensity) and reflection_intensity > 0.0 and L >= 0.0:
+            peak_valid[peak_idx] = 1
+            peak_gz0[peak_idx] = 2.0 * pi * (L / float(cv))
+            peak_gr0[peak_idx] = 4.0 * pi / float(av) * sqrt(
+                max((H * H + H * K + K * K) / 3.0, 0.0)
+            )
+
+    if accumulate_image_flag:
+        cache_capacity = int(_choose_local_pixel_cache_capacity(n_samp))
+        cache_keys = np.empty(cache_capacity, dtype=np.int64)
+        cache_values = np.empty(cache_capacity, dtype=np.float64)
+        cache_flush_limit = (cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM) // _LOCAL_PIXEL_CACHE_LOAD_DEN
+        if cache_flush_limit < 4:
+            cache_flush_limit = 4
+    else:
+        cache_keys = np.empty(1, dtype=np.int64)
+        cache_values = np.empty(1, dtype=np.float64)
+        cache_flush_limit = 0
+
+    # Current-call cache is safe with (peak_idx, rep_idx) because all solve_q
+    # settings and geometry inputs are fixed for this function invocation.
+    all_q_cache = {}
+
+    for sample_idx in range(n_samp):
+        if sample_terms[sample_idx, _SAMPLE_COL_VALID] <= 0.5:
+            all_status[:, sample_idx] = -10
+            continue
+
+        sample_weight = 1.0
+        if sample_weight_array is not None:
+            sample_weight = float(sample_weight_array[sample_idx])
+            if not np.isfinite(sample_weight) or sample_weight <= 0.0:
+                all_status[:, sample_idx] = -12
+                continue
+
+        sample_total_mass = 0.0
+        if accumulate_image_flag:
+            _clear_local_pixel_cache(cache_keys, cache_values)
+        cache_entry_count = 0
+
+        for peak_idx in range(num_peaks):
+            if int(peak_valid[peak_idx]) == 0:
+                continue
+
+            H = float(peak_h[peak_idx])
+            K = float(peak_k[peak_idx])
+            L = float(peak_l[peak_idx])
+            reflection_intensity = float(peak_reflection_intensity[peak_idx])
+            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
+            if rep_idx < 0:
+                rep_idx = sample_idx
+            cache_key = (int(peak_idx), int(rep_idx))
+            cached = all_q_cache.get(cache_key)
+            if cached is None:
+                k_in_crystal = np.array(
+                    [
+                        sample_terms[rep_idx, _SAMPLE_COL_KX_SCAT],
+                        sample_terms[rep_idx, _SAMPLE_COL_KY_SCAT],
+                        sample_terms[rep_idx, _SAMPLE_COL_RE_KZ],
+                    ],
+                    dtype=np.float64,
+                )
+                G_vec = np.array([0.0, peak_gr0[peak_idx], peak_gz0[peak_idx]], dtype=np.float64)
+                solve_start = time.perf_counter()
+                all_q_raw, stat = solve_q(
+                    k_in_crystal,
+                    float(sample_terms[rep_idx, _SAMPLE_COL_K_SCAT]),
+                    G_vec,
+                    sigma_rad,
+                    gamma_rad_m,
+                    eta_pv,
+                    H,
+                    K,
+                    L,
+                    solve_q_steps_i,
+                    DEFAULT_SOLVE_Q_BASE_INTERVALS,
+                    solve_q_rel_tol_i,
+                    solve_q_mode_i,
+                    default_solve_q_dtheta,
+                    default_solve_q_cos,
+                    default_solve_q_sin,
+                )
+                time_solve_q += time.perf_counter() - solve_start
+                all_q = np.asarray(all_q_raw, dtype=np.float64).reshape(-1, 4)
+                cached = (all_q, int(stat))
+                all_q_cache[cache_key] = cached
+                n_solve_q_calls += 1
+            else:
+                all_q, stat = cached
+            all_status[peak_idx, sample_idx] = int(stat)
+
+            project_start = time.perf_counter()
+            peak_mass, valid_count, project_calls = _weighted_event_pass1_for_qset(
+                all_q,
+                peak_idx,
+                sample_idx,
+                H,
+                K,
+                L,
+                reflection_intensity,
+                sample_weight,
+                float(sample_top_distances[sample_idx]),
+                debye_x_sq,
+                debye_y_sq,
+                center_row,
+                center_col,
+                R_sample_precomputed,
+                n_det_rot,
+                Detector_Pos,
+                e1_det,
+                e2_det,
+                sample_terms,
+                sample_n2_array,
+                sample_eps2_array,
+                thickness,
+                optics_mode,
+                pixel_scale,
+                int(image_size),
+                exit_projection_mode,
+                int(fast_optics_ready[sample_idx]),
+                fast_optics_lut[sample_idx],
+                int(save_flag),
+                q_data,
+                q_count,
+                representative_valid,
+                representative_distance,
+                representative_neg_mass,
+                representative_sample_idx,
+                representative_q_idx,
+                representative_rows,
+            )
+            time_project += time.perf_counter() - project_start
+            sample_total_mass += float(peak_mass)
+            pass1_total_mass += float(peak_mass)
+            n_valid_candidates += int(valid_count)
+            n_project_candidate_calls += int(project_calls)
+
+        if not np.isfinite(sample_total_mass) or sample_total_mass <= 0.0:
+            if accumulate_image_flag and cache_entry_count > 0:
+                flush_start = time.perf_counter()
+                _flush_local_pixel_cache(image, int(image_size), cache_keys, cache_values)
+                time_emit_cache += time.perf_counter() - flush_start
+            continue
+
+        select_start = time.perf_counter()
+        targets = _weighted_event_targets(sample_total_mass, events_per_beam_phase, sample_idx)
+        deposit = _weighted_event_deposit(sample_total_mass, events_per_beam_phase)
+        time_select += time.perf_counter() - select_start
+        if targets.size <= 0 or not np.isfinite(deposit) or deposit <= 0.0:
+            if accumulate_image_flag and cache_entry_count > 0:
+                flush_start = time.perf_counter()
+                _flush_local_pixel_cache(image, int(image_size), cache_keys, cache_values)
+                time_emit_cache += time.perf_counter() - flush_start
+            continue
+
+        target_idx = 0
+        cumulative_mass = 0.0
+        for peak_idx in range(num_peaks):
+            if int(peak_valid[peak_idx]) == 0:
+                continue
+
+            H = float(peak_h[peak_idx])
+            K = float(peak_k[peak_idx])
+            L = float(peak_l[peak_idx])
+            reflection_intensity = float(peak_reflection_intensity[peak_idx])
+            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
+            if rep_idx < 0:
+                rep_idx = sample_idx
+            all_q, _stat = all_q_cache[(int(peak_idx), int(rep_idx))]
+
+            project_start = time.perf_counter()
+            (
+                target_idx,
+                cumulative_mass,
+                flat_event_count,
+                cache_entry_count,
+                project_calls,
+                peak_pass2_mass,
+                selected_events,
+            ) = _weighted_event_pass2_for_qset(
+                all_q,
+                peak_idx,
+                sample_idx,
+                H,
+                K,
+                L,
+                reflection_intensity,
+                sample_weight,
+                debye_x_sq,
+                debye_y_sq,
+                center_row,
+                center_col,
+                R_sample_precomputed,
+                n_det_rot,
+                Detector_Pos,
+                e1_det,
+                e2_det,
+                sample_terms,
+                sample_n2_array,
+                sample_eps2_array,
+                thickness,
+                optics_mode,
+                pixel_scale,
+                int(image_size),
+                exit_projection_mode,
+                int(fast_optics_ready[sample_idx]),
+                fast_optics_lut[sample_idx],
+                targets,
+                int(target_idx),
+                float(cumulative_mass),
+                float(deposit),
+                collect_tables,
+                flat_event_rows,
+                flat_event_peak_indices,
+                int(flat_event_count),
+                event_counts,
+                accumulate_image_flag,
+                image,
+                cache_keys,
+                cache_values,
+                int(cache_entry_count),
+                int(cache_flush_limit),
+            )
+            time_project += time.perf_counter() - project_start
+            pass2_total_mass += float(peak_pass2_mass)
+            n_project_candidate_calls += int(project_calls)
+            n_selected_events += int(selected_events)
+
+        if accumulate_image_flag and cache_entry_count > 0:
+            flush_start = time.perf_counter()
+            _flush_local_pixel_cache(image, int(image_size), cache_keys, cache_values)
+            time_emit_cache += time.perf_counter() - flush_start
+
+    emit_start = time.perf_counter()
+    if best_sample_indices_out is not None:
+        best_sample_indices_out[:] = -1
+        for peak_idx in range(num_peaks):
+            best_count = -1
+            best_sample = -1
+            for sample_idx in range(n_samp):
+                count = int(event_counts[peak_idx, sample_idx])
+                if count > best_count:
+                    best_count = count
+                    best_sample = sample_idx
+            if best_count > 0 and peak_idx < best_sample_indices_out.shape[0]:
+                best_sample_indices_out[peak_idx] = int(best_sample)
+            elif peak_idx < best_sample_indices_out.shape[0]:
+                best_sample_indices_out[peak_idx] = -1
+
+    if collect_tables:
+        hit_tables = _build_weighted_event_hit_tables(
+            flat_event_rows,
+            flat_event_peak_indices,
+            flat_event_count,
+            num_peaks,
+        )
+    else:
+        hit_tables = []
+    representative_hit_tables = _build_weighted_event_representative_hit_tables(
+        representative_valid,
+        representative_rows,
+    )
+    time_emit_cache += time.perf_counter() - emit_start
+
+    _set_last_process_peaks_weighted_event_stats(
+        n_solve_q_calls=int(n_solve_q_calls),
+        n_project_candidate_calls=int(n_project_candidate_calls),
+        n_valid_candidates=int(n_valid_candidates),
+        n_selected_events=int(n_selected_events),
+        time_precompute=float(time_precompute),
+        time_solve_q=float(time_solve_q),
+        time_project=float(time_project),
+        time_select=float(time_select),
+        time_emit_cache=float(time_emit_cache),
+        pass1_total_mass=float(pass1_total_mass),
+        pass2_total_mass=float(pass2_total_mass),
+    )
+    return (
+        image,
+        hit_tables,
+        q_data,
+        q_count,
+        all_status,
+        miss_tables,
+        representative_hit_tables,
+    )
+
+
 def _process_peaks_parallel_impl(
     miller,
     intensities,
@@ -4791,46 +6422,235 @@ def _process_peaks_parallel_impl(
     default_solve_q_cos=None,
     default_solve_q_sin=None,
     numba_thread_count=1,
+    events_per_beam_phase=50,
 ):
-    """
-    High-level loop over multiple reflections from 'miller', each with an
-    intensity from 'intensities'. Reflection-invariant sample/beam terms are
-    precomputed once, then reused for each reflection core evaluation.
+    """Run weighted-event sampling through compiled helpers when hooks are default."""
 
-    parallel=True: We do a prange over each reflection. Each reflection is processed
-    independently, building the mosaic, computing geometry, and depositing
-    intensities in the final 'image'.
+    events_per_beam_phase = normalize_events_per_beam_phase_backend(events_per_beam_phase)
+    if not _weighted_event_fast_path_available(
+        projection_debug_counters=projection_debug_counters,
+        projection_debug_reject_counts=projection_debug_reject_counts,
+        projection_debug_reject_records=projection_debug_reject_records,
+        projection_debug_row_hit_counts=projection_debug_row_hit_counts,
+        projection_debug_row_tthp_sums=projection_debug_row_tthp_sums,
+        projection_debug_row_tth_sums=projection_debug_row_tth_sums,
+    ):
+        _set_last_process_peaks_weighted_event_stats()
+        result = _process_peaks_parallel_weighted_events_python(
+            miller,
+            intensities,
+            image_size,
+            av,
+            cv,
+            lambda_,
+            image,
+            Distance_CoR_to_Detector,
+            gamma_deg,
+            Gamma_deg,
+            chi_deg,
+            psi_deg,
+            psi_z_deg,
+            zs,
+            zb,
+            n2,
+            beam_x_array,
+            beam_y_array,
+            theta_array,
+            phi_array,
+            sigma_pv_deg,
+            gamma_pv_deg,
+            eta_pv,
+            wavelength_array,
+            debye_x,
+            debye_y,
+            center,
+            theta_initial_deg,
+            cor_angle_deg,
+            unit_x,
+            n_detector,
+            save_flag,
+            record_status=record_status,
+            thickness=thickness,
+            optics_mode=optics_mode,
+            solve_q_steps=solve_q_steps,
+            solve_q_rel_tol=solve_q_rel_tol,
+            solve_q_mode=solve_q_mode,
+            sample_weights=sample_weights,
+            best_sample_indices_out=best_sample_indices_out,
+            collect_hit_tables=collect_hit_tables,
+            pixel_size_m=pixel_size_m,
+            sample_width_m=sample_width_m,
+            sample_length_m=sample_length_m,
+            n2_sample_array_override=n2_sample_array_override,
+            accumulate_image=accumulate_image,
+            sample_qr_ring_once=sample_qr_ring_once,
+            exit_projection_mode=exit_projection_mode,
+            projection_debug_counters=projection_debug_counters,
+            projection_debug_reject_counts=projection_debug_reject_counts,
+            projection_debug_reject_records=projection_debug_reject_records,
+            projection_debug_row_hit_counts=projection_debug_row_hit_counts,
+            projection_debug_row_tthp_sums=projection_debug_row_tthp_sums,
+            projection_debug_row_tth_sums=projection_debug_row_tth_sums,
+            default_solve_q_dtheta=default_solve_q_dtheta,
+            default_solve_q_cos=default_solve_q_cos,
+            default_solve_q_sin=default_solve_q_sin,
+            numba_thread_count=numba_thread_count,
+            events_per_beam_phase=events_per_beam_phase,
+        )
+        _set_last_process_peaks_representative_hit_tables(result[6])
+        return result[:6]
+    result = _process_peaks_parallel_weighted_events_fast(
+        miller,
+        intensities,
+        image_size,
+        av,
+        cv,
+        lambda_,
+        image,
+        Distance_CoR_to_Detector,
+        gamma_deg,
+        Gamma_deg,
+        chi_deg,
+        psi_deg,
+        psi_z_deg,
+        zs,
+        zb,
+        n2,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        sigma_pv_deg,
+        gamma_pv_deg,
+        eta_pv,
+        wavelength_array,
+        debye_x,
+        debye_y,
+        center,
+        theta_initial_deg,
+        cor_angle_deg,
+        unit_x,
+        n_detector,
+        save_flag,
+        record_status=record_status,
+        thickness=thickness,
+        optics_mode=optics_mode,
+        solve_q_steps=solve_q_steps,
+        solve_q_rel_tol=solve_q_rel_tol,
+        solve_q_mode=solve_q_mode,
+        sample_weights=sample_weights,
+        best_sample_indices_out=best_sample_indices_out,
+        collect_hit_tables=collect_hit_tables,
+        pixel_size_m=pixel_size_m,
+        sample_width_m=sample_width_m,
+        sample_length_m=sample_length_m,
+        n2_sample_array_override=n2_sample_array_override,
+        accumulate_image=accumulate_image,
+        sample_qr_ring_once=sample_qr_ring_once,
+        exit_projection_mode=exit_projection_mode,
+        projection_debug_counters=projection_debug_counters,
+        projection_debug_reject_counts=projection_debug_reject_counts,
+        projection_debug_reject_records=projection_debug_reject_records,
+        projection_debug_row_hit_counts=projection_debug_row_hit_counts,
+        projection_debug_row_tthp_sums=projection_debug_row_tthp_sums,
+        projection_debug_row_tth_sums=projection_debug_row_tth_sums,
+        default_solve_q_dtheta=default_solve_q_dtheta,
+        default_solve_q_cos=default_solve_q_cos,
+        default_solve_q_sin=default_solve_q_sin,
+        numba_thread_count=numba_thread_count,
+        events_per_beam_phase=events_per_beam_phase,
+    )
+    _set_last_process_peaks_representative_hit_tables(result[6])
+    return result[:6]
 
-    Physically:
-      - This simulates multiple Bragg peaks in a single run,
-      - Summing up the resulting scattered intensities for each reflection.
 
-    Returns
-    -------
-    If save_flag==1, also returns q_data, q_count with detailed Q sampling info.
-    Otherwise, returns just the updated image and max_positions for each reflection.
-    """
-    gamma_rad = gamma_deg * (pi / 180.0)
-    Gamma_rad = Gamma_deg * (pi / 180.0)
-    chi_rad = chi_deg * (pi / 180.0)
-    psi_rad = psi_deg * (pi / 180.0)
-    sigma_rad = sigma_pv_deg * (pi / 180.0)
-    gamma_rad_m = gamma_pv_deg * (pi / 180.0)
-    solve_q_steps_i = int(solve_q_steps)
-    if solve_q_steps_i < MIN_SOLVE_Q_STEPS:
-        solve_q_steps_i = MIN_SOLVE_Q_STEPS
-    elif solve_q_steps_i > MAX_SOLVE_Q_STEPS:
-        solve_q_steps_i = MAX_SOLVE_Q_STEPS
-    solve_q_rel_tol_i = float(solve_q_rel_tol)
-    if solve_q_rel_tol_i < MIN_SOLVE_Q_REL_TOL:
-        solve_q_rel_tol_i = MIN_SOLVE_Q_REL_TOL
-    elif solve_q_rel_tol_i > MAX_SOLVE_Q_REL_TOL:
-        solve_q_rel_tol_i = MAX_SOLVE_Q_REL_TOL
-    solve_q_mode_i = int(solve_q_mode)
-    if solve_q_mode_i != SOLVE_Q_MODE_UNIFORM:
-        solve_q_mode_i = SOLVE_Q_MODE_ADAPTIVE
+def _process_peaks_parallel_weighted_events_python(
+    miller,
+    intensities,
+    image_size,
+    av,
+    cv,
+    lambda_,
+    image,
+    Distance_CoR_to_Detector,
+    gamma_deg,
+    Gamma_deg,
+    chi_deg,
+    psi_deg,
+    psi_z_deg,
+    zs,
+    zb,
+    n2,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    sigma_pv_deg,
+    gamma_pv_deg,
+    eta_pv,
+    wavelength_array,
+    debye_x,
+    debye_y,
+    center,
+    theta_initial_deg,
+    cor_angle_deg,
+    unit_x,
+    n_detector,
+    save_flag,
+    record_status=False,
+    thickness=50e-9,
+    optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    sample_weights=None,
+    best_sample_indices_out=None,
+    collect_hit_tables=True,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
+    n2_sample_array_override=None,
+    accumulate_image=True,
+    sample_qr_ring_once=True,
+    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    projection_debug_counters=None,
+    projection_debug_reject_counts=None,
+    projection_debug_reject_records=None,
+    projection_debug_row_hit_counts=None,
+    projection_debug_row_tthp_sums=None,
+    projection_debug_row_tth_sums=None,
+    default_solve_q_dtheta=-1.0,
+    default_solve_q_cos=None,
+    default_solve_q_sin=None,
+    numba_thread_count=None,
+    events_per_beam_phase=50,
+):
+    del sample_qr_ring_once
+    del numba_thread_count
 
-    # Build transforms for the detector
+    miller = np.asarray(miller, dtype=np.float64)
+    intensities = np.asarray(intensities, dtype=np.float64).reshape(-1)
+    image = np.asarray(image, dtype=np.float64)
+    beam_x_array = np.asarray(beam_x_array, dtype=np.float64).reshape(-1)
+    beam_y_array = np.asarray(beam_y_array, dtype=np.float64).reshape(-1)
+    theta_array = np.asarray(theta_array, dtype=np.float64).reshape(-1)
+    phi_array = np.asarray(phi_array, dtype=np.float64).reshape(-1)
+    wavelength_array = np.asarray(wavelength_array, dtype=np.float64).reshape(-1)
+    center = np.asarray(center, dtype=np.float64).reshape(-1)
+    unit_x = np.asarray(unit_x, dtype=np.float64).reshape(-1)
+    n_detector = np.asarray(n_detector, dtype=np.float64).reshape(-1)
+    events_per_beam_phase = normalize_events_per_beam_phase_backend(events_per_beam_phase)
+
+    gamma_rad = float(gamma_deg) * (pi / 180.0)
+    Gamma_rad = float(Gamma_deg) * (pi / 180.0)
+    chi_rad = float(chi_deg) * (pi / 180.0)
+    psi_rad = float(psi_deg) * (pi / 180.0)
+    sigma_rad = float(sigma_pv_deg) * (pi / 180.0)
+    gamma_rad_m = float(gamma_pv_deg) * (pi / 180.0)
+    solve_q_steps_i = int(np.clip(int(solve_q_steps), MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS))
+    solve_q_rel_tol_i = float(np.clip(float(solve_q_rel_tol), MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL))
+    solve_q_mode_i = SOLVE_Q_MODE_UNIFORM if int(solve_q_mode) == SOLVE_Q_MODE_UNIFORM else SOLVE_Q_MODE_ADAPTIVE
+
     cg = cos(gamma_rad)
     sg = sin(gamma_rad)
     cG = cos(Gamma_rad)
@@ -4839,30 +6659,26 @@ def _process_peaks_parallel_impl(
     R_z_det = np.array([[cG, sG, 0.0], [-sG, cG, 0.0], [0.0, 0.0, 1.0]])
     nd_temp = R_x_det @ n_detector
     n_det_rot = R_z_det @ nd_temp
-    nd_len = sqrt(
-        n_det_rot[0] * n_det_rot[0] + n_det_rot[1] * n_det_rot[1] + n_det_rot[2] * n_det_rot[2]
-    )
-    n_det_rot /= nd_len
+    nd_len = sqrt(float(np.dot(n_det_rot, n_det_rot)))
+    if nd_len > 1.0e-30:
+        n_det_rot = n_det_rot / nd_len
 
-    Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0], dtype=np.float64)
+    Detector_Pos = np.array([0.0, float(Distance_CoR_to_Detector), 0.0], dtype=np.float64)
 
-    dot_e1 = unit_x[0] * n_det_rot[0] + unit_x[1] * n_det_rot[1] + unit_x[2] * n_det_rot[2]
+    dot_e1 = float(np.dot(unit_x, n_det_rot))
     e1_det = unit_x - dot_e1 * n_det_rot
-    e1_len = sqrt(e1_det[0] * e1_det[0] + e1_det[1] * e1_det[1] + e1_det[2] * e1_det[2])
-    if e1_len < 1e-14:
-        e1_det = np.array([1.0, 0.0, 0.0])
+    e1_len = sqrt(float(np.dot(e1_det, e1_det)))
+    if e1_len < 1.0e-14:
+        e1_det = np.array([1.0, 0.0, 0.0], dtype=np.float64)
     else:
-        e1_det /= e1_len
+        e1_det = e1_det / e1_len
 
-    tmpx = n_det_rot[1] * e1_det[2] - n_det_rot[2] * e1_det[1]
-    tmpy = n_det_rot[2] * e1_det[0] - n_det_rot[0] * e1_det[2]
-    tmpz = n_det_rot[0] * e1_det[1] - n_det_rot[1] * e1_det[0]
-    e2_det = np.array([-tmpx, -tmpy, -tmpz], dtype=np.float64)
-    e2_len = sqrt(e2_det[0] * e2_det[0] + e2_det[1] * e2_det[1] + e2_det[2] * e2_det[2])
-    if e2_len < 1e-14:
-        e2_det = np.array([0.0, 1.0, 0.0])
+    e2_det = -np.cross(n_det_rot, e1_det)
+    e2_len = sqrt(float(np.dot(e2_det, e2_det)))
+    if e2_len < 1.0e-14:
+        e2_det = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     else:
-        e2_det /= e2_len
+        e2_det = e2_det / e2_len
 
     c_chi = cos(chi_rad)
     s_chi = sin(chi_rad)
@@ -4874,49 +6690,47 @@ def _process_peaks_parallel_impl(
 
     n1 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
     R_ZY_n = R_z_R_y @ n1
-    nzy_len = sqrt(R_ZY_n[0] * R_ZY_n[0] + R_ZY_n[1] * R_ZY_n[1] + R_ZY_n[2] * R_ZY_n[2])
-    R_ZY_n /= nzy_len
+    nzy_len = sqrt(float(np.dot(R_ZY_n, R_ZY_n)))
+    if nzy_len > 1.0e-30:
+        R_ZY_n = R_ZY_n / nzy_len
+    P0 = np.array([0.0, 0.0, -float(zs)], dtype=np.float64)
 
-    P0 = np.array([0.0, 0.0, -zs], dtype=np.float64)
-    num_peaks = miller.shape[0]
+    num_peaks = int(miller.shape[0])
+    n_samp = int(beam_x_array.size)
+    collect_tables = bool(collect_hit_tables)
+    accumulate_image_flag = bool(accumulate_image)
+    all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
+    event_counts = np.zeros((num_peaks, n_samp), dtype=np.int64)
 
-    max_solutions = 2000000
     if save_flag == 1:
+        max_solutions = 2000000
         q_data = np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
         q_count = np.zeros(num_peaks, dtype=np.int64)
     else:
         q_data = np.zeros((1, 1, 5), dtype=np.float64)
         q_count = np.zeros(1, dtype=np.int64)
-    collect_tables = bool(collect_hit_tables)
-    accumulate_image_flag = bool(accumulate_image)
-    collect_aux_outputs = collect_tables
-    core_save_flag = int(save_flag)
-    if not collect_aux_outputs:
-        core_save_flag += 2
-    if not accumulate_image_flag:
-        core_save_flag += 4
-    hit_tables = List.empty_list(types.float64[:, ::1])
-    miss_tables = List.empty_list(types.float64[:, ::1])
+
     if collect_tables:
-        for _ in range(num_peaks):
-            hit_tables.append(np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64))
-            miss_tables.append(np.empty((0, 3), dtype=np.float64))
-    n_samp = beam_x_array.size
-    all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
+        hit_rows_by_peak = [[] for _ in range(num_peaks)]
+        miss_tables = [np.empty((0, 3), dtype=np.float64) for _ in range(num_peaks)]
+    else:
+        hit_rows_by_peak = None
+        miss_tables = []
+    representative_rows_by_peak: list[dict[int, tuple[tuple[float, float, int, int, int], np.ndarray]]] = [
+        {} for _ in range(num_peaks)
+    ]
+
     sample_weight_array = sample_weights
     if sample_weight_array is not None:
+        sample_weight_array = np.asarray(sample_weight_array, dtype=np.float64).reshape(-1)
         if sample_weight_array.shape[0] != n_samp:
             sample_weight_array = None
+
     n2_sample_array = np.empty(n_samp, dtype=np.complex128)
-    # Keep the local override as a concrete ndarray so Numba does not need to
-    # reason about an optional array type before accessing `.size`.
     n2_override_array = np.empty(0, dtype=np.complex128)
     has_n2_override = n2_sample_array_override is not None
     if has_n2_override:
-        n2_override_array = np.asarray(
-            n2_sample_array_override,
-            dtype=np.complex128,
-        ).reshape(-1)
+        n2_override_array = np.asarray(n2_sample_array_override, dtype=np.complex128).reshape(-1)
     if has_n2_override and n2_override_array.size == n_samp:
         n2_sample_array[:] = n2_override_array
     elif wavelength_array.size == n_samp:
@@ -4935,7 +6749,7 @@ def _process_peaks_parallel_impl(
         sample_terms,
         sample_n2_array,
         sample_eps2_array,
-        best_idx_precomputed,
+        _best_idx_precomputed,
     ) = _precompute_sample_terms(
         wavelength_array,
         n2,
@@ -4957,344 +6771,83 @@ def _process_peaks_parallel_impl(
         P0,
     )
 
-    # Group reflections by identical (Gr, Gz). We run each
-    # source group once with the summed SF, then scale per-peak outputs.
-    source_index_for_peak = np.full(num_peaks, -1, dtype=np.int64)
-    source_total_sf = np.zeros(num_peaks, dtype=np.float64)
-    group_gr = np.empty(num_peaks, dtype=np.float64)
-    group_gz = np.empty(num_peaks, dtype=np.float64)
-    group_src_idx = np.empty(num_peaks, dtype=np.int64)
-    group_total_sf = np.empty(num_peaks, dtype=np.float64)
-    group_count = 0
+    debye_x_sq = float(debye_x) * float(debye_x)
+    debye_y_sq = float(debye_y) * float(debye_y)
 
-    for i_pk in range(num_peaks):
-        H = float(miller[i_pk, 0])
-        K = float(miller[i_pk, 1])
-        L = float(miller[i_pk, 2])
-        if L < 0.0:
+    for sample_idx in range(n_samp):
+        if sample_terms[sample_idx, _SAMPLE_COL_VALID] <= 0.5:
+            all_status[:, sample_idx] = -10
             continue
 
-        reflI = intensities[i_pk]
-
-        gz_key = 2.0 * pi * (L / cv)
-        gr_key = 4.0 * pi / av * sqrt((H * H + H * K + K * K) / 3.0)
-
-        group_idx = -1
-        for i_grp in range(group_count):
-            if abs(gr_key - group_gr[i_grp]) > (1.0e-12 * (1.0 + abs(gr_key))):
+        sample_weight = 1.0
+        if sample_weight_array is not None:
+            sample_weight = float(sample_weight_array[sample_idx])
+            if not np.isfinite(sample_weight) or sample_weight <= 0.0:
+                all_status[:, sample_idx] = -12
                 continue
-            if abs(gz_key - group_gz[i_grp]) > (1.0e-12 * (1.0 + abs(gz_key))):
+
+        sample_candidates: list[tuple[int, float, float, float, float, float, float, float]] = []
+        sample_masses: list[float] = []
+        sample_total_mass = 0.0
+
+        for i_pk in range(num_peaks):
+            reflection_intensity = float(intensities[i_pk]) if i_pk < intensities.shape[0] else 0.0
+            if not np.isfinite(reflection_intensity) or reflection_intensity <= 0.0:
                 continue
-            group_idx = i_grp
-            break
 
-        if group_idx >= 0:
-            source_index_for_peak[i_pk] = group_src_idx[group_idx]
-            group_total_sf[group_idx] += reflI
-        else:
-            group_gr[group_count] = gr_key
-            group_gz[group_count] = gz_key
-            group_src_idx[group_count] = i_pk
-            group_total_sf[group_count] = reflI
-            source_index_for_peak[i_pk] = i_pk
-            group_count += 1
+            H = float(miller[i_pk, 0])
+            K = float(miller[i_pk, 1])
+            L = float(miller[i_pk, 2])
+            if L < 0.0:
+                continue
+            gz0 = 2.0 * pi * (L / float(cv))
+            gr0 = 4.0 * pi / float(av) * sqrt(max((H * H + H * K + K * K) / 3.0, 0.0))
+            G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
 
-    for i_grp in range(group_count):
-        src_i = group_src_idx[i_grp]
-        source_total_sf[src_i] = group_total_sf[i_grp]
-
-    # Build the compact list of source peaks (the unique reflections we compute).
-    source_indices = np.empty(group_count, dtype=np.int64)
-    source_count = 0
-    for i_pk in range(num_peaks):
-        if source_index_for_peak[i_pk] == i_pk:
-            if float(miller[i_pk, 2]) >= 0.0:
-                source_indices[source_count] = i_pk
-                source_count += 1
-
-    # Decide whether to parallelize source-peak evaluation.
-    thread_count = int(numba_thread_count)
-    if thread_count < 1:
-        thread_count = 1
-    bytes_needed = float(thread_count) * float(image_size) * float(image_size) * 8.0
-    can_use_thread_local = bytes_needed <= float(_THREAD_LOCAL_IMAGE_MAX_BYTES)
-    merge_work = float(thread_count) * float(image_size) * float(image_size)
-    ray_work = float(source_count) * float(max(n_samp, 1))
-    merge_cost_ok = image_size <= _THREAD_LOCAL_MAX_IMAGE_SIZE and merge_work <= (
-        _THREAD_LOCAL_MERGE_WORK_FACTOR * ray_work
-    )
-    parallel_sources = (
-        source_count > 1
-        and save_flag != 1
-        and (
-            (accumulate_image_flag and can_use_thread_local and merge_cost_ok)
-            or not accumulate_image_flag
-        )
-    )
-    projection_debug_enabled = (
-        projection_debug_counters is not None
-        and projection_debug_reject_counts is not None
-        and projection_debug_reject_records is not None
-        and projection_debug_row_hit_counts is not None
-        and projection_debug_row_tthp_sums is not None
-        and projection_debug_row_tth_sums is not None
-    )
-    dummy_projection_debug_counters = np.zeros(
-        _PROJECTION_DEBUG_COUNTER_COLS,
-        dtype=np.int64,
-    )
-    dummy_projection_debug_reject_count = np.zeros(1, dtype=np.int64)
-    dummy_projection_debug_reject_records = np.full(
-        (1, _PROJECTION_DEBUG_REJECT_RECORD_COLS),
-        np.nan,
-        dtype=np.float64,
-    )
-    dummy_projection_debug_row_hit_counts = np.zeros(1, dtype=np.int64)
-    dummy_projection_debug_row_tthp_sums = np.zeros(1, dtype=np.float64)
-    dummy_projection_debug_row_tth_sums = np.zeros(1, dtype=np.float64)
-
-    if parallel_sources:
-        image_partials = np.empty((1, 1, 1), dtype=np.float64)
-        if accumulate_image_flag:
-            image_partials = np.zeros((thread_count, image_size, image_size), dtype=np.float64)
-        if collect_tables:
-            max_hits = max(n_samp * 2, 16)
-            src_hit_counts = np.zeros(source_count, dtype=np.int64)
-            src_hits = np.zeros(
-                (source_count, max_hits, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
+            k_in_crystal = np.array(
+                [
+                    sample_terms[sample_idx, _SAMPLE_COL_KX_SCAT],
+                    sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT],
+                    sample_terms[sample_idx, _SAMPLE_COL_RE_KZ],
+                ],
+                dtype=np.float64,
             )
-            src_miss_counts = np.zeros(source_count, dtype=np.int64)
-            src_miss = np.zeros((source_count, max_hits, 3), dtype=np.float64)
-        else:
-            max_hits = 1
-            src_hit_counts = np.zeros(1, dtype=np.int64)
-            src_hits = np.zeros((1, 1, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
-            src_miss_counts = np.zeros(1, dtype=np.int64)
-            src_miss = np.zeros((1, 1, 3), dtype=np.float64)
-        src_best_sample = np.full(source_count, -1, dtype=np.int64)
-        if record_status:
-            src_status = np.zeros((source_count, n_samp), dtype=np.int64)
-        else:
-            src_status = np.zeros((1, 1), dtype=np.int64)
+            solve_k_scat = float(sample_terms[sample_idx, _SAMPLE_COL_K_SCAT])
+            all_q, stat = solve_q(
+                k_in_crystal,
+                solve_k_scat,
+                G_vec,
+                sigma_rad,
+                gamma_rad_m,
+                eta_pv,
+                H,
+                K,
+                L,
+                solve_q_steps_i,
+                DEFAULT_SOLVE_Q_BASE_INTERVALS,
+                solve_q_rel_tol_i,
+                solve_q_mode_i,
+                default_solve_q_dtheta,
+                default_solve_q_cos,
+                default_solve_q_sin,
+            )
+            all_status[i_pk, sample_idx] = int(stat)
 
-        for i_src in prange(source_count):
-            i_pk = source_indices[i_src]
-            H = float(miller[i_pk, 0])
-            K = float(miller[i_pk, 1])
-            L = float(miller[i_pk, 2])
-
-            reflI_eff = source_total_sf[i_pk]
-            if reflI_eff <= 0.0:
-                if collect_tables:
-                    src_hit_counts[i_src] = 0
-                    src_miss_counts[i_src] = 0
-                src_best_sample[i_src] = -1
-                if record_status:
-                    src_status[i_src, :] = 0
-                continue
-
-            tid = get_thread_id()
-            if tid < 0 or tid >= image_partials.shape[0]:
-                tid = 0
-            peak_projection_debug_counters = dummy_projection_debug_counters
-            peak_projection_debug_reject_count = dummy_projection_debug_reject_count
-            peak_projection_debug_reject_records = dummy_projection_debug_reject_records
-            peak_projection_debug_row_hit_counts = dummy_projection_debug_row_hit_counts
-            peak_projection_debug_row_tthp_sums = dummy_projection_debug_row_tthp_sums
-            peak_projection_debug_row_tth_sums = dummy_projection_debug_row_tth_sums
-            if projection_debug_enabled:
-                peak_projection_debug_counters = projection_debug_counters[i_pk]
-                peak_projection_debug_reject_count = projection_debug_reject_counts[i_pk : i_pk + 1]
-                peak_projection_debug_reject_records = projection_debug_reject_records[i_pk]
-                peak_projection_debug_row_hit_counts = projection_debug_row_hit_counts[tid]
-                peak_projection_debug_row_tthp_sums = projection_debug_row_tthp_sums[tid]
-                peak_projection_debug_row_tth_sums = projection_debug_row_tth_sums[tid]
-            target_image = image
-            if accumulate_image_flag:
-                target_image = image_partials[tid]
-            if sample_weight_array is None:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
-                    _calculate_phi_from_precomputed(
-                        H,
-                        K,
-                        L,
-                        av,
-                        cv,
-                        target_image,
-                        image_size,
-                        reflI_eff,
-                        sigma_rad,
-                        gamma_rad_m,
-                        eta_pv,
-                        debye_x,
-                        debye_y,
-                        center,
-                        R_sample_precomputed,
-                        n_det_rot,
-                        Detector_Pos,
-                        e1_det,
-                        e2_det,
-                        sample_terms,
-                        sample_n2_array,
-                        sample_eps2_array,
-                        best_idx_precomputed,
-                        core_save_flag,
-                        q_data,
-                        q_count,
-                        i_pk,
-                        record_status,
-                        thickness,
-                        optics_mode,
-                        solve_q_steps_i,
-                        solve_q_rel_tol_i,
-                        solve_q_mode_i,
-                        pixel_size_m,
-                        sample_qr_ring_once,
-                        None,
-                        exit_projection_mode,
-                        projection_debug_enabled,
-                        peak_projection_debug_counters,
-                        peak_projection_debug_reject_count,
-                        peak_projection_debug_reject_records,
-                        peak_projection_debug_row_hit_counts,
-                        peak_projection_debug_row_tthp_sums,
-                        peak_projection_debug_row_tth_sums,
-                        default_solve_q_dtheta,
-                        default_solve_q_cos,
-                        default_solve_q_sin,
-                    )
-                )
-            else:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
-                    _calculate_phi_from_precomputed(
-                        H,
-                        K,
-                        L,
-                        av,
-                        cv,
-                        target_image,
-                        image_size,
-                        reflI_eff,
-                        sigma_rad,
-                        gamma_rad_m,
-                        eta_pv,
-                        debye_x,
-                        debye_y,
-                        center,
-                        R_sample_precomputed,
-                        n_det_rot,
-                        Detector_Pos,
-                        e1_det,
-                        e2_det,
-                        sample_terms,
-                        sample_n2_array,
-                        sample_eps2_array,
-                        best_idx_precomputed,
-                        core_save_flag,
-                        q_data,
-                        q_count,
-                        i_pk,
-                        record_status,
-                        thickness,
-                        optics_mode,
-                        solve_q_steps_i,
-                        solve_q_rel_tol_i,
-                        solve_q_mode_i,
-                        pixel_size_m,
-                        sample_qr_ring_once,
-                        sample_weight_array,
-                        exit_projection_mode,
-                        projection_debug_enabled,
-                        peak_projection_debug_counters,
-                        peak_projection_debug_reject_count,
-                        peak_projection_debug_reject_records,
-                        peak_projection_debug_row_hit_counts,
-                        peak_projection_debug_row_tthp_sums,
-                        peak_projection_debug_row_tth_sums,
-                        default_solve_q_dtheta,
-                        default_solve_q_cos,
-                        default_solve_q_sin,
-                    )
-                )
-            if collect_tables:
-                nh = pixel_hits.shape[0]
-                if nh > max_hits:
-                    nh = max_hits
-                src_hit_counts[i_src] = nh
-                for j in range(nh):
-                    for hit_col in range(HIT_ROW_WITH_PROVENANCE_WIDTH):
-                        src_hits[i_src, j, hit_col] = pixel_hits[j, hit_col]
-
-                nm = missed_arr.shape[0]
-                if nm > max_hits:
-                    nm = max_hits
-                src_miss_counts[i_src] = nm
-                for j in range(nm):
-                    src_miss[i_src, j, 0] = missed_arr[j, 0]
-                    src_miss[i_src, j, 1] = missed_arr[j, 1]
-                    src_miss[i_src, j, 2] = missed_arr[j, 2]
-
-            src_best_sample[i_src] = best_sample_idx_out
-            if record_status:
-                src_status[i_src, :] = status_arr
-
-        if accumulate_image_flag:
-            _merge_thread_local_images(image, image_partials)
-
-        for i_src in range(source_count):
-            i_pk = source_indices[i_src]
-            if collect_tables:
-                nh = int(src_hit_counts[i_src])
-                pixel_hits = np.empty((nh, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
-                for j in range(nh):
-                    for hit_col in range(HIT_ROW_WITH_PROVENANCE_WIDTH):
-                        pixel_hits[j, hit_col] = src_hits[i_src, j, hit_col]
-                hit_tables[i_pk] = pixel_hits
-
-                nm = int(src_miss_counts[i_src])
-                missed_arr = np.empty((nm, 3), dtype=np.float64)
-                for j in range(nm):
-                    missed_arr[j, 0] = src_miss[i_src, j, 0]
-                    missed_arr[j, 1] = src_miss[i_src, j, 1]
-                    missed_arr[j, 2] = src_miss[i_src, j, 2]
-                miss_tables[i_pk] = missed_arr
-
-            if record_status:
-                all_status[i_pk, :] = src_status[i_src, :]
-            if best_sample_indices_out is not None:
-                if i_pk < best_sample_indices_out.shape[0]:
-                    best_sample_indices_out[i_pk] = src_best_sample[i_src]
-    else:
-        # Serial source loop (supports q_data recording when save_flag==1).
-        for i_src in range(source_count):
-            i_pk = source_indices[i_src]
-            H = float(miller[i_pk, 0])
-            K = float(miller[i_pk, 1])
-            L = float(miller[i_pk, 2])
-
-            reflI_eff = source_total_sf[i_pk]
-            if reflI_eff <= 0.0:
-                if collect_tables:
-                    hit_tables[i_pk] = np.empty(
-                        (0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
-                    )
-                    miss_tables[i_pk] = np.empty((0, 3), dtype=np.float64)
-                if record_status:
-                    all_status[i_pk, :] = 0
-                if best_sample_indices_out is not None:
-                    if i_pk < best_sample_indices_out.shape[0]:
-                        best_sample_indices_out[i_pk] = -1
-                if save_flag == 1:
-                    q_count[i_pk] = 0
-                continue
-
-            peak_projection_debug_counters = dummy_projection_debug_counters
-            peak_projection_debug_reject_count = dummy_projection_debug_reject_count
-            peak_projection_debug_reject_records = dummy_projection_debug_reject_records
-            peak_projection_debug_row_hit_counts = dummy_projection_debug_row_hit_counts
-            peak_projection_debug_row_tthp_sums = dummy_projection_debug_row_tthp_sums
-            peak_projection_debug_row_tth_sums = dummy_projection_debug_row_tth_sums
-            if projection_debug_enabled:
+            peak_projection_debug_counters = None
+            peak_projection_debug_reject_count = None
+            peak_projection_debug_reject_records = None
+            peak_projection_debug_row_hit_counts = None
+            peak_projection_debug_row_tthp_sums = None
+            peak_projection_debug_row_tth_sums = None
+            peak_projection_debug_enabled = (
+                projection_debug_counters is not None
+                and projection_debug_reject_counts is not None
+                and projection_debug_reject_records is not None
+                and projection_debug_row_hit_counts is not None
+                and projection_debug_row_tthp_sums is not None
+                and projection_debug_row_tth_sums is not None
+            )
+            if peak_projection_debug_enabled:
                 peak_projection_debug_counters = projection_debug_counters[i_pk]
                 peak_projection_debug_reject_count = projection_debug_reject_counts[i_pk : i_pk + 1]
                 peak_projection_debug_reject_records = projection_debug_reject_records[i_pk]
@@ -5302,207 +6855,211 @@ def _process_peaks_parallel_impl(
                 peak_projection_debug_row_tthp_sums = projection_debug_row_tthp_sums[0]
                 peak_projection_debug_row_tth_sums = projection_debug_row_tth_sums[0]
 
-            if sample_weight_array is None:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
-                    _calculate_phi_from_precomputed(
-                        H,
-                        K,
-                        L,
-                        av,
-                        cv,
-                        image,
-                        image_size,
-                        reflI_eff,
-                        sigma_rad,
-                        gamma_rad_m,
-                        eta_pv,
-                        debye_x,
-                        debye_y,
-                        center,
-                        R_sample_precomputed,
-                        n_det_rot,
-                        Detector_Pos,
-                        e1_det,
-                        e2_det,
-                        sample_terms,
-                        sample_n2_array,
-                        sample_eps2_array,
-                        best_idx_precomputed,
-                        core_save_flag,
-                        q_data,
-                        q_count,
-                        i_pk,
-                        record_status,
-                        thickness,
-                        optics_mode,
-                        solve_q_steps_i,
-                        solve_q_rel_tol_i,
-                        solve_q_mode_i,
-                        pixel_size_m,
-                        sample_qr_ring_once,
-                        None,
-                        exit_projection_mode,
-                        projection_debug_enabled,
-                        peak_projection_debug_counters,
-                        peak_projection_debug_reject_count,
-                        peak_projection_debug_reject_records,
-                        peak_projection_debug_row_hit_counts,
-                        peak_projection_debug_row_tthp_sums,
-                        peak_projection_debug_row_tth_sums,
-                        default_solve_q_dtheta,
-                        default_solve_q_cos,
-                        default_solve_q_sin,
-                    )
+            for q_idx in range(int(np.asarray(all_q).shape[0])):
+                Qx = float(all_q[q_idx, 0])
+                Qy = float(all_q[q_idx, 1])
+                Qz = float(all_q[q_idx, 2])
+                I_Q = float(all_q[q_idx, 3])
+                candidate_valid, row_f, col_f, phi_f, mass = _project_weighted_candidate(
+                    H=H,
+                    K=K,
+                    L=L,
+                    Qx=Qx,
+                    Qy=Qy,
+                    Qz=Qz,
+                    I_Q=I_Q,
+                    reflection_intensity=reflection_intensity,
+                    sample_weight=sample_weight,
+                    debye_x_sq=debye_x_sq,
+                    debye_y_sq=debye_y_sq,
+                    center=center,
+                    R_sample=R_sample_precomputed,
+                    n_det_rot=n_det_rot,
+                    Detector_Pos=Detector_Pos,
+                    e1_det=e1_det,
+                    e2_det=e2_det,
+                    I_plane=np.array(
+                        [
+                            sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_X],
+                            sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Y],
+                            sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Z],
+                        ],
+                        dtype=np.float64,
+                    ),
+                    k_x_scat=sample_terms[sample_idx, _SAMPLE_COL_KX_SCAT],
+                    k_y_scat=sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT],
+                    re_k_z=sample_terms[sample_idx, _SAMPLE_COL_RE_KZ],
+                    im_k_z=sample_terms[sample_idx, _SAMPLE_COL_IM_KZ],
+                    k_scat=sample_terms[sample_idx, _SAMPLE_COL_K_SCAT],
+                    k0=sample_terms[sample_idx, _SAMPLE_COL_K0],
+                    Ti2=sample_terms[sample_idx, _SAMPLE_COL_TI2],
+                    L_in=sample_terms[sample_idx, _SAMPLE_COL_L_IN],
+                    n2_real=sample_terms[sample_idx, _SAMPLE_COL_N2_REAL],
+                    n2_samp=sample_n2_array[sample_idx],
+                    eps2=sample_eps2_array[sample_idx],
+                    thickness=thickness,
+                    optics_mode=optics_mode,
+                    pixel_size_m=pixel_size_m,
+                    image_size=image_size,
+                    exit_projection_mode=exit_projection_mode,
+                    projection_debug_enabled=peak_projection_debug_enabled,
+                    projection_debug_counters=peak_projection_debug_counters,
+                    projection_debug_reject_count=peak_projection_debug_reject_count,
+                    projection_debug_reject_records=peak_projection_debug_reject_records,
+                    projection_debug_row_hit_counts=peak_projection_debug_row_hit_counts,
+                    projection_debug_row_tthp_sums=peak_projection_debug_row_tthp_sums,
+                    projection_debug_row_tth_sums=peak_projection_debug_row_tth_sums,
                 )
-            else:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = (
-                    _calculate_phi_from_precomputed(
-                        H,
-                        K,
-                        L,
-                        av,
-                        cv,
-                        image,
-                        image_size,
-                        reflI_eff,
-                        sigma_rad,
-                        gamma_rad_m,
-                        eta_pv,
-                        debye_x,
-                        debye_y,
-                        center,
-                        R_sample_precomputed,
-                        n_det_rot,
-                        Detector_Pos,
-                        e1_det,
-                        e2_det,
-                        sample_terms,
-                        sample_n2_array,
-                        sample_eps2_array,
-                        best_idx_precomputed,
-                        core_save_flag,
-                        q_data,
-                        q_count,
-                        i_pk,
-                        record_status,
-                        thickness,
-                        optics_mode,
-                        solve_q_steps_i,
-                        solve_q_rel_tol_i,
-                        solve_q_mode_i,
-                        pixel_size_m,
-                        sample_qr_ring_once,
-                        sample_weight_array,
-                        exit_projection_mode,
-                        projection_debug_enabled,
-                        peak_projection_debug_counters,
-                        peak_projection_debug_reject_count,
-                        peak_projection_debug_reject_records,
-                        peak_projection_debug_row_hit_counts,
-                        peak_projection_debug_row_tthp_sums,
-                        peak_projection_debug_row_tth_sums,
-                        default_solve_q_dtheta,
-                        default_solve_q_cos,
-                        default_solve_q_sin,
-                    )
+                if save_flag == 1 and _candidate_valid_mass(mass) and q_count[i_pk] < q_data.shape[1]:
+                    idx = int(q_count[i_pk])
+                    q_data[i_pk, idx, 0] = Qx
+                    q_data[i_pk, idx, 1] = Qy
+                    q_data[i_pk, idx, 2] = Qz
+                    q_data[i_pk, idx, 3] = float(mass)
+                    q_data[i_pk, idx, 4] = float(sample_idx)
+                    q_count[i_pk] += 1
+                candidate_valid = bool(
+                    candidate_valid
+                    and _candidate_has_detector_support(int(image_size), float(row_f), float(col_f))
                 )
+                if not candidate_valid or not _candidate_valid_mass(mass):
+                    continue
 
-            if record_status:
-                all_status[i_pk, :] = status_arr
+                branch_id = _candidate_branch_id(H, K, phi_f, Qx)
+                representative_key = (
+                    float(_candidate_top_mosaic_distance(
+                        sample_idx,
+                        beam_x_array,
+                        beam_y_array,
+                        theta_array,
+                        phi_array,
+                        wavelength_array,
+                    )),
+                    float(-mass),
+                    int(sample_idx),
+                    int(i_pk),
+                    int(q_idx),
+                )
+                representative_row = np.array(
+                    [
+                        float(mass),
+                        float(col_f),
+                        float(row_f),
+                        float(phi_f),
+                        H,
+                        K,
+                        L,
+                        np.nan,
+                        np.nan,
+                        float(sample_idx),
+                    ],
+                    dtype=np.float64,
+                )
+                current_rep = representative_rows_by_peak[i_pk].get(branch_id)
+                if current_rep is None or representative_key < current_rep[0]:
+                    representative_rows_by_peak[i_pk][branch_id] = (
+                        representative_key,
+                        representative_row,
+                    )
+
+                sample_candidates.append(
+                    (
+                        int(i_pk),
+                        float(row_f),
+                        float(col_f),
+                        float(phi_f),
+                        H,
+                        K,
+                        L,
+                        float(mass),
+                    )
+                )
+                sample_masses.append(float(mass))
+                sample_total_mass += float(mass)
+
+        if not np.isfinite(sample_total_mass) or sample_total_mass <= 0.0:
+            continue
+
+        targets = _weighted_event_targets(sample_total_mass, events_per_beam_phase, sample_idx)
+        selected_indices = _select_weighted_event_indices_from_targets(
+            np.asarray(sample_masses, dtype=np.float64),
+            targets,
+        )
+        deposit = _weighted_event_deposit(sample_total_mass, events_per_beam_phase)
+        if not _candidate_valid_mass(deposit):
+            continue
+
+        for selected_idx in np.asarray(selected_indices, dtype=np.int64):
+            i_pk, row_f, col_f, phi_f, H, K, L, _mass = sample_candidates[int(selected_idx)]
+            if accumulate_image_flag:
+                deposited = _accumulate_bilinear_hit(
+                    image,
+                    int(image_size),
+                    float(row_f),
+                    float(col_f),
+                    float(deposit),
+                )
+                if not deposited:
+                    continue
             if collect_tables:
-                hit_tables[i_pk] = pixel_hits
-                miss_tables[i_pk] = missed_arr
-            if best_sample_indices_out is not None:
-                if i_pk < best_sample_indices_out.shape[0]:
-                    best_sample_indices_out[i_pk] = best_sample_idx_out
+                hit_rows_by_peak[int(i_pk)].append(
+                    [
+                        float(deposit),
+                        float(col_f),
+                        float(row_f),
+                        float(phi_f),
+                        float(H),
+                        float(K),
+                        float(L),
+                        np.nan,
+                        np.nan,
+                        float(sample_idx),
+                    ]
+                )
+            event_counts[int(i_pk), sample_idx] += 1
 
-    need_expand_templates = (
-        collect_tables or record_status or save_flag == 1 or best_sample_indices_out is not None
-    )
-    if need_expand_templates:
-        # Expand non-source peaks from source templates, scaling by each peak SF.
+    if best_sample_indices_out is not None:
+        best_sample_indices_out[:] = -1
         for i_pk in range(num_peaks):
-            H = float(miller[i_pk, 0])
-            K = float(miller[i_pk, 1])
-            L = float(miller[i_pk, 2])
-            if L < 0.0:
-                continue
+            best_count = -1
+            best_sample = -1
+            for sample_idx in range(n_samp):
+                count = int(event_counts[i_pk, sample_idx])
+                if count > best_count:
+                    best_count = count
+                    best_sample = sample_idx
+            if best_count > 0 and i_pk < best_sample_indices_out.shape[0]:
+                best_sample_indices_out[i_pk] = int(best_sample)
+            elif i_pk < best_sample_indices_out.shape[0]:
+                best_sample_indices_out[i_pk] = -1
 
-            src_idx = source_index_for_peak[i_pk]
-            if src_idx < 0 or src_idx == i_pk:
-                continue
+    if collect_tables:
+        hit_tables = [
+            np.asarray(rows, dtype=np.float64).reshape(-1, HIT_ROW_WITH_PROVENANCE_WIDTH)
+            if len(rows) > 0
+            else np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+            for rows in hit_rows_by_peak
+        ]
+    else:
+        hit_tables = []
 
-            total_sf = source_total_sf[src_idx]
-            peak_sf = intensities[i_pk]
-            scale = 0.0
-            if total_sf > 0.0 and peak_sf > 0.0:
-                scale = peak_sf / total_sf
+    representative_hit_tables = []
+    for i_pk in range(num_peaks):
+        branch_rows = representative_rows_by_peak[i_pk]
+        if not branch_rows:
+            representative_hit_tables.append(
+                np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
+            )
+            continue
+        ordered_rows = [
+            np.asarray(branch_rows[branch_id][1], dtype=np.float64)
+            for branch_id in sorted(branch_rows.keys())
+        ]
+        representative_hit_tables.append(
+            np.asarray(ordered_rows, dtype=np.float64).reshape(-1, HIT_ROW_WITH_PROVENANCE_WIDTH)
+        )
 
-            if collect_tables:
-                if scale > 0.0:
-                    src_hits = hit_tables[src_idx]
-                    pixel_hits = _copy_scaled_hit_table(src_hits, scale, H, K, L)
-                    hit_tables[i_pk] = pixel_hits
-                else:
-                    hit_tables[i_pk] = np.empty(
-                        (0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
-                    )
-
-                src_miss = miss_tables[src_idx]
-                miss_tables[i_pk] = _copy_miss_table(src_miss)
-
-            if record_status:
-                all_status[i_pk, :] = all_status[src_idx, :]
-
-            if save_flag == 1:
-                if scale > 0.0:
-                    src_q_count = q_count[src_idx]
-                    q_count[i_pk] = src_q_count
-                    _copy_scaled_q_rows(q_data, i_pk, src_idx, src_q_count, scale)
-                else:
-                    q_count[i_pk] = 0
-
-            if best_sample_indices_out is not None:
-                if (
-                    i_pk < best_sample_indices_out.shape[0]
-                    and src_idx < best_sample_indices_out.shape[0]
-                ):
-                    best_sample_indices_out[i_pk] = best_sample_indices_out[src_idx]
-
-    need_source_scaling = collect_tables or save_flag == 1
-    if need_source_scaling:
-        # Scale source rows down from group-total SF to per-peak SF.
-        for i_src in range(source_count):
-            i_pk = source_indices[i_src]
-            H = float(miller[i_pk, 0])
-            K = float(miller[i_pk, 1])
-            L = float(miller[i_pk, 2])
-            total_sf = source_total_sf[i_pk]
-            peak_sf = intensities[i_pk]
-
-            scale = 0.0
-            if total_sf > 0.0 and peak_sf > 0.0:
-                scale = peak_sf / total_sf
-
-            if scale <= 0.0:
-                if collect_tables:
-                    hit_tables[i_pk] = np.empty(
-                        (0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64
-                    )
-                if save_flag == 1:
-                    q_count[i_pk] = 0
-                continue
-
-            if collect_tables:
-                src_hits = hit_tables[i_pk]
-                pixel_hits = _copy_scaled_hit_table(src_hits, scale, H, K, L)
-                hit_tables[i_pk] = pixel_hits
-
-            if save_flag == 1 and abs(scale - 1.0) > 1e-15:
-                qn = q_count[i_pk]
-                q_data[i_pk, :qn, 3] *= scale
-
-    return image, hit_tables, q_data, q_count, all_status, miss_tables
+    return image, hit_tables, q_data, q_count, all_status, miss_tables, representative_hit_tables
 
 
 def process_peaks_parallel(
@@ -5564,6 +7121,7 @@ def process_peaks_parallel(
     default_solve_q_cos=None,
     default_solve_q_sin=None,
     numba_thread_count=None,
+    events_per_beam_phase=50,
 ):
     """Inject runtime defaults before entering cached compiled kernel."""
 
@@ -5578,7 +7136,15 @@ def process_peaks_parallel(
         default_solve_q_sin,
         numba_thread_count,
     )
-    return _process_peaks_parallel_impl(
+    events_per_beam_phase = normalize_events_per_beam_phase_backend(events_per_beam_phase)
+    (
+        image_out,
+        hit_tables,
+        q_data,
+        q_count,
+        all_status,
+        miss_tables,
+    ) = _process_peaks_parallel_impl(
         miller,
         intensities,
         image_size,
@@ -5637,13 +7203,19 @@ def process_peaks_parallel(
         default_solve_q_cos=default_solve_q_cos,
         default_solve_q_sin=default_solve_q_sin,
         numba_thread_count=numba_thread_count,
+        events_per_beam_phase=events_per_beam_phase,
     )
+    return image_out, hit_tables, q_data, q_count, all_status, miss_tables
 
 
 def _process_peaks_parallel_py_func(*args, **kwargs):
+    args, kwargs = _normalize_bound_process_peaks_parallel_call(args, kwargs)
     bound_result = _bind_process_peaks_parallel_call(args, kwargs)
     if bound_result is None:
-        return _process_peaks_parallel_impl.py_func(*args, **kwargs)
+        _set_last_process_peaks_weighted_event_stats()
+        result = _process_peaks_parallel_weighted_events_python(*args, **kwargs)
+        _set_last_process_peaks_representative_hit_tables(result[6])
+        return result[:6]
     bound, extra_kwargs = bound_result
     (
         bound["default_solve_q_dtheta"],
@@ -5659,7 +7231,10 @@ def _process_peaks_parallel_py_func(*args, **kwargs):
     call_kwargs = dict(extra_kwargs)
     for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[len(args) :]:
         call_kwargs[name] = bound[name]
-    return _process_peaks_parallel_impl.py_func(*args, **call_kwargs)
+    _set_last_process_peaks_weighted_event_stats()
+    result = _process_peaks_parallel_weighted_events_python(*args, **call_kwargs)
+    _set_last_process_peaks_representative_hit_tables(result[6])
+    return result[:6]
 
 
 process_peaks_parallel.py_func = _process_peaks_parallel_py_func
@@ -5694,89 +7269,7 @@ def _is_unexpected_keyword_error(exc: TypeError, keyword: str) -> bool:
 
 
 def _prepare_clustered_process_peaks_call(args, kwargs):
-    call_kwargs = dict(kwargs)
-    if len(args) <= 23:
-        return args, call_kwargs, None
-
-    if bool(call_kwargs.get("sample_qr_ring_once", True)):
-        return args, call_kwargs, None
-    save_flag = int(call_kwargs.get("save_flag", args[31] if len(args) > 31 else 0))
-    if save_flag == 1:
-        return args, call_kwargs, None
-    if call_kwargs.get("sample_weights") is not None:
-        return args, call_kwargs, None
-
-    beam_x = np.asarray(args[16], dtype=np.float64).reshape(-1)
-    beam_y = np.asarray(args[17], dtype=np.float64).reshape(-1)
-    theta = np.asarray(args[18], dtype=np.float64).reshape(-1)
-    phi = np.asarray(args[19], dtype=np.float64).reshape(-1)
-    wavelength = np.asarray(args[23], dtype=np.float64).reshape(-1)
-    raw_count = int(beam_x.size)
-    if raw_count == 0:
-        return args, call_kwargs, None
-    if not (
-        beam_y.size == raw_count
-        and theta.size == raw_count
-        and phi.size == raw_count
-        and wavelength.size == raw_count
-    ):
-        return args, call_kwargs, None
-
-    try:
-        (
-            cluster_beam_x,
-            cluster_beam_y,
-            cluster_theta,
-            cluster_phi,
-            cluster_wavelength,
-            cluster_weights,
-            raw_to_cluster,
-            cluster_to_rep,
-        ) = cluster_beam_profiles(
-            beam_x,
-            beam_y,
-            theta,
-            phi,
-            wavelength,
-        )
-    except Exception:
-        return args, call_kwargs, None
-
-    cluster_count = int(cluster_weights.size)
-    if cluster_count >= raw_count:
-        return args, call_kwargs, None
-
-    clustered_args = list(args)
-    clustered_args[16] = cluster_beam_x
-    clustered_args[17] = cluster_beam_y
-    clustered_args[18] = cluster_theta
-    clustered_args[19] = cluster_phi
-    clustered_args[23] = cluster_wavelength
-    clustered_kwargs = dict(call_kwargs)
-    clustered_kwargs["sample_weights"] = np.asarray(cluster_weights, dtype=np.float64)
-    cluster_rep_idx = np.asarray(cluster_to_rep, dtype=np.int64)
-    n2_override = clustered_kwargs.get("n2_sample_array_override")
-    if n2_override is not None:
-        n2_override = np.asarray(n2_override, dtype=np.complex128).reshape(-1)
-        if n2_override.size != raw_count:
-            return args, call_kwargs, None
-        clustered_kwargs["n2_sample_array_override"] = n2_override[cluster_rep_idx]
-
-    original_best = clustered_kwargs.get("best_sample_indices_out")
-    cluster_best = None
-    if original_best is not None:
-        cluster_best = np.full_like(np.asarray(original_best), -1)
-        clustered_kwargs["best_sample_indices_out"] = cluster_best
-
-    cluster_meta = {
-        "raw_count": raw_count,
-        "cluster_count": cluster_count,
-        "raw_to_cluster": np.asarray(raw_to_cluster, dtype=np.int64),
-        "cluster_to_rep": cluster_rep_idx,
-        "best_sample_indices_out": original_best,
-        "cluster_best_indices_out": cluster_best,
-    }
-    return tuple(clustered_args), clustered_kwargs, cluster_meta
+    return args, dict(kwargs), None
 
 
 def _finalize_clustered_process_peaks_result(result, cluster_meta):
@@ -5815,7 +7308,9 @@ def process_peaks_parallel_safe(*args, **kwargs):
     kwargs["sample_qr_ring_once"] = sample_qr_ring_once
     for name, value in get_process_peaks_runtime_kwargs().items():
         kwargs.setdefault(name, value)
+    args, kwargs = _normalize_bound_process_peaks_parallel_call(args, kwargs)
     _set_last_process_peaks_safe_stats()
+    _set_last_process_peaks_representative_hit_tables(None)
     if isinstance(safe_stats_out, dict):
         safe_stats_out.clear()
     (
@@ -5847,6 +7342,7 @@ def process_peaks_parallel_safe(*args, **kwargs):
             phi_array=phi_array,
             wavelength_array=wavelength_array,
             best_sample_indices_out=best_sample_indices_out,
+            representative_hit_tables=get_last_process_peaks_representative_hit_tables(),
         )
         return safe_cache_result
     clustered_args, clustered_kwargs, cluster_meta = _prepare_clustered_process_peaks_call(
@@ -5889,6 +7385,7 @@ def process_peaks_parallel_safe(*args, **kwargs):
                         phi_array=phi_array,
                         wavelength_array=wavelength_array,
                         best_sample_indices_out=best_sample_indices_out,
+                        representative_hit_tables=get_last_process_peaks_representative_hit_tables(),
                     )
                     return _finalize_clustered_process_peaks_result(result, call_meta)
                 except TypeError as exc:
@@ -6218,13 +7715,62 @@ def _set_last_intersection_cache(cache):
     """Store the latest detector intersection cache."""
 
     global _LAST_INTERSECTION_CACHE
+    global _LAST_INTERSECTION_CACHE_VIEWS
     if not _retain_last_intersection_cache():
         _LAST_INTERSECTION_CACHE = []
+        _LAST_INTERSECTION_CACHE_VIEWS = {
+            "sampled_event_rows": [],
+            "branch_representative_rows": [],
+        }
         return
     if cache is None:
         _LAST_INTERSECTION_CACHE = []
+        _LAST_INTERSECTION_CACHE_VIEWS = {
+            "sampled_event_rows": [],
+            "branch_representative_rows": [],
+        }
         return
     _LAST_INTERSECTION_CACHE = _copy_intersection_cache(cache)
+    _LAST_INTERSECTION_CACHE_VIEWS = {
+        "sampled_event_rows": [],
+        "branch_representative_rows": _copy_intersection_cache(cache),
+    }
+
+
+def _copy_hit_table_sequence(hit_tables):
+    copied = []
+    for table in hit_tables or ():
+        arr = np.asarray(table, dtype=np.float64)
+        if arr.ndim != 2:
+            copied.append(np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64))
+            continue
+        copied.append(np.array(arr, copy=True))
+    return copied
+
+
+def _set_last_process_peaks_representative_hit_tables(hit_tables):
+    global _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES
+    if hit_tables is None:
+        _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES = None
+        return
+    _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES = _copy_hit_table_sequence(hit_tables)
+
+
+def get_last_process_peaks_representative_hit_tables():
+    if _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES is None:
+        return None
+    return _copy_hit_table_sequence(_LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES)
+
+
+def get_last_intersection_cache_views():
+    return {
+        "sampled_event_rows": _copy_intersection_cache(
+            _LAST_INTERSECTION_CACHE_VIEWS.get("sampled_event_rows", [])
+        ),
+        "branch_representative_rows": _copy_intersection_cache(
+            _LAST_INTERSECTION_CACHE_VIEWS.get("branch_representative_rows", [])
+        ),
+    }
 
 
 def _set_last_intersection_cache_from_hit_tables(
@@ -6238,28 +7784,44 @@ def _set_last_intersection_cache_from_hit_tables(
     phi_array=None,
     wavelength_array=None,
     best_sample_indices_out=None,
+    representative_hit_tables=None,
 ):
     """Build and store the optional last-intersection cache when retained."""
 
     if not _retain_last_intersection_cache():
         return
-    _set_last_intersection_cache(
-        build_intersection_cache(
-            hit_tables,
-            av,
-            cv,
-            beam_x_array=beam_x_array,
-            beam_y_array=beam_y_array,
-            theta_array=theta_array,
-            phi_array=phi_array,
-            wavelength_array=wavelength_array,
-            best_sample_indices_out=best_sample_indices_out,
-        )
+    sampled_event_rows = build_intersection_cache(
+        hit_tables,
+        av,
+        cv,
+        beam_x_array=beam_x_array,
+        beam_y_array=beam_y_array,
+        theta_array=theta_array,
+        phi_array=phi_array,
+        wavelength_array=wavelength_array,
+        best_sample_indices_out=best_sample_indices_out,
     )
+    representative_rows = build_branch_representative_intersection_cache(
+        representative_hit_tables if representative_hit_tables is not None else hit_tables,
+        av,
+        cv,
+        beam_x_array=beam_x_array,
+        beam_y_array=beam_y_array,
+        theta_array=theta_array,
+        phi_array=phi_array,
+        wavelength_array=wavelength_array,
+        best_sample_indices_out=best_sample_indices_out,
+    )
+    _set_last_intersection_cache(representative_rows)
+    global _LAST_INTERSECTION_CACHE_VIEWS
+    _LAST_INTERSECTION_CACHE_VIEWS = {
+        "sampled_event_rows": _copy_intersection_cache(sampled_event_rows),
+        "branch_representative_rows": _copy_intersection_cache(representative_rows),
+    }
 
 
 def get_last_intersection_cache():
-    """Return the last detector-hit cache keyed by Qr/Qz set.
+    """Return the last fitter-facing branch representative detector cache.
 
     Fresh builds store the current 17-column detector layout:
     ``[Qr, Qz, detector_col, detector_row, intensity, phi, H, K, L,
@@ -6267,6 +7829,8 @@ def get_last_intersection_cache():
     wavelength_offset, source_table_index, source_row_index, best_sample_index]``.
     Replay and conversion helpers remain backward-compatible with legacy
     14-column detector caches and caked layouts with widths 16 and 19.
+    Sampled weighted-event rows are preserved separately under
+    ``get_last_intersection_cache_views()["sampled_event_rows"]``.
     """
 
     return _copy_intersection_cache(_LAST_INTERSECTION_CACHE)
@@ -6943,10 +8507,10 @@ def build_intersection_cache(
     wavelength_offset, source_table_index, source_row_index, best_sample_index]``.
     Replay helpers also accept legacy 14-column detector caches plus legacy/current
     caked layouts with widths 16 and 19, but this builder remains the authoritative
-    producer for the 17-column detector schema. Hit tables are merged by nominal
-    Bragg family before reduction, then the final cache keeps the row nearest the
-    top of the mosaic for each ``00L`` peak and one such row per detector-side
-    branch for non-specular peaks.
+    producer for the 17-column detector schema. Weighted-event hit tables keep
+    all sampled rows, including duplicates, so this builder preserves all rows
+    after nominal family grouping and only normalizes them into one-row cache
+    tables.
     """
 
     if hit_tables is None:
@@ -7090,14 +8654,42 @@ def build_intersection_cache(
     cache = []
     cache_table_summaries = []
     for group_tables in grouped_cache_tables.values():
-        expanded_tables, group_metadata = _expand_intersection_cache_group_with_metadata(
-            group_tables,
-            beam_x_array=beam_x_arr,
-            beam_y_array=beam_y_arr,
-            theta_array=theta_arr,
-            phi_array=phi_arr,
-            wavelength_array=wavelength_arr,
+        valid_group_tables = []
+        for cache_table in group_tables:
+            table = np.asarray(cache_table, dtype=np.float64)
+            if table.ndim != 2 or table.shape[0] <= 0:
+                continue
+            valid_group_tables.append(table)
+        if not valid_group_tables:
+            continue
+        combined_table = (
+            np.vstack(valid_group_tables)
+            if len(valid_group_tables) > 1
+            else np.asarray(valid_group_tables[0], dtype=np.float64)
         )
+        expanded_tables = [
+            np.asarray(combined_table[row_idx : row_idx + 1, :], dtype=np.float64).copy()
+            for row_idx in range(combined_table.shape[0])
+        ]
+        group_key = _intersection_cache_group_key(combined_table)
+        group_metadata = {
+            "group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+            "q_group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+            "row_count_before_grouping": int(combined_table.shape[0]),
+            "row_count_after_grouping": int(combined_table.shape[0]),
+            "representative_row_indices_kept": list(range(int(combined_table.shape[0]))),
+            "table_summaries": [
+                {
+                    "table_index": int(row_idx),
+                    "group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+                    "q_group_key": list(group_key) if isinstance(group_key, tuple) else group_key,
+                    "row_count_before_grouping": int(combined_table.shape[0]),
+                    "row_count_after_grouping": 1,
+                    "representative_row_indices_kept": [int(row_idx)],
+                }
+                for row_idx in range(combined_table.shape[0])
+            ],
+        }
         cache.extend(expanded_tables)
         if isinstance(group_metadata, dict) and group_metadata:
             cache_group_summaries.append(group_metadata)
@@ -7127,6 +8719,91 @@ def build_intersection_cache(
         )
 
     return cache
+
+
+def build_branch_representative_intersection_cache(
+    hit_tables,
+    av,
+    cv,
+    beam_x_array=None,
+    beam_y_array=None,
+    theta_array=None,
+    phi_array=None,
+    wavelength_array=None,
+    best_sample_indices_out=None,
+    group_by_qr_set=False,
+):
+    """Build deterministic branch-peak representatives for fitting and QR detection."""
+
+    sampled_cache = build_intersection_cache(
+        hit_tables,
+        av,
+        cv,
+        beam_x_array=beam_x_array,
+        beam_y_array=beam_y_array,
+        theta_array=theta_array,
+        phi_array=phi_array,
+        wavelength_array=wavelength_array,
+        best_sample_indices_out=best_sample_indices_out,
+    )
+
+    beam_x_arr = None if beam_x_array is None else np.asarray(beam_x_array, dtype=np.float64)
+    beam_y_arr = None if beam_y_array is None else np.asarray(beam_y_array, dtype=np.float64)
+    theta_arr = None if theta_array is None else np.asarray(theta_array, dtype=np.float64)
+    phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64)
+    wavelength_arr = (
+        None if wavelength_array is None else np.asarray(wavelength_array, dtype=np.float64)
+    )
+
+    grouped_by_source_table: dict[int, list[np.ndarray]] = {}
+    for table_idx, cache_table in enumerate(sampled_cache):
+        table = np.asarray(cache_table, dtype=np.float64)
+        if table.ndim != 2 or table.shape[0] <= 0:
+            continue
+        source_table_idx = int(table_idx)
+        if table.shape[1] > CACHE_COL_SOURCE_TABLE_INDEX and np.isfinite(
+            table[0, CACHE_COL_SOURCE_TABLE_INDEX]
+        ):
+            source_table_idx = int(np.rint(float(table[0, CACHE_COL_SOURCE_TABLE_INDEX])))
+        grouped_by_source_table.setdefault(source_table_idx, []).append(table)
+
+    representative_cache = []
+    for source_tables in grouped_by_source_table.values():
+        expanded_tables, _metadata = _expand_intersection_cache_group_with_metadata(
+            source_tables,
+            beam_x_array=beam_x_arr,
+            beam_y_array=beam_y_arr,
+            theta_array=theta_arr,
+            phi_array=phi_arr,
+            wavelength_array=wavelength_arr,
+        )
+        representative_cache.extend(expanded_tables)
+
+    if not group_by_qr_set:
+        return representative_cache
+
+    grouped_cache_tables: dict[tuple[object, ...], list[np.ndarray]] = {}
+    for table_idx, cache_table in enumerate(representative_cache):
+        table = np.asarray(cache_table, dtype=np.float64)
+        if table.ndim != 2 or table.shape[0] <= 0:
+            continue
+        group_key = _intersection_cache_group_key(table)
+        if group_key is None:
+            group_key = ("ungrouped", int(table_idx))
+        grouped_cache_tables.setdefault(group_key, []).append(table)
+
+    qr_grouped_cache = []
+    for group_tables in grouped_cache_tables.values():
+        expanded_tables, _metadata = _expand_intersection_cache_group_with_metadata(
+            group_tables,
+            beam_x_array=beam_x_arr,
+            beam_y_array=beam_y_arr,
+            theta_array=theta_arr,
+            phi_array=phi_arr,
+            wavelength_array=wavelength_arr,
+        )
+        qr_grouped_cache.extend(expanded_tables)
+    return qr_grouped_cache
 
 
 def _extract_process_peaks_context(args, kwargs):
@@ -7223,6 +8900,7 @@ def process_qr_rods_parallel(
     projection_debug_row_hit_counts=None,
     projection_debug_row_tthp_sums=None,
     projection_debug_row_tth_sums=None,
+    events_per_beam_phase=50,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -7295,6 +8973,7 @@ def process_qr_rods_parallel(
         projection_debug_row_hit_counts=projection_debug_row_hit_counts,
         projection_debug_row_tthp_sums=projection_debug_row_tthp_sums,
         projection_debug_row_tth_sums=projection_debug_row_tth_sums,
+        events_per_beam_phase=events_per_beam_phase,
     )
 
     return (*result, degeneracy)
@@ -7303,6 +8982,10 @@ def process_qr_rods_parallel(
 def process_qr_rods_parallel_safe(*args, **kwargs):
     """Run ``process_qr_rods_parallel`` with Python fallback if needed."""
 
+    kwargs = dict(kwargs)
+    kwargs["events_per_beam_phase"] = normalize_events_per_beam_phase_backend(
+        kwargs.get("events_per_beam_phase", 50)
+    )
     prefer_python_runner = bool(kwargs.get("prefer_python_runner", False))
     py_runner = getattr(process_qr_rods_parallel, "py_func", None)
     runners = []
