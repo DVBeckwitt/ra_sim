@@ -134,6 +134,162 @@ def normalize_headless_geometry_fit_active_var_names(
     return normalized_names
 
 
+def _canonicalize_headless_geometry_fit_active_var_names(
+    active_var_names: Sequence[str] | None,
+    *,
+    use_shared_theta_offset: bool,
+) -> list[str] | None:
+    """Map optional headless override names onto the runtime active-variable contract."""
+
+    if active_var_names is None:
+        return None
+    canonical_names: list[str] = []
+    seen_names: set[str] = set()
+    for raw_name in active_var_names:
+        name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
+            str(raw_name),
+            use_shared_theta_offset=use_shared_theta_offset,
+        )
+        if name in seen_names:
+            raise ValueError(
+                f"Geometry fit active-vars override resolves to duplicate runtime var '{name}'."
+            )
+        seen_names.add(name)
+        canonical_names.append(name)
+    return canonical_names
+
+
+def _headless_geometry_fit_bounds_section(
+    fit_config: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    """Return one normalized headless geometry-fit bounds mapping."""
+
+    if not isinstance(fit_config, Mapping):
+        return {}
+    fit_geometry_cfg = fit_config.get("geometry", {})
+    if "geometry" in fit_config and isinstance(fit_geometry_cfg, Mapping):
+        container_cfg = fit_geometry_cfg
+    else:
+        container_cfg = fit_config
+    bounds_cfg = container_cfg.get("bounds", {}) or {}
+    if not isinstance(bounds_cfg, Mapping):
+        return {}
+    return bounds_cfg
+
+
+def _headless_geometry_fit_domain_from_bounds_entry(
+    entry: object,
+    *,
+    current_value: object,
+) -> tuple[float, float] | None:
+    """Convert one geometry-fit bounds entry into a finite absolute domain."""
+
+    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+        try:
+            lo = float(entry[0])
+            hi = float(entry[1])
+        except Exception:
+            return None
+    elif isinstance(entry, Mapping):
+        mode = str(entry.get("mode", "absolute")).strip().lower()
+        try:
+            current_value_float = float(current_value)
+        except Exception:
+            current_value_float = float("nan")
+        min_raw = entry.get("min")
+        max_raw = entry.get("max")
+        if mode in {"relative", "rel"}:
+            if not np.isfinite(current_value_float):
+                return None
+            lo = (
+                current_value_float + float(min_raw)
+                if min_raw is not None
+                else float("-inf")
+            )
+            hi = (
+                current_value_float + float(max_raw)
+                if max_raw is not None
+                else float("inf")
+            )
+        elif mode in {"relative_min0", "rel_min0"}:
+            if not np.isfinite(current_value_float):
+                return None
+            lo = (
+                current_value_float + float(min_raw)
+                if min_raw is not None
+                else float("-inf")
+            )
+            if np.isfinite(lo):
+                lo = max(0.0, lo)
+            hi = (
+                current_value_float + float(max_raw)
+                if max_raw is not None
+                else float("inf")
+            )
+        else:
+            lo = float(min_raw) if min_raw is not None else float("-inf")
+            hi = float(max_raw) if max_raw is not None else float("inf")
+    else:
+        return None
+
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return None
+    if lo > hi:
+        lo, hi = hi, lo
+    return float(lo), float(hi)
+
+
+def _headless_runtime_geometry_fit_parameter_domains(
+    *,
+    fit_config: Mapping[str, object] | None,
+    current_params: Mapping[str, object],
+    image_size: object,
+    names: Sequence[str],
+    use_shared_theta_offset: bool,
+) -> dict[str, tuple[float, float]]:
+    """Build headless geometry-fit parameter domains for runtime-config shaping."""
+
+    bounds_cfg = _headless_geometry_fit_bounds_section(fit_config)
+    try:
+        image_size_value = float(image_size)
+    except Exception:
+        image_size_value = 0.0
+
+    domains: dict[str, tuple[float, float]] = {}
+    for raw_name in names:
+        name = str(raw_name)
+        parameter_name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
+            name,
+            use_shared_theta_offset=use_shared_theta_offset,
+        )
+        if parameter_name == "center_x" or parameter_name == "center_y":
+            domains[name] = (0.0, max(image_size_value - 1.0, 0.0))
+            continue
+        source_name = gui_geometry_fit.geometry_fit_constraint_source_name(parameter_name)
+        bound_entry = None
+        for candidate_name in (parameter_name, source_name, name):
+            if candidate_name in bounds_cfg:
+                bound_entry = bounds_cfg.get(candidate_name)
+                break
+        if bound_entry is None:
+            continue
+        current_value = current_params.get(
+            parameter_name,
+            current_params.get(source_name, current_params.get(name)),
+        )
+        domain = _headless_geometry_fit_domain_from_bounds_entry(
+            bound_entry,
+            current_value=current_value,
+        )
+        if domain is None:
+            continue
+        if parameter_name == "theta_offset":
+            span = max(abs(float(domain[0])), abs(float(domain[1])), 1.0)
+            domain = (-float(span), float(span))
+        domains[name] = (float(domain[0]), float(domain[1]))
+    return domains
+
+
 def _read_first_cif_block(path: str) -> tuple[object, object]:
     """Load one CIF and return the container plus its first block."""
 
@@ -2727,24 +2883,46 @@ def run_headless_geometry_fit(
     )
 
     params = value_callbacks.current_params()
+    use_shared_theta_offset = bool(_geometry_fit_uses_shared_theta_offset())
+    runtime_active_var_names = _canonicalize_headless_geometry_fit_active_var_names(
+        resolved_active_var_names,
+        use_shared_theta_offset=use_shared_theta_offset,
+    )
     var_names = (
-        list(resolved_active_var_names)
-        if resolved_active_var_names is not None
+        list(runtime_active_var_names)
+        if runtime_active_var_names is not None
         else list(value_callbacks.current_var_names())
     )
     preserve_live_theta = "theta_initial" not in var_names and "theta_offset" not in var_names
 
     def _build_headless_runtime_config(_fit_params: Mapping[str, object]) -> dict[str, object]:
-        runtime_cfg = copy.deepcopy(
+        base_runtime_cfg = copy.deepcopy(
             defaults.fit_config.get("geometry", {})
             if isinstance(defaults.fit_config, dict)
             else {}
         )
-        if not isinstance(runtime_cfg, dict):
-            runtime_cfg = {}
-        if resolved_active_var_names is not None:
-            runtime_cfg["candidate_param_names"] = list(var_names)
-        return runtime_cfg
+        if not isinstance(base_runtime_cfg, dict):
+            base_runtime_cfg = {}
+        if runtime_active_var_names is None:
+            return base_runtime_cfg
+        candidate_params = {
+            str(name): _fit_params.get(str(name))
+            for name in var_names
+        }
+        parameter_domains = _headless_runtime_geometry_fit_parameter_domains(
+            fit_config=base_runtime_cfg,
+            current_params=_fit_params,
+            image_size=defaults.image_size,
+            names=var_names,
+            use_shared_theta_offset=use_shared_theta_offset,
+        )
+        return gui_geometry_fit.build_geometry_fit_runtime_config(
+            base_runtime_cfg,
+            candidate_params,
+            {},
+            parameter_domains,
+            candidate_param_names=var_names,
+        )
 
     preflight_started_at = time.monotonic()
     preparation = gui_geometry_fit.prepare_runtime_geometry_fit_run(

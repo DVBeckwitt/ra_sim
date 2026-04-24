@@ -16403,9 +16403,30 @@ def _run_headless_active_var_contract_capture(
     tmp_path,
     *,
     active_var_names=None,
+    fit_geometry_cfg=None,
+    use_shared_theta_offset=False,
+    theta_offset_value=0.0,
 ):
     from ra_sim import headless_geometry_fit
 
+    resolved_fit_geometry_cfg = (
+        copy.deepcopy(fit_geometry_cfg)
+        if isinstance(fit_geometry_cfg, dict)
+        else {
+            "solver": {"manual_point_fit_mode": True},
+            "bounds": {
+                "corto_detector": [0.05, 0.1],
+                "theta_initial": [0.0, 10.0],
+                "cor_angle": [-5.0, 5.0],
+                "chi": [-5.0, 5.0],
+                "zs": [-0.01, 0.01],
+                "zb": [-0.01, 0.01],
+                "gamma": [-5.0, 5.0],
+                "Gamma": [-5.0, 5.0],
+                "psi_z": [-5.0, 5.0],
+            },
+        }
+    )
     defaults = headless_geometry_fit._RuntimeDefaults(
         primary_cif_path="C:/tmp/primary.cif",
         secondary_cif_path=None,
@@ -16459,20 +16480,7 @@ def _run_headless_active_var_contract_capture(
             "weight2": 1.0,
         },
         fit_config={
-            "geometry": {
-                "solver": {"manual_point_fit_mode": True},
-                "bounds": {
-                    "corto_detector": [0.05, 0.1],
-                    "theta_initial": [0.0, 10.0],
-                    "cor_angle": [-5.0, 5.0],
-                    "chi": [-5.0, 5.0],
-                    "zs": [-0.01, 0.01],
-                    "zb": [-0.01, 0.01],
-                    "gamma": [-5.0, 5.0],
-                    "Gamma": [-5.0, 5.0],
-                    "psi_z": [-5.0, 5.0],
-                },
-            }
+            "geometry": resolved_fit_geometry_cfg
         },
         intensity_threshold=0.0,
         include_rods_flag=False,
@@ -16553,12 +16561,12 @@ def _run_headless_active_var_contract_capture(
     monkeypatch.setattr(
         headless_geometry_fit.gui_background_theta,
         "geometry_fit_uses_shared_theta_offset",
-        lambda *args, **kwargs: False,
+        lambda *args, **kwargs: bool(use_shared_theta_offset),
     )
     monkeypatch.setattr(
         headless_geometry_fit.gui_background_theta,
         "current_geometry_theta_offset",
-        lambda **kwargs: 0.0,
+        lambda **kwargs: float(theta_offset_value),
     )
     monkeypatch.setattr(
         headless_geometry_fit.gui_background_theta,
@@ -16767,6 +16775,87 @@ def test_headless_geometry_fit_active_var_override_uses_ordered_contract_without
     assert captured["runtime_cfg"]["candidate_param_names"] == override_names
     assert captured["execute_var_names"] == override_names
     assert captured["execute_candidate_param_names"] == override_names
+    assert saved_state == saved_state_before
+    for name, value in saved_state_before["variables"].items():
+        assert result.state["variables"][name] == value
+
+
+def test_headless_geometry_fit_active_var_override_shapes_runtime_config_for_special_names(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    override_names = ["theta_offset", "center_x", "center_y"]
+    fit_geometry_cfg = {
+        "solver": {
+            "manual_point_fit_mode": True,
+            "gui_workers": "serial",
+        },
+        "gui_use_numba": True,
+        "bounds": {
+            "theta_initial": [0.0, 10.0],
+            "center_x": [90.0, 110.0],
+            "center_y": [190.0, 210.0],
+        },
+        "priors": {
+            "theta_offset": {"sigma": 0.25},
+            "center_x": {"sigma": 20.0},
+            "center_y": {"sigma": 20.0},
+            "gamma": {"sigma": 0.5},
+        },
+    }
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=override_names,
+        fit_geometry_cfg=fit_geometry_cfg,
+    )
+
+    assert result.accepted is True
+    assert captured["prepare_var_names"] == override_names
+    assert captured["execute_var_names"] == override_names
+    assert captured["execute_candidate_param_names"] == override_names
+    assert captured["runtime_cfg"]["candidate_param_names"] == override_names
+    assert captured["runtime_cfg"]["allow_unsafe_runtime"] is False
+    assert captured["runtime_cfg"]["use_numba"] is True
+    assert captured["runtime_cfg"]["solver"]["workers"] == "serial"
+    assert captured["runtime_cfg"]["bounds"]["theta_offset"] == [-10.0, 10.0]
+    assert captured["runtime_cfg"]["bounds"]["center_x"] == [0.0, 63.0]
+    assert captured["runtime_cfg"]["bounds"]["center_y"] == [0.0, 63.0]
+    assert captured["runtime_cfg"]["priors"] == {"gamma": {"sigma": 0.5}}
+    assert saved_state == saved_state_before
+    for name, value in saved_state_before["variables"].items():
+        assert result.state["variables"][name] == value
+
+
+def test_headless_geometry_fit_active_var_override_canonicalizes_theta_initial_in_shared_theta_mode(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    override_names = ["theta_initial", "center_x"]
+    expected_runtime_names = ["theta_offset", "center_x"]
+    fit_geometry_cfg = {
+        "solver": {"manual_point_fit_mode": True},
+        "bounds": {
+            "theta_initial": [0.0, 10.0],
+            "center_x": [90.0, 110.0],
+        },
+    }
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=override_names,
+        fit_geometry_cfg=fit_geometry_cfg,
+        use_shared_theta_offset=True,
+        theta_offset_value=0.125,
+    )
+
+    assert result.accepted is True
+    assert captured["prepare_var_names"] == expected_runtime_names
+    assert captured["execute_var_names"] == expected_runtime_names
+    assert captured["execute_candidate_param_names"] == expected_runtime_names
+    assert captured["runtime_cfg"]["candidate_param_names"] == expected_runtime_names
+    assert captured["runtime_cfg"]["bounds"]["theta_offset"] == [-10.0, 10.0]
+    assert captured["runtime_cfg"]["bounds"]["center_x"] == [0.0, 63.0]
     assert saved_state == saved_state_before
     for name, value in saved_state_before["variables"].items():
         assert result.state["variables"][name] == value
