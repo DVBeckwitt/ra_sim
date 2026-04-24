@@ -210,9 +210,11 @@ unsafe parameters. Current validation result: `status == "ok"`, Rung 1 stayed
 green, `provider_pair_count == 7`, `fixed_source_pair_count == 7`,
 `fallback_entry_count == 0`, `residual_probe_called == true`,
 `least_squares_called == false`, `optimizer_solve_called == false`, and
-`state_hash_unchanged == true`. Current classification is 9 active, 4
+`state_hash_unchanged == true`. Current classification is 11 active, 2
 near-zero, 0 non-finite, and 0 unsafe. Active parameters:
 
+- `center_x`
+- `center_y`
 - `chi`
 - `cor_angle`
 - `theta_initial`
@@ -222,6 +224,20 @@ near-zero, 0 non-finite, and 0 unsafe. Active parameters:
 - `a`
 - `c`
 - `psi_z`
+
+Near-zero parameters:
+
+- `gamma`
+- `Gamma`
+
+`center_x` and `center_y` moved from near-zero to active under the unchanged
+rule `delta_norm > max(1e-7, 1e-7 * abs(residual_norm_base))` because
+`residual_norm_base` dropped `17.32x`
+(`2665.1915227297354 -> 153.89073085166189`), shrinking the classifier
+threshold `17.32x`
+(`2.6651915227297353e-4 -> 1.538907308516619e-5`). Their delta norms dropped
+less: `center_x` `1.37x`, `center_y` `2.15x`. This is expected under the
+current rule, not a fitting regression.
 
 Rung 3 one-parameter solves are complete enough to proceed. Each active
 parameter was attempted as a singleton real solve with all other parameters
@@ -338,11 +354,13 @@ Rung 5 closeout status by work type:
 - Validation status: run `20260422_115256` passed Rungs 1-5, Rung 5 passed 4/4
   attempted blocks, provider guard after blocks stayed green, and `new4.json`
   stayed unchanged.
-- Still open: keep the separate Rung 2 sensitivity drift follow-up
-  (`active_param_count=11`, `near_zero_param_count=2`) isolated from the
-  exact-caked path, then continue any remaining full fitter, baseline, GUI
-  validation, unrestricted feature combinations, and freeze/thaw work in a
-  later solve project.
+- Rung 2 docs baseline update: current expected baseline is
+  `active_param_count=11`, `near_zero_param_count=2`. `center_x` and
+  `center_y` are active because lower `residual_norm_base` shrank the
+  unchanged classifier threshold faster than their delta norms fell. Keep this
+  isolated from the exact-caked path, then continue any remaining full fitter,
+  baseline, GUI validation, unrestricted feature combinations, and freeze/thaw
+  work in a later solve project.
 
 ## Do Not Redo
 
@@ -364,10 +382,12 @@ Do not redo these completed validations unless their guard output regresses:
 
 ## Next Rung
 
-Rung 7 exact-caked work is complete. The next focused follow-up is the separate
-Rung 2 sensitivity drift (`active_param_count=11`, `near_zero_param_count=2`).
-Do not reopen the exact-caked preflight, 3B harness, or full_beam_polish
-paths in this track unless a guard regresses.
+Rung 7 exact-caked work is complete. Current Rung 2 expected baseline is
+`active_param_count=11`, `near_zero_param_count=2`; `center_x` and `center_y`
+are active because the unchanged threshold rule now sees a much smaller
+`residual_norm_base`, not because of fitting regression. Do not reopen the
+exact-caked preflight, 3B harness, or full_beam_polish paths in this track
+unless a guard regresses.
 
 Allowed parameter set for Rung 4:
 
@@ -525,21 +545,23 @@ as bounded ladder evidence. The GUI fit button is not the validation path.
   missing or not green. Each moved base/plus/minus residual eval must carry a
   live `point_match_summary`; missing or dirty counters make the parameter
   unsafe. Fixed-correspondence summaries now report real branch mismatch counts
-  from the resolved branch. The 2026-04-21 real `new4` scan at
-  `artifacts/geometry_fit_ladder/new4/20260421_183827` reports rung 1 green,
+  from the resolved branch. Historical pre-threshold-shrink Rung 2 baseline:
+  the 2026-04-21 real `new4` scan at
+  `artifacts/geometry_fit_ladder/new4/20260421_183827` reported rung 1 green,
   rung 2 `status == "ok"`, 9 active parameters, 4 near-zero parameters, 0
   non-finite parameters, 0 unsafe parameters, `state_hash_unchanged == true`,
   and no center/solve rung artifacts. Abort-report booleans are strict
   `is True` checks, so malformed string values remain failed in both
   `rung_1_failures` and the aborted report body.
-- Rung 3 one-parameter solve run
-  `artifacts/geometry_fit_ladder/new4/20260421_193603` used the current-run
-  rung 2 active list only: `chi`, `cor_angle`, `theta_initial`,
-  `corto_detector`, `zs`, `zb`, `a`, `c`, and `psi_z`. Rung 2 was green with 9
-  active, 4 near-zero, 0 non-finite, and 0 unsafe parameters. Rung 3 summary
-  status is `ok_with_failures`: passed params are `chi`, `cor_angle`,
-  `theta_initial`, `corto_detector`, `zs`, `zb`, `c`, and `psi_z`; failed params
-  are none; timed-out params are `a`; skipped params are none.
+- Historical 2026-04-21 Rung 3 one-parameter solve run
+  `artifacts/geometry_fit_ladder/new4/20260421_193603` used that then-current
+  Rung 2 active list only: `chi`, `cor_angle`, `theta_initial`,
+  `corto_detector`, `zs`, `zb`, `a`, `c`, and `psi_z`. That historical Rung 2
+  baseline was green with 9 active, 4 near-zero, 0 non-finite, and 0 unsafe
+  parameters. Rung 3 summary status is `ok_with_failures`: passed params are
+  `chi`, `cor_angle`, `theta_initial`, `corto_detector`, `zs`, `zb`, `c`, and
+  `psi_z`; failed params are none; timed-out params are `a`; skipped params are
+  none.
 - Every passing one-param solve reported `least_squares_called == true`,
   `optimizer_solve_called == true`, 7 fixed-source pairs, 0 fallback rows, 0
   fixed-source resolution fallback, 0 missing fixed source, 7 resolved fixed
@@ -595,9 +617,11 @@ as bounded ladder evidence. The GUI fit button is not the validation path.
   and Rung 7 `dynamic_reanchor`/`discrete_modes`/`seed_multistart`/
   `full_beam_polish`/`identifiability_features` as complete bounded ladder
   evidence unless a guard regresses.
-- Keep the separate Rung 2 sensitivity drift follow-up isolated from the
-  exact-caked path. Do not reopen the exact-caked preflight, 3B harness, or
-  full_beam_polish paths in this track unless a guard regresses.
+- Keep the current Rung 2 docs baseline update isolated from the exact-caked
+  path. Expected baseline is `active_param_count=11`,
+  `near_zero_param_count=2` under the unchanged threshold rule. Do not reopen
+  the exact-caked preflight, 3B harness, or full_beam_polish paths in this
+  track unless a guard regresses.
 - Treat warm solve-rung reuse as implemented. Do not reintroduce one Python
   subprocess or one fresh solver context per candidate unless explicitly
   running `--use-subprocess` for diagnostics.
@@ -804,12 +828,12 @@ Rung 2 review hardening validation, 2026-04-21:
 - Fixed-source/provider-local/resolver/live-update tests: 12 passed.
 - Direct real rung 1 dry-run test: passed.
 - Rung 2 sensitivity tests: 15 passed.
-- Real `new4 --max-rung sensitivity`: passed, wrote only rung 0/1/2 JSON,
-  `status == "ok"`, `residual_probe_called == true`,
+- Historical pre-threshold-shrink `new4 --max-rung sensitivity`: passed, wrote
+  only rung 0/1/2 JSON, `status == "ok"`, `residual_probe_called == true`,
   `least_squares_called == false`, `optimizer_solve_called == false`,
-  `state_hash_unchanged == true`, 9 active, 4 near-zero, 0 non-finite, 0 unsafe,
-  and every moved eval used `counter_source == "point_match_summary"` with clean
-  fixed-source counters.
+  `state_hash_unchanged == true`, 9 active, 4 near-zero, 0 non-finite, 0
+  unsafe, and every moved eval used `counter_source == "point_match_summary"`
+  with clean fixed-source counters.
 
 Rung 3 one-parameter validation, 2026-04-21:
 
@@ -820,7 +844,7 @@ Rung 3 one-parameter validation, 2026-04-21:
   `classification == "point_provider_parity_ok"`.
 - Fixed-source/provider-local/resolver tests: 11 passed.
 - Direct real rung 1 dry-run test: passed.
-- Real `new4 --max-rung sensitivity`:
+- Historical pre-threshold-shrink `new4 --max-rung sensitivity`:
   `artifacts/geometry_fit_ladder/new4/20260421_193458`, status `pass`, current
   rung 2 `status == "ok"`, 9 active, 4 near-zero, 0 non-finite, 0 unsafe,
   `least_squares_called == false`, `optimizer_solve_called == false`.

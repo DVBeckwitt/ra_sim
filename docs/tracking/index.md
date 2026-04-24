@@ -40,9 +40,12 @@ chain are now validated for ladder work. Final frozen runs
 `codex_final_blocks_20260423`, `codex_final_combined_20260423`, and
 `codex_final_features_20260423` kept provider/caked/Rung 5/Rung 6 guards green
 and passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
-`full_beam_polish`, and `identifiability_features`. The remaining follow-up is
-separate Rung 2 sensitivity drift (`active_param_count=11`,
-`near_zero_param_count=2`); do not mix it with the exact-caked path.
+`full_beam_polish`, and `identifiability_features`. Current New4 Rung 2
+expected baseline is `active_param_count=11`, `near_zero_param_count=2`;
+`center_x` and `center_y` are active under the unchanged threshold rule because
+`residual_norm_base` dropped `17.32x`, shrinking the classifier threshold
+faster than their delta norms fell. This is expected, not a fitting regression;
+do not reopen the exact-caked path for it.
 `new4.json` stayed unchanged
 (`f5bf185ebcfbfa8b32f161cc4bd781e177175dad84b6fce4d563f23ca021ef36`).
 Timing observability is now available for current-run Rungs 0-5:
