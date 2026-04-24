@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from ra_sim.gui import geometry_q_group_manager as gqm
 from ra_sim.simulation import diffraction
 
 
@@ -137,6 +138,19 @@ def _flatten_hit_tables(hit_tables):
     if not rows:
         return np.empty((0, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
     return np.vstack(rows)
+
+
+def _new_representative_slot_state(n_slots):
+    return (
+        np.zeros(n_slots, dtype=np.uint8),
+        np.full(n_slots, np.inf, dtype=np.float64),
+        np.full(n_slots, np.inf, dtype=np.float64),
+        np.full(n_slots, np.inf, dtype=np.float64),
+        np.full(n_slots, -1, dtype=np.int64),
+        np.full(n_slots, -1, dtype=np.int64),
+        np.full(n_slots, -1, dtype=np.int64),
+        np.full((n_slots, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH), np.nan, dtype=np.float64),
+    )
 
 
 def test_weighted_event_targets_are_deterministic_and_bounded():
@@ -665,3 +679,254 @@ def test_sampled_event_rows_preserve_duplicates_and_representatives_do_not_repla
     views = diffraction.get_last_intersection_cache_views()
     assert len(views["sampled_event_rows"]) == 3
     assert len(views["branch_representative_rows"]) == 1
+
+
+def test_final_qr_set_branch_slots_fold_same_qr_l_hkls_and_keep_one_representative():
+    miller = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 2.0]], dtype=np.float64)
+    representative_slot_by_peak_branch, representative_slot_keys = (
+        diffraction._build_weighted_event_representative_slot_map(miller, 4.0)
+    )
+
+    assert representative_slot_by_peak_branch.shape == (2, 2)
+    assert len(representative_slot_keys) == 2
+    assert int(representative_slot_by_peak_branch[0, 0]) == int(
+        representative_slot_by_peak_branch[1, 0]
+    )
+    assert int(representative_slot_by_peak_branch[0, 1]) == int(
+        representative_slot_by_peak_branch[1, 1]
+    )
+    assert int(representative_slot_by_peak_branch[0, 0]) != int(
+        representative_slot_by_peak_branch[0, 1]
+    )
+
+    (
+        representative_valid,
+        representative_neg_sample_weight,
+        representative_top_distance,
+        representative_neg_mass,
+        representative_sample_idx,
+        representative_peak_idx,
+        representative_q_idx,
+        representative_rows,
+    ) = _new_representative_slot_state(len(representative_slot_keys))
+    update = diffraction._weighted_event_update_representative.py_func
+
+    update(
+        int(representative_slot_by_peak_branch[0, 0]),
+        1.0,
+        0.40,
+        10.0,
+        2,
+        0,
+        0,
+        20.0,
+        10.0,
+        -0.30,
+        1.0,
+        0.0,
+        2.0,
+        representative_valid,
+        representative_neg_sample_weight,
+        representative_top_distance,
+        representative_neg_mass,
+        representative_sample_idx,
+        representative_peak_idx,
+        representative_q_idx,
+        representative_rows,
+    )
+    update(
+        int(representative_slot_by_peak_branch[1, 0]),
+        1.0,
+        0.05,
+        1.0,
+        1,
+        1,
+        1,
+        21.0,
+        11.0,
+        -0.20,
+        0.0,
+        1.0,
+        2.0,
+        representative_valid,
+        representative_neg_sample_weight,
+        representative_top_distance,
+        representative_neg_mass,
+        representative_sample_idx,
+        representative_peak_idx,
+        representative_q_idx,
+        representative_rows,
+    )
+
+    representative_hit_tables = diffraction._build_weighted_event_representative_hit_tables(
+        representative_valid,
+        representative_rows,
+        representative_slot_keys,
+    )
+
+    assert len(representative_hit_tables) == 1
+    row = np.asarray(representative_hit_tables[0], dtype=np.float64)[0]
+    np.testing.assert_allclose(row[:10], np.array([1.0, 11.0, 21.0, -0.20, 0.0, 1.0, 2.0, 1.0, 1.0, 1.0]))
+
+
+def test_representative_choice_uses_mosaic_top_rank_before_mass():
+    (
+        representative_valid,
+        representative_neg_sample_weight,
+        representative_top_distance,
+        representative_neg_mass,
+        representative_sample_idx,
+        representative_peak_idx,
+        representative_q_idx,
+        representative_rows,
+    ) = _new_representative_slot_state(1)
+    update = diffraction._weighted_event_update_representative.py_func
+
+    update(
+        0,
+        1.0,
+        0.01,
+        1.0,
+        0,
+        0,
+        0,
+        20.0,
+        10.0,
+        -0.20,
+        1.0,
+        0.0,
+        2.0,
+        representative_valid,
+        representative_neg_sample_weight,
+        representative_top_distance,
+        representative_neg_mass,
+        representative_sample_idx,
+        representative_peak_idx,
+        representative_q_idx,
+        representative_rows,
+    )
+    update(
+        0,
+        1.0,
+        0.20,
+        100.0,
+        1,
+        0,
+        1,
+        40.0,
+        30.0,
+        -0.20,
+        1.0,
+        0.0,
+        2.0,
+        representative_valid,
+        representative_neg_sample_weight,
+        representative_top_distance,
+        representative_neg_mass,
+        representative_sample_idx,
+        representative_peak_idx,
+        representative_q_idx,
+        representative_rows,
+    )
+
+    np.testing.assert_allclose(
+        representative_rows[0, :10],
+        np.array([1.0, 10.0, 20.0, -0.20, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0]),
+    )
+
+
+def test_build_intersection_cache_preserves_explicit_representative_provenance(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    cache = diffraction.build_intersection_cache(
+        [
+            np.array(
+                [[1.0, 30.0, 40.0, -0.3, 1.0, 0.0, 2.0, 7.0, 3.0, 11.0]],
+                dtype=np.float64,
+            )
+        ],
+        4.0,
+        7.0,
+    )
+
+    assert len(cache) == 1
+    np.testing.assert_allclose(
+        np.asarray(cache[0], dtype=np.float64)[0, 14:17],
+        np.array([7.0, 3.0, 11.0], dtype=np.float64),
+    )
+
+
+def test_unsampled_branch_stays_in_representative_cache_and_geometry_fit(monkeypatch):
+    diffraction._set_last_intersection_cache([])
+    monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
+
+    sampled_hit_tables = [
+        np.array([[5.0, 10.0, 12.0, -0.2, 1.0, 0.0, 2.0, 7.0, 3.0, 0.0]], dtype=np.float64)
+    ]
+    representative_hit_tables = [
+        np.array([[5.0, 10.0, 12.0, -0.2, 1.0, 0.0, 2.0, 7.0, 3.0, 0.0]], dtype=np.float64),
+        np.array([[0.1, 50.0, 12.0, 0.2, 1.0, 0.0, 2.0, 7.0, 4.0, 1.0]], dtype=np.float64),
+    ]
+
+    diffraction._set_last_intersection_cache_from_hit_tables(
+        sampled_hit_tables,
+        4.0,
+        7.0,
+        representative_hit_tables=representative_hit_tables,
+    )
+
+    views = diffraction.get_last_intersection_cache_views()
+    assert len(views["sampled_event_rows"]) == 1
+    assert len(views["branch_representative_rows"]) == 2
+    assert len(diffraction.get_last_intersection_cache()) == 2
+
+    representative_rows = diffraction.intersection_cache_to_hit_tables(
+        diffraction.get_last_intersection_cache()
+    )
+    simulated_peaks = gqm.build_geometry_fit_simulated_peaks(
+        representative_rows,
+        image_shape=(128, 128),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        primary_a=4.0,
+        primary_c=7.0,
+    )
+
+    assert len(simulated_peaks) == 2
+    assert {int(entry["source_branch_index"]) for entry in simulated_peaks} == {0, 1}
+    assert len({tuple(entry["q_group_key"]) for entry in simulated_peaks}) == 1
+    assert {
+        (int(entry["source_table_index"]), int(entry["source_row_index"]))
+        for entry in simulated_peaks
+    } == {(7, 3), (7, 4)}
+
+
+def test_branch_representative_cache_passthrough_does_not_recollapse(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+    monkeypatch.setattr(
+        diffraction,
+        "_expand_intersection_cache_group_with_metadata",
+        lambda *_args, **_kwargs: pytest.fail("representative cache must not expand/reselect rows"),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_intersection_cache_selected_row_indices",
+        lambda *_args, **_kwargs: pytest.fail("representative cache must not reselect rows"),
+    )
+
+    hit_tables = [
+        np.array([[1.0, 13.0, 10.0, -0.3, 1.0, 0.0, 2.0, 7.0, 3.0, 1.0]], dtype=np.float64),
+        np.array([[1.0, 53.0, 10.0, 0.3, 1.0, 0.0, 2.0, 7.0, 4.0, 2.0]], dtype=np.float64),
+    ]
+
+    cache = diffraction.build_branch_representative_intersection_cache(
+        hit_tables,
+        4.0,
+        7.0,
+        group_by_qr_set=True,
+    )
+
+    assert len(cache) == 2
+    roundtrip_rows = np.vstack(
+        [np.asarray(table, dtype=np.float64) for table in diffraction.intersection_cache_to_hit_tables(cache)]
+    )
+    np.testing.assert_allclose(roundtrip_rows, np.vstack(hit_tables))

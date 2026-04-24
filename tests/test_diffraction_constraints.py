@@ -361,7 +361,13 @@ def test_process_qr_rods_parallel_debug_forwards_optional_debug_kwargs(monkeypat
 def test_process_peaks_parallel_skips_negative_l(monkeypatch):
     called_l_values = []
 
-    def fake_calculate_phi_precomputed(
+    def fake_solve_q(
+        _k_in_crystal,
+        _k_scat,
+        _G_vec,
+        _sigma,
+        _gamma_pv,
+        _eta_pv,
         H,
         K,
         L,
@@ -369,17 +375,20 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         **_kwargs,
     ):
         called_l_values.append(float(L))
-        return (
-            np.empty((0, 7), dtype=np.float64),
-            np.empty(0, dtype=np.int64),
-            np.empty((0, 3), dtype=np.float64),
-            0,
-        )
+        return np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0
+
+    def fake_project_weighted_candidate(**kwargs):
+        return True, 8.0, 8.0, 0.0, 1.0
 
     monkeypatch.setattr(
         diffraction,
-        "_calculate_phi_from_precomputed",
-        fake_calculate_phi_precomputed,
+        "solve_q",
+        fake_solve_q,
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_project_weighted_candidate",
+        fake_project_weighted_candidate,
     )
 
     miller = np.array([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], dtype=np.float64)
@@ -694,7 +703,7 @@ def test_build_intersection_cache_uses_best_sample_only_and_drops_invalid_rows(m
     np.testing.assert_allclose(first[:, 14:], np.array([[0.0, 0.0, 0.0]]))
 
 
-def test_build_intersection_cache_keeps_one_specular_representative(monkeypatch):
+def test_build_intersection_cache_preserves_all_specular_sampled_rows(monkeypatch):
     monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
 
     hit_tables = [
@@ -709,12 +718,14 @@ def test_build_intersection_cache_keeps_one_specular_representative(monkeypatch)
     ]
     cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
 
-    table = np.asarray(cache[0], dtype=np.float64)
-    assert table.shape == (1, 17)
-    np.testing.assert_allclose(table[0, 2:4], np.array([20.0, 21.0]))
+    assert len(cache) == 3
+    np.testing.assert_allclose(
+        np.vstack([np.asarray(table, dtype=np.float64)[0, 2:4] for table in cache]),
+        np.array([[10.0, 10.0], [20.0, 21.0], [31.0, 30.0]], dtype=np.float64),
+    )
 
 
-def test_build_intersection_cache_keeps_two_non_specular_representatives(monkeypatch):
+def test_build_intersection_cache_preserves_all_non_specular_sampled_rows(monkeypatch):
     monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
 
     hit_tables = [
@@ -732,51 +743,128 @@ def test_build_intersection_cache_keeps_two_non_specular_representatives(monkeyp
     ]
     cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
 
-    assert len(cache) == 2
+    assert len(cache) == 6
     np.testing.assert_allclose(
         np.vstack([np.asarray(table, dtype=np.float64)[:, 2:4] for table in cache]),
         np.array(
             [
+                [9.0, 10.0],
                 [11.0, 12.0],
+                [13.0, 11.0],
+                [48.0, 50.0],
                 [50.0, 49.0],
+                [53.0, 52.0],
             ],
             dtype=np.float64,
         ),
     )
 
 
-def test_build_intersection_cache_prefers_top_mosaic_row_per_branch(monkeypatch):
+def test_branch_representative_intersection_cache_preserves_preselected_rows_and_provenance(
+    monkeypatch,
+):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+    monkeypatch.setattr(
+        diffraction,
+        "_expand_intersection_cache_group_with_metadata",
+        lambda *_args, **_kwargs: pytest.fail("representative cache must not expand/reselect rows"),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_intersection_cache_selected_row_indices",
+        lambda *_args, **_kwargs: pytest.fail("representative cache must not reselect rows"),
+    )
+
+    hit_tables = [
+        np.array([[1.0, 13.0, 10.0, -0.3, 1.0, 0.0, 2.0, 7.0, 3.0, 1.0]], dtype=np.float64),
+        np.array([[1.0, 53.0, 10.0, 0.3, 1.0, 0.0, 2.0, 7.0, 4.0, 2.0]], dtype=np.float64),
+    ]
+
+    cache = diffraction.build_branch_representative_intersection_cache(
+        hit_tables,
+        4.0,
+        7.0,
+    )
+
+    assert len(cache) == 2
+    roundtrip_rows = np.vstack(
+        [np.asarray(table, dtype=np.float64) for table in diffraction.intersection_cache_to_hit_tables(cache)]
+    )
+    np.testing.assert_allclose(roundtrip_rows, np.vstack(hit_tables))
+
+
+def test_build_intersection_cache_preserves_duplicate_sampled_rows(monkeypatch):
     monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
 
-    nan = np.nan
     hit_tables = [
         np.array(
             [
-                [1.0, 9.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 3.0],
-                [1.0, 13.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 1.0],
-                [1.0, 47.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 4.0],
-                [1.0, 53.0, 10.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 2.0],
+                [1.0, 10.0, 11.0, 0.0, 1.0, 0.0, 2.0],
+                [1.0, 10.0, 11.0, 0.0, 1.0, 0.0, 2.0],
             ],
             dtype=np.float64,
         )
     ]
 
-    cache = diffraction.build_intersection_cache(
+    cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
+
+    assert len(cache) == 2
+    np.testing.assert_allclose(
+        np.vstack([np.asarray(table, dtype=np.float64)[0, 2:4] for table in cache]),
+        np.array([[10.0, 11.0], [10.0, 11.0]], dtype=np.float64),
+    )
+
+
+def test_branch_representative_cache_keeps_exact_hkl_rows_separate_when_qr_set_mode_is_disabled(
+    monkeypatch,
+):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    nan = np.nan
+    hit_tables = [
+        np.array([[1.0, 10.0, 11.0, 0.0, 1.0, 0.0, 2.0, nan, nan, 0.0]], dtype=np.float64),
+        np.array([[1.0, 20.0, 21.0, 0.0, 0.0, 1.0, 2.0, nan, nan, 1.0]], dtype=np.float64),
+    ]
+
+    cache = diffraction.build_branch_representative_intersection_cache(hit_tables, 4.0, 7.0)
+
+    assert len(cache) == 2
+    hkls = np.vstack([np.asarray(table, dtype=np.float64)[0, 6:9] for table in cache])
+    np.testing.assert_allclose(hkls, np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 2.0]], dtype=np.float64))
+
+
+def test_branch_representative_cache_group_by_qr_set_flag_is_passthrough(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+    monkeypatch.setattr(
+        diffraction,
+        "_expand_intersection_cache_group_with_metadata",
+        lambda *_args, **_kwargs: pytest.fail("group_by_qr_set must not recollapse representative rows"),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_intersection_cache_selected_row_indices",
+        lambda *_args, **_kwargs: pytest.fail("group_by_qr_set must not reselect representative rows"),
+    )
+
+    hit_tables = [
+        np.array([[1.0, 10.0, 10.0, -0.3, 1.0, 0.0, 2.0, 7.0, 0.0, 1.0]], dtype=np.float64),
+        np.array([[1.0, 50.0, 10.0, 0.3, 1.0, 0.0, 2.0, 7.0, 1.0, 2.0]], dtype=np.float64),
+        np.array([[1.0, 12.0, 10.0, -0.2, 0.0, 1.0, 2.0, 8.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([[1.0, 52.0, 10.0, 0.2, 0.0, 1.0, 2.0, 8.0, 1.0, 3.0]], dtype=np.float64),
+    ]
+
+    cache = diffraction.build_branch_representative_intersection_cache(
         hit_tables,
         4.0,
         7.0,
-        beam_x_array=np.zeros(5, dtype=np.float64),
-        beam_y_array=np.zeros(5, dtype=np.float64),
-        theta_array=np.array([0.20, 0.01, 0.02, 0.30, 0.40], dtype=np.float64),
-        phi_array=np.array([0.20, 0.00, 0.01, 0.30, 0.40], dtype=np.float64),
-        wavelength_array=np.ones(5, dtype=np.float64),
-        best_sample_indices_out=np.array([-1], dtype=np.int64),
+        group_by_qr_set=True,
     )
 
-    assert len(cache) == 2
-    selected = np.vstack([np.asarray(table, dtype=np.float64)[0, :] for table in cache])
-    np.testing.assert_allclose(selected[:, 2:4], np.array([[13.0, 10.0], [53.0, 10.0]]))
-    np.testing.assert_allclose(selected[:, 16], np.array([1.0, 2.0]))
+    assert len(cache) == 4
+    roundtrip_rows = np.vstack(
+        [np.asarray(table, dtype=np.float64) for table in diffraction.intersection_cache_to_hit_tables(cache)]
+    )
+    np.testing.assert_allclose(roundtrip_rows, np.vstack(hit_tables))
 
 
 def test_build_intersection_cache_merges_specular_tables_by_nominal_l(monkeypatch):
@@ -791,11 +879,9 @@ def test_build_intersection_cache_merges_specular_tables_by_nominal_l(monkeypatc
 
     cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
 
-    assert len(cache) == 1
-    table = np.asarray(cache[0], dtype=np.float64)
-    assert table.shape == (1, 17)
-    np.testing.assert_allclose(table[0, 2:4], np.array([21.0, 21.0]))
-    assert int(np.rint(float(table[0, 8]))) == 3
+    assert len(cache) == 4
+    for table in cache:
+        assert int(np.rint(float(np.asarray(table, dtype=np.float64)[0, 8]))) == 3
 
 
 def test_build_intersection_cache_merges_non_specular_tables_by_nominal_peak_and_side(monkeypatch):
@@ -812,19 +898,9 @@ def test_build_intersection_cache_merges_non_specular_tables_by_nominal_peak_and
 
     cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
 
-    assert len(cache) == 2
+    assert len(cache) == 6
     for table in cache:
         assert np.asarray(table, dtype=np.float64).shape == (1, 17)
-    np.testing.assert_allclose(
-        np.vstack([np.asarray(table, dtype=np.float64)[0, 2:4] for table in cache]),
-        np.array(
-            [
-                [11.0, 10.0],
-                [50.0, 10.0],
-            ],
-            dtype=np.float64,
-        ),
-    )
     for table in cache:
         assert int(np.rint(float(np.asarray(table, dtype=np.float64)[0, 8]))) == 2
 
@@ -867,7 +943,7 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
         7.0,
     )
 
-    assert len(cache) == 1
+    assert len(cache) == 3
     log_root = tmp_path / "intersection_cache"
     log_dirs = list(log_root.glob("intersection_cache_*"))
     assert len(log_dirs) == 1
@@ -881,21 +957,19 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     assert metadata["cache_source"] == "build_intersection_cache"
     assert metadata["cache_provenance"]["grouping"] == "nominal_bragg_family"
     assert metadata["group_summary_count"] == 1
-    assert metadata["table_count"] == 1
-    assert len(metadata["cache_tables"]) == 1
-    assert metadata["table_files"] == ["table_0000.npy"]
+    assert metadata["table_count"] == 3
+    assert len(metadata["cache_tables"]) == 3
+    assert metadata["table_files"] == ["table_0000.npy", "table_0001.npy", "table_0002.npy"]
     assert (log_dir / "table_0000.npy").exists()
 
     group_summary = metadata["group_summaries"][0]
-    assert group_summary["nominal_hkl"] == [0, 0, 3]
+    assert group_summary["group_key"] == ["specular", 3]
     assert "q_group_key" in group_summary
     assert group_summary["row_count_before_grouping"] == 3
-    assert group_summary["row_count_after_grouping"] == 1
+    assert group_summary["row_count_after_grouping"] == 3
     assert isinstance(group_summary["representative_row_indices_kept"], list)
 
     table_summary = metadata["table_summaries"][0]
-    assert table_summary["nominal_hkl"] == [0, 0, 3]
-    assert "q_group_key" in table_summary
     assert table_summary["row_count_before_grouping"] == 3
     assert table_summary["row_count_after_grouping"] == 1
     assert isinstance(table_summary["representative_row_indices_kept"], list)
@@ -903,13 +977,36 @@ def test_build_intersection_cache_log_records_extended_cache_metadata(
     reloaded_cache, reloaded_metadata = diffraction.load_most_recent_logged_intersection_cache(
         log_root=log_root
     )
-    assert len(reloaded_cache) == 1
+    assert len(reloaded_cache) == 3
     np.testing.assert_allclose(
         np.asarray(reloaded_cache[0], dtype=np.float64),
         np.asarray(cache[0], dtype=np.float64),
     )
-    assert reloaded_metadata["table_count"] == 1
+    assert reloaded_metadata["table_count"] == 3
     assert reloaded_metadata["log_dir"] == str(log_dir)
+
+
+def test_build_intersection_cache_preserves_duplicate_sampled_rows(monkeypatch):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    hit_tables = [
+        np.array(
+            [
+                [0.5, 10.0, 11.0, -1.0, 1.0, 0.0, 1.0, np.nan, np.nan, 0.0],
+                [0.5, 10.0, 11.0, -1.0, 1.0, 0.0, 1.0, np.nan, np.nan, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    cache = diffraction.build_intersection_cache(hit_tables, 4.0, 7.0)
+
+    assert len(cache) == 2
+    first = np.asarray(cache[0], dtype=np.float64)
+    second = np.asarray(cache[1], dtype=np.float64)
+    np.testing.assert_allclose(first[:, :15], second[:, :15])
+    np.testing.assert_allclose(first[:, 16:], second[:, 16:])
+    assert int(first[0, 15]) != int(second[0, 15])
 
 
 def test_load_most_recent_logged_intersection_cache_metadata_avoids_dir_stat_sort(

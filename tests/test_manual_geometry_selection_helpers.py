@@ -3,9 +3,10 @@ from types import SimpleNamespace
 import numpy as np
 
 from ra_sim.fitting.background_peak_matching import build_background_peak_context
+from ra_sim.gui import geometry_q_group_manager
 from ra_sim.gui import manual_geometry as mg
 from ra_sim.gui import peak_selection as ps
-from ra_sim.simulation import exact_cake_portable
+from ra_sim.simulation import diffraction, exact_cake_portable
 
 
 class _DummyVar:
@@ -1836,6 +1837,68 @@ def test_geometry_manual_choose_group_at_does_not_match_detector_pixels_in_caked
     assert group_key is None
     assert entries == []
     assert np.isnan(dist)
+
+
+def test_geometry_manual_choose_group_at_finds_qr_group_from_representative_cache_in_caked_view() -> (
+    None
+):
+    representative_cache = diffraction.build_branch_representative_intersection_cache(
+        [
+            np.array(
+                [[1.0, 10.0, 20.0, -0.2, 1.0, 0.0, 2.0, 7.0, 3.0, 11.0]],
+                dtype=np.float64,
+            )
+        ],
+        4.0,
+        7.0,
+    )
+    representative_hit_tables = diffraction.intersection_cache_to_hit_tables(representative_cache)
+    simulated_rows = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        representative_hit_tables,
+        image_shape=(128, 128),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        primary_a=4.0,
+        primary_c=7.0,
+    )
+
+    projected_rows, grouped_candidates, projection_lookup = (
+        mg._geometry_manual_build_caked_qr_projection_cache(
+            simulated_rows,
+            lambda rows: [
+                dict(
+                    entry,
+                    display_col=13.0,
+                    display_row=2.0,
+                    sim_col_raw=13.0,
+                    sim_row_raw=2.0,
+                    caked_x=13.0,
+                    caked_y=2.0,
+                )
+                for entry in (rows or ())
+            ],
+            _group_candidates,
+            _build_lookup,
+            None,
+        )
+    )
+
+    assert len(projected_rows) == 1
+    assert projection_lookup
+    found_key, entries, best_dist = mg.geometry_manual_choose_group_at(
+        grouped_candidates,
+        13.0,
+        2.0,
+        window_size_px=5.0,
+        use_caked_display=True,
+    )
+
+    assert found_key == projected_rows[0]["q_group_key"]
+    assert best_dist < 1.0
+    assert len(entries) == 1
+    assert entries[0]["source_table_index"] == 7
+    assert entries[0]["source_row_index"] == 3
+    assert entries[0]["best_sample_index"] == 11
+    assert entries[0]["source_branch_index"] == 0
 
 
 def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> None:

@@ -17,6 +17,8 @@ from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_SOURCE_TABLE_INDEX,
     CURRENT_DETECTOR_CACHE_WIDTH,
     HIT_ROW_COL_BEST_SAMPLE_INDEX,
+    HIT_ROW_COL_SOURCE_ROW_INDEX,
+    HIT_ROW_COL_SOURCE_TABLE_INDEX,
     HIT_ROW_WITH_PROVENANCE_WIDTH,
     cache_table_to_hit_table,
     coerce_float64_table,
@@ -4041,11 +4043,12 @@ def _project_weighted_candidate_fast(
 
 @njit(fastmath=True, cache=True)
 def _weighted_event_update_representative(
-    peak_idx,
-    branch_id,
+    rep_slot,
+    sample_weight,
     sample_top_distance,
     mass,
     sample_idx,
+    peak_idx,
     q_idx,
     row_f,
     col_f,
@@ -4054,54 +4057,70 @@ def _weighted_event_update_representative(
     K,
     L,
     representative_valid,
-    representative_distance,
+    representative_neg_sample_weight,
+    representative_top_distance,
     representative_neg_mass,
     representative_sample_idx,
+    representative_peak_idx,
     representative_q_idx,
     representative_rows,
 ):
-    slot = 0
-    if branch_id > 0:
-        slot = 1
+    if rep_slot < 0 or rep_slot >= representative_valid.shape[0]:
+        return
+
+    effective_sample_weight = 1.0
+    if np.isfinite(sample_weight) and sample_weight > 0.0:
+        effective_sample_weight = sample_weight
+    neg_sample_weight = -effective_sample_weight
 
     better = False
-    if representative_valid[peak_idx, slot] == 0:
+    if representative_valid[rep_slot] == 0:
         better = True
     else:
-        current_distance = representative_distance[peak_idx, slot]
-        current_neg_mass = representative_neg_mass[peak_idx, slot]
-        current_sample_idx = representative_sample_idx[peak_idx, slot]
-        current_q_idx = representative_q_idx[peak_idx, slot]
+        current_neg_sample_weight = representative_neg_sample_weight[rep_slot]
+        current_top_distance = representative_top_distance[rep_slot]
+        current_neg_mass = representative_neg_mass[rep_slot]
+        current_sample_idx = representative_sample_idx[rep_slot]
+        current_peak_idx = representative_peak_idx[rep_slot]
+        current_q_idx = representative_q_idx[rep_slot]
         neg_mass = -mass
-        if sample_top_distance < current_distance:
+        if neg_sample_weight < current_neg_sample_weight:
             better = True
-        elif sample_top_distance == current_distance:
-            if neg_mass < current_neg_mass:
+        elif neg_sample_weight == current_neg_sample_weight:
+            if sample_top_distance < current_top_distance:
                 better = True
-            elif neg_mass == current_neg_mass:
-                if sample_idx < current_sample_idx:
+            elif sample_top_distance == current_top_distance:
+                if neg_mass < current_neg_mass:
                     better = True
-                elif sample_idx == current_sample_idx and q_idx < current_q_idx:
-                    better = True
+                elif neg_mass == current_neg_mass:
+                    if sample_idx < current_sample_idx:
+                        better = True
+                    elif sample_idx == current_sample_idx:
+                        if peak_idx < current_peak_idx:
+                            better = True
+                        elif peak_idx == current_peak_idx and q_idx < current_q_idx:
+                            better = True
 
     if not better:
         return
 
-    representative_valid[peak_idx, slot] = 1
-    representative_distance[peak_idx, slot] = sample_top_distance
-    representative_neg_mass[peak_idx, slot] = -mass
-    representative_sample_idx[peak_idx, slot] = sample_idx
-    representative_q_idx[peak_idx, slot] = q_idx
-    representative_rows[peak_idx, slot, 0] = mass
-    representative_rows[peak_idx, slot, 1] = col_f
-    representative_rows[peak_idx, slot, 2] = row_f
-    representative_rows[peak_idx, slot, 3] = phi_f
-    representative_rows[peak_idx, slot, 4] = H
-    representative_rows[peak_idx, slot, 5] = K
-    representative_rows[peak_idx, slot, 6] = L
-    representative_rows[peak_idx, slot, 7] = np.nan
-    representative_rows[peak_idx, slot, 8] = np.nan
-    representative_rows[peak_idx, slot, 9] = float(sample_idx)
+    representative_valid[rep_slot] = 1
+    representative_neg_sample_weight[rep_slot] = neg_sample_weight
+    representative_top_distance[rep_slot] = sample_top_distance
+    representative_neg_mass[rep_slot] = -mass
+    representative_sample_idx[rep_slot] = sample_idx
+    representative_peak_idx[rep_slot] = peak_idx
+    representative_q_idx[rep_slot] = q_idx
+    representative_rows[rep_slot, 0] = mass
+    representative_rows[rep_slot, 1] = col_f
+    representative_rows[rep_slot, 2] = row_f
+    representative_rows[rep_slot, 3] = phi_f
+    representative_rows[rep_slot, 4] = H
+    representative_rows[rep_slot, 5] = K
+    representative_rows[rep_slot, 6] = L
+    representative_rows[rep_slot, 7] = float(peak_idx)
+    representative_rows[rep_slot, 8] = float(q_idx)
+    representative_rows[rep_slot, 9] = float(sample_idx)
 
 
 @njit(fastmath=True, cache=True)
@@ -4137,10 +4156,13 @@ def _weighted_event_pass1_for_qset(
     save_flag,
     q_data,
     q_count,
+    representative_slot_by_peak_branch,
     representative_valid,
-    representative_distance,
+    representative_neg_sample_weight,
+    representative_top_distance,
     representative_neg_mass,
     representative_sample_idx,
+    representative_peak_idx,
     representative_q_idx,
     representative_rows,
 ):
@@ -4220,26 +4242,31 @@ def _weighted_event_pass1_for_qset(
         total_mass += mass
         valid_count += 1
         branch_id = _candidate_branch_id_fast(H, K, phi_f, Qx)
-        _weighted_event_update_representative(
-            peak_idx,
-            branch_id,
-            sample_top_distance,
-            mass,
-            sample_idx,
-            q_idx,
-            row_f,
-            col_f,
-            phi_f,
-            H,
-            K,
-            L,
-            representative_valid,
-            representative_distance,
-            representative_neg_mass,
-            representative_sample_idx,
-            representative_q_idx,
-            representative_rows,
-        )
+        rep_slot = representative_slot_by_peak_branch[peak_idx, branch_id]
+        if rep_slot >= 0:
+            _weighted_event_update_representative(
+                rep_slot,
+                sample_weight,
+                sample_top_distance,
+                mass,
+                sample_idx,
+                peak_idx,
+                q_idx,
+                row_f,
+                col_f,
+                phi_f,
+                H,
+                K,
+                L,
+                representative_valid,
+                representative_neg_sample_weight,
+                representative_top_distance,
+                representative_neg_mass,
+                representative_sample_idx,
+                representative_peak_idx,
+                representative_q_idx,
+                representative_rows,
+            )
 
     return total_mass, valid_count, project_calls
 
@@ -5722,6 +5749,52 @@ def _weighted_event_fast_path_available(
     return all(arg is None for arg in debug_args)
 
 
+def _build_weighted_event_representative_slot_map(miller, av):
+    miller_arr = np.asarray(miller, dtype=np.float64)
+    if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
+        return np.empty((0, 2), dtype=np.int64), []
+
+    num_peaks = int(miller_arr.shape[0])
+    representative_slot_by_peak_branch = np.full((num_peaks, 2), -1, dtype=np.int64)
+    representative_slot_keys: list[tuple] = []
+    slot_index_by_key: dict[tuple, int] = {}
+    qr_scale = np.nan
+    av_val = float(av)
+    if np.isfinite(av_val) and abs(av_val) > 1.0e-12:
+        qr_scale = 4.0 * np.pi / av_val
+
+    for peak_idx in range(num_peaks):
+        H = float(miller_arr[peak_idx, 0])
+        K = float(miller_arr[peak_idx, 1])
+        L = float(miller_arr[peak_idx, 2])
+        l_key = int(round(L))
+        if abs(H) < 1.0e-12 and abs(K) < 1.0e-12:
+            key = ("specular", l_key, 0)
+            slot_idx = slot_index_by_key.get(key)
+            if slot_idx is None:
+                slot_idx = len(representative_slot_keys)
+                representative_slot_keys.append(key)
+                slot_index_by_key[key] = slot_idx
+            representative_slot_by_peak_branch[peak_idx, 0] = int(slot_idx)
+            representative_slot_by_peak_branch[peak_idx, 1] = int(slot_idx)
+            continue
+
+        qr = qr_scale * sqrt(max((H * H + H * K + K * K) / 3.0, 0.0))
+        if not np.isfinite(qr):
+            qr = 0.0
+        qr_key = round(float(qr), 8)
+        for branch_id in range(2):
+            key = ("non_specular", qr_key, l_key, int(branch_id))
+            slot_idx = slot_index_by_key.get(key)
+            if slot_idx is None:
+                slot_idx = len(representative_slot_keys)
+                representative_slot_keys.append(key)
+                slot_index_by_key[key] = slot_idx
+            representative_slot_by_peak_branch[peak_idx, branch_id] = int(slot_idx)
+
+    return representative_slot_by_peak_branch, representative_slot_keys
+
+
 def _build_weighted_event_hit_tables(
     flat_event_rows,
     flat_event_peak_indices,
@@ -5755,22 +5828,20 @@ def _build_weighted_event_hit_tables(
 def _build_weighted_event_representative_hit_tables(
     representative_valid,
     representative_rows,
+    representative_slot_keys,
 ):
-    num_peaks = int(representative_valid.shape[0])
     tables = []
-    for peak_idx in range(num_peaks):
-        count = int(representative_valid[peak_idx, 0]) + int(representative_valid[peak_idx, 1])
-        if count <= 0:
-            tables.append(np.empty((0, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64))
+    for slot_idx, _slot_key in enumerate(representative_slot_keys):
+        if slot_idx >= int(representative_valid.shape[0]):
+            break
+        if int(representative_valid[slot_idx]) <= 0:
             continue
-        table = np.empty((count, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
-        out_idx = 0
-        for branch_idx in range(2):
-            if int(representative_valid[peak_idx, branch_idx]) <= 0:
-                continue
-            table[out_idx, :] = representative_rows[peak_idx, branch_idx, :]
-            out_idx += 1
-        tables.append(table)
+        tables.append(
+            np.asarray(
+                representative_rows[slot_idx : slot_idx + 1, :],
+                dtype=np.float64,
+            ).copy()
+        )
     return tables
 
 
@@ -5942,15 +6013,18 @@ def _process_peaks_parallel_weighted_events_fast(
         miss_tables = []
     flat_event_count = 0
 
-    representative_valid = np.zeros((num_peaks, 2), dtype=np.uint8)
-    representative_distance = np.full((num_peaks, 2), np.inf, dtype=np.float64)
-    representative_neg_mass = np.full((num_peaks, 2), np.inf, dtype=np.float64)
-    representative_sample_idx = np.full((num_peaks, 2), -1, dtype=np.int64)
-    representative_q_idx = np.full((num_peaks, 2), -1, dtype=np.int64)
-    representative_rows = np.empty(
-        (num_peaks, 2, HIT_ROW_WITH_PROVENANCE_WIDTH),
-        dtype=np.float64,
+    representative_slot_by_peak_branch, representative_slot_keys = (
+        _build_weighted_event_representative_slot_map(miller, av)
     )
+    n_rep_slots = int(len(representative_slot_keys))
+    representative_valid = np.zeros(n_rep_slots, dtype=np.uint8)
+    representative_neg_sample_weight = np.full(n_rep_slots, np.inf, dtype=np.float64)
+    representative_top_distance = np.full(n_rep_slots, np.inf, dtype=np.float64)
+    representative_neg_mass = np.full(n_rep_slots, np.inf, dtype=np.float64)
+    representative_sample_idx = np.full(n_rep_slots, -1, dtype=np.int64)
+    representative_peak_idx = np.full(n_rep_slots, -1, dtype=np.int64)
+    representative_q_idx = np.full(n_rep_slots, -1, dtype=np.int64)
+    representative_rows = np.empty((n_rep_slots, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
     representative_rows.fill(np.nan)
 
     sample_weight_array = sample_weights
@@ -6199,10 +6273,13 @@ def _process_peaks_parallel_weighted_events_fast(
                 int(save_flag),
                 q_data,
                 q_count,
+                representative_slot_by_peak_branch,
                 representative_valid,
-                representative_distance,
+                representative_neg_sample_weight,
+                representative_top_distance,
                 representative_neg_mass,
                 representative_sample_idx,
+                representative_peak_idx,
                 representative_q_idx,
                 representative_rows,
             )
@@ -6336,6 +6413,7 @@ def _process_peaks_parallel_weighted_events_fast(
     representative_hit_tables = _build_weighted_event_representative_hit_tables(
         representative_valid,
         representative_rows,
+        representative_slot_keys,
     )
     time_emit_cache += time.perf_counter() - emit_start
 
@@ -8618,10 +8696,26 @@ def build_intersection_cache(
         cache_table[:, 6:9] = hits_arr[:, 4:7]
         cache_table[:, 9:14] = np.nan
         cache_table[:, CACHE_COL_BEST_SAMPLE_INDEX] = np.nan
+        cache_table[:, CACHE_COL_SOURCE_TABLE_INDEX] = np.nan
+        cache_table[:, CACHE_COL_SOURCE_ROW_INDEX] = np.nan
+        if hits_arr.shape[1] > HIT_ROW_COL_SOURCE_TABLE_INDEX:
+            raw_source_table = np.asarray(hits_arr[:, HIT_ROW_COL_SOURCE_TABLE_INDEX], dtype=np.float64)
+            finite_source_table = np.isfinite(raw_source_table)
+            cache_table[finite_source_table, CACHE_COL_SOURCE_TABLE_INDEX] = raw_source_table[
+                finite_source_table
+            ]
+        if hits_arr.shape[1] > HIT_ROW_COL_SOURCE_ROW_INDEX:
+            raw_source_row = np.asarray(hits_arr[:, HIT_ROW_COL_SOURCE_ROW_INDEX], dtype=np.float64)
+            finite_source_row = np.isfinite(raw_source_row)
+            cache_table[finite_source_row, CACHE_COL_SOURCE_ROW_INDEX] = raw_source_row[
+                finite_source_row
+            ]
         if has_beam_context_arrays:
             for row_idx in range(n_rows):
                 row_sample_idx = int(row_sample_indices[row_idx])
                 sample_for_row = row_sample_idx if row_sample_idx >= 0 else sample_idx
+                if row_sample_idx >= 0:
+                    cache_table[row_idx, CACHE_COL_BEST_SAMPLE_INDEX] = float(row_sample_idx)
                 if _sample_context_index_valid(
                     sample_for_row,
                     beam_x_arr,
@@ -8635,16 +8729,27 @@ def build_intersection_cache(
                     cache_table[row_idx, 11] = theta_arr[sample_for_row] - theta_center
                     cache_table[row_idx, 12] = phi_arr[sample_for_row] - phi_center
                     cache_table[row_idx, 13] = wavelength_arr[sample_for_row] - wavelength_center
-                    cache_table[row_idx, CACHE_COL_BEST_SAMPLE_INDEX] = float(sample_for_row)
+                    if not np.isfinite(cache_table[row_idx, CACHE_COL_BEST_SAMPLE_INDEX]):
+                        cache_table[row_idx, CACHE_COL_BEST_SAMPLE_INDEX] = float(sample_for_row)
         else:
             valid_row_samples = row_sample_indices >= 0
-            cache_table[valid_row_samples, CACHE_COL_BEST_SAMPLE_INDEX] = row_sample_indices[
-                valid_row_samples
+            missing_best_sample = ~np.isfinite(cache_table[:, CACHE_COL_BEST_SAMPLE_INDEX])
+            write_row_samples = valid_row_samples & missing_best_sample
+            cache_table[write_row_samples, CACHE_COL_BEST_SAMPLE_INDEX] = row_sample_indices[
+                write_row_samples
             ].astype(np.float64)
             if sample_idx >= 0:
-                cache_table[~valid_row_samples, CACHE_COL_BEST_SAMPLE_INDEX] = float(sample_idx)
-        cache_table[:, CACHE_COL_SOURCE_TABLE_INDEX] = float(table_idx)
-        cache_table[:, CACHE_COL_SOURCE_ROW_INDEX] = np.arange(n_rows, dtype=np.float64)
+                fallback_best_sample = ~valid_row_samples & ~np.isfinite(
+                    cache_table[:, CACHE_COL_BEST_SAMPLE_INDEX]
+                )
+                cache_table[fallback_best_sample, CACHE_COL_BEST_SAMPLE_INDEX] = float(sample_idx)
+        missing_source_table = ~np.isfinite(cache_table[:, CACHE_COL_SOURCE_TABLE_INDEX])
+        cache_table[missing_source_table, CACHE_COL_SOURCE_TABLE_INDEX] = float(table_idx)
+        missing_source_row = ~np.isfinite(cache_table[:, CACHE_COL_SOURCE_ROW_INDEX])
+        cache_table[missing_source_row, CACHE_COL_SOURCE_ROW_INDEX] = np.arange(
+            n_rows,
+            dtype=np.float64,
+        )[missing_source_row]
 
         group_key = _intersection_cache_group_key(cache_table)
         if group_key is None:
@@ -8733,9 +8838,10 @@ def build_branch_representative_intersection_cache(
     best_sample_indices_out=None,
     group_by_qr_set=False,
 ):
-    """Build deterministic branch-peak representatives for fitting and QR detection."""
+    """Build representative cache rows without recollapsing preselected inputs."""
 
-    sampled_cache = build_intersection_cache(
+    del group_by_qr_set
+    return build_intersection_cache(
         hit_tables,
         av,
         cv,
@@ -8746,64 +8852,6 @@ def build_branch_representative_intersection_cache(
         wavelength_array=wavelength_array,
         best_sample_indices_out=best_sample_indices_out,
     )
-
-    beam_x_arr = None if beam_x_array is None else np.asarray(beam_x_array, dtype=np.float64)
-    beam_y_arr = None if beam_y_array is None else np.asarray(beam_y_array, dtype=np.float64)
-    theta_arr = None if theta_array is None else np.asarray(theta_array, dtype=np.float64)
-    phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64)
-    wavelength_arr = (
-        None if wavelength_array is None else np.asarray(wavelength_array, dtype=np.float64)
-    )
-
-    grouped_by_source_table: dict[int, list[np.ndarray]] = {}
-    for table_idx, cache_table in enumerate(sampled_cache):
-        table = np.asarray(cache_table, dtype=np.float64)
-        if table.ndim != 2 or table.shape[0] <= 0:
-            continue
-        source_table_idx = int(table_idx)
-        if table.shape[1] > CACHE_COL_SOURCE_TABLE_INDEX and np.isfinite(
-            table[0, CACHE_COL_SOURCE_TABLE_INDEX]
-        ):
-            source_table_idx = int(np.rint(float(table[0, CACHE_COL_SOURCE_TABLE_INDEX])))
-        grouped_by_source_table.setdefault(source_table_idx, []).append(table)
-
-    representative_cache = []
-    for source_tables in grouped_by_source_table.values():
-        expanded_tables, _metadata = _expand_intersection_cache_group_with_metadata(
-            source_tables,
-            beam_x_array=beam_x_arr,
-            beam_y_array=beam_y_arr,
-            theta_array=theta_arr,
-            phi_array=phi_arr,
-            wavelength_array=wavelength_arr,
-        )
-        representative_cache.extend(expanded_tables)
-
-    if not group_by_qr_set:
-        return representative_cache
-
-    grouped_cache_tables: dict[tuple[object, ...], list[np.ndarray]] = {}
-    for table_idx, cache_table in enumerate(representative_cache):
-        table = np.asarray(cache_table, dtype=np.float64)
-        if table.ndim != 2 or table.shape[0] <= 0:
-            continue
-        group_key = _intersection_cache_group_key(table)
-        if group_key is None:
-            group_key = ("ungrouped", int(table_idx))
-        grouped_cache_tables.setdefault(group_key, []).append(table)
-
-    qr_grouped_cache = []
-    for group_tables in grouped_cache_tables.values():
-        expanded_tables, _metadata = _expand_intersection_cache_group_with_metadata(
-            group_tables,
-            beam_x_array=beam_x_arr,
-            beam_y_array=beam_y_arr,
-            theta_array=theta_arr,
-            phi_array=phi_arr,
-            wavelength_array=wavelength_arr,
-        )
-        qr_grouped_cache.extend(expanded_tables)
-    return qr_grouped_cache
 
 
 def _extract_process_peaks_context(args, kwargs):
