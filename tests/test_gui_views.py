@@ -2077,6 +2077,7 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
 
     view_state = state.SamplingOpticsControlsViewState()
     sample_count_events = []
+    events_events = []
     rod_commits = []
 
     views.create_sampling_optics_controls(
@@ -2086,6 +2087,10 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         sample_count_min=1,
         sample_count_max=5000,
         sample_count_text="2,500 samples",
+        events_per_phase_value=50,
+        events_per_phase_min=1,
+        events_per_phase_max=1000,
+        events_per_phase_text="50 events/phase",
         rod_points_per_gz_value=480,
         rod_points_per_gz_min=10,
         rod_points_per_gz_max=2000,
@@ -2094,6 +2099,8 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         optics_mode_text="exact",
         on_sample_count_slide=lambda value: sample_count_events.append(("slide", value)),
         on_commit_sample_count=lambda _event: sample_count_events.append(("commit", None)),
+        on_events_per_phase_slide=lambda value: events_events.append(("slide", value)),
+        on_commit_events_per_phase=lambda _event: events_events.append(("commit", None)),
         on_rod_points_per_gz_slide=lambda _value: rod_commits.append("slide"),
         on_commit_rod_points_per_gz=lambda _event: rod_commits.append("commit"),
     )
@@ -2106,6 +2113,8 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.stratified_control_vars == {}
     assert view_state.ray_count_var is None
     assert view_state.ray_warning_var is None
+    assert view_state.events_per_phase_var.get() == 50
+    assert view_state.events_per_phase_value_var.get() == "50 events/phase"
     assert view_state.rod_points_per_gz_var.get() == 480
     assert view_state.rod_points_per_gz_value_var.get() == "480 / Gz"
     assert view_state.rod_point_total_var.get() == "Longest rod: 960 points"
@@ -2114,14 +2123,21 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.sample_count_scale.variable is view_state.sample_count_var
     assert view_state.sample_count_scale.cget("from") == 1
     assert view_state.sample_count_scale.cget("to") == 5000
+    assert view_state.events_per_phase_scale is _FakeScale.created[1]
+    assert view_state.events_per_phase_scale.variable is view_state.events_per_phase_var
+    assert view_state.events_per_phase_scale.cget("from") == 1
+    assert view_state.events_per_phase_scale.cget("to") == 1000
+    assert any(label.text == "Events per beam phase" for label in _FakeLabel.created)
     assert [radio.value for radio in _FakeRadiobutton.created] == [
         "fast",
         "exact",
     ]
-    assert view_state.rod_points_per_gz_scale is _FakeScale.created[1]
+    assert view_state.rod_points_per_gz_scale is _FakeScale.created[2]
 
     views.set_sampling_sample_count_text(view_state, "3,600 samples")
     assert view_state.sample_count_value_var.get() == "3,600 samples"
+    views.set_sampling_events_per_phase_text(view_state, "75 events/phase")
+    assert view_state.events_per_phase_value_var.get() == "75 events/phase"
     views.set_sampling_rod_points_per_gz_text(view_state, "512 / Gz")
     views.set_sampling_rod_point_total_text(view_state, "Longest rod: 1,024 points")
     views.set_sampling_ray_count_text(view_state, "unused")
@@ -2133,9 +2149,11 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
 
     views.set_sampling_sample_count_controls_enabled(view_state, enabled=False)
     assert view_state.sample_count_scale.state == tk.DISABLED
+    assert view_state.events_per_phase_scale.state == tk.DISABLED
 
     views.set_sampling_sample_count_controls_enabled(view_state, enabled=True)
     assert view_state.sample_count_scale.state == tk.NORMAL
+    assert view_state.events_per_phase_scale.state == tk.NORMAL
 
     views.set_sampling_method_controls_enabled(
         view_state,
@@ -2146,9 +2164,12 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
 
     view_state.sample_count_scale.command("3600")
     view_state.sample_count_scale.bindings["<ButtonRelease-1>"][0](None)
+    view_state.events_per_phase_scale.command("75")
+    view_state.events_per_phase_scale.bindings["<ButtonRelease-1>"][0](None)
     view_state.rod_points_per_gz_scale.command(512)
     view_state.rod_points_per_gz_scale.bindings["<ButtonRelease-1>"][0](None)
     assert sample_count_events == [("slide", "3600"), ("commit", None)]
+    assert events_events == [("slide", "75"), ("commit", None)]
     assert rod_commits == ["slide", "commit"]
 
 

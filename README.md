@@ -64,7 +64,7 @@ The repository is shaped around three core workflows:
 
 - detector-space forward simulation for 2D grazing-incidence diffraction
 - hBN calibrant fitting to estimate beam center, tilt, and geometry hints
-- iterative geometry, mosaic-shape, structure-factor, and stacking-fault refinement against measured images
+- stage-gated geometry, mosaic-shape, structure-factor, and stacking-fault refinement against measured images
 
 ### Highlights
 
@@ -338,8 +338,9 @@ or `py -m ra_sim`; it is not the installed `ra-sim` console script.
 2. Launch the main GUI and load the experimental background.
 3. Match detector-space features first.
 4. Use radial, azimuthal, and caked views to validate the alignment.
-5. Refine mosaic, structure-factor, and stacking-fault parameters once geometry is stable.
-6. Save parameter snapshots or GUI state files so the run can be reproduced headlessly.
+5. Fit mosaic shapes from the accepted geometry cache. The planned production path uses selected Qr/background pairs, local detector ROIs, additive Lorentzian plus Gaussian profile centering, and centered profile residuals with geometry locked.
+6. Fit structure-factor terms last. The planned global path fits detector-space, background-subtracted peak ROI areas across many images with one shared structure-factor parameter vector and one nuisance scale per image.
+7. Save parameter snapshots or GUI state files so the run can be reproduced headlessly.
 
 ### CLI Examples
 
@@ -460,7 +461,7 @@ copied into the zip.
 ### Package Layout
 
 - `ra_sim/simulation/`: forward simulation engine, diffraction kernel, detector geometry
-- `ra_sim/fitting/`: geometry fitting, mosaic fitting, objectives, peak matching
+- `ra_sim/fitting/`: geometry fitting, mosaic profile fitting, objectives, peak matching
 - `ra_sim/gui/`: Tk application, controllers, overlays, runtime workflows
 - `ra_sim/io/`: GUI state persistence, file parsing, OSC readers
 - `ra_sim/config/`: config loading, validation, material/instrument accessors

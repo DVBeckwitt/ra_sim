@@ -38,6 +38,8 @@ SF_PRUNE_BIAS_MAX = 3.0
 DEFAULT_ROD_L_STEP = 0.01
 ROD_POINTS_PER_GZ_MIN = 10
 ROD_POINTS_PER_GZ_MAX = 2000
+EVENTS_PER_BEAM_PHASE_MIN = 1
+EVENTS_PER_BEAM_PHASE_MAX = 1000
 _SF_PRUNE_RETAIN_BASE = 0.9997
 _SF_PRUNE_RETAIN_MAX = 0.99998
 _SF_PRUNE_RETAIN_MIN = 0.90
@@ -200,6 +202,33 @@ def format_sampling_count_summary(sample_count: object) -> str:
 
     count = parse_sampling_count(sample_count, 1)
     return f"{count:,} samples" if count >= 1000 else f"{count} samples"
+
+
+def normalize_events_per_beam_phase(
+    raw_value: object,
+    fallback: object,
+    *,
+    minimum: int = EVENTS_PER_BEAM_PHASE_MIN,
+    maximum: int = EVENTS_PER_BEAM_PHASE_MAX,
+) -> int:
+    """Normalize one weighted-event count to the supported slider range."""
+
+    return normalize_sample_count(
+        raw_value,
+        fallback,
+        minimum=int(minimum),
+        maximum=int(maximum),
+    )
+
+
+def format_events_per_beam_phase(count: int) -> str:
+    """Format the weighted-event count label shown beside the slider."""
+
+    normalized = normalize_events_per_beam_phase(
+        count,
+        EVENTS_PER_BEAM_PHASE_MIN,
+    )
+    return f"{normalized:,} events/phase"
 
 
 def default_rod_points_per_gz(

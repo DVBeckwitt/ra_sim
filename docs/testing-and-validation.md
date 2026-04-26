@@ -14,6 +14,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | CLI or launcher behavior | Targeted CLI tests | `python -m ra_sim.dev test-all` |
 | GUI helper or controller behavior | Targeted GUI tests | `python -m ra_sim.dev test-all` |
 | Geometry fitting or projection behavior | Targeted geometry tests | Integration tests plus relevant debug script |
+| Mosaic selected-pair profile fitting | `python -m pytest tests/test_mosaic_shape_optimization.py` | CLI/headless mosaic smoke plus stale-cache guards after wiring |
+| Structure-factor intensity fitting | Structure-factor parity tests plus synthetic ROI tests when added | Held-out image and held-out reflection-family regressions |
 | Simulation or diffraction behavior | Targeted simulation tests | Full tests plus benchmark when performance-sensitive |
 | Timing or performance behavior | Timing or benchmark script | Compare generated artifact summaries |
 | Docs-only change | Path and link sanity | No full code run required |
@@ -155,6 +157,7 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Simulation and diffraction engine | `tests/test_diffraction_subpixel.py` | `python -m pytest tests/test_diffraction_subpixel.py` | Regression coverage for diffraction subpixel. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_tools_module.py` | `python -m pytest tests/test_diffraction_tools_module.py` | Regression coverage for diffraction tools module. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_tools_view.py` | `python -m pytest tests/test_diffraction_tools_view.py` | Regression coverage for diffraction tools view. | Untiered; direct pytest or full suite. |
+| Simulation and diffraction engine | `tests/test_diffraction_weighted_events.py` | `python -m pytest tests/test_diffraction_weighted_events.py` | Regression coverage for weighted diffraction event accounting. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_exact_cake_portable.py` | `python -m pytest tests/test_exact_cake_portable.py` | Regression coverage for exact cake portable. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_exact_qspace_portable.py` | `python -m pytest tests/test_exact_qspace_portable.py` | Regression coverage for exact qspace portable. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_fresnel_calls.py` | `python -m pytest tests/test_fresnel_calls.py` | Regression coverage for fresnel calls. | Untiered; direct pytest or full suite. |
@@ -292,6 +295,32 @@ These modules are not stand-alone test commands, but they are validation-critica
 ## Checked index guard
 
 `tests/test_testing_validation_index.py` reads this file and `git ls-files` to fail when tracked tests, fixtures, scripts, tools, developer modules, workflows, pre-commit config, or agent-support scripts are missing from the index. Its reverse path check is intentionally conservative and allows documented generated/example artifact paths.
+
+## Focused geometric-fitter Qr/Qz validation
+
+The `(-1,0,10)` Qr/Qz fitter regression is covered by focused tests in
+`tests/test_manual_geometry_selection_helpers.py` and provider-local resolver
+unit tests in `tests/test_geometry_fitting.py`.
+
+Focused commands:
+
+```powershell
+python -m py_compile ra_sim/fitting/optimization.py ra_sim/gui/geometry_fit.py ra_sim/gui/manual_geometry.py ra_sim/gui/_runtime/runtime_session.py
+pytest tests/test_geometry_fitting.py -k "provider_local_stale_row or duplicate_hkl_ambiguous or duplicate_hkl_saved_px or saved_detector_uses_stale_row_proof or does_not_upgrade_local_to_full_reflection" -q
+pytest tests/test_manual_geometry_selection_helpers.py -k "rung1_objective_dry_run_uses_qr_residuals or fitter_objective_matches_residual_audit or prediction_identity_stable_during_fit or qr_only_fit_reduces_residual_after_correspondence_fix or qr_only_objective_does_not_accept_worse_solution or full_fit_reports_qr_contribution" -s -q
+pytest tests/test_gui_runtime_import_safe.py -k "toggle_caked_2d" -q
+```
+
+Expected status:
+
+- dry-run objective calls the production residual helper and does not call
+  `least_squares`,
+- all seven provider-local fixed rows resolve without fallback,
+- the target Qr residual block is present with nonempty weights,
+- branch identity remains fixed through optimizer evaluations,
+- Qr-only fit either reduces the target residual norm or reports an exact
+  rejected-step reason without treating the rejected state as an accepted fit,
+- full fit reports total, Qr, non-Qr, line, and prior objective blocks.
 
 ## Appendix: Agent-skill support tools
 

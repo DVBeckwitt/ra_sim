@@ -8,6 +8,7 @@ def _run_process(
     intensities: np.ndarray,
     *,
     n_samp: int = 2,
+    events_per_beam_phase: int = 1,
 ):
     image_size = 16
     image = np.zeros((image_size, image_size), dtype=np.float64)
@@ -51,234 +52,140 @@ def _run_process(
         np.array([1.0, 0.0, 0.0], dtype=np.float64),
         np.array([0.0, 1.0, 0.0], dtype=np.float64),
         save_flag=0,
+        events_per_beam_phase=events_per_beam_phase,
     )
 
 
-def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
-    call_count = 0
+def test_process_peaks_parallel_enumerates_duplicate_gr_gz_peaks_independently(monkeypatch):
+    seen_calls: list[tuple[float, float, float, float]] = []
 
-    def fake_calculate_phi_precomputed(
+    def fake_solve_q(
+        _k_in_crystal,
+        _k_scat,
+        _G_vec,
+        _sigma,
+        _gamma_pv,
+        _eta_pv,
         H,
         K,
         L,
-        av,
-        cv,
-        image,
-        image_size,
-        reflection_intensity,
-        sigma_rad,
-        gamma_pv,
-        eta_pv,
-        debye_x,
-        debye_y,
-        center,
-        R_sample,
-        n_det_rot,
-        Detector_Pos,
-        e1_det,
-        e2_det,
-        sample_terms,
-        n2_samp_array,
-        eps2_array,
-        best_idx,
-        save_flag,
-        q_data,
-        q_count,
-        i_peaks_index,
-        record_status=False,
-        thickness=0.0,
-        optics_mode=0,
-        solve_q_steps=1000,
-        solve_q_rel_tol=5e-4,
-        solve_q_mode=0,
-        pixel_size_m=100e-6,
-        sample_qr_ring_once=True,
-        sample_weights=None,
         *_args,
         **_kwargs,
     ):
-        nonlocal call_count
-        call_count += 1
-        return (
-            np.array(
-                [[10.0, 5.0, 6.0, 0.2, H, K, L, np.nan, np.nan, 0.0]],
-                dtype=np.float64,
-            ),
-            np.empty(0, dtype=np.int64),
-            np.empty((0, 3), dtype=np.float64),
-            0,
-        )
+        return np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0
 
     monkeypatch.setattr(
         diffraction,
-        "_calculate_phi_from_precomputed",
-        fake_calculate_phi_precomputed,
+        "solve_q",
+        fake_solve_q,
+    )
+
+    def fake_project_weighted_candidate(**kwargs):
+        seen_calls.append(
+            (
+                float(kwargs["H"]),
+                float(kwargs["K"]),
+                float(kwargs["L"]),
+                float(kwargs["reflection_intensity"]),
+            )
+        )
+        return True, 5.0, 6.0, 0.2, float(kwargs["reflection_intensity"])
+
+    monkeypatch.setattr(
+        diffraction,
+        "_project_weighted_candidate",
+        fake_project_weighted_candidate,
     )
 
     # (1,0,1) and (0,1,1) have identical Gr and Gz for hexagonal metric.
     miller = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=np.float64)
     intensities = np.array([2.5, 2.5], dtype=np.float64)
 
-    _, hit_tables, *_ = _run_process(miller, intensities)
+    _run_process(miller, intensities, n_samp=1, events_per_beam_phase=1)
 
-    assert call_count == 1
-    first = np.asarray(hit_tables[0])
-    second = np.asarray(hit_tables[1])
-    assert first.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
-    assert second.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
-    assert int(np.rint(float(first[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
-    assert int(np.rint(float(second[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
-
-    # Cached hit keeps geometry/intensity columns but updates HKL for the row.
-    np.testing.assert_allclose(first[0, 0:4], second[0, 0:4])
-    np.testing.assert_allclose(first[0, 4:7], [1.0, 0.0, 1.0])
-    np.testing.assert_allclose(second[0, 4:7], [0.0, 1.0, 1.0])
+    assert seen_calls == [(1.0, 0.0, 1.0, 2.5), (0.0, 1.0, 1.0, 2.5)]
 
 
-def test_process_peaks_parallel_reuses_duplicate_gr_gz_even_with_different_sf(monkeypatch):
-    call_count = 0
+def test_process_peaks_parallel_uses_exact_original_row_intensities(monkeypatch):
+    seen_intensities: list[float] = []
 
-    def fake_calculate_phi_precomputed(
+    def fake_solve_q(
+        _k_in_crystal,
+        _k_scat,
+        _G_vec,
+        _sigma,
+        _gamma_pv,
+        _eta_pv,
         H,
         K,
         L,
-        av,
-        cv,
-        image,
-        image_size,
-        reflection_intensity,
-        sigma_rad,
-        gamma_pv,
-        eta_pv,
-        debye_x,
-        debye_y,
-        center,
-        R_sample,
-        n_det_rot,
-        Detector_Pos,
-        e1_det,
-        e2_det,
-        sample_terms,
-        n2_samp_array,
-        eps2_array,
-        best_idx,
-        save_flag,
-        q_data,
-        q_count,
-        i_peaks_index,
-        record_status=False,
-        thickness=0.0,
-        optics_mode=0,
-        solve_q_steps=1000,
-        solve_q_rel_tol=5e-4,
-        solve_q_mode=0,
-        pixel_size_m=100e-6,
-        sample_qr_ring_once=True,
-        sample_weights=None,
         *_args,
         **_kwargs,
     ):
-        nonlocal call_count
-        call_count += 1
-        # Return intensity proportional to the source run SF so per-peak
-        # scaling can be asserted exactly.
-        return (
-            np.array(
-                [[reflection_intensity, 5.0, 6.0, 0.2, H, K, L, np.nan, np.nan, 0.0]],
-                dtype=np.float64,
-            ),
-            np.empty(0, dtype=np.int64),
-            np.empty((0, 3), dtype=np.float64),
-            0,
-        )
+        return np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0
 
     monkeypatch.setattr(
         diffraction,
-        "_calculate_phi_from_precomputed",
-        fake_calculate_phi_precomputed,
+        "solve_q",
+        fake_solve_q,
+    )
+
+    def fake_project_weighted_candidate(**kwargs):
+        seen_intensities.append(float(kwargs["reflection_intensity"]))
+        return True, 5.0, 6.0, 0.2, float(kwargs["reflection_intensity"])
+
+    monkeypatch.setattr(
+        diffraction,
+        "_project_weighted_candidate",
+        fake_project_weighted_candidate,
     )
 
     miller = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=np.float64)
     intensities = np.array([2.0, 4.0], dtype=np.float64)
 
-    _, hit_tables, *_ = _run_process(miller, intensities, n_samp=1)
+    _run_process(miller, intensities, n_samp=1, events_per_beam_phase=1)
 
-    # One source run at total SF=6, then per-peak down-scaling to 2 and 4.
-    assert call_count == 1
-    first = np.asarray(hit_tables[0])
-    second = np.asarray(hit_tables[1])
-    assert first.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
-    assert second.shape == (1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH)
-    assert int(np.rint(float(first[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
-    assert int(np.rint(float(second[0, diffraction.HIT_ROW_COL_BEST_SAMPLE_INDEX]))) == 0
-    np.testing.assert_allclose(first[0, 0], 2.0)
-    np.testing.assert_allclose(second[0, 0], 4.0)
-    np.testing.assert_allclose(first[0, 4:7], [1.0, 0.0, 1.0])
-    np.testing.assert_allclose(second[0, 4:7], [0.0, 1.0, 1.0])
+    assert seen_intensities == [2.0, 4.0]
 
 
-def test_process_peaks_parallel_marks_matching_sphere_samples_for_reuse(monkeypatch):
-    observed: dict[str, np.ndarray] = {}
+def test_process_peaks_parallel_visits_each_sample_without_group_reuse(monkeypatch):
+    observed: list[tuple[float, float, float]] = []
 
-    def fake_calculate_phi_precomputed(
+    def fake_solve_q(
+        _k_in_crystal,
+        _k_scat,
+        _G_vec,
+        _sigma,
+        _gamma_pv,
+        _eta_pv,
         H,
         K,
         L,
-        av,
-        cv,
-        image,
-        image_size,
-        reflection_intensity,
-        sigma_rad,
-        gamma_pv,
-        eta_pv,
-        debye_x,
-        debye_y,
-        center,
-        R_sample,
-        n_det_rot,
-        Detector_Pos,
-        e1_det,
-        e2_det,
-        sample_terms,
-        n2_samp_array,
-        eps2_array,
-        best_idx,
-        save_flag,
-        q_data,
-        q_count,
-        i_peaks_index,
-        record_status=False,
-        thickness=0.0,
-        optics_mode=0,
-        solve_q_steps=1000,
-        solve_q_rel_tol=5e-4,
-        solve_q_mode=0,
-        pixel_size_m=100e-6,
-        sample_qr_ring_once=True,
-        sample_weights=None,
         *_args,
         **_kwargs,
     ):
-        observed["reps"] = np.asarray(
-            sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP],
-            dtype=np.float64,
-        ).copy()
-        observed["next"] = np.asarray(
-            sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_NEXT],
-            dtype=np.float64,
-        ).copy()
-        return (
-            np.empty((0, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64),
-            np.empty(0, dtype=np.int64),
-            np.empty((0, 3), dtype=np.float64),
-            0,
-        )
+        return np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0
 
     monkeypatch.setattr(
         diffraction,
-        "_calculate_phi_from_precomputed",
-        fake_calculate_phi_precomputed,
+        "solve_q",
+        fake_solve_q,
+    )
+
+    def fake_project_weighted_candidate(**kwargs):
+        observed.append(
+            (
+                float(kwargs["sample_weight"]),
+                float(kwargs["k_x_scat"]),
+                float(kwargs["k_y_scat"]),
+            )
+        )
+        return True, 5.0, 6.0, 0.2, 1.0
+
+    monkeypatch.setattr(
+        diffraction,
+        "_project_weighted_candidate",
+        fake_project_weighted_candidate,
     )
 
     image_size = 16
@@ -322,7 +229,7 @@ def test_process_peaks_parallel_marks_matching_sphere_samples_for_reuse(monkeypa
         np.array([1.0, 0.0, 0.0], dtype=np.float64),
         np.array([0.0, 1.0, 0.0], dtype=np.float64),
         save_flag=0,
+        events_per_beam_phase=1,
     )
 
-    np.testing.assert_allclose(observed["reps"], [0.0, 0.0, 0.0])
-    np.testing.assert_allclose(observed["next"], [1.0, 2.0, -1.0])
+    assert len(observed) == 3

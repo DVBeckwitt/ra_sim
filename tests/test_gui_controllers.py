@@ -260,6 +260,19 @@ def test_structure_factor_pruning_controller_helpers_clip_and_normalize_inputs()
         controllers.clip_structure_factor_prune_bias("1.5", fallback=0.0, minimum=-2.0, maximum=2.0)
         == 1.5
     )
+
+
+def test_normalize_events_per_beam_phase_clamps_to_supported_range():
+    assert controllers.normalize_events_per_beam_phase("0", fallback=50) == 1
+    assert controllers.normalize_events_per_beam_phase("-10", fallback=50) == 1
+    assert controllers.normalize_events_per_beam_phase("50", fallback=10) == 50
+    assert controllers.normalize_events_per_beam_phase("999999", fallback=50) == 1000
+    assert controllers.normalize_events_per_beam_phase("bad", fallback=75) == 75
+
+
+def test_format_events_per_beam_phase():
+    assert controllers.format_events_per_beam_phase(50) == "50 events/phase"
+    assert controllers.format_events_per_beam_phase(1000) == "1,000 events/phase"
     assert (
         controllers.clip_structure_factor_prune_bias(
             "bad", fallback=0.25, minimum=-2.0, maximum=2.0

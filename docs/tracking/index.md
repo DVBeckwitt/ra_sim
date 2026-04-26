@@ -14,8 +14,11 @@ The active sequence is:
 4. get the stacking-fault fitter working.
 
 The geometric fitter remains the primary recovery project. A first mosaic-fitter
-scaffold is now in progress, but GUI/headless wiring must stay geometry-locked
-and downstream of accepted geometry-cache provenance.
+scaffold is now in progress, with a documented selected-pair profile math
+contract. GUI/headless wiring must stay geometry-locked and downstream of
+accepted geometry-cache provenance. The structure-factor fitter now has a
+planned global multi-image detector-ROI intensity contract, but remains
+downstream of green mosaic fitting.
 
 ## In progress
 
@@ -25,12 +28,21 @@ and downstream of accepted geometry-cache provenance.
 | New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-23 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-23 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
-| Mosaic fitter recovery | feature | - | none | p1 | 2026-04-22 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
+| Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
+| Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 
 Replay status note: `Sim caked detector replay` remains in progress. Latest
 replay-only patch removed saved-background gating, tightened replay eligibility
 to current caked-projection evidence, and leaves replay-eligible sim rows
 unresolved on reverse-LUT failure. Validation is still pending.
+
+Weighted-event representative status note:
+`Weighted-event representative cache carry-through` is implemented on fast
+weighted-event path and targeted weighted-event/cache tests are green. Manual
+geometry replay/workflow suites and full-suite status remain red in this
+worktree for adjacent replay/finalizer and unrelated fixture/doc/env failures,
+so the follow-up stays tracked as in-progress until broader tree health is
+clean.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
@@ -104,8 +116,8 @@ patch is claimed yet.
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| Structure-factor fitter recovery | feature | - | none | p2 | 2026-04-20 | [structure-factor-fitter.md](planned-features/structure-factor-fitter.md) |
-| Stacking-fault fitter recovery | feature | - | none | p2 | 2026-04-20 | [stacking-fault-fitter.md](planned-features/stacking-fault-fitter.md) |
+| Structure-factor fitter recovery | feature | - | none | p2 | 2026-04-24 | [structure-factor-fitter.md](planned-features/structure-factor-fitter.md) |
+| Stacking-fault fitter recovery | feature | - | none | p2 | 2026-04-24 | [stacking-fault-fitter.md](planned-features/stacking-fault-fitter.md) |
 
 ## Archive
 

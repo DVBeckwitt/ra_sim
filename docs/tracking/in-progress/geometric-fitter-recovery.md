@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-23
+Last updated: 2026-04-26
 
 ## Summary
 
@@ -145,6 +145,83 @@ seconds total, about 53.4x faster. First residual time improved from a 62.07
 second average to a 0.35 second average. End-to-end pair ladder runtime is
 still not fully solved because one-time context capture and pre-solve setup
 remain expensive.
+
+## 2026-04-26 Qr/Qz caked residual objective status
+
+Target: `q_group_key=("q_group","primary",1,10)`, `hkl=(-1,0,10)`,
+branches 0 and 1.
+
+Status by work type:
+
+- Bug/error fixed: detector-origin and caked-origin point-consistency rungs pass
+  for the target Qr/Qz group. The same physical branch point is consistent
+  across detector visual/native points, caked `2theta,phi`, manual/background
+  observed values, visual simulation points, fit observed values, and fit
+  predictions.
+- Bug/error fixed: the geometric optimizer objective now includes the selected
+  Qr/Qz caked residuals. The previous first failure was Class B: request rows
+  were fixed, but the objective resolver rejected provider-local rows with
+  `prediction_branch_source_switched` and `source_row_provenance_not_found`.
+- Fix target: `ra_sim/fitting/optimization.py::_resolve_fixed_source_matches`
+  and `_resolve_geometry_fit_correspondence`.
+- Feature added: an objective dry-run mode evaluates the production objective
+  without calling `least_squares`, so rung 1 can prove residual-vector content,
+  fixed-source counts, fallback counts, and Qr weights before any solve rung.
+- Feature added: focused fitter diagnostics print the optimizer residual vector,
+  branch identity trace, Qr-only before/after norm, and full-fit objective
+  decomposition.
+- Review hardening fixed before commit: saved provider-local detector points
+  are tried only after the current hit-table resolver runs. They are accepted
+  only with non-ambiguous stale-row proof or canonical saved-source identity
+  proof; raw native pixels without a canonical display/native proof require the
+  stale-row proof. Duplicate-HKL local rows without branch proof stay rejected
+  even when saved detector pixels are present.
+- Offset-cache bug fixed: saved-simulation fit-space alignment offsets are
+  primed from explicit baseline params before seed scoring or least-squares
+  solve, and diagnostics label the offset source as `baseline_params` instead
+  of depending on whichever evaluation happened to run first.
+
+Validated current counters:
+
+- `provider_pair_count == 7`
+- `dataset_pair_count == 7`
+- `optimizer_request_pair_count == 7`
+- `fixed_source_pair_count == 7`
+- `fallback_row_count == 0`
+- `missing_fixed_source_count == 0`
+- `fixed_source_resolution_fallback_count == 0`
+- `matched_pair_count == 7`
+- `missing_pair_count == 0`
+- `branch_mismatch_count == 0`
+- `qr_residual_block_absent == no`
+- `qr_weights == [1.0]`
+- `objective_eval_called == true`
+- `objective_dry_run_residual_finite == true`
+- `least_squares_called == false` in dry-run mode
+- `optimizer_solve_called == false` in dry-run mode
+
+Target baseline residuals:
+
+| Branch | Observed caked deg | Predicted caked deg | Residual caked deg | Norm |
+| ---: | --- | --- | --- | ---: |
+| 0 | `(40.142509, 35.566836)` | `(33.274985, 131.750000)` | `(-6.867524, 96.183164)` | `96.428024169` |
+| 1 | `(40.853020, -37.565855)` | `(37.122146, 40.589187)` | `(-3.730874, 78.155042)` | `78.244041237` |
+
+Solve evidence:
+
+- Qr-only fit ran `nfev=70` and reduced target Qr norm
+  `124.179281018 -> 98.275666096`.
+- Full fit kept the Qr block present and improved total objective norm
+  `257.403969114 -> 256.495280344`; Qr block norm moved
+  `124.179281018 -> 124.145313592`.
+- Branch identity stayed fixed during optimizer evaluations:
+  target rows remained on `q_group_key=("q_group","primary",1,10)`,
+  `hkl=(-1,0,10)`, tables `160/167`, branches `0/1`, with no nearest-row
+  rematch to unrelated cache rows.
+
+Current conclusion: the full geometric fitter is optimizing the same target
+Qr/Qz caked residuals reported by the CMD/rung audit. Detector-native pixel
+residuals remain diagnostic only for this objective.
 
 ## Validated Ladder State
 

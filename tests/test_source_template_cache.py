@@ -1,15 +1,11 @@
-from pathlib import Path
+from __future__ import annotations
 
 import numpy as np
-import pytest
-import yaml
 
-from ra_sim.config import loader
 from ra_sim.simulation import diffraction
-from ra_sim.utils import stacking_fault
 
 
-def _call_safe(intensities, *, save_flag=0, theta_initial=6.0, **process_kwargs):
+def _call_safe(intensities, *, save_flag=0, events_per_beam_phase=50, **process_kwargs):
     image_size = 8
     image = np.zeros((image_size, image_size), dtype=np.float64)
     n_samp = 1
@@ -46,445 +42,127 @@ def _call_safe(intensities, *, save_flag=0, theta_initial=6.0, **process_kwargs)
         0.0,
         0.0,
         center,
-        float(theta_initial),
+        0.0,
         0.0,
         unit_x,
         n_detector,
         save_flag=save_flag,
-        sample_qr_ring_once=False,
+        events_per_beam_phase=events_per_beam_phase,
         **process_kwargs,
     )
 
 
-def _write_yaml(path: Path, payload: dict) -> None:
-    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+def _fake_result():
+    return (
+        np.zeros((8, 8), dtype=np.float64),
+        [],
+        np.zeros((1, 1, 5), dtype=np.float64),
+        np.zeros(1, dtype=np.int64),
+        np.zeros((2, 1), dtype=np.int64),
+        [],
+    )
 
 
-def _make_config_dir(tmp_path: Path, *, debug: dict | None = None) -> Path:
-    cfg = tmp_path / "cfg"
-    cfg.mkdir(parents=True)
-    _write_yaml(cfg / "file_paths.yaml", {})
-    _write_yaml(cfg / "dir_paths.yaml", {})
-    _write_yaml(cfg / "materials.yaml", {})
-    _write_yaml(cfg / "instrument.yaml", {})
-    if debug is not None:
-        _write_yaml(cfg / "debug.yaml", debug)
-    return cfg
-
-
-@pytest.fixture(autouse=True)
-def _reset_loader_cache() -> None:
-    loader.clear_config_cache()
-    yield
-    loader.clear_config_cache()
-
-
-def test_process_peaks_parallel_safe_reuses_source_template_cache(monkeypatch):
-    diffraction._PHASE_SPACE_CACHE.clear()
-    diffraction._SOURCE_TEMPLATE_CACHE.clear()
-    diffraction._Q_VECTOR_CACHE.clear()
-    phase_build_calls = 0
-    source_build_calls = 0
-
-    def fake_build_phase(_params):
-        nonlocal phase_build_calls
-        phase_build_calls += 1
-        return {"n_samp": 1}
-
-    def fake_build_source(_params, _phase_entry, H, K, L):
-        nonlocal source_build_calls
-        source_build_calls += 1
-        return {
-            "flat_indices": np.array([0], dtype=np.int64),
-            "flat_values": np.array([2.0], dtype=np.float64),
-            "hit_template": np.array([[1.0, 5.0, 6.0, 0.2, H, K, L]], dtype=np.float64),
-            "miss_template": np.empty((0, 3), dtype=np.float64),
-            "status_template": np.zeros(1, dtype=np.int64),
-            "best_sample_idx": -1,
-        }
-
-    def fake_kernel(*_args, **_kwargs):
-        raise AssertionError("kernel path should not run on cache hit")
-
-    monkeypatch.setattr(diffraction, "_build_phase_space_entry", fake_build_phase)
-    monkeypatch.setattr(diffraction, "_build_source_unit_template", fake_build_source)
-    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
-
-    out1 = _call_safe([2.0, 3.0], save_flag=0)
-    out2 = _call_safe([4.0, 6.0], save_flag=0)
-
-    # Phase/template state is rebuilt each run; reuse now happens at Q-vector
-    # level inside the source builder.
-    assert phase_build_calls == 2
-    assert source_build_calls == 2
-    assert float(out1[0][0, 0]) == 10.0
-    assert float(out2[0][0, 0]) == 20.0
-    np.testing.assert_allclose(np.asarray(out1[1][0])[:, 0], [2.0])
-    np.testing.assert_allclose(np.asarray(out1[1][1])[:, 0], [3.0])
-    np.testing.assert_allclose(np.asarray(out2[1][0])[:, 0], [4.0])
-    np.testing.assert_allclose(np.asarray(out2[1][1])[:, 0], [6.0])
-
-
-def test_process_peaks_parallel_safe_bypasses_cache_for_save_flag(monkeypatch):
+def test_source_template_cache_is_not_used_when_weighted_events_are_enabled(monkeypatch):
     diffraction._PHASE_SPACE_CACHE.clear()
     diffraction._SOURCE_TEMPLATE_CACHE.clear()
     diffraction._Q_VECTOR_CACHE.clear()
     called = 0
 
+    def fake_build_source(*_args, **_kwargs):
+        raise AssertionError("weighted event mode must not build source templates")
+
     def fake_kernel(*_args, **_kwargs):
         nonlocal called
         called += 1
-        return (
-            np.zeros((8, 8), dtype=np.float64),
-            [],
-            np.zeros((1, 1, 5), dtype=np.float64),
-            np.zeros(1, dtype=np.int64),
-            np.zeros((2, 1), dtype=np.int64),
-            [],
-        )
+        return _fake_result()
 
-    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
-
-    _call_safe([1.0, 1.0], save_flag=1)
-
-    assert called == 1
-
-
-def test_process_peaks_parallel_safe_reports_reused_rays(monkeypatch):
-    diffraction._PHASE_SPACE_CACHE.clear()
-    diffraction._SOURCE_TEMPLATE_CACHE.clear()
-    diffraction._Q_VECTOR_CACHE.clear()
-    call_count = 0
-
-    def fake_build_phase(_params):
-        return {"n_samp": 3}
-
-    def fake_build_source(_params, _phase_entry, H, K, L):
-        nonlocal call_count
-        call_count += 1
-        q_hits = 0 if call_count == 1 else 3
-        return {
-            "flat_indices": np.array([0], dtype=np.int64),
-            "flat_values": np.array([1.0], dtype=np.float64),
-            "hit_template": np.array([[1.0, 5.0, 6.0, 0.2, H, K, L]], dtype=np.float64),
-            "miss_template": np.empty((0, 3), dtype=np.float64),
-            "status_template": np.zeros(3, dtype=np.int64),
-            "best_sample_idx": -1,
-            "q_cache_hits": q_hits,
-        }
-
-    def fake_kernel(*_args, **_kwargs):
-        raise AssertionError("kernel path should not run when cache path is available")
-
-    monkeypatch.setattr(diffraction, "_build_phase_space_entry", fake_build_phase)
     monkeypatch.setattr(diffraction, "_build_source_unit_template", fake_build_source)
     monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
 
-    _call_safe([2.0, 3.0], save_flag=0)
-    stats_first = diffraction.get_last_process_peaks_safe_stats()
-    _call_safe([4.0, 6.0], save_flag=0)
-    stats_second = diffraction.get_last_process_peaks_safe_stats()
-
-    assert stats_first["used_safe_cache"] is True
-    assert stats_first["source_templates_built"] == 1
-    assert stats_first["source_templates_reused"] == 0
-    assert stats_first["rays_reused"] == 0
-
-    assert stats_second["used_safe_cache"] is True
-    assert stats_second["source_templates_built"] == 1
-    assert stats_second["source_templates_reused"] == 0
-    assert stats_second["rays_reused"] == 3
-
-
-def test_process_qr_rods_parallel_uses_safe_peak_wrapper(monkeypatch):
-    called = 0
-
-    def fake_qr_dict_to_arrays(_qr_dict):
-        return (
-            np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=np.float64),
-            np.array([2.0, 3.0], dtype=np.float64),
-            np.array([1.0, 1.0], dtype=np.float64),
-            None,
-        )
-
-    def fake_safe(*_args, **_kwargs):
-        nonlocal called
-        called += 1
-        return (
-            np.zeros((8, 8), dtype=np.float64),
-            [],
-            np.zeros((1, 1, 5), dtype=np.float64),
-            np.zeros(1, dtype=np.int64),
-            np.zeros((2, 1), dtype=np.int64),
-            [],
-        )
-
-    monkeypatch.setattr(stacking_fault, "qr_dict_to_arrays", fake_qr_dict_to_arrays)
-    monkeypatch.setattr(diffraction, "process_peaks_parallel_safe", fake_safe)
-
-    out = diffraction.process_qr_rods_parallel(
-        qr_dict={},
-        image_size=8,
-        av=1.0,
-        cv=1.0,
-        lambda_=1.0,
-        image=np.zeros((8, 8), dtype=np.float64),
-        Distance_CoR_to_Detector=1.0,
-        gamma_deg=0.0,
-        Gamma_deg=0.0,
-        chi_deg=0.0,
-        psi_deg=0.0,
-        psi_z_deg=0.0,
-        zs=0.0,
-        zb=0.0,
-        n2=1.0 + 0.0j,
-        beam_x_array=np.zeros(1, dtype=np.float64),
-        beam_y_array=np.zeros(1, dtype=np.float64),
-        theta_array=np.zeros(1, dtype=np.float64),
-        phi_array=np.zeros(1, dtype=np.float64),
-        sigma_pv_deg=0.5,
-        gamma_pv_deg=0.5,
-        eta_pv=0.0,
-        wavelength_array=np.ones(1, dtype=np.float64),
-        debye_x=0.0,
-        debye_y=0.0,
-        center=np.array([4.0, 4.0], dtype=np.float64),
-        theta_initial_deg=6.0,
-        cor_angle_deg=0.0,
-        unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
-        n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
-        save_flag=0,
-    )
+    _call_safe([2.0, 3.0], save_flag=0, events_per_beam_phase=50)
 
     assert called == 1
-    assert len(out) == 7
+    stats = diffraction.get_last_process_peaks_safe_stats()
+    assert stats["used_safe_cache"] is False
 
 
-def test_q_vector_cache_reuses_when_theta_i_returns(monkeypatch):
-    diffraction._Q_VECTOR_CACHE.clear()
-    diffraction._PHASE_SPACE_CACHE.clear()
-    diffraction._SOURCE_TEMPLATE_CACHE.clear()
-    solve_calls = 0
-
-    def fake_solve_q(*_args, **_kwargs):
-        nonlocal solve_calls
-        solve_calls += 1
-        return np.zeros((0, 4), dtype=np.float64), 0
-
-    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
-
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=10.0)
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
-    stats_last = diffraction.get_last_process_peaks_safe_stats()
-
-    # First 5deg builds cache, 10deg is distinct, returning to 5deg reuses.
-    assert solve_calls == 2
-    assert stats_last["rays_reused"] >= 1
-
-
-def test_q_vector_cache_bypasses_custom_trig_tables(monkeypatch):
-    diffraction._Q_VECTOR_CACHE.clear()
-    diffraction._PHASE_SPACE_CACHE.clear()
-    diffraction._SOURCE_TEMPLATE_CACHE.clear()
-    solve_calls = 0
+def test_grouped_source_expansion_path_is_not_used(monkeypatch):
+    def fake_precompute(*_args, **_kwargs):
+        sample_terms = np.zeros((1, diffraction._SAMPLE_COLS), dtype=np.float64)
+        sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_L_IN] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_N2_REAL] = 1.0
+        return (
+            np.eye(3, dtype=np.float64),
+            sample_terms,
+            np.ones(1, dtype=np.complex128),
+            np.ones(1, dtype=np.complex128),
+            0,
+        )
 
     def fake_solve_q(*_args, **_kwargs):
-        nonlocal solve_calls
-        solve_calls += 1
-        return np.zeros((0, 4), dtype=np.float64), 0
+        return np.array([[10.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0
 
+    def fake_project(**kwargs):
+        return True, 0.0, float(kwargs["Qx"]), 0.0, float(kwargs["reflection_intensity"])
+
+    def fail_copy_scaled_hit_table(*_args, **_kwargs):
+        raise AssertionError("grouped source expansion must not run")
+
+    monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute)
     monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+    monkeypatch.setattr(diffraction, "_project_weighted_candidate", fake_project)
+    monkeypatch.setattr(diffraction, "_copy_scaled_hit_table", fail_copy_scaled_hit_table)
 
-    default_kwargs = diffraction.get_default_solve_q_trig_kwargs()
-    custom_cos = np.array(default_kwargs["default_solve_q_cos"], copy=True)
-    custom_sin = np.array(default_kwargs["default_solve_q_sin"], copy=True)
-    custom_cos[0] += 0.5
-    custom_sin[0] -= 0.5
-
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **default_kwargs)
-    _call_safe(
-        [2.0, 3.0],
+    result = diffraction.process_peaks_parallel(
+        np.array([[1.0, 0.0, 1.0], [2.0, 0.0, 1.0]], dtype=np.float64),
+        np.array([1.0, 2.0], dtype=np.float64),
+        16,
+        4.0,
+        7.0,
+        1.54,
+        np.zeros((16, 16), dtype=np.float64),
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        np.zeros(1, dtype=np.float64),
+        0.5,
+        0.5,
+        0.0,
+        np.ones(1, dtype=np.float64),
+        0.0,
+        0.0,
+        np.array([8.0, 8.0], dtype=np.float64),
+        0.0,
+        0.0,
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
         save_flag=0,
-        theta_initial=5.0,
-        default_solve_q_dtheta=default_kwargs["default_solve_q_dtheta"],
-        default_solve_q_cos=custom_cos,
-        default_solve_q_sin=custom_sin,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=5,
     )
-
-    assert solve_calls == 2
-    assert len(diffraction._Q_VECTOR_CACHE) == 1
+    assert sum(np.asarray(table, dtype=np.float64).shape[0] for table in result[1]) == 5
 
 
-def test_q_vector_cache_reuses_copied_default_trig_tables(monkeypatch):
-    diffraction._Q_VECTOR_CACHE.clear()
-    diffraction._PHASE_SPACE_CACHE.clear()
-    diffraction._SOURCE_TEMPLATE_CACHE.clear()
-    solve_calls = 0
+def test_safe_wrapper_reports_source_template_cache_disabled(monkeypatch):
+    def fake_kernel(*_args, **_kwargs):
+        return _fake_result()
 
-    def fake_solve_q(*_args, **_kwargs):
-        nonlocal solve_calls
-        solve_calls += 1
-        return np.zeros((0, 4), dtype=np.float64), 0
-
-    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
-
-    default_kwargs = diffraction.get_default_solve_q_trig_kwargs()
-    copied_kwargs = {
-        "default_solve_q_dtheta": default_kwargs["default_solve_q_dtheta"],
-        "default_solve_q_cos": np.array(default_kwargs["default_solve_q_cos"], copy=True),
-        "default_solve_q_sin": np.array(default_kwargs["default_solve_q_sin"], copy=True),
-    }
-
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **copied_kwargs)
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **copied_kwargs)
-
-    assert solve_calls == 1
-    assert len(diffraction._Q_VECTOR_CACHE) == 1
-
-
-def test_q_vector_cache_reuses_readonly_helper_default_trig_views(monkeypatch):
-    diffraction._Q_VECTOR_CACHE.clear()
-    diffraction._PHASE_SPACE_CACHE.clear()
-    diffraction._SOURCE_TEMPLATE_CACHE.clear()
-    solve_calls = 0
-
-    def fake_solve_q(*_args, **_kwargs):
-        nonlocal solve_calls
-        solve_calls += 1
-        return np.zeros((0, 4), dtype=np.float64), 0
-
-    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
-
-    helper_kwargs_1 = diffraction.get_default_solve_q_trig_kwargs()
-    helper_kwargs_2 = diffraction.get_default_solve_q_trig_kwargs()
-    assert not np.shares_memory(
-        diffraction._CANONICAL_DEFAULT_SOLVE_Q_COS,
-        diffraction._DEFAULT_SOLVE_Q_COS,
-    )
-    assert not np.shares_memory(
-        diffraction._CANONICAL_DEFAULT_SOLVE_Q_SIN,
-        diffraction._DEFAULT_SOLVE_Q_SIN,
-    )
-
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **helper_kwargs_1)
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0, **helper_kwargs_2)
-
-    assert solve_calls == 1
-    assert len(diffraction._Q_VECTOR_CACHE) == 1
-
-
-def test_diffraction_safe_cache_can_be_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-):
-    cfg = _make_config_dir(
-        tmp_path,
-        debug={
-            "debug": {
-                "cache": {
-                    "families": {
-                        "diffraction_safe": "never",
-                    }
-                }
-            }
-        },
-    )
-    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
-    diffraction._Q_VECTOR_CACHE.clear()
-    diffraction._PHASE_SPACE_CACHE.clear()
-    diffraction._SOURCE_TEMPLATE_CACHE.clear()
-    solve_calls = 0
-
-    def fake_solve_q(*_args, **_kwargs):
-        nonlocal solve_calls
-        solve_calls += 1
-        return np.zeros((0, 4), dtype=np.float64), 0
-
-    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
-
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
-
-    assert solve_calls == 2
-    assert diffraction._Q_VECTOR_CACHE == {}
-    assert diffraction._PHASE_SPACE_CACHE == {}
-    assert diffraction._SOURCE_TEMPLATE_CACHE == {}
-
-
-def test_last_intersection_cache_can_be_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-):
-    cfg = _make_config_dir(
-        tmp_path,
-        debug={
-            "debug": {
-                "cache": {
-                    "families": {
-                        "diffraction_last_intersection": "never",
-                    }
-                }
-            }
-        },
-    )
-    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
-    build_calls = 0
-
-    def fail_build_intersection_cache(*_args, **_kwargs):
-        nonlocal build_calls
-        build_calls += 1
-        raise AssertionError("disabled last-intersection cache should not be built")
-
-    monkeypatch.setattr(
-        diffraction,
-        "build_intersection_cache",
-        fail_build_intersection_cache,
-    )
-
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
-
-    assert build_calls == 0
-    assert diffraction.get_last_intersection_cache() == []
-
-
-def test_last_intersection_cache_builds_when_retained(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-):
-    cfg = _make_config_dir(
-        tmp_path,
-        debug={
-            "debug": {
-                "cache": {
-                    "families": {
-                        "diffraction_last_intersection": "always",
-                    }
-                }
-            }
-        },
-    )
-    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
-    marker = np.arange(
-        diffraction.CURRENT_DETECTOR_CACHE_WIDTH,
-        dtype=np.float64,
-    ).reshape(1, -1)
-    build_calls = 0
-
-    def fake_build_intersection_cache(*_args, **_kwargs):
-        nonlocal build_calls
-        build_calls += 1
-        return [marker]
-
-    monkeypatch.setattr(
-        diffraction,
-        "build_intersection_cache",
-        fake_build_intersection_cache,
-    )
-
-    _call_safe([2.0, 3.0], save_flag=0, theta_initial=5.0)
-
-    cached = diffraction.get_last_intersection_cache()
-    assert build_calls == 1
-    assert len(cached) == 1
-    np.testing.assert_array_equal(cached[0], marker)
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_kernel)
+    _call_safe([1.0, 1.0], save_flag=0, events_per_beam_phase=50)
+    stats = diffraction.get_last_process_peaks_safe_stats()
+    assert stats["used_safe_cache"] is False

@@ -48,6 +48,7 @@ class MosaicParams:
     sigma_mosaic_deg: float
     gamma_mosaic_deg: float
     eta: float
+    events_per_beam_phase: int = 50
     solve_q_steps: int = 1000
     solve_q_rel_tol: float = 5.0e-4
     solve_q_mode: int = 0

@@ -283,6 +283,11 @@ class SamplingOpticsControlsViewState:
     sample_count_scale: Any = None
     sample_count_value_var: Any = None
     sample_count_value_label: Any = None
+    events_per_phase_frame: Any = None
+    events_per_phase_var: Any = None
+    events_per_phase_scale: Any = None
+    events_per_phase_value_var: Any = None
+    events_per_phase_value_label: Any = None
     rod_points_per_gz_frame: Any = None
     rod_points_per_gz_var: Any = None
     rod_points_per_gz_scale: Any = None

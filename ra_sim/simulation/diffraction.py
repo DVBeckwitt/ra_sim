@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
+from threading import local
 
 import numpy as np
 from ra_sim.config import get_dir
@@ -543,6 +544,7 @@ _LAST_INTERSECTION_CACHE_VIEWS = {
     "branch_representative_rows": [],
 }
 _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES = None
+_LAST_PROCESS_PEAKS_REPRESENTATIVE_STATE = local()
 _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "n_solve_q_calls": 0,
     "n_project_candidate_calls": 0,
@@ -7887,14 +7889,18 @@ def _set_last_process_peaks_representative_hit_tables(hit_tables):
     global _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES
     if hit_tables is None:
         _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES = None
+        _LAST_PROCESS_PEAKS_REPRESENTATIVE_STATE.hit_tables = None
         return
-    _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES = _copy_hit_table_sequence(hit_tables)
+    copied = _copy_hit_table_sequence(hit_tables)
+    _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES = copied
+    _LAST_PROCESS_PEAKS_REPRESENTATIVE_STATE.hit_tables = copied
 
 
 def get_last_process_peaks_representative_hit_tables():
-    if _LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES is None:
+    hit_tables = getattr(_LAST_PROCESS_PEAKS_REPRESENTATIVE_STATE, "hit_tables", None)
+    if hit_tables is None:
         return None
-    return _copy_hit_table_sequence(_LAST_PROCESS_PEAKS_REPRESENTATIVE_HIT_TABLES)
+    return _copy_hit_table_sequence(hit_tables)
 
 
 def get_last_intersection_cache_views():

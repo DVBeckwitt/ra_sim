@@ -468,6 +468,38 @@ gui_manual_geometry = _LazyModuleProxy(lambda: _load_gui_modules().gui_manual_ge
 gui_structure_model = _LazyModuleProxy(lambda: _load_gui_modules().gui_structure_model)
 
 
+def _headless_native_detector_coords_to_detector_display_coords_for_background(
+    load_background_by_index,
+    background_index: int,
+    *,
+    display_rotate_k: int = DISPLAY_ROTATE_K,
+):
+    try:
+        bg_idx = int(background_index)
+    except Exception:
+        return None
+    try:
+        native_background, _display_background = load_background_by_index(bg_idx)
+        native_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    except Exception:
+        return None
+    if len(native_shape) < 2 or min(native_shape) <= 0:
+        return None
+
+    def _to_display(col: float, row: float):
+        return gui_geometry_overlay.rotate_point_for_display(
+            float(col),
+            float(row),
+            native_shape,
+            int(display_rotate_k),
+        )
+
+    _to_display.__name__ = (
+        f"_headless_native_detector_coords_to_detector_display_coords_bg_{bg_idx}"
+    )
+    return _to_display
+
+
 def _coerce_float(value: object, default: float) -> float:
     try:
         parsed = float(value)
@@ -2892,6 +2924,22 @@ def run_headless_geometry_fit(
                 flip_x=background_state.backend_flip_x,
                 flip_y=background_state.backend_flip_y,
                 rotation_k=background_state.backend_rotation_k,
+            )
+        ),
+        native_detector_coords_to_detector_display_coords=(
+            _headless_native_detector_coords_to_detector_display_coords_for_background(
+                _load_background_by_index,
+                int(background_state.current_background_index),
+                display_rotate_k=DISPLAY_ROTATE_K,
+            )
+        ),
+        native_detector_coords_to_detector_display_coords_for_background=(
+            lambda background_index: (
+                _headless_native_detector_coords_to_detector_display_coords_for_background(
+                    _load_background_by_index,
+                    int(background_index),
+                    display_rotate_k=DISPLAY_ROTATE_K,
+                )
             )
         ),
         geometry_manual_simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,

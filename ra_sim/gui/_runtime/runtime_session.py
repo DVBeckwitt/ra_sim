@@ -9,6 +9,15 @@ from ra_sim.gui import bootstrap as gui_bootstrap
 
 write_excel = False
 
+# Module-level fallbacks for sampling controls. The runtime bootstrap later
+# reinitializes matching values inside the GUI session state, but helper
+# functions in this module also run in import-safe and test contexts where
+# those inner assignments have not executed.
+defaults = {}
+DEFAULT_EVENTS_PER_BEAM_PHASE = 50
+MIN_EVENTS_PER_BEAM_PHASE = 1
+MAX_EVENTS_PER_BEAM_PHASE = 1000
+
 
 gui_bootstrap.early_main_bootstrap(__name__)
 
@@ -41,6 +50,9 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
 from ra_sim.io.osc_reader import read_osc
+
+if not isinstance(globals().get("sampling_optics_controls_view_state"), SimpleNamespace):
+    sampling_optics_controls_view_state = SimpleNamespace()
 from ra_sim.utils.stacking_fault import (
     DEFAULT_PHASE_DELTA_EXPRESSION,
     DEFAULT_PHI_L_DIVISOR,
@@ -1261,6 +1273,9 @@ def _initialize_runtime_state_block_01() -> None:
     DEFAULT_RANDOM_SAMPLE_COUNT = 50
     MIN_RANDOM_SAMPLE_COUNT = 1
     MAX_RANDOM_SAMPLE_COUNT = 5000
+    DEFAULT_EVENTS_PER_BEAM_PHASE = 50
+    MIN_EVENTS_PER_BEAM_PHASE = 1
+    MAX_EVENTS_PER_BEAM_PHASE = 1000
     MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT = 50000
     MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS = 3
     CUSTOM_SAMPLING_OPTION = "Custom"
@@ -1648,6 +1663,7 @@ def _initialize_runtime_state_block_05() -> None:
         "center_y": center_default[1],
         "sampling_resolution": CUSTOM_SAMPLING_OPTION,
         "sampling_count": DEFAULT_RANDOM_SAMPLE_COUNT,
+        "events_per_beam_phase": DEFAULT_EVENTS_PER_BEAM_PHASE,
         "rod_points_per_gz": gui_controllers.default_rod_points_per_gz(cv),
         "bandwidth_percent": float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
         "sf_prune_bias": sf_prune_bias_default,
@@ -2019,6 +2035,440 @@ fit_theta_checkbutton = None
 _geometry_fit_runtime_value_callbacks = None
 _geometry_fit_var_map: dict[str, object] = {}
 _native_detector_coords_to_caked_display_coords = None
+pending_detector_to_caked_manual_trace = None
+
+
+def _detector_to_caked_manual_trace_background_index() -> int:
+    try:
+        return int(background_runtime_state.current_background_index)
+    except Exception:
+        return 0
+
+
+def _detector_to_caked_manual_trace_run_id(
+    entries: Sequence[Mapping[str, object]] | None,
+) -> str | None:
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        run_id = entry.get("manual_geometry_run_id")
+        if run_id is not None:
+            return str(run_id)
+    return None
+
+
+def _detector_to_caked_manual_trace_entry_snapshot(
+    entries: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    return [dict(entry) for entry in entries or () if isinstance(entry, Mapping)]
+
+
+def _detector_to_caked_manual_trace_projection_state() -> dict[str, object]:
+    callback = globals().get("_native_detector_coords_to_caked_display_coords")
+    callback_available = callable(callback)
+    try:
+        radial_count = int(
+            np.asarray(
+                getattr(simulation_runtime_state, "last_caked_radial_values", ()),
+                dtype=float,
+            ).size
+        )
+    except Exception:
+        radial_count = 0
+    try:
+        azimuth_count = int(
+            np.asarray(
+                getattr(simulation_runtime_state, "last_caked_azimuth_values", ()),
+                dtype=float,
+            ).size
+        )
+    except Exception:
+        azimuth_count = 0
+    try:
+        caked_image = getattr(simulation_runtime_state, "last_caked_image_unscaled", None)
+        image_ready = bool(
+            caked_image is not None
+            and np.asarray(caked_image).size
+        )
+    except Exception:
+        image_ready = False
+    bundle = getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
+    bundle_ready = isinstance(bundle, CakeTransformBundle)
+    return {
+        "callback_available": bool(callback_available),
+        "caked_projection_ready": bool(
+            callback_available
+            and image_ready
+            and radial_count > 1
+            and azimuth_count > 1
+            and bundle_ready
+        ),
+        "radial_count": int(radial_count),
+        "azimuth_count": int(azimuth_count),
+        "image_ready": bool(image_ready),
+        "bundle_ready": bool(bundle_ready),
+    }
+
+
+def _detector_to_caked_manual_trace_point(
+    entry: Mapping[str, object] | None,
+    tuple_key: str,
+    key_pairs: tuple[tuple[str, str], ...],
+) -> tuple[float, float] | None:
+    point = gui_manual_geometry._geometry_manual_tuple_point(entry, tuple_key)
+    if point is not None:
+        return point
+    return gui_manual_geometry._geometry_manual_finite_point(entry, key_pairs)
+
+
+def _detector_to_caked_manual_trace_native_to_caked(
+    point: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    callback = globals().get("_native_detector_coords_to_caked_display_coords")
+    if point is None or not callable(callback):
+        return None
+    try:
+        value = callback(float(point[0]), float(point[1]))
+    except Exception:
+        value = None
+    return gui_manual_geometry._geometry_manual_valid_tuple_point(value)
+
+
+def _detector_to_caked_manual_trace_display_to_native(
+    point: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    callback = globals().get("_background_display_to_native_detector_coords")
+    if point is None or not callable(callback):
+        return None
+    try:
+        value = callback(float(point[0]), float(point[1]))
+    except Exception:
+        value = None
+    return gui_manual_geometry._geometry_manual_valid_tuple_point(value)
+
+
+def _detector_to_caked_manual_trace_point_text(
+    point: tuple[float, float] | None,
+    *,
+    reason: str,
+) -> str:
+    if point is None:
+        return f"<unavailable reason={str(reason).replace(' ', '_')}>"
+    return f"({float(point[0]):.3f},{float(point[1]):.3f})"
+
+
+def _detector_to_caked_manual_trace_saved_entries() -> list[dict[str, object]]:
+    pairs_for_index = globals().get("_geometry_manual_pairs_for_index")
+    if not callable(pairs_for_index):
+        return []
+    background_index = _detector_to_caked_manual_trace_background_index()
+    try:
+        raw_entries = pairs_for_index(background_index)
+    except Exception:
+        raw_entries = []
+    entries: list[dict[str, object]] = []
+    refresh_entry = getattr(
+        globals().get("geometry_manual_projection_workflow"),
+        "refresh_entry_geometry",
+        None,
+    )
+    for raw_entry in raw_entries or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        if callable(refresh_entry):
+            try:
+                refreshed = refresh_entry(dict(entry))
+            except Exception:
+                refreshed = None
+            if isinstance(refreshed, Mapping):
+                entry = dict(refreshed)
+        if (
+            gui_manual_geometry._geometry_manual_trace_group_key(entry)
+            == ("q_group", "primary", 1, 10)
+            and gui_manual_geometry._geometry_manual_trace_hkl(entry) == (-1, 0, 10)
+        ):
+            entries.append(entry)
+    return entries
+
+
+def _emit_detector_to_caked_manual_trace(
+    *,
+    reason: str,
+    trace_deferred_until_caked_ready: bool,
+    entries: Sequence[Mapping[str, object]] | None = None,
+    pending_background_index: int | None = None,
+    pending_manual_geometry_run_id: str | None = None,
+) -> bool:
+    state = _detector_to_caked_manual_trace_projection_state()
+    trace_entries = (
+        _detector_to_caked_manual_trace_saved_entries()
+        if entries is None
+        else _detector_to_caked_manual_trace_entry_snapshot(entries)
+    )
+    if not trace_entries:
+        return False
+    trace_run_id = (
+        pending_manual_geometry_run_id
+        or _detector_to_caked_manual_trace_run_id(trace_entries)
+        or gui_manual_geometry.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID
+    )
+    header_parts = [
+        "[ra-sim] detector -> caked Qr/Qz projection",
+        gui_manual_geometry.geometry_manual_cmd_provenance_text(
+            run_id=trace_run_id,
+            emitter="_emit_detector_to_caked_manual_trace",
+            event="detector_to_caked_projection",
+            actual_source="saved_visual_coordinates",
+            expected_source="saved_visual_coordinates",
+        ),
+        f"reason={reason}",
+        "active_row_policy=saved_visual_coordinates",
+        f"caked_callback_available={'yes' if state.get('callback_available') else 'no'}",
+        f"callback_available={'yes' if state.get('callback_available') else 'no'}",
+        f"caked_projection_ready={'yes' if state.get('caked_projection_ready') else 'no'}",
+        "trace_emitted_before_caked_ready=no",
+        (
+            "trace_deferred_until_caked_ready="
+            f"{'yes' if trace_deferred_until_caked_ready else 'no'}"
+        ),
+    ]
+    if pending_background_index is not None:
+        header_parts.append(f"pending_background_index={int(pending_background_index)}")
+    if pending_manual_geometry_run_id:
+        header_parts.append(
+            f"pending_manual_geometry_run_id={pending_manual_geometry_run_id}"
+        )
+    print(" ".join(header_parts))
+    for entry in sorted(
+        trace_entries,
+        key=lambda item: int(item.get("source_branch_index", 9999) or 9999),
+    ):
+        raw_display = _detector_to_caked_manual_trace_point(
+            entry,
+            "raw_detector_display_px",
+            (("detector_seed_col", "detector_seed_row"), ("raw_x", "raw_y")),
+        )
+        raw_native = _detector_to_caked_manual_trace_point(
+            entry,
+            "raw_detector_native_px",
+            (),
+        )
+        if raw_native is None:
+            raw_native = _detector_to_caked_manual_trace_display_to_native(raw_display)
+        geometry_display = _detector_to_caked_manual_trace_point(
+            entry,
+            "geometry_detector_display_px",
+            (
+                ("refined_detector_display_col", "refined_detector_display_row"),
+                ("x", "y"),
+            ),
+        )
+        geometry_native = _detector_to_caked_manual_trace_point(
+            entry,
+            "geometry_detector_native_px",
+            (
+                ("refined_detector_native_col", "refined_detector_native_row"),
+                ("background_detector_x", "background_detector_y"),
+                ("detector_x", "detector_y"),
+                ("native_col", "native_row"),
+            ),
+        )
+        if geometry_native is None:
+            geometry_native = _detector_to_caked_manual_trace_display_to_native(
+                geometry_display
+            )
+        sim_display = _detector_to_caked_manual_trace_point(
+            entry,
+            "sim_visual_detector_display_px",
+            (
+                ("refined_sim_x", "refined_sim_y"),
+                ("sim_col_raw", "sim_row_raw"),
+                ("sim_col", "sim_row"),
+            ),
+        )
+        sim_existing_native = _detector_to_caked_manual_trace_point(
+            entry,
+            "sim_visual_detector_native_existing",
+            (
+                ("refined_sim_native_x", "refined_sim_native_y"),
+                ("sim_native_x", "sim_native_y"),
+            ),
+        )
+        sim_native = _detector_to_caked_manual_trace_display_to_native(sim_display)
+        if sim_native is None:
+            sim_native = _detector_to_caked_manual_trace_point(
+                entry,
+                "sim_visual_detector_native_px",
+                (),
+            )
+        raw_caked = (
+            _detector_to_caked_manual_trace_native_to_caked(raw_native)
+            or _detector_to_caked_manual_trace_point(entry, "raw_caked_deg", ())
+        )
+        geometry_caked = (
+            _detector_to_caked_manual_trace_native_to_caked(geometry_native)
+            or _detector_to_caked_manual_trace_point(entry, "geometry_caked_deg", ())
+        )
+        sim_caked = (
+            _detector_to_caked_manual_trace_native_to_caked(sim_native)
+            or _detector_to_caked_manual_trace_point(entry, "sim_visual_caked_deg", ())
+        )
+        delta = None
+        if geometry_caked is not None and sim_caked is not None:
+            delta = (
+                float(geometry_caked[0]) - float(sim_caked[0]),
+                ((float(geometry_caked[1]) - float(sim_caked[1]) + 180.0) % 360.0)
+                - 180.0,
+            )
+        branch = entry.get("source_branch_index", "<none>")
+        row_stamp = gui_manual_geometry.geometry_manual_cmd_provenance_text(
+            run_id=entry.get("manual_geometry_run_id", trace_run_id),
+            emitter="_emit_detector_to_caked_manual_trace",
+            event="detector_to_caked_projection_row",
+            branch=branch,
+            actual_source="saved_visual_coordinates",
+            expected_source="saved_visual_coordinates",
+        )
+        print(
+            "branch={branch} q_group_key={q_group!r} hkl={hkl!r} "
+            "raw_detector_display_px={raw_display} raw_detector_native_px={raw_native} "
+            "raw_display_to_native_px={raw_display_to_native} "
+            "geometry_detector_display_px={geometry_display} "
+            "geometry_detector_native_px={geometry_native} "
+            "geometry_display_to_native_px={geometry_display_to_native} "
+            "sim_visual_detector_display_px={sim_display} "
+            "sim_visual_detector_native_existing={sim_existing_native} "
+            "sim_visual_detector_native_px={sim_native} "
+            "raw_caked_deg={raw_caked} geometry_caked_deg={geometry_caked} "
+            "sim_caked_deg={sim_caked} geometry_minus_sim_caked_delta_deg={delta} "
+            "active_row_policy=saved_visual_coordinates {stamp}".format(
+                branch=branch,
+                q_group=entry.get("q_group_key", "<none>"),
+                hkl=entry.get("hkl", "<none>"),
+                raw_display=_detector_to_caked_manual_trace_point_text(
+                    raw_display,
+                    reason="missing raw detector display",
+                ),
+                raw_native=_detector_to_caked_manual_trace_point_text(
+                    raw_native,
+                    reason="missing raw detector native",
+                ),
+                raw_display_to_native=_detector_to_caked_manual_trace_point_text(
+                    _detector_to_caked_manual_trace_display_to_native(raw_display),
+                    reason="display to native unavailable",
+                ),
+                geometry_display=_detector_to_caked_manual_trace_point_text(
+                    geometry_display,
+                    reason="missing geometry detector display",
+                ),
+                geometry_native=_detector_to_caked_manual_trace_point_text(
+                    geometry_native,
+                    reason="missing geometry detector native",
+                ),
+                geometry_display_to_native=_detector_to_caked_manual_trace_point_text(
+                    _detector_to_caked_manual_trace_display_to_native(geometry_display),
+                    reason="display to native unavailable",
+                ),
+                sim_display=_detector_to_caked_manual_trace_point_text(
+                    sim_display,
+                    reason="missing sim visual detector display",
+                ),
+                sim_existing_native=_detector_to_caked_manual_trace_point_text(
+                    sim_existing_native,
+                    reason="missing existing sim native",
+                ),
+                sim_native=_detector_to_caked_manual_trace_point_text(
+                    sim_native,
+                    reason="missing sim visual detector native",
+                ),
+                raw_caked=_detector_to_caked_manual_trace_point_text(
+                    raw_caked,
+                    reason="native to caked unavailable",
+                ),
+                geometry_caked=_detector_to_caked_manual_trace_point_text(
+                    geometry_caked,
+                    reason="native to caked unavailable",
+                ),
+                sim_caked=_detector_to_caked_manual_trace_point_text(
+                    sim_caked,
+                    reason="native to caked unavailable",
+                ),
+                delta=_detector_to_caked_manual_trace_point_text(
+                    delta,
+                    reason="missing geometry or sim caked",
+                ),
+                stamp=row_stamp,
+            )
+        )
+    return True
+
+
+def _emit_or_defer_detector_to_caked_manual_trace(reason: str) -> bool:
+    global pending_detector_to_caked_manual_trace
+    state = _detector_to_caked_manual_trace_projection_state()
+    if not bool(state.get("caked_projection_ready", False)):
+        entries = _detector_to_caked_manual_trace_saved_entries()
+        if entries:
+            snapshot = _detector_to_caked_manual_trace_entry_snapshot(entries)
+            pending_detector_to_caked_manual_trace = {
+                "reason": str(reason),
+                "background_index": _detector_to_caked_manual_trace_background_index(),
+                "manual_geometry_run_id": _detector_to_caked_manual_trace_run_id(
+                    snapshot
+                ),
+                "trace_deferred_until_caked_ready": True,
+                "entries": snapshot,
+                "entry_count": int(len(snapshot)),
+            }
+        return False
+    if isinstance(pending_detector_to_caked_manual_trace, Mapping):
+        return _flush_pending_detector_to_caked_manual_trace(str(reason))
+    return _emit_detector_to_caked_manual_trace(
+        reason=str(reason),
+        trace_deferred_until_caked_ready=False,
+    )
+
+
+def _flush_pending_detector_to_caked_manual_trace(reason: str = "caked_projection_ready") -> bool:
+    global pending_detector_to_caked_manual_trace
+    if not isinstance(pending_detector_to_caked_manual_trace, Mapping):
+        return False
+    state = _detector_to_caked_manual_trace_projection_state()
+    if not bool(state.get("caked_projection_ready", False)):
+        return False
+    pending = dict(pending_detector_to_caked_manual_trace)
+    pending_background_index = pending.get("background_index")
+    if (
+        isinstance(pending_background_index, int)
+        and pending_background_index
+        != _detector_to_caked_manual_trace_background_index()
+    ):
+        pending_detector_to_caked_manual_trace = None
+        return False
+    pending_entries = pending.get("entries")
+    entries = _detector_to_caked_manual_trace_entry_snapshot(
+        pending_entries if isinstance(pending_entries, (list, tuple)) else None
+    )
+    if not entries:
+        pending_detector_to_caked_manual_trace = None
+        return False
+    pending_detector_to_caked_manual_trace = None
+    return _emit_detector_to_caked_manual_trace(
+        reason=str(pending.get("reason", reason)),
+        trace_deferred_until_caked_ready=True,
+        entries=entries,
+        pending_background_index=(
+            int(pending_background_index)
+            if isinstance(pending_background_index, int)
+            else None
+        ),
+        pending_manual_geometry_run_id=(
+            str(pending.get("manual_geometry_run_id"))
+            if pending.get("manual_geometry_run_id") is not None
+            else None
+        ),
+    )
 _scattering_angles_to_detector_pixel = None
 _detector_pixel_to_scattering_angles = None
 _get_detector_angular_maps = None
@@ -2344,6 +2794,45 @@ def _native_detector_coords_to_live_bundle_detector_coords(
         float(row),
         shape,
     )
+
+
+def _native_detector_coords_to_detector_display_coords_for_background(
+    background_index: int,
+) -> Callable[[float, float], tuple[float | None, float | None]] | None:
+    """Build a native->display transform pinned to one background's native shape."""
+
+    try:
+        bg_idx = int(background_index)
+    except Exception:
+        return None
+    native_background = None
+    try:
+        if bg_idx == int(background_runtime_state.current_background_index):
+            native_background = _get_current_background_native()
+        else:
+            native_background, _display_background = _load_background_image_by_index(bg_idx)
+    except Exception:
+        native_background = None
+    if native_background is None:
+        return None
+    try:
+        shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    except Exception:
+        return None
+    if len(shape) < 2 or min(shape) <= 0:
+        return None
+
+    def _to_display(col: float, row: float) -> tuple[float | None, float | None]:
+        return _native_detector_coords_to_bundle_detector_coords(
+            float(col),
+            float(row),
+            shape,
+        )
+
+    _to_display.__name__ = (
+        f"_native_detector_coords_to_detector_display_coords_bg_{int(bg_idx)}"
+    )
+    return _to_display
 
 
 def _geometry_manual_detector_display_from_native(
@@ -3350,6 +3839,7 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
         "sigma_mosaic_deg": sigma_mosaic_var.get(),
         "gamma_mosaic_deg": gamma_mosaic_var.get(),
         "eta": eta_var.get(),
+        "events_per_beam_phase": _current_events_per_beam_phase(),
         "solve_q_steps": resolved_solve_q_steps,
         "solve_q_rel_tol": solve_q.rel_tol,
         "solve_q_mode": solve_q.mode_flag,
@@ -5322,12 +5812,54 @@ def _refresh_geometry_manual_pick_session() -> dict[str, object]:
     if not isinstance(cache_data, dict):
         return current_session
 
+    if _geometry_manual_pick_uses_caked_space():
+        caked_grouped_candidates = cache_data.get("caked_qr_projection_grouped_candidates")
+        if not (
+            isinstance(caked_grouped_candidates, Mapping)
+            and bool(caked_grouped_candidates)
+        ):
+            return current_session
+        grouped_candidates = caked_grouped_candidates
+    else:
+        grouped_candidates = (
+            gui_manual_geometry.geometry_manual_detector_picker_grouped_candidates_from_cache(
+                cache_data,
+                display_background=background_image,
+                profile_cache=simulation_runtime_state.profile_cache,
+            )
+        )
+
     refreshed_session = gui_manual_geometry.refresh_geometry_manual_pick_session_candidates(
         current_session,
-        grouped_candidates=cache_data.get("grouped_candidates"),
+        grouped_candidates=grouped_candidates,
         cache_signature=cache_data.get("signature"),
         candidate_source_key=_geometry_manual_candidate_source_key,
+        profile_cache=simulation_runtime_state.profile_cache,
     )
+    if _geometry_manual_pick_uses_caked_space():
+        gui_manual_geometry.geometry_manual_trace_live_caked_visual_source_event(
+            "pending_visual_map_built",
+            manual_geometry_run_id=(
+                refreshed_session.get("manual_geometry_run_id")
+                if isinstance(refreshed_session, dict)
+                else None
+            ),
+            selected_candidate=(
+                refreshed_session.get("tagged_candidate")
+                if isinstance(refreshed_session, dict)
+                else None
+            ),
+            pending_entries=(
+                refreshed_session.get("group_entries", [])
+                if isinstance(refreshed_session, dict)
+                else []
+            ),
+            saved_entries=(
+                refreshed_session.get("pending_entries", [])
+                if isinstance(refreshed_session, dict)
+                else []
+            ),
+        )
     if refreshed_session != current_session:
         return _set_geometry_manual_pick_session(refreshed_session)
     return current_session
@@ -6909,6 +7441,17 @@ def _initialize_runtime_controls_block_04() -> None:
             caked_projection_signature=(
                 geometry_manual_projection_workflow.caked_projection_signature
             ),
+            detector_simulation_image=lambda: simulation_runtime_state.unscaled_image,
+            caked_simulation_image=lambda: simulation_runtime_state.last_caked_image_unscaled,
+            radial_axis=lambda: simulation_runtime_state.last_caked_radial_values,
+            azimuth_axis=lambda: simulation_runtime_state.last_caked_azimuth_values,
+            detector_display_to_native_coords=_background_display_to_native_detector_coords,
+            native_detector_coords_to_caked_display_coords=(
+                _native_detector_coords_to_caked_display_coords
+            ),
+            caked_angles_to_detector_display_coords=(
+                _caked_angles_to_background_display_coords
+            ),
             replace_cache_state=_set_geometry_manual_pick_cache_state,
             current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
             pairs_for_index=_geometry_manual_pairs_for_index,
@@ -7091,7 +7634,14 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
     ) -> tuple[list[dict[str, object]], tuple[object, ...]]:
         if not isinstance(cache_data, dict):
             return [], ("empty",)
-        grouped = cache_data.get("grouped_candidates")
+        grouped = gui_manual_geometry.geometry_manual_detector_picker_grouped_candidates_from_cache(
+            cache_data,
+            profile_cache=simulation_runtime_state.profile_cache,
+        )
+        signature_kind = "detector_picker_grouped"
+        if not grouped:
+            grouped = cache_data.get("grouped_candidates")
+            signature_kind = "grouped"
         if not isinstance(grouped, dict):
             return [], ("no_grouped_candidates",)
         rows: list[dict[str, object]] = []
@@ -7099,7 +7649,7 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
             if isinstance(entries, (list, tuple)):
                 rows.extend(dict(entry) for entry in entries if isinstance(entry, dict))
         signature = (
-            "grouped",
+            signature_kind,
             cache_data.get("signature"),
             len(rows),
             _rows_content_signature(rows),
@@ -8414,6 +8964,8 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
     if _toggle_caked_2d_requires_overlay_invalidation(target_view_mode):
         _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _apply_main_caked_view_toggle()
+    if target_view_mode == "caked":
+        _emit_or_defer_detector_to_caked_manual_trace("toggle_caked_2d")
     _sync_selected_qr_rod_controls_state()
     _sync_center_marker(redraw=False)
     reselect_current_peak = getattr(
@@ -12076,6 +12628,7 @@ def _build_current_dataset_simulation_text(*, view_text: str) -> str:
         optics_text = "Unknown"
 
     sample_count = int(max(1, getattr(simulation_runtime_state, "num_samples", 1)))
+    events_per_phase = int(_current_events_per_beam_phase())
     try:
         sf_text = gui_controllers.format_structure_factor_pruning_status(
             simulation_runtime_state.sf_prune_stats,
@@ -12083,7 +12636,11 @@ def _build_current_dataset_simulation_text(*, view_text: str) -> str:
         )
     except Exception:
         sf_text = "SF pruning unavailable"
-    return f"{view_text} | optics {optics_text} | sampling {sample_count:,} samples | {sf_text}"
+    return (
+        f"{view_text} | optics {optics_text} | "
+        f"sampling {sample_count:,} samples | "
+        f"events {events_per_phase:,}/phase | {sf_text}"
+    )
 
 
 def _build_current_dataset_structure_text() -> str:
@@ -13334,6 +13891,9 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 sigma_mosaic_deg=float(mosaic_params_job["sigma_mosaic_deg"]),
                 gamma_mosaic_deg=float(mosaic_params_job["gamma_mosaic_deg"]),
                 eta=float(mosaic_params_job["eta"]),
+                events_per_beam_phase=int(
+                    mosaic_params_job.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE)
+                ),
                 solve_q_steps=int(mosaic_params_job["solve_q_steps"]),
                 solve_q_rel_tol=float(mosaic_params_job["solve_q_rel_tol"]),
                 solve_q_mode=int(mosaic_params_job["solve_q_mode"]),
@@ -14777,13 +15337,16 @@ def _restore_caked_display_payload_from_cached_results(
             bg_payload=None,
         )
         simulation_runtime_state.last_q_space_payload_signature = None
-    return bool(
+    ready = bool(
         isinstance(sim_caked, dict)
         or (
             live_q_space_requested
             and simulation_runtime_state.last_q_space_image_unscaled is not None
         )
     )
+    if ready:
+        _flush_pending_detector_to_caked_manual_trace("cached_caked_payload_restored")
+    return ready
 
 
 def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
@@ -15209,6 +15772,7 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         )
     else:
         simulation_runtime_state.last_q_space_payload_signature = None
+    _flush_pending_detector_to_caked_manual_trace("analysis_result_applied")
 
     _store_cached_caking_entry(
         "sim",
@@ -16345,6 +16909,9 @@ def do_update():
                 "sigma_mosaic_deg": float(mosaic_params["sigma_mosaic_deg"]),
                 "gamma_mosaic_deg": float(mosaic_params["gamma_mosaic_deg"]),
                 "eta": float(mosaic_params["eta"]),
+                "events_per_beam_phase": int(
+                    mosaic_params.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE)
+                ),
                 "solve_q_steps": int(mosaic_params["solve_q_steps"]),
                 "solve_q_rel_tol": float(mosaic_params["solve_q_rel_tol"]),
                 "solve_q_mode": int(mosaic_params["solve_q_mode"]),
@@ -17308,6 +17875,7 @@ def do_update():
         _schedule_exact_cake_numba_warmup_once()
         _schedule_forward_simulation_numba_warmup_once()
         _schedule_qr_rod_simulation_numba_warmup_once()
+    _flush_pending_detector_to_caked_manual_trace("do_update_complete")
     simulation_runtime_state.update_running = False
     if "progress_label" in globals() and progress_label is not None:
         try:
@@ -19662,6 +20230,7 @@ def _geometry_source_snapshot_signature_from_params(
         int(mosaic_params["solve_q_steps"]),
         round(float(mosaic_params["solve_q_rel_tol"]), 8),
         int(mosaic_params["solve_q_mode"]),
+        int(mosaic_params.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE)),
         tuple(mosaic_params.get("_sampling_signature", ())),
         round(_geometry_source_signature_numeric(sf_prune_bias), 3),
         int((sf_prune_stats or {}).get("qr_kept", 0)),
@@ -28437,6 +29006,15 @@ def _parse_sample_count(raw_value, fallback):
     )
 
 
+def _parse_events_per_beam_phase(raw_value, fallback):
+    return gui_controllers.normalize_events_per_beam_phase(
+        raw_value,
+        fallback,
+        minimum=MIN_EVENTS_PER_BEAM_PHASE,
+        maximum=MAX_EVENTS_PER_BEAM_PHASE,
+    )
+
+
 def _default_random_sample_count() -> int:
     configured_count = defaults.get("sampling_count")
     if configured_count is not None:
@@ -28448,6 +29026,13 @@ def _default_random_sample_count() -> int:
         DEFAULT_RANDOM_SAMPLE_COUNT,
     )
     return _parse_sample_count(legacy_count, DEFAULT_RANDOM_SAMPLE_COUNT)
+
+
+def _default_events_per_beam_phase() -> int:
+    return _parse_events_per_beam_phase(
+        defaults.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE),
+        DEFAULT_EVENTS_PER_BEAM_PHASE,
+    )
 
 
 def _parse_rod_points_per_gz(raw_value, fallback):
@@ -28473,6 +29058,16 @@ def _current_random_sample_count(default=None):
     sample_count_var = sampling_optics_controls_view_state.sample_count_var
     raw_value = sample_count_var.get() if sample_count_var is not None else fallback
     return _parse_sample_count(raw_value, fallback)
+
+
+def _current_events_per_beam_phase(default=None):
+    fallback = _parse_events_per_beam_phase(
+        default if default is not None else _default_events_per_beam_phase(),
+        DEFAULT_EVENTS_PER_BEAM_PHASE,
+    )
+    events_var = getattr(sampling_optics_controls_view_state, "events_per_phase_var", None)
+    raw_value = events_var.get() if events_var is not None else fallback
+    return _parse_events_per_beam_phase(raw_value, fallback)
 
 
 def _current_active_sample_count() -> int:
@@ -28502,6 +29097,13 @@ def _refresh_resolution_display():
     gui_views.set_sampling_sample_count_text(
         sampling_optics_controls_view_state,
         random_summary_text,
+    )
+    events_per_phase = _current_events_per_beam_phase(
+        default=defaults.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE),
+    )
+    gui_views.set_sampling_events_per_phase_text(
+        sampling_optics_controls_view_state,
+        gui_controllers.format_events_per_beam_phase(events_per_phase),
     )
     rod_points_per_gz = _current_rod_points_per_gz(
         default=defaults.get("rod_points_per_gz"),
@@ -28539,6 +29141,7 @@ def _refresh_resolution_display():
             solve_q_mode_summary = ""
     summary_parts = [
         random_summary_text,
+        f"events {events_per_phase:,}/phase",
         f"rods {rod_points_per_gz:,}/Gz",
         f"optics {optics_summary}",
     ]
@@ -28566,8 +29169,27 @@ def _normalize_random_sample_count_control(default=None) -> int:
     return int(normalized)
 
 
+def _normalize_events_per_beam_phase_control(default=None) -> int:
+    events_var = sampling_optics_controls_view_state.events_per_phase_var
+    normalized = _current_events_per_beam_phase(default=default)
+    if events_var is not None:
+        try:
+            current_value = int(round(float(events_var.get())))
+        except Exception:
+            current_value = normalized
+        if current_value != normalized:
+            events_var.set(normalized)
+    defaults["events_per_beam_phase"] = int(normalized)
+    return int(normalized)
+
+
 def _preview_random_sample_count(_value=None):
     _normalize_random_sample_count_control(default=_default_random_sample_count())
+    _refresh_resolution_display()
+
+
+def _preview_events_per_beam_phase(_value=None):
+    _normalize_events_per_beam_phase_control(default=_default_events_per_beam_phase())
     _refresh_resolution_display()
 
 
@@ -28578,6 +29200,17 @@ def _apply_random_sample_count(*, trigger_update=True):
     _refresh_resolution_display()
     if trigger_update and simulation_runtime_state.num_samples != previous_num_samples:
         update_mosaic_cache()
+        schedule_update()
+
+
+def _apply_events_per_beam_phase(*, trigger_update=True):
+    _normalize_events_per_beam_phase_control(default=_default_events_per_beam_phase())
+    _refresh_resolution_display()
+    if trigger_update:
+        _invalidate_geometry_manual_pick_cache()
+        simulation_runtime_state.last_sim_signature = None
+        simulation_runtime_state.last_simulation_signature = None
+        simulation_runtime_state.worker_ready_result = None
         schedule_update()
 
 
@@ -28704,6 +29337,9 @@ def _initialize_runtime_controls_block_46() -> None:
     initial_rod_points_per_gz = _current_rod_points_per_gz(
         default=defaults.get("rod_points_per_gz"),
     )
+    initial_events_per_phase = _current_events_per_beam_phase(
+        default=defaults.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE),
+    )
 
     gui_views.create_sampling_optics_controls(
         parent=sampling_pruning_frame.frame,
@@ -28712,6 +29348,12 @@ def _initialize_runtime_controls_block_46() -> None:
         sample_count_min=MIN_RANDOM_SAMPLE_COUNT,
         sample_count_max=MAX_RANDOM_SAMPLE_COUNT,
         sample_count_text=gui_controllers.format_sampling_count_summary(initial_sample_count),
+        events_per_phase_value=initial_events_per_phase,
+        events_per_phase_min=MIN_EVENTS_PER_BEAM_PHASE,
+        events_per_phase_max=MAX_EVENTS_PER_BEAM_PHASE,
+        events_per_phase_text=gui_controllers.format_events_per_beam_phase(
+            initial_events_per_phase
+        ),
         rod_points_per_gz_value=initial_rod_points_per_gz,
         rod_points_per_gz_min=gui_controllers.ROD_POINTS_PER_GZ_MIN,
         rod_points_per_gz_max=gui_controllers.ROD_POINTS_PER_GZ_MAX,
@@ -28724,6 +29366,10 @@ def _initialize_runtime_controls_block_46() -> None:
         optics_mode_text=_normalize_optics_mode_label(defaults.get("optics_mode", "fast")),
         on_sample_count_slide=_preview_random_sample_count,
         on_commit_sample_count=lambda _event: _apply_random_sample_count(trigger_update=True),
+        on_events_per_phase_slide=_preview_events_per_beam_phase,
+        on_commit_events_per_phase=lambda _event: _apply_events_per_beam_phase(
+            trigger_update=True
+        ),
         on_rod_points_per_gz_slide=_preview_rod_points_per_gz,
         on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(trigger_update=True),
     )
@@ -29930,6 +30576,9 @@ def _build_geometry_fit_async_job(
         ),
         "unrotate_display_peaks": manual_dataset_bindings.unrotate_display_peaks,
         "display_to_native_sim_coords": (manual_dataset_bindings.display_to_native_sim_coords),
+        "native_detector_coords_to_detector_display_coords": (
+            manual_dataset_bindings.native_detector_coords_to_detector_display_coords
+        ),
         "select_fit_orientation": manual_dataset_bindings.select_fit_orientation,
         "apply_orientation_to_entries": (manual_dataset_bindings.apply_orientation_to_entries),
         "orient_image_for_fit": manual_dataset_bindings.orient_image_for_fit,
@@ -31959,6 +32608,33 @@ def _run_async_geometry_fit_worker_job(
                 f"exact caked projector unavailable for background {int(background_idx) + 1}"
             )
 
+    def _worker_native_detector_coords_to_detector_display_coords_for_background(
+        background_index: int,
+    ) -> Callable[[float, float], tuple[float | None, float | None]] | None:
+        try:
+            bg_idx = int(background_index)
+        except Exception:
+            return None
+        background_payload = dict(
+            dict(job_data.get("background_images", {}) or {}).get(bg_idx) or {}
+        )
+        native_background = background_payload.get("native")
+        try:
+            shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+        except Exception:
+            return None
+        if len(shape) < 2 or min(shape) <= 0:
+            return None
+        rotate_k = int(job_data.get("display_rotate_k", DISPLAY_ROTATE_K))
+
+        def _to_display(col: float, row: float) -> tuple[float | None, float | None]:
+            return _rotate_point_for_display(float(col), float(row), shape, rotate_k)
+
+        _to_display.__name__ = (
+            f"_worker_native_detector_coords_to_detector_display_coords_bg_{bg_idx}"
+        )
+        return _to_display
+
     worker_manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=list(job_data.get("osc_files", ()) or ()),
         current_background_index=int(job_data.get("current_background_index", 0)),
@@ -32004,6 +32680,12 @@ def _run_async_geometry_fit_worker_job(
         ),
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
         display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
+        native_detector_coords_to_detector_display_coords=(
+            job_data.get("native_detector_coords_to_detector_display_coords")
+        ),
+        native_detector_coords_to_detector_display_coords_for_background=(
+            _worker_native_detector_coords_to_detector_display_coords_for_background
+        ),
         select_fit_orientation=job_data.get("select_fit_orientation"),
         apply_orientation_to_entries=job_data.get("apply_orientation_to_entries"),
         orient_image_for_fit=job_data.get("orient_image_for_fit"),
@@ -32441,6 +33123,12 @@ def _initialize_runtime_controls_block_50() -> None:
             ),
             "native_detector_coords_to_bundle_detector_coords": (
                 _native_detector_coords_to_live_bundle_detector_coords
+            ),
+            "native_detector_coords_to_detector_display_coords": (
+                _native_detector_coords_to_live_bundle_detector_coords
+            ),
+            "native_detector_coords_to_detector_display_coords_for_background": (
+                _native_detector_coords_to_detector_display_coords_for_background
             ),
             "geometry_manual_simulated_peaks_for_params": (
                 _geometry_manual_simulated_peaks_for_params

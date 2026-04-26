@@ -15,9 +15,11 @@ See also:
 ## Package Layout
 
 - `ra_sim/simulation/`: forward simulation engine, diffraction kernel, typed requests/responses, detector geometry
-- `ra_sim/fitting/`: geometry fitting, mosaic fitting, objective assembly, peak matching
+- `ra_sim/fitting/`: geometry fitting, mosaic profile fitting, objective assembly, peak matching
 - `ra_sim/fitting/optimization_runtime.py`: shared worker, cache, and process-peaks runtime helpers extracted from the large optimizer
+- `ra_sim/fitting/optimization_mosaic_profiles.py`: selected-Qr/background pairing, local `I(phi)` extraction, Lorentzian plus Gaussian profile centering, and centered-profile mosaic residual helpers
 - `ra_sim/gui/`: Tk application, controllers, runtime state, overlays, operator workflows
+- `ra_sim/gui/ordered_structure_fit.py`: detector-space ordered-structure mask construction, positive scale solve, and the nearest existing code surface for structure-factor intensity refinement
 - `ra_sim/gui/_runtime/live_cache_helpers.py`: cache-inventory and overlay-reset helpers extracted from the main runtime session
 - `ra_sim/io/`: OSC readers, file parsing, GUI state persistence
 - `ra_sim/config/`: config loading, models, and validation
@@ -34,7 +36,10 @@ Typical flow:
 3. The main GUI or CLI assembles beam, mosaic, geometry, and material inputs.
 4. Simulation code produces detector-space predictions.
 5. Fitting code compares predicted and observed peaks or images.
-6. GUI/runtime code manages interaction state, cached datasets, and analysis views.
+6. The accepted geometry cache becomes the contract boundary for mosaic fitting.
+7. Mosaic fitting must keep geometry fixed and move only explicitly selected mosaic/profile parameters.
+8. Structure-factor fitting comes after mosaic fitting and should compare background-subtracted detector ROI intensities against transported simulated ROI intensity.
+9. GUI/runtime code manages interaction state, cached datasets, and analysis views.
 
 ## Where To Edit
 
@@ -42,6 +47,8 @@ Typical flow:
 - Config semantics or defaults: `ra_sim/config/` plus versioned templates in `config/`
 - Diffraction or detector geometry logic: `ra_sim/simulation/`
 - Peak matching or fit objectives: `ra_sim/fitting/`
+- Selected-pair mosaic profile scaffolding: `ra_sim/fitting/optimization_mosaic_profiles.py`
+- Ordered-structure and structure-factor detector-space fitting surfaces: `ra_sim/gui/ordered_structure_fit.py` plus future fitter entry points that consume the same accepted geometry and mosaic state
 - Shared fitting worker/cache plumbing: `ra_sim/fitting/optimization_runtime.py`
 - GUI interactions and workflow controls: `ra_sim/gui/`
 - GUI cache inventory/reset helpers: `ra_sim/gui/_runtime/live_cache_helpers.py`

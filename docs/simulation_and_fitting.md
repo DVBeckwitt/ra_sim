@@ -10,7 +10,7 @@ The scope is the current live pipeline:
 - reciprocal-space integration and mosaic broadening
 - manual point-pick geometry fitting
 - automatic background peak matching
-- geometry-fit-cached mosaic-shape fitting, legacy mosaic-width fitting, image-space refinement, and ordered-structure detector fitting
+- geometry-fit-cached mosaic-shape fitting, selected-pair mosaic profile fitting, legacy mosaic-width fitting, image-space refinement, ordered-structure detector fitting, and the planned global structure-factor ROI fitter
 - hBN calibrant ellipse fitting and projective tilt correction
 - stacking-disorder rod modeling, weighted HT mixtures, and Qr grouping
 - debug/logging controls and optional cache-retention policy
@@ -118,6 +118,20 @@ HKL/Qr groups so paired reflections with identical `Qr` are not both simulated.
 Specular picks contribute both `2theta` line-shape terms and relative-intensity
 constraints across the selected specular family, while the retained
 off-specular groups contribute `phi` line-shape terms only.
+
+The selected-pair mosaic scaffold is the target for the next production
+wiring step. It should preserve the full selected Qr/background pair list,
+extract one local `I(phi)` profile per pair, fit the measured and simulated
+profiles with the same additive Lorentzian plus Gaussian centering model, and
+compare centered profile shapes while leaving geometry fixed. The one open
+production fork is whether specular `(00l)` picks remain on the existing
+`2theta` branch, move to the selected-pair `phi` branch, or contribute both
+terms with explicit weights.
+
+Structure-factor fitting should remain downstream of that mosaic step. Its
+planned observable is not a GUI-normalized image and not raw `|F|^2`; it is the
+background-subtracted detector ROI area for each selected peak, compared to the
+ray-carried simulated intensity summed into the same ROI.
 
 Saving parameter snapshots regularly is the easiest way to keep iterations
 reproducible.
@@ -255,6 +269,7 @@ for every scattering experiment or every optics regime.
 | Diffraction kernel | [`ra_sim/simulation/diffraction.py`](../ra_sim/simulation/diffraction.py) | Sample/detector geometry, optics, `solve_q`, detector projection, hit-table generation. |
 | Material and optics helpers | [`ra_sim/utils/calculations.py`](../ra_sim/utils/calculations.py) | Refractive index, Fresnel transmission, Bragg-angle helper math. |
 | Geometry and image fitting | [`ra_sim/fitting/optimization.py`](../ra_sim/fitting/optimization.py) | Geometry fitting, geometry-cached mosaic-shape fitting, legacy mosaic-width fitting, image refinement, identifiability analysis. |
+| Selected-pair mosaic profile scaffold | [`ra_sim/fitting/optimization_mosaic_profiles.py`](../ra_sim/fitting/optimization_mosaic_profiles.py) | Selected-Qr/background pairing, local `I(phi)` extraction, additive Lorentzian plus Gaussian profile centering, centered-profile comparison, and callback-driven active-parameter least squares. |
 | Ordered-structure detector fit | [`ra_sim/gui/ordered_structure_fit.py`](../ra_sim/gui/ordered_structure_fit.py) | Detector-space mask construction, analytic positive scale solve, and local nonlinear refinement of ordered structural parameters after geometry and mosaic are fixed. |
 | Background peak matching | [`ra_sim/fitting/background_peak_matching.py`](../ra_sim/fitting/background_peak_matching.py) | Measured-summit detection and scored one-to-one simulated/measured matching. |
 | Geometry-fit dataset preparation | [`ra_sim/gui/geometry_fit.py`](../ra_sim/gui/geometry_fit.py), [`ra_sim/gui/geometry_overlay.py`](../ra_sim/gui/geometry_overlay.py), [`ra_sim/gui/_runtime/runtime_impl.py`](../ra_sim/gui/_runtime/runtime_impl.py) | Manual picking, orientation resolution, dataset assembly, overlay bookkeeping. |
@@ -521,6 +536,131 @@ fractional coordinates, and related ordered-structure parameters become
 physically interpretable. Disorder is intentionally deferred until after this
 ordered model converges, because diffuse `Qz` intensity can otherwise trade off
 against average structure or broadening.
+
+### Planned global multi-image structure-factor ROI fitter
+
+The local ordered-structure detector fit above is useful for refining selected
+ordered parameters inside a fixed detector mask. The planned structure-factor
+fitter should use a more global contract: many detector images, one shared
+structure-factor parameter vector, and a small nuisance model per image.
+
+Problem: infer one shared parameter vector `theta` for structure-factor terms
+while geometry and mosaic/profile parameters are fixed from the accepted earlier
+stages. The fitter should explain relative peak intensities across images, not
+absolute exposure differences.
+
+For observation `i` in image `m(i)`, let `R_i` be the peak ROI and `B_i` be a
+local background ring or sideband. With detector counts `D_m(p)` at pixel `p`,
+use
+
+\[
+\hat b_i = \frac{1}{|B_i|}\sum_{q \in B_i} D_{m(i)}(q),
+\qquad
+ y_i = \sum_{p \in R_i} D_{m(i)}(p) - |R_i|\hat b_i .
+\]
+
+The approximate variance used for initial weights can be
+
+\[
+\sigma_{y,i}^{2}
+\approx
+\sum_{p \in R_i} \max(D_{m(i)}(p), 0)
++ |R_i|^{2}\operatorname{Var}(\hat b_i).
+\]
+
+The prediction must be made in the same detector ROI, after the forward model
+has transported intensity to the detector. If `C_i` is the set of simulated ray
+or subpixel contributors that deposit any intensity into `R_i`, then
+
+\[
+\mu_i(\theta)
+= \sum_{r \in C_i} q_{ir}\,W_r\,|F_{hkl(r)}(\theta)|^2 .
+\]
+
+Here `q_ir` is the fractional detector deposition of contributor `r` inside
+`R_i`; `W_r` contains the fixed factors from beam sampling, mosaic density,
+footprint, optics transport, attenuation, detector projection, and any fixed
+reflection scaling. The structure-factor model supplies only the factor that is
+allowed to vary through `theta`:
+
+\[
+F_{hkl}(\theta)
+=
+\sum_a o_a(\theta) f_a(Q)
+\exp\!\left[2\pi i\,\mathbf G_{hkl}\cdot\mathbf r_a(\theta)\right]
+\exp\!\left[-2\pi^2\mathbf G_{hkl}\cdot\mathbf U_a(\theta)\cdot\mathbf G_{hkl}\right].
+\]
+
+The main residual should be a robust log-intensity residual with one scale
+nuisance per image:
+
+\[
+e_i(\theta,\alpha)
+= \log(y_i^+ + \epsilon)
+- \alpha_{m(i)}
+- \log(\mu_i(\theta) + \epsilon),
+\]
+
+\[
+\min_{\theta,\alpha}\sum_i \rho\!\left(\sqrt{w_i}\,e_i\right),
+\]
+
+where `rho` is Huber or Student-t, `epsilon` is a small positive count floor,
+and `y_i^+` is either `y_i` for accepted positive observations or a filtered
+positive-floor value used only after a quality gate. The preferred path is to
+drop peaks whose background-subtracted area is not physically usable rather
+than let negative peaks drive the log objective.
+
+For fixed `theta` and ordinary weighted least squares, the per-image scale has
+an analytic update:
+
+\[
+\alpha_m(\theta)
+=
+\frac{\sum_{i:m(i)=m} w_i\,[\log(y_i^+ + \epsilon)-\log(\mu_i(\theta)+\epsilon)]}
+{\sum_{i:m(i)=m} w_i} .
+\]
+
+With a robust loss, use the same expression inside an iteratively reweighted
+least-squares update, replacing `w_i` by the current robust effective weight.
+This keeps exposure, flux, and footprint drift from becoming fake
+structure-factor changes.
+
+The observation unit is one ROI in one image. Branch and overlap handling must
+follow that unit:
+
+- If two branches land in different ROIs, keep them as different observations.
+- If two branches merge into one ROI, sum both simulated contributions before
+  comparing to that ROI.
+- If ray casting already expands multiplicity, do not multiply by a separate
+  multiplicity factor.
+- If one measured overlap requires decomposition, use a local positive-amplitude
+  multi-peak fit with shared background; otherwise drop the unstable ROI.
+- Never let the same detector pixel contribute to two independent observations.
+
+Weights should start as
+
+\[
+w_i = w_{\mathrm{var},i}\,w_{\mathrm{family},i}\,w_{\mathrm{image},i}\,w_{\mathrm{quality},i},
+\]
+
+where `w_var` is inverse variance from the ROI statistics, `w_family` balances
+reflection families or `q` bins, `w_image` equalizes total image weight, and
+`w_quality` downweights saturated, overlapped, or low-support peaks. Cap large
+weights so one intense peak cannot dominate the solution.
+
+The implementation should be staged. Stage A fits non-`00l` peaks first. Stage
+B adds `00l` peaks with lower weight or a separate nuisance term, because the
+specular family is sensitive to footprint, alignment, saturation, and effects
+outside the structure-factor model. Release parameters in identifiable order:
+occupancies first, isotropic Debye-Waller terms second, then anisotropic or
+coordinate-like terms only when the earlier fit is stable.
+
+Acceptance tests for this planned fitter are scale invariance under multiplying
+one image by a constant, held-out image prediction, held-out reflection-family
+prediction, overlap accounting, branch accounting, specular robustness, and a
+display-normalization guard proving that GUI display scaling does not change the
+fit.
 
 ## Simulation parameter inventory
 
@@ -2424,6 +2564,60 @@ top three groups, it currently focuses on `phi` profiles rather than the existin
 specular `2theta` branch, and its per-profile fit is not the pseudo-Voigt-style
 `eta` mixture still used by the forward mosaic kernel.
 
+The selected-pair profile route has this math contract. For selected pair `p`,
+let `R_p` be the local detector ROI, `S_p(g)` the signal pixels assigned to phi
+bin `g`, and `B_p(g)` the sideband pixels assigned to the same bin. A measured
+profile bin is
+
+\[
+m_p(g)
+= \sum_{u \in S_p(g)} D(u)
+- \frac{|S_p(g)|}{|B_p(g)|}\sum_{v \in B_p(g)}D(v),
+\]
+
+with invalid bins rejected when either signal or sideband support is missing.
+The same extraction rule is used for the simulated image generated from a trial
+active-parameter vector `x`.
+
+Each extracted measured or simulated profile is fit with an additive Lorentzian
+plus Gaussian model:
+
+\[
+I(\phi)
+= A_G\exp\!\left[-\frac{1}{2}\left(\frac{\phi-\phi_0}{\sigma}\right)^2\right]
++ \frac{A_L}{1 + \left((\phi-\phi_0)/\gamma\right)^2}
++ b .
+\]
+
+This model is not a pseudo-Voigt mixture. `A_G`, `A_L`, `sigma`, `gamma`,
+`phi_0`, and `b` are profile-fit diagnostics. The mosaic objective uses the
+fitted center `hat(phi_0)` to center the profile before comparison:
+
+\[
+\phi' = \phi - \hat\phi_0 .
+\]
+
+After centering, measured and simulated profiles are interpolated onto a common
+grid `g` and optionally normalized by positive area or another documented
+shape-only normalization. The residual for pair `p` is
+
+\[
+r_p(g; x) = \sqrt{w_p}\,[s_p(g; x) - m_p(g)],
+\]
+
+and the active mosaic parameters solve
+
+\[
+\min_x \frac{1}{2}\left\|\operatorname{concat}_p r_p(g; x)\right\|_2^2 .
+\]
+
+Only names in the active parameter list may be changed by `x`; detector geometry,
+beam center, detector distance, shared-theta interpretation, and selected-pair
+identity stay fixed. The next safe production rung is a no-optimizer dry run
+that proves accepted-cache loading, selected-pair provenance, ROI extraction,
+Lorentzian plus Gaussian fits, centered self-comparison, and rejected-pair
+reporting before live GUI or headless optimization is promoted.
+
 Each dataset block is scaled by `1 / sqrt(num_rois_in_dataset)` so one
 selected background cannot dominate just because it contributed more peaks.
 
@@ -3192,6 +3386,57 @@ $env:RA_SIM_DISABLE_ALL_LOGGING = "1"
 
 The config kill switch and the env kill switches both disable every debug/log output covered by this section.
 
+## Qr/Qz caked residual objective contract
+
+The manual geometry fitter now has a focused validation path for the
+`(-1,0,10)` Qr/Qz group, branches 0 and 1. The production objective contract is:
+
+- observed = refined background/manual point
+- predicted = simulated point for the same Qr branch
+- residual = predicted - observed
+- objective space = `caked_deg`
+- units = weighted degrees
+- detector-native pixel residuals = diagnostics only
+
+The target Qr/Qz block is expected to appear in the optimizer residual vector
+as four caked-degree components: branch 0 `2theta`, branch 0 wrapped `phi`,
+branch 1 `2theta`, and branch 1 wrapped `phi`. The resolver must preserve
+`q_group_key`, `hkl`, table identity, row identity when proven, and branch
+identity. It must not nearest-rematch the prediction to an unrelated cache row.
+
+Provider-local fixed-source rows are local identities. They must not be upgraded
+to `source_reflection_namespace="full_reflection"` unless the namespace and
+signature prove that identity. If a local source row is stale, the resolver may
+recover it only through one of these fail-closed paths:
+
+1. exact source-row provenance exists and matches HKL and branch,
+2. the resolved provider-local table has exactly one valid HKL-matching row,
+3. the resolved provider-local table has multiple rows but source branch or
+   peak provenance uniquely identifies one HKL-matching row.
+
+Duplicate-HKL local rows without branch proof are rejected as ambiguous. Saved
+provider-local detector-native simulation points are tried only after the
+current hit-table resolver runs. They can be used with non-ambiguous stale-row
+proof or canonical saved-source identity proof; raw native pixels without a
+canonical display/native proof require stale-row proof. They are not allowed to
+bypass ambiguity.
+
+Saved-simulation fit-space alignment offsets are cached from explicit baseline
+params before seed scoring or least-squares solve. Diagnostics expose
+`provider_local_saved_sim_fit_space_offset_source`; expected production value is
+`baseline_params`, not the first arbitrary optimizer evaluation.
+
+Current target evidence as of 2026-04-26:
+
+| Branch | Observed caked deg | Predicted caked deg | Residual caked deg |
+| ---: | --- | --- | --- |
+| 0 | `(40.142509, 35.566836)` | `(33.274985, 131.750000)` | `(-6.867524, 96.183164)` |
+| 1 | `(40.853020, -37.565855)` | `(37.122146, 40.589187)` | `(-3.730874, 78.155042)` |
+
+The Qr-only fit reduced target norm `124.179281018 -> 98.275666096`. The full
+fit kept the Qr block present and improved total objective norm
+`257.403969114 -> 256.495280344`.
+
 ## Appendix A: Center of rotation axis math
 
 This appendix expands the short rotation summary in [Rotation construction used by the kernel](#rotation-construction-used-by-the-kernel).
@@ -3352,6 +3597,7 @@ That keeps the main simulation and the debug path on the same axis convention.
 | Geometry nonlinear solve and identifiability | [`fit_geometry_parameters`](../ra_sim/fitting/optimization.py) |
 | Background summit detection and matching | [`build_background_peak_context`](../ra_sim/fitting/background_peak_matching.py), [`match_simulated_peaks_to_peak_context`](../ra_sim/fitting/background_peak_matching.py) |
 | Geometry-cached mosaic-shape fitting | [`fit_mosaic_shape_parameters`](../ra_sim/fitting/optimization.py) |
+| Selected-pair mosaic profile scaffold | [`pair_selected_qr_and_background_points`](../ra_sim/fitting/optimization_mosaic_profiles.py), [`integrate_selected_qr_phi_profiles`](../ra_sim/fitting/optimization_mosaic_profiles.py), [`fit_lorentzian_plus_gaussian_profile`](../ra_sim/fitting/optimization_mosaic_profiles.py), [`compare_centered_phi_profiles`](../ra_sim/fitting/optimization_mosaic_profiles.py), [`fit_mosaic_parameters_from_centered_phi_profiles`](../ra_sim/fitting/optimization_mosaic_profiles.py) |
 | Ordered-structure detector mask and scale solve | [`build_hybrid_ordered_structure_mask`](../ra_sim/gui/ordered_structure_fit.py), [`solve_positive_weighted_scale`](../ra_sim/gui/ordered_structure_fit.py), [`fit_ordered_structure_parameters`](../ra_sim/gui/ordered_structure_fit.py) |
 | Legacy mosaic-width fitting | [`fit_mosaic_widths_separable`](../ra_sim/fitting/optimization.py) |
 | Image-space refinement | [`build_tube_rois`](../ra_sim/fitting/optimization.py), [`robust_residuals`](../ra_sim/fitting/optimization.py), [`iterative_refinement`](../ra_sim/fitting/optimization.py) |

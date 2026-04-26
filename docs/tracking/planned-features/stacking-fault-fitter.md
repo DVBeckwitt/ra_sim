@@ -5,7 +5,7 @@ Type: feature
 Owner:
 Issue: none
 Priority: p2
-Last updated: 2026-04-20
+Last updated: 2026-04-24
 
 ## Summary
 
@@ -71,6 +71,6 @@ point is selected.
 ## Links
 
 - [Geometric fitter recovery](../in-progress/geometric-fitter-recovery.md)
-- [Mosaic fitter recovery](mosaic-fitter.md)
+- [Mosaic fitter recovery](../in-progress/mosaic-fitter.md)
 - [Structure-factor fitter recovery](structure-factor-fitter.md)
 - [Canonical simulation and fitting reference](../../simulation_and_fitting.md)

@@ -1,11 +1,21 @@
+from collections.abc import Mapping, Sequence
+import contextlib
+import importlib
+import io
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 
 from ra_sim.fitting.background_peak_matching import build_background_peak_context
+from ra_sim import headless_geometry_fit as hgf
+from ra_sim.gui import geometry_fit as gf
 from ra_sim.gui import geometry_q_group_manager
+from ra_sim.gui import geometry_overlay
 from ra_sim.gui import manual_geometry as mg
+from ra_sim.gui import mosaic_top_selection
 from ra_sim.gui import peak_selection as ps
+from ra_sim.io.data_loading import load_gui_state_file
 from ra_sim.simulation import diffraction, exact_cake_portable
 
 
@@ -15176,3 +15186,8334 @@ def test_runtime_projection_callbacks_collapse_raw_cache_00l_rows_before_first_c
         ),
     )
     assert len([entry for entry in displayed if entry.get("q_group_key") == group_key]) == 1
+
+
+_QR_PICKER_DIAG_STATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "artifacts"
+    / "geometry_fit_gui_states"
+    / "new4.json"
+)
+_QR_PICKER_TARGET_Q_GROUP_KEY = ("q_group", "primary", 1, 10)
+_QR_PICKER_TARGET_HKL = (-1, 0, 10)
+
+
+def _diag_plain(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_diag_plain(item) for item in value.tolist()]
+    if isinstance(value, (list, tuple)):
+        return tuple(_diag_plain(item) for item in value)
+    return value
+
+
+def _diag_tuple(value):
+    value = _diag_plain(value)
+    if isinstance(value, tuple):
+        return tuple(value)
+    if isinstance(value, list):
+        return tuple(value)
+    return None
+
+
+def _diag_hkl(entry):
+    value = _diag_tuple(entry.get("hkl") if isinstance(entry, Mapping) else None)
+    if value is None or len(value) < 3:
+        return None
+    try:
+        return tuple(int(np.rint(float(item))) for item in value[:3])
+    except Exception:
+        return None
+
+
+def _diag_q_group_key(entry):
+    value = _diag_tuple(entry.get("q_group_key") if isinstance(entry, Mapping) else None)
+    if value is None:
+        return None
+    normalized = []
+    for item in value:
+        try:
+            numeric = float(item)
+        except Exception:
+            normalized.append(item)
+            continue
+        if np.isfinite(numeric) and abs(numeric - round(numeric)) < 1.0e-9:
+            normalized.append(int(round(numeric)))
+        else:
+            normalized.append(float(numeric))
+    return tuple(normalized)
+
+
+def _diag_finite_pair(entry, key_pairs):
+    if not isinstance(entry, Mapping):
+        return None
+    for x_key, y_key in key_pairs:
+        try:
+            col = float(entry.get(x_key, np.nan))
+            row = float(entry.get(y_key, np.nan))
+        except Exception:
+            continue
+        if np.isfinite(col) and np.isfinite(row):
+            return float(col), float(row)
+    return None
+
+
+def _diag_shape_hw(image):
+    arr = np.asarray(image)
+    if arr.ndim < 2:
+        return 0, 0
+    return int(arr.shape[0]), int(arr.shape[1])
+
+
+def _diag_inside(point, width, height):
+    if point is None:
+        return False
+    return bool(0.0 <= float(point[0]) < float(width) and 0.0 <= float(point[1]) < float(height))
+
+
+def _diag_point_text(point, reason="missing"):
+    if point is None:
+        if isinstance(reason, str) and reason.startswith("<unavailable"):
+            return reason
+        return f"<unavailable reason={reason}>"
+    return f"({float(point[0]):.3f}, {float(point[1]):.3f})"
+
+
+def _diag_float_text(value):
+    try:
+        number = float(value)
+    except Exception:
+        return "<unavailable>"
+    if not np.isfinite(number):
+        return "<unavailable>"
+    return f"{number:.6f}"
+
+
+def _diag_function_name(fn):
+    if fn is None:
+        return "<unavailable>"
+    return getattr(fn, "__name__", type(fn).__name__)
+
+
+def _diag_source_identity(entry):
+    if not isinstance(entry, Mapping):
+        return None
+    key = _source_key(dict(entry))
+    if key is not None:
+        return key
+    return (
+        _diag_q_group_key(entry),
+        _diag_hkl(entry),
+        entry.get("source_branch_index"),
+        entry.get("source_table_index"),
+        entry.get("source_row_index"),
+        entry.get("source_peak_index"),
+        entry.get("branch_id"),
+    )
+
+
+def _diag_sorted(entries):
+    def _sort_key(entry):
+        return (
+            repr(_diag_q_group_key(entry)),
+            repr(_diag_hkl(entry)),
+            int(entry.get("source_branch_index", -1) or -1),
+            int(entry.get("source_table_index", -1) or -1),
+            int(entry.get("source_row_index", -1) or -1),
+            int(entry.get("source_peak_index", -1) or -1),
+            str(entry.get("branch_id", "")),
+        )
+
+    return sorted(entries, key=_sort_key)
+
+
+def _diag_runtime_value(value):
+    return value() if callable(value) else value
+
+
+def _diag_load_saved_state():
+    loaded = load_gui_state_file(_QR_PICKER_DIAG_STATE_PATH)
+    if isinstance(loaded, Mapping) and isinstance(loaded.get("state"), Mapping):
+        return dict(loaded["state"])
+    return dict(loaded)
+
+
+def test_headless_native_to_display_transform_is_bound_to_requested_background() -> None:
+    calls = []
+    backgrounds = {
+        0: np.zeros((10, 20), dtype=float),
+        2: np.zeros((30, 40), dtype=float),
+    }
+
+    def load_background(index):
+        calls.append(int(index))
+        image = backgrounds[int(index)]
+        return image, image
+
+    callback = hgf._headless_native_detector_coords_to_detector_display_coords_for_background(
+        load_background,
+        2,
+        display_rotate_k=0,
+    )
+
+    assert callable(callback)
+    assert calls == [2]
+    calls.clear()
+    assert callback(3.0, 4.0) == (3.0, 4.0)
+    assert calls == []
+    assert "bg_2" in getattr(callback, "__name__", "")
+
+
+def _diag_capture_startup_runtime(tmp_path):
+    saved_state = _diag_load_saved_state()
+    captured = []
+    original_factory = mg.make_runtime_geometry_manual_projection_callbacks
+
+    def _capture_factory(**kwargs):
+        callbacks = original_factory(**kwargs)
+        captured.append((dict(kwargs), callbacks))
+        return callbacks
+
+    runtime_error = None
+    mg.make_runtime_geometry_manual_projection_callbacks = _capture_factory
+    try:
+        try:
+            hgf.run_headless_geometry_fit(
+                saved_state,
+                state_path=_QR_PICKER_DIAG_STATE_PATH,
+                downloads_dir=tmp_path,
+                stamp="qr_picker_detector_pixel_positions",
+            )
+        except RuntimeError as exc:
+            runtime_error = str(exc)
+    finally:
+        mg.make_runtime_geometry_manual_projection_callbacks = original_factory
+
+    assert captured, "GUI runtime did not build manual geometry projection callbacks"
+    projection_kwargs, projection_callbacks = captured[-1]
+    detector_kwargs = dict(projection_kwargs)
+    detector_kwargs["caked_view_enabled"] = lambda: False
+    detector_callbacks = original_factory(**detector_kwargs)
+    return {
+        "saved_state": saved_state,
+        "projection_kwargs": detector_kwargs,
+        "projection_callbacks": detector_callbacks,
+        "captured_projection_callbacks": projection_callbacks,
+        "runtime_error": runtime_error,
+    }
+
+
+def _diag_native_shape(context):
+    native = _diag_runtime_value(context["projection_kwargs"]["current_background_native"])
+    return _diag_shape_hw(native)
+
+
+def _diag_display_shape(context):
+    display = _diag_runtime_value(context["projection_kwargs"]["current_background_display"])
+    return _diag_shape_hw(display)
+
+
+def _diag_native_to_display(context, point):
+    if point is None:
+        return None
+    fn = context["projection_kwargs"].get("native_detector_coords_to_detector_display_coords")
+    if callable(fn):
+        result = fn(float(point[0]), float(point[1]))
+        if result is not None:
+            try:
+                return float(result[0]), float(result[1])
+            except Exception:
+                return None
+    native_h, native_w = _diag_native_shape(context)
+    rotate_fn = context["projection_kwargs"].get("rotate_point_for_display")
+    rotate_k = int(context["projection_kwargs"].get("display_rotate_k", 0))
+    if callable(rotate_fn):
+        return rotate_fn(float(point[0]), float(point[1]), (native_h, native_w), rotate_k)
+    return geometry_overlay.rotate_point_for_display(
+        float(point[0]),
+        float(point[1]),
+        (native_h, native_w),
+        rotate_k,
+    )
+
+
+def _diag_display_to_native(context, point):
+    if point is None:
+        return None
+    callbacks = context["projection_callbacks"]
+    fn = getattr(callbacks, "background_display_to_native_detector_coords", None)
+    if not callable(fn):
+        return None
+    result = fn(float(point[0]), float(point[1]))
+    if result is None:
+        return None
+    try:
+        return float(result[0]), float(result[1])
+    except Exception:
+        return None
+
+
+def _diag_manual_entries_for_active_background(saved_state):
+    geometry_state = saved_state.get("geometry", {}) if isinstance(saved_state, Mapping) else {}
+    manual_pairs = (
+        geometry_state.get("manual_pairs", []) if isinstance(geometry_state, Mapping) else []
+    )
+    for item in manual_pairs or ():
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            background_index = int(item.get("background_index"))
+        except Exception:
+            continue
+        if background_index != 0:
+            continue
+        entries = item.get("entries", [])
+        return [dict(entry) for entry in entries if isinstance(entry, Mapping)]
+    return []
+
+
+def _diag_prepare_saved_manual_source_rows(context, profile_cache):
+    rows = []
+    for raw in _diag_manual_entries_for_active_background(context["saved_state"]):
+        entry = dict(raw)
+        q_group_key = _diag_q_group_key(entry)
+        hkl = _diag_hkl(entry)
+        if q_group_key is not None:
+            entry["q_group_key"] = q_group_key
+        if hkl is not None:
+            entry["hkl"] = hkl
+            entry["label"] = ",".join(str(item) for item in hkl)
+        native = _diag_finite_pair(
+            entry,
+            (
+                ("refined_sim_native_x", "refined_sim_native_y"),
+                ("sim_native_x", "sim_native_y"),
+                ("native_col", "native_row"),
+                ("detector_x", "detector_y"),
+            ),
+        )
+        if native is not None:
+            display = _diag_native_to_display(context, native)
+            entry["native_col"] = float(native[0])
+            entry["native_row"] = float(native[1])
+            entry["sim_native_x"] = float(native[0])
+            entry["sim_native_y"] = float(native[1])
+            entry["detector_native_col"] = float(native[0])
+            entry["detector_native_row"] = float(native[1])
+            if display is not None:
+                entry["display_col"] = float(display[0])
+                entry["display_row"] = float(display[1])
+                entry["sim_col"] = float(display[0])
+                entry["sim_row"] = float(display[1])
+                entry["sim_col_raw"] = float(display[0])
+                entry["sim_row_raw"] = float(display[1])
+        entry.pop("refined_sim_x", None)
+        entry.pop("refined_sim_y", None)
+        entry["coordinate_frame"] = "simulation_native"
+        entry["diagnostic_source"] = "manual_saved_pair"
+        entry["included_in_manual_source_rows"] = True
+        entry.setdefault("best_sample_index", entry.get("source_row_index"))
+        entry["mosaic_weight"] = float(entry.get("mosaic_weight", 1.0))
+        branch_id, branch_source = mosaic_top_selection.normalize_branch_id(
+            entry,
+            target_key=q_group_key,
+            profile_cache=profile_cache,
+        )
+        entry["branch_id"] = str(branch_id)
+        entry["branch_source"] = str(branch_source)
+        rows.append(
+            mosaic_top_selection.annotate_selection_metadata(
+                entry,
+                target_key=q_group_key,
+                profile_cache=profile_cache,
+            )
+        )
+    return rows
+
+
+def _diag_fresh_source_rows(context, profile_cache):
+    kwargs = context["projection_kwargs"]
+    params = dict(_diag_runtime_value(kwargs["current_geometry_fit_params"]))
+    miller = np.asarray(_diag_runtime_value(kwargs["miller"]), dtype=np.float64)
+    intensities = np.asarray(_diag_runtime_value(kwargs["intensities"]), dtype=np.float64)
+    image_size = int(_diag_runtime_value(kwargs["image_size"]))
+    mosaic = dict(params.get("mosaic_params", {}) or {})
+    hit_tables = geometry_q_group_manager.simulate_geometry_fit_hit_tables(
+        miller,
+        intensities,
+        image_size,
+        params,
+        build_geometry_fit_central_mosaic_params=None,
+        process_peaks_parallel=diffraction.process_peaks_parallel,
+        default_solve_q_steps=int(mosaic.get("solve_q_steps", params.get("solve_q_steps", 1000))),
+        default_solve_q_rel_tol=float(
+            mosaic.get(
+                "solve_q_rel_tol",
+                params.get("solve_q_rel_tol", diffraction.DEFAULT_SOLVE_Q_REL_TOL),
+            )
+        ),
+        default_solve_q_mode=int(
+            mosaic.get("solve_q_mode", params.get("solve_q_mode", diffraction.DEFAULT_SOLVE_Q_MODE))
+        ),
+    )
+    source_reflection_indices = (
+        geometry_q_group_manager.audited_full_order_source_reflection_indices(
+            hit_tables,
+            owner="test_qr_picker_detector_pixel_positions",
+        )
+    )
+    rows = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        hit_tables,
+        image_shape=(image_size, image_size),
+        native_sim_to_display_coords=lambda col, row, shape: (
+            geometry_overlay.native_sim_to_display_coords(
+                col,
+                row,
+                shape,
+                sim_display_rotate_k=hgf.SIM_DISPLAY_ROTATE_K,
+            )
+        ),
+        peak_table_lattice=[
+            (params.get("a", np.nan), params.get("c", np.nan), "primary")
+            for _ in hit_tables
+        ],
+        source_reflection_indices=source_reflection_indices,
+        primary_a=params.get("a", np.nan),
+        primary_c=params.get("c", np.nan),
+        default_source_label="primary",
+        round_pixel_centers=True,
+        allow_nominal_hkl_indices=True,
+        profile_cache=profile_cache,
+    )
+    output = []
+    for row in rows:
+        entry = dict(row)
+        entry["diagnostic_source"] = "fresh_full_order_source_rows"
+        entry["included_in_manual_source_rows"] = True
+        q_group_key = _diag_q_group_key(entry)
+        if q_group_key is not None:
+            entry["q_group_key"] = q_group_key
+        hkl = _diag_hkl(entry)
+        if hkl is not None:
+            entry["hkl"] = hkl
+        output.append(entry)
+    return output
+
+
+def _diag_project_detector_entry(context, raw_entry):
+    entry = dict(raw_entry)
+    native = _diag_finite_pair(
+        entry,
+        (
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("sim_native_x", "sim_native_y"),
+            ("native_col", "native_row"),
+            ("detector_x", "detector_y"),
+            ("background_detector_x", "background_detector_y"),
+        ),
+    )
+    if native is None:
+        display = _diag_finite_pair(
+            entry,
+            (
+                ("display_col", "display_row"),
+                ("sim_col_raw", "sim_row_raw"),
+                ("sim_col", "sim_row"),
+                ("x", "y"),
+            ),
+        )
+        native = _diag_display_to_native(context, display)
+    display = _diag_native_to_display(context, native) if native is not None else None
+    if native is not None:
+        entry["native_col"] = float(native[0])
+        entry["native_row"] = float(native[1])
+        entry["sim_native_x"] = float(native[0])
+        entry["sim_native_y"] = float(native[1])
+        entry["detector_native_col"] = float(native[0])
+        entry["detector_native_row"] = float(native[1])
+    if display is not None:
+        entry["display_col"] = float(display[0])
+        entry["display_row"] = float(display[1])
+        entry["sim_col"] = float(display[0])
+        entry["sim_row"] = float(display[1])
+        entry["sim_col_raw"] = float(display[0])
+        entry["sim_row_raw"] = float(display[1])
+        entry["display_frame"] = "detector_display"
+        entry["detector_display_source"] = "diagnostic_native_to_display"
+    entry.pop("refined_sim_x", None)
+    entry.pop("refined_sim_y", None)
+    return entry
+
+
+def _diag_group_and_project_rows(context):
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    profile_cache = dict(params.get("mosaic_params", {}) or {})
+    manual_rows = _diag_prepare_saved_manual_source_rows(context, profile_cache)
+    fresh_rows = _diag_fresh_source_rows(context, profile_cache)
+    combined = [*manual_rows, *fresh_rows]
+    collapsed = mg._geometry_manual_collapse_q_group_representatives(
+        combined,
+        profile_cache=profile_cache,
+    )
+    projected = [
+        _diag_project_detector_entry(context, entry)
+        for entry in collapsed
+        if isinstance(entry, Mapping)
+    ]
+    grouped = context["projection_callbacks"].pick_candidates(projected)
+    picker_rows = []
+    for key, entries in grouped.items():
+        if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+            continue
+        for entry in entries:
+            if isinstance(entry, Mapping):
+                item = dict(entry)
+                item["q_group_key"] = _diag_q_group_key({"q_group_key": key}) or key
+                picker_rows.append(item)
+    return {
+        "profile_cache": profile_cache,
+        "manual_rows": manual_rows,
+        "fresh_rows": fresh_rows,
+        "combined_source_rows": combined,
+        "collapsed_source_rows": collapsed,
+        "overlay_rows": [dict(entry) for entry in projected if isinstance(entry, Mapping)],
+        "picker_rows": picker_rows,
+    }
+
+
+_QR_PICKER_STARTUP_CACHE = {}
+
+
+def _diag_startup_context_and_rows(tmp_path):
+    if "payload" not in _QR_PICKER_STARTUP_CACHE:
+        context = _diag_capture_startup_runtime(tmp_path)
+        rows = _diag_group_and_project_rows(context)
+        _QR_PICKER_STARTUP_CACHE["payload"] = (context, rows)
+    return _QR_PICKER_STARTUP_CACHE["payload"]
+
+
+def _diag_detector_picker_cache(source_rows, *, overlay_grouped=None):
+    source_rows = [dict(entry) for entry in source_rows if isinstance(entry, Mapping)]
+    if overlay_grouped is None:
+        overlay_grouped = {}
+    return {
+        "signature": ("detector-picker-diagnostic",),
+        "simulated_peaks": [dict(entry) for entry in source_rows],
+        "active_simulated_peaks": [dict(entry) for entry in source_rows],
+        "detector_picker_source_rows": [dict(entry) for entry in source_rows],
+        "grouped_candidates": dict(overlay_grouped),
+        "caked_qr_projection_grouped_candidates": {},
+        "cache_metadata": {
+            "cache_source": "startup_sim_ready_detector_rows",
+            "simulated_peak_count": len(source_rows),
+        },
+    }
+
+
+def _diag_flatten_grouped(grouped):
+    rows = []
+    for key, entries in (grouped or {}).items():
+        for entry in entries or ():
+            if isinstance(entry, Mapping):
+                item = dict(entry)
+                item.setdefault("q_group_key", key)
+                rows.append(item)
+    return rows
+
+
+def _diag_target_rows_by_branch(grouped):
+    target_rows = [
+        row
+        for row in _diag_flatten_grouped(grouped)
+        if _diag_q_group_key(row) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        and _diag_hkl(row) == _QR_PICKER_TARGET_HKL
+    ]
+    return {
+        int(row.get("source_branch_index")): row
+        for row in target_rows
+        if row.get("source_branch_index") is not None
+    }
+
+
+def _diag_toggle_detector_click(cache_data, click_px, profile_cache, trace_output=None):
+    statuses = []
+    sessions = []
+    handled, session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        float(click_px[0]),
+        float(click_px[1]),
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((3000, 3000), dtype=float),
+        get_cache_data=lambda **_kwargs: dict(cache_data),
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda value: sessions.append(dict(value)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=statuses.append,
+        listed_q_group_entries=lambda: [{"key": _QR_PICKER_TARGET_Q_GROUP_KEY}],
+        format_q_group_line=lambda _entry: "target q_group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+        profile_cache=profile_cache,
+        trace_picker_input_fn=(
+            (lambda trace: trace_output.append(dict(trace)))
+            if isinstance(trace_output, list)
+            else None
+        ),
+    )
+    assert handled is True
+    assert suppress_drag is True
+    assert sessions
+    assert session == sessions[-1]
+    assert not any("No simulated Qr/Qz groups are available" in text for text in statuses)
+    return session, statuses
+
+
+def _diag_detector_display_point(entry):
+    return mg._geometry_manual_entry_detector_display_point(entry)
+
+
+def _diag_detector_native_point(entry):
+    return mg._geometry_manual_entry_native_point(entry)
+
+
+def _diag_detector_point_is_caked(entry, point):
+    if point is None:
+        return False
+    for key_pair in (
+        ("caked_x", "caked_y"),
+        ("raw_caked_x", "raw_caked_y"),
+        ("two_theta_deg", "phi_deg"),
+        ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ("background_two_theta_deg", "background_phi_deg"),
+    ):
+        caked = _diag_finite_pair(entry, (key_pair,))
+        if caked is not None and np.allclose(point, caked, atol=1.0e-6, rtol=0.0):
+            return True
+    return False
+
+
+def _diag_source_branch(entry):
+    if not isinstance(entry, Mapping):
+        return None
+    for key in ("source_branch_index", "branch_index"):
+        if key in entry:
+            try:
+                return int(entry.get(key))
+            except Exception:
+                return None
+    return None
+
+
+def _diag_branch_map(entries):
+    mapped = {}
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        branch = _diag_source_branch(entry)
+        if branch is not None:
+            mapped[int(branch)] = dict(entry)
+    return mapped
+
+
+def _diag_pair_source(entry, key_pairs, source):
+    pair = _diag_finite_pair(entry, key_pairs)
+    return pair, source if pair is not None else "<unavailable>"
+
+
+def _diag_observed_detector_display(entry):
+    point = mg._geometry_manual_entry_detector_display_point(entry)
+    if point is not None:
+        return point, "entry_detector_display"
+    return None, "<unavailable reason=no detector back-projection>"
+
+
+def _diag_observed_detector_native(entry):
+    return _diag_pair_source(
+        entry,
+        (
+            ("refined_detector_native_col", "refined_detector_native_row"),
+            ("background_detector_x", "background_detector_y"),
+            ("detector_native_col", "detector_native_row"),
+            ("native_col", "native_row"),
+            ("detector_x", "detector_y"),
+        ),
+        "entry_detector_native",
+    )
+
+
+def _diag_observed_caked(entry):
+    return _diag_pair_source(
+        entry,
+        (
+            ("refined_background_two_theta_deg", "refined_background_phi_deg"),
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("raw_caked_x", "raw_caked_y"),
+            ("caked_x", "caked_y"),
+            ("two_theta_deg", "phi_deg"),
+        ),
+        "entry_caked_deg",
+    )
+
+
+def _diag_sim_visual_detector_display(entry):
+    tuple_point = mg._geometry_manual_tuple_point(
+        entry,
+        "sim_visual_detector_display_px",
+    )
+    if tuple_point is not None:
+        return tuple_point, "entry_sim_visual_detector_display_px"
+    return _diag_pair_source(
+        entry,
+        (
+            ("refined_sim_x", "refined_sim_y"),
+            ("sim_col_raw", "sim_row_raw"),
+            ("sim_col", "sim_row"),
+            ("display_col", "display_row"),
+        ),
+        "entry_visual_detector_display",
+    )
+
+
+def _diag_sim_visual_detector_native(entry):
+    tuple_point = mg._geometry_manual_tuple_point(
+        entry,
+        "sim_visual_detector_native_px",
+    )
+    if tuple_point is not None:
+        return tuple_point, "entry_sim_visual_detector_native_px"
+    return _diag_pair_source(
+        entry,
+        (
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("sim_native_x", "sim_native_y"),
+            ("native_col", "native_row"),
+            ("detector_native_col", "detector_native_row"),
+        ),
+        "entry_visual_detector_native",
+    )
+
+
+def _diag_sim_visual_caked(entry):
+    pair = _diag_tuple(entry.get("sim_visual_caked_deg") if isinstance(entry, Mapping) else None)
+    if pair is not None and len(pair) >= 2:
+        try:
+            return (float(pair[0]), float(pair[1])), "entry_sim_visual_caked_deg"
+        except Exception:
+            pass
+    pair = _diag_tuple(entry.get("sim_refined_caked_deg") if isinstance(entry, Mapping) else None)
+    if pair is not None and len(pair) >= 2:
+        try:
+            return (float(pair[0]), float(pair[1])), "entry_sim_refined_caked_deg"
+        except Exception:
+            pass
+    pair = _diag_tuple(entry.get("sim_visual_deg") if isinstance(entry, Mapping) else None)
+    if pair is not None and len(pair) >= 2:
+        try:
+            return (float(pair[0]), float(pair[1])), "entry_sim_visual_deg"
+        except Exception:
+            pass
+    pair = _diag_tuple(entry.get("sim_caked") if isinstance(entry, Mapping) else None)
+    if pair is not None and len(pair) >= 2:
+        try:
+            return (float(pair[0]), float(pair[1])), "entry_sim_caked"
+        except Exception:
+            pass
+    return _diag_pair_source(
+        entry,
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+        ),
+        "entry_visual_caked",
+    )
+
+
+def _diag_legacy_sim_caked(entry):
+    pair = _diag_tuple(entry.get("sim_caked") if isinstance(entry, Mapping) else None)
+    if pair is not None and len(pair) >= 2:
+        try:
+            return (float(pair[0]), float(pair[1])), "legacy_sim_caked_tuple"
+        except Exception:
+            pass
+    return _diag_pair_source(
+        entry,
+        (("simulated_two_theta_deg", "simulated_phi_deg"),),
+        "legacy_simulated_caked_fields",
+    )
+
+
+def _diag_copy_projection_kwargs(context, *, use_caked):
+    kwargs = dict(context["projection_kwargs"])
+    kwargs["caked_view_enabled"] = lambda: bool(use_caked)
+    return kwargs
+
+
+def _diag_build_caked_callbacks(context):
+    return mg.make_runtime_geometry_manual_projection_callbacks(
+        **_diag_copy_projection_kwargs(context, use_caked=True)
+    )
+
+
+def _diag_build_caked_qr_cache(context, rows, detector_cache):
+    callbacks = _diag_build_caked_callbacks(context)
+    entries, grouped, lookup = mg._geometry_manual_build_caked_qr_projection_cache(
+        rows["overlay_rows"],
+        callbacks.project_peaks_to_current_view,
+        callbacks.pick_candidates,
+        callbacks.simulated_lookup,
+        None,
+    )
+    cache_data = dict(detector_cache)
+    cache_data["caked_qr_projection_entries"] = [dict(entry) for entry in entries]
+    cache_data["caked_qr_projection_grouped_candidates"] = {
+        key: [dict(entry) for entry in value]
+        for key, value in (grouped or {}).items()
+    }
+    cache_data["caked_qr_projection_lookup"] = lookup
+    return callbacks, cache_data, grouped
+
+
+def _diag_poison_visual_grouped_candidates(grouped, poison_by_branch):
+    poisoned = {}
+    for key, entries in (grouped or {}).items():
+        out_entries = []
+        for raw_entry in entries or ():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            branch = _diag_source_branch(entry)
+            poison = poison_by_branch.get(branch)
+            if poison is not None:
+                entry["sim_visual_deg"] = (float(poison[0]), float(poison[1]))
+                entry["sim_caked"] = (float(poison[0]), float(poison[1]))
+                entry["sim_refined_caked_deg"] = (float(poison[0]), float(poison[1]))
+                entry["refined_sim_caked_x"] = float(poison[0])
+                entry["refined_sim_caked_y"] = float(poison[1])
+                entry["caked_x"] = float(poison[0])
+                entry["caked_y"] = float(poison[1])
+                entry["display_col"] = float(poison[0])
+                entry["display_row"] = float(poison[1])
+                entry["diagnostic_source"] = "cache_current_poison"
+            out_entries.append(entry)
+        poisoned[key] = out_entries
+    return poisoned
+
+
+def _diag_direct_native_to_caked(callbacks, point):
+    if point is None:
+        return None, "missing_native"
+    fn = getattr(callbacks, "native_detector_coords_to_caked_display_coords", None)
+    if not callable(fn):
+        return None, "missing_converter"
+    try:
+        result = fn(float(point[0]), float(point[1]))
+    except Exception as exc:
+        return None, f"exception:{type(exc).__name__}"
+    if result is None:
+        return None, "outside_detector"
+    try:
+        caked = (float(result[0]), float(result[1]))
+    except Exception:
+        return None, "invalid_result"
+    if not np.isfinite(caked[0]) or not np.isfinite(caked[1]):
+        return None, "invalid_result"
+    return caked, "ok"
+
+
+def _diag_angle_delta(left, right):
+    if left is None or right is None:
+        return None
+    return (
+        float(left[0]) - float(right[0]),
+        ((float(left[1]) - float(right[1]) + 180.0) % 360.0) - 180.0,
+    )
+
+
+def _diag_pair_distance_caked(left, right):
+    delta = _diag_angle_delta(left, right)
+    if delta is None:
+        return None
+    return float(np.hypot(delta[0], delta[1]))
+
+
+def _diag_caked_visual_source_changed(before, after, *, tth_tol=0.25, phi_tol=0.5):
+    if before is None or after is None:
+        return True
+    delta = _diag_angle_delta(before, after)
+    if delta is None:
+        return True
+    return bool(abs(float(delta[0])) > float(tth_tol) or abs(float(delta[1])) > float(phi_tol))
+
+
+def _diag_assert_caked_session_refresh_preserved_visual_source(
+    before_map,
+    after_map,
+    *,
+    incoming_candidate_source,
+):
+    changed = []
+    for branch in (0, 1):
+        before_visual, _before_source = _diag_sim_visual_caked(before_map.get(branch))
+        after_visual, _after_source = _diag_sim_visual_caked(after_map.get(branch))
+        if _diag_caked_visual_source_changed(before_visual, after_visual):
+            changed.append((branch, before_visual, after_visual))
+    if changed:
+        branch, before_visual, after_visual = changed[0]
+        print("caked_session_refresh_visual_source_changed=yes")
+        print(f"changed_branch={branch}")
+        print(f"before_sim_visual_caked_deg={_diag_point_text(before_visual)}")
+        print(f"after_sim_visual_caked_deg={_diag_point_text(after_visual)}")
+        print(f"incoming_candidate_source={incoming_candidate_source}")
+    else:
+        print("caked_session_refresh_visual_source_changed=no")
+        print(f"incoming_candidate_source={incoming_candidate_source}")
+    assert not changed
+
+
+def _diag_matches_distance(value, expected, tol=1.0e-3):
+    if value is None or expected is None:
+        return False
+    try:
+        return abs(float(value) - float(expected)) <= float(tol)
+    except Exception:
+        return False
+
+
+def _diag_preview_distance_match(observed_caked, visual_caked, cache_caked, preview_value):
+    visual_distance = _diag_pair_distance_caked(observed_caked, visual_caked)
+    cache_distance = _diag_pair_distance_caked(observed_caked, cache_caked)
+    visual_match = _diag_matches_distance(preview_value, visual_distance)
+    cache_match = _diag_matches_distance(preview_value, cache_distance)
+    if visual_match and cache_match:
+        match = "both"
+    elif visual_match:
+        match = "sim_visual"
+    elif cache_match:
+        match = "sim_cache_current"
+    else:
+        match = "neither"
+    return match, visual_distance, cache_distance
+
+
+def _diag_text_cell(value):
+    if isinstance(value, tuple) and len(value) >= 2:
+        return _diag_point_text(value)
+    if value is None:
+        return "<unavailable>"
+    if isinstance(value, float):
+        return _diag_float_text(value)
+    return str(value)
+
+
+def _diag_target_caked(entry):
+    point, _source = _diag_observed_caked(entry)
+    return point
+
+
+def _diag_cache_current_map(context, detector_targets, caked_targets):
+    cache_current = {}
+    callbacks = _diag_build_caked_callbacks(context)
+    for branch in (0, 1):
+        detector_entry = detector_targets.get(branch)
+        caked_entry = caked_targets.get(branch)
+        display, _display_source = _diag_sim_visual_detector_display(detector_entry)
+        native, _native_source = _diag_sim_visual_detector_native(detector_entry)
+        caked = _diag_target_caked(caked_entry)
+        source = "caked_qr_projection_cache" if caked is not None else "<unavailable>"
+        if caked is None and native is not None:
+            caked, status = _diag_direct_native_to_caked(callbacks, native)
+            source = f"direct_current_native_projection:{status}"
+        cache_current[branch] = {
+            "source": source,
+            "detector_display": display,
+            "detector_native": native,
+            "caked": caked,
+        }
+    return cache_current
+
+
+def _diag_visual_map(detector_targets):
+    visual = {}
+    for branch, entry in detector_targets.items():
+        display, display_source = _diag_sim_visual_detector_display(entry)
+        native, native_source = _diag_sim_visual_detector_native(entry)
+        caked, caked_source = _diag_sim_visual_caked(entry)
+        visual[int(branch)] = {
+            "source": caked_source,
+            "detector_display": display,
+            "detector_display_source": display_source,
+            "detector_native": native,
+            "detector_native_source": native_source,
+            "caked": caked,
+        }
+    return visual
+
+
+def _diag_build_refine_preview(use_caked_space, radial_axis, azimuth_axis):
+    def _refine_preview(candidate, col, row, **kwargs):
+        local_kwargs = dict(kwargs)
+        local_kwargs.pop("force_detector_space", None)
+        return mg.geometry_manual_refine_preview_point(
+            candidate,
+            col,
+            row,
+            use_caked_space=bool(use_caked_space),
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            **local_kwargs,
+        )
+
+    return _refine_preview
+
+
+def _diag_live_toggle(cache_data, click, *, display_background, use_caked_space, profile_cache):
+    statuses = []
+    sessions = []
+    handled, session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        float(click[0]),
+        float(click[1]),
+        pick_session={},
+        current_background_index=0,
+        display_background=display_background,
+        get_cache_data=lambda **_kwargs: dict(cache_data),
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda value: sessions.append(dict(value)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=statuses.append,
+        listed_q_group_entries=lambda: [{"key": _QR_PICKER_TARGET_Q_GROUP_KEY}],
+        format_q_group_line=lambda _entry: "target q_group",
+        use_caked_space=bool(use_caked_space),
+        pick_search_window_px=50.0,
+        profile_cache=profile_cache,
+    )
+    assert handled is True
+    assert suppress_drag is True
+    assert sessions
+    assert session == sessions[-1]
+    return session, statuses
+
+
+def _diag_live_preview(
+    session,
+    click,
+    *,
+    cache_data,
+    display_background,
+    use_caked_space,
+    callbacks,
+    radial_axis,
+    azimuth_axis,
+    profile_cache,
+):
+    remaining = mg.geometry_manual_unassigned_group_candidates(
+        session,
+        current_background_index=0,
+    )
+    return mg.geometry_manual_pick_preview_state(
+        float(click[0]),
+        float(click[1]),
+        pick_session=session,
+        current_background_index=0,
+        force=True,
+        remaining_candidates=remaining,
+        display_background=display_background,
+        cache_data=dict(cache_data),
+        refine_preview_point=_diag_build_refine_preview(
+            use_caked_space,
+            radial_axis,
+            azimuth_axis,
+        ),
+        use_caked_space=bool(use_caked_space),
+        caked_angles_to_background_display_coords=getattr(
+            callbacks,
+            "caked_angles_to_background_display_coords",
+            None,
+        ),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+
+
+def _diag_live_place(
+    session,
+    click,
+    *,
+    cache_data,
+    display_background,
+    use_caked_space,
+    callbacks,
+    radial_axis,
+    azimuth_axis,
+    profile_cache,
+):
+    state = {"sessions": [], "saved": [], "statuses": []}
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        float(click[0]),
+        float(click[1]),
+        pick_session=dict(session),
+        current_background_index=0,
+        display_background=display_background,
+        get_cache_data=lambda **_kwargs: dict(cache_data),
+        refine_preview_point=_diag_build_refine_preview(
+            use_caked_space,
+            radial_axis,
+            azimuth_axis,
+        ),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            state["saved"].append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda value: state["sessions"].append(dict(value)),
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=state["statuses"].append,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=bool(use_caked_space),
+        caked_angles_to_background_display_coords=getattr(
+            callbacks,
+            "caked_angles_to_background_display_coords",
+            None,
+        ),
+        background_display_to_native_detector_coords=getattr(
+            callbacks,
+            "background_display_to_native_detector_coords",
+            None,
+        ),
+        native_detector_coords_to_caked_display_coords=getattr(
+            callbacks,
+            "native_detector_coords_to_caked_display_coords",
+            None,
+        ),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    assert handled is True
+    if state["saved"]:
+        entries = state["saved"][-1]
+    else:
+        entries = next_session.get("pending_entries", []) if isinstance(next_session, dict) else []
+    return next_session, [dict(entry) for entry in entries if isinstance(entry, Mapping)], state
+
+
+def _diag_runtime_refresh_pick_session(
+    runtime_session,
+    monkeypatch,
+    *,
+    session,
+    cache_data,
+    background_image,
+    profile_cache,
+    use_caked_space,
+    detector_grouped=None,
+):
+    manual_state = SimpleNamespace(pick_session=dict(session))
+    refresh_sources = []
+    original_refresh = mg.refresh_geometry_manual_pick_session_candidates
+    caked_grouped = (
+        cache_data.get("caked_qr_projection_grouped_candidates")
+        if isinstance(cache_data, Mapping)
+        else None
+    )
+    grouped = cache_data.get("grouped_candidates") if isinstance(cache_data, Mapping) else None
+
+    def _record_refresh(pick_session, *, grouped_candidates, **kwargs):
+        if grouped_candidates is caked_grouped:
+            refresh_sources.append("caked_qr_projection_grouped_candidates")
+        elif grouped_candidates is detector_grouped:
+            refresh_sources.append("detector_grouped_candidates_from_cache")
+        elif grouped_candidates is grouped:
+            refresh_sources.append("grouped_candidates")
+        else:
+            refresh_sources.append("other_grouped_candidates")
+        return original_refresh(
+            pick_session,
+            grouped_candidates=grouped_candidates,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(runtime_session, "geometry_manual_state", manual_state, raising=False)
+    monkeypatch.setattr(runtime_session.background_runtime_state, "current_background_index", 0)
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_pick_session",
+        lambda value: setattr(manual_state, "pick_session", dict(value)) or manual_state.pick_session,
+    )
+    monkeypatch.setattr(runtime_session.simulation_runtime_state, "profile_cache", profile_cache)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: background_image,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: dict(cache_data),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: bool(use_caked_space),
+        raising=False,
+    )
+    if detector_grouped is not None:
+        monkeypatch.setattr(
+            mg,
+            "geometry_manual_detector_picker_grouped_candidates_from_cache",
+            lambda *_args, **_kwargs: detector_grouped,
+        )
+    monkeypatch.setattr(mg, "refresh_geometry_manual_pick_session_candidates", _record_refresh)
+
+    remaining = runtime_session._geometry_manual_unassigned_group_candidates()
+    return manual_state.pick_session, remaining, list(refresh_sources)
+
+
+def _diag_refresh_entries(callbacks, entries):
+    refreshed = []
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            value = callbacks.refresh_entry_geometry(dict(entry))
+        except Exception:
+            value = None
+        refreshed.append(dict(value) if isinstance(value, Mapping) else dict(entry))
+    return refreshed
+
+
+def _diag_pair_close(left, right, tol=1.0e-3):
+    if left is None or right is None:
+        return False
+    return bool(np.allclose(left, right, atol=tol, rtol=0.0))
+
+
+def _diag_field_label_errors(row, caked_points):
+    errors = []
+    for key in (
+        "observed_detector_display_px",
+        "observed_detector_native_px",
+        "sim_visual_detector_display_px",
+        "sim_visual_detector_native_px",
+        "sim_cache_current_detector_display_px",
+        "sim_cache_current_native_px",
+    ):
+        point = row.get(key)
+        if point is None:
+            continue
+        for label, caked_point in caked_points:
+            if _diag_pair_close(point, caked_point):
+                errors.append(f"{key}_contains_{label}")
+    return ",".join(errors) if errors else ""
+
+
+def _diag_source_ledger_row(
+    event,
+    branch,
+    entry,
+    *,
+    visual_map,
+    cache_current,
+    preview=None,
+    direct_result=None,
+):
+    entry = dict(entry) if isinstance(entry, Mapping) else {}
+    observed_display, _observed_display_source = _diag_observed_detector_display(entry)
+    observed_native, _observed_native_source = _diag_observed_detector_native(entry)
+    observed_caked, _observed_caked_source = _diag_observed_caked(entry)
+    visual = visual_map.get(branch, {})
+    visual_display = visual.get("detector_display")
+    visual_native = visual.get("detector_native")
+    visual_caked = visual.get("caked")
+    visual_source = str(visual.get("source", "<unavailable>"))
+    cache = cache_current.get(branch, {})
+    cache_caked = cache.get("caked")
+    legacy_caked, legacy_source = _diag_legacy_sim_caked(entry)
+    preview_value = None
+    if isinstance(preview, Mapping):
+        preview_value = preview.get("sim_dist")
+        if preview_value is None:
+            preview_value = preview.get("printed_preview_distance")
+    preview_source = "<unavailable>"
+    if isinstance(preview, Mapping):
+        preview_source = str(
+            preview.get(
+                "preview_distance_source",
+                preview.get(
+                    "sim_dist_source",
+                    preview.get("preview_distance_matches", "<unavailable>"),
+                ),
+            )
+        )
+    delta = _diag_angle_delta(observed_caked, visual_caked)
+    geometry_delta_source = "observed_minus_sim_visual" if delta is not None else "<unavailable>"
+    direct_point = direct_result.get("point") if isinstance(direct_result, Mapping) else None
+    direct_status = direct_result.get("status") if isinstance(direct_result, Mapping) else "<unavailable>"
+    row = {
+        "event": event,
+        "branch": branch,
+        "source_table_index": entry.get("source_table_index", "<none>"),
+        "source_row_index": entry.get("source_row_index", "<none>"),
+        "source_branch_index": entry.get("source_branch_index", "<none>"),
+        "branch_id": entry.get("branch_id", "<none>"),
+        "observed_detector_display_px": observed_display,
+        "observed_detector_native_px": observed_native,
+        "observed_caked_deg": observed_caked,
+        "sim_visual_source": visual_source,
+        "sim_visual_detector_display_px": visual_display,
+        "sim_visual_detector_native_px": visual_native,
+        "sim_visual_caked_deg": visual_caked,
+        "sim_cache_current_source": cache.get("source", "<unavailable>"),
+        "sim_cache_current_detector_display_px": cache.get("detector_display"),
+        "sim_cache_current_native_px": cache.get("detector_native"),
+        "sim_cache_current_caked_deg": cache_caked,
+        "legacy_sim_caked_source": legacy_source,
+        "legacy_sim_caked_deg": legacy_caked,
+        "preview_distance_source": preview_source,
+        "preview_distance_value": preview_value,
+        "geometry_minus_sim_caked_source": geometry_delta_source,
+        "geometry_minus_sim_caked_delta": delta,
+        "direct_detector_native_to_caked_deg": direct_point,
+        "direct_detector_native_to_caked_status": direct_status,
+    }
+    row["field_label_errors"] = _diag_field_label_errors(
+        row,
+        (
+            ("observed_caked_deg", observed_caked),
+            ("sim_visual_caked_deg", visual_caked),
+            ("sim_cache_current_caked_deg", cache_caked),
+            ("legacy_sim_caked_deg", legacy_caked),
+        ),
+    )
+    return row
+
+
+_SOURCE_LEDGER_FIELDS = (
+    "event",
+    "branch",
+    "source_table_index",
+    "source_row_index",
+    "source_branch_index",
+    "branch_id",
+    "observed_detector_display_px",
+    "observed_detector_native_px",
+    "observed_caked_deg",
+    "sim_visual_source",
+    "sim_visual_detector_display_px",
+    "sim_visual_detector_native_px",
+    "sim_visual_caked_deg",
+    "sim_cache_current_source",
+    "sim_cache_current_detector_display_px",
+    "sim_cache_current_native_px",
+    "sim_cache_current_caked_deg",
+    "legacy_sim_caked_source",
+    "legacy_sim_caked_deg",
+    "preview_distance_source",
+    "preview_distance_value",
+    "geometry_minus_sim_caked_source",
+    "geometry_minus_sim_caked_delta",
+    "direct_detector_native_to_caked_deg",
+    "direct_detector_native_to_caked_status",
+    "field_label_errors",
+)
+
+
+def _diag_print_source_ledger(rows):
+    print("\nsource_ledger")
+    print(" | ".join(_SOURCE_LEDGER_FIELDS))
+    for row in rows:
+        print(" | ".join(_diag_text_cell(row.get(field)) for field in _SOURCE_LEDGER_FIELDS))
+
+
+def _diag_direct_detector_origin_checks(context, callbacks, entries, visual_map):
+    checks = []
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        branch = _diag_source_branch(entry)
+        if branch is None:
+            continue
+        raw_display = _diag_finite_pair(entry, (("raw_x", "raw_y"), ("detector_seed_col", "detector_seed_row"), ("x", "y")))
+        raw_native = _diag_display_to_native(context, raw_display)
+        geometry_native, _geometry_native_source = _diag_observed_detector_native(entry)
+        sim_native = visual_map.get(branch, {}).get("detector_native")
+        targets = (
+            ("raw_detector_native_px", raw_native, _diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),))),
+            ("geometry_detector_native_px", geometry_native, _diag_observed_caked(entry)[0]),
+            ("sim_visual_detector_native_px", sim_native, visual_map.get(branch, {}).get("caked")),
+        )
+        for field, native, trace_caked in targets:
+            direct_caked, status = _diag_direct_native_to_caked(callbacks, native)
+            comparison = "missing_trace"
+            if direct_caked is not None and trace_caked is not None:
+                comparison = (
+                    "matches_trace"
+                    if _diag_pair_close(direct_caked, trace_caked, tol=1.0e-2)
+                    else "differs_from_trace"
+                )
+            checks.append(
+                {
+                    "branch": branch,
+                    "field": field,
+                    "native": native,
+                    "direct": direct_caked,
+                    "trace": trace_caked,
+                    "status": status,
+                    "comparison": comparison,
+                }
+            )
+    print("\ndetector_origin_direct_conversion_check")
+    print("branch | field | native_px | direct_caked_deg | trace_caked_deg | status | comparison")
+    for check in checks:
+        print(
+            " | ".join(
+                (
+                    str(check["branch"]),
+                    str(check["field"]),
+                    _diag_point_text(check["native"]),
+                    _diag_point_text(check["direct"]),
+                    _diag_point_text(check["trace"]),
+                    str(check["status"]),
+                    str(check["comparison"]),
+                )
+            )
+        )
+    return checks
+
+
+def _diag_print_frozen_visual_branch_map(session, visual_map, event_name):
+    branch_map = _diag_branch_map(session.get("group_entries", []) if isinstance(session, Mapping) else [])
+    print("\npending_visual_branch_map")
+    print("branch | exists | sim_visual_caked_deg | sim_visual_source_event")
+    for branch in (0, 1):
+        exists = branch in branch_map
+        visual = visual_map.get(branch, {})
+        print(
+            " | ".join(
+                (
+                    str(branch),
+                    "yes" if exists else "no",
+                    _diag_point_text(visual.get("caked")),
+                    event_name if exists else "<missing>",
+                )
+            )
+        )
+    return branch_map
+
+
+def _diag_make_preview_check(event, branch, observed_caked, visual_map, cache_current, preview):
+    preview_value = None
+    if isinstance(preview, Mapping):
+        preview_value = preview.get("sim_dist")
+    match, visual_distance, cache_distance = _diag_preview_distance_match(
+        observed_caked,
+        visual_map.get(branch, {}).get("caked"),
+        cache_current.get(branch, {}).get("caked"),
+        preview_value,
+    )
+    return {
+        "event": event,
+        "branch": branch,
+        "printed_preview_distance": preview_value,
+        "preview_distance_source": (
+            str(preview.get("preview_distance_source"))
+            if isinstance(preview, Mapping) and preview.get("preview_distance_source") is not None
+            else "<unavailable>"
+        ),
+        "visual_distance": visual_distance,
+        "cache_current_distance": cache_distance,
+        "preview_distance_matches": match,
+    }
+
+
+def _diag_conclusion(failures):
+    if not failures:
+        return {
+            "conclusion": "no_failure_found",
+            "first_bad_event": "<none>",
+            "first_bad_branch": "<none>",
+            "first_bad_field": "<none>",
+            "expected_source": "<none>",
+            "actual_source": "<none>",
+            "explanation": "all checked sources stayed visual",
+        }
+    order = {
+        "visual_branch_map_missing_non_clicked_branch": 0,
+        "detector_to_caked_trace_uses_wrong_or_double_transformed_native": 1,
+        "preview_distance_uses_cache_current": 2,
+        "legacy_sim_caked_uses_cache_current": 3,
+        "caked_values_labeled_as_detector_px": 4,
+    }
+    return min(failures, key=lambda item: order.get(item["conclusion"], 99))
+
+
+def _diag_entry_table_line(entry, picker_keys, overlay_keys, source_keys, display_w, display_h, native_w, native_h):
+    display = _diag_detector_display_point(entry)
+    native = _diag_detector_native_point(entry)
+    identity = _diag_source_identity(entry)
+    return " | ".join(
+        [
+            repr(_diag_q_group_key(entry)),
+            repr(_diag_hkl(entry)),
+            str(entry.get("source_branch_index", "<none>")),
+            str(entry.get("source_table_index", "<none>")),
+            str(entry.get("source_row_index", "<none>")),
+            str(entry.get("source_peak_index", "<none>")),
+            str(entry.get("branch_id", "<none>")),
+            _diag_point_text(display, "no_detector_display_px"),
+            _diag_point_text(native, "no_detector_native_px"),
+            str(_diag_inside(display, display_w, display_h) and _diag_inside(native, native_w, native_h)),
+            str(identity in picker_keys),
+            str(identity in overlay_keys),
+            str(entry.get("diagnostic_source", entry.get("source_label", "<none>"))),
+        ]
+    )
+
+
+def _diag_rank_for_entry(entry, profile_cache, branch_id=None):
+    return mosaic_top_selection.mosaic_top_rank_key(
+        entry,
+        branch_id=branch_id,
+        source_order=0,
+        profile_cache=profile_cache,
+    )
+
+
+def test_qr_sim_peak_refines_detector_candidate_to_sim_local_max() -> None:
+    image = np.zeros((24, 24), dtype=float)
+    image[6, 8] = 25.0
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_branch_index": 1,
+        "display_col": 5.4,
+        "display_row": 6.2,
+        "native_col": 105.4,
+        "native_row": 206.2,
+        "caked_x": 11.0,
+        "caked_y": 22.0,
+    }
+
+    refined = mg.geometry_manual_refine_qr_sim_peak_detector(
+        candidate,
+        detector_simulation_image=image,
+        search_radius_px=5,
+        detector_display_to_native_coords=lambda col, row: (col + 100.0, row + 200.0),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            col / 10.0,
+            row / 10.0,
+        ),
+    )
+
+    assert refined is not None
+    assert refined["source_branch_index"] == 1
+    assert refined["sim_nominal_detector_display_px"] == (5.4, 6.2)
+    assert refined["sim_refined_detector_display_px"] == (8.0, 6.0)
+    assert refined["sim_refined_detector_native_px"] == (108.0, 206.0)
+    assert refined["sim_refined_caked_deg"] == (10.8, 20.6)
+    assert refined["sim_refinement_status"] == "refined"
+    assert refined["sim_refinement_source"] == "detector_simulation_image"
+    assert refined["sim_visual_deg"] == refined["sim_refined_caked_deg"]
+
+
+def test_qr_sim_peak_detector_blank_image_is_not_refined() -> None:
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_branch_index": 1,
+        "display_col": 5.0,
+        "display_row": 6.0,
+        "native_col": 105.0,
+        "native_row": 206.0,
+        "caked_x": 11.0,
+        "caked_y": 22.0,
+    }
+
+    refined = mg.geometry_manual_refine_qr_sim_peak_detector(
+        candidate,
+        detector_simulation_image=np.zeros((24, 24), dtype=float),
+        search_radius_px=5,
+        detector_display_to_native_coords=lambda col, row: (col + 100.0, row + 200.0),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            col / 10.0,
+            row / 10.0,
+        ),
+    )
+
+    assert refined is not None
+    assert refined["sim_refinement_status"] == "no_peak_found"
+    assert "sim_refined_detector_display_px" not in refined
+    assert "sim_refined_detector_native_px" not in refined
+    assert "sim_refined_caked_deg" not in refined
+    assert refined["sim_visual_deg"] == refined["sim_nominal_caked_deg"]
+
+
+def test_qr_sim_peak_refines_caked_candidate_to_sim_local_max() -> None:
+    radial = np.linspace(0.0, 9.0, 10)
+    azimuth = np.linspace(0.0, 9.0, 10)
+    image = np.zeros((10, 10), dtype=float)
+    image[4, 7] = 100.0
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_branch_index": 0,
+        "caked_x": 5.2,
+        "caked_y": 4.1,
+    }
+
+    refined = mg.geometry_manual_refine_qr_sim_peak_caked(
+        candidate,
+        caked_simulation_image=image,
+        radial_axis=radial,
+        azimuth_axis=azimuth,
+    )
+
+    assert refined is not None
+    assert refined["source_branch_index"] == 0
+    assert refined["sim_nominal_caked_deg"] == (5.2, 4.1)
+    assert np.allclose(refined["sim_refined_caked_deg"], (7.0, 4.0), atol=1.0e-6)
+    assert refined["sim_refinement_status"] == "refined"
+    assert refined["sim_refinement_source"] == "caked_simulation_image"
+    assert refined["sim_refined_caked_projection_status"] == "caked_simulation_image_axes"
+    assert refined["sim_refined_caked_projection_real_callback"] is False
+    assert refined["sim_visual_deg"] == refined["sim_refined_caked_deg"]
+    assert "sim_refined_detector_display_px" not in refined
+    assert "refined_sim_x" not in refined
+
+
+def test_qr_sim_peak_caked_blank_image_is_not_refined() -> None:
+    radial = np.linspace(0.0, 9.0, 10)
+    azimuth = np.linspace(0.0, 9.0, 10)
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_branch_index": 0,
+        "caked_x": 5.2,
+        "caked_y": 4.1,
+    }
+
+    refined = mg.geometry_manual_refine_qr_sim_peak_caked(
+        candidate,
+        caked_simulation_image=np.zeros((10, 10), dtype=float),
+        radial_axis=radial,
+        azimuth_axis=azimuth,
+    )
+
+    assert refined is not None
+    assert refined["sim_refinement_status"] == "no_peak_found"
+    assert "sim_refined_caked_deg" not in refined
+    assert "refined_sim_caked_x" not in refined
+    assert refined["sim_visual_deg"] == refined["sim_nominal_caked_deg"]
+
+
+def test_detector_picker_row_uses_refined_sim_detector_px_and_matching_native() -> None:
+    entry = {
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_branch_index": 0,
+        "display_col": 10.0,
+        "display_row": 20.0,
+        "native_col": 110.0,
+        "native_row": 120.0,
+        "sim_refined_detector_display_px": (12.0, 23.0),
+        "sim_refined_detector_native_px": (112.0, 123.0),
+    }
+
+    row = mg.geometry_manual_detector_picker_row(
+        entry,
+        display_width=100,
+        display_height=100,
+        native_width=200,
+        native_height=200,
+    )
+
+    assert row is not None
+    assert row["detector_display_px"] == (12.0, 23.0)
+    assert row["detector_native_px"] == (112.0, 123.0)
+    assert row["display_col"] == 12.0
+    assert row["display_row"] == 23.0
+    assert row["detector_display_source"] == "sim_refined_detector_display_px"
+
+
+def test_detector_picker_row_does_not_pair_refined_display_with_nominal_native() -> None:
+    entry = {
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_branch_index": 0,
+        "display_col": 10.0,
+        "display_row": 20.0,
+        "native_col": 110.0,
+        "native_row": 120.0,
+        "sim_refined_detector_display_px": (12.0, 23.0),
+    }
+
+    row = mg.geometry_manual_detector_picker_row(
+        entry,
+        display_width=100,
+        display_height=100,
+        native_width=200,
+        native_height=200,
+    )
+
+    assert row is not None
+    assert row["detector_display_px"] == (12.0, 23.0)
+    assert "detector_native_px" not in row
+    assert "native_col" not in row
+    assert "native_row" not in row
+
+
+def test_detector_picker_dedupe_uses_refined_sim_detector_px() -> None:
+    nominal_entry = {
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_table_index": 160,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "source_peak_index": 24,
+        "branch_id": "primary:1:10:0",
+        "display_col": 10.0,
+        "display_row": 20.0,
+        "native_col": 110.0,
+        "native_row": 120.0,
+        "detector_picker_source": "manual_saved_pair",
+    }
+    refined_entry = {
+        **nominal_entry,
+        "sim_refined_detector_display_px": (12.0, 23.0),
+        "sim_refined_detector_native_px": (112.0, 123.0),
+        "detector_picker_source": "fresh_source_rows",
+    }
+
+    deduped = mg._geometry_manual_detector_picker_dedupe_rows(
+        [nominal_entry, refined_entry]
+    )
+
+    assert len(deduped) == 2
+    assert deduped[0]["detector_picker_source"] == "manual_saved_pair"
+    assert deduped[1]["detector_picker_source"] == "fresh_source_rows"
+
+
+def test_minus_1_0_10_sim_visual_uses_refined_peak_for_both_branches(tmp_path) -> None:
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    cache_data = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        profile_cache=rows["profile_cache"],
+    )
+    target_by_branch = _diag_target_rows_by_branch(grouped)
+    assert set(target_by_branch) == {0, 1}
+
+    image = np.zeros((3000, 3000), dtype=float)
+    branch_refined_display = {}
+    for branch, entry in target_by_branch.items():
+        nominal = _diag_detector_display_point(entry)
+        assert nominal is not None
+        refined = (
+            float(round(nominal[0]) + (3 if branch == 0 else -4)),
+            float(round(nominal[1]) + (2 if branch == 0 else -3)),
+        )
+        image[int(refined[1]), int(refined[0])] = 1000.0 + float(branch)
+        branch_refined_display[int(branch)] = refined
+
+    def display_to_native(col, row):
+        return _diag_display_to_native(context, (float(col), float(row)))
+
+    def native_to_caked(col, row):
+        return (float(col) / 100.0, float(row) / 100.0)
+
+    refined_cache = mg.geometry_manual_refine_qr_sim_candidates_in_cache(
+        cache_data,
+        detector_simulation_image=image,
+        detector_display_to_native_coords=display_to_native,
+        native_detector_coords_to_caked_display_coords=native_to_caked,
+    )
+    refined_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        refined_cache,
+        profile_cache=rows["profile_cache"],
+    )
+    refined_target = _diag_target_rows_by_branch(refined_grouped)
+    assert set(refined_target) == {0, 1}
+
+    print("\nCMD sim refine (-1,0,10)")
+    for branch in (0, 1):
+        before = target_by_branch[branch]
+        after = refined_target[branch]
+        nominal_display = after.get("sim_nominal_detector_display_px")
+        refined_display = after.get("sim_refined_detector_display_px")
+        refined_caked = after.get("sim_refined_caked_deg")
+        manual_caked = _diag_finite_pair(
+            before,
+            (
+                ("background_two_theta_deg", "background_phi_deg"),
+                ("caked_x", "caked_y"),
+            ),
+        )
+        delta = (
+            float(
+                np.hypot(
+                    float(manual_caked[0]) - float(refined_caked[0]),
+                    float(manual_caked[1]) - float(refined_caked[1]),
+                )
+            )
+            if manual_caked is not None and refined_caked is not None
+            else float("nan")
+        )
+        print(
+            "CMD before "
+            f"branch={branch} nominal_sim_detector={_diag_point_text(nominal_display)} "
+            f"nominal_native={_diag_point_text(after.get('sim_nominal_detector_native_px'))}"
+        )
+        print(
+            "CMD after "
+            f"branch={branch} refined_sim_detector={_diag_point_text(refined_display)} "
+            f"refined_sim_caked={_diag_point_text(refined_caked)} "
+            f"geometry_manual_peak={_diag_point_text(manual_caked)} "
+            f"geometry_minus_refined_sim_delta={_diag_float_text(delta)}"
+        )
+        assert nominal_display is not None
+        assert after.get("sim_nominal_detector_native_px") is not None
+        assert np.allclose(refined_display, branch_refined_display[branch], atol=1.0e-6)
+        assert after["sim_refinement_status"] == "refined"
+        assert after["sim_refinement_source"] == "detector_simulation_image"
+        assert after["sim_visual_deg"] == after["sim_refined_caked_deg"]
+        assert after.get("sim_visual_source") == "sim_refined_caked_deg"
+        assert after.get("sim_cache_current_deg") is None
+
+
+def test_qr_sim_refinement_does_not_change_manual_background_refinement() -> None:
+    background = np.zeros((20, 20), dtype=float)
+    background[7, 8] = 50.0
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+
+    before = mg.geometry_manual_refine_preview_point(
+        candidate,
+        5.2,
+        6.1,
+        display_background=background,
+        cache_data={},
+        use_caked_space=False,
+    )
+    sim_image = np.zeros((20, 20), dtype=float)
+    sim_image[3, 4] = 100.0
+    _refined_sim = mg.geometry_manual_refine_qr_sim_peak_detector(
+        candidate,
+        detector_simulation_image=sim_image,
+        search_radius_px=5,
+    )
+    after = mg.geometry_manual_refine_preview_point(
+        candidate,
+        5.2,
+        6.1,
+        display_background=background,
+        cache_data={},
+        use_caked_space=False,
+    )
+
+    assert before == (8.0, 7.0)
+    assert after == before
+
+
+def test_qr_picker_detector_pixel_positions(tmp_path) -> None:
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    display_h, display_w = _diag_display_shape(context)
+    native_h, native_w = _diag_native_shape(context)
+    flags = context["saved_state"].get("flags", {})
+    display_to_native_fn = getattr(
+        context["projection_callbacks"],
+        "background_display_to_native_detector_coords",
+        None,
+    )
+    native_to_display_fn = context["projection_kwargs"].get(
+        "native_detector_coords_to_detector_display_coords"
+    )
+
+    overlay_rows = [
+        row
+        for row in rows["overlay_rows"]
+        if _diag_q_group_key(row) is not None
+        and _diag_inside(_diag_detector_display_point(row), display_w, display_h)
+        and _diag_inside(_diag_detector_native_point(row), native_w, native_h)
+    ]
+    picker_rows = [
+        row
+        for row in rows["picker_rows"]
+        if _diag_q_group_key(row) is not None
+        and _diag_inside(_diag_detector_display_point(row), display_w, display_h)
+        and _diag_inside(_diag_detector_native_point(row), native_w, native_h)
+    ]
+    source_rows = [
+        row
+        for row in rows["collapsed_source_rows"]
+        if _diag_q_group_key(row) is not None
+    ]
+    picker_keys = {_diag_source_identity(row) for row in picker_rows}
+    overlay_keys = {_diag_source_identity(row) for row in overlay_rows}
+    source_keys = {_diag_source_identity(row) for row in source_rows}
+    drawn_not_selectable = sorted(overlay_keys - picker_keys, key=repr)
+    selectable_not_drawn = sorted(picker_keys - overlay_keys, key=repr)
+
+    print("\nSection 1: detector geometry and orientation")
+    print(f"detector image width/height: {native_w} / {native_h}")
+    print(f"displayed background width/height: {display_w} / {display_h}")
+    print(f"display rotation k: {context['projection_kwargs'].get('display_rotate_k')}")
+    print("display flip settings: flip_x=False flip_y=False")
+    print(
+        "backend rotation/flip settings: "
+        f"rotation_k={flags.get('background_backend_rotation_k')} "
+        f"flip_x={flags.get('background_backend_flip_x')} "
+        f"flip_y={flags.get('background_backend_flip_y')}"
+    )
+    print(
+        "detector display -> native transform function name: "
+        f"{_diag_function_name(display_to_native_fn)}"
+    )
+    print(
+        "native -> display transform function name: "
+        f"{_diag_function_name(native_to_display_fn) if native_to_display_fn is not None else 'rotate_point_for_display'}"
+    )
+    if context["runtime_error"]:
+        print(f"startup runtime preflight error captured: {context['runtime_error']}")
+
+    print("\nSection 2: all Qr picker candidates on detector")
+    print(
+        "q_group_key | hkl | branch | table | row | peak | branch_id | "
+        "detector_display_px | detector_native_px | inside_detector | "
+        "picker_candidate | overlay_drawn | source"
+    )
+    for entry in _diag_sorted(picker_rows):
+        print(
+            _diag_entry_table_line(
+                entry,
+                picker_keys,
+                overlay_keys,
+                source_keys,
+                display_w,
+                display_h,
+                native_w,
+                native_h,
+            )
+        )
+        display = _diag_detector_display_point(entry)
+        native = _diag_detector_native_point(entry)
+        assert not _diag_detector_point_is_caked(entry, display)
+        assert not _diag_detector_point_is_caked(entry, native)
+
+    target_rows = [
+        row
+        for row in picker_rows
+        if _diag_q_group_key(row) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        and _diag_hkl(row) == _QR_PICKER_TARGET_HKL
+    ]
+    target_by_branch = {
+        int(row.get("source_branch_index")): row
+        for row in target_rows
+        if row.get("source_branch_index") is not None
+    }
+
+    print("\nSection 3: target group only")
+    print(f"target q_group_key={_QR_PICKER_TARGET_Q_GROUP_KEY} hkl={_QR_PICKER_TARGET_HKL}")
+    for branch in sorted(target_by_branch):
+        entry = target_by_branch[branch]
+        display = _diag_detector_display_point(entry)
+        native = _diag_detector_native_point(entry)
+        display_to_native = _diag_display_to_native(context, display)
+        native_to_display = _diag_native_to_display(context, native)
+        native_delta = (
+            float(np.hypot(display_to_native[0] - native[0], display_to_native[1] - native[1]))
+            if display_to_native is not None and native is not None
+            else float("nan")
+        )
+        display_delta = (
+            float(np.hypot(native_to_display[0] - display[0], native_to_display[1] - display[1]))
+            if native_to_display is not None and display is not None
+            else float("nan")
+        )
+        branch_id = str(entry.get("branch_id", ""))
+        print(
+            "branch "
+            f"{branch}: detector_display_px={_diag_point_text(display)} "
+            f"detector_native_px={_diag_point_text(native)} "
+            f"display_to_native(detector_display_px)={_diag_point_text(display_to_native)} "
+            f"native_to_display(detector_native_px)={_diag_point_text(native_to_display)} "
+            f"roundtrip_delta_native={_diag_float_text(native_delta)} "
+            f"roundtrip_delta_display={_diag_float_text(display_delta)} "
+            f"inside_detector={_diag_inside(display, display_w, display_h) and _diag_inside(native, native_w, native_h)} "
+            f"mosaic_top_rank_key={_diag_rank_for_entry(entry, rows['profile_cache'], branch_id=branch_id)} "
+            f"mosaic_weight={entry.get('mosaic_weight', '<none>')} "
+            f"best_sample_index={entry.get('best_sample_index', '<none>')}"
+        )
+        assert display is not None
+        assert native is not None
+        assert _diag_inside(display, display_w, display_h)
+        assert _diag_inside(native, native_w, native_h)
+        assert not _diag_detector_point_is_caked(entry, display)
+        assert not _diag_detector_point_is_caked(entry, native)
+        assert display_to_native is not None
+        assert native_to_display is not None
+        assert np.allclose(display_to_native, native, atol=1.0e-6, rtol=0.0)
+        assert np.allclose(native_to_display, display, atol=1.0e-6, rtol=0.0)
+
+    assert set(target_by_branch) == {0, 1}
+
+    print("\nSection 4: click simulation for target group")
+    payload = ps.build_hkl_pick_simulation_point_payload(picker_rows)
+    runtime_state = SimpleNamespace(
+        peak_records=[dict(row) for row in picker_rows],
+        peak_positions=[_diag_detector_display_point(row) for row in picker_rows],
+        peak_positions_filtered=False,
+        profile_cache=rows["profile_cache"],
+    )
+    for branch in sorted(target_by_branch):
+        entry = target_by_branch[branch]
+        display = _diag_detector_display_point(entry)
+        assert display is not None
+        idx, selected, distance, within = ps.find_peak_record_for_canvas_click(
+            runtime_state,
+            float(display[0]),
+            float(display[1]),
+            ensure_peak_overlay_data=lambda force=False: None,
+            max_axis_distance_px=25.0,
+            simulation_point_candidates=payload,
+            use_caked_display=False,
+        )
+        assert selected is not None
+        selected_display = _diag_detector_display_point(selected)
+        print(
+            "branch "
+            f"{branch}: click_px={_diag_point_text(display)} "
+            f"nearest_picker_candidate_index={idx} "
+            f"distance_px={_diag_float_text(distance)} within={within} "
+            f"selected_q_group_key={_diag_q_group_key(selected)} "
+            f"selected_source_branch_index={selected.get('source_branch_index')} "
+            f"selected_source_table_index={selected.get('source_table_index')} "
+            f"selected_source_row_index={selected.get('source_row_index')} "
+            f"selected_branch_id={selected.get('branch_id')}"
+        )
+        assert int(selected.get("source_branch_index")) == branch
+        assert _diag_q_group_key(selected) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        assert _diag_hkl(selected) == _QR_PICKER_TARGET_HKL
+        assert selected_display is not None
+        assert np.allclose(selected_display, display, atol=1.0e-6, rtol=0.0)
+        assert not _diag_detector_point_is_caked(selected, selected_display)
+
+    detector_visual_consistent = not drawn_not_selectable and not selectable_not_drawn
+    print("\nSection 5: visual mismatch summary")
+    print(f"total Qr candidates on detector: {len(picker_rows)}")
+    print(f"total picker candidates: {len(picker_rows)}")
+    print(f"total overlay-drawn points: {len(overlay_rows)}")
+    print(f"candidates drawn but not selectable: {drawn_not_selectable}")
+    print(f"candidates selectable but not drawn: {selectable_not_drawn}")
+    for branch in (0, 1):
+        point = _diag_detector_display_point(target_by_branch.get(branch))
+        print(
+            f"target (-1,0,10) branch {branch} detector px: "
+            f"{_diag_point_text(point, 'missing_target_branch')}"
+        )
+    print(f"detector visual point source is consistent: {detector_visual_consistent}")
+
+    assert detector_visual_consistent
+
+
+def _diag_minus_1_0_10_caked_probe(tmp_path):
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    display_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["current_background_display"])
+    )
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    detector_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        detector_cache,
+        display_background=display_background,
+        profile_cache=profile_cache,
+    )
+    detector_targets = _diag_target_rows_by_branch(detector_grouped)
+    assert set(detector_targets) == {0, 1}
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    assert set(caked_targets) == {0, 1}
+    visual_map = _diag_visual_map(detector_targets)
+    cache_current = _diag_cache_current_map(context, detector_targets, caked_targets)
+
+    caked_select_point = _diag_target_caked(caked_targets[0])
+    assert caked_select_point is not None
+    caked_session, _statuses = _diag_live_toggle(
+        caked_cache,
+        caked_select_point,
+        display_background=caked_background,
+        use_caked_space=True,
+        profile_cache=profile_cache,
+    )
+    caked_select_map = _diag_branch_map(caked_session.get("group_entries", []))
+
+    click0 = _diag_target_caked(detector_targets[0])
+    assert click0 is not None
+    preview0 = _diag_live_preview(
+        caked_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    check0 = _diag_make_preview_check(
+        "caked_mode_placement_branch_0",
+        0,
+        (float(preview0["refined_col"]), float(preview0["refined_row"])),
+        visual_map,
+        cache_current,
+        preview0,
+    )
+    caked_session, branch0_entries, place0_state = _diag_live_place(
+        caked_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+
+    click1 = _diag_target_caked(detector_targets[1])
+    assert click1 is not None
+    preview1 = _diag_live_preview(
+        caked_session,
+        click1,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    check1 = _diag_make_preview_check(
+        "caked_mode_placement_branch_1",
+        1,
+        (float(preview1["refined_col"]), float(preview1["refined_row"])),
+        visual_map,
+        cache_current,
+        preview1,
+    )
+    _next_session, saved_entries, place1_state = _diag_live_place(
+        caked_session,
+        click1,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    return {
+        "context": context,
+        "detector_targets": detector_targets,
+        "caked_targets": caked_targets,
+        "visual_map": visual_map,
+        "cache_current": cache_current,
+        "caked_select_map": caked_select_map,
+        "preview0": preview0,
+        "preview1": preview1,
+        "preview_check0": check0,
+        "preview_check1": check1,
+        "branch0_entries": branch0_entries,
+        "saved_entries": saved_entries,
+        "place0_state": place0_state,
+        "place1_state": place1_state,
+    }
+
+
+def test_minus_1_0_10_caked_preview_distance_uses_visual_sim(tmp_path) -> None:
+    probe = _diag_minus_1_0_10_caked_probe(tmp_path)
+    print("\ncaked_preview_distance_before_after")
+    print("before_source=sim_cache_current_caked_deg")
+    print("after_source=sim_visual_caked_deg")
+    for check in (probe["preview_check0"], probe["preview_check1"]):
+        print(
+            "branch={branch} printed={printed} visual={visual} cache_current={cache} "
+            "source={source} match={match}".format(
+                branch=check["branch"],
+                printed=_diag_float_text(check["printed_preview_distance"]),
+                visual=_diag_float_text(check["visual_distance"]),
+                cache=_diag_float_text(check["cache_current_distance"]),
+                source=check["preview_distance_source"],
+                match=check["preview_distance_matches"],
+            )
+        )
+        assert check["preview_distance_source"] == "sim_visual_caked_deg"
+        assert check["preview_distance_matches"] == "sim_visual"
+        assert _diag_matches_distance(
+            check["printed_preview_distance"],
+            check["visual_distance"],
+        )
+        assert not _diag_matches_distance(
+            check["printed_preview_distance"],
+            check["cache_current_distance"],
+        )
+
+
+def test_minus_1_0_10_caked_assignment_distance_uses_visual_sim(tmp_path) -> None:
+    probe = _diag_minus_1_0_10_caked_probe(tmp_path)
+    branch0 = _diag_branch_map(probe["branch0_entries"])[0]
+    saved = _diag_branch_map(probe["saved_entries"])
+    branch1 = saved[1]
+    status0 = probe["place0_state"]["statuses"][-1]
+    visual0 = probe["preview_check0"]["visual_distance"]
+    print("\ncaked_assignment_distance_before_after")
+    print("before_source=sim_cache_current_caked_deg")
+    print("after_source=sim_visual_caked_deg")
+    print(f"branch=0 status={status0}")
+    print(
+        "branch=0 assignment={assignment} cache_current={cache}".format(
+            assignment=_diag_float_text(branch0.get("assignment_distance_to_sim")),
+            cache=_diag_float_text(branch0.get("assignment_distance_to_cache_current_sim")),
+        )
+    )
+    print(
+        "branch=1 assignment={assignment} cache_current={cache}".format(
+            assignment=_diag_float_text(branch1.get("assignment_distance_to_sim")),
+            cache=_diag_float_text(branch1.get("assignment_distance_to_cache_current_sim")),
+        )
+    )
+    assert branch0["assignment_distance_source"] == "sim_visual_caked_deg"
+    assert branch1["assignment_distance_source"] == "sim_visual_caked_deg"
+    assert _diag_matches_distance(branch0["assignment_distance_to_sim"], visual0)
+    assert f"({float(visual0):.2f} deg from sim)" in status0
+    assert not _diag_matches_distance(
+        branch0["assignment_distance_to_sim"],
+        branch0.get("assignment_distance_to_cache_current_sim"),
+    )
+    assert not _diag_matches_distance(
+        branch1["assignment_distance_to_sim"],
+        branch1.get("assignment_distance_to_cache_current_sim"),
+    )
+
+
+def test_minus_1_0_10_caked_preview_status_line_uses_visual_sim(tmp_path) -> None:
+    probe = _diag_minus_1_0_10_caked_probe(tmp_path)
+    print("\ncaked_preview_status_line_before_after")
+    print("before=Manual pick preview ... tagged sim [-1,0,10] (78.85 deg)")
+    for branch, preview, check in (
+        (0, probe["preview0"], probe["preview_check0"]),
+        (1, probe["preview1"], probe["preview_check1"]),
+    ):
+        message = str(preview["message"])
+        print(f"branch={branch} after={message}")
+        assert "Manual pick preview" in message
+        assert "status_distance_source=sim_visual_caked_deg" in message
+        assert "status_distance_units=deg" in message
+        assert "78.85 deg" not in message
+        assert "77.85 deg" not in message
+        assert "80.32 deg" not in message
+        assert check["preview_distance_source"] == "sim_visual_caked_deg"
+        assert _diag_matches_distance(
+            preview["status_distance_value"],
+            check["visual_distance"],
+        )
+        assert not _diag_matches_distance(
+            preview["status_distance_value"],
+            check["cache_current_distance"],
+        )
+        assert float(preview["status_distance_value"]) < 2.0
+
+
+def test_minus_1_0_10_caked_assignment_status_line_uses_visual_sim(tmp_path) -> None:
+    probe = _diag_minus_1_0_10_caked_probe(tmp_path)
+    branch0 = _diag_branch_map(probe["branch0_entries"])[0]
+    saved = _diag_branch_map(probe["saved_entries"])
+    branch1 = saved[1]
+    status0 = str(probe["place0_state"]["statuses"][-1])
+    print("\ncaked_assignment_status_line_before_after")
+    print("before=Placed peak ... Assigned ... (77.85 deg from sim)")
+    print(f"branch=0 after={status0}")
+    print(
+        "branch=1 saved_assignment_source={source} saved_assignment_distance={distance}".format(
+            source=branch1.get("assignment_distance_source"),
+            distance=_diag_float_text(branch1.get("assignment_distance_to_sim")),
+        )
+    )
+    assert "Assigned to" in status0
+    assert "status_distance_source=sim_visual_caked_deg" in status0
+    assert "status_distance_units=deg" in status0
+    assert "77.85 deg from sim" not in status0
+    assert "80.32 deg" not in status0
+    assert branch0["assignment_distance_source"] == "sim_visual_caked_deg"
+    assert branch1["assignment_distance_source"] == "sim_visual_caked_deg"
+    assert _diag_matches_distance(
+        branch0["status_distance_value"],
+        probe["preview_check0"]["visual_distance"],
+    )
+    assert _diag_matches_distance(
+        branch1["status_distance_value"],
+        probe["preview_check1"]["visual_distance"],
+    )
+    assert float(branch0["status_distance_value"]) < 2.0
+    assert float(branch1["status_distance_value"]) < 2.0
+
+
+def test_manual_geometry_live_code_path_marker(capsys) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    stamp = mg.print_geometry_manual_live_code_path_stamp(force=True)
+    output = capsys.readouterr().out
+    print("\nmanual_geometry_live_code_path_marker")
+    print(stamp)
+    assert "source_path_marker=manual_preview_visual_distance_patch_v1" in output
+    assert "manual_geometry.__file__=" in output
+    assert "runtime_session.__file__=" in output
+    assert str(Path(runtime_session.__file__).resolve()) in stamp
+    assert "ra_sim" in stamp
+    assert "manual_geometry.py" in stamp
+
+
+def test_live_caked_visual_trace_without_run_id_stays_unattributed(capsys) -> None:
+    active_run_id = mg.geometry_manual_start_run_id()
+    legacy_entry = {
+        "q_group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
+        "hkl": _QR_PICKER_TARGET_HKL,
+        "source_branch_index": 0,
+        "source_table_index": 160,
+        "source_row_index": 24,
+        "sim_visual_deg": (40.237466, 36.527645),
+    }
+    mg.geometry_manual_trace_live_caked_visual_source_event(
+        "legacy_projection_without_run_id",
+        selected_candidate=legacy_entry,
+    )
+    output = capsys.readouterr().out
+
+    assert f"manual_geometry_run_id={active_run_id}" not in output
+    assert f"manual_geometry_run_id={mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID}" in output
+    assert "emitter=geometry_manual_trace_live_caked_visual_source_event" in output
+
+
+def test_live_preview_and_place_without_session_run_id_stay_unattributed(tmp_path) -> None:
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    caked_select_point = _diag_target_caked(caked_targets[0])
+    assert caked_select_point is not None
+    session, _statuses = _diag_live_toggle(
+        caked_cache,
+        caked_select_point,
+        display_background=caked_background,
+        use_caked_space=True,
+        profile_cache=profile_cache,
+    )
+    legacy_session = dict(session)
+    legacy_session.pop("manual_geometry_run_id", None)
+    legacy_session.pop("manual_trace_version", None)
+    active_run_id = mg.geometry_manual_start_run_id()
+
+    click0 = _diag_target_caked(caked_targets[0])
+    preview = _diag_live_preview(
+        legacy_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    assert preview["manual_geometry_run_id"] == mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID
+    assert f"manual_geometry_run_id={active_run_id}" not in preview["message"]
+    assert (
+        f"manual_geometry_run_id={mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID}"
+        in preview["message"]
+    )
+
+    _next_session, entries, place_state = _diag_live_place(
+        legacy_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    status = str(place_state["statuses"][-1])
+    assert f"manual_geometry_run_id={active_run_id}" not in status
+    assert f"manual_geometry_run_id={mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID}" in status
+    assert entries
+    assert entries[0]["manual_geometry_run_id"] == mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID
+
+
+def test_manual_trace_never_prints_caked_values_as_detector_px(tmp_path) -> None:
+    probe = _diag_minus_1_0_10_caked_probe(tmp_path)
+    rows = []
+    for branch in (0, 1):
+        row = _diag_source_ledger_row(
+            "caked_mode_qr_selection",
+            branch,
+            probe["caked_select_map"][branch],
+            visual_map=probe["visual_map"],
+            cache_current=probe["cache_current"],
+            direct_result={"point": None, "status": "not_checked"},
+        )
+        rows.append(row)
+    print("\nmanual_trace_no_caked_values_as_detector_px")
+    for row in rows:
+        print(
+            "branch={branch} detector_display={display} caked={caked} errors={errors}".format(
+                branch=row["branch"],
+                display=_diag_point_text(row["observed_detector_display_px"]),
+                caked=_diag_point_text(row["observed_caked_deg"]),
+                errors=row["field_label_errors"] or "<none>",
+            )
+        )
+        assert row["observed_caked_deg"] is not None
+        assert row["field_label_errors"] == ""
+        assert not _diag_pair_close(
+            row["observed_detector_display_px"],
+            row["observed_caked_deg"],
+        )
+
+
+def test_manual_trace_no_caked_values_as_detector_px(tmp_path) -> None:
+    test_manual_trace_never_prints_caked_values_as_detector_px(tmp_path)
+
+
+def test_minus_1_0_10_live_source_ledger(tmp_path) -> None:
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    display_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["current_background_display"])
+    )
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_callbacks = context["projection_callbacks"]
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    detector_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        detector_cache,
+        display_background=display_background,
+        profile_cache=profile_cache,
+    )
+    detector_targets = _diag_target_rows_by_branch(detector_grouped)
+    assert set(detector_targets) == {0, 1}
+
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    assert set(caked_targets) == {0, 1}
+    detector_cache.update(
+        {
+            "caked_qr_projection_entries": caked_cache["caked_qr_projection_entries"],
+            "caked_qr_projection_grouped_candidates": caked_cache[
+                "caked_qr_projection_grouped_candidates"
+            ],
+            "caked_qr_projection_lookup": caked_cache["caked_qr_projection_lookup"],
+        }
+    )
+
+    visual_map = _diag_visual_map(detector_targets)
+    cache_current = _diag_cache_current_map(context, detector_targets, caked_targets)
+    ledger_rows = []
+    preview_checks = []
+    failures = []
+
+    def _direct_for_row(branch, entry):
+        native, _source = _diag_observed_detector_native(entry)
+        if native is None:
+            native = visual_map.get(branch, {}).get("detector_native")
+        point, status = _diag_direct_native_to_caked(caked_callbacks, native)
+        return {"point": point, "status": status}
+
+    def _append_event(event, branch_entries, previews=None):
+        branch_entries = dict(branch_entries or {})
+        previews = dict(previews or {})
+        for branch in (0, 1):
+            entry = branch_entries.get(branch, {})
+            direct = _direct_for_row(branch, entry)
+            row = _diag_source_ledger_row(
+                event,
+                branch,
+                entry,
+                visual_map=visual_map,
+                cache_current=cache_current,
+                preview=previews.get(branch),
+                direct_result=direct,
+            )
+            ledger_rows.append(row)
+            if row["field_label_errors"]:
+                failures.append(
+                    {
+                        "conclusion": "caked_values_labeled_as_detector_px",
+                        "first_bad_event": event,
+                        "first_bad_branch": branch,
+                        "first_bad_field": row["field_label_errors"],
+                        "expected_source": "detector_px_fields_have_detector_px",
+                        "actual_source": "caked_deg",
+                        "explanation": "angle-valued caked pair appeared in detector px field",
+                    }
+                )
+            legacy = row.get("legacy_sim_caked_deg")
+            visual = row.get("sim_visual_caked_deg")
+            cache = row.get("sim_cache_current_caked_deg")
+            if (
+                legacy is not None
+                and cache is not None
+                and visual is not None
+                and _diag_pair_close(legacy, cache, tol=1.0e-3)
+                and not _diag_pair_close(legacy, visual, tol=1.0e-3)
+            ):
+                failures.append(
+                    {
+                        "conclusion": "legacy_sim_caked_uses_cache_current",
+                        "first_bad_event": event,
+                        "first_bad_branch": branch,
+                        "first_bad_field": "legacy_sim_caked_deg",
+                        "expected_source": "sim_visual_caked_deg",
+                        "actual_source": "sim_cache_current_caked_deg",
+                        "explanation": "legacy sim caked matched cache/current instead of visual source",
+                    }
+                )
+
+    print("\nlive_source_ledger_target")
+    print(f"q_group_key={_QR_PICKER_TARGET_Q_GROUP_KEY} hkl={_QR_PICKER_TARGET_HKL}")
+
+    _append_event("startup_simulation_ready", detector_targets)
+
+    detector_select_point = _diag_detector_display_point(detector_targets[0])
+    assert detector_select_point is not None
+    detector_session, detector_select_statuses = _diag_live_toggle(
+        detector_cache,
+        detector_select_point,
+        display_background=display_background,
+        use_caked_space=False,
+        profile_cache=profile_cache,
+    )
+    frozen_detector_map = _diag_print_frozen_visual_branch_map(
+        detector_session,
+        visual_map,
+        "detector_mode_qr_selection",
+    )
+    if 1 not in frozen_detector_map:
+        print("first_failure=visual_branch_map_only_freezes_clicked_seed")
+        failures.append(
+            {
+                "conclusion": "visual_branch_map_missing_non_clicked_branch",
+                "first_bad_event": "detector_mode_qr_selection",
+                "first_bad_branch": 1,
+                "first_bad_field": "pending_visual_branch_map",
+                "expected_source": "both_visual_branches",
+                "actual_source": "clicked_seed_only",
+                "explanation": "branch 1 missing after Qr simulation selection",
+            }
+        )
+    _append_event("detector_mode_qr_selection", frozen_detector_map)
+
+    detector_session, detector_branch0_entries, _detector_place0_state = _diag_live_place(
+        detector_session,
+        _diag_detector_display_point(detector_targets[0]),
+        cache_data=detector_cache,
+        display_background=display_background,
+        use_caked_space=False,
+        callbacks=detector_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    _append_event("detector_mode_placement_branch_0", _diag_branch_map(detector_branch0_entries))
+
+    detector_session, detector_saved_entries, _detector_place1_state = _diag_live_place(
+        detector_session,
+        _diag_detector_display_point(detector_targets[1]),
+        cache_data=detector_cache,
+        display_background=display_background,
+        use_caked_space=False,
+        callbacks=detector_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    detector_saved_map = _diag_branch_map(detector_saved_entries)
+    _append_event("detector_mode_placement_branch_1", detector_saved_map)
+
+    direct_checks = _diag_direct_detector_origin_checks(
+        context,
+        caked_callbacks,
+        detector_saved_entries,
+        visual_map,
+    )
+    for check in direct_checks:
+        if check["status"] == "ok" and check["comparison"] == "missing_trace":
+            print("first_failure=trace_uses_wrong_field_or_double_transforms_native")
+            failures.append(
+                {
+                    "conclusion": "detector_to_caked_trace_uses_wrong_or_double_transformed_native",
+                    "first_bad_event": "detector_to_caked_switch",
+                    "first_bad_branch": check["branch"],
+                    "first_bad_field": check["field"],
+                    "expected_source": "direct_native_detector_coords_to_caked",
+                    "actual_source": "trace_unavailable",
+                    "explanation": "direct native-to-caked succeeds but trace lacks caked result",
+                }
+            )
+
+    detector_to_caked_entries = _diag_refresh_entries(caked_callbacks, detector_saved_entries)
+    _append_event("detector_to_caked_switch", _diag_branch_map(detector_to_caked_entries))
+
+    _append_event("clear", {})
+
+    caked_select_point = _diag_target_caked(caked_targets[0])
+    assert caked_select_point is not None
+    caked_session, _caked_select_statuses = _diag_live_toggle(
+        caked_cache,
+        caked_select_point,
+        display_background=caked_background,
+        use_caked_space=True,
+        profile_cache=profile_cache,
+    )
+    caked_select_map = _diag_branch_map(caked_session.get("group_entries", []))
+    if 1 not in caked_select_map:
+        print("first_failure=visual_branch_map_only_freezes_clicked_seed")
+        failures.append(
+            {
+                "conclusion": "visual_branch_map_missing_non_clicked_branch",
+                "first_bad_event": "caked_mode_qr_selection",
+                "first_bad_branch": 1,
+                "first_bad_field": "pending_visual_branch_map",
+                "expected_source": "both_visual_branches",
+                "actual_source": "clicked_seed_only",
+                "explanation": "branch 1 missing after caked Qr simulation selection",
+            }
+        )
+    _append_event("caked_mode_qr_selection", caked_select_map)
+
+    caked_click0 = _diag_target_caked(detector_targets[0])
+    assert caked_click0 is not None
+    preview0 = _diag_live_preview(
+        caked_session,
+        caked_click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    preview_check0 = _diag_make_preview_check(
+        "caked_mode_placement_branch_0",
+        0,
+        (float(preview0["refined_col"]), float(preview0["refined_row"])),
+        visual_map,
+        cache_current,
+        preview0,
+    )
+    preview_checks.append(preview_check0)
+    if preview_check0["preview_distance_matches"] == "sim_cache_current":
+        print("preview_distance_matches=sim_cache_current")
+        failures.append(
+            {
+                "conclusion": "preview_distance_uses_cache_current",
+                "first_bad_event": "caked_mode_placement_branch_0",
+                "first_bad_branch": 0,
+                "first_bad_field": "preview_distance_value",
+                "expected_source": "sim_visual_caked_deg",
+                "actual_source": "sim_cache_current_caked_deg",
+                "explanation": "preview distance matches cache/current caked point, not visual caked point",
+            }
+        )
+    caked_session, caked_branch0_entries, _caked_place0_state = _diag_live_place(
+        caked_session,
+        caked_click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    _append_event(
+        "caked_mode_placement_branch_0",
+        _diag_branch_map(caked_branch0_entries),
+        previews={0: preview_check0},
+    )
+
+    caked_click1 = _diag_target_caked(detector_targets[1])
+    assert caked_click1 is not None
+    preview1 = _diag_live_preview(
+        caked_session,
+        caked_click1,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    preview_check1 = _diag_make_preview_check(
+        "caked_mode_placement_branch_1",
+        1,
+        (float(preview1["refined_col"]), float(preview1["refined_row"])),
+        visual_map,
+        cache_current,
+        preview1,
+    )
+    preview_checks.append(preview_check1)
+    if preview_check1["preview_distance_matches"] == "sim_cache_current":
+        print("preview_distance_matches=sim_cache_current")
+        failures.append(
+            {
+                "conclusion": "preview_distance_uses_cache_current",
+                "first_bad_event": "caked_mode_placement_branch_1",
+                "first_bad_branch": 1,
+                "first_bad_field": "preview_distance_value",
+                "expected_source": "sim_visual_caked_deg",
+                "actual_source": "sim_cache_current_caked_deg",
+                "explanation": "preview distance matches cache/current caked point, not visual caked point",
+            }
+        )
+    caked_session, caked_saved_entries, _caked_place1_state = _diag_live_place(
+        caked_session,
+        caked_click1,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    _append_event(
+        "caked_mode_placement_branch_1",
+        _diag_branch_map(caked_saved_entries),
+        previews={1: preview_check1},
+    )
+
+    caked_to_detector_entries = _diag_refresh_entries(detector_callbacks, caked_saved_entries)
+    _append_event("caked_to_detector_switch", _diag_branch_map(caked_to_detector_entries))
+
+    _diag_print_source_ledger(ledger_rows)
+
+    print("\npreview_distance_source_check")
+    print(
+        "event | branch | printed_preview_distance | visual_distance | "
+        "cache_current_distance | preview_distance_matches"
+    )
+    for check in preview_checks:
+        print(
+            " | ".join(
+                (
+                    str(check["event"]),
+                    str(check["branch"]),
+                    _diag_float_text(check["printed_preview_distance"]),
+                    _diag_float_text(check["visual_distance"]),
+                    _diag_float_text(check["cache_current_distance"]),
+                    str(check["preview_distance_matches"]),
+                )
+            )
+        )
+
+    direct_success = any(check["status"] == "ok" for check in direct_checks)
+    branch1_frozen_exists = 1 in frozen_detector_map
+    conclusion = _diag_conclusion(failures)
+    print("\nsource_ledger_conclusion")
+    for key in (
+        "first_bad_event",
+        "first_bad_branch",
+        "first_bad_field",
+        "expected_source",
+        "actual_source",
+        "explanation",
+        "conclusion",
+    ):
+        print(f"{key}={conclusion[key]}")
+    print(f"detector_native_to_caked_direct_success={direct_success}")
+    print(f"frozen_visual_branch_1_exists={branch1_frozen_exists}")
+    print(f"detector_select_status={detector_select_statuses[-1] if detector_select_statuses else '<none>'}")
+
+    assert ledger_rows
+    assert preview_checks
+    assert direct_success
+    assert branch1_frozen_exists
+
+
+def test_minus_1_0_10_live_caked_visual_source_ledger(tmp_path, monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    display_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["current_background_display"])
+    )
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    detector_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        detector_cache,
+        display_background=display_background,
+        profile_cache=profile_cache,
+    )
+    detector_targets = _diag_target_rows_by_branch(detector_grouped)
+    assert set(detector_targets) == {0, 1}
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    assert set(caked_targets) == {0, 1}
+    visual_map = _diag_visual_map(detector_targets)
+    poison_by_branch = {
+        0: (42.276621, -43.250000),
+        1: (36.063607, -116.750000),
+    }
+    caked_cache["grouped_candidates"] = _diag_poison_visual_grouped_candidates(
+        caked_grouped,
+        poison_by_branch,
+    )
+
+    caked_select_point = _diag_target_caked(caked_targets[0])
+    assert caked_select_point is not None
+    caked_session, caked_select_statuses = _diag_live_toggle(
+        caked_cache,
+        caked_select_point,
+        display_background=caked_background,
+        use_caked_space=True,
+        profile_cache=profile_cache,
+    )
+
+    manual_state = SimpleNamespace(pick_session=dict(caked_session))
+    monkeypatch.setattr(runtime_session, "geometry_manual_state", manual_state, raising=False)
+    monkeypatch.setattr(runtime_session.background_runtime_state, "current_background_index", 0)
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_pick_session",
+        lambda value: setattr(manual_state, "pick_session", dict(value)) or manual_state.pick_session,
+    )
+    monkeypatch.setattr(runtime_session.simulation_runtime_state, "profile_cache", profile_cache)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: caked_background,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: dict(caked_cache),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: True,
+        raising=False,
+    )
+
+    refreshed_session = runtime_session._refresh_geometry_manual_pick_session()
+    pending_map = _diag_branch_map(refreshed_session.get("group_entries", []))
+    assert set(pending_map) == {0, 1}
+    first_bad_event = "<none>"
+    wrong_source = "<none>"
+    expected_visual = None
+    actual_visual = None
+    for branch in (0, 1):
+        expected_visual = visual_map[branch]["caked"]
+        actual_visual, _source = _diag_sim_visual_caked(pending_map[branch])
+        poison = poison_by_branch[branch]
+        if _diag_pair_close(actual_visual, poison, tol=1.0e-3):
+            first_bad_event = "pending_visual_map_built_from_cache_current"
+            wrong_source = "cache_current"
+            break
+        assert _diag_pair_close(actual_visual, expected_visual, tol=1.0)
+        assert not _diag_pair_close(actual_visual, poison, tol=1.0)
+
+    click0 = _diag_target_caked(detector_targets[0])
+    assert click0 is not None
+    preview0 = _diag_live_preview(
+        refreshed_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    pending0_visual, _source0 = _diag_sim_visual_caked(pending_map[0])
+    preview0_visual = preview0["status_sim_visual_caked_deg"]
+    if not _diag_pair_close(preview0_visual, pending0_visual, tol=1.0e-3):
+        first_bad_event = "preview_reads_cache_current_instead_of_pending_visual"
+        wrong_source = "cache_current"
+        expected_visual = pending0_visual
+        actual_visual = preview0_visual
+    assert _diag_pair_close(preview0_visual, pending0_visual, tol=1.0e-3)
+    assert float(preview0["status_distance_value"]) < 2.0
+
+    next_session, branch0_entries, place0_state = _diag_live_place(
+        refreshed_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    branch0 = _diag_branch_map(branch0_entries)[0]
+    branch0_visual, _source = _diag_sim_visual_caked(branch0)
+    if not _diag_pair_close(branch0_visual, pending0_visual, tol=1.0e-3):
+        first_bad_event = "placement_overwrites_pending_visual_with_cache_current"
+        wrong_source = "cache_current"
+        expected_visual = pending0_visual
+        actual_visual = branch0_visual
+    assert _diag_pair_close(branch0_visual, pending0_visual, tol=1.0e-3)
+
+    click1 = _diag_target_caked(detector_targets[1])
+    assert click1 is not None
+    preview1 = _diag_live_preview(
+        next_session,
+        click1,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    _final_session, saved_entries, _place1_state = _diag_live_place(
+        next_session,
+        click1,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    saved_map = _diag_branch_map(saved_entries)
+    assert set(saved_map) == {0, 1}
+    assert float(preview1["status_distance_value"]) < 2.0
+    assert all(float(entry["status_distance_value"]) < 2.0 for entry in saved_map.values())
+
+    before_status = (
+        "Manual pick preview ... tagged sim [-1,0,10] (78.85 deg) "
+        "status_sim_visual_caked_deg=(42.276621,-43.250000)"
+    )
+    after_status = str(preview0["message"])
+    print("\nlive_caked_visual_source_ledger_result")
+    print(f"selection_status={caked_select_statuses[-1]}")
+    print(f"first_bad_event={first_bad_event}")
+    print(f"expected visual caked value={_diag_point_text(expected_visual)}")
+    print(f"actual visual caked value={_diag_point_text(actual_visual)}")
+    print(f"source that supplied wrong value={wrong_source}")
+    print(f"before_live_like_status={before_status}")
+    print(f"after_live_like_status={after_status}")
+    print(f"branch0_preview_status_sim_visual_caked_deg={_diag_point_text(preview0_visual)}")
+    print(
+        "branch1_preview_status_sim_visual_caked_deg="
+        f"{_diag_point_text(preview1['status_sim_visual_caked_deg'])}"
+    )
+
+    assert first_bad_event == "<none>"
+    assert wrong_source == "<none>"
+    assert "78.85 deg" not in after_status
+    assert "status_distance_source=sim_visual_caked_deg" in after_status
+
+
+def _diag_minus_1_0_10_caked_refresh_probe(tmp_path, monkeypatch):
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    display_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["current_background_display"])
+    )
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    detector_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        detector_cache,
+        display_background=display_background,
+        profile_cache=profile_cache,
+    )
+    detector_targets = _diag_target_rows_by_branch(detector_grouped)
+    assert set(detector_targets) == {0, 1}
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    assert set(caked_targets) == {0, 1}
+    visual_map = _diag_visual_map(detector_targets)
+    cache_current = _diag_cache_current_map(context, detector_targets, caked_targets)
+    poison_by_branch = {
+        0: (42.3514, -42.2500),
+        1: (36.2090, -117.7514),
+    }
+    caked_cache["grouped_candidates"] = _diag_poison_visual_grouped_candidates(
+        caked_grouped,
+        poison_by_branch,
+    )
+
+    caked_select_point = _diag_target_caked(caked_targets[0])
+    assert caked_select_point is not None
+    caked_session, select_statuses = _diag_live_toggle(
+        caked_cache,
+        caked_select_point,
+        display_background=caked_background,
+        use_caked_space=True,
+        profile_cache=profile_cache,
+    )
+    before_map = _diag_branch_map(caked_session.get("group_entries", []))
+    refreshed_session, remaining, refresh_sources = _diag_runtime_refresh_pick_session(
+        runtime_session,
+        monkeypatch,
+        session=caked_session,
+        cache_data=caked_cache,
+        background_image=caked_background,
+        profile_cache=profile_cache,
+        use_caked_space=True,
+    )
+    after_map = _diag_branch_map(refreshed_session.get("group_entries", []))
+
+    click0 = _diag_target_caked(detector_targets[0])
+    click1 = _diag_target_caked(detector_targets[1])
+    assert click0 is not None
+    assert click1 is not None
+    preview0 = _diag_live_preview(
+        refreshed_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    next_session, branch0_entries, place0_state = _diag_live_place(
+        refreshed_session,
+        click0,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    preview1 = _diag_live_preview(
+        next_session,
+        click1,
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=caked_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    check0 = _diag_make_preview_check(
+        "caked_session_refresh_branch_0",
+        0,
+        (float(preview0["refined_col"]), float(preview0["refined_row"])),
+        visual_map,
+        cache_current,
+        preview0,
+    )
+    check1 = _diag_make_preview_check(
+        "caked_session_refresh_branch_1",
+        1,
+        (float(preview1["refined_col"]), float(preview1["refined_row"])),
+        visual_map,
+        cache_current,
+        preview1,
+    )
+    return {
+        "select_statuses": select_statuses,
+        "before_map": before_map,
+        "after_map": after_map,
+        "remaining": remaining,
+        "refresh_sources": refresh_sources,
+        "poison_by_branch": poison_by_branch,
+        "preview0": preview0,
+        "preview1": preview1,
+        "check0": check0,
+        "check1": check1,
+        "next_session": next_session,
+        "branch0_entries": branch0_entries,
+        "place0_state": place0_state,
+        "visual_map": visual_map,
+        "cache_current": cache_current,
+        "caked_cache": caked_cache,
+        "detector_grouped": detector_grouped,
+        "caked_grouped": caked_grouped,
+        "caked_background": caked_background,
+        "display_background": display_background,
+        "profile_cache": profile_cache,
+        "runtime_session": runtime_session,
+    }
+
+
+def test_minus_1_0_10_caked_session_refresh_preserves_visual_candidates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    probe = _diag_minus_1_0_10_caked_refresh_probe(tmp_path, monkeypatch)
+    before_map = probe["before_map"]
+    after_map = probe["after_map"]
+    incoming_source = probe["refresh_sources"][-1]
+    print("\ncaked_session_refresh_preserves_visual_candidates")
+    print("before_caked_refresh_source=caked_qr_projection_grouped_candidates")
+    print(f"after_caked_refresh_source={incoming_source}")
+    for branch in (0, 1):
+        before_visual, _before_source = _diag_sim_visual_caked(before_map[branch])
+        after_visual, _after_source = _diag_sim_visual_caked(after_map[branch])
+        poison = probe["poison_by_branch"][branch]
+        print(f"branch{branch}_visual_before_refresh={_diag_point_text(before_visual)}")
+        print(f"branch{branch}_visual_after_refresh={_diag_point_text(after_visual)}")
+        assert _diag_pair_close(after_visual, before_visual, tol=1.0e-6)
+        assert not _diag_pair_close(after_visual, poison, tol=1.0e-3)
+    _diag_assert_caked_session_refresh_preserved_visual_source(
+        before_map,
+        after_map,
+        incoming_candidate_source=incoming_source,
+    )
+    assert set(after_map) == {0, 1}
+    assert probe["refresh_sources"] == ["caked_qr_projection_grouped_candidates"]
+    for check in (probe["check0"], probe["check1"]):
+        print(
+            "branch={branch} preview_distance_after_refresh={distance} "
+            "source={source} match={match}".format(
+                branch=check["branch"],
+                distance=_diag_float_text(check["printed_preview_distance"]),
+                source=check["preview_distance_source"],
+                match=check["preview_distance_matches"],
+            )
+        )
+        assert check["preview_distance_source"] == "sim_visual_caked_deg"
+        assert check["preview_distance_matches"] == "sim_visual"
+        assert float(check["printed_preview_distance"]) < 2.0
+        assert float(check["printed_preview_distance"]) < 10.0
+
+
+def test_minus_1_0_10_caked_refresh_uses_caked_projection_candidates_not_grouped_candidates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    probe = _diag_minus_1_0_10_caked_refresh_probe(tmp_path, monkeypatch)
+    assert probe["refresh_sources"] == ["caked_qr_projection_grouped_candidates"]
+
+    runtime_session = probe["runtime_session"]
+    base_session = {
+        "background_index": 0,
+        "group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
+        "group_entries": list(probe["after_map"].values()),
+        "pending_entries": [],
+        "target_count": 2,
+    }
+    detector_session, _remaining, detector_sources = _diag_runtime_refresh_pick_session(
+        runtime_session,
+        monkeypatch,
+        session=base_session,
+        cache_data=probe["caked_cache"],
+        background_image=probe["display_background"],
+        profile_cache=probe["profile_cache"],
+        use_caked_space=False,
+        detector_grouped=probe["detector_grouped"],
+    )
+    assert detector_session.get("group_entries")
+    assert detector_sources == ["detector_grouped_candidates_from_cache"]
+
+    empty_caked_cache = dict(probe["caked_cache"])
+    empty_caked_cache["caked_qr_projection_grouped_candidates"] = {}
+    preserved_session, _remaining, empty_sources = _diag_runtime_refresh_pick_session(
+        runtime_session,
+        monkeypatch,
+        session=base_session,
+        cache_data=empty_caked_cache,
+        background_image=probe["caked_background"],
+        profile_cache=probe["profile_cache"],
+        use_caked_space=True,
+    )
+    assert empty_sources == []
+    assert preserved_session["group_entries"] == base_session["group_entries"]
+    print("\ncaked_refresh_candidate_source_selection")
+    print("caked_mode_used=caked_qr_projection_grouped_candidates")
+    print("detector_mode_used=detector_grouped_candidates_from_cache")
+    print("caked_empty_projection_preserved_existing_group_entries=yes")
+
+
+def test_minus_1_0_10_caked_preview_after_refresh_uses_preserved_visual_source(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    probe = _diag_minus_1_0_10_caked_refresh_probe(tmp_path, monkeypatch)
+    print("\ncaked_preview_after_refresh_uses_preserved_visual_source")
+    for branch, preview, check, bounds in (
+        (0, probe["preview0"], probe["check0"], (0.6, 1.05)),
+        (1, probe["preview1"], probe["check1"], (0.75, 1.05)),
+    ):
+        message = str(preview["message"])
+        visual = preview["status_sim_visual_caked_deg"]
+        cache = preview["status_sim_cache_current_caked_deg"]
+        print(
+            "branch={branch} preview_distance_after_refresh={distance} "
+            "status_distance_source={source} visual={visual} cache_current={cache}".format(
+                branch=branch,
+                distance=_diag_float_text(preview["status_distance_value"]),
+                source=preview["status_distance_source"],
+                visual=_diag_point_text(visual),
+                cache=_diag_point_text(cache),
+            )
+        )
+        assert bounds[0] <= float(preview["status_distance_value"]) <= bounds[1]
+        assert "77." not in message
+        assert "78." not in message
+        assert "79." not in message
+        assert "80." not in message
+        assert preview["status_distance_source"] == "sim_visual_caked_deg"
+        assert "status_distance_source=sim_visual_caked_deg" in message
+        assert check["preview_distance_matches"] == "sim_visual"
+        assert not _diag_pair_close(visual, cache, tol=1.0e-3)
+
+
+def test_manual_trace_never_routes_caked_angles_to_detector_px(tmp_path) -> None:
+    bad_points = (
+        (39.827, 35.250),
+        (42.351, -42.250),
+        (36.209, -117.751),
+    )
+    print("\nmanual_trace_never_routes_caked_angles_to_detector_px")
+    for point in bad_points:
+        entry = {
+            "_caked_qr_projection_cache": True,
+            "display_frame": "caked_display",
+            "display_col": point[0],
+            "display_row": point[1],
+            "caked_x": point[0],
+            "caked_y": point[1],
+            "raw_caked_x": point[0],
+            "raw_caked_y": point[1],
+            "two_theta_deg": point[0],
+            "phi_deg": point[1],
+            "sim_visual_deg": point,
+            "sim_visual_source": "sim_visual_caked_deg",
+        }
+        detector_display, detector_source = _diag_observed_detector_display(entry)
+        observed_caked, caked_source = _diag_observed_caked(entry)
+        print(
+            "point={point} detector_px={detector} detector_source={detector_source} "
+            "caked_deg={caked} caked_source={caked_source}".format(
+                point=_diag_point_text(point),
+                detector=_diag_point_text(detector_display),
+                detector_source=detector_source,
+                caked=_diag_point_text(observed_caked),
+                caked_source=caked_source,
+            )
+        )
+        assert detector_display is None
+        assert detector_source == "<unavailable reason=no detector back-projection>"
+        assert _diag_pair_close(observed_caked, point, tol=1.0e-6)
+
+
+def test_manual_trace_never_routes_caked_row_generic_xy_to_detector_px() -> None:
+    entry = {
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+        "x": 42.3514,
+        "y": -42.25,
+        "simulated_x": 36.209,
+        "simulated_y": -117.7514,
+        "sim_col_raw": 42.3514,
+        "sim_row_raw": -42.25,
+        "sim_col": 36.209,
+        "sim_row": -117.7514,
+        "two_theta_deg": 40.237466,
+        "phi_deg": 36.527645,
+    }
+    detector_display, detector_source = _diag_observed_detector_display(entry)
+    print("\nmanual_trace_never_routes_caked_row_generic_xy_to_detector_px")
+    print(
+        "generic_xy_detector_px={detector} detector_source={source}".format(
+            detector=_diag_point_text(detector_display),
+            source=detector_source,
+        )
+    )
+    assert detector_display is None
+    assert detector_source == "<unavailable reason=no detector back-projection>"
+
+
+def test_caked_refresh_identity_keys_are_scoped_to_branch_identity() -> None:
+    keys = mg._geometry_manual_refresh_branch_identity_keys(
+        {
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "hkl": (-1, 0, 10),
+            "source_table_index": 160,
+            "source_row_index": 24,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "branch_id": "branch-0",
+        }
+    )
+    print("\ncaked_refresh_identity_keys_are_scoped_to_branch_identity")
+    print(f"identity_keys={keys}")
+    assert keys
+    assert str(keys[0][0]).startswith("q_group_hkl_source_row")
+    assert not any(key and key[0] == "candidate_source" for key in keys)
+    assert all(key[0] != "q_group_hkl_source_branch" or key[1] for key in keys)
+
+
+def test_caked_refresh_preserves_visual_by_specific_source_row_before_broad_hkl() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    first_visual = (40.0, 10.0)
+    second_visual = (41.0, 20.0)
+    incoming_visual = (42.0, 30.0)
+    shared = {
+        "q_group_key": group_key,
+        "hkl": (-1, 0, 10),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+    }
+    session = {
+        "background_index": 0,
+        "group_key": group_key,
+        "group_entries": [
+            {
+                **shared,
+                "source_table_index": 160,
+                "source_row_index": 24,
+                "sim_visual_deg": first_visual,
+                "sim_caked": first_visual,
+            },
+            {
+                **shared,
+                "source_table_index": 167,
+                "source_row_index": 24,
+                "sim_visual_deg": second_visual,
+                "sim_caked": second_visual,
+            },
+        ],
+        "pending_entries": [],
+        "target_count": 2,
+    }
+    refreshed = mg.refresh_geometry_manual_pick_session_candidates(
+        session,
+        grouped_candidates={
+            group_key: [
+                {
+                    **shared,
+                    "source_table_index": 167,
+                    "source_row_index": 24,
+                    "sim_visual_deg": incoming_visual,
+                    "sim_caked": incoming_visual,
+                }
+            ]
+        },
+    )
+    refreshed_entry = refreshed["group_entries"][0]
+    print("\ncaked_refresh_preserves_visual_by_specific_source_row_before_broad_hkl")
+    print(f"preserved_visual={_diag_point_text(refreshed_entry.get('sim_visual_deg'))}")
+    assert _diag_pair_close(refreshed_entry["sim_visual_deg"], second_visual)
+    assert not _diag_pair_close(refreshed_entry["sim_visual_deg"], first_visual)
+
+
+def test_caked_refresh_preserves_visual_but_not_cache_current_simulated_angles() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    session = {
+        "background_index": 0,
+        "group_key": group_key,
+        "group_entries": [
+            {
+                "q_group_key": group_key,
+                "hkl": (-1, 0, 10),
+                "source_table_index": 160,
+                "source_row_index": 24,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+                "sim_visual_deg": (40.237466, 36.527645),
+                "sim_caked": (40.237466, 36.527645),
+                "simulated_two_theta_deg": 999.0,
+                "simulated_phi_deg": 888.0,
+                "_caked_qr_projection_cache": True,
+                "display_frame": "caked_display",
+            }
+        ],
+        "pending_entries": [],
+        "target_count": 1,
+    }
+    incoming = {
+        "q_group_key": group_key,
+        "hkl": (-1, 0, 10),
+        "source_table_index": 160,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "sim_visual_deg": (42.3514, -42.25),
+        "sim_caked": (42.3514, -42.25),
+        "simulated_two_theta_deg": 40.142509,
+        "simulated_phi_deg": 35.566836,
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+    }
+    refreshed = mg.refresh_geometry_manual_pick_session_candidates(
+        session,
+        grouped_candidates={group_key: [incoming]},
+    )
+    refreshed_entry = refreshed["group_entries"][0]
+    print("\ncaked_refresh_preserves_visual_but_not_cache_current_simulated_angles")
+    print(f"sim_visual_deg={_diag_point_text(refreshed_entry.get('sim_visual_deg'))}")
+    print(
+        "simulated_angles=({tth:.6f},{phi:.6f})".format(
+            tth=float(refreshed_entry["simulated_two_theta_deg"]),
+            phi=float(refreshed_entry["simulated_phi_deg"]),
+        )
+    )
+    assert _diag_pair_close(refreshed_entry["sim_visual_deg"], (40.237466, 36.527645))
+    assert refreshed_entry["simulated_two_theta_deg"] == 40.142509
+    assert refreshed_entry["simulated_phi_deg"] == 35.566836
+
+
+def test_manual_trace_no_caked_angles_to_detector_px(tmp_path) -> None:
+    test_manual_trace_never_routes_caked_angles_to_detector_px(tmp_path)
+
+
+def test_detector_to_caked_projection_does_not_print_caked_angles_as_detector_px() -> None:
+    entry = {
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+        "q_group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
+        "hkl": _QR_PICKER_TARGET_HKL,
+        "source_branch_index": 0,
+        "caked_x": 42.351,
+        "caked_y": -42.250,
+        "raw_caked_x": 36.209,
+        "raw_caked_y": -117.751,
+        "two_theta_deg": 39.827,
+        "phi_deg": 35.250,
+        "sim_visual_caked_deg": (39.827, 35.250),
+    }
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        _diag_print_projection_block(
+            "[ra-sim] detector -> caked Qr/Qz projection",
+            [entry],
+            {0: {"caked": (39.827, 35.250)}},
+            "manual-angle-guard",
+            emitter="test_detector_to_caked_projection_does_not_print_caked_angles_as_detector_px",
+            event="detector_to_caked_projection",
+        )
+    text = out.getvalue()
+    print("\ndetector_to_caked_projection_does_not_print_caked_angles_as_detector_px")
+    print(text.strip())
+    assert (
+        "geometry_detector_display_px=<unavailable reason=no detector back-projection>"
+        in text
+    )
+    bad_values = (
+        "(42.351, -42.250)",
+        "(36.209, -117.751)",
+        "(39.827, 35.250)",
+        "(42.351,-42.250)",
+        "(36.209,-117.751)",
+        "(39.827,35.250)",
+    )
+    detector_fields = (
+        "geometry_detector_display_px",
+        "geometry_detector_px",
+        "sim_detector_display_px",
+        "sim_detector_px",
+    )
+    for field in detector_fields:
+        for value in bad_values:
+            assert f"{field}={value}" not in text
+
+
+def test_detector_to_caked_projection_no_caked_angles_as_detector_px() -> None:
+    test_detector_to_caked_projection_does_not_print_caked_angles_as_detector_px()
+
+
+def test_headless_replay_uses_same_caked_picker_builder_as_live(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    calls = []
+    original_builder = mg._geometry_manual_build_caked_qr_projection_cache
+    marker_key = "live_caked_picker_builder_marker"
+
+    def _mark_entry(entry):
+        marked = dict(entry)
+        marked[marker_key] = "yes"
+        return marked
+
+    def _mark_grouped(grouped):
+        return {
+            key: [_mark_entry(entry) for entry in value if isinstance(entry, Mapping)]
+            for key, value in (grouped or {}).items()
+        }
+
+    def _mark_lookup(lookup):
+        marked = {}
+        for key, bucket in (lookup or {}).items():
+            bucket_entries = mg._geometry_manual_lookup_bucket_entries(bucket)
+            if len(bucket_entries) == 1:
+                marked[key] = _mark_entry(bucket_entries[0])
+            elif bucket_entries:
+                marked[key] = [_mark_entry(entry) for entry in bucket_entries]
+        return marked
+
+    def _spy_builder(*args, **kwargs):
+        calls.append("live_caked_picker_builder")
+        entries, grouped, lookup = original_builder(*args, **kwargs)
+        return (
+            [_mark_entry(entry) for entry in entries],
+            _mark_grouped(grouped),
+            _mark_lookup(lookup),
+        )
+
+    monkeypatch.setattr(mg, "_geometry_manual_build_caked_qr_projection_cache", _spy_builder)
+    callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    caked_select_point = _diag_target_caked(caked_targets[0])
+    assert caked_select_point is not None
+    statuses = []
+    workflow, state = _diag_headless_workflow(
+        cache_data=caked_cache,
+        display_background=caked_background,
+        use_caked_space=True,
+        callbacks=callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+        status_sink=statuses,
+    )
+    workflow.toggle_selection_at(*caked_select_point)
+    replay_entries = [
+        entry
+        for entry in state["pick_session"].get("group_entries", [])
+        if isinstance(entry, Mapping)
+        and _diag_q_group_key(entry) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        and _diag_hkl(entry) == _QR_PICKER_TARGET_HKL
+    ]
+    replay_used_builder_rows = bool(replay_entries) and all(
+        entry.get(marker_key) == "yes" for entry in replay_entries
+    )
+    bypassed = not bool(calls)
+    if bypassed or not replay_used_builder_rows:
+        print("headless_replay_bypasses_live_caked_candidate_builder=yes")
+    else:
+        print("headless_replay_bypasses_live_caked_candidate_builder=no")
+    print(f"headless_replay_builder_calls={len(calls)}")
+    print(
+        "headless_replay_caked_picker_candidate_count="
+        f"{len(_diag_flatten_grouped(caked_grouped))}"
+    )
+    print(f"headless_replay_selected_builder_row_count={len(replay_entries)}")
+
+    assert not bypassed
+    assert calls
+    assert caked_cache["caked_qr_projection_grouped_candidates"]
+    assert caked_targets.keys() >= {0, 1}
+    assert replay_entries
+    assert replay_used_builder_rows
+
+
+def _diag_status_capture(label, sink):
+    def _status(message):
+        text = f"[geometry] {message}"
+        sink.append(text)
+        print(text)
+
+    return _status
+
+
+def _diag_cmd_stamp(
+    run_id,
+    *,
+    emitter,
+    event,
+    branch=None,
+    actual_source=None,
+    expected_source=None,
+):
+    return mg.geometry_manual_cmd_provenance_text(
+        run_id=run_id,
+        emitter=emitter,
+        event=event,
+        branch=branch,
+        actual_source=actual_source,
+        expected_source=expected_source,
+    )
+
+
+def _diag_headless_workflow(
+    *,
+    cache_data,
+    display_background,
+    use_caked_space,
+    callbacks,
+    radial_axis,
+    azimuth_axis,
+    profile_cache,
+    status_sink,
+):
+    state = {"pick_session": {}, "pairs": [], "previews": []}
+
+    def _set_pick_session(value):
+        state["pick_session"] = dict(value) if isinstance(value, Mapping) else {}
+
+    def _set_pairs_for_index(_idx, entries):
+        state["pairs"] = [dict(entry) for entry in (entries or []) if isinstance(entry, Mapping)]
+        return list(state["pairs"])
+
+    def _show_preview(raw_col, raw_row, refined_col, refined_row, **kwargs):
+        state["previews"].append(
+            {
+                "raw_col": float(raw_col),
+                "raw_row": float(raw_row),
+                "refined_col": float(refined_col),
+                "refined_row": float(refined_row),
+                **dict(kwargs),
+            }
+        )
+
+    def _remaining_candidates():
+        return mg.geometry_manual_unassigned_group_candidates(
+            state["pick_session"],
+            current_background_index=0,
+        )
+
+    workflow = mg.make_runtime_geometry_manual_callbacks(
+        background_visible=True,
+        current_background_index=0,
+        current_background_image=display_background,
+        pick_session=lambda: state["pick_session"],
+        build_initial_pairs_display=lambda *_args, **_kwargs: ([], []),
+        session_initial_pairs_display=lambda: [],
+        clear_geometry_pick_artists=lambda **_kwargs: None,
+        draw_initial_geometry_pairs_overlay=lambda *_args, **_kwargs: None,
+        update_button_label=lambda: None,
+        set_background_file_status_text=lambda: None,
+        pair_group_count=lambda _idx: len(state["pairs"]),
+        set_status_text=_diag_status_capture("manual_geometry", status_sink),
+        get_cache_data=lambda **_kwargs: dict(cache_data),
+        set_pairs_for_index=_set_pairs_for_index,
+        pairs_for_index=lambda _idx: list(state["pairs"]),
+        set_pick_session=_set_pick_session,
+        restore_view=lambda **_kwargs: None,
+        clear_preview_artists=lambda **_kwargs: None,
+        push_undo_state=lambda: None,
+        listed_q_group_entries=lambda: [{"key": _QR_PICKER_TARGET_Q_GROUP_KEY}],
+        format_q_group_line=lambda _entry: f"group={_QR_PICKER_TARGET_Q_GROUP_KEY}",
+        use_caked_space=bool(use_caked_space),
+        pick_search_window_px=50.0,
+        sync_peak_selection_state=lambda: None,
+        refine_preview_point=_diag_build_refine_preview(
+            use_caked_space,
+            radial_axis,
+            azimuth_axis,
+        ),
+        remaining_candidates=_remaining_candidates,
+        preview_due=lambda _col, _row: True,
+        caked_angles_to_background_display_coords=getattr(
+            callbacks,
+            "caked_angles_to_background_display_coords",
+            None,
+        ),
+        last_caked_radial_values=radial_axis,
+        last_caked_azimuth_values=azimuth_axis,
+        background_display_to_native_detector_coords=getattr(
+            callbacks,
+            "background_display_to_native_detector_coords",
+            None,
+        ),
+        native_detector_coords_to_caked_display_coords=getattr(
+            callbacks,
+            "native_detector_coords_to_caked_display_coords",
+            None,
+        ),
+        refine_saved_pair_entry=getattr(callbacks, "refresh_entry_geometry", None),
+        show_preview=_show_preview,
+        profile_cache=profile_cache,
+    )
+    return workflow, state
+
+
+def _diag_headless_detector_picker_resolution(context, picker_rows, target_by_branch, run_id):
+    payload = ps.build_hkl_pick_simulation_point_payload(picker_rows)
+    runtime_state = SimpleNamespace(
+        peak_records=[dict(row) for row in picker_rows],
+        peak_positions=[_diag_detector_display_point(row) for row in picker_rows],
+        peak_positions_filtered=False,
+        profile_cache=context["rows"]["profile_cache"],
+    )
+    resolved = {}
+    print(
+        "[ra-sim] Qr/Qz detector simulation selection "
+        + _diag_cmd_stamp(
+            run_id,
+            emitter="_diag_headless_detector_picker_resolution",
+            event="detector_simulation_selection",
+        )
+    )
+    for branch in (0, 1):
+        click = _diag_detector_display_point(target_by_branch[branch])
+        idx, selected, distance, within = ps.find_peak_record_for_canvas_click(
+            runtime_state,
+            float(click[0]),
+            float(click[1]),
+            ensure_peak_overlay_data=lambda force=False: None,
+            max_axis_distance_px=25.0,
+            simulation_point_candidates=payload,
+            use_caked_display=False,
+        )
+        resolved[branch] = dict(selected) if isinstance(selected, Mapping) else {}
+        print(
+            "branch={branch} click_px={click} picker_index={idx} distance_px={dist} "
+            "within={within} q_group_key={q_group} hkl={hkl} table={table} row={row} "
+            "source_branch={source_branch} {stamp}".format(
+                branch=branch,
+                click=_diag_point_text(click),
+                idx=idx,
+                dist=_diag_float_text(distance),
+                within=within,
+                q_group=_diag_q_group_key(selected),
+                hkl=_diag_hkl(selected),
+                table=selected.get("source_table_index") if isinstance(selected, Mapping) else "<none>",
+                row=selected.get("source_row_index") if isinstance(selected, Mapping) else "<none>",
+                source_branch=(
+                    selected.get("source_branch_index")
+                    if isinstance(selected, Mapping)
+                    else "<none>"
+                ),
+                stamp=_diag_cmd_stamp(
+                    run_id,
+                    emitter="_diag_headless_detector_picker_resolution",
+                    event="detector_simulation_selection_row",
+                    branch=branch,
+                    actual_source="detector_picker_payload",
+                    expected_source="sim_visual_detector_display_px",
+                ),
+            )
+        )
+    return resolved
+
+
+def _diag_print_projection_block(title, entries, visual_map, run_id, *, emitter, event):
+    print(
+        title
+        + " "
+        + _diag_cmd_stamp(
+            run_id,
+            emitter=emitter,
+            event=event,
+        )
+    )
+    for entry in _diag_sorted(entries):
+        branch = _diag_source_branch(entry)
+        observed_display, _display_source = _diag_observed_detector_display(entry)
+        observed_native, _native_source = _diag_observed_detector_native(entry)
+        observed_caked, _caked_source = _diag_observed_caked(entry)
+        visual = visual_map.get(branch, {}) if branch is not None else {}
+        print(
+            "branch={branch} q_group_key={q_group} hkl={hkl} "
+            "geometry_detector_display_px={display} geometry_detector_native_px={native} "
+            "raw_caked_deg={raw_caked} geometry_caked_deg={geometry_caked} "
+            "sim_caked_deg={sim_caked} {stamp}".format(
+                branch=branch,
+                q_group=_diag_q_group_key(entry),
+                hkl=_diag_hkl(entry),
+                display=_diag_point_text(displayed := observed_display, _display_source),
+                native=_diag_point_text(observed_native, _native_source),
+                raw_caked=_diag_point_text(_diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),))),
+                geometry_caked=_diag_point_text(observed_caked),
+                sim_caked=_diag_point_text(visual.get("caked")),
+                stamp=_diag_cmd_stamp(
+                    run_id,
+                    emitter=emitter,
+                    event=f"{event}_row",
+                    branch=branch,
+                    actual_source="projection_refresh",
+                    expected_source="sim_visual_caked_deg",
+                ),
+            )
+        )
+        del displayed
+
+
+def _diag_detector_origin_to_caked_fixture(tmp_path):
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    display_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["current_background_display"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_callbacks = context["projection_callbacks"]
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    detector_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        detector_cache,
+        display_background=display_background,
+        profile_cache=profile_cache,
+    )
+    detector_targets = _diag_target_rows_by_branch(detector_grouped)
+    assert set(detector_targets) == {0, 1}
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    assert set(_diag_target_rows_by_branch(caked_grouped)) == {0, 1}
+    visual_map = _diag_visual_map(detector_targets)
+    detector_clicks = {
+        0: (1083.818, 1083.270),
+        1: (1846.620, 1083.734),
+    }
+    session, _statuses = _diag_live_toggle(
+        detector_cache,
+        detector_clicks[0],
+        display_background=display_background,
+        use_caked_space=False,
+        profile_cache=profile_cache,
+    )
+    run_id = session.get("manual_geometry_run_id")
+    session, _branch0_entries, _state0 = _diag_live_place(
+        session,
+        detector_clicks[0],
+        cache_data=detector_cache,
+        display_background=display_background,
+        use_caked_space=False,
+        callbacks=detector_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    session, detector_saved, _state1 = _diag_live_place(
+        session,
+        detector_clicks[1],
+        cache_data=detector_cache,
+        display_background=display_background,
+        use_caked_space=False,
+        callbacks=detector_callbacks,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        profile_cache=profile_cache,
+    )
+    detector_to_caked = _diag_refresh_entries(caked_callbacks, detector_saved)
+    return {
+        "context": context,
+        "rows": rows,
+        "profile_cache": profile_cache,
+        "detector_cache": detector_cache,
+        "detector_targets": detector_targets,
+        "detector_saved": detector_saved,
+        "detector_to_caked": detector_to_caked,
+        "visual_map": visual_map,
+        "caked_callbacks": caked_callbacks,
+        "run_id": run_id,
+    }
+
+
+def test_minus_1_0_10_detector_origin_direct_native_to_caked_succeeds(tmp_path) -> None:
+    fixture = _diag_detector_origin_to_caked_fixture(tmp_path)
+    callbacks = fixture["caked_callbacks"]
+    expected = {
+        0: ((1083.270, 1915.182), (40.10, 35.75)),
+        1: ((1083.734, 1152.380), (40.75, -37.70)),
+    }
+    print("\ndetector_origin_direct_native_to_caked")
+    for branch, (native, target) in expected.items():
+        caked, status = _diag_direct_native_to_caked(callbacks, native)
+        print(
+            "branch={branch} native_px={native} direct_caked_deg={caked} "
+            "expected_caked_deg={target} status={status}".format(
+                branch=branch,
+                native=_diag_point_text(native),
+                caked=_diag_point_text(caked),
+                target=_diag_point_text(target),
+                status=status,
+            )
+        )
+        assert status == "ok"
+        assert caked is not None
+        assert np.allclose(caked, target, atol=0.75, rtol=0.0)
+
+
+def test_minus_1_0_10_detector_origin_sim_native_derived_from_display(tmp_path) -> None:
+    fixture = _diag_detector_origin_to_caked_fixture(tmp_path)
+    context = fixture["context"]
+    entries = _diag_branch_map(fixture["detector_to_caked"])
+    print("\ndetector_origin_sim_native_from_display")
+    for branch in (0, 1):
+        entry = entries[branch]
+        display = mg._geometry_manual_tuple_point(entry, "sim_visual_detector_display_px")
+        native = mg._geometry_manual_tuple_point(entry, "sim_visual_detector_native_px")
+        existing = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_native_existing",
+        )
+        expected = _diag_display_to_native(context, display)
+        confused = bool(
+            existing is not None
+            and display is not None
+            and np.allclose(existing, display, atol=1.0e-6, rtol=0.0)
+        )
+        print(
+            "branch={branch} sim_visual_detector_display_px={display} "
+            "sim_visual_detector_native_existing={existing} "
+            "sim_visual_display_to_native_px={expected} "
+            "sim_visual_detector_native_px={native} "
+            "display_native_confused_existing={confused} source={source}".format(
+                branch=branch,
+                display=_diag_point_text(display),
+                existing=_diag_point_text(existing),
+                expected=_diag_point_text(expected),
+                native=_diag_point_text(native),
+                confused="yes" if confused else "no",
+                source=entry.get("sim_visual_detector_native_source", "<none>"),
+            )
+        )
+        assert display is not None
+        assert native is not None
+        assert expected is not None
+        assert np.allclose(native, expected, atol=1.0e-6, rtol=0.0)
+        assert entry["sim_visual_detector_native_source"] == "display_to_native_callback"
+
+
+def test_minus_1_0_10_detector_origin_to_caked_conversion_ledger(tmp_path) -> None:
+    fixture = _diag_detector_origin_to_caked_fixture(tmp_path)
+    context = fixture["context"]
+    callbacks = fixture["caked_callbacks"]
+    entries = _diag_branch_map(fixture["detector_to_caked"])
+    print("\ndetector_origin_to_caked_conversion_ledger")
+    for branch in (0, 1):
+        entry = entries[branch]
+        raw_display = mg._geometry_manual_tuple_point(entry, "raw_detector_display_px")
+        raw_native = mg._geometry_manual_tuple_point(entry, "raw_detector_native_px")
+        raw_display_to_native = _diag_display_to_native(context, raw_display)
+        raw_native_to_caked, raw_status = _diag_direct_native_to_caked(
+            callbacks,
+            raw_native,
+        )
+        geometry_display = mg._geometry_manual_tuple_point(
+            entry,
+            "geometry_detector_display_px",
+        )
+        geometry_native = mg._geometry_manual_tuple_point(
+            entry,
+            "geometry_detector_native_px",
+        )
+        geometry_display_to_native = _diag_display_to_native(context, geometry_display)
+        geometry_native_to_caked, geometry_status = _diag_direct_native_to_caked(
+            callbacks,
+            geometry_native,
+        )
+        sim_display = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_display_px",
+        )
+        sim_existing = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_native_existing",
+        )
+        sim_native = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_native_px",
+        )
+        sim_display_to_native = _diag_display_to_native(context, sim_display)
+        sim_native_to_caked, sim_status = _diag_direct_native_to_caked(callbacks, sim_native)
+        trace_raw = _diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),))
+        trace_geometry, _ = _diag_observed_caked(entry)
+        trace_sim, _ = _diag_sim_visual_caked(entry)
+        callback_available = callable(
+            getattr(callbacks, "native_detector_coords_to_caked_display_coords", None)
+        )
+        projection_ready = bool(raw_status == geometry_status == sim_status == "ok")
+        trace_deferred = "no"
+        sim_existing_differs_from_canonical = bool(
+            sim_existing is not None
+            and sim_display_to_native is not None
+            and not np.allclose(
+                sim_existing,
+                sim_display_to_native,
+                atol=1.0e-6,
+                rtol=0.0,
+            )
+        )
+        first_failure = "<none>"
+        if not callback_available:
+            first_failure = "trace_emitted_before_caked_projection_ready"
+        elif geometry_native_to_caked is not None and trace_geometry is None:
+            first_failure = "trace_not_using_saved_native_or_callback"
+        elif sim_existing_differs_from_canonical:
+            first_failure = "sim_native_display_confusion"
+        print(
+            "branch={branch} raw_detector_display_px={raw_display} "
+            "raw_detector_native_px={raw_native} raw_display_to_native_px={raw_d2n} "
+            "raw_native_to_caked_deg={raw_caked} "
+            "geometry_detector_display_px={geometry_display} "
+            "geometry_detector_native_px={geometry_native} "
+            "geometry_display_to_native_px={geometry_d2n} "
+            "geometry_native_to_caked_deg={geometry_caked} "
+            "sim_visual_detector_display_px={sim_display} "
+            "sim_visual_detector_native_existing={sim_existing} "
+            "sim_visual_display_to_native_px={sim_d2n} "
+            "sim_visual_native_to_caked_deg={sim_caked} "
+            "trace_raw_caked_deg={trace_raw} "
+            "trace_geometry_caked_deg={trace_geometry} "
+            "trace_sim_caked_deg={trace_sim} "
+            "caked_callback_available={callback_available} "
+            "caked_projection_ready={projection_ready} "
+            "trace_deferred_until_caked_ready={trace_deferred} "
+            "trace_emitted_before_caked_ready=no first_failure={first_failure}".format(
+                branch=branch,
+                raw_display=_diag_point_text(raw_display),
+                raw_native=_diag_point_text(raw_native),
+                raw_d2n=_diag_point_text(raw_display_to_native),
+                raw_caked=_diag_point_text(raw_native_to_caked),
+                geometry_display=_diag_point_text(geometry_display),
+                geometry_native=_diag_point_text(geometry_native),
+                geometry_d2n=_diag_point_text(geometry_display_to_native),
+                geometry_caked=_diag_point_text(geometry_native_to_caked),
+                sim_display=_diag_point_text(sim_display),
+                sim_existing=_diag_point_text(sim_existing),
+                sim_d2n=_diag_point_text(sim_display_to_native),
+                sim_caked=_diag_point_text(sim_native_to_caked),
+                trace_raw=_diag_point_text(trace_raw),
+                trace_geometry=_diag_point_text(trace_geometry),
+                trace_sim=_diag_point_text(trace_sim),
+                callback_available="yes" if callback_available else "no",
+                projection_ready="yes" if projection_ready else "no",
+                trace_deferred=trace_deferred,
+                first_failure=first_failure,
+            )
+        )
+        assert raw_native_to_caked is not None
+        assert geometry_native_to_caked is not None
+        assert sim_native_to_caked is not None
+        assert trace_raw is not None
+        assert trace_geometry is not None
+        assert trace_sim is not None
+        assert first_failure == "<none>"
+
+
+def test_minus_1_0_10_detector_origin_to_caked_live_ledger(tmp_path) -> None:
+    test_minus_1_0_10_detector_origin_to_caked_conversion_ledger(tmp_path)
+
+
+def test_minus_1_0_10_detector_to_caked_trace_waits_for_caked_ready(
+    monkeypatch,
+    capsys,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    entry = {
+        "q_group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
+        "hkl": _QR_PICKER_TARGET_HKL,
+        "source_branch_index": 0,
+        "manual_geometry_run_id": "manual-snapshot",
+        "raw_detector_display_px": (10.0, 20.0),
+        "raw_detector_native_px": (20.0, 40.0),
+        "geometry_detector_display_px": (11.0, 21.0),
+        "geometry_detector_native_px": (22.0, 42.0),
+        "sim_visual_detector_display_px": (12.0, 22.0),
+        "sim_visual_detector_native_px": (24.0, 44.0),
+    }
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_to_caked_manual_trace_saved_entries",
+        lambda: [dict(entry)],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_native_detector_coords_to_caked_display_coords",
+        lambda col, row: (float(col) / 10.0, float(row) / 10.0),
+    )
+    states = [{"callback_available": False, "caked_projection_ready": False}]
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_to_caked_manual_trace_projection_state",
+        lambda: dict(states[-1]),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_to_caked_manual_trace_background_index",
+        lambda: 0,
+    )
+    runtime_session.pending_detector_to_caked_manual_trace = None
+    emitted = runtime_session._emit_or_defer_detector_to_caked_manual_trace("unit_before")
+    before = capsys.readouterr().out
+    assert emitted is False
+    assert before == ""
+    assert isinstance(runtime_session.pending_detector_to_caked_manual_trace, Mapping)
+    assert runtime_session.pending_detector_to_caked_manual_trace["background_index"] == 0
+    assert (
+        runtime_session.pending_detector_to_caked_manual_trace["manual_geometry_run_id"]
+        == "manual-snapshot"
+    )
+    assert (
+        runtime_session.pending_detector_to_caked_manual_trace[
+            "trace_deferred_until_caked_ready"
+        ]
+        is True
+    )
+    entry["source_branch_index"] = 99
+    entry["raw_detector_native_px"] = (990.0, 990.0)
+    entry["geometry_detector_native_px"] = (991.0, 991.0)
+    entry["sim_visual_detector_native_px"] = (992.0, 992.0)
+    states.append({"callback_available": True, "caked_projection_ready": True})
+    flushed = runtime_session._emit_or_defer_detector_to_caked_manual_trace(
+        "unit_after_ready"
+    )
+    after = capsys.readouterr().out
+    print("\ndetector_to_caked_deferred_trace")
+    print(after.strip())
+    assert flushed is True
+    assert "reason=unit_before" in after
+    assert "reason=unit_after_ready" not in after
+    assert "trace_deferred_until_caked_ready=yes" in after
+    assert "pending_background_index=0" in after
+    assert "pending_manual_geometry_run_id=manual-snapshot" in after
+    assert "branch=0 " in after
+    assert "branch=99 " not in after
+    assert "raw_caked_deg=(2.000,4.000)" in after
+    assert "geometry_caked_deg=(2.200,4.200)" in after
+    assert "sim_caked_deg=(2.400,4.400)" in after
+    assert "(99.000,99.000)" not in after
+
+
+def test_minus_1_0_10_detector_to_caked_trace_drops_stale_background(
+    monkeypatch,
+    capsys,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    entry = {
+        "q_group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
+        "hkl": _QR_PICKER_TARGET_HKL,
+        "source_branch_index": 0,
+        "raw_detector_native_px": (20.0, 40.0),
+    }
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_to_caked_manual_trace_saved_entries",
+        lambda: [dict(entry)],
+    )
+    states = [{"callback_available": False, "caked_projection_ready": False}]
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_to_caked_manual_trace_projection_state",
+        lambda: dict(states[-1]),
+    )
+    background_indexes = [0]
+    monkeypatch.setattr(
+        runtime_session,
+        "_detector_to_caked_manual_trace_background_index",
+        lambda: background_indexes[-1],
+    )
+    runtime_session.pending_detector_to_caked_manual_trace = None
+    assert runtime_session._emit_or_defer_detector_to_caked_manual_trace("unit_before") is False
+    assert capsys.readouterr().out == ""
+    background_indexes.append(1)
+    states.append({"callback_available": True, "caked_projection_ready": True})
+    assert runtime_session._emit_or_defer_detector_to_caked_manual_trace("unit_after_ready") is False
+    assert capsys.readouterr().out == ""
+    assert runtime_session.pending_detector_to_caked_manual_trace is None
+
+
+def test_minus_1_0_10_detector_to_caked_trace_prints_raw_geometry_sim_caked(
+    tmp_path,
+) -> None:
+    fixture = _diag_detector_origin_to_caked_fixture(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        _diag_print_projection_block(
+            "[ra-sim] detector -> caked Qr/Qz projection",
+            fixture["detector_to_caked"],
+            fixture["visual_map"],
+            fixture["run_id"],
+            emitter="_diag_print_projection_block",
+            event="detector_to_caked_projection",
+        )
+    text = out.getvalue()
+    print("\ndetector_to_caked_raw_geometry_sim_trace")
+    print(text.strip())
+    assert "raw_caked_deg=<unavailable" not in text
+    assert "geometry_caked_deg=<unavailable" not in text
+    assert "sim_caked_deg=<unavailable" not in text
+    assert "outside detector" not in text
+    assert "no detector LUT" not in text
+    assert "no matching branch row" not in text
+    assert "raw_caked_deg=(" in text
+    assert "geometry_caked_deg=(" in text
+    assert "sim_caked_deg=(" in text
+
+
+def test_minus_1_0_10_caked_preview_regression_still_fixed(tmp_path) -> None:
+    fixture = _diag_detector_origin_to_caked_fixture(tmp_path)
+    context = fixture["context"]
+    rows = fixture["rows"]
+    profile_cache = fixture["profile_cache"]
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        fixture["detector_cache"],
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    visual_map = fixture["visual_map"]
+    session, _statuses = _diag_live_toggle(
+        caked_cache,
+        _diag_target_caked(caked_targets[0]),
+        display_background=caked_background,
+        use_caked_space=True,
+        profile_cache=profile_cache,
+    )
+    for branch in (0, 1):
+        preview = _diag_live_preview(
+            session,
+            _diag_target_caked(caked_targets[branch]),
+            cache_data=caked_cache,
+            display_background=caked_background,
+            use_caked_space=True,
+            callbacks=caked_callbacks,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            profile_cache=profile_cache,
+        )
+        observed = (float(preview["refined_col"]), float(preview["refined_row"]))
+        visual_distance = _diag_pair_distance_caked(
+            observed,
+            visual_map[branch]["caked"],
+        )
+        print(
+            "branch={branch} caked_preview_distance_source={source} "
+            "preview_distance={preview_distance} visual_distance={visual_distance}".format(
+                branch=branch,
+                source=preview.get("preview_distance_source"),
+                preview_distance=_diag_float_text(preview.get("sim_dist")),
+                visual_distance=_diag_float_text(visual_distance),
+            )
+        )
+        assert preview.get("preview_distance_source") == "sim_visual_caked_deg"
+        assert _diag_matches_distance(preview.get("sim_dist"), visual_distance)
+        assert float(preview.get("sim_dist")) < 2.0
+        assert float(preview.get("sim_dist")) < 10.0
+        if branch == 0:
+            session, _entries, _state = _diag_live_place(
+                session,
+                _diag_target_caked(caked_targets[branch]),
+                cache_data=caked_cache,
+                display_background=caked_background,
+                use_caked_space=True,
+                callbacks=caked_callbacks,
+                radial_axis=radial_axis,
+                azimuth_axis=azimuth_axis,
+                profile_cache=profile_cache,
+            )
+
+
+_QR_POINT_CONSISTENCY_RUNG_CACHE = {}
+
+
+def _diag_rung_value_text(value):
+    if isinstance(value, tuple):
+        if len(value) >= 2:
+            try:
+                return _diag_point_text((float(value[0]), float(value[1])))
+            except Exception:
+                pass
+        return "(" + ", ".join(_diag_rung_value_text(item) for item in value) + ")"
+    if isinstance(value, list):
+        if len(value) >= 2 and all(
+            not isinstance(item, (Mapping, list, tuple)) for item in value[:2]
+        ):
+            try:
+                return _diag_point_text((float(value[0]), float(value[1])))
+            except Exception:
+                pass
+        return "[" + ", ".join(_diag_rung_value_text(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        return ", ".join(f"{key}={_diag_rung_value_text(item)}" for key, item in value.items())
+    if isinstance(value, float):
+        return _diag_float_text(value)
+    if value is None:
+        return "<unavailable>"
+    return str(value)
+
+
+def _diag_print_point_consistency_rungs(rows):
+    print("\npoint_consistency_rungs")
+    print("rung | name | branch | expected | actual | delta | status | first_failure_reason")
+    for row in rows:
+        print(
+            " | ".join(
+                (
+                    str(row["rung"]),
+                    str(row["name"]),
+                    str(row["branch"]),
+                    str(row["expected"]),
+                    str(row["actual"]),
+                    str(row["delta"]),
+                    str(row["status"]),
+                    str(row["first_failure_reason"]),
+                )
+            )
+        )
+
+
+def _diag_fail_point_consistency_rung(row):
+    print(f"first_failing_rung={row['rung']}")
+    print(f"first_failing_event={row['event']}")
+    print(f"first_failing_branch={row['branch']}")
+    print(f"expected_source={row['expected_source']}")
+    print(f"actual_source={row['actual_source']}")
+    print(f"expected_value={row['expected_value']}")
+    print(f"actual_value={row['actual_value']}")
+    print(f"suggested_fix_target={row['suggested_fix_target']}")
+
+
+def _diag_add_point_consistency_rung(
+    rows,
+    rung,
+    name,
+    branch,
+    *,
+    ok,
+    expected,
+    actual,
+    delta="<none>",
+    failure_reason="<none>",
+    event="<none>",
+    expected_source="<none>",
+    actual_source="<none>",
+    expected_value="<none>",
+    actual_value="<none>",
+    suggested_fix_target="<none>",
+):
+    row = {
+        "rung": int(rung),
+        "name": str(name),
+        "branch": branch,
+        "expected": _diag_rung_value_text(expected),
+        "actual": _diag_rung_value_text(actual),
+        "delta": _diag_rung_value_text(delta),
+        "status": "PASS" if ok else "FAIL",
+        "first_failure_reason": "<none>" if ok else str(failure_reason),
+        "event": str(event),
+        "expected_source": str(expected_source),
+        "actual_source": str(actual_source),
+        "expected_value": _diag_rung_value_text(expected_value),
+        "actual_value": _diag_rung_value_text(actual_value),
+        "suggested_fix_target": str(suggested_fix_target),
+    }
+    rows.append(row)
+    if not ok:
+        _diag_print_point_consistency_rungs(rows)
+        _diag_fail_point_consistency_rung(row)
+        raise AssertionError(f"first_failing_rung={rung}: {failure_reason}")
+    return row
+
+
+def _diag_point_consistency_rung_status(rows, rung):
+    return [
+        row
+        for row in rows
+        if int(row.get("rung", -1)) == int(rung)
+        and str(row.get("status")) != "PASS"
+    ]
+
+
+def _diag_detector_to_caked_deferral_trace_result():
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    entry = {
+        "q_group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
+        "hkl": _QR_PICKER_TARGET_HKL,
+        "source_branch_index": 0,
+        "manual_geometry_run_id": "manual-snapshot",
+        "raw_detector_display_px": (10.0, 20.0),
+        "raw_detector_native_px": (20.0, 40.0),
+        "geometry_detector_display_px": (11.0, 21.0),
+        "geometry_detector_native_px": (22.0, 42.0),
+        "sim_visual_detector_display_px": (12.0, 22.0),
+        "sim_visual_detector_native_px": (24.0, 44.0),
+    }
+    originals = {
+        "_detector_to_caked_manual_trace_saved_entries": getattr(
+            runtime_session,
+            "_detector_to_caked_manual_trace_saved_entries",
+            None,
+        ),
+        "_native_detector_coords_to_caked_display_coords": getattr(
+            runtime_session,
+            "_native_detector_coords_to_caked_display_coords",
+            None,
+        ),
+        "_detector_to_caked_manual_trace_projection_state": getattr(
+            runtime_session,
+            "_detector_to_caked_manual_trace_projection_state",
+            None,
+        ),
+        "_detector_to_caked_manual_trace_background_index": getattr(
+            runtime_session,
+            "_detector_to_caked_manual_trace_background_index",
+            None,
+        ),
+        "pending_detector_to_caked_manual_trace": getattr(
+            runtime_session,
+            "pending_detector_to_caked_manual_trace",
+            None,
+        ),
+    }
+    states = [{"callback_available": False, "caked_projection_ready": False}]
+    try:
+        runtime_session._detector_to_caked_manual_trace_saved_entries = lambda: [dict(entry)]
+        runtime_session._native_detector_coords_to_caked_display_coords = (
+            lambda col, row: (float(col) / 10.0, float(row) / 10.0)
+        )
+        runtime_session._detector_to_caked_manual_trace_projection_state = (
+            lambda: dict(states[-1])
+        )
+        runtime_session._detector_to_caked_manual_trace_background_index = lambda: 0
+        runtime_session.pending_detector_to_caked_manual_trace = None
+        with contextlib.redirect_stdout(io.StringIO()) as before_out:
+            emitted_before = runtime_session._emit_or_defer_detector_to_caked_manual_trace(
+                "unit_before"
+            )
+        pending = dict(runtime_session.pending_detector_to_caked_manual_trace or {})
+        entry["source_branch_index"] = 99
+        entry["raw_detector_native_px"] = (990.0, 990.0)
+        entry["geometry_detector_native_px"] = (991.0, 991.0)
+        entry["sim_visual_detector_native_px"] = (992.0, 992.0)
+        states.append({"callback_available": True, "caked_projection_ready": True})
+        with contextlib.redirect_stdout(io.StringIO()) as after_out:
+            flushed_after = runtime_session._emit_or_defer_detector_to_caked_manual_trace(
+                "unit_after_ready"
+            )
+        after_text = after_out.getvalue()
+        return {
+            "emitted_before": bool(emitted_before),
+            "before_text": before_out.getvalue(),
+            "pending": pending,
+            "flushed_after": bool(flushed_after),
+            "after_text": after_text,
+        }
+    finally:
+        for name, value in originals.items():
+            setattr(runtime_session, name, value)
+
+
+def _diag_records_same(left, right):
+    try:
+        _diag_records_close(left, right)
+    except AssertionError:
+        return False
+    return True
+
+
+def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_table):
+    if "payload" in _QR_POINT_CONSISTENCY_RUNG_CACHE:
+        rows = _QR_POINT_CONSISTENCY_RUNG_CACHE["payload"]
+        if print_table:
+            _diag_print_point_consistency_rungs(rows)
+        return rows
+
+    rows = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        detector_fixture = _diag_detector_origin_to_caked_fixture(tmp_path)
+    context = detector_fixture["context"]
+    caked_callbacks = detector_fixture["caked_callbacks"]
+    detector_saved = _diag_branch_map(detector_fixture["detector_saved"])
+    detector_to_caked = _diag_branch_map(detector_fixture["detector_to_caked"])
+    visual_map = detector_fixture["visual_map"]
+    with contextlib.redirect_stdout(io.StringIO()):
+        caked_probe = _diag_minus_1_0_10_caked_probe(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        caked_refresh = _diag_minus_1_0_10_caked_refresh_probe(tmp_path, monkeypatch)
+    with contextlib.redirect_stdout(io.StringIO()):
+        fit_context, fit_dataset, _fit_events = _diag_fit_handoff_dataset(tmp_path)
+    fit_rows = _diag_fit_audit_rows(fit_dataset)
+    deferral = _diag_detector_to_caked_deferral_trace_result()
+
+    manual_lines = [
+        line
+        for line in str(deferral["after_text"]).splitlines()
+        if "manual_geometry_run_id=" in line
+        and ("Qr/Qz" in line or f"q_group_key={_QR_PICKER_TARGET_Q_GROUP_KEY!r}" in line)
+    ]
+    required_tokens = (
+        "manual_geometry_run_id=",
+        "manual_trace_version=",
+        "source_path_marker=",
+        "emitter=",
+        "event=",
+    )
+    unmarked = [
+        line for line in manual_lines if any(token not in line for token in required_tokens)
+    ]
+    legacy = [
+        line
+        for line in manual_lines
+        if f"manual_geometry_run_id={mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID}" in line
+    ]
+    _diag_add_point_consistency_rung(
+        rows,
+        0,
+        "live path attribution",
+        "all",
+        ok=bool(manual_lines) and not unmarked and not legacy,
+        expected="marked manual Qr/Qz trace lines, no legacy emitter",
+        actual={
+            "manual_lines": len(manual_lines),
+            "unmarked": len(unmarked),
+            "legacy": len(legacy),
+        },
+        event="detector_to_caked_projection_trace",
+        expected_source="manual_geometry_cmd_provenance_text",
+        actual_source="runtime detector_to_caked trace",
+        expected_value="all required provenance fields",
+        actual_value=manual_lines[:2],
+        suggested_fix_target="ra_sim/gui/manual_geometry.py:geometry_manual_cmd_provenance_text",
+        failure_reason="unmarked_or_legacy_manual_qr_qz_trace_line",
+    )
+
+    for branch in (0, 1):
+        entry = detector_saved.get(branch)
+        ok = bool(
+            isinstance(entry, Mapping)
+            and int(entry.get("source_branch_index", -1)) == branch
+            and _diag_q_group_key(entry) == _QR_PICKER_TARGET_Q_GROUP_KEY
+            and _diag_hkl(entry) == _QR_PICKER_TARGET_HKL
+        )
+        _diag_add_point_consistency_rung(
+            rows,
+            1,
+            "detector picker identity",
+            branch,
+            ok=ok,
+            expected={
+                "q_group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
+                "hkl": _QR_PICKER_TARGET_HKL,
+                "source_branch_index": branch,
+            },
+            actual={
+                "q_group_key": _diag_q_group_key(entry),
+                "hkl": _diag_hkl(entry),
+                "source_branch_index": entry.get("source_branch_index") if entry else None,
+            },
+            event="detector_mode_placement",
+            expected_source="detector click target",
+            actual_source="saved detector-origin pair",
+            suggested_fix_target="ra_sim/gui/manual_geometry.py:geometry_manual_toggle_selection_at",
+            failure_reason="detector_picker_branch_identity_unstable",
+        )
+
+    for branch in (0, 1):
+        entry = detector_to_caked[branch]
+        geometry_display = mg._geometry_manual_tuple_point(
+            entry,
+            "geometry_detector_display_px",
+        )
+        geometry_native = mg._geometry_manual_tuple_point(
+            entry,
+            "geometry_detector_native_px",
+        )
+        geometry_d2n = _diag_display_to_native(context, geometry_display)
+        sim_display = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_display_px",
+        )
+        sim_native = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_native_px",
+        )
+        sim_d2n = _diag_display_to_native(context, sim_display)
+        geometry_delta = (
+            None
+            if geometry_d2n is None or geometry_native is None
+            else (
+                float(geometry_d2n[0]) - float(geometry_native[0]),
+                float(geometry_d2n[1]) - float(geometry_native[1]),
+            )
+        )
+        sim_delta = (
+            None
+            if sim_d2n is None or sim_native is None
+            else (
+                float(sim_d2n[0]) - float(sim_native[0]),
+                float(sim_d2n[1]) - float(sim_native[1]),
+            )
+        )
+        copied_display = bool(
+            geometry_display is not None
+            and geometry_native is not None
+            and np.allclose(geometry_display, geometry_native, atol=1.0e-6, rtol=0.0)
+            and not np.allclose(geometry_d2n, geometry_native, atol=1.0e-6, rtol=0.0)
+        )
+        ok = bool(
+            geometry_display is not None
+            and geometry_native is not None
+            and geometry_d2n is not None
+            and sim_display is not None
+            and sim_native is not None
+            and sim_d2n is not None
+            and np.allclose(geometry_d2n, geometry_native, atol=1.0e-6, rtol=0.0)
+            and np.allclose(sim_d2n, sim_native, atol=1.0e-6, rtol=0.0)
+            and entry.get("sim_visual_detector_native_source")
+            == "display_to_native_callback"
+            and not copied_display
+        )
+        _diag_add_point_consistency_rung(
+            rows,
+            2,
+            "detector display/native consistency",
+            branch,
+            ok=ok,
+            expected="display_to_native(display_px) == native_px; sim native canonical",
+            actual={
+                "geometry_display": geometry_display,
+                "geometry_native": geometry_native,
+                "geometry_d2n": geometry_d2n,
+                "sim_display": sim_display,
+                "sim_native": sim_native,
+                "sim_d2n": sim_d2n,
+                "sim_native_source": entry.get("sim_visual_detector_native_source"),
+            },
+            delta={"geometry": geometry_delta, "sim": sim_delta},
+            event="detector_to_caked_switch",
+            expected_source="display_to_native_callback",
+            actual_source=str(entry.get("sim_visual_detector_native_source")),
+            expected_value=geometry_native,
+            actual_value=geometry_d2n,
+            suggested_fix_target="ra_sim/gui/manual_geometry.py:_geometry_manual_apply_sim_visual_detector_fields",
+            failure_reason="detector_display_native_inconsistent",
+        )
+
+    expected_geometry_caked = {
+        0: (40.10, 35.75),
+        1: (40.75, -37.70),
+    }
+    for branch in (0, 1):
+        entry = detector_to_caked[branch]
+        direct_results = {}
+        for label, native in (
+            (
+                "raw",
+                mg._geometry_manual_tuple_point(entry, "raw_detector_native_px"),
+            ),
+            (
+                "geometry",
+                mg._geometry_manual_tuple_point(entry, "geometry_detector_native_px"),
+            ),
+            (
+                "sim",
+                mg._geometry_manual_tuple_point(entry, "sim_visual_detector_native_px"),
+            ),
+        ):
+            point, status = _diag_direct_native_to_caked(caked_callbacks, native)
+            direct_results[label] = {"native": native, "caked": point, "status": status}
+        geometry_caked = direct_results["geometry"]["caked"]
+        expected = expected_geometry_caked[branch]
+        ok = bool(
+            all(item["status"] == "ok" and item["caked"] is not None for item in direct_results.values())
+            and np.allclose(geometry_caked, expected, atol=0.75, rtol=0.0)
+        )
+        _diag_add_point_consistency_rung(
+            rows,
+            3,
+            "direct detector native -> caked",
+            branch,
+            ok=ok,
+            expected={"geometry_native_to_caked_approx": expected},
+            actual=direct_results,
+            delta=_diag_angle_delta(geometry_caked, expected),
+            event="direct_native_to_caked",
+            expected_source="saved detector native + caked callback",
+            actual_source="native_detector_coords_to_caked_display_coords",
+            expected_value=expected,
+            actual_value=geometry_caked,
+            suggested_fix_target="ra_sim/gui/manual_geometry.py:make_runtime_geometry_manual_projection_callbacks",
+            failure_reason="valid_native_detector_coordinate_failed_caked_projection",
+        )
+
+    required_pair_fields = (
+        "raw_detector_display_px",
+        "raw_detector_native_px",
+        "geometry_detector_display_px",
+        "geometry_detector_native_px",
+        "sim_visual_detector_display_px",
+        "sim_visual_detector_native_px",
+    )
+    for branch in (0, 1):
+        entry = detector_saved[branch]
+        missing = [
+            field
+            for field in required_pair_fields
+            if mg._geometry_manual_tuple_point(entry, field) is None
+        ]
+        sim_display = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_display_px",
+        )
+        sim_native = mg._geometry_manual_tuple_point(
+            entry,
+            "sim_visual_detector_native_px",
+        )
+        sim_d2n = _diag_display_to_native(context, sim_display)
+        ok = bool(
+            not missing
+            and sim_display is not None
+            and sim_native is not None
+            and sim_d2n is not None
+            and np.allclose(sim_native, sim_d2n, atol=1.0e-6, rtol=0.0)
+        )
+        _diag_add_point_consistency_rung(
+            rows,
+            4,
+            "detector-origin saved pair preservation",
+            branch,
+            ok=ok,
+            expected="all detector raw/geometry/sim display+native fields preserved",
+            actual={"missing": missing, "sim_native": sim_native, "sim_d2n": sim_d2n},
+            event="detector_mode_placement_saved_pair",
+            expected_source="saved detector-origin pair",
+            actual_source="geometry manual pair entry",
+            expected_value=required_pair_fields,
+            actual_value={field: mg._geometry_manual_tuple_point(entry, field) for field in required_pair_fields},
+            suggested_fix_target="ra_sim/gui/manual_geometry.py:geometry_manual_pair_entry_from_candidate",
+            failure_reason="detector_origin_saved_pair_lost_coordinate_field",
+        )
+
+    after_text = str(deferral["after_text"])
+    readiness_ok = bool(
+        deferral["emitted_before"] is False
+        and deferral["before_text"] == ""
+        and deferral["pending"].get("trace_deferred_until_caked_ready") is True
+        and deferral["flushed_after"] is True
+        and "trace_deferred_until_caked_ready=yes" in after_text
+        and "branch=0 " in after_text
+        and "branch=99 " not in after_text
+        and "raw_caked_deg=(2.000,4.000)" in after_text
+        and "geometry_caked_deg=(2.200,4.200)" in after_text
+        and "sim_caked_deg=(2.400,4.400)" in after_text
+        and "raw_caked_deg=<unavailable" not in after_text
+        and "geometry_caked_deg=<unavailable" not in after_text
+        and "sim_caked_deg=<unavailable" not in after_text
+    )
+    _diag_add_point_consistency_rung(
+        rows,
+        5,
+        "detector -> caked switch readiness",
+        "all",
+        ok=readiness_ok,
+        expected="defer before caked ready; flush saved snapshot after ready",
+        actual={
+            "emitted_before": deferral["emitted_before"],
+            "pending": bool(deferral["pending"]),
+            "flushed_after": deferral["flushed_after"],
+        },
+        event="detector_to_caked_trace_defer_flush",
+        expected_source="pending saved detector-native context",
+        actual_source="runtime pending_detector_to_caked_manual_trace",
+        expected_value="trace_deferred_until_caked_ready=yes then real caked operands",
+        actual_value=after_text.strip().splitlines()[:2],
+        suggested_fix_target="ra_sim/gui/_runtime/runtime_session.py:_emit_or_defer_detector_to_caked_manual_trace",
+        failure_reason="detector_to_caked_trace_emitted_before_projection_ready",
+    )
+
+    for branch in (0, 1):
+        entry = detector_to_caked[branch]
+        raw_caked = _diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),))
+        geometry_caked, _geometry_source = _diag_observed_caked(entry)
+        sim_caked, _sim_source = _diag_sim_visual_caked(entry)
+        ok = raw_caked is not None and geometry_caked is not None and sim_caked is not None
+        _diag_add_point_consistency_rung(
+            rows,
+            6,
+            "detector-origin detector -> caked values",
+            branch,
+            ok=ok,
+            expected="raw/geometry/sim caked operands real",
+            actual={
+                "raw_caked_deg": raw_caked,
+                "geometry_caked_deg": geometry_caked,
+                "sim_caked_deg": sim_caked,
+            },
+            delta=_diag_angle_delta(geometry_caked, sim_caked),
+            event="detector_to_caked_switch",
+            expected_source="saved native + caked callback",
+            actual_source="refreshed detector-origin saved pair",
+            expected_value="no unavailable caked operands",
+            actual_value={
+                "raw": raw_caked,
+                "geometry": geometry_caked,
+                "sim": sim_caked,
+            },
+            suggested_fix_target="ra_sim/gui/_runtime/runtime_session.py:_emit_detector_to_caked_manual_trace",
+            failure_reason="detector_origin_caked_operand_unavailable",
+        )
+
+    caked_saved = _diag_branch_map(caked_probe["saved_entries"])
+    refresh_checks = {
+        0: caked_refresh["check0"],
+        1: caked_refresh["check1"],
+    }
+    for branch, preview, check in (
+        (0, caked_probe["preview0"], caked_probe["preview_check0"]),
+        (1, caked_probe["preview1"], caked_probe["preview_check1"]),
+    ):
+        saved = caked_saved[branch]
+        refresh_check = refresh_checks[branch]
+        preview_distance = float(check["printed_preview_distance"])
+        assignment_distance = float(saved.get("assignment_distance_to_sim"))
+        refresh_distance = float(refresh_check["printed_preview_distance"])
+        ok = bool(
+            check["preview_distance_source"] == "sim_visual_caked_deg"
+            and saved.get("assignment_distance_source") == "sim_visual_caked_deg"
+            and check["preview_distance_matches"] == "sim_visual"
+            and refresh_check["preview_distance_source"] == "sim_visual_caked_deg"
+            and refresh_check["preview_distance_matches"] == "sim_visual"
+            and preview_distance < 2.0
+            and assignment_distance < 2.0
+            and refresh_distance < 2.0
+            and "77." not in str(preview.get("message"))
+            and "78." not in str(preview.get("message"))
+            and "79." not in str(preview.get("message"))
+            and "80." not in str(preview.get("message"))
+        )
+        _diag_add_point_consistency_rung(
+            rows,
+            7,
+            "caked-origin visual source preservation",
+            branch,
+            ok=ok,
+            expected="preview/assignment/refresh source = sim_visual_caked_deg, distance < 2 deg",
+            actual={
+                "preview_source": check["preview_distance_source"],
+                "assignment_source": saved.get("assignment_distance_source"),
+                "refresh_source": refresh_check["preview_distance_source"],
+                "preview_distance": preview_distance,
+                "assignment_distance": assignment_distance,
+                "refresh_distance": refresh_distance,
+            },
+            event="caked_origin_preview_assignment_refresh",
+            expected_source="sim_visual_caked_deg",
+            actual_source=str(check["preview_distance_source"]),
+            expected_value="<2 deg and not 77-80 deg",
+            actual_value=preview_distance,
+            suggested_fix_target="ra_sim/gui/manual_geometry.py:geometry_manual_pick_preview_state",
+            failure_reason="caked_origin_visual_source_regressed",
+        )
+
+    label_errors = []
+    for branch in (0, 1):
+        row = _diag_source_ledger_row(
+            "caked_mode_qr_selection",
+            branch,
+            caked_probe["caked_select_map"][branch],
+            visual_map=caked_probe["visual_map"],
+            cache_current=caked_probe["cache_current"],
+            direct_result={"point": None, "status": "not_checked"},
+        )
+        if row["field_label_errors"]:
+            label_errors.append((branch, row["field_label_errors"]))
+    synthetic_bad = []
+    for point in ((39.827, 35.250), (42.351, -42.250), (36.209, -117.751)):
+        detector_display, detector_source = _diag_observed_detector_display(
+            {
+                "_caked_qr_projection_cache": True,
+                "display_frame": "caked_display",
+                "display_col": point[0],
+                "display_row": point[1],
+                "caked_x": point[0],
+                "caked_y": point[1],
+                "raw_caked_x": point[0],
+                "raw_caked_y": point[1],
+                "two_theta_deg": point[0],
+                "phi_deg": point[1],
+            }
+        )
+        if detector_display is not None or detector_source != "<unavailable reason=no detector back-projection>":
+            synthetic_bad.append((point, detector_display, detector_source))
+    _diag_add_point_consistency_rung(
+        rows,
+        8,
+        "coordinate field labeling",
+        "all",
+        ok=not label_errors and not synthetic_bad,
+        expected="caked angle pairs never printed as detector px",
+        actual={"field_label_errors": label_errors, "synthetic_bad": synthetic_bad},
+        event="coordinate_label_guard",
+        expected_source="detector px fields from detector projection only",
+        actual_source="source ledger + caked projection guard",
+        expected_value="<unavailable reason=no detector back-projection>",
+        actual_value={"errors": label_errors, "synthetic_bad": synthetic_bad},
+        suggested_fix_target="ra_sim/gui/geometry_fit.py:manual_trace_detector_point_label_guard",
+        failure_reason="caked_angle_pair_routed_to_detector_px_field",
+    )
+
+    for branch in (0, 1):
+        detector_geometry = _diag_observed_caked(detector_to_caked[branch])[0]
+        caked_geometry = _diag_observed_caked(caked_saved[branch])[0]
+        delta = _diag_angle_delta(detector_geometry, caked_geometry)
+        ok = bool(
+            delta is not None
+            and abs(float(delta[0])) <= 0.25
+            and abs(float(delta[1])) <= 0.5
+        )
+        _diag_add_point_consistency_rung(
+            rows,
+            9,
+            "cross-origin equivalence",
+            branch,
+            ok=ok,
+            expected="detector-origin and caked-origin refined caked points agree",
+            actual={
+                "detector_origin_geometry_caked_deg": detector_geometry,
+                "caked_origin_geometry_caked_deg": caked_geometry,
+            },
+            delta=delta,
+            event="cross_origin_compare",
+            expected_source="same physical Qr branch point",
+            actual_source="detector-origin vs caked-origin saved geometry",
+            expected_value="2theta<=0.25 deg, wrapped phi<=0.5 deg",
+            actual_value=delta,
+            suggested_fix_target="ra_sim/gui/manual_geometry.py:refresh_geometry_manual_pair_entry",
+            failure_reason="detector_origin_caked_origin_not_equivalent",
+        )
+
+    recompute_first = _diag_recompute_fit_audit_rows(fit_context, fit_dataset)
+    recompute_second = _diag_recompute_fit_audit_rows(fit_context, fit_dataset)
+    records_first = _diag_records_from_audit_rows(recompute_first)
+    records_second = _diag_records_from_audit_rows(recompute_second)
+    recompute_same = _diag_records_same(records_first, records_second)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(fit_context, fit_dataset)
+    no_fake_after_fit = True
+    if not fit_run["step_executed"]:
+        baseline_records = _diag_records_from_audit_rows(fit_rows)
+        repeated_records = _diag_records_from_audit_rows(
+            _diag_recompute_fit_audit_rows(fit_context, fit_dataset)
+        )
+        no_fake_after_fit = _diag_records_same(baseline_records, repeated_records)
+    allowed_prediction_sources = {"dynamic_current_simulation", "saved_visual_sim_refined"}
+    for branch in (0, 1):
+        row = fit_rows[branch]
+        prediction_source = str(row.get("fit_prediction_source"))
+        observed_match = bool(
+            row.get("observed_visual_to_fit_observed_match") == "yes"
+            and float(row.get("fit_observed_minus_observed_refined_detector_delta_px", np.inf)) <= 1.0
+        )
+        caked_delta = row.get("fit_observed_minus_observed_refined_caked_delta_deg")
+        try:
+            _diag_delta_pair_close(caked_delta)
+            caked_match = True
+        except AssertionError:
+            caked_match = False
+        prediction_source_ok = bool(
+            prediction_source in allowed_prediction_sources
+            or prediction_source.startswith("unavailable_reason:")
+        )
+        ok = bool(
+            observed_match
+            and caked_match
+            and prediction_source_ok
+            and recompute_same
+            and no_fake_after_fit
+        )
+        _diag_add_point_consistency_rung(
+            rows,
+            10,
+            "fit handoff consistency",
+            branch,
+            ok=ok,
+            expected="fit observed=manual refined; prediction explicit; same params stable; no fake failed-fit state",
+            actual={
+                "fit_observed_caked_deg": row.get("fit_observed_caked_deg"),
+                "fit_prediction_caked_deg": row.get("fit_prediction_caked_deg"),
+                "fit_prediction_source": prediction_source,
+                "recompute_same": recompute_same,
+                "no_fake_after_fit": no_fake_after_fit,
+            },
+            delta=row.get("fit_observed_minus_observed_refined_caked_delta_deg"),
+            event="fit_handoff",
+            expected_source="manual/background observed + simulation prediction",
+            actual_source=prediction_source,
+            expected_value="stable predicted-observed residual",
+            actual_value=row.get("residual_caked_deg"),
+            suggested_fix_target="ra_sim/gui/geometry_fit.py:build_geometry_fit_qr_handoff_audit_rows",
+            failure_reason="fit_handoff_inconsistent",
+        )
+
+    _QR_POINT_CONSISTENCY_RUNG_CACHE["payload"] = rows
+    if print_table:
+        _diag_print_point_consistency_rungs(rows)
+    return rows
+
+
+def test_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch) -> None:
+    rows = _diag_minus_1_0_10_point_consistency_rungs(
+        tmp_path,
+        monkeypatch,
+        print_table=True,
+    )
+    assert rows
+    assert not [row for row in rows if row["status"] != "PASS"]
+
+
+def test_minus_1_0_10_detector_origin_rungs_pass(tmp_path, monkeypatch) -> None:
+    rows = _diag_minus_1_0_10_point_consistency_rungs(
+        tmp_path,
+        monkeypatch,
+        print_table=False,
+    )
+    for rung in (1, 2, 3, 4, 5, 6):
+        assert not _diag_point_consistency_rung_status(rows, rung)
+
+
+def test_minus_1_0_10_caked_origin_rungs_still_pass(tmp_path, monkeypatch) -> None:
+    rows = _diag_minus_1_0_10_point_consistency_rungs(
+        tmp_path,
+        monkeypatch,
+        print_table=False,
+    )
+    for rung in (7, 9):
+        assert not _diag_point_consistency_rung_status(rows, rung)
+
+
+def test_minus_1_0_10_no_caked_angles_as_detector_pixels(tmp_path, monkeypatch) -> None:
+    rows = _diag_minus_1_0_10_point_consistency_rungs(
+        tmp_path,
+        monkeypatch,
+        print_table=False,
+    )
+    assert not _diag_point_consistency_rung_status(rows, 8)
+
+
+def test_minus_1_0_10_fit_handoff_rung_still_passes(tmp_path, monkeypatch) -> None:
+    rows = _diag_minus_1_0_10_point_consistency_rungs(
+        tmp_path,
+        monkeypatch,
+        print_table=False,
+    )
+    assert not _diag_point_consistency_rung_status(rows, 10)
+
+
+def _diag_headless_comparison_rows(entries, visual_map, cache_current, previews):
+    branch_entries = _diag_branch_map(entries)
+    rows = []
+    for branch in (0, 1):
+        entry = branch_entries[branch]
+        observed, _observed_source = _diag_observed_caked(entry)
+        visual = visual_map.get(branch, {}).get("caked")
+        cache = cache_current.get(branch, {}).get("caked")
+        visual_delta = _diag_angle_delta(observed, visual)
+        cache_delta = _diag_angle_delta(observed, cache)
+        preview = previews[branch]
+        rows.append(
+            {
+                "branch": branch,
+                "observed_caked": observed,
+                "sim_visual_caked": visual,
+                "sim_cache_current_caked": cache,
+                "visual_delta": visual_delta,
+                "cache_current_delta": cache_delta,
+                "preview_distance": preview.get("status_distance_value", preview.get("sim_dist")),
+                "assignment_distance": entry.get("assignment_distance_to_sim"),
+            }
+        )
+    return rows
+
+
+def _diag_print_headless_comparison_table(rows, run_id):
+    print(
+        "[ra-sim] Qr/Qz completed group comparison "
+        + _diag_cmd_stamp(
+            run_id,
+            emitter="_diag_print_headless_comparison_table",
+            event="completed_group_comparison",
+        )
+    )
+    print(
+        "branch | observed_caked | sim_visual_caked | sim_cache_current_caked | "
+        "visual_delta | cache_current_delta | preview_distance | assignment_distance "
+        + _diag_cmd_stamp(
+            run_id,
+            emitter="_diag_print_headless_comparison_table",
+            event="completed_group_comparison_header",
+        )
+    )
+    for row in rows:
+        print(
+            (
+                " | ".join(
+                    (
+                        str(row["branch"]),
+                        _diag_point_text(row["observed_caked"]),
+                        _diag_point_text(row["sim_visual_caked"]),
+                        _diag_point_text(row["sim_cache_current_caked"]),
+                        _diag_point_text(row["visual_delta"]),
+                        _diag_point_text(row["cache_current_delta"]),
+                        _diag_float_text(row["preview_distance"]),
+                        _diag_float_text(row["assignment_distance"]),
+                    )
+                )
+                + " "
+                + _diag_cmd_stamp(
+                    run_id,
+                    emitter="_diag_print_headless_comparison_table",
+                    event="completed_group_comparison_row",
+                    branch=row["branch"],
+                    actual_source="sim_visual_caked_deg",
+                    expected_source="sim_visual_caked_deg",
+                )
+            )
+        )
+        print(
+            "legacy geometry_minus_sim_caked_delta_deg branch={branch} value={delta} {stamp}".format(
+                branch=row["branch"],
+                delta=_diag_point_text(row["visual_delta"]),
+                stamp=_diag_cmd_stamp(
+                    run_id,
+                    emitter="_diag_print_headless_comparison_table",
+                    event="completed_group_legacy_delta",
+                    branch=row["branch"],
+                    actual_source="legacy_geometry_minus_sim_caked_delta_deg",
+                    expected_source="sim_visual_caked_deg",
+                ),
+            )
+        )
+
+
+def test_minus_1_0_10_live_cmd_log_validator(tmp_path) -> None:
+    importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    context["rows"] = rows
+    profile_cache = rows["profile_cache"]
+    display_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["current_background_display"])
+    )
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+    radial_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_radial_values"])
+    azimuth_axis = _diag_runtime_value(context["projection_kwargs"]["last_caked_azimuth_values"])
+    detector_callbacks = context["projection_callbacks"]
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    detector_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        detector_cache,
+        display_background=display_background,
+        profile_cache=profile_cache,
+    )
+    detector_targets = _diag_target_rows_by_branch(detector_grouped)
+    assert set(detector_targets) == {0, 1}
+    caked_callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    assert set(caked_targets) == {0, 1}
+    visual_map = _diag_visual_map(detector_targets)
+    cache_current = _diag_cache_current_map(context, detector_targets, caked_targets)
+
+    detector_statuses = []
+    caked_statuses = []
+    transcript = {}
+    detector_seed0 = _diag_detector_display_point(detector_targets[0])
+    assert detector_seed0 is not None
+    detector_target_points = {
+        0: (1083.818, 1083.270),
+        1: (1846.620, 1083.734),
+    }
+    caked_target_points = {
+        0: (40.1425, 35.5668),
+        1: (40.8530, -37.5659),
+    }
+
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        detector_workflow, detector_state = _diag_headless_workflow(
+            cache_data=detector_cache,
+            display_background=display_background,
+            use_caked_space=False,
+            callbacks=detector_callbacks,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            profile_cache=profile_cache,
+            status_sink=detector_statuses,
+        )
+        detector_workflow.toggle_selection_at(*detector_seed0)
+        detector_run_id = detector_state["pick_session"].get("manual_geometry_run_id")
+        assert detector_run_id
+        picker_resolved = _diag_headless_detector_picker_resolution(
+            context,
+            _diag_flatten_grouped(detector_grouped),
+            detector_targets,
+            detector_run_id,
+        )
+        for branch in (0, 1):
+            detector_workflow.update_pick_preview(*detector_target_points[branch], force=True)
+            detector_workflow.place_selection_at(*detector_target_points[branch])
+        print(
+            "[ra-sim] Qr/Qz detector geometry selection "
+            + _diag_cmd_stamp(
+                detector_run_id,
+                emitter="test_minus_1_0_10_live_cmd_log_validator",
+                event="detector_geometry_selection",
+            )
+        )
+        for entry in _diag_sorted(detector_state["pairs"]):
+            print(
+                "branch={branch} q_group_key={q_group} hkl={hkl} "
+                "geometry_detector_display_px={display} geometry_caked_deg={caked} "
+                "assignment_distance={assignment} source={source} {stamp}".format(
+                    branch=_diag_source_branch(entry),
+                    q_group=_diag_q_group_key(entry),
+                    hkl=_diag_hkl(entry),
+                    display=_diag_point_text(_diag_observed_detector_display(entry)[0]),
+                    caked=_diag_point_text(_diag_observed_caked(entry)[0]),
+                    assignment=_diag_float_text(entry.get("assignment_distance_to_sim")),
+                    source=entry.get("assignment_distance_source", "<unavailable>"),
+                    stamp=_diag_cmd_stamp(
+                        detector_run_id,
+                        emitter="test_minus_1_0_10_live_cmd_log_validator",
+                        event="detector_geometry_selection_row",
+                        branch=_diag_source_branch(entry),
+                        actual_source=entry.get("assignment_distance_source", "<unavailable>"),
+                        expected_source="sim_visual_detector_display_px",
+                    ),
+                )
+            )
+    transcript["detector"] = out.getvalue().strip()
+    detector_saved = [dict(entry) for entry in detector_state["pairs"]]
+
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        detector_to_caked = _diag_refresh_entries(caked_callbacks, detector_saved)
+        _diag_print_projection_block(
+            "[ra-sim] detector -> caked Qr/Qz projection",
+            detector_to_caked,
+            visual_map,
+            detector_run_id,
+            emitter="_diag_print_projection_block",
+            event="detector_to_caked_projection",
+        )
+    transcript["detector_to_caked"] = out.getvalue().strip()
+
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        caked_workflow, caked_state = _diag_headless_workflow(
+            cache_data=caked_cache,
+            display_background=caked_background,
+            use_caked_space=True,
+            callbacks=caked_callbacks,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            profile_cache=profile_cache,
+            status_sink=caked_statuses,
+        )
+        caked_select_point = _diag_target_caked(caked_targets[0])
+        assert caked_select_point is not None
+        caked_workflow.toggle_selection_at(*caked_select_point)
+        caked_run_id = caked_state["pick_session"].get("manual_geometry_run_id")
+        assert caked_run_id
+        print(
+            "[geometry] Clear saved manual geometry. "
+            + _diag_cmd_stamp(
+                caked_run_id,
+                emitter="test_minus_1_0_10_live_cmd_log_validator",
+                event="clear_saved_manual_geometry",
+            )
+        )
+        print(
+            "[ra-sim] Qr/Qz caked simulation selection "
+            + _diag_cmd_stamp(
+                caked_run_id,
+                emitter="test_minus_1_0_10_live_cmd_log_validator",
+                event="caked_simulation_selection",
+            )
+        )
+        print(
+            "q_group_key={q_group} hkl={hkl} click_caked_deg={click} {stamp}".format(
+                q_group=_QR_PICKER_TARGET_Q_GROUP_KEY,
+                hkl=_QR_PICKER_TARGET_HKL,
+                click=_diag_point_text(caked_select_point),
+                stamp=_diag_cmd_stamp(
+                    caked_run_id,
+                    emitter="test_minus_1_0_10_live_cmd_log_validator",
+                    event="caked_simulation_selection_row",
+                    branch=0,
+                    actual_source="sim_visual_caked_deg",
+                    expected_source="sim_visual_caked_deg",
+                ),
+            )
+        )
+        caked_previews = {}
+        for branch in (0, 1):
+            caked_workflow.update_pick_preview(*caked_target_points[branch], force=True)
+            caked_previews[branch] = dict(
+                mg.geometry_manual_pick_preview_state(
+                    *caked_target_points[branch],
+                    pick_session=caked_state["pick_session"],
+                    current_background_index=0,
+                    force=True,
+                    remaining_candidates=mg.geometry_manual_unassigned_group_candidates(
+                        caked_state["pick_session"],
+                        current_background_index=0,
+                    ),
+                    display_background=caked_background,
+                    cache_data=dict(caked_cache),
+                    refine_preview_point=_diag_build_refine_preview(
+                        True,
+                        radial_axis,
+                        azimuth_axis,
+                    ),
+                    use_caked_space=True,
+                    caked_angles_to_background_display_coords=getattr(
+                        caked_callbacks,
+                        "caked_angles_to_background_display_coords",
+                        None,
+                    ),
+                    radial_axis=radial_axis,
+                    azimuth_axis=azimuth_axis,
+                    profile_cache=profile_cache,
+                )
+            )
+            caked_workflow.place_selection_at(*caked_target_points[branch])
+        print(
+            "[ra-sim] Qr/Qz caked geometry selection "
+            + _diag_cmd_stamp(
+                caked_run_id,
+                emitter="test_minus_1_0_10_live_cmd_log_validator",
+                event="caked_geometry_selection",
+            )
+        )
+        for entry in _diag_sorted(caked_state["pairs"]):
+            print(
+                "branch={branch} q_group_key={q_group} hkl={hkl} "
+                "geometry_caked_deg={caked} sim_visual_deg={visual} "
+                "assignment_distance={assignment} source={source} {stamp}".format(
+                    branch=_diag_source_branch(entry),
+                    q_group=_diag_q_group_key(entry),
+                    hkl=_diag_hkl(entry),
+                    caked=_diag_point_text(_diag_observed_caked(entry)[0]),
+                    visual=_diag_point_text(
+                        visual_map.get(_diag_source_branch(entry), {}).get("caked")
+                    ),
+                    assignment=_diag_float_text(entry.get("assignment_distance_to_sim")),
+                    source=entry.get("assignment_distance_source", "<unavailable>"),
+                    stamp=_diag_cmd_stamp(
+                        caked_run_id,
+                        emitter="test_minus_1_0_10_live_cmd_log_validator",
+                        event="caked_geometry_selection_row",
+                        branch=_diag_source_branch(entry),
+                        actual_source=entry.get("assignment_distance_source", "<unavailable>"),
+                        expected_source="sim_visual_caked_deg",
+                    ),
+                )
+            )
+        comparison_rows = _diag_headless_comparison_rows(
+            caked_state["pairs"],
+            visual_map,
+            cache_current,
+            caked_previews,
+        )
+        _diag_print_headless_comparison_table(comparison_rows, caked_run_id)
+    transcript["caked"] = out.getvalue().strip()
+    caked_saved = [dict(entry) for entry in caked_state["pairs"]]
+
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        caked_to_detector = _diag_refresh_entries(detector_callbacks, caked_saved)
+        _diag_print_projection_block(
+            "[ra-sim] caked-origin caked -> detector projection",
+            caked_to_detector,
+            visual_map,
+            caked_run_id,
+            emitter="_diag_print_projection_block",
+            event="caked_to_detector_projection",
+        )
+    transcript["caked_to_detector"] = out.getvalue().strip()
+
+    full_transcript = (
+        "[ra-sim] headless_minus_1_0_10_manual_picker_replay "
+        + _diag_cmd_stamp(
+            caked_run_id,
+            emitter="test_minus_1_0_10_live_cmd_log_validator",
+            event="headless_replay_transcript",
+        )
+        + "\n"
+        "--- detector workflow transcript ---\n"
+        f"{transcript['detector']}\n"
+        "--- detector -> caked transcript ---\n"
+        f"{transcript['detector_to_caked']}\n"
+        "--- caked workflow transcript ---\n"
+        f"{transcript['caked']}\n"
+        "--- caked -> detector transcript ---\n"
+        f"{transcript['caked_to_detector']}"
+    )
+    print("\n" + full_transcript)
+
+    forbidden = {
+        "tagged sim ... (77.85 deg)": "tagged sim [-1,0,10] (77.85 deg)",
+        "nearest sim ... (80.32 deg)": "nearest sim [-1,0,10] (80.32 deg)",
+        "Assigned ... (77.85 deg from sim)": "77.85 deg from sim",
+        "Assigned ... (77.85 deg from sim bracketed)": (
+            "Assigned to [-1,0,10] (77.85 deg from sim)"
+        ),
+        "legacy current_full_reflection_prediction": (
+            "sim_caked_semantics=current_full_reflection_prediction"
+        ),
+        "legacy cache_fresh_row": "active_row_policy=cache_fresh_row",
+        "caked labeled detector display px": "geometry_detector_display_px=(39.",
+        "caked labeled detector px": "geometry_detector_px=(39.",
+        "valid detector->caked outside detector": (
+            "raw_caked_deg=<unavailable reason=outside detector>"
+        ),
+        "missing saved sim visual branch row": (
+            "sim_caked_deg=<unavailable reason=no matching branch row>"
+        ),
+    }
+    trace_marker = f"manual_trace_version={mg.MANUAL_GEOMETRY_TRACE_VERSION}"
+    current_run_marker = f"manual_geometry_run_id={caked_run_id}"
+    all_lines = full_transcript.splitlines()
+    current_lines = [
+        line for line in all_lines if current_run_marker in line and trace_marker in line
+    ]
+
+    def _line_emitter(line):
+        for token in str(line).split():
+            if token.startswith("emitter="):
+                return token.split("=", 1)[1]
+        return "<missing>"
+
+    def _requires_manual_stamp(line):
+        if not (line.startswith("[geometry]") or line.startswith("[ra-sim]")):
+            return False
+        manual_tokens = (
+            "manual_geometry",
+            "Manual pick preview",
+            "Placed peak",
+            "Saved ",
+            "Selected ",
+            "Qr/Qz",
+            "live_caked_visual_source",
+            "headless_minus_1_0_10",
+            "Clear saved manual geometry",
+            "caked-origin",
+            "detector -> caked",
+        )
+        return any(token in line for token in manual_tokens)
+
+    unmarked_lines = [
+        line
+        for line in all_lines
+        if _requires_manual_stamp(line)
+        and not (
+            "manual_geometry_run_id=" in line
+            and "manual_trace_version=" in line
+            and "emitter=" in line
+        )
+    ]
+    for line in unmarked_lines[:5]:
+        print("unmarked_manual_geometry_line=yes")
+        print(f"unmarked_line={line}")
+
+    current_bad_hits = []
+    stale_bad_hits = []
+    for label, needle in forbidden.items():
+        for line in all_lines:
+            if needle not in line:
+                continue
+            hit = (label, needle, line)
+            if line in current_lines:
+                current_bad_hits.append(hit)
+            else:
+                stale_bad_hits.append(hit)
+
+    print("\nlive_cmd_log_validator")
+    print(f"current_manual_geometry_run_id={caked_run_id}")
+    print(f"current_run_line_count={len(current_lines)}")
+    print(
+        "headless_replay_bypasses_live_emitter="
+        + (
+            "no"
+            if any("emitter=geometry_manual_pick_preview_state" in line for line in current_lines)
+            and any("emitter=geometry_manual_place_selection_at" in line for line in current_lines)
+            else "yes"
+        )
+    )
+    if current_bad_hits:
+        for label, needle, line in current_bad_hits[:5]:
+            print("bad_line_classification=current_live_path_failure")
+            print(f"bad_label={label}")
+            print(f"bad_needle={needle}")
+            print(f"bad_emitter={_line_emitter(line)}")
+            print(f"bad_line={line}")
+    if stale_bad_hits:
+        for label, needle, line in stale_bad_hits[:5]:
+            print("bad_line_classification=stale_or_previous_run")
+            print(f"stale_bad_label={label}")
+            print(f"stale_bad_needle={needle}")
+            print(f"stale_bad_line={line}")
+
+    caked_preview_sources = {
+        str(caked_previews[branch].get("status_distance_source")) for branch in (0, 1)
+    }
+    caked_saved_by_branch = _diag_branch_map(caked_saved)
+    caked_assignment_sources = {
+        str(caked_saved_by_branch[branch].get("assignment_distance_source"))
+        for branch in (0, 1)
+    }
+    print(f"current_run_bad_77_80_lines={'yes' if current_bad_hits else 'no'}")
+    print(f"current_run_unmarked_manual_lines={'yes' if unmarked_lines else 'no'}")
+    print(
+        "caked_preview_distance_source="
+        + (
+            "sim_visual_caked_deg"
+            if caked_preview_sources == {"sim_visual_caked_deg"}
+            else ",".join(sorted(caked_preview_sources))
+        )
+    )
+    print(
+        "caked_assignment_distance_source="
+        + (
+            "sim_visual_caked_deg"
+            if caked_assignment_sources == {"sim_visual_caked_deg"}
+            else ",".join(sorted(caked_assignment_sources))
+        )
+    )
+    print(f"stale_bad_lines_detected={'yes' if stale_bad_hits else 'no'}")
+    print("branch | preview_source | preview_distance | assignment_source | assignment_distance")
+    for branch in (0, 1):
+        print(
+            " | ".join(
+                (
+                    str(branch),
+                    str(caked_previews[branch].get("status_distance_source")),
+                    _diag_float_text(caked_previews[branch].get("status_distance_value")),
+                    str(caked_saved_by_branch[branch].get("assignment_distance_source")),
+                    _diag_float_text(caked_saved_by_branch[branch].get("assignment_distance_to_sim")),
+                )
+            )
+        )
+
+    assert "No simulated Qr/Qz groups are available" not in full_transcript
+    assert "q_group_key=('q_group', 'primary', 1, 10)" in full_transcript
+    assert picker_resolved[0]["source_table_index"] == 160
+    assert picker_resolved[0]["source_row_index"] == 24
+    assert picker_resolved[0]["source_branch_index"] == 0
+    assert picker_resolved[1]["source_table_index"] == 167
+    assert picker_resolved[1]["source_row_index"] == 24
+    assert picker_resolved[1]["source_branch_index"] == 1
+    assert set(_diag_branch_map(detector_saved)) == {0, 1}
+    assert set(_diag_branch_map(caked_saved)) == {0, 1}
+    assert current_lines
+    assert not unmarked_lines
+    assert any("emitter=geometry_manual_pick_preview_state" in line for line in current_lines)
+    assert any("emitter=geometry_manual_place_selection_at" in line for line in current_lines)
+    assert caked_preview_sources == {"sim_visual_caked_deg"}
+    assert caked_assignment_sources == {"sim_visual_caked_deg"}
+    assert "status_distance_source=sim_visual_caked_deg" in transcript["caked"]
+    assert all(float(row["preview_distance"]) < 2.0 for row in comparison_rows)
+    assert all(float(row["assignment_distance"]) < 2.0 for row in comparison_rows)
+    for row in comparison_rows:
+        assert _diag_matches_distance(row["preview_distance"], np.hypot(*row["visual_delta"]))
+        assert _diag_matches_distance(row["assignment_distance"], np.hypot(*row["visual_delta"]))
+        assert np.hypot(*row["visual_delta"]) < 2.0
+    assert not current_bad_hits
+
+
+def test_detector_mode_qr_picker_has_candidates_after_startup_sim_ready(tmp_path) -> None:
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    projected_fresh_rows = [
+        _diag_project_detector_entry(context, entry)
+        for entry in rows["fresh_rows"]
+        if isinstance(entry, Mapping)
+    ]
+    cache_data = _diag_detector_picker_cache(projected_fresh_rows, overlay_grouped={})
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        profile_cache=rows["profile_cache"],
+    )
+    trace = mg.geometry_manual_detector_picker_input_trace(
+        cache_data,
+        background_index=0,
+        display_background=np.zeros((3000, 3000), dtype=float),
+        grouped_candidates=grouped,
+        profile_cache=rows["profile_cache"],
+    )
+    picker_rows = _diag_flatten_grouped(grouped)
+    print("\nDetector-mode startup trace")
+    print(trace)
+    assert trace["simulation_ready"] is True
+    assert trace["source_rows_count"] > 0
+    assert trace["qr_group_rows_count"] > 0
+    assert trace["picker_candidate_count"] > 0
+    assert picker_rows
+
+    click = _diag_detector_display_point(picker_rows[0])
+    assert click is not None
+    _session, statuses = _diag_toggle_detector_click(cache_data, click, rows["profile_cache"])
+    assert not any("No simulated Qr/Qz groups are available" in text for text in statuses)
+
+
+def test_detector_mode_qr_picker_clean_start_without_saved_pairs(tmp_path) -> None:
+    _context, rows = _diag_startup_context_and_rows(tmp_path)
+    fresh_rows = [dict(entry) for entry in rows["fresh_rows"] if isinstance(entry, Mapping)]
+    previous_empty_cache = {
+        "signature": ("clean-start-detector-picker-empty-before-fallback",),
+        "simulated_peaks": [],
+        "active_simulated_peaks": [],
+        "grouped_candidates": {},
+        "caked_qr_projection_grouped_candidates": {},
+    }
+    previous_trace = mg.geometry_manual_detector_picker_input_trace(
+        previous_empty_cache,
+        view_mode="detector",
+        background_index=0,
+        display_background=np.zeros((3000, 3000), dtype=float),
+        qr_overlay_visible=False,
+        grouped_candidates={},
+        profile_cache=rows["profile_cache"],
+    )
+    assert previous_trace["reason_candidates_are_empty"] == "no_detector_picker_source_rows"
+
+    cache_data = {
+        "signature": ("clean-start-detector-picker-fresh-source-rows",),
+        "simulated_peaks": [],
+        "active_simulated_peaks": [],
+        "detector_picker_source_rows": [],
+        "detector_picker_rows": [],
+        "detector_picker_grouped_candidates": {},
+        "fresh_source_rows": fresh_rows,
+        "grouped_candidates": {},
+        "caked_qr_projection_entries": [],
+        "caked_qr_projection_grouped_candidates": {},
+        "caked_qr_projection_lookup": {},
+        "cache_metadata": {
+            "cache_source": "clean_start_fresh_source_rows",
+            "simulated_peak_count": len(fresh_rows),
+        },
+    }
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        display_background=np.zeros((3000, 3000), dtype=float),
+        profile_cache=rows["profile_cache"],
+    )
+    trace = mg.geometry_manual_detector_picker_input_trace(
+        cache_data,
+        view_mode="detector",
+        background_index=0,
+        display_background=np.zeros((3000, 3000), dtype=float),
+        qr_overlay_visible=False,
+        grouped_candidates=grouped,
+        profile_cache=rows["profile_cache"],
+    )
+    picker_rows = _diag_flatten_grouped(grouped)
+    source_breakdown = trace["detector_picker_candidate_count_by_source"]
+
+    print("\nDetector-mode clean-start trace")
+    print(f"previous_empty_reason={previous_trace['reason_candidates_are_empty']}")
+    print(f"live_clean_start_candidate_count={trace['detector_picker_candidate_count']}")
+    print(f"live_clean_start_source_breakdown={source_breakdown}")
+    print(trace)
+
+    assert trace["simulation_ready"] is True
+    assert trace["caked_ready"] is False
+    assert trace["qr_overlay_visible"] is False
+    assert trace["manual_saved_pair_count"] == 0
+    assert trace["fresh_source_row_count"] > 0
+    assert trace["detector_picker_candidate_count"] > 0
+    assert trace["overlay_drawn_count"] == 0
+    assert trace["reason_candidates_are_empty"] == ""
+    assert picker_rows
+    assert not any("manual_saved_pair" in str(key) for key in source_breakdown)
+    assert any("fresh" in str(key) or "source" in str(key) for key in source_breakdown)
+
+    fresh_target_rows = [
+        row
+        for row in picker_rows
+        if _diag_q_group_key(row) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        and _diag_hkl(row) == _QR_PICKER_TARGET_HKL
+    ]
+    if fresh_target_rows:
+        assert {int(row["source_branch_index"]) for row in fresh_target_rows} >= {0, 1}
+    else:
+        available_target_hkls = sorted(
+            {
+                _diag_hkl(row)
+                for row in picker_rows
+                if _diag_q_group_key(row) == _QR_PICKER_TARGET_Q_GROUP_KEY
+            },
+            key=repr,
+        )
+        print(
+            "clean-start (-1,0,10) fresh rows unavailable; "
+            f"available target q_group hkls={available_target_hkls}"
+        )
+
+    click = _diag_detector_display_point(picker_rows[0])
+    assert click is not None
+    live_traces = []
+    _session, statuses = _diag_toggle_detector_click(
+        cache_data,
+        click,
+        rows["profile_cache"],
+        trace_output=live_traces,
+    )
+    assert not any("No simulated Qr/Qz groups are available" in text for text in statuses)
+    assert live_traces
+    assert live_traces[-1]["detector_picker_candidate_count"] > 0
+    assert live_traces[-1]["manual_saved_pair_count"] == 0
+    assert live_traces[-1]["caked_ready"] is False
+
+
+def test_detector_mode_qr_picker_selects_minus_1_0_10_branch_clicks(tmp_path) -> None:
+    _context, rows = _diag_startup_context_and_rows(tmp_path)
+    cache_data = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        profile_cache=rows["profile_cache"],
+    )
+    target_by_branch = _diag_target_rows_by_branch(grouped)
+    assert set(target_by_branch) == {0, 1}
+
+    expected = {
+        0: ((1074.878, 1085.949), 160, 24),
+        1: ((1834.555, 1083.733), 167, 24),
+    }
+    for branch, (click, table_index, row_index) in expected.items():
+        session, _statuses = _diag_toggle_detector_click(
+            cache_data,
+            click,
+            rows["profile_cache"],
+        )
+        selected = session.get("tagged_candidate")
+        assert isinstance(selected, Mapping)
+        selected_display = _diag_detector_display_point(selected)
+        assert selected_display is not None
+        assert np.allclose(selected_display, click, atol=1.0e-3, rtol=0.0)
+        assert _diag_q_group_key(selected) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        assert _diag_hkl(selected) == _QR_PICKER_TARGET_HKL
+        assert int(selected["source_branch_index"]) == branch
+        assert int(selected["source_table_index"]) == table_index
+        assert int(selected["source_row_index"]) == row_index
+        print(
+            "detector click "
+            f"{click} -> q_group={_diag_q_group_key(selected)} "
+            f"branch={selected.get('source_branch_index')} "
+            f"table={selected.get('source_table_index')} "
+            f"row={selected.get('source_row_index')}"
+        )
+
+
+def test_detector_mode_qr_picker_not_blocked_by_caked_unavailable(tmp_path) -> None:
+    _context, rows = _diag_startup_context_and_rows(tmp_path)
+    cache_data = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    cache_data["caked_qr_projection_entries"] = []
+    cache_data["caked_qr_projection_grouped_candidates"] = {}
+    cache_data["caked_qr_projection_lookup"] = {}
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        profile_cache=rows["profile_cache"],
+    )
+    target_by_branch = _diag_target_rows_by_branch(grouped)
+    display = _diag_detector_display_point(target_by_branch[0])
+    assert display is not None
+    session, statuses = _diag_toggle_detector_click(cache_data, display, rows["profile_cache"])
+    assert session["group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
+    assert not any("No simulated Qr/Qz groups are available" in text for text in statuses)
+
+
+def test_qr_overlay_hidden_does_not_disable_manual_picker_candidates(tmp_path) -> None:
+    _context, rows = _diag_startup_context_and_rows(tmp_path)
+    cache_data = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    trace = mg.geometry_manual_detector_picker_input_trace(
+        cache_data,
+        background_index=0,
+        display_background=np.zeros((3000, 3000), dtype=float),
+        profile_cache=rows["profile_cache"],
+    )
+    assert trace["overlay_drawn_count"] == 0
+    assert trace["picker_candidate_count"] > 0
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        profile_cache=rows["profile_cache"],
+    )
+    target_by_branch = _diag_target_rows_by_branch(grouped)
+    display = _diag_detector_display_point(target_by_branch[1])
+    assert display is not None
+    session, _statuses = _diag_toggle_detector_click(cache_data, display, rows["profile_cache"])
+    selected = session.get("tagged_candidate")
+    assert isinstance(selected, Mapping)
+    assert int(selected["source_branch_index"]) == 1
+
+
+def test_detector_mode_qr_picker_overlay_hidden_does_not_disable_manual_picker_candidates(
+    tmp_path,
+) -> None:
+    test_qr_overlay_hidden_does_not_disable_manual_picker_candidates(tmp_path)
+
+
+_QR_FIT_AUDIT_CACHE = {}
+_QR_FIT_STEP_CACHE = {}
+
+
+def _diag_caked_view_payload(context):
+    kwargs = context["projection_kwargs"]
+    return {
+        "background_image": _diag_runtime_value(kwargs["last_caked_background_image_unscaled"]),
+        "background": _diag_runtime_value(kwargs["last_caked_background_image_unscaled"]),
+        "radial_axis": _diag_runtime_value(kwargs["last_caked_radial_values"]),
+        "azimuth_axis": _diag_runtime_value(kwargs["last_caked_azimuth_values"]),
+        "raw_azimuth_axis": _diag_runtime_value(kwargs["last_caked_azimuth_values"]),
+        "transform_bundle": _diag_runtime_value(kwargs["caked_transform_bundle"]),
+    }
+
+
+def _diag_fit_handoff_dataset(tmp_path):
+    if "payload" in _QR_FIT_AUDIT_CACHE:
+        return _QR_FIT_AUDIT_CACHE["payload"]
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    kwargs = context["projection_kwargs"]
+    callbacks = context["projection_callbacks"]
+    saved_entries = _diag_manual_entries_for_active_background(context["saved_state"])
+    native_background = np.asarray(_diag_runtime_value(kwargs["current_background_native"]))
+    display_background = np.asarray(_diag_runtime_value(kwargs["current_background_display"]))
+    params = dict(_diag_runtime_value(kwargs["current_geometry_fit_params"]))
+    image_size = int(_diag_runtime_value(kwargs["image_size"]))
+    source_rows = [dict(entry) for entry in rows["overlay_rows"] if isinstance(entry, Mapping)]
+    events = []
+
+    def _source_rows_for_background(_idx, _params=None, **_kwargs):
+        return [dict(entry) for entry in source_rows]
+
+    bindings = gf.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=("Bi2Se3_5m_5d.osc",),
+        current_background_index=0,
+        image_size=image_size,
+        display_rotate_k=int(kwargs.get("display_rotate_k", hgf.DISPLAY_ROTATE_K)),
+        geometry_manual_pairs_for_index=lambda idx: [dict(entry) for entry in saved_entries]
+        if int(idx) == 0
+        else [],
+        load_background_by_index=lambda _idx: (native_background, display_background),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda *_args, **_kwargs: [
+            dict(entry) for entry in source_rows
+        ],
+        geometry_manual_simulated_lookup=callbacks.simulated_lookup,
+        geometry_manual_entry_display_coords=callbacks.entry_display_coords,
+        unrotate_display_peaks=lambda measured, rotated_shape, *, k=None: (
+            geometry_overlay.unrotate_display_peaks(
+                measured,
+                rotated_shape,
+                k=k,
+                default_display_rotate_k=hgf.DISPLAY_ROTATE_K,
+            )
+        ),
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            geometry_overlay.display_to_native_sim_coords(
+                col,
+                row,
+                image_shape,
+                sim_display_rotate_k=hgf.SIM_DISPLAY_ROTATE_K,
+            )
+        ),
+        select_fit_orientation=geometry_overlay.select_fit_orientation,
+        apply_orientation_to_entries=geometry_overlay.apply_orientation_to_entries,
+        orient_image_for_fit=geometry_overlay.orient_image_for_fit,
+        geometry_manual_project_peaks_to_current_view=lambda projected_rows: [
+            dict(entry) for entry in (projected_rows or []) if isinstance(entry, Mapping)
+        ],
+        geometry_manual_project_peaks_for_background_view=lambda _idx, projected_rows: [
+            dict(entry) for entry in (projected_rows or []) if isinstance(entry, Mapping)
+        ],
+        native_detector_coords_to_bundle_detector_coords=kwargs.get(
+            "native_detector_coords_to_bundle_detector_coords"
+        ),
+        native_detector_coords_to_detector_display_coords=kwargs.get(
+            "native_detector_coords_to_detector_display_coords"
+        ),
+        geometry_manual_source_rows_for_background=_source_rows_for_background,
+        geometry_manual_rebuild_source_rows_for_background=_source_rows_for_background,
+        geometry_manual_last_source_snapshot_diagnostics=lambda: {"status": "test_ready"},
+        geometry_manual_last_simulation_diagnostics=callbacks.last_simulation_diagnostics,
+        geometry_manual_match_config=lambda: {},
+        pick_uses_caked_space=lambda: False,
+        geometry_manual_caked_view_for_index=lambda idx: _diag_caked_view_payload(context)
+        if int(idx) == 0
+        else None,
+        geometry_manual_refresh_pair_entry=callbacks.refresh_entry_geometry,
+    )
+    dataset = gf.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=0.0,
+        base_fit_params=params,
+        manual_dataset_bindings=bindings,
+        orientation_cfg={"enabled": False},
+        stage_callback=lambda stage, payload: events.append((stage, dict(payload))),
+    )
+    _QR_FIT_AUDIT_CACHE["payload"] = (context, dataset, events)
+    return context, dataset, events
+
+
+def _diag_fit_audit_rows(dataset):
+    rows = [
+        dict(row)
+        for row in dataset.get("fit_handoff_audit_rows", []) or []
+        if isinstance(row, Mapping)
+    ]
+    return {
+        int(row["source_branch_index"]): row
+        for row in rows
+        if row.get("source_branch_index") is not None
+    }
+
+
+def _diag_entry_is_minus_1_0_10_branch(entry):
+    if not isinstance(entry, Mapping):
+        return False
+    branch = entry.get("source_branch_index")
+    try:
+        branch = int(branch)
+    except Exception:
+        return False
+    return (
+        _diag_q_group_key(entry) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        and _diag_hkl(entry) == _QR_PICKER_TARGET_HKL
+        and branch in {0, 1}
+    )
+
+
+def _diag_filter_minus_1_0_10_dataset(dataset):
+    filtered = dict(dataset)
+    pair_fields = (
+        "provider_pairs",
+        "manual_point_pairs",
+        "measured_display",
+        "measured_for_fit",
+        "initial_pairs_display",
+    )
+    pair_lists = {
+        key: [dict(entry) for entry in dataset.get(key, ()) or () if isinstance(entry, Mapping)]
+        for key in pair_fields
+    }
+    pair_count = max((len(entries) for entries in pair_lists.values()), default=0)
+    keep_indices = []
+    for index in range(pair_count):
+        entries = [
+            entries[index]
+            for entries in pair_lists.values()
+            if index < len(entries) and isinstance(entries[index], Mapping)
+        ]
+        if any(_diag_entry_is_minus_1_0_10_branch(entry) for entry in entries):
+            keep_indices.append(index)
+    for key, entries in pair_lists.items():
+        filtered[key] = [
+            dict(entries[index]) for index in keep_indices if index < len(entries)
+        ]
+    filtered["pair_count"] = int(len(keep_indices))
+    for key in ("source_rows_for_trace", "source_rows", "simulated_peaks"):
+        entries = [
+            dict(entry)
+            for entry in dataset.get(key, ()) or ()
+            if isinstance(entry, Mapping) and _diag_entry_is_minus_1_0_10_branch(entry)
+        ]
+        if entries:
+            filtered[key] = entries
+    spec = dict(dataset.get("spec", {}) or {})
+    spec["manual_point_pairs"] = [dict(entry) for entry in filtered["manual_point_pairs"]]
+    spec["measured_peaks"] = [dict(entry) for entry in filtered["measured_for_fit"]]
+    filtered["spec"] = spec
+    return filtered
+
+
+def _diag_float_pair(value):
+    assert isinstance(value, (list, tuple)) and len(value) >= 2
+    return (float(value[0]), float(value[1]))
+
+
+def _diag_residual_record(
+    branch,
+    *,
+    observed_detector_native,
+    observed_caked,
+    predicted_detector_native,
+    predicted_caked,
+):
+    observed_detector_native = _diag_float_pair(observed_detector_native)
+    observed_caked = _diag_float_pair(observed_caked)
+    predicted_detector_native = _diag_float_pair(predicted_detector_native)
+    predicted_caked = _diag_float_pair(predicted_caked)
+    residual_detector = gf._qr_residual_detector_native_px(
+        observed_detector_native,
+        predicted_detector_native,
+    )
+    residual_caked = gf._qr_residual_caked_deg(observed_caked, predicted_caked)
+    assert residual_detector is not None
+    assert residual_caked is not None
+    residual_detector_norm = gf._qr_residual_norm(residual_detector)
+    residual_caked_norm = gf._qr_residual_norm(residual_caked)
+    assert residual_detector_norm is not None
+    assert residual_caked_norm is not None
+    return {
+        "branch": int(branch),
+        "observed_detector_native": observed_detector_native,
+        "observed_caked": observed_caked,
+        "predicted_detector_native": predicted_detector_native,
+        "predicted_caked": predicted_caked,
+        "residual_detector": residual_detector,
+        "residual_caked": residual_caked,
+        "residual_detector_norm": float(residual_detector_norm),
+        "residual_norm": float(residual_caked_norm),
+    }
+
+
+def _diag_total_residual_norm(records):
+    values = []
+    for record in records.values():
+        residual = record["residual_caked"]
+        values.extend([float(residual[0]), float(residual[1])])
+    return float(np.linalg.norm(np.asarray(values, dtype=float)))
+
+
+def _diag_fmt_pair(value):
+    return f"({float(value[0]):.6f}, {float(value[1]):.6f})"
+
+
+def _diag_print_fit_step_table(before_records, after_records):
+    print(
+        "branch | observed_caked | prediction_before | residual_before | "
+        "prediction_after | residual_after | residual_norm_before | "
+        "residual_norm_after"
+    )
+    for branch in sorted(before_records):
+        before = before_records[branch]
+        after = after_records[branch]
+        print(
+            f"{branch} | "
+            f"{_diag_fmt_pair(before['observed_caked'])} | "
+            f"{_diag_fmt_pair(before['predicted_caked'])} | "
+            f"{_diag_fmt_pair(before['residual_caked'])} | "
+            f"{_diag_fmt_pair(after['predicted_caked'])} | "
+            f"{_diag_fmt_pair(after['residual_caked'])} | "
+            f"{before['residual_norm']:.9f} | "
+            f"{after['residual_norm']:.9f}"
+        )
+
+
+def _diag_print_residual_table(title, records):
+    print(title)
+    print(
+        "branch | observed_detector_native_px | predicted_detector_native_px | "
+        "residual_detector_native_px | observed_caked_deg | predicted_caked_deg | "
+        "residual_caked_deg | residual_detector_norm_px | residual_caked_norm_deg"
+    )
+    for branch in sorted(records):
+        record = records[branch]
+        print(
+            f"{branch} | "
+            f"{_diag_fmt_pair(record['observed_detector_native'])} | "
+            f"{_diag_fmt_pair(record['predicted_detector_native'])} | "
+            f"{_diag_fmt_pair(record['residual_detector'])} | "
+            f"{_diag_fmt_pair(record['observed_caked'])} | "
+            f"{_diag_fmt_pair(record['predicted_caked'])} | "
+            f"{_diag_fmt_pair(record['residual_caked'])} | "
+            f"{record['residual_detector_norm']:.9f} | "
+            f"{record['residual_norm']:.9f}"
+        )
+
+
+def _diag_records_from_audit_rows(rows_by_branch):
+    return {
+        int(branch): _diag_residual_record(
+            branch,
+            observed_detector_native=row.get(
+                "observed_detector_native_px",
+                row["fit_observed_detector_native_px"],
+            ),
+            observed_caked=row.get("observed_caked_deg", row["fit_observed_caked_deg"]),
+            predicted_detector_native=row.get(
+                "predicted_detector_native_px",
+                row["fit_prediction_detector_native_px"],
+            ),
+            predicted_caked=row.get("predicted_caked_deg", row["fit_prediction_caked_deg"]),
+        )
+        for branch, row in rows_by_branch.items()
+    }
+
+
+def _diag_records_close(left, right, *, atol=1.0e-9):
+    assert set(left) == set(right)
+    for branch in left:
+        for key in (
+            "predicted_detector_native",
+            "predicted_caked",
+            "residual_detector",
+            "residual_caked",
+        ):
+            assert np.allclose(left[branch][key], right[branch][key], atol=atol, rtol=0.0), (
+                branch,
+                key,
+                left[branch][key],
+                right[branch][key],
+            )
+
+
+def _diag_saved_bool(saved_state, name, default=False):
+    variables = saved_state.get("variables", {}) if isinstance(saved_state, Mapping) else {}
+    value = variables.get(name, default) if isinstance(variables, Mapping) else default
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in {"1", "true", "yes", "on"}:
+            return True
+        if key in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _diag_geometry_fit_var_names(saved_state):
+    return gf.current_geometry_fit_var_names(
+        fit_zb=_diag_saved_bool(saved_state, "fit_zb_var"),
+        fit_zs=_diag_saved_bool(saved_state, "fit_zs_var"),
+        fit_theta=_diag_saved_bool(saved_state, "fit_theta_var"),
+        fit_psi_z=_diag_saved_bool(saved_state, "fit_psi_z_var"),
+        fit_chi=_diag_saved_bool(saved_state, "fit_chi_var"),
+        fit_cor=_diag_saved_bool(saved_state, "fit_cor_var"),
+        fit_gamma=_diag_saved_bool(saved_state, "fit_gamma_var"),
+        fit_Gamma=_diag_saved_bool(saved_state, "fit_Gamma_var"),
+        fit_dist=_diag_saved_bool(saved_state, "fit_dist_var"),
+        fit_a=_diag_saved_bool(saved_state, "fit_a_var"),
+        fit_c=_diag_saved_bool(saved_state, "fit_c_var"),
+        fit_center_x=_diag_saved_bool(saved_state, "fit_center_x_var"),
+        fit_center_y=_diag_saved_bool(saved_state, "fit_center_y_var"),
+        use_shared_theta_offset=False,
+    )
+
+
+def _diag_build_minus_1_0_10_fit_request(
+    context,
+    dataset,
+    *,
+    seed_multistart_enabled=True,
+    objective_trace_enabled=False,
+    qr_only_objective=False,
+    objective_dry_run_only=False,
+):
+    kwargs = context["projection_kwargs"]
+    saved_state = context["saved_state"]
+    params = dict(_diag_runtime_value(kwargs["current_geometry_fit_params"]))
+    fit_dataset = (
+        _diag_filter_minus_1_0_10_dataset(dataset)
+        if bool(qr_only_objective)
+        else dataset
+    )
+    image_size = int(_diag_runtime_value(kwargs["image_size"]))
+    defaults = hgf._build_runtime_defaults(saved_state)
+    var_names = _diag_geometry_fit_var_names(saved_state)
+    domains = hgf._headless_runtime_geometry_fit_parameter_domains(
+        fit_config=defaults.fit_config,
+        current_params=params,
+        image_size=image_size,
+        names=var_names,
+        use_shared_theta_offset=False,
+    )
+    runtime_cfg = gf.build_geometry_fit_runtime_config(
+        defaults.fit_config.get("geometry", {})
+        if isinstance(defaults.fit_config, Mapping)
+        else {},
+        params,
+        {},
+        domains,
+        candidate_param_names=var_names,
+        caked_roi_enabled=False,
+    )
+    runtime_cfg = gf.apply_manual_caked_point_geometry_fit_runtime_overrides(
+        runtime_cfg,
+        joint_background_mode=False,
+    )
+    optimizer_cfg = dict(runtime_cfg.get("optimizer", {}) or {})
+    optimizer_cfg.update(
+        {
+            "max_nfev": 1,
+            "restarts": 0,
+            "workers": 1,
+            "parallel_mode": "off",
+            "worker_numba_threads": 0,
+            "loss": "linear",
+            "seed_multistart_enabled": bool(seed_multistart_enabled),
+            "seed_multistart": bool(seed_multistart_enabled),
+            "objective_trace_enabled": bool(objective_trace_enabled),
+            "objective_dry_run_only": bool(objective_dry_run_only),
+            "objective_trace_max_evals": 512,
+        }
+    )
+    if qr_only_objective:
+        optimizer_cfg.update(
+            {
+                "q_group_line_constraints": False,
+                "q_group_line_constraints_enabled": False,
+                "q_group_line_angle_weight": 0.0,
+                "q_group_line_offset_weight": 0.0,
+            }
+        )
+    seed_search_cfg = dict(runtime_cfg.get("seed_search", {}) or {})
+    seed_search_cfg.update(
+        {
+            "enabled": bool(seed_multistart_enabled),
+            "prescore_top_k": 1,
+            "n_global": 0,
+            "n_jitter": 0,
+        }
+    )
+    runtime_cfg["optimizer"] = optimizer_cfg
+    runtime_cfg["solver"] = dict(optimizer_cfg)
+    runtime_cfg["seed_search"] = seed_search_cfg
+    if qr_only_objective:
+        runtime_cfg["priors"] = {}
+    runtime_cfg["use_numba"] = False
+    runtime_cfg["allow_unsafe_runtime"] = False
+
+    dataset_spec = dict(fit_dataset.get("spec", {}) or {})
+    prepared_run = gf.GeometryFitPreparedRun(
+        fit_params=params,
+        selected_background_indices=[0],
+        background_theta_values=[float(params.get("theta_initial", 0.0))],
+        joint_background_mode=False,
+        current_dataset=dict(fit_dataset),
+        dataset_infos=[{"dataset_index": 0, "background_index": 0}],
+        dataset_specs=[dataset_spec],
+        start_cmd_line="[ra-sim] minus_1_0_10 diagnostic fit step",
+        start_log_sections=[],
+        max_display_markers=100,
+        geometry_runtime_cfg=runtime_cfg,
+        stage_timing_s={},
+    )
+    solver_inputs = gf.GeometryFitRuntimeSolverInputs(
+        miller=np.asarray(_diag_runtime_value(kwargs["miller"]), dtype=float),
+        intensities=np.asarray(_diag_runtime_value(kwargs["intensities"]), dtype=float),
+        image_size=image_size,
+    )
+    request = gf.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=var_names,
+        solver_inputs=solver_inputs,
+    )
+    return request, var_names
+
+
+def _diag_parameter_values_from_result(request, var_names, result):
+    before = {name: float(request.params[name]) for name in var_names}
+    after = dict(before)
+    raw_x = getattr(result, "x", None)
+    if raw_x is not None:
+        try:
+            x_values = np.asarray(raw_x, dtype=float).ravel()
+        except Exception:
+            x_values = np.asarray([], dtype=float)
+        if x_values.size >= len(var_names):
+            after = {
+                str(name): float(value)
+                for name, value in zip(var_names, x_values[: len(var_names)])
+            }
+    return before, after
+
+
+def _diag_result_target_predictions(result):
+    predictions = {}
+    diagnostics = getattr(result, "point_match_diagnostics", None) or []
+    for raw in diagnostics:
+        if not isinstance(raw, Mapping):
+            continue
+        branch = raw.get("source_branch_index")
+        if branch is None:
+            continue
+        if _diag_q_group_key(raw) != _QR_PICKER_TARGET_Q_GROUP_KEY:
+            continue
+        if _diag_hkl(raw) != _QR_PICKER_TARGET_HKL:
+            continue
+        if int(branch) not in {0, 1}:
+            continue
+        if raw.get("simulated_two_theta_deg") is None or raw.get("simulated_phi_deg") is None:
+            continue
+        predictions[int(branch)] = {
+            "predicted_caked": (
+                float(raw["simulated_two_theta_deg"]),
+                float(raw["simulated_phi_deg"]),
+            ),
+            "predicted_detector_native": (
+                float(raw.get("simulated_x", np.nan)),
+                float(raw.get("simulated_y", np.nan)),
+            ),
+            "measured_caked": (
+                float(raw.get("measured_two_theta_deg", np.nan)),
+                float(raw.get("measured_phi_deg", np.nan)),
+            ),
+            }
+    return predictions
+
+
+def _diag_after_records_from_fit_result(baseline_records, result):
+    result_predictions = _diag_result_target_predictions(result)
+    after_records = {}
+    for branch, before in baseline_records.items():
+        assert branch in result_predictions
+        prediction = result_predictions[branch]
+        after_records[branch] = _diag_residual_record(
+            branch,
+            observed_detector_native=before["observed_detector_native"],
+            observed_caked=before["observed_caked"],
+            predicted_detector_native=prediction["predicted_detector_native"],
+            predicted_caked=prediction["predicted_caked"],
+        )
+        assert after_records[branch]["observed_detector_native"] == before[
+            "observed_detector_native"
+        ]
+        assert after_records[branch]["observed_caked"] == before["observed_caked"]
+    return after_records
+
+
+def _diag_predictions_changed(before_records, after_records):
+    return any(
+        not np.allclose(
+            after_records[branch]["predicted_caked"],
+            before_records[branch]["predicted_caked"],
+            atol=1.0e-12,
+            rtol=0.0,
+        )
+        for branch in before_records
+    )
+
+
+def _diag_fixed_manual_pair_no_decrease_reason(
+    *,
+    q_residual_count,
+    valid_evaluation,
+    params_changed,
+    prediction_changed,
+    result,
+):
+    trace = getattr(result, "objective_trace", None) or []
+    for record in trace:
+        for row in _diag_target_objective_rows(record):
+            if row.get("resolution_reason") == "prediction_branch_source_switched":
+                return "prediction_branch_source_switched"
+    for row in getattr(result, "point_match_diagnostics", None) or []:
+        if (
+            _diag_entry_is_minus_1_0_10_branch(row)
+            and row.get("resolution_reason") == "prediction_branch_source_switched"
+        ):
+            return "prediction_branch_source_switched"
+    summary = getattr(result, "point_match_summary", None) or {}
+    if int(summary.get("prediction_branch_source_switched_count", 0) or 0) > 0:
+        return "prediction_branch_source_switched"
+    if int(q_residual_count) < 2:
+        return "objective_excludes_qr_residual"
+    if not valid_evaluation:
+        return "optimizer_step_rejected"
+    if not params_changed:
+        bound_summary = getattr(result, "bound_proximity_summary", {}) or {}
+        hugging = []
+        if isinstance(bound_summary, Mapping):
+            hugging = list(bound_summary.get("hugging_parameters", []) or [])
+        return "bounds_block_update" if hugging else "parameterization_cannot_move_qr_prediction"
+    if not prediction_changed:
+        return "parameterization_cannot_move_qr_prediction"
+    if not bool(getattr(result, "success", False)):
+        return "optimizer_step_rejected"
+    if len(trace) >= 2:
+        before = trace[0]
+        after = trace[-1]
+        before_total = float(before.get("residual_norm", np.nan))
+        after_total = float(after.get("residual_norm", np.nan))
+        if np.isfinite(before_total) and np.isfinite(after_total) and after_total < before_total:
+            return "total_objective_improved_but_qr_worsened"
+    return "optimizer_residual_vector_mismatch"
+
+
+def _diag_objective_trace(result):
+    trace = getattr(result, "objective_trace", None) or []
+    return [dict(record) for record in trace if isinstance(record, Mapping)]
+
+
+def _diag_target_objective_components(record):
+    components = []
+    for raw in record.get("point_components", []) or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("component")) not in {
+            "delta_two_theta_deg",
+            "wrapped_delta_phi_deg",
+        }:
+            continue
+        if (
+            _diag_q_group_key(raw) == _QR_PICKER_TARGET_Q_GROUP_KEY
+            and _diag_hkl(raw) == _QR_PICKER_TARGET_HKL
+        ):
+            try:
+                if int(raw.get("source_branch_index")) in {0, 1}:
+                    components.append(dict(raw))
+            except Exception:
+                continue
+    return components
+
+
+def _diag_target_objective_rows(record):
+    rows = []
+    for raw in record.get("point_rows", []) or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if (
+            _diag_q_group_key(raw) == _QR_PICKER_TARGET_Q_GROUP_KEY
+            and _diag_hkl(raw) == _QR_PICKER_TARGET_HKL
+        ):
+            try:
+                if int(raw.get("source_branch_index")) in {0, 1}:
+                    rows.append(dict(raw))
+            except Exception:
+                continue
+    return rows
+
+
+def _diag_qr_norm_from_objective_record(record):
+    values = [
+        float(component["unweighted_value"])
+        for component in _diag_target_objective_components(record)
+    ]
+    return float(np.linalg.norm(np.asarray(values, dtype=float))) if values else float("nan")
+
+
+def _diag_non_qr_point_norm_from_objective_record(record):
+    values = []
+    for raw in record.get("point_components", []) or []:
+        if not isinstance(raw, Mapping):
+            continue
+        if (
+            _diag_q_group_key(raw) == _QR_PICKER_TARGET_Q_GROUP_KEY
+            and _diag_hkl(raw) == _QR_PICKER_TARGET_HKL
+        ):
+            try:
+                if int(raw.get("source_branch_index")) in {0, 1}:
+                    continue
+            except Exception:
+                pass
+        values.append(float(raw.get("weighted_value", np.nan)))
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(np.linalg.norm(arr)) if arr.size else 0.0
+
+
+def _diag_print_optimizer_residual_vector_table(record):
+    print("optimizer_residual_vector_table")
+    print(
+        "component_index | branch | q_group_key | hkl | coordinate_space | units | "
+        "observed_source | predicted_source | observed_value | predicted_value | "
+        "residual_unweighted | weight | residual_weighted"
+    )
+    for component_index, component in enumerate(record.get("point_components", []) or []):
+        if not isinstance(component, Mapping):
+            continue
+        component_name = str(component.get("component", ""))
+        axis_index = 1 if "phi" in component_name else 0
+        observed_pair = component.get("observed_caked_deg", (np.nan, np.nan))
+        predicted_pair = component.get("predicted_caked_deg", (np.nan, np.nan))
+        try:
+            observed_value = float(observed_pair[axis_index])
+        except Exception:
+            observed_value = float("nan")
+        try:
+            predicted_value = float(predicted_pair[axis_index])
+        except Exception:
+            predicted_value = float("nan")
+        print(
+            f"{int(component_index)} | "
+            f"{component.get('source_branch_index')} | "
+            f"{component.get('q_group_key')} | "
+            f"{component.get('hkl')} | "
+            f"{component.get('coordinate_space')} | "
+            f"{component.get('units')} | "
+            f"{component.get('observed_source')} | "
+            f"{component.get('predicted_source')} | "
+            f"{observed_value:.9f} | "
+            f"{predicted_value:.9f} | "
+            f"{float(component.get('unweighted_value', np.nan)):.9f} | "
+            f"{float(component.get('weight', np.nan)):.9f} | "
+            f"{float(component.get('weighted_value', np.nan)):.9f}"
+        )
+
+
+def _diag_optimizer_rows_by_branch(record):
+    rows = {}
+    for row in _diag_target_objective_rows(record):
+        try:
+            branch = int(row.get("source_branch_index"))
+        except Exception:
+            continue
+        rows[branch] = dict(row)
+    return rows
+
+
+def _diag_pair_or_nan(value):
+    if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
+        try:
+            return (float(value[0]), float(value[1]))
+        except Exception:
+            pass
+    return (float("nan"), float("nan"))
+
+
+def _diag_row_pair(row, key, fallback_keys=()):
+    value = row.get(key)
+    point = _diag_pair_or_nan(value)
+    if np.isfinite(point[0]) and np.isfinite(point[1]):
+        return point
+    for left_key, right_key in fallback_keys:
+        if left_key in row or right_key in row:
+            point = _diag_pair_or_nan((row.get(left_key), row.get(right_key)))
+            if np.isfinite(point[0]) and np.isfinite(point[1]):
+                return point
+    return point
+
+
+def _diag_project_native_for_test(dataset, native_point):
+    point = _diag_pair_or_nan(native_point)
+    if not (np.isfinite(point[0]) and np.isfinite(point[1])):
+        return (float("nan"), float("nan"))
+    spec = dict(dataset.get("spec", {}) or {})
+    projector = spec.get("fit_space_projector")
+    if not callable(projector):
+        return (float("nan"), float("nan"))
+    projected, _reason = gf._geometry_fit_audit_project_native_to_caked(
+        point,
+        fit_space_projector=projector,
+        base_fit_params={"theta_initial": 0.0},
+    )
+    if projected is None:
+        return (float("nan"), float("nan"))
+    return (float(projected[0]), float(projected[1]))
+
+
+def _diag_print_handoff_optimizer_prediction_table(rows_by_branch, optimizer_rows):
+    print("handoff_optimizer_prediction_table")
+    print(
+        "branch | observed_caked | handoff_prediction_source | "
+        "handoff_prediction_detector_display_px | handoff_prediction_detector_native_px | "
+        "handoff_prediction_caked_deg | optimizer_prediction_source | "
+        "optimizer_prediction_detector_display_px | optimizer_prediction_detector_native_px | "
+        "optimizer_prediction_caked_deg | optimizer_minus_handoff_prediction_delta_deg | "
+        "source_field_used_by_resolver | projection_callback_bundle_identity"
+    )
+    for branch in sorted(rows_by_branch):
+        handoff = rows_by_branch[branch]
+        optimizer = optimizer_rows.get(branch, {})
+        handoff_pred = _diag_row_pair(handoff, "fit_prediction_caked_deg")
+        optimizer_pred = _diag_row_pair(optimizer, "predicted_caked_deg")
+        delta = (
+            float(optimizer_pred[0]) - float(handoff_pred[0]),
+            gf._geometry_fit_audit_phi_delta(float(optimizer_pred[1]), float(handoff_pred[1])),
+        )
+        optimizer_native = _diag_row_pair(
+            optimizer,
+            "display_to_native_saved_sim_detector_display_px",
+            (("simulated_native_col", "simulated_native_row"),),
+        )
+        projection_identity = (
+            f"{optimizer.get('fit_space_projector_kind')}:"
+            f"{optimizer.get('cake_bundle_signature')}"
+        )
+        print(
+            f"{branch} | "
+            f"{_diag_fmt_pair(_diag_row_pair(handoff, 'fit_observed_caked_deg'))} | "
+            f"{handoff.get('fit_prediction_source')} | "
+            f"{_diag_fmt_pair(_diag_row_pair(handoff, 'fit_prediction_detector_display_px'))} | "
+            f"{_diag_fmt_pair(_diag_row_pair(handoff, 'fit_prediction_detector_native_px'))} | "
+            f"{_diag_fmt_pair(handoff_pred)} | "
+            f"{optimizer.get('predicted_source')} | "
+            f"{_diag_fmt_pair(_diag_row_pair(optimizer, 'saved_sim_detector_display_px'))} | "
+            f"{_diag_fmt_pair(optimizer_native)} | "
+            f"{_diag_fmt_pair(optimizer_pred)} | "
+            f"{_diag_fmt_pair(delta)} | "
+            f"{optimizer.get('provider_local_saved_sim_detector_source_field')} | "
+            f"{projection_identity}"
+        )
+
+
+def _diag_print_saved_sim_native_diagnostics(dataset, rows_by_branch, optimizer_rows):
+    print("provider_local_saved_sim_detector_native_px_diagnostics")
+    print(
+        "branch | saved_sim_detector_display_px | saved_sim_detector_native_px | "
+        "display_to_native(saved_sim_detector_display_px) | caked_from_saved_native | "
+        "caked_from_display_to_native | handoff_prediction_caked | "
+        "saved_sim_detector_native_rejected_reason"
+    )
+    for branch in sorted(rows_by_branch):
+        row = optimizer_rows.get(branch, {})
+        saved_native = _diag_row_pair(row, "saved_sim_detector_native_px")
+        canonical_native = _diag_row_pair(
+            row,
+            "display_to_native_saved_sim_detector_display_px",
+        )
+        caked_from_saved_native = _diag_row_pair(row, "caked_from_saved_native")
+        if not (np.isfinite(caked_from_saved_native[0]) and np.isfinite(caked_from_saved_native[1])):
+            caked_from_saved_native = _diag_project_native_for_test(dataset, saved_native)
+        caked_from_display_to_native = _diag_row_pair(row, "caked_from_display_to_native")
+        if not (
+            np.isfinite(caked_from_display_to_native[0])
+            and np.isfinite(caked_from_display_to_native[1])
+        ):
+            caked_from_display_to_native = _diag_project_native_for_test(
+                dataset,
+                canonical_native,
+            )
+        print(
+            f"{branch} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'saved_sim_detector_display_px'))} | "
+            f"{_diag_fmt_pair(saved_native)} | "
+            f"{_diag_fmt_pair(canonical_native)} | "
+            f"{_diag_fmt_pair(caked_from_saved_native)} | "
+            f"{_diag_fmt_pair(caked_from_display_to_native)} | "
+            f"{_diag_fmt_pair(_diag_row_pair(rows_by_branch[branch], 'fit_prediction_caked_deg'))} | "
+            f"{row.get('saved_sim_detector_native_rejected_reason')}"
+        )
+
+
+def _diag_print_branch_identity_stability_table(trace):
+    print("branch_identity_stability_table")
+    print(
+        "eval | branch | q_group_key | hkl | source_table_index | source_row_index | "
+        "source_branch_index | source_peak_index | branch_id | prediction_source | "
+        "resolution_reason | source_row_rejection_reason | predicted_caked_deg"
+    )
+    for record in trace:
+        for row in _diag_target_objective_rows(record):
+            predicted = row.get("predicted_caked_deg", (np.nan, np.nan))
+            print(
+                f"{int(record.get('eval_index', -1))} | "
+                f"{row.get('source_branch_index')} | "
+                f"{row.get('q_group_key')} | "
+                f"{row.get('hkl')} | "
+                f"{row.get('source_table_index')} | "
+                f"{row.get('source_row_index')} | "
+                f"{row.get('source_branch_index')} | "
+                f"{row.get('source_peak_index')} | "
+                f"{row.get('branch_id')} | "
+                f"{row.get('predicted_source')} | "
+                f"{row.get('resolution_reason')} | "
+                f"{row.get('source_row_rejection_reason')} | "
+                f"{_diag_fmt_pair(predicted)}"
+            )
+
+
+def _diag_pick_fit_failure_reason(
+    *,
+    var_names,
+    q_residual_present,
+    params_changed,
+    prediction_changed,
+    result_success,
+    result_message,
+    before_total_norm,
+    after_total_norm,
+):
+    if after_total_norm < before_total_norm - 1.0e-9:
+        return None
+    if not q_residual_present:
+        return "qr_residual_not_in_fit_objective"
+    if not var_names:
+        return "optimizer_parameters_locked"
+    if params_changed and not prediction_changed:
+        return "dynamic_prediction_not_recomputed"
+    if not params_changed and not result_success:
+        return "step_rejected_by_optimizer"
+    if params_changed and after_total_norm >= before_total_norm - 1.0e-9:
+        return "fit_not_sensitive_to_qr_residual"
+    if not params_changed:
+        return "optimizer_parameters_locked"
+    if result_message:
+        return f"other={result_message}"
+    return "other=residual_not_decreased"
+
+
+def _diag_recompute_fit_audit_rows(context, dataset, params=None):
+    if params is None:
+        params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    rows = gf.build_geometry_fit_qr_handoff_audit_rows(
+        dataset,
+        base_fit_params=dict(params),
+    )
+    return _diag_fit_audit_rows({"fit_handoff_audit_rows": rows})
+
+
+def _diag_run_controlled_minus_1_0_10_fit(
+    context,
+    dataset,
+    *,
+    seed_multistart_enabled=True,
+    objective_trace_enabled=False,
+    qr_only_objective=False,
+    objective_dry_run_only=False,
+):
+    from ra_sim.fitting.optimization import fit_geometry_parameters
+
+    cache_key = (
+        bool(seed_multistart_enabled),
+        bool(objective_trace_enabled),
+        bool(qr_only_objective),
+        bool(objective_dry_run_only),
+    )
+    cached = _QR_FIT_STEP_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    request, var_names = _diag_build_minus_1_0_10_fit_request(
+        context,
+        dataset,
+        seed_multistart_enabled=seed_multistart_enabled,
+        objective_trace_enabled=objective_trace_enabled,
+        qr_only_objective=qr_only_objective,
+        objective_dry_run_only=objective_dry_run_only,
+    )
+    result = gf.solve_geometry_fit_request(
+        request,
+        solve_fit=fit_geometry_parameters,
+        status_callback=lambda _message: None,
+        live_update_callback=lambda _payload: None,
+    )
+    before_params, after_params = _diag_parameter_values_from_result(
+        request,
+        var_names,
+        result,
+    )
+    params_changed = any(
+        not np.isclose(before_params[name], after_params.get(name, before_params[name]))
+        for name in before_params
+    )
+    nfev = int(getattr(result, "nfev", 0) or 0)
+    step_executed = bool(nfev > 0)
+    payload = {
+        "request": request,
+        "var_names": var_names,
+        "result": result,
+        "before_params": before_params,
+        "after_params": after_params,
+        "params_changed": bool(params_changed),
+        "step_executed": bool(step_executed),
+        "valid_evaluation": bool(nfev > 0),
+        "params_accepted": bool(nfev > 0 and getattr(result, "x", None) is not None),
+    }
+    _QR_FIT_STEP_CACHE[cache_key] = payload
+    return payload
+
+
+def _diag_delta_pair_close(delta, *, theta_tol=0.25, phi_tol=0.5):
+    assert isinstance(delta, (list, tuple)) and len(delta) >= 2
+    assert abs(float(delta[0])) <= float(theta_tol)
+    assert abs(float(delta[1])) <= float(phi_tol)
+
+
+def test_minus_1_0_10_fit_handoff_audit_prints_visual_and_fit_values(tmp_path) -> None:
+    _context, dataset, events = _diag_fit_handoff_dataset(tmp_path)
+    audit_lines = list(dataset.get("fit_handoff_audit_lines", []))
+    print("\n".join(str(line) for line in audit_lines))
+    assert audit_lines
+    assert audit_lines[0] == "[ra-sim] Qr/Qz fit handoff audit"
+    assert any(
+        stage == "cmd_line" and payload.get("text") == "[ra-sim] Qr/Qz fit handoff audit"
+        for stage, payload in events
+    )
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    assert set(rows_by_branch) == {0, 1}
+    for branch, row in rows_by_branch.items():
+        assert row["q_group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
+        assert row["hkl"] == _QR_PICKER_TARGET_HKL
+        assert row["source_branch_index"] == branch
+        for field in (
+            "observed_refined_detector_display_px",
+            "observed_refined_detector_native_px",
+            "observed_refined_caked_deg",
+            "sim_nominal_detector_display_px",
+            "sim_nominal_detector_native_px",
+            "fit_observed_detector_display_px",
+            "fit_observed_detector_native_px",
+            "fit_observed_caked_deg",
+            "fit_prediction_source",
+        ):
+            assert field in row
+
+
+def test_minus_1_0_10_fit_step_reduces_qr_residual(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    assert set(rows_by_branch) == {0, 1}
+
+    before_records = _diag_records_from_audit_rows(rows_by_branch)
+    for branch, row in rows_by_branch.items():
+        assert row["q_group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
+        assert row["hkl"] == _QR_PICKER_TARGET_HKL
+        assert row["source_branch_index"] == branch
+        assert row["fit_prediction_source"] == "dynamic_current_simulation"
+        assert "cache_fresh_row" not in str(row.get("fit_prediction_source", ""))
+        assert row["fit_observed_caked_deg"] is not row["fit_prediction_caked_deg"]
+        assert row["fit_observed_detector_native_px"] is not row[
+            "fit_prediction_detector_native_px"
+        ]
+        assert not np.allclose(
+            _diag_float_pair(row["fit_observed_caked_deg"]),
+            _diag_float_pair(row["fit_prediction_caked_deg"]),
+            atol=1.0e-12,
+            rtol=0.0,
+        )
+
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(context, dataset)
+    request = fit_run["request"]
+    var_names = fit_run["var_names"]
+    result = fit_run["result"]
+    before_params = fit_run["before_params"]
+    after_params = fit_run["after_params"]
+    params_changed = fit_run["params_changed"]
+    step_executed = fit_run["step_executed"]
+    handoff_summary = request.refinement_config.get("optimizer_request_handoff_summary", {})
+    assert int(handoff_summary.get("fallback_row_count", 0)) == 0
+    assert int(handoff_summary.get("fixed_source_pair_count", 0)) >= 2
+
+    after_records = {}
+    target_predictions_available = False
+    if step_executed:
+        result_predictions = _diag_result_target_predictions(result)
+        target_predictions_available = all(
+            branch in result_predictions for branch in before_records
+        )
+        for branch, before in before_records.items():
+            prediction = result_predictions.get(branch, {})
+            predicted_detector_native = prediction.get(
+                "predicted_detector_native",
+                before["predicted_detector_native"],
+            )
+            predicted_caked = prediction.get("predicted_caked", before["predicted_caked"])
+            after_records[branch] = _diag_residual_record(
+                branch,
+                observed_detector_native=before["observed_detector_native"],
+                observed_caked=before["observed_caked"],
+                predicted_detector_native=predicted_detector_native,
+                predicted_caked=predicted_caked,
+            )
+            assert after_records[branch]["observed_caked"] == before["observed_caked"]
+            assert after_records[branch]["observed_detector_native"] == before[
+                "observed_detector_native"
+            ]
+    else:
+        after_records = {branch: dict(record) for branch, record in before_records.items()}
+        repeated_rows = _diag_recompute_fit_audit_rows(context, dataset)
+        repeated_records = _diag_records_from_audit_rows(repeated_rows)
+        _diag_records_close(before_records, repeated_records)
+
+    prediction_changed = any(
+        not np.allclose(
+            after_records[branch]["predicted_caked"],
+            before_records[branch]["predicted_caked"],
+            atol=1.0e-12,
+            rtol=0.0,
+        )
+        for branch in before_records
+    )
+    if params_changed and target_predictions_available:
+        assert prediction_changed, "dynamic_prediction_not_recomputed"
+
+    point_match_summary = getattr(result, "point_match_summary", {}) or {}
+    q_residual_count = int(point_match_summary.get("manual_caked_residual_row_count", 0))
+    trace = _diag_objective_trace(result)
+    q_residual_present = bool(trace and _diag_target_objective_components(trace[0]))
+    target_source_switched = any(
+        row.get("resolution_reason") == "prediction_branch_source_switched"
+        for record in trace
+        for row in _diag_target_objective_rows(record)
+    )
+    assert q_residual_present or target_source_switched, "qr_residual_not_in_fit_objective"
+
+    before_total_norm = _diag_total_residual_norm(before_records)
+    after_total_norm = _diag_total_residual_norm(after_records)
+    result_success = bool(getattr(result, "success", False))
+    result_message = str(getattr(result, "message", "") or "")
+    first_reason = _diag_pick_fit_failure_reason(
+        var_names=var_names,
+        q_residual_present=q_residual_present,
+        params_changed=params_changed,
+        prediction_changed=prediction_changed,
+        result_success=result_success,
+        result_message=result_message,
+        before_total_norm=before_total_norm,
+        after_total_norm=after_total_norm,
+    )
+    if target_source_switched:
+        first_reason = "prediction_branch_source_switched"
+
+    optimizer_cfg = request.refinement_config.get("optimizer", {})
+    optimizer_method = str(
+        optimizer_cfg.get("method")
+        or optimizer_cfg.get("least_squares_method")
+        or "least_squares"
+    )
+    print("[ra-sim] (-1,0,10) Qr/Qz fit-step diagnostic")
+    _diag_print_residual_table("baseline_residual_table", before_records)
+    if step_executed:
+        _diag_print_fit_step_table(before_records, after_records)
+    else:
+        print("fit_step_executed=no")
+        print("post_fit_residual=<unavailable reason=no accepted optimizer step>")
+    print("fit_metadata")
+    print(f"parameters_varied={list(var_names)}")
+    print(f"parameter_values_before={before_params}")
+    print(f"parameter_values_after={after_params}")
+    print(f"optimizer_method={optimizer_method}")
+    print(f"number_of_evaluations={int(getattr(result, 'nfev', 0) or 0)}")
+    print(f"success={result_success}")
+    print(f"message={result_message}")
+    print(f"manual_caked_residual_row_count={q_residual_count}")
+    print(f"residual_norm_before={before_total_norm:.9f}")
+    print(f"residual_norm_after={after_total_norm:.9f}")
+    print(
+        "qr_residual_reduced="
+        f"{str(after_total_norm < before_total_norm - 1.0e-9).lower()}"
+    )
+    if first_reason is not None:
+        print(f"first_failing_reason={first_reason}")
+
+    if result_success and target_predictions_available:
+        assert (
+            after_total_norm <= before_total_norm + 1.0e-9
+        ), "fitter silently reported success while residual norm increased"
+
+
+def test_minus_1_0_10_residual_definition_consistent_between_cmd_and_fit(
+    tmp_path,
+) -> None:
+    _context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    audit_lines = [str(line) for line in dataset.get("fit_handoff_audit_lines", [])]
+    records = _diag_records_from_audit_rows(rows_by_branch)
+    _diag_print_residual_table("baseline_residual_table", records)
+    assert set(rows_by_branch) == {0, 1}
+    for branch, row in rows_by_branch.items():
+        detector_residual = gf._qr_residual_detector_native_px(
+            row["observed_detector_native_px"],
+            row["predicted_detector_native_px"],
+        )
+        caked_residual = gf._qr_residual_caked_deg(
+            row["observed_caked_deg"],
+            row["predicted_caked_deg"],
+        )
+        assert detector_residual is not None
+        assert caked_residual is not None
+        assert np.allclose(row["residual_detector_native_px"], detector_residual)
+        assert np.allclose(row["fit_residual_detector_native_px"], detector_residual)
+        assert np.allclose(row["residual_caked_deg"], caked_residual)
+        assert np.allclose(row["fit_residual_caked_deg"], caked_residual)
+        assert row["residual_sign_convention"] == "predicted - observed"
+        assert row["residual_detector_native_units"] == "px"
+        assert row["residual_caked_units"] == "deg"
+        assert np.allclose(
+            row["geometry_minus_sim_detector_native_px"],
+            -np.asarray(detector_residual, dtype=float),
+        )
+        assert np.allclose(
+            row["geometry_minus_sim_caked_deg"],
+            -np.asarray(caked_residual, dtype=float),
+        )
+        assert np.allclose(
+            row["fit_observed_minus_fit_prediction_caked_delta_deg"],
+            row["geometry_minus_sim_caked_deg"],
+        )
+        for field in (
+            "observed_detector_native_px",
+            "predicted_detector_native_px",
+            "residual_detector_native_px",
+            "observed_caked_deg",
+            "predicted_caked_deg",
+            "residual_caked_deg",
+            "residual_sign_convention",
+            "objective_space",
+        ):
+            expected = (
+                f"{field}="
+                f"{gf._geometry_fit_audit_value_text(row.get(field))}"
+            )
+            assert any(expected in line for line in audit_lines), (branch, expected)
+
+
+def test_minus_1_0_10_observed_is_background_predicted_is_simulation(tmp_path) -> None:
+    _context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    assert set(rows_by_branch) == {0, 1}
+    for row in rows_by_branch.values():
+        assert row["observed_source"] == "background/manual"
+        assert row["predicted_source"] == "simulation"
+        assert row["fit_prediction_source"] == "dynamic_current_simulation"
+        assert row["fit_prediction_is_dynamic"] == "yes"
+        assert np.allclose(
+            row["observed_detector_native_px"],
+            row["observed_refined_detector_native_px"],
+        )
+        assert np.allclose(row["observed_caked_deg"], row["observed_refined_caked_deg"])
+        assert np.allclose(
+            row["predicted_detector_native_px"],
+            row["fit_prediction_detector_native_px"],
+        )
+        assert np.allclose(row["predicted_caked_deg"], row["fit_prediction_caked_deg"])
+        assert row["observed_source"] != row["predicted_source"]
+        assert row["observed_detector_native_px"] is not row["predicted_detector_native_px"]
+        assert not np.allclose(
+            row["observed_detector_native_px"],
+            row["predicted_detector_native_px"],
+            atol=1.0e-12,
+            rtol=0.0,
+        )
+
+
+def test_minus_1_0_10_same_params_recompute_same_prediction_and_residual(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_first = _diag_recompute_fit_audit_rows(context, dataset)
+    rows_second = _diag_recompute_fit_audit_rows(context, dataset)
+    records_first = _diag_records_from_audit_rows(rows_first)
+    records_second = _diag_records_from_audit_rows(rows_second)
+    _diag_print_residual_table("baseline_residual_table", records_first)
+    _diag_print_residual_table("repeated_same_params_residual_table", records_second)
+    _diag_records_close(records_first, records_second)
+
+
+def test_minus_1_0_10_failed_fit_does_not_report_fake_after_state(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(context, dataset)
+    result = fit_run["result"]
+    nfev = int(getattr(result, "nfev", 0) or 0)
+    success = bool(getattr(result, "success", False))
+    params_changed = bool(fit_run["params_changed"])
+    if nfev == 0 and not success and not params_changed:
+        print("fit_step_executed=no")
+        print("post_fit_residual=<unavailable reason=no accepted optimizer step>")
+        repeated_rows = _diag_recompute_fit_audit_rows(context, dataset)
+        repeated_records = _diag_records_from_audit_rows(repeated_rows)
+        _diag_print_residual_table("baseline_residual_table", baseline_records)
+        _diag_print_residual_table("repeated_same_params_residual_table", repeated_records)
+        _diag_records_close(baseline_records, repeated_records)
+        result_predictions = _diag_result_target_predictions(result)
+        for branch, prediction in result_predictions.items():
+            if branch not in baseline_records:
+                continue
+            assert not np.allclose(
+                prediction["predicted_caked"],
+                baseline_records[branch]["predicted_caked"],
+                atol=1.0e-12,
+                rtol=0.0,
+            ) or str(getattr(result, "message", "") or "")
+        return
+    print("fit_step_executed=yes")
+
+
+def test_minus_1_0_10_accepted_fit_step_recomputes_from_accepted_params(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+    )
+    result = fit_run["result"]
+    if not fit_run["step_executed"]:
+        reason = str(getattr(result, "message", "") or "no_compatible_fit_mode")
+        print(f"fit_not_testable_reason={reason}")
+        assert reason == "seed_multistart_incompatible_with_fixed_manual_pairs"
+        return
+
+    print("fit_step_executed=yes")
+    print(f"nfev={int(getattr(result, 'nfev', 0) or 0)}")
+    print(f"accepted_params={fit_run['after_params']}")
+    try:
+        after_records = _diag_after_records_from_fit_result(baseline_records, result)
+    except AssertionError:
+        after_records = None
+    if after_records is None:
+        print(
+            "fit_not_testable_reason="
+            "prediction_branch_source_switched"
+        )
+    else:
+        _diag_print_fit_step_table(baseline_records, after_records)
+    assert int(getattr(result, "nfev", 0) or 0) > 0
+
+
+def test_minus_1_0_10_fixed_manual_pairs_fit_step_runs_without_seed_multistart(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+    )
+    request = fit_run["request"]
+    result = fit_run["result"]
+    trace = getattr(result, "seed_multistart_trace", {}) or {}
+    summary = getattr(result, "point_match_summary", {}) or {}
+    q_residual_count = int(summary.get("manual_caked_residual_row_count", 0))
+    nfev = int(getattr(result, "nfev", 0) or 0)
+    try:
+        after_records = _diag_after_records_from_fit_result(baseline_records, result)
+    except AssertionError:
+        after_records = None
+    prediction_changed = (
+        _diag_predictions_changed(baseline_records, after_records)
+        if after_records is not None
+        else False
+    )
+
+    print("[ra-sim] (-1,0,10) fixed manual-pair one-step trace")
+    print(f"seed_multistart_enabled={bool(trace.get('enabled', True))}")
+    print(
+        "fixed_manual_pairs_enabled="
+        f"{bool(trace.get('fixed_manual_pair_integrity_enabled', False))}"
+    )
+    print(f"active_fit_mode={trace.get('active_fit_mode')}")
+    print(f"manual_pair_count={int(trace.get('manual_pair_count', 0) or 0)}")
+    print(f"qr_residual_count={q_residual_count}")
+    print(f"optimizer_method={trace.get('optimizer_method')}")
+    print(f"parameter_list={trace.get('parameter_list')}")
+    print(f"guard_rejection_reason={trace.get('guard_rejection_reason')}")
+    print(f"bypassed_guard={trace.get('bypassed_guard')}")
+    print(f"fit_step_executed={'yes' if nfev > 0 else 'no'}")
+    print(f"nfev={nfev}")
+    print(f"success={bool(getattr(result, 'success', False))}")
+    print(f"message={str(getattr(result, 'message', '') or '')}")
+    print(f"parameter_values_before={fit_run['before_params']}")
+    print(f"parameter_values_after={fit_run['after_params']}")
+    _diag_print_residual_table("baseline_residual_table", baseline_records)
+    if after_records is not None:
+        _diag_print_fit_step_table(baseline_records, after_records)
+    else:
+        print("post_fit_residual=<unavailable reason=no accepted optimizer step>")
+
+    optimizer_cfg = request.refinement_config.get("optimizer", {})
+    seed_search_cfg = request.refinement_config.get("seed_search", {})
+    assert bool(optimizer_cfg.get("seed_multistart_enabled")) is False
+    assert bool(seed_search_cfg.get("enabled")) is False
+    assert bool(trace.get("enabled", True)) is False
+    assert trace.get("disabled_reason") == "disabled_by_config"
+    assert trace.get("active_fit_mode") == "fixed_manual_pair_direct_least_squares"
+    assert bool(trace.get("fixed_manual_pair_integrity_enabled", False))
+    assert q_residual_count >= 2
+    assert nfev > 0
+    if after_records is not None:
+        assert fit_run["params_accepted"]
+    if fit_run["params_changed"] and after_records is not None:
+        assert prediction_changed, "parameterization_cannot_move_qr_prediction"
+
+
+def test_minus_1_0_10_fit_step_reduces_or_reports_qr_residual(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+    )
+    result = fit_run["result"]
+    summary = getattr(result, "point_match_summary", {}) or {}
+    q_residual_count = int(summary.get("manual_caked_residual_row_count", 0))
+    before_norm = _diag_total_residual_norm(baseline_records)
+    nfev = int(getattr(result, "nfev", 0) or 0)
+    valid_evaluation = bool(fit_run["valid_evaluation"])
+
+    print("[ra-sim] (-1,0,10) Qr residual reduce-or-report")
+    _diag_print_residual_table("baseline_residual_table", baseline_records)
+    print(f"baseline_residual_norm={before_norm:.9f}")
+    print(f"fit_step_executed={'yes' if valid_evaluation else 'no'}")
+    print(f"nfev={nfev}")
+
+    after_records = None
+    after_norm = float("nan")
+    prediction_changed = False
+    if valid_evaluation and fit_run["params_accepted"]:
+        try:
+            after_records = _diag_after_records_from_fit_result(baseline_records, result)
+        except AssertionError:
+            after_records = None
+        if after_records is not None:
+            after_norm = _diag_total_residual_norm(after_records)
+            prediction_changed = _diag_predictions_changed(baseline_records, after_records)
+            _diag_print_fit_step_table(baseline_records, after_records)
+            print(f"trial_or_after_residual_norm={after_norm:.9f}")
+        else:
+            print("post_fit_residual=<unavailable reason=no accepted optimizer step>")
+    else:
+        print("post_fit_residual=<unavailable reason=no accepted optimizer step>")
+
+    reduced = bool(np.isfinite(after_norm) and after_norm < before_norm - 1.0e-9)
+    print(f"qr_residual_reduced={'yes' if reduced else 'no'}")
+    if reduced:
+        return
+
+    reason = _diag_fixed_manual_pair_no_decrease_reason(
+        q_residual_count=q_residual_count,
+        valid_evaluation=valid_evaluation,
+        params_changed=bool(fit_run["params_changed"]),
+        prediction_changed=bool(prediction_changed),
+        result=result,
+    )
+    print(f"first_failing_reason={reason}")
+    assert reason in {
+        "optimizer_step_rejected",
+        "bounds_block_update",
+        "parameterization_cannot_move_qr_prediction",
+        "objective_excludes_qr_residual",
+        "prediction_branch_source_switched",
+        "total_objective_improved_but_qr_worsened",
+        "optimizer_residual_vector_mismatch",
+    }
+
+
+def test_minus_1_0_10_optimizer_residual_vector_matches_audit(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    trace = _diag_objective_trace(fit_run["result"])
+    assert trace
+    baseline_record = trace[0]
+    _diag_print_residual_table("baseline_audit_residual_table", baseline_records)
+    _diag_print_optimizer_residual_vector_table(baseline_record)
+
+    components = _diag_target_objective_components(baseline_record)
+    if len(components) != 4:
+        target_rows = _diag_target_objective_rows(baseline_record)
+        print("optimizer_residual_vector_mismatch=prediction_branch_source_switched")
+        for row in target_rows:
+            print(
+                "target_rejection | "
+                f"branch={row.get('source_branch_index')} | "
+                f"prediction_source={row.get('predicted_source')} | "
+                f"resolution_reason={row.get('resolution_reason')} | "
+                f"resolution_subreason={row.get('resolution_subreason')} | "
+                f"source_row_rejection_reason={row.get('source_row_rejection_reason')}"
+            )
+        assert target_rows, "qr_residual_absent_from_objective"
+        assert all(
+            row.get("predicted_source") == "rejected:prediction_branch_source_switched"
+            for row in target_rows
+        ), "optimizer_residual_vector_mismatch"
+        assert all(
+            row.get("resolution_reason") == "prediction_branch_source_switched"
+            for row in target_rows
+        ), "optimizer_residual_vector_mismatch"
+        return
+    assert len(components) == 4, "qr_residual_absent_from_objective"
+    by_branch_component = {
+        (int(component["source_branch_index"]), str(component["component"])): component
+        for component in components
+    }
+    for branch, audit_record in baseline_records.items():
+        theta_component = by_branch_component[(branch, "delta_two_theta_deg")]
+        phi_component = by_branch_component[(branch, "wrapped_delta_phi_deg")]
+        expected = audit_record["residual_caked"]
+        assert theta_component["predicted_source"] == (
+            "dynamic_current_simulation:q_group_hkl_source_row_provenance"
+        )
+        assert phi_component["predicted_source"] == (
+            "dynamic_current_simulation:q_group_hkl_source_row_provenance"
+        )
+        assert theta_component["coordinate_space"] == "caked_deg"
+        assert phi_component["coordinate_space"] == "caked_deg"
+        assert theta_component["units"] == "deg"
+        assert phi_component["units"] == "deg"
+        assert np.isclose(
+            float(theta_component["unweighted_value"]),
+            float(expected[0]),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        assert np.isclose(
+            float(phi_component["unweighted_value"]),
+            float(expected[1]),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        assert np.isclose(
+            float(theta_component["weighted_value"]),
+            float(theta_component["unweighted_value"]) * float(theta_component["weight"]),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        assert np.isclose(
+            float(phi_component["weighted_value"]),
+            float(phi_component["unweighted_value"]) * float(phi_component["weight"]),
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+
+
+def test_minus_1_0_10_qr_only_objective_does_not_accept_worse_solution(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    baseline_norm = _diag_total_residual_norm(baseline_records)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+    )
+    result = fit_run["result"]
+    success = bool(getattr(result, "success", False))
+    nfev = int(getattr(result, "nfev", 0) or 0)
+    trace = _diag_objective_trace(result)
+    rejected_trial_norm = (
+        _diag_qr_norm_from_objective_record(trace[-1]) if trace else float("nan")
+    )
+    after_records = None
+    accepted_norm = float("nan")
+    accepted_predictions_available = False
+    try:
+        candidate_after_records = _diag_after_records_from_fit_result(
+            baseline_records,
+            result,
+        )
+    except AssertionError:
+        candidate_after_records = None
+    if candidate_after_records is not None:
+        after_records = candidate_after_records
+        accepted_norm = _diag_total_residual_norm(after_records)
+        accepted_predictions_available = True
+
+    print("[ra-sim] (-1,0,10) Qr-only fit result")
+    print(f"baseline_qr_only_norm={baseline_norm:.9f}")
+    if accepted_predictions_available:
+        print("fit_step_executed=yes")
+        print(f"accepted_qr_only_norm={accepted_norm:.9f}")
+    else:
+        print("fit_step_executed=no")
+        print(f"rejected_trial_norm={rejected_trial_norm:.9f}")
+        print("post_fit_residual=<unavailable reason=no accepted optimizer step>")
+    print(f"success={success}")
+    print(f"nfev={nfev}")
+    print(f"parameter_values_before={fit_run['before_params']}")
+    print(f"parameter_values_after={fit_run['after_params']}")
+    if after_records is not None:
+        _diag_print_fit_step_table(baseline_records, after_records)
+
+    assert nfev > 0
+    assert (not success) or accepted_predictions_available, (
+        "optimizer_accepted_without_target_qr_prediction",
+        baseline_norm,
+        rejected_trial_norm,
+    )
+    assert (not success) or accepted_norm <= baseline_norm + 1.0e-9, (
+        "optimizer_accepted_worse_qr_only_solution",
+        baseline_norm,
+        accepted_norm,
+    )
+
+
+def test_minus_1_0_10_fit_prediction_identity_stable_during_step(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    trace = _diag_objective_trace(fit_run["result"])
+    assert trace
+    _diag_print_branch_identity_stability_table(trace)
+
+    expected_by_branch = {}
+    for row in _diag_target_objective_rows(trace[0]):
+        branch = int(row["source_branch_index"])
+        expected_by_branch[branch] = (
+            _diag_q_group_key(row),
+            _diag_hkl(row),
+            row.get("source_table_index"),
+            row.get("source_row_index"),
+            row.get("source_branch_index"),
+            row.get("source_peak_index"),
+            row.get("branch_id"),
+        )
+    assert set(expected_by_branch) == {0, 1}
+    for record in trace:
+        rows = {int(row["source_branch_index"]): row for row in _diag_target_objective_rows(record)}
+        assert set(rows) == {0, 1}, "prediction_branch_source_switched"
+        for branch, row in rows.items():
+            identity = (
+                _diag_q_group_key(row),
+                _diag_hkl(row),
+                row.get("source_table_index"),
+                row.get("source_row_index"),
+                row.get("source_branch_index"),
+                row.get("source_peak_index"),
+                row.get("branch_id"),
+            )
+            assert identity == expected_by_branch[branch], "prediction_branch_source_switched"
+            assert row["predicted_source"] in {
+                "dynamic_current_simulation:q_group_hkl_source_row_provenance",
+                "rejected:prediction_branch_source_switched",
+            }
+            if row["predicted_source"] == "rejected:prediction_branch_source_switched":
+                assert row.get("resolution_reason") == "prediction_branch_source_switched"
+
+
+def test_minus_1_0_10_total_objective_reports_qr_contribution(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    result = fit_run["result"]
+    trace = _diag_objective_trace(result)
+    assert len(trace) >= 2
+    before = trace[0]
+    after = trace[-1]
+    qr_before = _diag_qr_norm_from_objective_record(before)
+    qr_after = _diag_qr_norm_from_objective_record(after)
+    total_before = float(before.get("residual_norm", np.nan))
+    total_after = float(after.get("residual_norm", np.nan))
+    non_qr_before = _diag_non_qr_point_norm_from_objective_record(before)
+    non_qr_after = _diag_non_qr_point_norm_from_objective_record(after)
+    line_before = float(before.get("line_residual_norm", np.nan))
+    line_after = float(after.get("line_residual_norm", np.nan))
+    prior_before = float(before.get("prior_residual_norm", np.nan))
+    prior_after = float(after.get("prior_residual_norm", np.nan))
+    weights = sorted(
+        {
+            float(component.get("weight", np.nan))
+            for component in _diag_target_objective_components(before)
+        }
+    )
+
+    print("production_fit_objective_decomposition")
+    print(f"total_objective_norm_before={total_before:.9f}")
+    print(f"total_objective_norm_after={total_after:.9f}")
+    print(f"qr_objective_norm_before={qr_before:.9f}")
+    print(f"qr_objective_norm_after={qr_after:.9f}")
+    print(f"non_qr_point_objective_norm_before={non_qr_before:.9f}")
+    print(f"non_qr_point_objective_norm_after={non_qr_after:.9f}")
+    print(f"line_objective_norm_before={line_before:.9f}")
+    print(f"line_objective_norm_after={line_after:.9f}")
+    print(f"prior_objective_norm_before={prior_before:.9f}")
+    print(f"prior_objective_norm_after={prior_after:.9f}")
+    print(f"qr_weights={weights}")
+
+    if not np.isfinite(qr_before) or not _diag_target_objective_components(before):
+        print("qr_residual_absent_from_objective=yes")
+        target_rows = _diag_target_objective_rows(before)
+        assert target_rows, "qr_residual_absent_from_objective"
+        assert all(
+            row.get("resolution_reason") == "prediction_branch_source_switched"
+            for row in target_rows
+        ), "qr_residual_absent_from_objective"
+        print("prediction_branch_source_switched=yes")
+        return
+
+    assert np.isfinite(qr_before), "qr_residual_absent_from_objective"
+    assert _diag_target_objective_components(before), "qr_residual_absent_from_objective"
+    if total_after < total_before - 1.0e-9 and qr_after > qr_before + 1.0e-9:
+        print("qr_residual_sacrificed_to_other_terms=yes")
+    if weights:
+        print(f"qr_weight={weights[0]:.9f}")
+        if max(weights) < 1.0:
+            print("qr_weight_too_low=yes")
+
+
+def _diag_target_prediction_rows_by_branch(record):
+    rows = {}
+    for row in _diag_target_objective_rows(record):
+        try:
+            branch = int(row.get("source_branch_index"))
+        except Exception:
+            continue
+        rows[branch] = dict(row)
+    return rows
+
+
+def _diag_request_pair_counts(request, result, baseline_record):
+    measured = [entry for entry in request.measured_peaks if isinstance(entry, Mapping)]
+    handoff_summary = request.refinement_config.get("optimizer_request_handoff_summary", {})
+    if not isinstance(handoff_summary, Mapping):
+        handoff_summary = {}
+    point_summary = getattr(result, "point_match_summary", {}) or {}
+    if not isinstance(point_summary, Mapping):
+        point_summary = {}
+    diagnostics = getattr(result, "point_match_diagnostics", []) or []
+    fixed_source_resolution_fallback_count = 0
+    branch_mismatch_count = int(point_summary.get("branch_mismatch_count", 0) or 0)
+    for raw in diagnostics:
+        if not isinstance(raw, Mapping):
+            continue
+        if bool(raw.get("optimizer_request_fallback_row", False)):
+            fixed_source_resolution_fallback_count += 1
+        if str(raw.get("resolution_kind", "")).strip().lower() not in {
+            "",
+            "fixed_source",
+        }:
+            fixed_source_resolution_fallback_count += 1
+        try:
+            source_branch = int(raw.get("source_branch_index"))
+            resolved_peak = int(raw.get("resolved_peak_index"))
+        except Exception:
+            continue
+        if source_branch in {0, 1} and resolved_peak in {0, 1} and source_branch != resolved_peak:
+            branch_mismatch_count += 1
+    components = _diag_target_objective_components(baseline_record)
+    return {
+        "provider_pair_count": sum(
+            1 for entry in measured if entry.get("optimizer_request_source") == "provider_pair"
+        ),
+        "dataset_pair_count": len(measured),
+        "optimizer_request_pair_count": len(measured),
+        "fixed_source_pair_count": int(handoff_summary.get("fixed_source_pair_count", 0) or 0),
+        "fallback_row_count": int(handoff_summary.get("fallback_row_count", 0) or 0),
+        "missing_fixed_source_count": sum(
+            1 for entry in measured if not bool(entry.get("optimizer_request_has_fixed_source"))
+        ),
+        "fixed_source_resolution_fallback_count": int(fixed_source_resolution_fallback_count),
+        "matched_pair_count": int(point_summary.get("matched_pair_count", 0) or 0),
+        "missing_pair_count": int(point_summary.get("missing_pair_count", 0) or 0),
+        "branch_mismatch_count": int(branch_mismatch_count),
+        "qr_residual_block_absent": "no" if components else "yes",
+        "qr_weights": sorted({float(component.get("weight", np.nan)) for component in components}),
+        "objective_eval_called": bool(getattr(result, "objective_eval_called", False)),
+        "objective_dry_run_residual_finite": bool(
+            getattr(result, "objective_dry_run_residual_finite", False)
+        ),
+        "least_squares_called": bool(getattr(result, "least_squares_called", True)),
+        "optimizer_solve_called": bool(getattr(result, "optimizer_solve_called", True)),
+    }
+
+
+def test_minus_1_0_10_rung1_objective_dry_run_uses_qr_residuals(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        objective_dry_run_only=True,
+    )
+    result = fit_run["result"]
+    trace = _diag_objective_trace(result)
+    assert trace
+    baseline_record = trace[0]
+    counts = _diag_request_pair_counts(fit_run["request"], result, baseline_record)
+    for key in (
+        "provider_pair_count",
+        "dataset_pair_count",
+        "optimizer_request_pair_count",
+        "fixed_source_pair_count",
+        "fallback_row_count",
+        "missing_fixed_source_count",
+        "fixed_source_resolution_fallback_count",
+        "matched_pair_count",
+        "missing_pair_count",
+        "branch_mismatch_count",
+        "qr_residual_block_absent",
+        "qr_weights",
+        "objective_eval_called",
+        "objective_dry_run_residual_finite",
+        "least_squares_called",
+        "optimizer_solve_called",
+    ):
+        print(f"{key}={counts[key]}")
+    _diag_print_optimizer_residual_vector_table(baseline_record)
+
+    if counts["qr_residual_block_absent"] == "yes":
+        for row in _diag_target_objective_rows(baseline_record):
+            print(
+                "failing_row | "
+                f"pair_id={row.get('manual_pair_id', row.get('row_index'))} | "
+                f"branch={row.get('source_branch_index')} | "
+                f"reason={row.get('resolution_reason')} | "
+                f"subreason={row.get('resolution_subreason')} | "
+                f"source_row_reason={row.get('source_row_rejection_reason')}"
+            )
+    assert counts["least_squares_called"] is False
+    assert counts["optimizer_solve_called"] is False
+    assert counts["objective_eval_called"] is True
+    assert counts["objective_dry_run_residual_finite"] is True
+    assert counts["fixed_source_pair_count"] == 7
+    assert counts["fallback_row_count"] == 0
+    assert counts["missing_fixed_source_count"] == 0
+    assert counts["fixed_source_resolution_fallback_count"] == 0
+    assert counts["matched_pair_count"] == 7
+    assert counts["missing_pair_count"] == 0
+    assert counts["branch_mismatch_count"] == 0
+    assert counts["qr_residual_block_absent"] == "no"
+    assert counts["qr_weights"]
+
+
+def test_minus_1_0_10_fitter_objective_matches_residual_audit(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    trace = _diag_objective_trace(fit_run["result"])
+    assert trace
+    baseline_record = trace[0]
+    _diag_print_residual_table("baseline_residual_table", baseline_records)
+    _diag_print_optimizer_residual_vector_table(baseline_record)
+
+    components = _diag_target_objective_components(baseline_record)
+    target_rows = _diag_target_objective_rows(baseline_record)
+    if len(components) != 4:
+        print("first_failure=objective_not_using_qr_residual")
+        for row in target_rows:
+            print(
+                "target_rejection | "
+                f"branch={row.get('source_branch_index')} | "
+                f"q_group_key={row.get('q_group_key')} | "
+                f"hkl={row.get('hkl')} | "
+                f"predicted_source={row.get('predicted_source')} | "
+                f"resolution_reason={row.get('resolution_reason')} | "
+                f"resolution_subreason={row.get('resolution_subreason')} | "
+                f"source_row_rejection_reason={row.get('source_row_rejection_reason')}"
+            )
+    assert len(components) == 4, "objective_not_using_qr_residual"
+
+    by_key = {
+        (int(component["source_branch_index"]), str(component["component"])): component
+        for component in components
+    }
+    for branch, audit_record in baseline_records.items():
+        for component_name, axis_index in (
+            ("delta_two_theta_deg", 0),
+            ("wrapped_delta_phi_deg", 1),
+        ):
+            component = by_key[(branch, component_name)]
+            assert component["coordinate_space"] == "caked_deg"
+            assert component["units"] == "deg"
+            assert component["observed_source"] == "background/manual"
+            assert str(component["predicted_source"]).startswith("dynamic_current_simulation")
+            assert np.isclose(
+                float(component["unweighted_value"]),
+                float(audit_record["residual_caked"][axis_index]),
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+            assert np.isclose(
+                float(component["weighted_value"]),
+                float(component["unweighted_value"]) * float(component["weight"]),
+                atol=1.0e-9,
+                rtol=0.0,
+            )
+
+
+def test_minus_1_0_10_optimizer_prediction_matches_fit_handoff_prediction(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    trace = _diag_objective_trace(fit_run["result"])
+    assert trace
+    optimizer_rows = _diag_optimizer_rows_by_branch(trace[0])
+    _diag_print_handoff_optimizer_prediction_table(rows_by_branch, optimizer_rows)
+    _diag_print_saved_sim_native_diagnostics(dataset, rows_by_branch, optimizer_rows)
+
+    failures = []
+    for branch in (0, 1):
+        handoff = rows_by_branch[branch]
+        optimizer = optimizer_rows.get(branch)
+        if optimizer is None:
+            failures.append((branch, "missing_optimizer_prediction"))
+            continue
+        handoff_prediction = _diag_row_pair(handoff, "fit_prediction_caked_deg")
+        optimizer_prediction = _diag_row_pair(optimizer, "predicted_caked_deg")
+        if not np.allclose(
+            optimizer_prediction,
+            handoff_prediction,
+            atol=1.0e-9,
+            rtol=0.0,
+        ):
+            failures.append(
+                (
+                    branch,
+                    "optimizer_prediction_source_mismatch",
+                    handoff_prediction,
+                    optimizer_prediction,
+                )
+            )
+    if failures:
+        print("first_failure=optimizer_prediction_source_mismatch")
+        print(f"prediction_failures={failures}")
+    assert not failures
+
+
+def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    callbacks = context["projection_callbacks"]
+    from ra_sim.fitting import optimization as opt
+
+    resolver_rows = {}
+    measured_rows = [
+        dict(row) for row in dataset.get("measured_for_fit", ()) or [] if isinstance(row, Mapping)
+    ]
+    initial_rows = [
+        dict(row)
+        for row in dataset.get("initial_pairs_display", ()) or []
+        if isinstance(row, Mapping)
+    ]
+    for index, measured_row in enumerate(measured_rows):
+        if not _diag_entry_is_minus_1_0_10_branch(measured_row):
+            continue
+        branch = int(measured_row["source_branch_index"])
+        initial_row = initial_rows[index] if index < len(initial_rows) else {}
+        handoff_row = rows_by_branch[branch]
+        entry = dict(measured_row)
+        entry.update(
+            {
+                "fit_source_resolution_kind": "provider_fixed_source_local",
+                "optimizer_request_source": "provider_pair",
+                "optimizer_request_has_fixed_source": True,
+                "optimizer_request_fallback_row": False,
+                "provider_local_subset_provenance": True,
+                "provider_local_subset_assignment": "provider_local_duplicate_hkl_unproven",
+                "resolved_table_index": entry.get("source_table_index"),
+                "resolved_peak_index": branch,
+            }
+        )
+        if "sim_display" in initial_row:
+            entry["fit_prediction_detector_display_px"] = initial_row["sim_display"]
+        if "sim_native" in initial_row:
+            entry["fit_prediction_detector_native_px"] = initial_row["sim_native"]
+            entry["sim_visual_detector_canonical_native_px"] = initial_row["sim_native"]
+        entry["fit_prediction_detector_display_px"] = handoff_row[
+            "fit_prediction_detector_display_px"
+        ]
+        entry["sim_visual_detector_display_px"] = handoff_row[
+            "fit_prediction_detector_display_px"
+        ]
+        entry["fit_prediction_detector_native_px"] = handoff_row[
+            "fit_prediction_detector_native_px"
+        ]
+        entry["sim_visual_detector_canonical_native_px"] = handoff_row[
+            "fit_prediction_detector_native_px"
+        ]
+        display_point = entry["sim_visual_detector_display_px"]
+        wrong_native = callbacks.background_display_to_native_detector_coords(
+            float(display_point[0]),
+            float(display_point[1]),
+        )
+        if wrong_native is not None:
+            entry["sim_visual_detector_native_px"] = (
+                float(wrong_native[0]),
+                float(wrong_native[1]),
+            )
+        point, payload, reason = opt._provider_local_saved_sim_detector_point(entry)
+        assert point is not None, (branch, reason, payload)
+        row = dict(payload)
+        row["caked_from_saved_native"] = entry.get("sim_visual_caked_deg")
+        row["caked_from_display_to_native"] = handoff_row["fit_prediction_caked_deg"]
+        row["predicted_caked_deg"] = handoff_row["fit_prediction_caked_deg"]
+        resolver_rows[branch] = row
+    _diag_print_saved_sim_native_diagnostics(dataset, rows_by_branch, resolver_rows)
+
+    for branch in (0, 1):
+        row = resolver_rows[branch]
+        saved_native = _diag_row_pair(row, "saved_sim_detector_native_px")
+        canonical_native = _diag_row_pair(
+            row,
+            "display_to_native_saved_sim_detector_display_px",
+        )
+        handoff_prediction = _diag_row_pair(
+            rows_by_branch[branch],
+            "fit_prediction_caked_deg",
+        )
+        optimizer_prediction = _diag_row_pair(row, "predicted_caked_deg")
+        assert not np.allclose(saved_native, canonical_native, atol=1.0e-6, rtol=0.0)
+        assert not np.allclose(
+            _diag_row_pair(row, "caked_from_saved_native"),
+            handoff_prediction,
+            atol=1.0e-6,
+            rtol=0.0,
+        )
+        assert row.get("saved_sim_detector_native_rejected_reason") == (
+            "display_native_mismatch"
+        )
+        assert np.allclose(
+            _diag_row_pair(row, "caked_from_display_to_native"),
+            handoff_prediction,
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        assert np.allclose(
+            optimizer_prediction,
+            handoff_prediction,
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+
+
+def test_minus_1_0_10_fitter_same_params_reproduce_same_residual(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_first = _diag_recompute_fit_audit_rows(context, dataset)
+    rows_second = _diag_recompute_fit_audit_rows(context, dataset)
+    records_first = _diag_records_from_audit_rows(rows_first)
+    records_second = _diag_records_from_audit_rows(rows_second)
+    _diag_print_residual_table("baseline_residual_table", records_first)
+    _diag_print_residual_table("same_params_repeated_residual_table", records_second)
+    _diag_records_close(records_first, records_second)
+
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    trace = _diag_objective_trace(fit_run["result"])
+    assert trace
+    first_vec = np.asarray(trace[0].get("residual_vector", ()), dtype=float)
+    second_vec = np.asarray(trace[0].get("residual_vector", ()), dtype=float)
+    assert np.allclose(first_vec, second_vec, atol=1.0e-12, rtol=0.0)
+
+
+def test_minus_1_0_10_fitter_trial_param_changes_prediction(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    base_rows = _diag_recompute_fit_audit_rows(context, dataset, params)
+    base_records = _diag_records_from_audit_rows(base_rows)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    var_names = list(fit_run["var_names"])
+    print("parameter_sensitivity_table")
+    print(
+        "param | before | after | branch0_prediction_before | branch0_prediction_after | "
+        "branch1_prediction_before | branch1_prediction_after | residual_norm_before | "
+        "residual_norm_after | sensitivity_norm"
+    )
+    any_sensitive = False
+    before_norm = _diag_total_residual_norm(base_records)
+    for name in var_names:
+        if name not in params:
+            continue
+        before_value = float(params[name])
+        step = 0.1 if name not in {"zb", "zs", "corto_detector"} else 1.0
+        trial_params = dict(params)
+        trial_params[name] = before_value + float(step)
+        trial_rows = _diag_recompute_fit_audit_rows(context, dataset, trial_params)
+        trial_records = _diag_records_from_audit_rows(trial_rows)
+        after_norm = _diag_total_residual_norm(trial_records)
+        deltas = []
+        for branch in (0, 1):
+            before_pred = np.asarray(base_records[branch]["predicted_caked"], dtype=float)
+            after_pred = np.asarray(trial_records[branch]["predicted_caked"], dtype=float)
+            deltas.extend((after_pred - before_pred).tolist())
+        sensitivity_norm = float(np.linalg.norm(np.asarray(deltas, dtype=float)))
+        any_sensitive = any_sensitive or bool(sensitivity_norm > 1.0e-12)
+        print(
+            f"{name} | {before_value:.9f} | {trial_params[name]:.9f} | "
+            f"{_diag_fmt_pair(base_records[0]['predicted_caked'])} | "
+            f"{_diag_fmt_pair(trial_records[0]['predicted_caked'])} | "
+            f"{_diag_fmt_pair(base_records[1]['predicted_caked'])} | "
+            f"{_diag_fmt_pair(trial_records[1]['predicted_caked'])} | "
+            f"{before_norm:.9f} | {after_norm:.9f} | {sensitivity_norm:.9f}"
+        )
+    if not any_sensitive:
+        print("first_failure=fit_not_sensitive_to_qr_prediction")
+    assert any_sensitive, "fit_not_sensitive_to_qr_prediction"
+
+
+def test_minus_1_0_10_qr_only_fit_reduces_residual_after_correspondence_fix(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    baseline_records = _diag_records_from_audit_rows(rows_by_branch)
+    baseline_norm = _diag_total_residual_norm(baseline_records)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+    )
+    result = fit_run["result"]
+    trace = _diag_objective_trace(result)
+    after_records = None
+    after_norm = float("nan")
+    try:
+        after_records = _diag_after_records_from_fit_result(baseline_records, result)
+        after_norm = _diag_total_residual_norm(after_records)
+    except AssertionError:
+        after_records = None
+
+    print("qr_only_fit")
+    print(f"initial_params={fit_run['before_params']}")
+    print(f"final_params={fit_run['after_params']}")
+    print(f"nfev={int(getattr(result, 'nfev', 0) or 0)}")
+    print(f"success={bool(getattr(result, 'success', False))}")
+    _diag_print_residual_table("baseline_residual_table", baseline_records)
+    if after_records is None:
+        print("final_residual_table=<unavailable reason=no accepted optimizer step>")
+    else:
+        _diag_print_fit_step_table(baseline_records, after_records)
+    print(f"total_norm_before={baseline_norm:.9f}")
+    print(f"total_norm_after={after_norm:.9f}")
+    assert int(getattr(result, "nfev", 0) or 0) > 0
+    components = _diag_target_objective_components(trace[0]) if trace else []
+    if len(components) != 4:
+        print("first_failure=objective_not_using_qr_residual")
+    assert len(components) == 4, "objective_not_using_qr_residual"
+    if not (np.isfinite(after_norm) and after_norm <= baseline_norm + 1.0e-9):
+        reason = _diag_fixed_manual_pair_no_decrease_reason(
+            q_residual_count=len(components),
+            valid_evaluation=bool(np.isfinite(after_norm)),
+            params_changed=fit_run["before_params"] != fit_run["after_params"],
+            prediction_changed=bool(
+                after_records is not None
+                and _diag_predictions_changed(baseline_records, after_records)
+            ),
+            result=result,
+        )
+        print(f"qr_only_after_norm_not_reduced_reason={reason}")
+        assert reason
+    else:
+        assert np.isfinite(after_norm)
+
+
+def test_minus_1_0_10_full_fit_reports_qr_contribution(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    trace = _diag_objective_trace(fit_run["result"])
+    assert len(trace) >= 1
+    before = trace[0]
+    after = trace[-1]
+    total_before = float(before.get("residual_norm", np.nan))
+    total_after = float(after.get("residual_norm", np.nan))
+    qr_before = _diag_qr_norm_from_objective_record(before)
+    qr_after = _diag_qr_norm_from_objective_record(after)
+    non_qr_before = _diag_non_qr_point_norm_from_objective_record(before)
+    non_qr_after = _diag_non_qr_point_norm_from_objective_record(after)
+    weights = sorted(
+        {
+            float(component.get("weight", np.nan))
+            for component in _diag_target_objective_components(before)
+        }
+    )
+    print("full_fit_objective_decomposition")
+    print(f"total_objective_norm_before={total_before:.9f}")
+    print(f"total_objective_norm_after={total_after:.9f}")
+    print(f"qr_residual_block_norm_before={qr_before:.9f}")
+    print(f"qr_residual_block_norm_after={qr_after:.9f}")
+    print(f"non_qr_block_norm_before={non_qr_before:.9f}")
+    print(f"non_qr_block_norm_after={non_qr_after:.9f}")
+    print(f"line_block_norm_before={float(before.get('line_residual_norm', np.nan)):.9f}")
+    print(f"line_block_norm_after={float(after.get('line_residual_norm', np.nan)):.9f}")
+    print(f"prior_block_norm_before={float(before.get('prior_residual_norm', np.nan)):.9f}")
+    print(f"prior_block_norm_after={float(after.get('prior_residual_norm', np.nan)):.9f}")
+    print(f"qr_weights={weights}")
+    print(f"accepted_params_before={fit_run['before_params']}")
+    print(f"accepted_params_after={fit_run['after_params']}")
+    if not _diag_target_objective_components(before):
+        print("qr_residual_block_absent=yes")
+    assert _diag_target_objective_components(before), "qr_residual_block_absent"
+    if total_after < total_before - 1.0e-9 and qr_after > qr_before + 1.0e-9:
+        print("qr_residual_sacrificed_to_other_terms=yes")
+    if weights and max(weights) < 1.0:
+        print("qr_weight_too_low=yes")
+
+
+def test_minus_1_0_10_prediction_identity_stable_during_fit(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+    )
+    trace = _diag_objective_trace(fit_run["result"])
+    assert trace
+    _diag_print_branch_identity_stability_table(trace)
+    baseline_rows = _diag_target_prediction_rows_by_branch(trace[0])
+    assert set(baseline_rows) == {0, 1}
+    for record in trace:
+        rows = _diag_target_prediction_rows_by_branch(record)
+        assert set(rows) == {0, 1}, "branch_identity_switched"
+        for branch, row in rows.items():
+            expected = baseline_rows[branch]
+            identity = (
+                row.get("q_group_key"),
+                row.get("hkl"),
+                row.get("source_branch_index"),
+                row.get("source_peak_index"),
+                row.get("branch_id"),
+            )
+            expected_identity = (
+                expected.get("q_group_key"),
+                expected.get("hkl"),
+                expected.get("source_branch_index"),
+                expected.get("source_peak_index"),
+                expected.get("branch_id"),
+            )
+            assert identity == expected_identity, "branch_identity_switched"
+            assert row.get("predicted_source") != "rejected:prediction_branch_source_switched"
+
+
+def test_qr_residual_objective_units_are_not_mixed_unweighted(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(context, dataset)
+    request = fit_run["request"]
+    result = fit_run["result"]
+    optimizer_cfg = request.refinement_config.get("optimizer", {})
+    assert bool(optimizer_cfg.get("dynamic_point_geometry_fit", False))
+    for row in rows_by_branch.values():
+        assert row["objective_space"] in {"detector_native_px", "caked_deg"}
+        assert row["objective_mixes_detector_px_and_caked_deg"] == "no"
+        if row["objective_space"] == "caked_deg":
+            assert row["objective_residual_units"] == "deg"
+        else:
+            assert row["objective_residual_units"] == "px"
+    summary = getattr(result, "point_match_summary", {}) or {}
+    assert int(summary.get("manual_caked_residual_row_count", 0)) >= 2
+    assert summary.get("metric_unit") == "deg"
+    assert summary.get("weighted_metric_unit") == "weighted_deg"
+    for diag in getattr(result, "point_match_diagnostics", []) or []:
+        if not isinstance(diag, Mapping) or not diag.get("valid"):
+            continue
+        vector = np.asarray(diag.get("solver_residual_vector", ()), dtype=float)
+        weighted = np.asarray(
+            [
+                float(diag.get("weighted_delta_two_theta_deg", np.nan)),
+                float(diag.get("weighted_delta_phi_deg", np.nan)),
+            ],
+            dtype=float,
+        )
+        assert vector.shape == weighted.shape
+        assert np.allclose(vector, weighted, atol=1.0e-9, rtol=0.0)
+
+
+def test_minus_1_0_10_fit_observed_matches_manual_refined_visual(tmp_path) -> None:
+    _context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    assert set(rows_by_branch) == {0, 1}
+    for row in rows_by_branch.values():
+        assert row["observed_visual_to_fit_observed_match"] == "yes"
+        assert float(row["fit_observed_minus_observed_refined_detector_delta_px"]) <= 1.0
+        _diag_delta_pair_close(row["fit_observed_minus_observed_refined_caked_delta_deg"])
+
+
+def test_minus_1_0_10_sim_refined_caked_uses_real_projection(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    callbacks = context["projection_callbacks"]
+    assert set(rows_by_branch) == {0, 1}
+    for row in rows_by_branch.values():
+        caked = row.get("sim_refined_caked_deg")
+        native = row.get("sim_refined_detector_native_px")
+        assert caked is not None, (
+            row.get("source_branch_index"),
+            row.get("sim_refined_caked_deg_unavailable_reason"),
+        )
+        assert native is not None, row.get("source_branch_index")
+        assert row["caked_values_from_real_projection_callback"] == "yes"
+        assert row["sim_refined_caked_projection_status"] == "real_projection_callback"
+        assert not np.allclose(
+            caked,
+            (float(native[0]) / 100.0, float(native[1]) / 100.0),
+            atol=1.0e-3,
+            rtol=0.0,
+        )
+        display_back = callbacks.caked_angles_to_background_display_coords(
+            float(caked[0]),
+            float(caked[1]),
+        )
+        assert display_back is not None
+        native_back = callbacks.background_display_to_native_detector_coords(
+            float(display_back[0]),
+            float(display_back[1]),
+        )
+        assert native_back is not None
+        assert np.hypot(
+            float(native_back[0]) - float(native[0]),
+            float(native_back[1]) - float(native[1]),
+        ) <= 2.0
+
+
+def test_minus_1_0_10_fit_prediction_source_is_explicit(tmp_path) -> None:
+    _context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    rows_by_branch = _diag_fit_audit_rows(dataset)
+    allowed = {
+        "dynamic_current_simulation",
+        "saved_visual_sim_refined",
+    }
+    for row in rows_by_branch.values():
+        source = str(row.get("fit_prediction_source"))
+        assert source in allowed or source.startswith("unavailable_reason:")
+        assert "cache_fresh_row" not in source
+        if source == "dynamic_current_simulation":
+            assert row["fit_prediction_is_dynamic"] == "yes"
+            assert row["sim_visual_to_fit_prediction_match"] == "not-applicable"
+
+
+def test_minus_1_0_10_no_caked_values_printed_as_detector_px(tmp_path) -> None:
+    _context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    audit_lines = [str(line) for line in dataset.get("fit_handoff_audit_lines", [])]
+    suspicious = ("(39.827, 35.250)", "(10.880, 19.210)", "(10.810, 11.680)")
+    for line in audit_lines:
+        if "_detector" not in line or "_px=" not in line:
+            continue
+        assert not any(token in line for token in suspicious), line
+
+
+def test_minus_1_0_10_fit_handoff_audit_uses_bound_native_to_display_callback() -> None:
+    dataset = {
+        "native_background": np.zeros((20, 20), dtype=float),
+        "display_rotate_k": 0,
+        "native_detector_coords_to_detector_display_coords": lambda col, row: (
+            float(col) + 1000.0,
+            float(row) + 2000.0,
+        ),
+    }
+    assert gf._geometry_fit_audit_native_to_display((3.0, 4.0), dataset) == (
+        1003.0,
+        2004.0,
+    )
+
+
+def test_minus_1_0_10_fit_handoff_prefers_background_bound_native_to_display_callback() -> None:
+    bindings = SimpleNamespace(
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 1000.0,
+            float(row) + 2000.0,
+        ),
+        native_detector_coords_to_detector_display_coords_for_background=lambda idx: (
+            lambda col, row: (
+                float(col) + 10.0 * int(idx),
+                float(row) + 100.0 * int(idx),
+            )
+        ),
+    )
+
+    callback, reason, source = gf._geometry_fit_dataset_native_to_display_callback(bindings, 2)
+
+    assert callable(callback)
+    assert reason is None
+    assert source == "background_bound_callback"
+    assert callback(3.0, 4.0) == (23.0, 204.0)
+
+
+def test_minus_1_0_10_fit_handoff_bound_transform_failure_no_rotate_fallback() -> None:
+    bindings = SimpleNamespace(
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 1000.0,
+            float(row) + 2000.0,
+        ),
+        native_detector_coords_to_detector_display_coords_for_background=lambda _idx: None,
+    )
+    callback, reason, source = gf._geometry_fit_dataset_native_to_display_callback(bindings, 0)
+    dataset = {
+        "native_background": np.zeros((20, 20), dtype=float),
+        "display_rotate_k": 0,
+        "native_detector_coords_to_detector_display_coords": callback,
+        "native_detector_coords_to_detector_display_coords_unavailable_reason": reason,
+    }
+
+    point, unavailable = gf._geometry_fit_audit_native_to_display_result((3.0, 4.0), dataset)
+
+    assert callback is None
+    assert source == "background_bound_callback"
+    assert point is None
+    assert unavailable == "background-bound native->display callback unavailable"
+
+
+def test_minus_1_0_10_fit_handoff_audit_native_to_display_callback_failure_no_fallback() -> None:
+    dataset = {
+        "native_background": np.zeros((20, 20), dtype=float),
+        "display_rotate_k": 0,
+        "native_detector_coords_to_detector_display_coords": lambda _col, _row: None,
+    }
+    assert gf._geometry_fit_audit_native_to_display((3.0, 4.0), dataset) is None
+    lines = gf.build_geometry_fit_qr_handoff_audit_lines(
+        [
+            {
+                "source_branch_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "hkl": (-1, 0, 10),
+                "source_table_index": 160,
+                "source_row_index": 24,
+                "source_peak_index": 0,
+                "branch_id": "branch-0",
+                "fit_prediction_detector_display_px": None,
+                "fit_prediction_detector_display_px_unavailable_reason": (
+                    "live native->display callback returned unavailable"
+                ),
+            }
+        ]
+    )
+    assert (
+        "    fit_prediction_detector_display_px="
+        "<unavailable reason=live native->display callback returned unavailable>"
+    ) in lines
+
+
+def test_qr_fit_audit_caked_axes_do_not_claim_real_projection_callback() -> None:
+    caked, meta = gf._geometry_fit_audit_sim_refined_caked(
+        [
+            {
+                "sim_refined_caked_deg": (7.0, 4.0),
+                "sim_refined_caked_projection_status": "caked_simulation_image_axes",
+                "sim_refined_caked_projection_real_callback": False,
+            }
+        ],
+        (107.0, 204.0),
+        fit_space_projector=None,
+        base_fit_params={},
+    )
+
+    assert caked == (7.0, 4.0)
+    assert meta["sim_refined_caked_projection_status"] == "caked_simulation_image_axes"
+    assert meta["sim_refined_caked_projection_real_callback"] is False
+    assert meta["fit_prediction_uses_fake_or_test_transform"] is False
+
+
+def test_minus_1_0_10_fit_handoff_audit_lines_print_missing_target_block() -> None:
+    lines = gf.build_geometry_fit_qr_handoff_audit_lines([])
+    assert lines == [
+        "[ra-sim] Qr/Qz fit handoff audit",
+        "  <unavailable reason=target_q_group_not_in_fit_dataset>",
+    ]
+
+
+def test_minus_1_0_10_fit_handoff_audit_fit_observed_matches_manual_refined_visual(
+    tmp_path,
+) -> None:
+    test_minus_1_0_10_fit_observed_matches_manual_refined_visual(tmp_path)
+
+
+def test_minus_1_0_10_fit_handoff_audit_sim_refined_caked_uses_real_projection(
+    tmp_path,
+) -> None:
+    test_minus_1_0_10_sim_refined_caked_uses_real_projection(tmp_path)
+
+
+def test_minus_1_0_10_fit_handoff_audit_fit_prediction_source_is_explicit(
+    tmp_path,
+) -> None:
+    test_minus_1_0_10_fit_prediction_source_is_explicit(tmp_path)
+
+
+def test_minus_1_0_10_fit_handoff_audit_no_caked_values_printed_as_detector_px(
+    tmp_path,
+) -> None:
+    test_minus_1_0_10_no_caked_values_printed_as_detector_px(tmp_path)

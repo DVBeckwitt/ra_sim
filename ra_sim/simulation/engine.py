@@ -19,8 +19,12 @@ from ra_sim.utils.parallel import (
 )
 
 from .diffraction import (
+    _set_last_process_peaks_representative_hit_tables,
+    build_branch_representative_intersection_cache,
     get_process_peaks_runtime_kwargs,
+    get_last_process_peaks_representative_hit_tables,
     build_intersection_cache,
+    normalize_events_per_beam_phase_backend,
     process_peaks_parallel_safe,
     process_qr_rods_parallel_safe,
 )
@@ -34,8 +38,8 @@ from .types import (
 )
 
 
-PeakRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any]]
-RodRunner = Callable[..., tuple[Any, Any, Any, Any, Any, Any, Any]]
+PeakRunner = Callable[..., tuple[Any, ...]]
+RodRunner = Callable[..., tuple[Any, ...]]
 _FORWARD_SIMULATION_NUMBA_WARMUP_LOCK = Lock()
 _FORWARD_SIMULATION_NUMBA_WARMED = False
 _FORWARD_SIMULATION_NUMBA_WARMUP_FAILED = False
@@ -119,6 +123,43 @@ def _ensure_best_sample_buffer(
         return None
     request.best_sample_indices_out = np.full(int(peak_count), -1, dtype=np.int64)
     return request.best_sample_indices_out
+
+
+def _normalize_representative_hit_tables_candidate(
+    candidate: object,
+) -> tuple[bool, list[object] | None]:
+    if candidate is None:
+        return True, None
+    if isinstance(candidate, np.ndarray):
+        return False, None
+    try:
+        tables = list(candidate)  # type: ignore[arg-type]
+    except TypeError:
+        return False, None
+    normalized: list[object] = []
+    for table in tables:
+        try:
+            arr = np.asarray(table, dtype=np.float64)
+        except Exception:
+            return False, None
+        if arr.ndim != 2:
+            return False, None
+        normalized.append(table)
+    return True, normalized
+
+
+def _representative_hit_tables_from_runner_result(
+    result: tuple[Any, ...],
+    *,
+    representative_index: int,
+) -> list[object] | None:
+    if len(result) > representative_index:
+        valid, tables = _normalize_representative_hit_tables_candidate(
+            result[representative_index]
+        )
+        if valid:
+            return tables
+    return get_last_process_peaks_representative_hit_tables()
 
 
 def _ensure_request_beam_n2_sample_array(request: SimulationRequest) -> np.ndarray:
@@ -263,6 +304,9 @@ def _run_simulation_request(
         solve_q_steps=request.mosaic.solve_q_steps,
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
+        events_per_beam_phase=normalize_events_per_beam_phase_backend(
+            request.mosaic.events_per_beam_phase
+        ),
         collect_hit_tables=collect_for_cache,
         accumulate_image=request.accumulate_image,
         exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
@@ -331,9 +375,15 @@ def _run_simulation_request(
         accumulate_image=bool(request.accumulate_image),
     ):
         with temporary_numba_thread_limit(worker_count):
-            image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
+            _set_last_process_peaks_representative_hit_tables(None)
+            peak_result = peak_runner(
                 *peak_args,
                 **peak_kwargs,
+            )
+            image, hit_tables, q_data, q_count, all_status, miss_tables = peak_result[:6]
+            representative_hit_tables = _representative_hit_tables_from_runner_result(
+                peak_result,
+                representative_index=6,
             )
             if safe_run_stats_out is not None:
                 _set_last_forward_simulation_safe_run_used_python_runner(
@@ -371,8 +421,8 @@ def _run_simulation_request(
                     projection_debug_background,
                 )
         if request.build_intersection_cache:
-            intersection_cache = build_intersection_cache(
-                hit_tables,
+            intersection_cache = build_branch_representative_intersection_cache(
+                representative_hit_tables if representative_hit_tables is not None else hit_tables,
                 request.geometry.av,
                 request.geometry.cv,
                 beam_x_array=request.beam.beam_x_array,
@@ -381,6 +431,7 @@ def _run_simulation_request(
                 phi_array=request.beam.phi_array,
                 wavelength_array=request.beam.wavelength_array,
                 best_sample_indices_out=best_sample_indices_out,
+                group_by_qr_set=False,
             )
         else:
             intersection_cache = []
@@ -758,6 +809,9 @@ def simulate_qr_rods(
         solve_q_steps=request.mosaic.solve_q_steps,
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
+        events_per_beam_phase=normalize_events_per_beam_phase_backend(
+            request.mosaic.events_per_beam_phase
+        ),
         collect_hit_tables=collect_for_cache,
         accumulate_image=request.accumulate_image,
         exit_projection_mode=resolve_exit_projection_mode_flag(request.exit_projection_mode),
@@ -821,9 +875,17 @@ def simulate_qr_rods(
         accumulate_image=bool(request.accumulate_image),
     ):
         with temporary_numba_thread_limit(worker_count):
-            image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
+            _set_last_process_peaks_representative_hit_tables(None)
+            rod_result = peak_runner(
                 *rod_args,
                 **rod_kwargs,
+            )
+            image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = (
+                rod_result[:7]
+            )
+            representative_hit_tables = _representative_hit_tables_from_runner_result(
+                rod_result,
+                representative_index=7,
             )
             if safe_run_stats_out is not None:
                 _set_last_qr_rod_simulation_safe_run_used_python_runner(
@@ -861,8 +923,8 @@ def simulate_qr_rods(
                     projection_debug_background,
                 )
         if request.build_intersection_cache:
-            intersection_cache = build_intersection_cache(
-                hit_tables,
+            intersection_cache = build_branch_representative_intersection_cache(
+                representative_hit_tables if representative_hit_tables is not None else hit_tables,
                 request.geometry.av,
                 request.geometry.cv,
                 beam_x_array=request.beam.beam_x_array,
@@ -871,6 +933,7 @@ def simulate_qr_rods(
                 phi_array=request.beam.phi_array,
                 wavelength_array=request.beam.wavelength_array,
                 best_sample_indices_out=best_sample_indices_out,
+                group_by_qr_set=True,
             )
         else:
             intersection_cache = []

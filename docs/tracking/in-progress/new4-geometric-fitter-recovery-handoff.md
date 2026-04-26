@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-23
+Last updated: 2026-04-26
 
 ## Current status
 
@@ -18,6 +18,14 @@ Last updated: 2026-04-23
 - Rung 3A `a` diagnosis is usable.
 - Rung 3B caked-point reprojection guard is green.
 - Rung 4 initial paired solves are green.
+- Target `(-1,0,10)` Qr/Qz point-consistency rungs are green for branches 0
+  and 1 across detector visual/native, caked `2theta,phi`,
+  manual/background observed, visual simulation, fit observed, and fit
+  prediction values.
+- Target `(-1,0,10)` optimizer objective rung is green: the Qr residual block
+  is present in caked degrees, residuals are `predicted - observed`, Qr weights
+  are `[1.0]`, dry-run evaluates the objective without `least_squares`, and
+  branch identity stays fixed during solve evaluation.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.
@@ -96,6 +104,20 @@ feature-combination solves.
 
 Status by work type:
 
+- Bug/error: target `(-1,0,10)` Qr/Qz objective absence is fixed. Resolver
+  failure class was B: fixed provider-local request rows reached the optimizer,
+  but the objective resolver rejected them as source-row provenance loss. The
+  resolver now preserves provider-local proof, fails closed for ambiguous
+  duplicate-HKL rows, and only uses saved detector-native simulation points
+  after stale-row proof or canonical saved-source identity proof. Raw native
+  saved pixels without canonical display/native proof still require stale-row
+  proof.
+- Review hardening: saved-simulation fit-space offset caching is baseline
+  primed before seed scoring or least-squares solve, so seed/multistart order
+  cannot decide the Qr/Qz residual alignment offset.
+- Feature: objective dry-run and residual-vector audit tests now prove Qr
+  residual-vector membership before solve. Full-fit decomposition reports total,
+  Qr, non-Qr, line, and prior block norms before/after.
 - Feature: controlled Rung 7 passed `dynamic_reanchor`, `discrete_modes`,
   `seed_multistart`, `full_beam_polish`, and `identifiability_features` in the
   fixed comparator `codex_restore_rung7_features_fix_20260423`; the exact-caked

@@ -3086,6 +3086,10 @@ def create_sampling_optics_controls(
     sample_count_min: int,
     sample_count_max: int,
     sample_count_text: str,
+    events_per_phase_value: int,
+    events_per_phase_min: int,
+    events_per_phase_max: int,
+    events_per_phase_text: str,
     rod_points_per_gz_value: int,
     rod_points_per_gz_min: int,
     rod_points_per_gz_max: int,
@@ -3094,6 +3098,8 @@ def create_sampling_optics_controls(
     optics_mode_text: str,
     on_sample_count_slide: Callable[[object], None],
     on_commit_sample_count: Callable[[object], None],
+    on_events_per_phase_slide: Callable[[object], None],
+    on_commit_events_per_phase: Callable[[object], None],
     on_rod_points_per_gz_slide: Callable[[object], None],
     on_commit_rod_points_per_gz: Callable[[object], None],
     **_ignored_legacy_sampling_kwargs,
@@ -3138,6 +3144,38 @@ def create_sampling_optics_controls(
         width=14,
     )
     sample_count_value_label.pack(side=tk.LEFT, padx=(8, 0))
+
+    events_per_phase_frame = ttk.Frame(random_sampling_frame)
+    events_per_phase_frame.pack(fill=tk.X, pady=(0, 2))
+    ttk.Label(events_per_phase_frame, text="Events per beam phase").pack(
+        anchor=tk.W,
+        padx=5,
+    )
+
+    events_per_phase_row = ttk.Frame(events_per_phase_frame)
+    events_per_phase_row.pack(fill=tk.X, padx=5, pady=(2, 0))
+
+    events_per_phase_var = tk.IntVar(value=int(events_per_phase_value))
+    events_per_phase_scale = tk.Scale(
+        events_per_phase_row,
+        from_=int(events_per_phase_min),
+        to=int(events_per_phase_max),
+        orient=tk.HORIZONTAL,
+        resolution=1,
+        showvalue=False,
+        variable=events_per_phase_var,
+        command=on_events_per_phase_slide,
+    )
+    events_per_phase_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    events_per_phase_scale.bind("<ButtonRelease-1>", on_commit_events_per_phase)
+
+    events_per_phase_value_var = tk.StringVar(value=str(events_per_phase_text))
+    events_per_phase_value_label = ttk.Label(
+        events_per_phase_row,
+        textvariable=events_per_phase_value_var,
+        width=16,
+    )
+    events_per_phase_value_label.pack(side=tk.LEFT, padx=(8, 0))
 
     rod_points_per_gz_frame = ttk.Frame(parent)
     rod_points_per_gz_frame.pack(fill=tk.X, pady=(6, 2))
@@ -3209,6 +3247,11 @@ def create_sampling_optics_controls(
     view_state.sample_count_scale = sample_count_scale
     view_state.sample_count_value_var = sample_count_value_var
     view_state.sample_count_value_label = sample_count_value_label
+    view_state.events_per_phase_frame = events_per_phase_frame
+    view_state.events_per_phase_var = events_per_phase_var
+    view_state.events_per_phase_scale = events_per_phase_scale
+    view_state.events_per_phase_value_var = events_per_phase_value_var
+    view_state.events_per_phase_value_label = events_per_phase_value_label
     view_state.rod_points_per_gz_frame = rod_points_per_gz_frame
     view_state.rod_points_per_gz_var = rod_points_per_gz_var
     view_state.rod_points_per_gz_scale = rod_points_per_gz_scale
@@ -3250,6 +3293,17 @@ def set_sampling_resolution_summary_text(
     """Compatibility wrapper for older call sites/tests."""
 
     set_sampling_sample_count_text(view_state, text)
+
+
+def set_sampling_events_per_phase_text(
+    view_state: SamplingOpticsControlsViewState,
+    text: str,
+) -> None:
+    """Update the live events-per-phase label beside the slider."""
+
+    setter = getattr(view_state.events_per_phase_value_var, "set", None)
+    if callable(setter):
+        setter(str(text))
 
 
 def set_sampling_rod_points_per_gz_text(
@@ -3313,6 +3367,7 @@ def set_sampling_sample_count_controls_enabled(
 
     state_value = tk.NORMAL if enabled else tk.DISABLED
     _configure_widget_state(view_state.sample_count_scale, state_value)
+    _configure_widget_state(view_state.events_per_phase_scale, state_value)
 
 
 def set_sampling_custom_controls_enabled(
@@ -3337,6 +3392,7 @@ def set_sampling_method_controls_enabled(
     stratified_state = tk.NORMAL if stratified_enabled else tk.DISABLED
 
     _configure_widget_state(view_state.sample_count_scale, random_state)
+    _configure_widget_state(view_state.events_per_phase_scale, random_state)
 
     _configure_widget_state(view_state.seed_entry, stratified_state)
     _configure_widget_state(view_state.reset_sampling_button, stratified_state)

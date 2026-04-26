@@ -8,7 +8,7 @@ you need implementation-level detail.
 
 - [README.md](../README.md): install, configuration, CLI entry points, screenshots
 - [CONTRIBUTING.md](../CONTRIBUTING.md): development workflow, validation, PR expectations
-- [simulation_and_fitting.md](simulation_and_fitting.md): canonical reference for the live pipeline
+- [simulation_and_fitting.md](simulation_and_fitting.md): canonical reference for the live pipeline, including the mosaic profile and structure-factor fitting math contracts
 
 ## Task-Focused Guides
 
@@ -30,6 +30,8 @@ If you need to:
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
 - inspect live recovery work or substantial investigations: start with [tracking/index.md](tracking/index.md)
 - inspect the current fitter project order: start with [tracking/index.md](tracking/index.md)
+- implement the selected-pair mosaic profile plan: read [tracking/in-progress/mosaic-fitter.md](tracking/in-progress/mosaic-fitter.md) and [the canonical mosaic section](simulation_and_fitting.md#mosaic-shape-fitting-legacy-mosaic-width-fitting-and-image-space-refinement)
+- implement the global multi-image structure-factor fitter: read [tracking/planned-features/structure-factor-fitter.md](tracking/planned-features/structure-factor-fitter.md) and [the ordered-structure section](simulation_and_fitting.md#ordered-structure-intensity-model-and-detector-space-refinement)
 - choose tests, validation tools, timing tools, or benchmarks: read [testing-and-validation.md](testing-and-validation.md)
 - debug the geometric fitter saved-state baseline: start with [tracking/index.md](tracking/index.md)
 - debug rotated or drifting simulated peak overlays: start with [tracking/index.md](tracking/index.md)

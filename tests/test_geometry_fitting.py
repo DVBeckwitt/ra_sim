@@ -3341,6 +3341,195 @@ def test_resolve_fixed_source_matches_rescues_provider_local_singleton_row() -> 
     assert diag["provider_local_subset_branch_provenance"] is True
 
 
+def test_resolve_fixed_source_matches_provider_local_stale_row_single_row_table() -> None:
+    entry = _provider_local_singleton_entry(
+        q_group_key=("q", 2),
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+    )
+    hit_tables = [np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert len(resolved) == 1
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_kind"] == "fixed_source"
+    assert diag["resolution_reason"] == (
+        "provider_local_stale_row_index_single_row_table_resolved"
+    )
+    assert diag["provider_local_stale_row_index_single_row_table_resolved"] is True
+    assert diag["prediction_source_status"] == "available"
+    assert diag["stale_source_row_index"] == 24
+    assert diag["source_row_count"] == 1
+
+
+def test_resolve_fixed_source_matches_provider_local_stale_row_unique_branch() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 3.0, 3.0, -10.0, 2.0, 0.0, 0.0],
+                [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert len(resolved) == 1
+    assert resolved[0][1] == (4.0, 4.0)
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_kind"] == "fixed_source"
+    assert diag["resolution_reason"] == "provider_local_stale_row_index_branch_resolved"
+    assert diag["provider_local_stale_row_index_branch_resolved"] is True
+    assert diag["provider_local_branch_match_row_count"] == 1
+    assert diag["prediction_source_status"] == "available"
+
+
+def test_resolve_fixed_source_matches_saved_detector_uses_stale_row_proof() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        sim_visual_detector_native_px=(9.0, 8.0),
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 3.0, 3.0, -10.0, 2.0, 0.0, 0.0],
+                [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert len(resolved) == 1
+    assert resolved[0][1] == (9.0, 8.0)
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_reason"] == "provider_local_saved_sim_detector_native_px"
+    assert diag["provider_local_stale_row_proof_reason"] == (
+        "provider_local_stale_row_index_branch_resolved"
+    )
+    assert diag["provider_local_saved_sim_detector_branch_resolved"] is True
+
+
+def test_resolve_fixed_source_matches_provider_local_duplicate_hkl_ambiguous_rejects() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+                [1.0, 5.0, 5.0, 12.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert resolved == []
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_kind"] == "fixed_source"
+    assert diag["resolution_reason"] in {
+        "provider_local_duplicate_hkl_unproven",
+        "unavailable_ambiguous",
+    }
+    assert diag["prediction_source_status"] == "unavailable_ambiguous"
+    assert diag["provider_local_branch_match_row_count"] == 2
+
+
+def test_resolve_fixed_source_matches_provider_local_duplicate_hkl_saved_px_rejects() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_local_subset_assignment="provider_local_duplicate_hkl_unproven",
+        provider_local_subset_branch_provenance=False,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+            "source_row_index": 24,
+            "source_peak_index": 0,
+            "source_branch_index": 0,
+        },
+        sim_visual_detector_native_px=(9.0, 8.0),
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+                [1.0, 5.0, 5.0, 12.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert resolved == []
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_kind"] == "fixed_source"
+    assert diag["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
+    assert diag["prediction_source_status"] == "unavailable_ambiguous"
+
+
+def test_resolve_fixed_source_matches_does_not_upgrade_local_to_full_reflection() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+    )
+    hit_tables = [np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert len(resolved) == 1
+    assert fallback_entries == []
+    assert entry.get("source_reflection_namespace") != "full_reflection"
+    assert resolution_lookup[id(entry)].get("source_reflection_namespace") != "full_reflection"
+
+
 def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives() -> None:
     base_hit_row = [1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]
     cases = [
