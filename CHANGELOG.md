@@ -35,6 +35,7 @@
   - Updated `ra_sim/fitting/optimization.py` with robust solver config, restart support, one-to-one point matching, weighted residuals, and missing-pair penalties.
   - Kept New4 ladder lean solve rungs fast by disabling identifiability diagnostics by default, preserving the explicit `identifiability_features` diagnostic run, and throttling running heartbeat writes while keeping full residual traces in final reports.
   - Fixed the `(-1,0,10)` Qr/Qz geometric-fitter objective handoff so provider-local fixed-source rows resolve without HKL fallback, selected caked residuals enter the optimizer vector, saved detector-point shortcuts cannot bypass ambiguous row rejection, and baseline fit-space offsets are primed from explicit baseline params instead of the first objective evaluation.
+  - Fixed New4 Mode A Qr geometric-fit prediction so all 14 saved first-image branches resolve by locked dynamic identity, trial params rebuild detector-space source rows, simulated caked peaks are refined before residual calculation, and partial 8/28 residual objectives fail closed instead of silently using stale visual/caked coordinates.
 
 - **GUI and UX updates**
   - Made simulation GUI startup default to diagnostics-off, with saved debug settings and one-run debug mode kept as explicit opt-in choices.

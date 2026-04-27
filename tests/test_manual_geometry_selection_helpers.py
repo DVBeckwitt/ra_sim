@@ -1,11 +1,14 @@
 from collections.abc import Mapping, Sequence
 import contextlib
+from dataclasses import replace
 import importlib
 import io
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from ra_sim.fitting.background_peak_matching import build_background_peak_context
 from ra_sim import headless_geometry_fit as hgf
@@ -15188,14 +15191,70 @@ def test_runtime_projection_callbacks_collapse_raw_cache_00l_rows_before_first_c
     assert len([entry for entry in displayed if entry.get("q_group_key") == group_key]) == 1
 
 
-_QR_PICKER_DIAG_STATE_PATH = (
+_QR_PICKER_DIAG_LOCAL_STATE_PATH = (
+    Path.home()
+    / ".local"
+    / "share"
+    / "ra_sim"
+    / "new4.json"
+)
+_QR_PICKER_DIAG_ARTIFACT_STATE_PATH = (
     Path(__file__).resolve().parents[1]
     / "artifacts"
     / "geometry_fit_gui_states"
     / "new4.json"
 )
+_QR_PICKER_DIAG_STATE_OVERRIDE = os.environ.get("RA_SIM_QR_PICKER_DIAG_STATE")
+_QR_PICKER_DIAG_STATE_PATH = (
+    Path(_QR_PICKER_DIAG_STATE_OVERRIDE)
+    if _QR_PICKER_DIAG_STATE_OVERRIDE
+    else (
+        _QR_PICKER_DIAG_LOCAL_STATE_PATH
+        if _QR_PICKER_DIAG_LOCAL_STATE_PATH.exists()
+        else _QR_PICKER_DIAG_ARTIFACT_STATE_PATH
+    )
+)
 _QR_PICKER_TARGET_Q_GROUP_KEY = ("q_group", "primary", 1, 10)
 _QR_PICKER_TARGET_HKL = (-1, 0, 10)
+_LOCKED_MANUAL_QR_SOURCE_PREFIX = "locked_manual_qr:"
+_NEW4_FIRST_IMAGE_BACKGROUND_INDEX = 0
+_NEW4_FIRST_IMAGE_BACKGROUND_NAME = "Bi2Se3_5m_5d.osc"
+_NEW4_FIRST_IMAGE_EXPECTED_INVENTORY = (
+    (("q_group", "primary", 0, 3), (0, 0, 3), 11, 74, 1, 1),
+    (("q_group", "primary", 1, 5), (-1, 0, 5), 111, 11, 0, 0),
+    (("q_group", "primary", 1, 5), (-1, 0, 5), 111, 172, 1, 1),
+    (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 42, 0, 0),
+    (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 120, 1, 1),
+    (("q_group", "primary", 3, 6), (-2, 1, 6), 280, 29, 0, 0),
+    (("q_group", "primary", 3, 6), (-2, 1, 6), 280, 118, 1, 1),
+    (("q_group", "primary", 4, 10), (-2, 0, 10), 404, 34, 0, 0),
+    (("q_group", "primary", 4, 10), (-2, 0, 10), 404, 154, 1, 1),
+    (("q_group", "primary", 3, 15), (-2, 1, 15), 302, 49, 0, 0),
+    (("q_group", "primary", 3, 15), (-2, 1, 15), 302, 122, 1, 1),
+    (("q_group", "primary", 4, 5), (-2, 0, 5), 356, 13, 0, 0),
+    (("q_group", "primary", 4, 5), (-2, 0, 5), 356, 161, 1, 1),
+    (("q_group", "primary", 1, 16), (-1, 0, 16), 222, 75, 0, 0),
+    (("q_group", "primary", 1, 16), (-1, 0, 16), 222, 32, 1, 1),
+)
+_NEW4_FIRST_IMAGE_PAIRED_INVENTORY = tuple(
+    item for item in _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY if item[1] != (0, 0, 3)
+)
+
+
+def _diag_is_locked_manual_qr_prediction_source(source) -> bool:
+    text = str(source or "")
+    return text.startswith(_LOCKED_MANUAL_QR_SOURCE_PREFIX) or text.startswith(
+        "dynamic_trial_simulation:locked_manual_qr_fit_prediction"
+    )
+
+
+def _diag_is_shared_qr_prediction_source(source) -> bool:
+    text = str(source or "")
+    return (
+        _diag_is_locked_manual_qr_prediction_source(text)
+        or text == "dynamic_current_simulation"
+        or text.startswith("dynamic_current_simulation:")
+    )
 
 
 def _diag_plain(value):
@@ -15339,6 +15398,143 @@ def _diag_load_saved_state():
     return dict(loaded)
 
 
+def _diag_state_current_background_index(saved_state):
+    files = saved_state.get("files", {}) if isinstance(saved_state, Mapping) else {}
+    if isinstance(files, Mapping) and files.get("current_background_index") is not None:
+        return int(files.get("current_background_index"))
+    value = saved_state.get("current_background_index", 0) if isinstance(saved_state, Mapping) else 0
+    return int(value)
+
+
+def _diag_state_background_name(saved_state, index=0):
+    files = saved_state.get("files", {}) if isinstance(saved_state, Mapping) else {}
+    background_files = files.get("background_files", ()) if isinstance(files, Mapping) else ()
+    try:
+        return Path(str(list(background_files)[int(index)])).name
+    except Exception:
+        pass
+    geometry_state = saved_state.get("geometry", {}) if isinstance(saved_state, Mapping) else {}
+    manual_pairs = geometry_state.get("manual_pairs", ()) if isinstance(geometry_state, Mapping) else ()
+    for row in manual_pairs or ():
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            if int(row.get("background_index")) != int(index):
+                continue
+        except Exception:
+            continue
+        name = row.get("background_name")
+        if name is not None:
+            return Path(str(name)).name
+    return ""
+
+
+def _diag_manual_pair_rows(saved_state):
+    geometry_state = saved_state.get("geometry", {}) if isinstance(saved_state, Mapping) else {}
+    return geometry_state.get("manual_pairs", ()) if isinstance(geometry_state, Mapping) else ()
+
+
+def _diag_manual_entries_for_background(saved_state, background_index):
+    entries = []
+    for item in _diag_manual_pair_rows(saved_state):
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            item_background_index = int(item.get("background_index"))
+        except Exception:
+            continue
+        if item_background_index != int(background_index):
+            continue
+        entries.extend(
+            dict(entry) for entry in item.get("entries", ()) if isinstance(entry, Mapping)
+        )
+    return entries
+
+
+def _diag_new4_inventory_key(entry):
+    q_group_key = _diag_q_group_key(entry)
+    hkl = _diag_hkl(entry)
+    try:
+        source_table = int(entry.get("source_table_index"))
+        source_row = int(entry.get("source_row_index"))
+        source_branch = int(entry.get("source_branch_index"))
+        source_peak = int(entry.get("source_peak_index"))
+    except Exception:
+        return None
+    return (q_group_key, hkl, source_table, source_row, source_branch, source_peak)
+
+
+def _diag_new4_inventory(entries, *, include_003=True):
+    allowed = (
+        set(_NEW4_FIRST_IMAGE_EXPECTED_INVENTORY)
+        if include_003
+        else set(_NEW4_FIRST_IMAGE_PAIRED_INVENTORY)
+    )
+    rows = []
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        key = _diag_new4_inventory_key(entry)
+        if key in allowed:
+            rows.append(key)
+    return sorted(rows, key=repr)
+
+
+def _diag_new4_expected_inventory(*, include_003=True):
+    expected = (
+        _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY
+        if include_003
+        else _NEW4_FIRST_IMAGE_PAIRED_INVENTORY
+    )
+    return sorted(expected, key=repr)
+
+
+def _diag_print_new4_inventory_table(entries, *, title="new4_first_image_manual_branch_inventory"):
+    print(title)
+    print("q_group | hkl | source_table | source_row | source_branch | source_peak")
+    for q_group, hkl, table, row, branch, peak in _diag_new4_inventory(entries):
+        print(f"{q_group} | {hkl} | {table} | {row} | {branch} | {peak}")
+
+
+def _diag_assert_new4_inventory(entries, *, include_003=True):
+    actual = _diag_new4_inventory(entries, include_003=include_003)
+    expected = _diag_new4_expected_inventory(include_003=include_003)
+    assert actual == expected
+    assert len(actual) == (15 if include_003 else 14)
+    return actual
+
+
+def test_new4_first_image_manual_branch_inventory() -> None:
+    saved_state = _diag_load_saved_state()
+    entries = _diag_manual_entries_for_background(
+        saved_state,
+        _NEW4_FIRST_IMAGE_BACKGROUND_INDEX,
+    )
+    other_background_entries = [
+        dict(entry)
+        for row in _diag_manual_pair_rows(saved_state)
+        if isinstance(row, Mapping)
+        and int(row.get("background_index", -1)) != _NEW4_FIRST_IMAGE_BACKGROUND_INDEX
+        for entry in row.get("entries", ())
+        if isinstance(entry, Mapping)
+    ]
+    state_path = Path(_QR_PICKER_DIAG_STATE_PATH)
+    print(f"state_path={state_path}")
+    print(f"current_background_index={_diag_state_current_background_index(saved_state)}")
+    print(f"background_name={_diag_state_background_name(saved_state, 0)}")
+    _diag_print_new4_inventory_table(entries)
+    if _QR_PICKER_DIAG_STATE_OVERRIDE:
+        assert state_path == Path(_QR_PICKER_DIAG_STATE_OVERRIDE)
+    elif _QR_PICKER_DIAG_LOCAL_STATE_PATH.exists():
+        assert state_path == _QR_PICKER_DIAG_LOCAL_STATE_PATH
+    else:
+        assert state_path == _QR_PICKER_DIAG_ARTIFACT_STATE_PATH
+    assert _diag_state_current_background_index(saved_state) == 0
+    assert _diag_state_background_name(saved_state, 0) == _NEW4_FIRST_IMAGE_BACKGROUND_NAME
+    assert not other_background_entries
+    _diag_assert_new4_inventory(entries, include_003=True)
+
+
 def test_headless_native_to_display_transform_is_bound_to_requested_background() -> None:
     calls = []
     backgrounds = {
@@ -15455,22 +15651,10 @@ def _diag_display_to_native(context, point):
 
 
 def _diag_manual_entries_for_active_background(saved_state):
-    geometry_state = saved_state.get("geometry", {}) if isinstance(saved_state, Mapping) else {}
-    manual_pairs = (
-        geometry_state.get("manual_pairs", []) if isinstance(geometry_state, Mapping) else []
+    return _diag_manual_entries_for_background(
+        saved_state,
+        _NEW4_FIRST_IMAGE_BACKGROUND_INDEX,
     )
-    for item in manual_pairs or ():
-        if not isinstance(item, Mapping):
-            continue
-        try:
-            background_index = int(item.get("background_index"))
-        except Exception:
-            continue
-        if background_index != 0:
-            continue
-        entries = item.get("entries", [])
-        return [dict(entry) for entry in entries if isinstance(entry, Mapping)]
-    return []
 
 
 def _diag_prepare_saved_manual_source_rows(context, profile_cache):
@@ -20188,6 +20372,7 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
             caked_match = False
         prediction_source_ok = bool(
             prediction_source in allowed_prediction_sources
+            or _diag_is_locked_manual_qr_prediction_source(prediction_source)
             or prediction_source.startswith("unavailable_reason:")
         )
         ok = bool(
@@ -22060,7 +22245,7 @@ def test_minus_1_0_10_fit_step_reduces_qr_residual(tmp_path) -> None:
         assert row["q_group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
         assert row["hkl"] == _QR_PICKER_TARGET_HKL
         assert row["source_branch_index"] == branch
-        assert row["fit_prediction_source"] == "dynamic_current_simulation"
+        assert _diag_is_locked_manual_qr_prediction_source(row["fit_prediction_source"])
         assert "cache_fresh_row" not in str(row.get("fit_prediction_source", ""))
         assert row["fit_observed_caked_deg"] is not row["fit_prediction_caked_deg"]
         assert row["fit_observed_detector_native_px"] is not row[
@@ -22256,8 +22441,8 @@ def test_minus_1_0_10_observed_is_background_predicted_is_simulation(tmp_path) -
     for row in rows_by_branch.values():
         assert row["observed_source"] == "background/manual"
         assert row["predicted_source"] == "simulation"
-        assert row["fit_prediction_source"] == "dynamic_current_simulation"
-        assert row["fit_prediction_is_dynamic"] == "yes"
+        assert _diag_is_locked_manual_qr_prediction_source(row["fit_prediction_source"])
+        assert row["fit_prediction_is_dynamic"] == "no"
         assert np.allclose(
             row["observed_detector_native_px"],
             row["observed_refined_detector_native_px"],
@@ -22537,11 +22722,11 @@ def test_minus_1_0_10_optimizer_residual_vector_matches_audit(tmp_path) -> None:
         theta_component = by_branch_component[(branch, "delta_two_theta_deg")]
         phi_component = by_branch_component[(branch, "wrapped_delta_phi_deg")]
         expected = audit_record["residual_caked"]
-        assert theta_component["predicted_source"] == (
-            "dynamic_current_simulation:q_group_hkl_source_row_provenance"
+        assert _diag_is_locked_manual_qr_prediction_source(
+            theta_component["predicted_source"]
         )
-        assert phi_component["predicted_source"] == (
-            "dynamic_current_simulation:q_group_hkl_source_row_provenance"
+        assert _diag_is_locked_manual_qr_prediction_source(
+            phi_component["predicted_source"]
         )
         assert theta_component["coordinate_space"] == "caked_deg"
         assert phi_component["coordinate_space"] == "caked_deg"
@@ -23120,6 +23305,8 @@ def _diag_prediction_source_text(row):
 
 def _diag_resolver_function_text(row):
     source, reason, subreason = _diag_prediction_source_text(row)
+    if _diag_is_locked_manual_qr_prediction_source(source):
+        return "locked_manual_qr_fit_prediction"
     if "q_group_hkl_source_row_provenance" in source or reason == "resolved_source_row":
         return "q_group_hkl_source_row_provenance"
     if "branch_representative" in source or reason == "resolved_source_peak":
@@ -23851,10 +24038,9 @@ def test_minus_1_0_10_fit_prediction_identity_stable_during_step(tmp_path) -> No
                 row.get("branch_id"),
             )
             assert identity == expected_by_branch[branch], "prediction_branch_source_switched"
-            assert row["predicted_source"] in {
-                "dynamic_current_simulation:q_group_hkl_source_row_provenance",
-                "rejected:prediction_branch_source_switched",
-            }
+            assert _diag_is_locked_manual_qr_prediction_source(
+                row["predicted_source"]
+            ) or row["predicted_source"] == "rejected:prediction_branch_source_switched"
             if row["predicted_source"] == "rejected:prediction_branch_source_switched":
                 assert row.get("resolution_reason") == "prediction_branch_source_switched"
 
@@ -24735,6 +24921,1283 @@ def _diag_request_pair_counts(request, result, baseline_record):
     }
 
 
+def _diag_new4_entry_allowed(entry, *, include_003):
+    return _diag_new4_inventory_key(entry) in set(
+        _diag_new4_expected_inventory(include_003=include_003)
+    )
+
+
+def _diag_filter_new4_exact_dataset(dataset, *, include_003):
+    filtered = dict(dataset)
+    pair_fields = (
+        "provider_pairs",
+        "manual_point_pairs",
+        "measured_display",
+        "measured_for_fit",
+        "initial_pairs_display",
+    )
+    pair_lists = {
+        key: [dict(entry) for entry in dataset.get(key, ()) or () if isinstance(entry, Mapping)]
+        for key in pair_fields
+    }
+    pair_count = max((len(entries) for entries in pair_lists.values()), default=0)
+    keep_indices = []
+    for index in range(pair_count):
+        entries = [
+            entries[index]
+            for entries in pair_lists.values()
+            if index < len(entries) and isinstance(entries[index], Mapping)
+        ]
+        if any(_diag_new4_entry_allowed(entry, include_003=include_003) for entry in entries):
+            keep_indices.append(index)
+    for key, entries in pair_lists.items():
+        filtered[key] = [
+            dict(entries[index]) for index in keep_indices if index < len(entries)
+        ]
+    filtered["pair_count"] = int(len(keep_indices))
+    for key in ("source_rows_for_trace", "source_rows", "simulated_peaks"):
+        entries = [
+            dict(entry)
+            for entry in dataset.get(key, ()) or ()
+            if isinstance(entry, Mapping)
+        ]
+        if entries:
+            filtered[key] = entries
+    spec = dict(dataset.get("spec", {}) or {})
+    spec["manual_point_pairs"] = [dict(entry) for entry in filtered["manual_point_pairs"]]
+    spec["measured_peaks"] = [dict(entry) for entry in filtered["measured_for_fit"]]
+    filtered["spec"] = spec
+    return filtered
+
+
+def _diag_new4_mode_name(include_003):
+    return "Mode B all first-image manual entries" if include_003 else "Mode A paired Qr sets only"
+
+
+def _diag_new4_mode_label(include_003):
+    return "B" if include_003 else "A"
+
+
+def _diag_new4_filter_factory(include_003):
+    def _filter(dataset):
+        return _diag_filter_new4_exact_dataset(dataset, include_003=bool(include_003))
+
+    return _filter
+
+
+def _diag_run_new4_dry_run(
+    context,
+    dataset,
+    *,
+    include_003,
+    qr_only_objective=True,
+    params_overrides=None,
+):
+    return _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=bool(qr_only_objective),
+        objective_dry_run_only=True,
+        params_overrides=params_overrides,
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+
+
+def _diag_solve_new4_existing_request(base_run, *, params_overrides=None):
+    from ra_sim.fitting.optimization import fit_geometry_parameters
+
+    request = base_run["request"]
+    params = dict(request.params)
+    if isinstance(params_overrides, Mapping):
+        params.update(dict(params_overrides))
+    trial_request = replace(request, params=params)
+    result = gf.solve_geometry_fit_request(
+        trial_request,
+        solve_fit=fit_geometry_parameters,
+        status_callback=lambda _message: None,
+        live_update_callback=lambda _payload: None,
+    )
+    before_params, after_params = _diag_parameter_values_from_result(
+        trial_request,
+        base_run["var_names"],
+        result,
+    )
+    return {
+        "request": trial_request,
+        "var_names": base_run["var_names"],
+        "result": result,
+        "before_params": before_params,
+        "after_params": after_params,
+        "params_changed": any(
+            not np.isclose(before_params[name], after_params.get(name, before_params[name]))
+            for name in before_params
+        ),
+        "step_executed": bool(int(getattr(result, "nfev", 0) or 0) > 0),
+        "valid_evaluation": bool(int(getattr(result, "nfev", 0) or 0) > 0),
+        "params_accepted": bool(
+            int(getattr(result, "nfev", 0) or 0) > 0 and getattr(result, "x", None) is not None
+        ),
+    }
+
+
+def _diag_new4_point_rows(record, *, include_003):
+    rows = {}
+    for raw in record.get("point_rows", ()) or ():
+        if not isinstance(raw, Mapping):
+            continue
+        key = _diag_new4_inventory_key(raw)
+        if key in set(_diag_new4_expected_inventory(include_003=include_003)):
+            rows[key] = dict(raw)
+    return rows
+
+
+def _diag_new4_components(record, *, include_003):
+    components = []
+    allowed = set(_diag_new4_expected_inventory(include_003=include_003))
+    for raw in record.get("point_components", ()) or ():
+        if not isinstance(raw, Mapping):
+            continue
+        if str(raw.get("component")) not in {
+            "delta_two_theta_deg",
+            "wrapped_delta_phi_deg",
+        }:
+            continue
+        if _diag_new4_inventory_key(raw) in allowed:
+            components.append(dict(raw))
+    return components
+
+
+def _diag_new4_norm(record, *, include_003):
+    values = [
+        float(component.get("unweighted_value", np.nan))
+        for component in _diag_new4_components(record, include_003=include_003)
+    ]
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(np.linalg.norm(arr)) if arr.size else float("nan")
+
+
+def _diag_new4_axis_norms(record, *, include_003):
+    theta_values = []
+    phi_values = []
+    for component in _diag_new4_components(record, include_003=include_003):
+        value = float(component.get("unweighted_value", np.nan))
+        if not np.isfinite(value):
+            continue
+        if str(component.get("component")) == "delta_two_theta_deg":
+            theta_values.append(value)
+        elif str(component.get("component")) == "wrapped_delta_phi_deg":
+            phi_values.append(value)
+    theta_arr = np.asarray(theta_values, dtype=float)
+    phi_arr = np.asarray(phi_values, dtype=float)
+    return {
+        "theta_norm": float(np.linalg.norm(theta_arr)) if theta_arr.size else float("nan"),
+        "phi_norm": float(np.linalg.norm(phi_arr)) if phi_arr.size else float("nan"),
+        "theta_values": theta_values,
+        "phi_values": phi_values,
+    }
+
+
+def _diag_new4_non_qr_point_norm(record, *, include_003):
+    allowed = set(_diag_new4_expected_inventory(include_003=include_003))
+    values = []
+    for raw in record.get("point_components", ()) or ():
+        if not isinstance(raw, Mapping):
+            continue
+        if _diag_new4_inventory_key(raw) in allowed:
+            continue
+        try:
+            values.append(float(raw.get("weighted_value", np.nan)))
+        except Exception:
+            continue
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(np.linalg.norm(arr)) if arr.size else 0.0
+
+
+def _diag_new4_branch_identity_stable(records, *, include_003):
+    expected_keys = set(_diag_new4_expected_inventory(include_003=include_003))
+    if not records:
+        return False
+    first_rows = _diag_new4_point_rows(records[0], include_003=include_003)
+    if set(first_rows) != expected_keys:
+        return False
+    first_identity = {key: _diag_source_identity_key(row) for key, row in first_rows.items()}
+    for record in records:
+        rows = _diag_new4_point_rows(record, include_003=include_003)
+        if set(rows) != expected_keys:
+            return False
+        for key, row in rows.items():
+            if _diag_source_identity_key(row) != first_identity[key]:
+                return False
+            source = str(row.get("predicted_source", "") or "")
+            if "cache_current" in source or "visual" in source:
+                return False
+            if row.get("predicted_source") == "rejected:prediction_branch_source_switched":
+                return False
+    return True
+
+
+def _diag_assert_new4_objective_record(record, *, include_003):
+    rows = _diag_new4_point_rows(record, include_003=include_003)
+    components = _diag_new4_components(record, include_003=include_003)
+    expected = set(_diag_new4_expected_inventory(include_003=include_003))
+    assert set(rows) == expected
+    assert len(rows) == (15 if include_003 else 14)
+    if len(components) != 2 * len(rows):
+        print("new4_objective_match_status")
+        print(
+            "q_group | hkl | branch | table | row | peak | status | "
+            "reason | subreason | source_reject | predicted_source | resolver"
+        )
+        for key in _diag_new4_expected_inventory(include_003=include_003):
+            row = rows.get(key, {})
+            q_group, hkl, table_idx, row_idx, branch_idx, peak_idx = key
+            print(
+                f"{q_group} | {hkl} | {branch_idx} | {table_idx} | {row_idx} | "
+                f"{peak_idx} | {row.get('match_status')} | "
+                f"{row.get('resolution_reason')} | {row.get('resolution_subreason')} | "
+                f"{row.get('source_row_rejection_reason')} | "
+                f"{row.get('predicted_source')} | "
+                f"{row.get('fit_prediction_resolver_function')}"
+            )
+    assert len(components) == 2 * len(rows)
+    for row in rows.values():
+        assert row.get("observed_source") == "background/manual"
+        source = str(row.get("predicted_source", "") or "")
+        assert _diag_is_locked_manual_qr_prediction_source(source)
+        assert "cache_current" not in source
+        assert "visual" not in source
+        assert row.get("fit_prediction_resolver_function") in {
+            "_resolve_fixed_manual_qr_fit_prediction",
+            "_resolve_qr_fit_prediction_from_trial_params",
+        }
+        assert int(row.get("source_branch_index")) == int(row.get("source_peak_index"))
+    for component in components:
+        assert component.get("observed_source") == "background/manual"
+        source = str(component.get("predicted_source", "") or "")
+        assert _diag_is_locked_manual_qr_prediction_source(source)
+        assert component.get("fit_prediction_resolver_function") in {
+            "_resolve_fixed_manual_qr_fit_prediction",
+            "_resolve_qr_fit_prediction_from_trial_params",
+        }
+        assert component.get("coordinate_space") == "caked_deg"
+        assert component.get("units") in {"deg", "weighted_deg"}
+        observed = _diag_row_pair(component, "observed_caked_deg")
+        predicted = _diag_row_pair(component, "predicted_caked_deg")
+        supplied = float(component.get("unweighted_value", np.nan))
+        if str(component.get("component")) == "delta_two_theta_deg":
+            recomputed = float(predicted[0] - observed[0])
+        else:
+            recomputed = float(((predicted[1] - observed[1] + 180.0) % 360.0) - 180.0)
+        assert np.isclose(supplied, recomputed, atol=1.0e-9, rtol=0.0)
+    return rows, components
+
+
+def _diag_param_entries_from_result(result):
+    debug = getattr(result, "geometry_fit_debug_summary", {}) or {}
+    return {
+        str(entry.get("name")): dict(entry)
+        for entry in debug.get("parameter_entries", ()) or ()
+        if isinstance(entry, Mapping) and entry.get("name") is not None
+    }
+
+
+def _diag_add_trial_value(trials, label, value, *, lower, upper):
+    try:
+        candidate = float(value)
+    except Exception:
+        return
+    if not np.isfinite(candidate):
+        return
+    if np.isfinite(lower):
+        candidate = max(float(lower), candidate)
+    if np.isfinite(upper):
+        candidate = min(float(upper), candidate)
+    if not np.isfinite(candidate):
+        return
+    if any(np.isclose(candidate, existing[1], atol=1.0e-12, rtol=0.0) for existing in trials):
+        return
+    trials.append((str(label), float(candidate)))
+
+
+def _diag_finite_sweep_trial_values(name, baseline_value, param_entry):
+    lower = float(param_entry.get("lower_bound", np.nan))
+    upper = float(param_entry.get("upper_bound", np.nan))
+    x_scale = float(param_entry.get("scale", param_entry.get("x_scale", np.nan)))
+    base = float(baseline_value)
+    trials = []
+    _diag_add_trial_value(trials, "baseline", base, lower=lower, upper=upper)
+    if np.isfinite(lower) and lower <= base:
+        _diag_add_trial_value(trials, "lower_bound", lower, lower=lower, upper=upper)
+    if np.isfinite(upper) and upper >= base:
+        _diag_add_trial_value(trials, "upper_bound", upper, lower=lower, upper=upper)
+    if np.isfinite(lower) and np.isfinite(upper) and upper > lower:
+        range_width = float(upper - lower)
+    else:
+        range_width = max(abs(base), 1.0)
+    for fraction in (0.10, 0.25):
+        step = float(fraction * range_width)
+        _diag_add_trial_value(
+            trials,
+            f"baseline-{int(fraction * 100)}pct_range",
+            base - step,
+            lower=lower,
+            upper=upper,
+        )
+        _diag_add_trial_value(
+            trials,
+            f"baseline+{int(fraction * 100)}pct_range",
+            base + step,
+            lower=lower,
+            upper=upper,
+        )
+    if np.isfinite(x_scale) and x_scale > 0.0:
+        step = 0.50 * float(x_scale)
+        _diag_add_trial_value(
+            trials,
+            "baseline-50pct_x_scale",
+            base - step,
+            lower=lower,
+            upper=upper,
+        )
+        _diag_add_trial_value(
+            trials,
+            "baseline+50pct_x_scale",
+            base + step,
+            lower=lower,
+            upper=upper,
+        )
+    return trials
+
+
+_NEW4_FINITE_SWEEP_SUMMARY = {}
+
+
+def _diag_new4_classify_sweep(summary):
+    active_names = list(summary.get("active_names", ()))
+    phi_active = list(summary.get("phi_active", ()))
+    max_pred_motion = float(summary.get("max_prediction_motion", 0.0))
+    max_phi_motion = float(summary.get("max_phi_motion", 0.0))
+    best_phi_delta = float(summary.get("best_phi_delta", 0.0))
+    best_qr_delta = float(summary.get("best_qr_delta", 0.0))
+    if not active_names:
+        return "B. active_params_not_propagated"
+    if not phi_active:
+        return "C. phi_controlling_params_fixed_or_missing"
+    if max_pred_motion <= 1.0e-9:
+        return "A. prediction_coordinates_frozen"
+    if max_phi_motion <= 1.0e-9:
+        return "D. parameterization_cannot_reduce_phi"
+    if best_phi_delta < -1.0e-6 or best_qr_delta < -1.0e-6:
+        return "F. finite_sweep_shows_fit_can_move_phi"
+    return "D. parameterization_cannot_reduce_phi"
+
+
+def _diag_run_new4_finite_sweep_mode(context, dataset, *, include_003):
+    mode_label = _diag_new4_mode_label(include_003)
+    baseline = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+    )
+    baseline_record = _diag_objective_trace(baseline["result"])[0]
+    baseline_rows, baseline_components = _diag_assert_new4_objective_record(
+        baseline_record,
+        include_003=include_003,
+    )
+    baseline_axis = _diag_new4_axis_norms(baseline_record, include_003=include_003)
+    baseline_norm = _diag_new4_norm(baseline_record, include_003=include_003)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    active_names = [str(name) for name in baseline["var_names"] if str(name) in params]
+    param_entries = _diag_param_entries_from_result(baseline["result"])
+    phi_active = [
+        name
+        for name in active_names
+        if bool(_diag_param_expected_effects(name).get("caked_phi"))
+        or _diag_param_expected_effects(name).get("caked_phi") == "weak"
+    ]
+    max_prediction_motion = 0.0
+    max_phi_motion = 0.0
+    best_phi_delta = 0.0
+    best_qr_delta = 0.0
+    print(f"finite_parameter_sweep_mode={mode_label}")
+    print(f"mode_name={_diag_new4_mode_name(include_003)}")
+    print(f"entry_count={len(baseline_rows)}")
+    print(f"residual_component_count={len(baseline_components)}")
+    print(
+        "mode | parameter | trial | group | hkl | branch | observed caked | "
+        "predicted before | predicted after | residual before | residual after | "
+        "delta_2theta | delta_phi | branch identity stable"
+    )
+    for name in active_names:
+        base_value = float(params[name])
+        trials = _diag_finite_sweep_trial_values(
+            name,
+            base_value,
+            param_entries.get(name, {}),
+        )
+        best_trial = None
+        best_trial_score = -float("inf")
+        best_trial_record = None
+        for trial_label, trial_value in trials:
+            trial_params = dict(params)
+            trial_params[name] = float(trial_value)
+            if np.isclose(float(trial_value), base_value, atol=1.0e-12, rtol=0.0):
+                trial_run = baseline
+            else:
+                try:
+                    trial_run = _diag_solve_new4_existing_request(
+                        baseline,
+                        params_overrides=trial_params,
+                    )
+                except RuntimeError as exc:
+                    if "qr_fit_objective_incomplete=yes" not in str(exc):
+                        raise
+                    print(
+                        f"finite_trial_skipped | mode={mode_label} | parameter={name} | "
+                        f"trial={trial_label}={trial_value:.9g} | reason={exc}"
+                    )
+                    continue
+            trial_record = _diag_objective_trace(trial_run["result"])[0]
+            trial_preview_rows = _diag_new4_point_rows(
+                trial_record,
+                include_003=include_003,
+            )
+            trial_preview_components = _diag_new4_components(
+                trial_record,
+                include_003=include_003,
+            )
+            expected_keys = set(_diag_new4_expected_inventory(include_003=include_003))
+            if (
+                set(trial_preview_rows) != expected_keys
+                or len(trial_preview_components) != 2 * len(expected_keys)
+            ):
+                reasons = sorted(
+                    {
+                        str(row.get("resolution_reason", ""))
+                        for row in trial_preview_rows.values()
+                        if str(row.get("match_status", "")).lower() != "matched"
+                    }
+                )
+                print(
+                    f"finite_trial_skipped | mode={mode_label} | parameter={name} | "
+                    f"trial={trial_label}={trial_value:.9g} | reasons={reasons}"
+                )
+                continue
+            trial_rows, _trial_components = _diag_assert_new4_objective_record(
+                trial_record,
+                include_003=include_003,
+            )
+            trial_axis = _diag_new4_axis_norms(trial_record, include_003=include_003)
+            trial_norm = _diag_new4_norm(trial_record, include_003=include_003)
+            branch_motion = []
+            phi_motion = []
+            for key, before_row in baseline_rows.items():
+                after_row = trial_rows[key]
+                pred_before = _diag_row_pair(before_row, "predicted_caked_deg")
+                pred_after = _diag_row_pair(after_row, "predicted_caked_deg")
+                delta = _diag_caked_delta(pred_after, pred_before)
+                branch_motion.append(float(np.linalg.norm(np.asarray(delta, dtype=float))))
+                phi_motion.append(abs(float(delta[1])))
+            trial_max_motion = max(branch_motion, default=0.0)
+            trial_max_phi_motion = max(phi_motion, default=0.0)
+            max_prediction_motion = max(max_prediction_motion, trial_max_motion)
+            max_phi_motion = max(max_phi_motion, trial_max_phi_motion)
+            phi_delta = float(trial_axis["phi_norm"] - baseline_axis["phi_norm"])
+            qr_delta = float(trial_norm - baseline_norm)
+            best_phi_delta = min(best_phi_delta, phi_delta)
+            best_qr_delta = min(best_qr_delta, qr_delta)
+            score = max(trial_max_phi_motion, -phi_delta, -qr_delta)
+            if score > best_trial_score:
+                best_trial_score = float(score)
+                best_trial = (trial_label, float(trial_value))
+                best_trial_record = trial_record
+        assert best_trial is not None
+        assert best_trial_record is not None
+        trial_rows = _diag_new4_point_rows(best_trial_record, include_003=include_003)
+        for key in _diag_new4_expected_inventory(include_003=include_003):
+            before_row = baseline_rows[key]
+            after_row = trial_rows.get(key, {})
+            observed = _diag_row_pair(before_row, "observed_caked_deg")
+            pred_before = _diag_row_pair(before_row, "predicted_caked_deg")
+            pred_after = _diag_row_pair(after_row, "predicted_caked_deg")
+            residual_before = _diag_row_pair(before_row, "residual_caked_deg")
+            residual_after = _diag_row_pair(after_row, "residual_caked_deg")
+            delta = _diag_caked_delta(pred_after, pred_before)
+            stable = bool(
+                after_row
+                and _diag_source_identity_key(before_row) == _diag_source_identity_key(after_row)
+            )
+            q_group, hkl, _table, _row, branch, _peak = key
+            print(
+                f"{mode_label} | {name} | {best_trial[0]}={best_trial[1]:.9g} | "
+                f"{q_group} | {hkl} | {branch} | {_diag_fmt_pair(observed)} | "
+                f"{_diag_fmt_pair(pred_before)} | {_diag_fmt_pair(pred_after)} | "
+                f"{_diag_fmt_pair(residual_before)} | {_diag_fmt_pair(residual_after)} | "
+                f"{delta[0]:.9f} | {delta[1]:.9f} | {'yes' if stable else 'no'}"
+            )
+    summary = {
+        "mode": mode_label,
+        "entry_count": len(baseline_rows),
+        "component_count": len(baseline_components),
+        "active_names": active_names,
+        "phi_active": phi_active,
+        "baseline_norm": baseline_norm,
+        "baseline_phi_norm": float(baseline_axis["phi_norm"]),
+        "max_prediction_motion": float(max_prediction_motion),
+        "max_phi_motion": float(max_phi_motion),
+        "best_phi_delta": float(best_phi_delta),
+        "best_qr_delta": float(best_qr_delta),
+    }
+    classification = _diag_new4_classify_sweep(summary)
+    summary["classification"] = classification
+    print(f"mode_{mode_label}_max_prediction_motion={max_prediction_motion:.9f}")
+    print(f"mode_{mode_label}_max_phi_motion={max_phi_motion:.9f}")
+    print(f"mode_{mode_label}_best_phi_norm_delta={best_phi_delta:.9f}")
+    print(f"mode_{mode_label}_best_qr_norm_delta={best_qr_delta:.9f}")
+    print(f"mode_{mode_label}_classification={classification}")
+    return summary
+
+
+def test_new4_first_image_fitter_uses_exact_manual_branch_inventory(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    saved_entries = _diag_manual_entries_for_active_background(context["saved_state"])
+    _diag_assert_new4_inventory(saved_entries, include_003=True)
+    fit_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=True,
+        qr_only_objective=True,
+    )
+    request = fit_run["request"]
+    result = fit_run["result"]
+    measured = [dict(entry) for entry in request.measured_peaks if isinstance(entry, Mapping)]
+    trace = _diag_objective_trace(result)
+    assert trace
+    baseline_record = trace[0]
+    rows, components = _diag_assert_new4_objective_record(
+        baseline_record,
+        include_003=True,
+    )
+    measured_inventory = _diag_new4_inventory(measured, include_003=True)
+    print("new4_first_image_fitter_request_inventory")
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print(f"background_index={_NEW4_FIRST_IMAGE_BACKGROUND_INDEX}")
+    print(f"background_name={_NEW4_FIRST_IMAGE_BACKGROUND_NAME}")
+    _diag_print_new4_inventory_table(measured, title="optimizer_request_manual_branch_inventory")
+    print(f"optimizer_request_pair_count={len(measured)}")
+    print(f"objective_row_count={len(rows)}")
+    print(f"objective_component_count={len(components)}")
+    print("observed_source=background/manual")
+    print("predicted_source=shared locked Qr fit resolver")
+    assert measured_inventory == _diag_new4_expected_inventory(include_003=True)
+    assert len(measured) == 15
+    assert len(request.dataset_specs or []) == 1
+    assert int((request.dataset_specs or [{}])[0].get("dataset_index", 0)) == 0
+    assert int((request.dataset_specs or [{}])[0].get("background_index", 0) or 0) == 0
+    background_indices = {
+        int(entry.get("background_index", 0) or 0)
+        for entry in measured
+        if entry.get("background_index", 0) is not None
+    }
+    assert background_indices <= {0}
+    assert all(entry.get("optimizer_request_source") == "provider_pair" for entry in measured)
+    assert all(bool(entry.get("optimizer_request_has_fixed_source")) for entry in measured)
+    handoff = request.refinement_config.get("optimizer_request_handoff_summary", {})
+    assert int(handoff.get("fixed_source_pair_count", 0) or 0) == 15
+    assert int(handoff.get("fallback_row_count", 0) or 0) == 0
+    summary = getattr(result, "point_match_summary", {}) or {}
+    assert int(summary.get("manual_caked_residual_row_count", 0) or 0) == 15
+    assert int(summary.get("branch_mismatch_count", 0) or 0) == 0
+    assert _diag_new4_branch_identity_stable([baseline_record], include_003=True)
+
+
+def test_new4_first_image_qr_fit_finite_parameter_sweep_exact_inventory(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    mode_a = _diag_run_new4_finite_sweep_mode(context, dataset, include_003=False)
+    mode_b = _diag_run_new4_finite_sweep_mode(context, dataset, include_003=True)
+    _NEW4_FINITE_SWEEP_SUMMARY["A"] = dict(mode_a)
+    _NEW4_FINITE_SWEEP_SUMMARY["B"] = dict(mode_b)
+    assert mode_a["entry_count"] == 14
+    assert mode_a["component_count"] == 28
+    assert mode_b["entry_count"] == 15
+    assert mode_b["component_count"] == 30
+    print(f"final_classification={mode_a['classification']}")
+
+
+def _diag_print_new4_full_fit_decomposition(before, after, fit_run, *, include_003):
+    mode_label = _diag_new4_mode_label(include_003)
+    qr_before = _diag_new4_norm(before, include_003=include_003)
+    qr_after = _diag_new4_norm(after, include_003=include_003)
+    axis_before = _diag_new4_axis_norms(before, include_003=include_003)
+    axis_after = _diag_new4_axis_norms(after, include_003=include_003)
+    total_before = float(before.get("residual_norm", np.nan))
+    total_after = float(after.get("residual_norm", np.nan))
+    non_qr_before = _diag_new4_non_qr_point_norm(before, include_003=include_003)
+    non_qr_after = _diag_new4_non_qr_point_norm(after, include_003=include_003)
+    weights = sorted(
+        {
+            float(component.get("weight", np.nan))
+            for component in _diag_new4_components(before, include_003=include_003)
+        }
+    )
+    component_count = len(_diag_new4_components(before, include_003=include_003))
+    stable = _diag_new4_branch_identity_stable(
+        [before, *_diag_objective_trace(fit_run["result"]), after],
+        include_003=include_003,
+    )
+    print(f"full_fit_decomposition_mode={mode_label}")
+    print(f"total_objective_before={total_before:.9f}")
+    print(f"total_objective_after={total_after:.9f}")
+    print(f"qr_block_before={qr_before:.9f}")
+    print(f"qr_block_after={qr_after:.9f}")
+    print(f"theta_norm_before={float(axis_before['theta_norm']):.9f}")
+    print(f"theta_norm_after={float(axis_after['theta_norm']):.9f}")
+    print(f"phi_norm_before={float(axis_before['phi_norm']):.9f}")
+    print(f"phi_norm_after={float(axis_after['phi_norm']):.9f}")
+    print(f"non_qr_blocks_before={non_qr_before:.9f}")
+    print(f"non_qr_blocks_after={non_qr_after:.9f}")
+    print(f"line_block_before={float(before.get('line_residual_norm', np.nan)):.9f}")
+    print(f"line_block_after={float(after.get('line_residual_norm', np.nan)):.9f}")
+    print(f"prior_block_before={float(before.get('prior_residual_norm', np.nan)):.9f}")
+    print(f"prior_block_after={float(after.get('prior_residual_norm', np.nan)):.9f}")
+    print(f"weights={weights}")
+    print(f"component_count={component_count}")
+    print(f"branch_identity_stability={'yes' if stable else 'no'}")
+    return {
+        "total_before": total_before,
+        "total_after": total_after,
+        "qr_before": qr_before,
+        "qr_after": qr_after,
+        "theta_before": float(axis_before["theta_norm"]),
+        "theta_after": float(axis_after["theta_norm"]),
+        "phi_before": float(axis_before["phi_norm"]),
+        "phi_after": float(axis_after["phi_norm"]),
+        "non_qr_before": non_qr_before,
+        "non_qr_after": non_qr_after,
+        "weights": weights,
+        "component_count": component_count,
+        "stable": stable,
+    }
+
+
+def test_new4_first_image_full_fit_objective_decomposition_exact_inventory(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    include_003 = False
+    before_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=False,
+    )
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        optimizer_overrides={"max_nfev": 20},
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+    after_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=False,
+        params_overrides=fit_run["after_params"],
+    )
+    before = _diag_objective_trace(before_run["result"])[0]
+    after = _diag_objective_trace(after_run["result"])[0]
+    _diag_assert_new4_objective_record(before, include_003=include_003)
+    _diag_assert_new4_objective_record(after, include_003=include_003)
+    stats = _diag_print_new4_full_fit_decomposition(
+        before,
+        after,
+        fit_run,
+        include_003=include_003,
+    )
+    mode_b = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=True,
+        qr_only_objective=False,
+    )
+    mode_b_record = _diag_objective_trace(mode_b["result"])[0]
+    _diag_assert_new4_objective_record(mode_b_record, include_003=True)
+    print("mode_B_enabled=yes")
+    print(f"mode_B_entry_count={len(_diag_new4_point_rows(mode_b_record, include_003=True))}")
+    print(f"mode_B_component_count={len(_diag_new4_components(mode_b_record, include_003=True))}")
+    finite = _NEW4_FINITE_SWEEP_SUMMARY.get("A", {})
+    classification = str(finite.get("classification") or "F. finite_sweep_shows_fit_can_move_phi")
+    if (
+        float(finite.get("best_phi_delta", 0.0)) < -1.0e-6
+        and stats["phi_after"] >= stats["phi_before"] - 1.0e-6
+    ):
+        classification = "E. optimizer_cannot_follow_good_finite_step"
+    print(f"final_classification={classification}")
+    assert stats["component_count"] == 28
+    assert stats["stable"], "prediction_branch_source_switched"
+    assert len(_diag_new4_components(mode_b_record, include_003=True)) == 30
+
+
+def _diag_new4_pipeline_baseline(tmp_path, *, include_003=False):
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+    )
+    record = _diag_objective_trace(run["result"])[0]
+    rows, components = _diag_assert_new4_objective_record(
+        record,
+        include_003=include_003,
+    )
+    return context, dataset, run, record, rows, components
+
+
+def _diag_new4_find_finite_trial(context, dataset, baseline_run, baseline_record, *, include_003):
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    active_names = [str(name) for name in baseline_run["var_names"] if str(name) in params]
+    param_entries = _diag_param_entries_from_result(baseline_run["result"])
+    baseline_rows = _diag_new4_point_rows(baseline_record, include_003=include_003)
+    last_trial = None
+    for name in active_names:
+        base_value = float(params[name])
+        for trial_label, trial_value in _diag_finite_sweep_trial_values(
+            name,
+            base_value,
+            param_entries.get(name, {}),
+        ):
+            if np.isclose(float(trial_value), base_value, atol=1.0e-12, rtol=0.0):
+                continue
+            trial_params = dict(params)
+            trial_params[name] = float(trial_value)
+            trial_run = _diag_solve_new4_existing_request(
+                baseline_run,
+                params_overrides=trial_params,
+            )
+            trial_record = _diag_objective_trace(trial_run["result"])[0]
+            try:
+                trial_rows, _trial_components = _diag_assert_new4_objective_record(
+                    trial_record,
+                    include_003=include_003,
+                )
+            except AssertionError:
+                last_trial = (name, trial_label, trial_value, trial_run, trial_record)
+                continue
+            changed = False
+            for key, before_row in baseline_rows.items():
+                after_row = trial_rows[key]
+                before_sig = (
+                    before_row.get("params_signature"),
+                    before_row.get("detector_simulation_signature"),
+                    before_row.get("caked_projection_signature"),
+                    before_row.get("caked_simulation_signature"),
+                )
+                after_sig = (
+                    after_row.get("params_signature"),
+                    after_row.get("detector_simulation_signature"),
+                    after_row.get("caked_projection_signature"),
+                    after_row.get("caked_simulation_signature"),
+                )
+                before_refined = _diag_row_pair(before_row, "predicted_refined_caked_deg")
+                after_refined = _diag_row_pair(after_row, "predicted_refined_caked_deg")
+                if before_sig != after_sig or not np.allclose(
+                    before_refined,
+                    after_refined,
+                    atol=1.0e-12,
+                    rtol=0.0,
+                ):
+                    changed = True
+                    break
+            if changed:
+                return name, trial_label, float(trial_value), trial_run, trial_record
+            last_trial = (name, trial_label, trial_value, trial_run, trial_record)
+    assert last_trial is not None
+    return last_trial
+
+
+def _diag_new4_print_prediction_pipeline_table(title, rows):
+    print(title)
+    print(
+        "q_group | hkl | branch | params_sig | detector_sig | projection_sig | "
+        "nominal_detector_px | nominal_caked | refined_caked | status | source"
+    )
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        q_group, hkl, _table, _source_row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {row.get('params_signature')} | "
+            f"{row.get('detector_simulation_signature')} | "
+            f"{row.get('caked_projection_signature')} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'sim_nominal_detector_px'))} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'predicted_nominal_caked_deg'))} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'predicted_refined_caked_deg'))} | "
+            f"{row.get('sim_refinement_status')} | {row.get('predicted_source')}"
+        )
+
+
+def _diag_new4_print_refinement_table(title, rows):
+    print(title)
+    print("q_group | hkl | branch | nominal_caked | refined_caked | delta_caked | status")
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        q_group, hkl, _table, _source_row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'predicted_nominal_caked_deg'))} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'predicted_refined_caked_deg'))} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'sim_refinement_delta_caked_deg'))} | "
+            f"{row.get('sim_refinement_status')}"
+        )
+
+
+def _diag_new4_print_objective_residual_table(title, components):
+    print(title)
+    print(
+        "q_group | hkl | branch | component | observed | nominal | refined | "
+        "residual_used | residual_expected_from_refined | weight"
+    )
+    for component in components:
+        observed = _diag_row_pair(component, "observed_caked_deg")
+        nominal = _diag_row_pair(component, "predicted_nominal_caked_deg")
+        refined = _diag_row_pair(component, "predicted_refined_caked_deg")
+        if str(component.get("component")) == "delta_two_theta_deg":
+            expected = float(refined[0] - observed[0])
+        else:
+            expected = float(((refined[1] - observed[1] + 180.0) % 360.0) - 180.0)
+        print(
+            f"{component.get('q_group_key')} | {component.get('hkl')} | "
+            f"{component.get('source_branch_index')} | {component.get('component')} | "
+            f"{_diag_fmt_pair(observed)} | {_diag_fmt_pair(nominal)} | "
+            f"{_diag_fmt_pair(refined)} | {float(component.get('unweighted_value')):.9f} | "
+            f"{expected:.9f} | {float(component.get('weight')):.9f}"
+        )
+
+
+def _diag_new4_print_cache_signature_table(title, rows):
+    print(title)
+    print(
+        "q_group | hkl | branch | params_sig | simulation_sig | projection_sig | "
+        "caked_sig | rows_rebuilt_or_reused | reuse_valid | stale"
+    )
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        q_group, hkl, _table, _source_row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {row.get('params_signature')} | "
+            f"{row.get('simulation_source_signature')} | "
+            f"{row.get('caked_projection_signature')} | "
+            f"{row.get('caked_simulation_signature')} | "
+            f"{row.get('source_rows_rebuilt_or_reused')} | "
+            f"{row.get('reuse_valid_for_same_params_signature')} | "
+            f"{row.get('stale_prediction_cache_used_for_trial_params')}"
+        )
+
+
+def test_new4_fit_prediction_pipeline_regenerates_detector_simulation(tmp_path) -> None:
+    include_003 = False
+    context, dataset, baseline_run, baseline_record, baseline_rows, _components = (
+        _diag_new4_pipeline_baseline(tmp_path, include_003=include_003)
+    )
+    name, trial_label, trial_value, _trial_run, trial_record = _diag_new4_find_finite_trial(
+        context,
+        dataset,
+        baseline_run,
+        baseline_record,
+        include_003=include_003,
+    )
+    trial_rows, _trial_components = _diag_assert_new4_objective_record(
+        trial_record,
+        include_003=include_003,
+    )
+    saved_entries = _diag_manual_entries_for_active_background(context["saved_state"])
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print(f"background_index={_NEW4_FIRST_IMAGE_BACKGROUND_INDEX}")
+    print(f"background_name={_NEW4_FIRST_IMAGE_BACKGROUND_NAME}")
+    _diag_print_new4_inventory_table(
+        saved_entries,
+        title="selected_first_image_branch_inventory_Mode_B_15",
+    )
+    print("selected_first_image_branch_inventory_Mode_A_entries=14 components=28")
+    _diag_new4_print_prediction_pipeline_table(
+        "baseline_prediction_pipeline_table",
+        baseline_rows,
+    )
+    print(f"finite_trial_parameter={name}")
+    print(f"finite_trial_value={trial_label}={trial_value:.9g}")
+    _diag_new4_print_prediction_pipeline_table(
+        "finite_trial_prediction_pipeline_table",
+        trial_rows,
+    )
+    assert len(baseline_rows) == 14
+    assert len(trial_rows) == 14
+    assert _diag_new4_branch_identity_stable(
+        [baseline_record, trial_record],
+        include_003=include_003,
+    )
+    changed_signature = any(
+        (
+            baseline_rows[key].get("detector_simulation_signature")
+            != trial_rows[key].get("detector_simulation_signature")
+        )
+        or (
+            baseline_rows[key].get("caked_projection_signature")
+            != trial_rows[key].get("caked_projection_signature")
+        )
+        for key in baseline_rows
+    )
+    assert changed_signature
+    for row in trial_rows.values():
+        assert row.get("fit_prediction_resolver_function") == (
+            "_resolve_qr_fit_prediction_from_trial_params"
+        )
+        assert str(row.get("predicted_source", "")).startswith(
+            "dynamic_trial_simulation:locked_manual_qr_fit_prediction"
+        )
+
+
+def test_new4_fit_prediction_pipeline_refines_in_caked_space(tmp_path) -> None:
+    _context, _dataset, _run, _record, rows, _components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=False,
+    )
+    _diag_new4_print_refinement_table("nominal_vs_refined_caked_table", rows)
+    for row in rows.values():
+        assert row.get("sim_refinement_status") == "refined"
+        nominal = _diag_row_pair(row, "predicted_nominal_caked_deg")
+        refined = _diag_row_pair(row, "predicted_refined_caked_deg")
+        residual = _diag_row_pair(row, "residual_caked_deg")
+        observed = _diag_row_pair(row, "observed_caked_deg")
+        expected = (float(refined[0] - observed[0]), float(_diag_caked_delta(refined, observed)[1]))
+        assert np.all(np.isfinite(nominal))
+        assert np.all(np.isfinite(refined))
+        assert np.allclose(residual, expected, atol=1.0e-9, rtol=0.0)
+
+
+def test_new4_objective_uses_refined_sim_caked_residual(tmp_path) -> None:
+    _context, _dataset, _run, _record, _rows, components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=False,
+    )
+    _diag_new4_print_objective_residual_table(
+        "objective_residual_table_refined_caked_used",
+        components,
+    )
+    for component in components:
+        observed = _diag_row_pair(component, "observed_caked_deg")
+        refined = _diag_row_pair(component, "predicted_refined_caked_deg")
+        nominal = _diag_row_pair(component, "predicted_nominal_caked_deg")
+        if str(component.get("component")) == "delta_two_theta_deg":
+            expected_refined = float(refined[0] - observed[0])
+            expected_nominal = float(nominal[0] - observed[0])
+        else:
+            expected_refined = float(((refined[1] - observed[1] + 180.0) % 360.0) - 180.0)
+            expected_nominal = float(((nominal[1] - observed[1] + 180.0) % 360.0) - 180.0)
+        used = float(component.get("unweighted_value"))
+        assert np.isclose(used, expected_refined, atol=1.0e-9, rtol=0.0)
+        if not np.isclose(expected_nominal, expected_refined, atol=1.0e-12, rtol=0.0):
+            assert not np.isclose(used, expected_nominal, atol=1.0e-12, rtol=0.0)
+
+
+def test_new4_fit_prediction_not_static_under_finite_trial_params(tmp_path) -> None:
+    context, dataset, baseline_run, baseline_record, baseline_rows, _components = (
+        _diag_new4_pipeline_baseline(tmp_path, include_003=False)
+    )
+    summary = _diag_run_new4_finite_sweep_mode(context, dataset, include_003=False)
+    assert summary["entry_count"] == 14
+    assert summary["component_count"] == 28
+    frozen = float(summary.get("max_prediction_motion", 0.0)) <= 1.0e-9
+    print(f"fit_prediction_coordinates_frozen={'yes' if frozen else 'no'}")
+    if frozen:
+        print("A. prediction_pipeline_static")
+    assert not frozen
+    assert _diag_new4_branch_identity_stable([baseline_record], include_003=False)
+
+
+def test_new4_objective_callback_uses_same_pipeline_as_handoff(tmp_path) -> None:
+    include_003 = False
+    context, dataset, handoff_run, handoff_record, handoff_rows, _handoff_components = (
+        _diag_new4_pipeline_baseline(tmp_path, include_003=include_003)
+    )
+    dry_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+    )
+    dry_record = _diag_objective_trace(dry_run["result"])[0]
+    solver_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        optimizer_overrides={"max_nfev": 1},
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+    solver_record = _diag_objective_trace(solver_run["result"])[0]
+    dry_rows = _diag_new4_point_rows(dry_record, include_003=include_003)
+    solver_rows = _diag_new4_point_rows(solver_record, include_003=include_003)
+    print("handoff_vs_objective_vs_solver_x0_table")
+    print("q_group | hkl | branch | A_nom_det | B_nom_det | C_nom_det | A_refined | B_refined | C_refined")
+    mismatch = False
+    for key in sorted(handoff_rows, key=repr):
+        a = handoff_rows[key]
+        b = dry_rows[key]
+        c = solver_rows[key]
+        values = (
+            _diag_row_pair(a, "sim_nominal_detector_px"),
+            _diag_row_pair(b, "sim_nominal_detector_px"),
+            _diag_row_pair(c, "sim_nominal_detector_px"),
+            _diag_row_pair(a, "predicted_refined_caked_deg"),
+            _diag_row_pair(b, "predicted_refined_caked_deg"),
+            _diag_row_pair(c, "predicted_refined_caked_deg"),
+        )
+        q_group, hkl, _table, _source_row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {_diag_fmt_pair(values[0])} | "
+            f"{_diag_fmt_pair(values[1])} | {_diag_fmt_pair(values[2])} | "
+            f"{_diag_fmt_pair(values[3])} | {_diag_fmt_pair(values[4])} | "
+            f"{_diag_fmt_pair(values[5])}"
+        )
+        mismatch = mismatch or not (
+            np.allclose(values[0], values[1], atol=1.0e-9, rtol=0.0)
+            and np.allclose(values[1], values[2], atol=1.0e-9, rtol=0.0)
+            and np.allclose(values[3], values[4], atol=1.0e-9, rtol=0.0)
+            and np.allclose(values[4], values[5], atol=1.0e-9, rtol=0.0)
+        )
+        assert a.get("fit_prediction_resolver_function") == (
+            "_resolve_qr_fit_prediction_from_trial_params"
+        )
+    if mismatch:
+        print("optimizer_start_blocked_reason=prediction_pipeline_mismatch")
+    assert not mismatch
+
+
+def test_new4_fit_pipeline_no_stale_cache_under_trial_params(tmp_path) -> None:
+    include_003 = False
+    context, dataset, baseline_run, baseline_record, baseline_rows, _components = (
+        _diag_new4_pipeline_baseline(tmp_path, include_003=include_003)
+    )
+    _name, _label, _value, _trial_run, trial_record = _diag_new4_find_finite_trial(
+        context,
+        dataset,
+        baseline_run,
+        baseline_record,
+        include_003=include_003,
+    )
+    trial_rows = _diag_new4_point_rows(trial_record, include_003=include_003)
+    _diag_new4_print_cache_signature_table(
+        "baseline_cache_signature_table",
+        baseline_rows,
+    )
+    _diag_new4_print_cache_signature_table(
+        "finite_trial_cache_signature_table",
+        trial_rows,
+    )
+    stale = any(
+        bool(row.get("stale_prediction_cache_used_for_trial_params", False))
+        for row in trial_rows.values()
+    )
+    if stale:
+        print("stale_prediction_cache_used_for_trial_params=yes")
+        print("B. stale_prediction_cache_used")
+    assert not stale
+    assert any(
+        baseline_rows[key].get("params_signature") != trial_rows[key].get("params_signature")
+        for key in baseline_rows
+    )
+
+
+def test_new4_qr_only_fit_with_refined_dynamic_predictions(tmp_path) -> None:
+    include_003 = False
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    before_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+    )
+    before = _diag_objective_trace(before_run["result"])[0]
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        optimizer_overrides={"max_nfev": 20},
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+    after_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+        params_overrides=fit_run["after_params"],
+    )
+    after = _diag_objective_trace(after_run["result"])[0]
+    _diag_assert_new4_objective_record(before, include_003=include_003)
+    _diag_assert_new4_objective_record(after, include_003=include_003)
+    axis_before = _diag_new4_axis_norms(before, include_003=include_003)
+    axis_after = _diag_new4_axis_norms(after, include_003=include_003)
+    norm_before = _diag_new4_norm(before, include_003=include_003)
+    norm_after = _diag_new4_norm(after, include_003=include_003)
+    trace = _diag_objective_trace(fit_run["result"])
+    stable = _diag_new4_branch_identity_stable([before, *trace, after], include_003=include_003)
+    print("qr_only_fit_before_after")
+    print(f"norm_before={norm_before:.9f}")
+    print(f"norm_after={norm_after:.9f}")
+    print(f"theta_norm_before={float(axis_before['theta_norm']):.9f}")
+    print(f"theta_norm_after={float(axis_after['theta_norm']):.9f}")
+    print(f"phi_norm_before={float(axis_before['phi_norm']):.9f}")
+    print(f"phi_norm_after={float(axis_after['phi_norm']):.9f}")
+    print(f"nfev={int(getattr(fit_run['result'], 'nfev', 0) or 0)}")
+    print(f"accepted_params={fit_run['after_params']}")
+    print(f"branch_identity_stable={'yes' if stable else 'no'}")
+    refined = all(
+        row.get("sim_refinement_status") == "refined"
+        for row in _diag_new4_point_rows(before, include_003=include_003).values()
+    )
+    stale = any(
+        bool(row.get("stale_prediction_cache_used_for_trial_params", False))
+        for record in [before, *trace, after]
+        for row in _diag_new4_point_rows(record, include_003=include_003).values()
+    )
+    if stale:
+        print("B. stale_prediction_cache_used")
+    elif not refined:
+        print("C. caked_refinement_not_applied_to_objective")
+    elif not stable:
+        print("A. prediction_pipeline_static")
+    else:
+        print("F. dynamic_refined_prediction_pipeline_working")
+    assert stable
+    assert refined
+    assert not stale
+    assert int(getattr(fit_run["result"], "nfev", 0) or 0) > 0
+
+
+def _diag_print_new4_before_fix_missing_ambiguous_table() -> None:
+    print("missing_ambiguous_table_before_fix")
+    print("hkl | branch | before_fix_reason")
+    before_fix = [
+        ("(-1,0,10)", 1, "locked_qr_hkl_branch_missing"),
+        ("(-1,0,10)", 0, "locked_qr_hkl_branch_ambiguous"),
+        ("(-1,0,16)", 1, "locked_qr_hkl_branch_missing"),
+        ("(-1,0,5)", 0, "locked_qr_hkl_branch_ambiguous"),
+        ("(-1,0,5)", 1, "locked_qr_hkl_branch_ambiguous"),
+        ("(-2,1,6)", 0, "locked_qr_hkl_branch_ambiguous"),
+        ("(-2,1,6)", 1, "locked_qr_hkl_branch_ambiguous"),
+        ("(-2,0,10)", 0, "locked_qr_hkl_branch_ambiguous"),
+        ("(-2,0,5)", 0, "locked_qr_hkl_branch_missing"),
+        ("(-2,0,5)", 1, "locked_qr_hkl_branch_missing"),
+    ]
+    for hkl, branch, reason in before_fix:
+        print(f"{hkl} | {branch} | {reason}")
+
+
+def _diag_print_new4_after_fix_identity_table(rows) -> None:
+    print("after_fix_14_14_mode_a_identity_table")
+    print(
+        "q_group | hkl | branch | fit_qr_branch_key | reason | "
+        "source_rows_count | candidates | nominal_detector | refined_caked"
+    )
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        q_group, hkl, _table, _row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {row.get('fit_qr_branch_key')} | "
+            f"{row.get('resolution_reason')} | {row.get('trial_source_rows_count')} | "
+            f"{row.get('trial_source_rows_fit_qr_branch_key_candidate_count')} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'sim_nominal_detector_px'))} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'predicted_refined_caked_deg'))}"
+        )
+
+
+def test_new4_first_image_dynamic_identity_resolves_all_mode_a_branches(tmp_path) -> None:
+    context, _dataset, _run, record, rows, components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=False,
+    )
+    saved_entries = _diag_manual_entries_for_active_background(context["saved_state"])
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print("selected_first_image_branch_inventory_Mode_A_entries=14 components=28")
+    _diag_print_new4_inventory_table(
+        saved_entries,
+        title="selected_first_image_branch_inventory",
+    )
+    _diag_print_new4_before_fix_missing_ambiguous_table()
+    _diag_print_new4_after_fix_identity_table(rows)
+    assert len(rows) == 14
+    assert len(components) == 28
+    assert all(row.get("match_status") == "matched" for row in rows.values())
+    assert all(row.get("resolution_reason") == "locked_fit_qr_branch_key_resolved" for row in rows.values())
+    assert _diag_new4_branch_identity_stable([record], include_003=False)
+
+
+def test_new4_first_image_no_partial_qr_objective_allowed(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    broken_dataset = dict(dataset)
+    broken_spec = dict(dataset.get("spec", {}) or {})
+    partial_rows = [
+        dict(entry)
+        for entry in (dataset.get("source_rows_for_trace", ()) or ())[:5]
+        if isinstance(entry, Mapping)
+    ]
+
+    def _partial_trial_source_rows_builder(*, local_params=None):
+        del local_params
+        return {
+            "available": True,
+            "rows": partial_rows,
+            "source": "test_partial_trial_source_rows",
+            "source_rows_rebuilt_or_reused": "rebuilt_for_trial_params",
+            "reuse_valid_for_same_params_signature": True,
+            "source_rows_signature": "test_partial_rows",
+        }
+
+    broken_spec["qr_fit_trial_source_rows_builder"] = _partial_trial_source_rows_builder
+    broken_dataset["spec"] = broken_spec
+    print("partial_qr_objective_probe expected_count=14 expected_components=28")
+    with pytest.raises(RuntimeError, match="qr_fit_objective_incomplete=yes") as excinfo:
+        _diag_run_new4_dry_run(
+            context,
+            broken_dataset,
+            include_003=False,
+            qr_only_objective=True,
+        )
+    print(str(excinfo.value))
+
+
+def test_new4_legacy_bootstrap_resolves_unique_saved_sim_anchor(tmp_path) -> None:
+    _context, _dataset, _run, _record, rows, _components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=False,
+    )
+    print("legacy_bootstrap_decisions")
+    print("pair | decision | reason")
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        print(f"{key} | not_needed | durable_fit_qr_branch_key_resolved")
+        assert row.get("resolution_reason") == "locked_fit_qr_branch_key_resolved"
+        assert "legacy_bootstrap" not in str(row)
+
+
+def test_new4_dynamic_prediction_pipeline_uses_locked_identity(tmp_path) -> None:
+    test_new4_fit_prediction_pipeline_regenerates_detector_simulation(tmp_path)
+
+
+def test_new4_objective_uses_refined_sim_caked_residual_all_mode_a(tmp_path) -> None:
+    test_new4_objective_uses_refined_sim_caked_residual(tmp_path)
+
+
+def test_new4_qr_only_fit_with_complete_dynamic_refined_predictions(tmp_path) -> None:
+    test_new4_qr_only_fit_with_refined_dynamic_predictions(tmp_path)
+
+
 def test_minus_1_0_10_rung1_objective_dry_run_uses_qr_residuals(tmp_path) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     fit_run = _diag_run_controlled_minus_1_0_10_fit(
@@ -24841,7 +26304,9 @@ def test_minus_1_0_10_fitter_objective_matches_residual_audit(tmp_path) -> None:
             assert component["coordinate_space"] == "caked_deg"
             assert component["units"] == "deg"
             assert component["observed_source"] == "background/manual"
-            assert str(component["predicted_source"]).startswith("dynamic_current_simulation")
+            assert _diag_is_locked_manual_qr_prediction_source(
+                component["predicted_source"]
+            )
             assert np.isclose(
                 float(component["unweighted_value"]),
                 float(audit_record["residual_caked"][axis_index]),
@@ -24907,7 +26372,6 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
 ) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     rows_by_branch = _diag_fit_audit_rows(dataset)
-    callbacks = context["projection_callbacks"]
     from ra_sim.fitting import optimization as opt
 
     resolver_rows = {}
@@ -24933,7 +26397,8 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
                 "optimizer_request_has_fixed_source": True,
                 "optimizer_request_fallback_row": False,
                 "provider_local_subset_provenance": True,
-                "provider_local_subset_assignment": "provider_local_duplicate_hkl_unproven",
+                "provider_local_subset_assignment": "provider_local_duplicate_hkl_branch",
+                "provider_local_subset_branch_provenance": True,
                 "resolved_table_index": entry.get("source_table_index"),
                 "resolved_peak_index": branch,
             }
@@ -24968,15 +26433,12 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
             "display_to_native_sim_coords(sim_display)"
         )
         display_point = entry["sim_visual_detector_display_px"]
-        wrong_native = callbacks.background_display_to_native_detector_coords(
+        entry["sim_visual_detector_native_px"] = (
             float(display_point[0]),
             float(display_point[1]),
         )
-        if wrong_native is not None:
-            entry["sim_visual_detector_native_px"] = (
-                float(wrong_native[0]),
-                float(wrong_native[1]),
-            )
+        entry["sim_visual_detector_native_source"] = "display_frame_regression"
+        entry.pop("sim_visual_detector_native_px_source", None)
         point, payload, reason = opt._provider_local_saved_sim_detector_point(entry)
         assert point is not None, (branch, reason, payload)
         raw_only_entry = dict(entry)
@@ -24996,8 +26458,22 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
         assert raw_only_payload.get("saved_sim_detector_native_rejected_reason") == (
             "display_native_unproven"
         )
+        raw_only_stale_entry = dict(raw_only_entry)
+        raw_only_stale_entry["provider_local_stale_row_proof_available"] = True
+        raw_only_stale_entry["provider_local_stale_row_proof_reason"] = "regression_case"
+        raw_only_stale_point, raw_only_stale_payload, raw_only_stale_reason = (
+            opt._provider_local_saved_sim_detector_point(raw_only_stale_entry)
+        )
+        assert raw_only_stale_point is None, (
+            branch,
+            raw_only_stale_reason,
+            raw_only_stale_payload,
+        )
+        assert raw_only_stale_payload.get("saved_sim_detector_native_rejected_reason") == (
+            "display_native_unproven"
+        )
         row = dict(payload)
-        row["caked_from_saved_native"] = entry.get("sim_visual_caked_deg")
+        row["caked_from_saved_native"] = (float("nan"), float("nan"))
         row["caked_from_display_to_native"] = handoff_row["fit_prediction_caked_deg"]
         row["predicted_caked_deg"] = handoff_row["fit_prediction_caked_deg"]
         resolver_rows[branch] = row
@@ -25148,6 +26624,9 @@ def test_minus_1_0_10_qr_only_fit_reduces_residual_after_correspondence_fix(
         _diag_print_fit_step_table(baseline_records, after_records)
     print(f"total_norm_before={baseline_norm:.9f}")
     print(f"total_norm_after={after_norm:.9f}")
+    if not (np.isfinite(baseline_norm) and baseline_norm < 5.0):
+        print("first_failure=wrong_prediction_frame")
+    assert np.isfinite(baseline_norm) and baseline_norm < 5.0, "wrong_prediction_frame"
     assert int(getattr(result, "nfev", 0) or 0) > 0
     components = _diag_target_objective_components(trace[0]) if trace else []
     if len(components) != 4:
@@ -25366,11 +26845,17 @@ def test_minus_1_0_10_fit_prediction_source_is_explicit(tmp_path) -> None:
     }
     for row in rows_by_branch.values():
         source = str(row.get("fit_prediction_source"))
-        assert source in allowed or source.startswith("unavailable_reason:")
+        assert (
+            source in allowed
+            or _diag_is_locked_manual_qr_prediction_source(source)
+            or source.startswith("unavailable_reason:")
+        )
         assert "cache_fresh_row" not in source
         if source == "dynamic_current_simulation":
             assert row["fit_prediction_is_dynamic"] == "yes"
             assert row["sim_visual_to_fit_prediction_match"] == "not-applicable"
+        if _diag_is_locked_manual_qr_prediction_source(source):
+            assert row["fit_prediction_is_dynamic"] == "no"
 
 
 def test_minus_1_0_10_no_caked_values_printed_as_detector_px(tmp_path) -> None:

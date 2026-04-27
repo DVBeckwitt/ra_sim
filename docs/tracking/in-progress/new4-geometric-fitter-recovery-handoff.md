@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-26
+Last updated: 2026-04-27
 
 ## Current status
 
@@ -28,15 +28,20 @@ Last updated: 2026-04-26
   are `predicted - observed`, Qr weights are `[1.0]`, dry-run evaluates the
   objective without `least_squares`, and branch identity stays fixed during
   solve evaluation.
-- Qr-only fit starts at the correct residual scale and accepts a small reducing
-  step: `1.423219664 -> 1.419117984`, `success=True`.
-- Full geometric fit keeps the Qr block live and improves the full objective:
-  total `6.847163064 -> 6.731263668`, Qr block
-  `2.819315157 -> 2.644004804`, `branch_identity_stable=yes`, and
-  `qr_residual_sacrificed_to_other_terms=no`.
-- Remaining Qr limitation is phi parameter sensitivity. Phi residuals are
-  present and weighted, but active params cannot meaningfully move phi; current
-  classification is C, active params cannot move phi enough.
+- Earlier target `(-1,0,10)` Qr-only reducer evidence remains historical.
+  Current full Mode A dynamic/refined Qr-only smoke starts only after 14/14
+  branch coverage, runs `nfev=1`, and leaves norm unchanged:
+  `632.783875527 -> 632.783875527`.
+- Earlier full-fit decomposition remains ladder evidence for the prior
+  fixed-source path. Current full Mode A claim is narrower: objective coverage,
+  refined caked residual use, no stale prediction cache, and fail-closed partial
+  objective gating are green. Full GUI/baseline convergence remains
+  unvalidated.
+- Remaining Qr limitation is phi parameter leverage. Finite trial sweeps prove
+  coordinates are not frozen (`max_prediction_motion=38.674929893`), but
+  `max_phi_motion=0.000000000`; current classification is
+  `E. phi_controlling_params_fixed_or_missing` plus
+  `F. dynamic_refined_prediction_pipeline_working`.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.
@@ -93,12 +98,20 @@ Last updated: 2026-04-26
   shrinking the unchanged classifier threshold faster than their delta norms
   fell (`1.37x` and `2.15x`). This is expected, not a fitting regression. Do
   not mix it with the exact-caked path.
-- Real full headless geometric-fit smoke is now run for
-  `artifacts/geometry_fit_gui_states/new4.json`, background `0`. The optimizer
-  request stays exact-caked and pair/source identity stays clean. Earlier
+- New4 Mode A dynamic/refined Qr prediction is implemented and verified for
+  saved state `C:\Users\Kenpo\.local\share\ra_sim\new4.json`, background index
+  `0` (`Bi2Se3_5m_5d.osc`). The optimizer regenerates trial detector-space
+  source rows from trial params, resolves locked Qr branch identity by durable
+  key, projects through the trial caked projector, refines in simulated caked
+  intensity, and computes residuals as `refined_sim_caked - observed_caked`.
+  Mode A resolves 14/14 branches and 28/28 caked residual components; partial
+  Qr objectives fail closed with `qr_fit_objective_incomplete=yes`.
+- Real full headless geometric-fit smoke was run for
+  `artifacts/geometry_fit_gui_states/new4.json`, background `0`. Earlier
   seed/start-state split evidence remains useful for baseline/full-beam
-  comparison, but the current Qr diagnostic path proves the full objective and
-  Qr block both improve with locked source identity.
+  comparison, but current dynamic/refined Qr evidence is limited to complete
+  Mode A prediction coverage and residual correctness, not full GUI/baseline
+  convergence.
 - Baseline, GUI fit button, and unrestricted feature-combination runs should
   still be treated as unvalidated.
 
@@ -108,6 +121,26 @@ it as approval for GUI, baseline, or unrestricted feature-combination solves.
 
 Status by work type:
 
+- Bug/error: multi-branch New4 Mode A Qr identity resolution is fixed. The
+  earlier regenerated hit-table resolver resolved only 4/14 saved branches and
+  produced 8/28 caked residual components. The durable `fit_qr_branch_key` now
+  resolves all 14 branches with one dynamic candidate each and no branch-only
+  fallback.
+- Bug/error: stale saved visual/caked fallback is removed from active Qr
+  prediction. Trial detector source rows, caked projection signatures, and
+  simulated caked image signatures are tied to the objective trial params; stale
+  baseline cache reuse under changed params is rejected.
+- Feature: shared dynamic Qr prediction helper returns locked branch identity,
+  nominal detector/native/caked coordinates, refined simulated caked
+  coordinates, refinement status, params signature, detector-source signature,
+  and caked-simulation signature. Handoff audit, objective dry-run, and solver
+  callback use this same helper at x0.
+- Feature/status: caked refinement is applied to the objective for all 28 Mode
+  A components. Residual units are weighted caked degrees, with residuals
+  computed as `sim_refined_caked_deg - observed_caked_deg`.
+- Not fixed: phi-controlling fit leverage remains missing or fixed. Dynamic
+  prediction moves under finite trials, but the measured phi component does not
+  move; Qr-only fit does not reduce the full Mode A phi-dominated norm.
 - Bug/error: target `(-1,0,10)` Qr/Qz objective absence and prediction-resolver
   split are fixed. Handoff/audit, optimizer dry-run, and solver callback call
   the shared fixed-manual Qr fit resolver and agree at x0. If they diverge,
@@ -139,9 +172,10 @@ Status by work type:
   Rung 2 expected baseline is `11/2` under the unchanged threshold rule and
   does not require solver, residual, runtime, or caked-routing changes.
 - Full fit bug/error/status: request construction is clean, the Qr block is not
-  silently dropped, and the full objective improves. Remaining Qr issue is
-  active-parameter phi sensitivity, not optimizer convergence, acceptance
-  thresholds, source identity, or detector-space reporting.
+  silently dropped, and partial Qr objectives now fail closed. Current
+  dynamic/refined evidence does not claim full GUI/baseline convergence.
+  Remaining Qr issue is active-parameter phi sensitivity, not source identity,
+  detector-space reporting, stale caked coordinates, or objective membership.
 - Timing feature: current-run Rung 0-5 timing JSON and stdout table are
   available for opt-in ladder runs.
 - Timing bug/error: review follow-up is closed. Timing collection excludes

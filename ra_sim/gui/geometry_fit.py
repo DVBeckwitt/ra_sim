@@ -43,6 +43,7 @@ from ra_sim.simulation.exact_cake_portable import (
     detector_pixel_to_caked_bin,
     detector_two_theta_max_deg,
     gui_phi_to_raw_phi,
+    integrate_detector_to_cake_lut,
     prepare_gui_phi_display,
     raw_phi_to_gui_phi,
     resolve_cake_transform_bundle,
@@ -530,7 +531,7 @@ def _geometry_fit_projection_signature(
     if not isinstance(payload, Mapping):
         return None
     try:
-        canonical = repr(_geometry_fit_cache_jsonable(payload))
+        canonical = repr(_geometry_fit_cache_canonical_tuple(payload))
     except Exception:
         return None
     return hashlib.sha1(canonical.encode("utf-8")).hexdigest()
@@ -3109,6 +3110,11 @@ def build_geometry_fit_qr_handoff_audit_rows(
             resolved_prediction_payload,
             resolved_prediction_reason,
         ) = _resolve_fixed_manual_qr_fit_prediction(resolver_entry)
+        resolved_prediction_source = str(
+            resolved_prediction_payload.get("prediction_source", "") or ""
+        ).strip()
+        if resolved_prediction_source:
+            fit_prediction_source = resolved_prediction_source
         fit_prediction_display = _geometry_fit_audit_point_from_tuple_key(
             (initial_entry,),
             "sim_display",
@@ -3150,6 +3156,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
             (initial_entry,),
             (("simulated_two_theta_deg", "simulated_phi_deg"),),
         )
+        fit_prediction_caked_from_handoff = fit_prediction_caked is not None
         fit_prediction_caked_projection_reason = ""
         fit_prediction_projection_theta_initial = None
         if fit_prediction_native is not None:
@@ -3165,7 +3172,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
                 )
             )
             fit_prediction_caked_projection_reason = str(projected_prediction_reason)
-            if projected_prediction_caked is not None:
+            if projected_prediction_caked is not None and not fit_prediction_caked_from_handoff:
                 fit_prediction_caked = projected_prediction_caked
 
         observed_native_delta = _geometry_fit_audit_point_delta(
@@ -3183,7 +3190,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
             and abs(float(observed_caked_delta[0])) <= 0.25
             and abs(float(observed_caked_delta[1])) <= 0.5
         )
-        sim_dynamic = bool(fit_prediction_source == "dynamic_current_simulation")
+        sim_dynamic = bool(fit_prediction_source.startswith("dynamic_current_simulation"))
         sim_detector_delta = _geometry_fit_audit_point_delta(
             fit_prediction_native,
             sim_refined_native,
@@ -9149,6 +9156,120 @@ def build_geometry_manual_fit_dataset(
         copied = copy.deepcopy(raw_value)
         return copied if isinstance(copied, dict) else {}
 
+    def _trial_source_rows_signature(rows: object) -> str:
+        try:
+            payload = repr(_geometry_fit_cache_jsonable(rows)).encode(
+                "utf-8",
+                errors="replace",
+            )
+        except Exception:
+            payload = repr(rows).encode("utf-8", errors="replace")
+        return hashlib.sha1(payload).hexdigest()
+
+    def _qr_fit_trial_source_rows_builder(
+        *,
+        local_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        active_params = dict(params_i)
+        if isinstance(local_params, Mapping):
+            active_params.update(dict(local_params))
+        raw_rows: object = []
+        source = "unavailable"
+        rebuild_attempted = False
+        if callable(manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background):
+            rebuild_attempted = True
+            try:
+                raw_rows = (
+                    manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background(
+                        int(background_idx),
+                        active_params,
+                        consumer="geometry_fit_trial_prediction",
+                        required_pairs=selected_entries,
+                    )
+                    or []
+                )
+                source = "geometry_manual_rebuild_source_rows_for_background"
+            except TypeError:
+                try:
+                    raw_rows = (
+                        manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background(
+                            int(background_idx),
+                            active_params,
+                        )
+                        or []
+                    )
+                    source = "geometry_manual_rebuild_source_rows_for_background"
+                except Exception:
+                    raw_rows = []
+            except Exception:
+                raw_rows = []
+        if not raw_rows and callable(manual_dataset_bindings.geometry_manual_source_rows_for_background):
+            try:
+                raw_rows = (
+                    manual_dataset_bindings.geometry_manual_source_rows_for_background(
+                        int(background_idx),
+                        active_params,
+                        consumer="geometry_fit_dataset",
+                        required_pairs=selected_entries,
+                    )
+                    or []
+                )
+                source = "geometry_manual_source_rows_for_background"
+            except TypeError:
+                try:
+                    raw_rows = (
+                        manual_dataset_bindings.geometry_manual_source_rows_for_background(
+                            int(background_idx),
+                            active_params,
+                        )
+                        or []
+                    )
+                    source = "geometry_manual_source_rows_for_background"
+                except Exception:
+                    raw_rows = []
+            except Exception:
+                raw_rows = []
+        if not raw_rows:
+            try:
+                raw_rows = (
+                    manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
+                        active_params,
+                        prefer_cache=False,
+                    )
+                    or []
+                )
+                source = "geometry_manual_simulated_peaks_for_params(prefer_cache=False)"
+            except TypeError:
+                try:
+                    raw_rows = (
+                        manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
+                            active_params,
+                        )
+                        or []
+                    )
+                    source = "geometry_manual_simulated_peaks_for_params"
+                except Exception:
+                    raw_rows = []
+            except Exception:
+                raw_rows = []
+        projected_rows = _project_source_rows_for_current_view(raw_rows)
+        rows = [dict(entry) for entry in projected_rows if isinstance(entry, Mapping)]
+        diagnostics = _current_simulation_diagnostics()
+        return {
+            "available": bool(rows),
+            "rows": rows,
+            "source": source,
+            "source_rows_rebuilt_or_reused": "rebuilt_for_trial_params",
+            "reuse_valid_for_same_params_signature": True,
+            "rebuild_attempted": bool(rebuild_attempted),
+            "row_count": int(len(rows)),
+            "source_rows_signature": _trial_source_rows_signature(rows),
+            "source_diagnostics": diagnostics,
+        }
+
+    qr_fit_trial_source_rows_builder = _qr_fit_trial_source_rows_builder
+    qr_fit_trial_source_rows_builder_kind = "geometry_manual_trial_source_rows"
+
     if callable(manual_dataset_bindings.geometry_manual_source_rows_for_background):
         simulated_peaks = manual_dataset_bindings.geometry_manual_source_rows_for_background(
             int(background_idx),
@@ -11562,6 +11683,8 @@ def build_geometry_manual_fit_dataset(
     fit_space_projector = None
     fit_space_projector_kind: str | None = None
     fit_space_projector_unavailable_reason = "exact_caked_view_unavailable"
+    sim_caked_image_builder = None
+    sim_caked_image_builder_kind: str | None = None
     if callable(manual_dataset_bindings.geometry_manual_match_config):
         try:
             dynamic_reanchor_match_cfg = dict(
@@ -11867,6 +11990,7 @@ def build_geometry_manual_fit_dataset(
                             orientation_choice=orientation_choice,
                             native_mapper=(
                                 manual_dataset_bindings.backend_detector_coords_to_native_detector_coords
+                                or manual_dataset_bindings.display_to_native_sim_coords
                             ),
                             native_shape=native_background.shape,
                         )
@@ -12007,6 +12131,86 @@ def build_geometry_manual_fit_dataset(
                 input_frame=input_frame,
                 prefer_rebuild_bundle=True,
             )
+
+        def _trial_detector_image_signature(detector_image: object) -> str:
+            try:
+                arr = np.ascontiguousarray(np.asarray(detector_image, dtype=np.float64))
+            except Exception:
+                return "unavailable"
+            payload = arr.tobytes() + repr((arr.shape, str(arr.dtype))).encode("utf-8")
+            return hashlib.sha1(payload).hexdigest()
+
+        def _sim_caked_image_builder(
+            detector_image: object,
+            *,
+            local_params: Mapping[str, object] | None = None,
+        ) -> dict[str, object] | None:
+            active_params = local_params if isinstance(local_params, Mapping) else params_i
+            try:
+                detector_arr = np.asarray(detector_image, dtype=np.float64)
+            except Exception:
+                return {
+                    "available": False,
+                    "unavailable_reason": "detector_image_invalid",
+                    "detector_simulation_signature": "unavailable",
+                }
+            active_bundle = _resolve_dynamic_reanchor_cached_caked_bundle(
+                active_params,
+                prefer_rebuild_bundle=True,
+            )
+            if not isinstance(active_bundle, CakeTransformBundle):
+                return {
+                    "available": False,
+                    "unavailable_reason": "missing_exact_caked_bundle",
+                    "detector_simulation_signature": _trial_detector_image_signature(
+                        detector_arr
+                    ),
+                    "fit_space_local_params_signature": _geometry_fit_projection_signature(
+                        _geometry_fit_transform_driven_param_payload(active_params)
+                    ),
+                }
+            try:
+                caked_result = integrate_detector_to_cake_lut(
+                    detector_arr,
+                    np.asarray(active_bundle.radial_deg, dtype=np.float64),
+                    np.asarray(active_bundle.raw_azimuth_deg, dtype=np.float64),
+                    active_bundle.lut,
+                )
+                caked_image, radial_axis, azimuth_axis = prepare_gui_phi_display(caked_result)
+                caked_arr = np.asarray(caked_image, dtype=np.float64)
+            except Exception as exc:
+                return {
+                    "available": False,
+                    "unavailable_reason": f"sim_caked_integration_exception:{type(exc).__name__}",
+                    "detector_simulation_signature": _trial_detector_image_signature(
+                        detector_arr
+                    ),
+                    "fit_space_local_params_signature": _geometry_fit_projection_signature(
+                        _geometry_fit_transform_driven_param_payload(active_params)
+                    ),
+                    "cake_bundle_signature": _geometry_fit_cake_bundle_signature(
+                        active_bundle,
+                        local_params=active_params,
+                    ),
+                }
+            return {
+                "available": True,
+                "image": caked_arr,
+                "radial_axis": np.asarray(radial_axis, dtype=np.float64),
+                "azimuth_axis": np.asarray(azimuth_axis, dtype=np.float64),
+                "raw_azimuth_axis": np.asarray(active_bundle.raw_azimuth_deg, dtype=np.float64),
+                "detector_simulation_signature": _trial_detector_image_signature(detector_arr),
+                "caked_simulation_signature": _trial_detector_image_signature(caked_arr),
+                "fit_space_local_params_signature": _geometry_fit_projection_signature(
+                    _geometry_fit_transform_driven_param_payload(active_params)
+                ),
+                "cake_bundle_signature": _geometry_fit_cake_bundle_signature(
+                    active_bundle,
+                    local_params=active_params,
+                ),
+                "source_rows_rebuilt_or_reused": "rebuilt_for_trial_params",
+                "reuse_valid_for_same_params_signature": True,
+            }
 
         def _dynamic_reanchor_callback(
             measured_entry: Mapping[str, object] | None,
@@ -12218,6 +12422,8 @@ def build_geometry_manual_fit_dataset(
             fit_space_projector = _fit_space_projector
             fit_space_projector_kind = "exact_caked_bundle"
             fit_space_projector_unavailable_reason = None
+            sim_caked_image_builder = _sim_caked_image_builder
+            sim_caked_image_builder_kind = "exact_caked_lut"
         elif fit_space_projector_unavailable_reason == "missing_exact_caked_bundle":
             pass
         elif not dynamic_reanchor_caked_view_ready:
@@ -12319,6 +12525,12 @@ def build_geometry_manual_fit_dataset(
             "fit_space_projector": fit_space_projector,
             "fit_space_projector_kind": fit_space_projector_kind,
             "fit_space_projector_unavailable_reason": (fit_space_projector_unavailable_reason),
+            "sim_caked_image_builder": sim_caked_image_builder,
+            "sim_caked_image_builder_kind": sim_caked_image_builder_kind,
+            "qr_fit_trial_source_rows_builder": qr_fit_trial_source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": (
+                qr_fit_trial_source_rows_builder_kind
+            ),
         },
     }
     dataset_payload["manual_point_pairs"] = _geometry_fit_dataset_pairs_from_handoff(
@@ -13412,6 +13624,15 @@ def _geometry_fit_cache_jsonable(
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return repr(value)
+
+
+def _geometry_fit_cache_canonical_tuple(value: object) -> object:
+    canonical = _geometry_fit_cache_jsonable(value)
+    if isinstance(canonical, list):
+        return tuple(_geometry_fit_cache_canonical_tuple(item) for item in canonical)
+    if isinstance(canonical, tuple):
+        return tuple(_geometry_fit_cache_canonical_tuple(item) for item in canonical)
+    return canonical
 
 
 def _geometry_fit_cache_finite_float(
