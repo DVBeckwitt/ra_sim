@@ -20335,11 +20335,27 @@ def _geometry_source_snapshot_payload(
     created_from: str,
     source_reflection_index_count: int,
     empty_reason: str,
+    projected_rows: Sequence[Mapping[str, object]] | None = None,
+    diagnostics: Mapping[str, object] | None = None,
+    requested_signature: object = None,
+    requested_signature_summary: object = None,
+    projection_view_signature: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     normalized_rows = [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+    normalized_projected_rows = [
+        dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)
+    ]
+    normalized_projection_signature = (
+        dict(projection_view_signature) if isinstance(projection_view_signature, Mapping) else None
+    )
+    normalized_diagnostics = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
     return {
         "background_index": int(background_index),
         "simulation_signature": simulation_signature,
+        "requested_signature": (
+            simulation_signature if requested_signature is None else requested_signature
+        ),
+        "requested_signature_summary": requested_signature_summary,
         "base_simulation_signature": simulation_runtime_state.last_simulation_signature,
         "simulation_signature_summary": _live_cache_signature_summary(simulation_signature),
         "row_content_signature": getattr(
@@ -20348,11 +20364,22 @@ def _geometry_source_snapshot_payload(
             None,
         ),
         "rows": normalized_rows,
+        "stored_rows": [dict(entry) for entry in normalized_rows],
+        "projected_rows": normalized_projected_rows,
         "row_count": int(len(normalized_rows)),
+        "projected_row_count": int(len(normalized_projected_rows)),
         "valid_for_picker": bool(normalized_rows),
+        "valid_for_geometry_fit_dataset": bool(normalized_rows or normalized_projected_rows),
         "empty_reason": (None if normalized_rows else str(empty_reason)),
         "created_from": str(created_from or "unknown"),
         "source_reflection_index_count": int(source_reflection_index_count),
+        "projection_view_signature": normalized_projection_signature,
+        "projection_view_signature_digest": (
+            gui_geometry_fit._geometry_fit_digest_payload(normalized_projection_signature)
+            if normalized_projection_signature is not None
+            else None
+        ),
+        "diagnostics": copy.deepcopy(normalized_diagnostics),
     }
 
 
@@ -20992,6 +21019,36 @@ def _geometry_fit_background_label(background_index: int) -> str:
     return f"background {int(background_index) + 1}"
 
 
+def _normalize_geometry_fit_projection_view_signature(
+    raw: object,
+    background_index: int,
+) -> dict[str, object]:
+    """Normalize legacy projection signatures before mapping-style access."""
+
+    background_idx = int(background_index)
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if raw is None:
+        return {
+            "mode": "detector",
+            "available": False,
+            "background_index": int(background_idx),
+            "reason": "missing_projection_view_signature",
+        }
+    reason = f"invalid_projection_view_signature_type:{type(raw).__name__}"
+    try:
+        legacy_signature = gui_geometry_fit._geometry_fit_cache_jsonable(raw)
+    except Exception:
+        legacy_signature = repr(raw)
+    return {
+        "mode": "detector",
+        "available": False,
+        "background_index": int(background_idx),
+        "reason": reason,
+        "legacy_projection_view_signature": legacy_signature,
+    }
+
+
 def _geometry_fit_logged_intersection_cache_loaders() -> tuple[
     Callable[..., object] | None, Callable[..., object] | None
 ]:
@@ -21060,8 +21117,9 @@ def _commit_geometry_manual_source_row_rebuild_result(
 
     if stored_rows:
         if targeted_preflight_enabled and targeted_cache_key_digest:
-            targeted_projection_signature = _geometry_fit_targeted_projection_view_signature(
-                background_idx
+            targeted_projection_signature = _normalize_geometry_fit_projection_view_signature(
+                _geometry_fit_targeted_projection_view_signature(background_idx),
+                background_idx,
             )
             _geometry_fit_store_targeted_projected_cache_entry(
                 background_index=int(background_idx),
@@ -21136,6 +21194,15 @@ def _commit_geometry_manual_source_row_rebuild_result(
         background_index=int(background_idx),
         simulation_signature=rebuild_result.requested_signature,
         rows=stored_rows,
+        projected_rows=projected_rows,
+        diagnostics=diagnostics,
+        requested_signature=rebuild_result.requested_signature,
+        requested_signature_summary=rebuild_result.requested_signature_summary,
+        projection_view_signature=_normalize_geometry_fit_projection_view_signature(
+            diagnostics.get("projection_view_signature")
+            or _geometry_fit_targeted_projection_view_signature(background_idx),
+            background_idx,
+        ),
         created_from=str(rebuild_result.rebuild_source or "unknown"),
         source_reflection_index_count=int(len(rebuild_result.source_reflection_indices or ())),
         empty_reason="no_source_rows",
@@ -21146,6 +21213,33 @@ def _commit_geometry_manual_source_row_rebuild_result(
         simulation_runtime_state.source_row_snapshots[int(background_idx)] = snapshot_payload
     else:
         simulation_runtime_state.source_row_snapshots.pop(int(background_idx), None)
+
+    strict_projection_return = (
+        not is_current_background
+        and str(
+            diagnostics.get("projection_view_mode") or _geometry_fit_targeted_projection_view_mode()
+        )
+        .strip()
+        .lower()
+        in {"caked", "q_space"}
+    )
+    final_return_row_count = int(
+        len(projected_rows)
+        if projected_rows
+        else (0 if strict_projection_return else len(stored_rows))
+    )
+    if str(diagnostics.get("status", "")) == "snapshot_hit" and final_return_row_count <= 0:
+        diagnostics["status"] = (
+            "snapshot_hit_projection_unavailable"
+            if strict_projection_return
+            else "snapshot_hit_empty_rows"
+        )
+        diagnostics.setdefault(
+            "snapshot_filter_reason",
+            str(diagnostics.get("status")),
+        )
+        diagnostics.setdefault("stale_reason", str(diagnostics.get("status")))
+        diagnostics["final_returned_row_count"] = 0
 
     if diagnostics:
         _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
@@ -21194,7 +21288,10 @@ def _geometry_manual_rebuild_source_rows_for_background(
     )
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
-    projection_view_signature = _geometry_fit_targeted_projection_view_signature(background_idx)
+    projection_view_signature = _normalize_geometry_fit_projection_view_signature(
+        _geometry_fit_targeted_projection_view_signature(background_idx),
+        background_idx,
+    )
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
     projection_payload = (
         _geometry_fit_resolve_targeted_caked_projection_payload(
@@ -21391,7 +21488,10 @@ def _geometry_manual_source_rows_for_background(
     )
     preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
     targeted_preflight_enabled = preflight_mode == "manual_geometry_targeted"
-    projection_view_signature = _geometry_fit_targeted_projection_view_signature(background_idx)
+    projection_view_signature = _normalize_geometry_fit_projection_view_signature(
+        _geometry_fit_targeted_projection_view_signature(background_idx),
+        background_idx,
+    )
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
     required_branch_group_keys_digest = (
         gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
@@ -21408,6 +21508,68 @@ def _geometry_manual_source_rows_for_background(
     manual_target_scoring_digest = gui_geometry_fit._geometry_fit_manual_target_scoring_digest(
         required_manual_fit_targets
     )
+    projection_view_signature_digest = gui_geometry_fit._geometry_fit_digest_payload(
+        projection_view_signature
+    )
+    projection_diagnostics = {
+        "projection_view_mode": str(projection_view_mode),
+        "projection_view_signature": copy.deepcopy(dict(projection_view_signature)),
+        "projection_view_signature_digest": str(projection_view_signature_digest),
+        "projection_view_signature_available": bool(
+            projection_view_signature.get("available", True)
+        ),
+    }
+    if projection_view_signature.get("reason") is not None:
+        projection_diagnostics["reason"] = str(projection_view_signature.get("reason"))
+
+    dataset_debug = {
+        "background_index": int(background_idx),
+        "consumer": lookup_context,
+        "requested_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
+            normalized_requested_signature
+        ),
+        "projection_view_signature_digest": str(projection_view_signature_digest),
+        "snapshot_present": False,
+        "snapshot_status": "not_checked",
+        "snapshot_row_count": 0,
+        "snapshot_projected_row_count": 0,
+        "snapshot_valid_for_picker": False,
+        "snapshot_valid_for_geometry_fit_dataset": False,
+        "required_pair_count": int(len(required_manual_fit_targets)),
+        "rows_before_required_filter": 0,
+        "rows_after_required_filter": 0,
+        "missing_required_pairs": [],
+        "rebuild_attempted": False,
+        "rebuild_returned_row_count": 0,
+        "final_returned_row_count": 0,
+    }
+
+    def _print_geometry_fit_dataset_source_snapshot_diagnostics() -> None:
+        if lookup_context != "geometry_fit_dataset":
+            return
+        parts = []
+        for key, value in dataset_debug.items():
+            if isinstance(value, bool):
+                rendered = "yes" if value else "no"
+            else:
+                rendered = repr(value) if isinstance(value, (list, tuple, dict)) else str(value)
+            parts.append(f"{key}={rendered}")
+        try:
+            print("geometry_fit_dataset_source_snapshot " + " ".join(parts))
+        except Exception:
+            pass
+
+    def _finish_source_rows(
+        rows: Sequence[Mapping[str, object]] | None,
+        *,
+        status: str | None = None,
+    ) -> list[dict[str, object]]:
+        returned = [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+        if status is not None:
+            dataset_debug["snapshot_status"] = str(status)
+        dataset_debug["final_returned_row_count"] = int(len(returned))
+        _print_geometry_fit_dataset_source_snapshot_diagnostics()
+        return returned
 
     def _targeted_lookup_flags(
         *,
@@ -21556,6 +21718,11 @@ def _geometry_manual_source_rows_for_background(
                     targeted_cache_payload.get("projected_rows"),
                 )
             ]
+            dataset_debug["snapshot_present"] = True
+            dataset_debug["snapshot_status"] = "targeted_projected_cache_lookup"
+            dataset_debug["snapshot_projected_row_count"] = int(len(targeted_rows))
+            dataset_debug["rows_before_required_filter"] = int(len(targeted_rows))
+            dataset_debug["rows_after_required_filter"] = int(len(targeted_rows))
             if (
                 requested_signature_matches
                 and projection_signature_matches
@@ -21600,6 +21767,7 @@ def _geometry_manual_source_rows_for_background(
                     ),
                     signature_match=True,
                     live_cache_inventory=live_cache_inventory,
+                    **projection_diagnostics,
                     **targeted_flags,
                 )
                 _trace_live_cache_event(
@@ -21618,9 +21786,11 @@ def _geometry_manual_source_rows_for_background(
                     projected_peak_count=int(len(targeted_rows)),
                     signature_match=True,
                 )
-                return targeted_rows
+                return _finish_source_rows(targeted_rows, status="snapshot_hit")
     snapshot = dict(simulation_runtime_state.source_row_snapshots.get(background_idx) or {})
     if not snapshot:
+        dataset_debug["snapshot_present"] = False
+        dataset_debug["snapshot_status"] = "snapshot_missing_background"
         live_cache_inventory = _live_cache_inventory_snapshot()
         _set_geometry_manual_source_snapshot_diagnostics(
             source="source_snapshot",
@@ -21635,6 +21805,7 @@ def _geometry_manual_source_rows_for_background(
             projected_peak_count=0,
             signature_match=False,
             live_cache_inventory=live_cache_inventory,
+            **projection_diagnostics,
         )
         _trace_live_cache_event(
             "source_snapshot",
@@ -21649,6 +21820,7 @@ def _geometry_manual_source_rows_for_background(
             signature_match=False,
         )
         if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
             rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
                 background_idx,
                 param_set,
@@ -21656,9 +21828,10 @@ def _geometry_manual_source_rows_for_background(
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
                 required_pairs=required_pairs,
             )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
             if rebuilt_rows:
-                return rebuilt_rows
-        return []
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
+        return _finish_source_rows([], status="snapshot_missing_background")
     snapshot_signature = snapshot.get("simulation_signature")
     stored_signature_summary = _live_cache_signature_summary(snapshot_signature)
     created_from = snapshot.get("created_from")
@@ -21669,21 +21842,80 @@ def _geometry_manual_source_rows_for_background(
         snapshot.get("row_content_signature")
     )
     snapshot_valid_for_picker = bool(snapshot.get("valid_for_picker", False))
+    snapshot_valid_for_geometry_fit_dataset = bool(
+        snapshot.get("valid_for_geometry_fit_dataset", False)
+    )
+    snapshot_projected_rows = [
+        dict(entry)
+        for entry in _geometry_fit_rows_for_background(
+            int(background_idx),
+            snapshot.get("projected_rows", ()),
+        )
+    ]
     raw_rows = [
         dict(entry)
         for entry in _geometry_fit_rows_for_background(
             int(background_idx),
-            snapshot.get("rows", ()),
+            snapshot.get("stored_rows", snapshot.get("rows", ())),
         )
     ]
-    if snapshot_signature != requested_signature:
+    if not raw_rows and snapshot_projected_rows:
+        raw_rows = [dict(entry) for entry in snapshot_projected_rows]
+    dataset_debug["snapshot_present"] = True
+    dataset_debug["snapshot_status"] = "snapshot_loaded"
+    dataset_debug["snapshot_row_count"] = int(len(raw_rows))
+    dataset_debug["snapshot_projected_row_count"] = int(len(snapshot_projected_rows))
+    dataset_debug["snapshot_valid_for_picker"] = bool(snapshot_valid_for_picker)
+    dataset_debug["snapshot_valid_for_geometry_fit_dataset"] = bool(
+        snapshot_valid_for_geometry_fit_dataset
+    )
+    try:
+        snapshot_background_idx = int(snapshot.get("background_index", background_idx))
+    except Exception:
+        snapshot_background_idx = int(background_idx)
+    if int(snapshot_background_idx) != int(background_idx):
+        status = "snapshot_hit_wrong_background"
         live_cache_inventory = _live_cache_inventory_snapshot()
         _set_geometry_manual_source_snapshot_diagnostics(
             source="source_snapshot",
             cache_family="source_snapshot",
             action="lookup",
             consumer=lookup_context,
-            status="snapshot_signature_mismatch",
+            status=status,
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=int(len(snapshot_projected_rows)),
+            created_from=created_from,
+            signature_match=False,
+            live_cache_inventory=live_cache_inventory,
+            **projection_diagnostics,
+        )
+        if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
+            if rebuilt_rows:
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
+        return _finish_source_rows([], status=status)
+    if snapshot_signature != requested_signature:
+        dataset_debug["snapshot_status"] = "snapshot_hit_signature_mismatch"
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status="snapshot_hit_signature_mismatch",
             background_index=int(background_idx),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
@@ -21694,6 +21926,7 @@ def _geometry_manual_source_rows_for_background(
             created_from=created_from,
             signature_match=False,
             live_cache_inventory=live_cache_inventory,
+            **projection_diagnostics,
         )
         _trace_live_cache_event(
             "source_snapshot",
@@ -21701,7 +21934,7 @@ def _geometry_manual_source_rows_for_background(
             background_index=int(background_idx),
             outcome="mismatch",
             consumer=lookup_context,
-            status="snapshot_signature_mismatch",
+            status="snapshot_hit_signature_mismatch",
             requested_signature_summary=requested_signature_summary,
             stored_signature_summary=stored_signature_summary,
             created_from=created_from,
@@ -21710,6 +21943,7 @@ def _geometry_manual_source_rows_for_background(
             signature_match=False,
         )
         if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
             rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
                 background_idx,
                 param_set,
@@ -21717,41 +21951,93 @@ def _geometry_manual_source_rows_for_background(
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
                 required_pairs=required_pairs,
             )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
             if rebuilt_rows:
-                return rebuilt_rows
-        return []
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
+        return _finish_source_rows([], status="snapshot_hit_signature_mismatch")
     if snapshot_row_content_signature != current_row_content_signature:
-        if allow_source_snapshot_rebuild:
-            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
-                background_idx,
-                param_set,
-                consumer=lookup_context,
-                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
-                required_pairs=required_pairs,
-            )
-            if rebuilt_rows:
-                return rebuilt_rows
-        return []
-    if not snapshot_valid_for_picker:
-        if allow_source_snapshot_rebuild:
-            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
-                background_idx,
-                param_set,
-                consumer=lookup_context,
-                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
-                required_pairs=required_pairs,
-            )
-            if rebuilt_rows:
-                return rebuilt_rows
-        return []
-    if not raw_rows:
+        status = "snapshot_hit_signature_mismatch"
+        dataset_debug["snapshot_status"] = status
         live_cache_inventory = _live_cache_inventory_snapshot()
         _set_geometry_manual_source_snapshot_diagnostics(
             source="source_snapshot",
             cache_family="source_snapshot",
             action="lookup",
             consumer=lookup_context,
-            status="snapshot_empty",
+            status=status,
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=int(len(snapshot_projected_rows)),
+            created_from=created_from,
+            signature_match=False,
+            row_content_signature_match=False,
+            live_cache_inventory=live_cache_inventory,
+            **projection_diagnostics,
+        )
+        if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
+            if rebuilt_rows:
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
+        return _finish_source_rows([], status=status)
+    if not snapshot_valid_for_picker and not (
+        lookup_context == "geometry_fit_dataset" and snapshot_valid_for_geometry_fit_dataset
+    ):
+        status = "snapshot_hit_empty_rows"
+        dataset_debug["snapshot_status"] = status
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status=status,
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=int(len(snapshot_projected_rows)),
+            created_from=created_from,
+            signature_match=True,
+            live_cache_inventory=live_cache_inventory,
+            **projection_diagnostics,
+        )
+        if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
+            if rebuilt_rows:
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
+        return _finish_source_rows([], status=status)
+    if not raw_rows:
+        status = "snapshot_hit_empty_rows"
+        dataset_debug["snapshot_status"] = status
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status=status,
             background_index=int(background_idx),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
@@ -21762,6 +22048,7 @@ def _geometry_manual_source_rows_for_background(
             created_from=created_from,
             signature_match=True,
             live_cache_inventory=live_cache_inventory,
+            **projection_diagnostics,
         )
         _trace_live_cache_event(
             "source_snapshot",
@@ -21769,7 +22056,7 @@ def _geometry_manual_source_rows_for_background(
             background_index=int(background_idx),
             outcome="empty",
             consumer=lookup_context,
-            status="snapshot_empty",
+            status=status,
             requested_signature_summary=requested_signature_summary,
             stored_signature_summary=stored_signature_summary,
             created_from=created_from,
@@ -21778,6 +22065,7 @@ def _geometry_manual_source_rows_for_background(
             signature_match=True,
         )
         if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
             rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
                 background_idx,
                 param_set,
@@ -21785,9 +22073,10 @@ def _geometry_manual_source_rows_for_background(
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
                 required_pairs=required_pairs,
             )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
             if rebuilt_rows:
-                return rebuilt_rows
-        return []
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
+        return _finish_source_rows([], status=status)
     filtered_rows = [dict(entry) for entry in raw_rows]
     filter_diagnostics = {
         "total_count": int(len(filtered_rows)),
@@ -21804,6 +22093,8 @@ def _geometry_manual_source_rows_for_background(
             raw_rows,
             required_branch_group_keys,
         )
+    dataset_debug["rows_before_required_filter"] = int(len(raw_rows))
+    dataset_debug["rows_after_required_filter"] = int(len(filtered_rows))
     snapshot_validation = (
         gui_geometry_fit.validate_geometry_fit_live_source_rows(
             filtered_rows,
@@ -21813,6 +22104,21 @@ def _geometry_manual_source_rows_for_background(
         else {}
     )
     if required_pairs and not bool(snapshot_validation.get("valid", False)):
+        pair_failures = [
+            dict(entry)
+            for entry in (snapshot_validation.get("pair_failures", ()) or ())
+            if isinstance(entry, Mapping)
+        ]
+        dataset_debug["missing_required_pairs"] = [
+            str(entry.get("pair_id") or entry.get("overlay_match_index") or "")
+            for entry in pair_failures
+        ]
+        status = (
+            "snapshot_hit_required_pairs_filtered_out"
+            if targeted_preflight_enabled and raw_rows and not filtered_rows
+            else "snapshot_hit_missing_required_pairs"
+        )
+        dataset_debug["snapshot_status"] = status
         live_cache_inventory = _live_cache_inventory_snapshot()
         targeted_flags = (
             _targeted_lookup_flags(
@@ -21844,7 +22150,7 @@ def _geometry_manual_source_rows_for_background(
             cache_family="source_snapshot",
             action="lookup",
             consumer=lookup_context,
-            status="snapshot_pair_validation_failed",
+            status=status,
             background_index=int(background_idx),
             requested_signature=requested_signature,
             requested_signature_summary=requested_signature_summary,
@@ -21856,6 +22162,9 @@ def _geometry_manual_source_rows_for_background(
             signature_match=True,
             live_cache_inventory=live_cache_inventory,
             live_runtime_cache_validation=snapshot_validation,
+            missing_required_pairs=list(dataset_debug["missing_required_pairs"]),
+            snapshot_filter_reason=status,
+            **projection_diagnostics,
             **targeted_flags,
         )
         _trace_live_cache_event(
@@ -21864,7 +22173,7 @@ def _geometry_manual_source_rows_for_background(
             background_index=int(background_idx),
             outcome="validation_failed",
             consumer=lookup_context,
-            status="snapshot_pair_validation_failed",
+            status=status,
             requested_signature_summary=requested_signature_summary,
             stored_signature_summary=stored_signature_summary,
             created_from=created_from,
@@ -21873,6 +22182,7 @@ def _geometry_manual_source_rows_for_background(
             signature_match=True,
         )
         if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
             rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
                 background_idx,
                 param_set,
@@ -21880,21 +22190,105 @@ def _geometry_manual_source_rows_for_background(
                 prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
                 required_pairs=required_pairs,
             )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
             if rebuilt_rows:
-                return rebuilt_rows
-        return []
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
+        return _finish_source_rows([], status=status)
+    snapshot_projection_signature = snapshot.get("projection_view_signature")
+    snapshot_projection_signature_matches = (
+        gui_geometry_fit._geometry_fit_stable_projection_view_signature(
+            snapshot_projection_signature
+        )
+        == gui_geometry_fit._geometry_fit_stable_projection_view_signature(
+            projection_view_signature
+        )
+        if isinstance(snapshot_projection_signature, Mapping)
+        else projection_view_mode == "detector"
+    )
     projected_projection_count = 0
     rows_to_project = filtered_rows if targeted_preflight_enabled else raw_rows
-    projected_rows = _geometry_manual_project_peaks_for_background(
-        int(background_idx),
-        rows_to_project,
-        mode_override=projection_view_mode,
-    )
-    projected_projection_count = int(len(rows_to_project))
-    projected_rows = _geometry_fit_rows_for_background(
-        int(background_idx),
-        projected_rows,
-    )
+    if (
+        lookup_context == "geometry_fit_dataset"
+        and snapshot_valid_for_geometry_fit_dataset
+        and snapshot_projected_rows
+        and snapshot_projection_signature_matches
+    ):
+        projected_rows = [dict(entry) for entry in snapshot_projected_rows]
+        if targeted_preflight_enabled:
+            projected_rows, projected_filter_diagnostics, _matched_projected_keys = (
+                gui_geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+                    projected_rows,
+                    required_branch_group_keys,
+                )
+            )
+            if not projected_rows and snapshot_projected_rows:
+                filter_diagnostics = projected_filter_diagnostics
+        projected_projection_count = 0
+    else:
+        projected_rows = _geometry_manual_project_peaks_for_background(
+            int(background_idx),
+            rows_to_project,
+            mode_override=projection_view_mode,
+        )
+        projected_projection_count = int(len(rows_to_project))
+        projected_rows = _geometry_fit_rows_for_background(
+            int(background_idx),
+            projected_rows,
+        )
+    if not projected_rows:
+        status = "snapshot_hit_empty_rows"
+        if not bool(projection_view_signature.get("available", True)):
+            status = "snapshot_hit_projection_unavailable"
+        elif isinstance(snapshot_projection_signature, Mapping) and not snapshot_projection_signature_matches:
+            status = "snapshot_hit_signature_mismatch"
+        elif targeted_preflight_enabled and rows_to_project and not projected_rows:
+            status = "snapshot_hit_required_pairs_filtered_out"
+        dataset_debug["snapshot_status"] = status
+        live_cache_inventory = _live_cache_inventory_snapshot()
+        targeted_flags = (
+            _targeted_lookup_flags(
+                total_source_rows_available=int(len(raw_rows)),
+                source_rows_considered_for_rebinding=int(len(filtered_rows)),
+                source_rows_projected_for_rebinding=int(projected_projection_count),
+                candidate_rows_after_hkl_filter=int(
+                    filter_diagnostics.get("after_hkl_filter_count", len(filtered_rows))
+                ),
+                candidate_rows_after_branch_filter=int(
+                    filter_diagnostics.get("after_branch_filter_count", len(filtered_rows))
+                ),
+                candidate_rows_scored_for_background_distance=0,
+                unrelated_projected_row_count_for_rebinding=0,
+                unrelated_scored_row_count_for_rebinding=int(
+                    filter_diagnostics.get("unrelated_count", 0)
+                ),
+                targeted_cache_hit=bool(targeted_preflight_enabled),
+                cache_source="source_snapshot",
+            )
+            if targeted_preflight_enabled
+            else {}
+        )
+        _set_geometry_manual_source_snapshot_diagnostics(
+            source="source_snapshot",
+            cache_family="source_snapshot",
+            action="lookup",
+            consumer=lookup_context,
+            status=status,
+            background_index=int(background_idx),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=snapshot_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(raw_rows)),
+            projected_peak_count=0,
+            created_from=created_from,
+            signature_match=bool(snapshot_projection_signature_matches),
+            live_cache_inventory=live_cache_inventory,
+            live_runtime_cache_validation=snapshot_validation,
+            snapshot_filter_reason=status,
+            **projection_diagnostics,
+            **targeted_flags,
+        )
+        return _finish_source_rows([], status=status)
     live_cache_inventory = _live_cache_inventory_snapshot()
     targeted_flags = (
         _targeted_lookup_flags(
@@ -21923,6 +22317,8 @@ def _geometry_manual_source_rows_for_background(
             cache_source="source_snapshot",
             diagnostics=targeted_flags,
         )
+    dataset_debug["snapshot_status"] = "snapshot_hit"
+    dataset_debug["snapshot_projected_row_count"] = int(len(projected_rows))
     _set_geometry_manual_source_snapshot_diagnostics(
         source="source_snapshot",
         cache_family="source_snapshot",
@@ -21940,6 +22336,7 @@ def _geometry_manual_source_rows_for_background(
         signature_match=True,
         live_cache_inventory=live_cache_inventory,
         live_runtime_cache_validation=snapshot_validation,
+        **projection_diagnostics,
         **targeted_flags,
     )
     _trace_live_cache_event(
@@ -21956,7 +22353,7 @@ def _geometry_manual_source_rows_for_background(
         projected_peak_count=int(len(projected_rows)),
         signature_match=True,
     )
-    return projected_rows
+    return _finish_source_rows(projected_rows, status="snapshot_hit")
 
 
 def _initialize_runtime_controls_block_39() -> None:
@@ -30479,12 +30876,15 @@ def _build_geometry_fit_async_job(
         except Exception:
             detector_shape = None
         projection_view_signature_by_background[int(idx)] = (
-            _geometry_fit_targeted_projection_view_signature(
+            _normalize_geometry_fit_projection_view_signature(
+                _geometry_fit_targeted_projection_view_signature(
+                    int(idx),
+                    mode_override=projection_view_mode,
+                    caked_payload=dict(caked_views_by_background.get(int(idx)) or {}) or None,
+                    detector_shape=detector_shape,
+                    analysis_preview_bins=analysis_bins,
+                ),
                 int(idx),
-                mode_override=projection_view_mode,
-                caked_payload=dict(caked_views_by_background.get(int(idx)) or {}) or None,
-                detector_shape=detector_shape,
-                analysis_preview_bins=analysis_bins,
             )
         )
 
@@ -30978,6 +31378,10 @@ def _run_async_geometry_fit_worker_job(
                 analysis_preview_bins=job_data.get("analysis_bins"),
             )
 
+        resolved_signature = _normalize_geometry_fit_projection_view_signature(
+            resolved_signature,
+            background_idx,
+        )
         signature_map[background_idx] = copy.deepcopy(dict(resolved_signature))
         if background_idx == int(job_data.get("current_background_index", -1)):
             job_data["projection_view_signature"] = copy.deepcopy(signature_map[background_idx])
@@ -31221,6 +31625,15 @@ def _run_async_geometry_fit_worker_job(
             return rows
         normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
         if normalized_mode in {"caked", "q_space"}:
+            projected_rows = _geometry_fit_rows_for_background(
+                int(bundle.background_index),
+                _project_source_rows_for_background(
+                    int(bundle.background_index),
+                    bundle.stored_rows,
+                ),
+            )
+            if projected_rows:
+                return projected_rows
             return []
         return _geometry_fit_rows_for_background(int(bundle.background_index), bundle.stored_rows)
 
@@ -31232,8 +31645,21 @@ def _run_async_geometry_fit_worker_job(
             "background_index": int(bundle.background_index),
             "simulation_signature": bundle.requested_signature,
             "rows": _copy_source_rows(bundle.stored_rows),
+            "stored_rows": _copy_source_rows(bundle.stored_rows),
+            "projected_rows": _copy_source_rows(bundle.projected_rows),
             "row_count": int(len(bundle.stored_rows or ())),
+            "projected_row_count": int(len(bundle.projected_rows or ())),
             "created_from": str(bundle.cache_source or "geometry_fit_background_cache"),
+            "requested_signature": bundle.requested_signature,
+            "requested_signature_summary": bundle.requested_signature_summary,
+            "diagnostics": copy.deepcopy(dict(bundle.diagnostics or {})),
+            "projection_view_signature": copy.deepcopy(
+                dict(job_data.get("projection_view_signature_by_background", {}) or {}).get(
+                    int(bundle.background_index)
+                )
+            ),
+            "valid_for_picker": bool(bundle.stored_rows),
+            "valid_for_geometry_fit_dataset": bool(bundle.stored_rows or bundle.projected_rows),
         }
         return _advance_source_cache_generation(int(bundle.background_index))
 
@@ -31706,15 +32132,18 @@ def _run_async_geometry_fit_worker_job(
                     {},
                 )
                 projection_signature_map[int(bundle.background_index)] = (
-                    _geometry_fit_targeted_projection_view_signature(
-                        int(bundle.background_index),
-                        mode_override="caked",
-                        caked_payload=dict(
-                            caked_views_by_background.get(int(bundle.background_index)) or {}
+                    _normalize_geometry_fit_projection_view_signature(
+                        _geometry_fit_targeted_projection_view_signature(
+                            int(bundle.background_index),
+                            mode_override="caked",
+                            caked_payload=dict(
+                                caked_views_by_background.get(int(bundle.background_index)) or {}
+                            ),
+                            detector_shape=backend_background.shape[:2],
+                            ai=worker_ai,
+                            analysis_preview_bins=job_data.get("analysis_bins"),
                         ),
-                        detector_shape=backend_background.shape[:2],
-                        ai=worker_ai,
-                        analysis_preview_bins=job_data.get("analysis_bins"),
+                        int(bundle.background_index),
                     )
                 )
                 if int(bundle.background_index) == int(
@@ -31723,6 +32152,60 @@ def _run_async_geometry_fit_worker_job(
                     job_data["projection_view_signature"] = copy.deepcopy(
                         projection_signature_map[int(bundle.background_index)]
                     )
+                refreshed_projected_rows = _geometry_fit_rows_for_background(
+                    int(bundle.background_index),
+                    _project_source_rows_for_background(
+                        int(bundle.background_index),
+                        bundle.stored_rows,
+                    ),
+                )
+                if refreshed_projected_rows:
+                    refreshed_diagnostics = dict(bundle.diagnostics or {})
+                    refreshed_diagnostics["projected_peak_count"] = int(
+                        len(refreshed_projected_rows)
+                    )
+                    refreshed_diagnostics["projection_view_signature"] = copy.deepcopy(
+                        projection_signature_map.get(int(bundle.background_index))
+                    )
+                    refreshed_diagnostics["projection_view_signature_digest"] = (
+                        gui_geometry_fit._geometry_fit_digest_payload(
+                            refreshed_diagnostics.get("projection_view_signature")
+                        )
+                    )
+                    refreshed_bundle = replace(
+                        bundle,
+                        projected_rows=[dict(entry) for entry in refreshed_projected_rows],
+                        diagnostics=refreshed_diagnostics,
+                    )
+                    worker_background_cache_by_index[int(bundle.background_index)] = (
+                        refreshed_bundle
+                    )
+                    worker_source_row_snapshots[int(bundle.background_index)] = {
+                        "background_index": int(refreshed_bundle.background_index),
+                        "simulation_signature": refreshed_bundle.requested_signature,
+                        "requested_signature": refreshed_bundle.requested_signature,
+                        "requested_signature_summary": (
+                            refreshed_bundle.requested_signature_summary
+                        ),
+                        "rows": _copy_source_rows(refreshed_bundle.stored_rows),
+                        "stored_rows": _copy_source_rows(refreshed_bundle.stored_rows),
+                        "projected_rows": _copy_source_rows(refreshed_bundle.projected_rows),
+                        "row_count": int(len(refreshed_bundle.stored_rows or ())),
+                        "projected_row_count": int(
+                            len(refreshed_bundle.projected_rows or ())
+                        ),
+                        "created_from": str(
+                            refreshed_bundle.cache_source or "geometry_fit_background_cache"
+                        ),
+                        "diagnostics": copy.deepcopy(dict(refreshed_bundle.diagnostics or {})),
+                        "projection_view_signature": copy.deepcopy(
+                            refreshed_diagnostics.get("projection_view_signature")
+                        ),
+                        "valid_for_picker": bool(refreshed_bundle.stored_rows),
+                        "valid_for_geometry_fit_dataset": bool(
+                            refreshed_bundle.stored_rows or refreshed_bundle.projected_rows
+                        ),
+                    }
         except Exception:
             return _caked_result(
                 "store_caked_payload_failed",

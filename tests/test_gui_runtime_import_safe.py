@@ -18147,6 +18147,31 @@ def test_targeted_projected_cache_stored_rows_only_does_not_count_as_hit(monkeyp
     assert diagnostics.get("cache_source") != "targeted_projected_cache"
 
 
+def test_geometry_manual_source_rows_tolerates_list_projection_signature(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda *_args, **_kwargs: ["legacy", "detector"],
+        raising=False,
+    )
+
+    rows = runtime_session._geometry_manual_source_rows_for_background(
+        0,
+        {"a": 4.143},
+        consumer="initial_pairs_display",
+    )
+    diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert rows == []
+    assert diagnostics["reason"] == "invalid_projection_view_signature_type:list"
+    assert diagnostics["projection_view_signature"]["legacy_projection_view_signature"] == [
+        "legacy",
+        "detector",
+    ]
+
+
 def test_source_snapshot_signature_survives_manual_pick_arming(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     manual_geometry = importlib.import_module("ra_sim.gui.manual_geometry")

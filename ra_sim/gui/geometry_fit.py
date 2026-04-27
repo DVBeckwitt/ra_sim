@@ -9310,11 +9310,39 @@ def build_geometry_manual_fit_dataset(
         simulation_diagnostics = _current_simulation_diagnostics()
     if not simulated_peaks:
         snapshot_status = str(simulation_diagnostics.get("status", "<unknown>"))
+        raw_peak_count = int(simulation_diagnostics.get("raw_peak_count", 0) or 0)
+        projected_peak_count = int(simulation_diagnostics.get("projected_peak_count", 0) or 0)
+        final_returned_row_count = int(
+            simulation_diagnostics.get("final_returned_row_count", 0) or 0
+        )
+        filter_reason = str(
+            simulation_diagnostics.get(
+                "snapshot_filter_reason",
+                simulation_diagnostics.get(
+                    "projection_failure_reason",
+                    simulation_diagnostics.get("reason", "empty_returned_rows"),
+                ),
+            )
+            or "empty_returned_rows"
+        )
+        if snapshot_status == "snapshot_hit":
+            snapshot_status = "snapshot_hit_empty_returned_rows"
+            simulation_diagnostics["status"] = snapshot_status
+            simulation_diagnostics["stale_reason"] = (
+                "snapshot_hit returned zero rows "
+                f"(raw_peak_count={raw_peak_count}, "
+                f"projected_peak_count={projected_peak_count}, "
+                f"final_returned_row_count={final_returned_row_count}, "
+                f"filter_reason={filter_reason})"
+            )
         exception_type = str(simulation_diagnostics.get("exception_type", "")).strip()
         exception_message = str(simulation_diagnostics.get("exception_message", "")).strip()
         error_text = (
             "Geometry-fit source snapshot unavailable for "
-            f"background {int(background_idx) + 1} (status={snapshot_status})."
+            f"background {int(background_idx) + 1} (status={snapshot_status}; "
+            f"raw_peak_count={raw_peak_count}; projected_peak_count={projected_peak_count}; "
+            f"final_returned_row_count={final_returned_row_count}; "
+            f"filter_reason={filter_reason})."
         )
         if exception_type or exception_message:
             error_text = (
@@ -13831,6 +13859,26 @@ def build_geometry_fit_dataset_cache_metadata(
                 "snapshot_hit" if simulated_peaks else "snapshot_empty",
             )
         )
+        simulated_peak_total = int(sum(len(entries) for entries in raw_by_table.values()))
+        snapshot_filter_reason = str(
+            snapshot_diag.get(
+                "snapshot_filter_reason",
+                snapshot_diag.get(
+                    "projection_failure_reason",
+                    snapshot_diag.get("reason", "empty_returned_rows"),
+                ),
+            )
+            or "empty_returned_rows"
+        )
+        if snapshot_status == "snapshot_hit" and simulated_peak_total <= 0:
+            snapshot_status = "snapshot_hit_empty_returned_rows"
+            snapshot_diag["status"] = snapshot_status
+            snapshot_diag["stale_reason"] = (
+                "snapshot_hit returned zero simulated rows "
+                f"(raw_peak_count={int(snapshot_diag.get('raw_peak_count', 0) or 0)}, "
+                f"projected_peak_count={int(snapshot_diag.get('projected_peak_count', 0) or 0)}, "
+                f"filter_reason={snapshot_filter_reason})"
+            )
         snapshot_hit = snapshot_status == "snapshot_hit"
         snapshot_cache_source = str(
             snapshot_diag.get(
@@ -13842,7 +13890,14 @@ def build_geometry_fit_dataset_cache_metadata(
         snapshot_rebuild_source = str(
             snapshot_diag.get("rebuild_source", snapshot_diag.get("created_from", "")) or ""
         )
-        stale_reason = None if snapshot_hit else f"source snapshot status={snapshot_status}"
+        stale_reason = (
+            None
+            if snapshot_hit
+            else str(
+                snapshot_diag.get("stale_reason")
+                or f"source snapshot status={snapshot_status}; filter_reason={snapshot_filter_reason}"
+            )
+        )
         cache_provenance = [
             f"source_snapshot:{snapshot_status}",
             *([f"rebuild_source:{snapshot_rebuild_source}"] if snapshot_rebuild_source else []),
@@ -13878,6 +13933,10 @@ def build_geometry_fit_dataset_cache_metadata(
         "source_snapshot_consumer": snapshot_diag.get("consumer"),
         "source_snapshot_cache_family": snapshot_diag.get("cache_family"),
         "source_snapshot_action": snapshot_diag.get("action"),
+        "source_snapshot_filter_reason": snapshot_diag.get(
+            "snapshot_filter_reason",
+            snapshot_diag.get("projection_failure_reason", snapshot_diag.get("reason")),
+        ),
         "source_snapshot_requested_signature_summary": snapshot_diag.get(
             "requested_signature_summary",
         ),

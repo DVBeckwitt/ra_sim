@@ -21317,6 +21317,67 @@ def _diag_fit_handoff_dataset(tmp_path):
     return context, dataset, events
 
 
+def test_new4_gui_geometric_fit_button_source_snapshot_handoff(tmp_path) -> None:
+    context, dataset, events = _diag_fit_handoff_dataset(tmp_path)
+    saved_entries = _diag_manual_entries_for_active_background(context["saved_state"])
+    fit_spaces = gf.geometry_manual_fit_space_by_background(
+        [_NEW4_FIRST_IMAGE_BACKGROUND_INDEX],
+        lambda idx: [dict(entry) for entry in saved_entries] if int(idx) == 0 else [],
+        pick_uses_caked_space=False,
+        current_background_index=_NEW4_FIRST_IMAGE_BACKGROUND_INDEX,
+    )
+    mixed_error = gf.manual_geometry_fit_space_preflight_error(
+        fit_spaces,
+        osc_files=[_NEW4_FIRST_IMAGE_BACKGROUND_NAME],
+    )
+    if mixed_error is not None:
+        assert (
+            "saved manual Qr/Qz pairs mix detector-pixel and caked fit-space coordinates"
+            in mixed_error
+        )
+        assert "source snapshot unavailable" not in mixed_error
+        return
+
+    source_rows = [
+        dict(entry)
+        for entry in dataset.get("source_rows_for_trace", ()) or ()
+        if isinstance(entry, Mapping)
+    ]
+    cache_metadata = dict(dataset.get("cache_metadata", {}) or {})
+    print("new4_gui_geometric_fit_button_source_snapshot_handoff")
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print(f"background_index={_NEW4_FIRST_IMAGE_BACKGROUND_INDEX}")
+    print(f"background_name={_NEW4_FIRST_IMAGE_BACKGROUND_NAME}")
+    print("phase | row_count | status")
+    print(f"source_cache_preflight | {len(source_rows)} | ready")
+    print(
+        "geometry_fit_dataset | "
+        f"{int(dataset.get('simulated_peak_count', 0) or 0)} | "
+        f"{cache_metadata.get('source_snapshot_status', 'unknown')}"
+    )
+
+    assert len(source_rows) > 0
+    assert int(dataset.get("simulated_peak_count", 0) or 0) > 0
+    assert all(
+        "source snapshot unavailable" not in str(payload.get("message", ""))
+        for _stage, payload in events
+        if isinstance(payload, Mapping)
+    )
+
+    fit_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=False,
+        qr_only_objective=True,
+    )
+    record = _diag_objective_trace(fit_run["result"])[0]
+    rows, components = _diag_assert_new4_objective_record(record, include_003=False)
+    print(f"mode_A_entry_count={len(rows)}")
+    print(f"mode_A_component_count={len(components)}")
+    assert len(rows) == 14
+    assert len(components) == 28
+
+
 def _diag_fit_audit_rows(dataset):
     rows = [
         dict(row)
