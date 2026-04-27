@@ -9004,6 +9004,7 @@ def build_geometry_manual_fit_dataset(
         refresh_pair_entry=manual_dataset_bindings.geometry_manual_refresh_pair_entry,
     )
 
+    baseline_fit_params_i = dict(base_fit_params or {})
     params_i = dict(base_fit_params or {})
     theta_offset = float(params_i.get("theta_offset", 0.0))
     params_i["theta_initial"] = float(theta_base + theta_offset)
@@ -12531,6 +12532,7 @@ def build_geometry_manual_fit_dataset(
             "qr_fit_trial_source_rows_builder_kind": (
                 qr_fit_trial_source_rows_builder_kind
             ),
+            "baseline_fit_params": dict(baseline_fit_params_i),
         },
     }
     dataset_payload["manual_point_pairs"] = _geometry_fit_dataset_pairs_from_handoff(

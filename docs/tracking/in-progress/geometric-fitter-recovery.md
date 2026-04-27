@@ -5,9 +5,22 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-26
+Last updated: 2026-04-27
 
 ## Summary
+
+New4 Mode A dynamic/refined Qr fitting is now guarded at the actual optimizer
+prediction path. For saved state `C:\Users\Kenpo\.local\share\ra_sim\new4.json`
+and background index `0`, all 14 first-image paired Qr branches resolve to
+locked dynamic identities, produce 28/28 caked residual components, and compute
+residuals as `refined_sim_caked - observed_caked` in weighted caked degrees.
+Baseline dynamic predictions now reproduce the saved refined sim centers before
+solver start; a poisoned or drifting x0 anchor blocks optimization with
+`optimizer_start_blocked_reason=dynamic_baseline_anchor_mismatch`. Current
+Qr-only smoke after the anchor fix is `4.833668706 -> 4.811337654` over
+`nfev=2`, with branch identity stable and classification
+`F. dynamic_refined_prediction_pipeline_working`. Full GUI/baseline convergence
+is still not claimed here.
 
 Point-provider parity is fixed for the manual-geometry handoff layer, and the
 next validation step is a bounded `new4` optimizer ladder. The manual Qr picker

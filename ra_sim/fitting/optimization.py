@@ -1882,6 +1882,7 @@ class GeometryFitDatasetContext:
         Callable[..., Mapping[str, object] | None]
     ] = None
     qr_fit_trial_source_rows_builder_kind: str | None = None
+    baseline_fit_params: Optional[Dict[str, object]] = None
 
 
 def _copy_geometry_fit_dataset_context(
@@ -1924,6 +1925,11 @@ def _copy_geometry_fit_dataset_context(
         qr_fit_trial_source_rows_builder=dataset_ctx.qr_fit_trial_source_rows_builder,
         qr_fit_trial_source_rows_builder_kind=(
             dataset_ctx.qr_fit_trial_source_rows_builder_kind
+        ),
+        baseline_fit_params=(
+            dict(dataset_ctx.baseline_fit_params)
+            if isinstance(dataset_ctx.baseline_fit_params, Mapping)
+            else None
         ),
     )
 
@@ -3914,6 +3920,11 @@ def _build_geometry_fit_dataset_contexts(
         qr_fit_trial_source_rows_builder_kind = (
             str(entry.get("qr_fit_trial_source_rows_builder_kind", "") or "") or None
         )
+        baseline_fit_params = entry.get("baseline_fit_params")
+        if isinstance(baseline_fit_params, Mapping):
+            baseline_fit_params = dict(baseline_fit_params)
+        else:
+            baseline_fit_params = dict(params)
         subset = _prepare_reflection_subset(miller, intensities, measured_local)
         contexts.append(
             GeometryFitDatasetContext(
@@ -3939,6 +3950,7 @@ def _build_geometry_fit_dataset_contexts(
                 qr_fit_trial_source_rows_builder_kind=(
                     qr_fit_trial_source_rows_builder_kind
                 ),
+                baseline_fit_params=baseline_fit_params,
             )
         )
     return contexts
@@ -13578,10 +13590,22 @@ def _provider_local_saved_sim_caked_reference(
 ) -> Optional[Tuple[float, float]]:
     if not _fixed_manual_pair_requires_exact_source_row(entry):
         return None
+    for x_key, y_key in (
+        ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ("sim_refined_caked_x", "sim_refined_caked_y"),
+        ("sim_caked_x", "sim_caked_y"),
+        ("sim_visual_caked_x", "sim_visual_caked_y"),
+    ):
+        try:
+            point = (float(entry.get(x_key, np.nan)), float(entry.get(y_key, np.nan)))
+        except Exception:
+            continue
+        if np.isfinite(point[0]) and np.isfinite(point[1]):
+            return (float(point[0]), float(point[1]))
     for key in (
-        "sim_visual_caked_deg",
         "sim_refined_caked_deg",
         "refined_sim_caked_deg",
+        "sim_visual_caked_deg",
         "sim_caked",
     ):
         raw_point = entry.get(key)
@@ -15826,8 +15850,8 @@ def _refine_sim_caked_peak_from_image(
     two_theta_deg: float,
     phi_deg: float,
     *,
-    tth_half_window_bins: int = 6,
-    phi_half_window_bins: int = 8,
+    tth_half_window_bins: int = 1,
+    phi_half_window_bins: int = 1,
 ) -> Dict[str, object]:
     try:
         img = np.asarray(image, dtype=np.float64)
@@ -16099,14 +16123,15 @@ def _fit_qr_branch_key_for_match(entry: Mapping[str, object]) -> Tuple[object, .
     return key
 
 
-def _fit_qr_detector_display_point_from_source_row(
+def _fit_qr_detector_point_payload_from_source_row(
     row: Mapping[str, object],
-) -> Optional[Tuple[float, float]]:
+) -> Dict[str, object]:
+    display_point: Optional[Tuple[float, float]] = None
     for x_key, y_key in (
         ("sim_col", "sim_row"),
         ("display_col", "display_row"),
-        ("detector_x", "detector_y"),
-        ("raw_x", "raw_y"),
+        ("sim_col_raw", "sim_row_raw"),
+        ("refined_sim_x", "refined_sim_y"),
     ):
         try:
             col = float(row.get(x_key, np.nan))
@@ -16114,8 +16139,49 @@ def _fit_qr_detector_display_point_from_source_row(
         except Exception:
             continue
         if np.isfinite(col) and np.isfinite(rr):
-            return float(col), float(rr)
-    return None
+            display_point = (float(col), float(rr))
+            break
+
+    for x_key, y_key in (
+        ("native_col", "native_row"),
+        ("sim_native_x", "sim_native_y"),
+        ("detector_native_col", "detector_native_row"),
+        ("refined_sim_native_x", "refined_sim_native_y"),
+    ):
+        try:
+            col = float(row.get(x_key, np.nan))
+            rr = float(row.get(y_key, np.nan))
+        except Exception:
+            continue
+        if np.isfinite(col) and np.isfinite(rr):
+            return {
+                "point": (float(col), float(rr)),
+                "input_frame": "native_detector",
+                "point_source": f"{x_key}/{y_key}",
+                "native_px": [float(col), float(rr)],
+                "display_px": (
+                    [float(display_point[0]), float(display_point[1])]
+                    if display_point is not None
+                    else None
+                ),
+            }
+
+    if display_point is not None:
+        return {
+            "point": (float(display_point[0]), float(display_point[1])),
+            "input_frame": "fit_detector",
+            "point_source": "sim_col/sim_row",
+            "native_px": None,
+            "display_px": [float(display_point[0]), float(display_point[1])],
+        }
+
+    return {
+        "point": None,
+        "input_frame": None,
+        "point_source": "sim_detector_point_missing",
+        "native_px": None,
+        "display_px": None,
+    }
 
 
 def _build_trial_qr_source_rows_payload(
@@ -16206,12 +16272,14 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
             same_hkl_branch.append(row)
         if candidate_key != locked_key:
             continue
-        point = _fit_qr_detector_display_point_from_source_row(row)
+        point_payload = _fit_qr_detector_point_payload_from_source_row(row)
+        point = point_payload.get("point")
         candidates.append(
             {
                 "row": row,
                 "row_index": int(row_index),
                 "point": point,
+                "point_payload": point_payload,
                 "candidate_key": candidate_key,
                 "candidate_missing_fields": candidate_missing,
                 "candidate_identity": candidate_payload,
@@ -16261,6 +16329,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         payload["resolution_reason"] = "locked_fit_qr_branch_key_invalid_detector_point"
         return None, payload
     row = dict(candidate.get("row") or {})
+    point_payload = dict(candidate.get("point_payload") or {})
     native_col = _safe_float(row.get("native_col", row.get("sim_native_x")), float("nan"))
     native_row = _safe_float(row.get("native_row", row.get("sim_native_y")), float("nan"))
     caked_theta = _safe_float(row.get("caked_x", row.get("raw_caked_x")), float("nan"))
@@ -16279,6 +16348,10 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
             "projection_available": True,
             "projection_finite": True,
             "off_detector": False,
+            "resolved_detector_point_input_frame": point_payload.get("input_frame"),
+            "resolved_detector_point_source": point_payload.get("point_source"),
+            "resolved_detector_display_px": point_payload.get("display_px"),
+            "resolved_detector_native_px": point_payload.get("native_px"),
             "sim_nominal_detector_native_px_from_source_row": [
                 float(native_col),
                 float(native_row),
@@ -16290,6 +16363,181 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         }
     )
     return (float(point[0]), float(point[1])), payload
+
+
+def _fit_qr_apply_caked_alignment_offset(
+    caked_point: Tuple[float, float],
+    offset: Tuple[float, float],
+) -> Tuple[float, float]:
+    return (
+        float(caked_point[0]) + float(offset[0]),
+        float(_angular_difference_deg(float(caked_point[1]) + float(offset[1]), 0.0)),
+    )
+
+
+def _fit_qr_saved_sim_caked_alignment_payload(
+    pair: Mapping[str, object],
+    trial_params: Mapping[str, object],
+    fit_context: Mapping[str, object],
+    locked_correspondence: Mapping[str, object],
+) -> Dict[str, object]:
+    dataset_ctx = fit_context.get("dataset_ctx")
+    saved_anchor = _provider_local_saved_sim_caked_reference(locked_correspondence)
+    if saved_anchor is None:
+        saved_anchor = _provider_local_saved_sim_caked_reference(pair)
+    if saved_anchor is None:
+        return {
+            "status": "saved_sim_anchor_unavailable",
+            "applied": False,
+            "offset": [0.0, 0.0],
+        }
+    if not isinstance(dataset_ctx, GeometryFitDatasetContext):
+        return {
+            "status": "dataset_context_unavailable",
+            "applied": False,
+            "offset": [0.0, 0.0],
+            "saved_refined_sim_caked_anchor_deg": [
+                float(saved_anchor[0]),
+                float(saved_anchor[1]),
+            ],
+        }
+
+    locked_key = _fit_qr_branch_key_for_match(locked_correspondence)
+    cache_key = (
+        locked_key,
+        round(float(saved_anchor[0]), 9),
+        round(float(saved_anchor[1]), 9),
+    )
+    cache = getattr(dataset_ctx, "_qr_fit_saved_sim_caked_alignment_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(dataset_ctx, "_qr_fit_saved_sim_caked_alignment_cache", cache)
+    if cache_key in cache:
+        return dict(cache[cache_key])
+
+    baseline_params = (
+        dict(dataset_ctx.baseline_fit_params)
+        if isinstance(dataset_ctx.baseline_fit_params, Mapping)
+        else dict(trial_params)
+    )
+    baseline_signature = _fit_prediction_trial_params_signature(baseline_params)
+    source_rows_payload = _build_trial_qr_source_rows_payload(
+        dataset_ctx,
+        trial_params=baseline_params,
+        params_signature=baseline_signature,
+        fit_context=fit_context,
+    )
+    baseline_point, resolution_payload = _resolve_locked_qr_trial_detector_point_from_source_rows(
+        locked_correspondence,
+        source_rows_payload=source_rows_payload,
+    )
+    payload: Dict[str, object] = {
+        "status": "unavailable",
+        "applied": False,
+        "offset": [0.0, 0.0],
+        "saved_refined_sim_caked_anchor_deg": [
+            float(saved_anchor[0]),
+            float(saved_anchor[1]),
+        ],
+        "dynamic_baseline_anchor_params_signature": baseline_signature,
+        "dynamic_baseline_anchor_source_rows_signature": source_rows_payload.get(
+            "source_rows_signature"
+        ),
+        "dynamic_baseline_anchor_resolution_reason": resolution_payload.get(
+            "resolution_reason"
+        ),
+    }
+    if baseline_point is None:
+        payload["status"] = str(
+            resolution_payload.get("resolution_reason")
+            or "baseline_locked_branch_unavailable"
+        )
+        cache[cache_key] = dict(payload)
+        return dict(payload)
+
+    try:
+        baseline_col = float(baseline_point[0])
+        baseline_row = float(baseline_point[1])
+    except Exception:
+        payload["status"] = "baseline_detector_point_nonfinite"
+        cache[cache_key] = dict(payload)
+        return dict(payload)
+    if not (np.isfinite(baseline_col) and np.isfinite(baseline_row)):
+        payload["status"] = "baseline_detector_point_nonfinite"
+        cache[cache_key] = dict(payload)
+        return dict(payload)
+
+    input_frame = str(
+        resolution_payload.get("resolved_detector_point_input_frame") or "fit_detector"
+    )
+    two_theta_arr, phi_arr, projection_meta = _project_detector_points_to_fit_space(
+        dataset_ctx,
+        np.asarray([baseline_col], dtype=np.float64),
+        np.asarray([baseline_row], dtype=np.float64),
+        local_params=baseline_params,
+        anchor_kind="simulated",
+        input_frame=input_frame,
+        center=fit_context.get("fit_center"),
+        detector_distance=float(fit_context.get("detector_distance", np.nan)),
+        pixel_size=float(fit_context.get("pixel_size", np.nan)),
+        gamma_deg=float(fit_context.get("gamma_deg", 0.0)),
+        Gamma_deg=float(fit_context.get("Gamma_deg", 0.0)),
+    )
+    payload["dynamic_baseline_anchor_projection_signature"] = projection_meta.get(
+        "fit_space_local_params_signature"
+    )
+    payload["dynamic_baseline_anchor_projection_input_frame"] = input_frame
+    if (
+        two_theta_arr.size < 1
+        or phi_arr.size < 1
+        or not np.isfinite(two_theta_arr[0])
+        or not np.isfinite(phi_arr[0])
+    ):
+        payload["status"] = str(
+            projection_meta.get("invalid_reason")
+            or "baseline_fit_space_projection_invalid"
+        )
+        cache[cache_key] = dict(payload)
+        return dict(payload)
+
+    baseline_projected = (float(two_theta_arr[0]), float(phi_arr[0]))
+    offset = (
+        float(saved_anchor[0] - baseline_projected[0]),
+        float(_angular_difference_deg(float(saved_anchor[1]), baseline_projected[1])),
+    )
+    payload.update(
+        {
+            "dynamic_baseline_projected_caked_deg": [
+                float(baseline_projected[0]),
+                float(baseline_projected[1]),
+            ],
+            "dynamic_baseline_anchor_offset_caked_deg": [
+                float(offset[0]),
+                float(offset[1]),
+            ],
+        }
+    )
+    if (
+        not np.isfinite(offset[0])
+        or not np.isfinite(offset[1])
+        or abs(float(offset[0])) > 10.0
+        or abs(float(offset[1])) > 10.0
+    ):
+        payload["status"] = "saved_sim_anchor_offset_too_large"
+        payload["dynamic_baseline_anchor_offset_rejected"] = True
+        cache[cache_key] = dict(payload)
+        return dict(payload)
+
+    payload.update(
+        {
+            "status": "saved_sim_anchor_alignment_applied",
+            "applied": True,
+            "offset": [float(offset[0]), float(offset[1])],
+            "dynamic_baseline_anchor_offset_source": "saved_refined_sim_caked_anchor",
+        }
+    )
+    cache[cache_key] = dict(payload)
+    return dict(payload)
 
 
 def _resolve_locked_qr_trial_detector_point_from_hit_tables(
@@ -16571,7 +16819,9 @@ def _resolve_qr_fit_prediction_from_trial_params(
         out.update({"available": False, "unavailable_reason": "off_detector"})
         return out
 
-    input_frame = "fit_detector"
+    input_frame = str(
+        resolution_payload.get("resolved_detector_point_input_frame") or "fit_detector"
+    )
     two_theta_arr, phi_arr, projection_meta = _project_detector_points_to_fit_space(
         dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
         np.asarray([sim_col], dtype=np.float64),
@@ -16585,10 +16835,23 @@ def _resolve_qr_fit_prediction_from_trial_params(
         gamma_deg=float(fit_context.get("gamma_deg", 0.0)),
         Gamma_deg=float(fit_context.get("Gamma_deg", 0.0)),
     )
+    resolved_display = resolution_payload.get("resolved_detector_display_px")
+    if (
+        isinstance(resolved_display, (list, tuple, np.ndarray))
+        and len(resolved_display) >= 2
+    ):
+        try:
+            display_px = [float(resolved_display[0]), float(resolved_display[1])]
+        except Exception:
+            display_px = [float(sim_col), float(sim_row)]
+    else:
+        display_px = [float(sim_col), float(sim_row)]
     out.update(
         {
-            "sim_nominal_detector_px": [float(sim_col), float(sim_row)],
-            "sim_nominal_detector_display_px": [float(sim_col), float(sim_row)],
+            "sim_nominal_detector_px": list(display_px),
+            "sim_nominal_detector_display_px": list(display_px),
+            "sim_nominal_projection_input_px": [float(sim_col), float(sim_row)],
+            "sim_nominal_projection_input_frame": input_frame,
             "sim_nominal_native_px": [
                 float(np.asarray(projection_meta.get("native_cols", [np.nan]))[0]),
                 float(np.asarray(projection_meta.get("native_rows", [np.nan]))[0]),
@@ -16617,8 +16880,57 @@ def _resolve_qr_fit_prediction_from_trial_params(
         )
         return out
 
-    nominal_caked = (float(two_theta_arr[0]), float(phi_arr[0]))
-    out["sim_nominal_caked_deg"] = [float(nominal_caked[0]), float(nominal_caked[1])]
+    raw_nominal_caked = (float(two_theta_arr[0]), float(phi_arr[0]))
+    alignment_payload = _fit_qr_saved_sim_caked_alignment_payload(
+        pair,
+        trial_params,
+        fit_context,
+        locked_correspondence,
+    )
+    alignment_offset_raw = alignment_payload.get("offset", [0.0, 0.0])
+    try:
+        alignment_offset = (
+            float(alignment_offset_raw[0]),
+            float(alignment_offset_raw[1]),
+        )
+    except Exception:
+        alignment_offset = (0.0, 0.0)
+    alignment_applied = bool(alignment_payload.get("applied", False))
+    nominal_caked = (
+        _fit_qr_apply_caked_alignment_offset(raw_nominal_caked, alignment_offset)
+        if alignment_applied
+        else raw_nominal_caked
+    )
+    out.update(
+        {
+            "sim_nominal_caked_raw_deg": [
+                float(raw_nominal_caked[0]),
+                float(raw_nominal_caked[1]),
+            ],
+            "sim_nominal_caked_deg": [
+                float(nominal_caked[0]),
+                float(nominal_caked[1]),
+            ],
+            "dynamic_baseline_anchor_status": alignment_payload.get("status"),
+            "dynamic_baseline_anchor_alignment_applied": bool(alignment_applied),
+            "dynamic_baseline_anchor_offset_caked_deg": alignment_payload.get(
+                "dynamic_baseline_anchor_offset_caked_deg",
+                [float(alignment_offset[0]), float(alignment_offset[1])],
+            ),
+            "dynamic_baseline_projected_caked_deg": alignment_payload.get(
+                "dynamic_baseline_projected_caked_deg"
+            ),
+            "saved_refined_sim_caked_anchor_deg": alignment_payload.get(
+                "saved_refined_sim_caked_anchor_deg"
+            ),
+            "dynamic_baseline_anchor_offset_source": alignment_payload.get(
+                "dynamic_baseline_anchor_offset_source"
+            ),
+            "dynamic_baseline_anchor_offset_rejected": bool(
+                alignment_payload.get("dynamic_baseline_anchor_offset_rejected", False)
+            ),
+        }
+    )
     caked_payload = _build_trial_sim_caked_image_payload(
         dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
         sim_buffer=sim_buffer,
@@ -16663,23 +16975,98 @@ def _resolve_qr_fit_prediction_from_trial_params(
         caked_payload.get("image"),
         caked_payload.get("radial_axis"),
         caked_payload.get("azimuth_axis"),
-        float(nominal_caked[0]),
-        float(nominal_caked[1]),
+        float(raw_nominal_caked[0]),
+        float(raw_nominal_caked[1]),
     )
     status = str(refinement.get("status", "no_peak_found"))
     out["sim_refinement_status"] = status
     if status != "refined" or refinement.get("refined") is None:
         out.update({"available": False, "unavailable_reason": status})
         return out
-    refined = refinement["refined"]
-    delta = refinement.get("delta", (float("nan"), float("nan")))
+    raw_refined = refinement["refined"]
+    raw_delta = refinement.get("delta", (float("nan"), float("nan")))
+    refined = (
+        _fit_qr_apply_caked_alignment_offset(
+            (float(raw_refined[0]), float(raw_refined[1])),
+            alignment_offset,
+        )
+        if alignment_applied
+        else (float(raw_refined[0]), float(raw_refined[1]))
+    )
+    delta = (
+        float(refined[0] - nominal_caked[0]),
+        float(_angular_difference_deg(float(refined[1]), float(nominal_caked[1]))),
+    )
+    saved_anchor_raw = alignment_payload.get("saved_refined_sim_caked_anchor_deg")
+    saved_anchor_delta: Tuple[float, float] | None = None
+    if (
+        alignment_applied
+        and isinstance(saved_anchor_raw, (list, tuple, np.ndarray))
+        and len(saved_anchor_raw) >= 2
+        and str(alignment_payload.get("dynamic_baseline_anchor_params_signature") or "")
+        == params_signature
+    ):
+        try:
+            saved_anchor_delta = (
+                float(refined[0] - float(saved_anchor_raw[0])),
+                float(
+                    _angular_difference_deg(
+                        float(refined[1]),
+                        float(saved_anchor_raw[1]),
+                    )
+                ),
+            )
+        except Exception:
+            saved_anchor_delta = None
+        if (
+            saved_anchor_delta is not None
+            and (
+                abs(float(saved_anchor_delta[0])) > 0.5
+                or abs(float(saved_anchor_delta[1])) > 1.0
+            )
+        ):
+            out["sim_refinement_rejected_anchor_mismatch"] = True
+            out["sim_refinement_anchor_guard_status"] = "rejected_anchor_mismatch"
+            out["sim_refinement_rejected_raw_caked_deg"] = [
+                float(raw_refined[0]),
+                float(raw_refined[1]),
+            ]
+            out["sim_refinement_rejected_delta_to_saved_anchor_caked_deg"] = [
+                float(saved_anchor_delta[0]),
+                float(saved_anchor_delta[1]),
+            ]
+            refined = (float(nominal_caked[0]), float(nominal_caked[1]))
+            delta = (0.0, 0.0)
+    if (
+        not np.isfinite(delta[0])
+        or not np.isfinite(delta[1])
+        or abs(float(delta[0])) > 1.0
+        or abs(float(delta[1])) > 1.0
+    ):
+        status = "rejected_far_jump"
+        out["sim_refinement_status"] = status
+        out["sim_refinement_rejected_far_jump"] = True
+        out["sim_refinement_rejected_raw_caked_deg"] = [
+            float(raw_refined[0]),
+            float(raw_refined[1]),
+        ]
+        out["sim_refinement_rejected_delta_caked_deg"] = [
+            float(raw_delta[0]),
+            float(raw_delta[1]),
+        ]
+        refined = (float(nominal_caked[0]), float(nominal_caked[1]))
+        delta = (0.0, 0.0)
     out.update(
         {
             "available": True,
+            "sim_refined_caked_raw_deg": [
+                float(raw_refined[0]),
+                float(raw_refined[1]),
+            ],
             "sim_refined_caked_deg": [float(refined[0]), float(refined[1])],
             "sim_refinement_delta_caked_deg": [float(delta[0]), float(delta[1])],
             "sim_refinement_delta_caked_norm_deg": float(
-                refinement.get("delta_norm", math.hypot(float(delta[0]), float(delta[1])))
+                math.hypot(float(delta[0]), float(delta[1]))
             ),
             "sim_refinement_peak_value": refinement.get("peak_value"),
             "sim_refinement_window_bounds": refinement.get("window_bounds"),
@@ -20557,6 +20944,81 @@ def fit_geometry_parameters(
             )
         return mismatches
 
+    def _manual_qr_dynamic_baseline_anchor_mismatches(
+        diagnostics: Sequence[Mapping[str, object]],
+    ) -> List[Dict[str, object]]:
+        mismatches: List[Dict[str, object]] = []
+        for raw_entry in diagnostics:
+            if not isinstance(raw_entry, Mapping):
+                continue
+            if not _fixed_manual_pair_requires_exact_source_row(raw_entry):
+                continue
+            resolver_function = str(
+                raw_entry.get("fit_prediction_resolver_function", "") or ""
+            )
+            if resolver_function != "_resolve_qr_fit_prediction_from_trial_params":
+                continue
+            saved_anchor = _fit_prediction_pair(
+                raw_entry,
+                "saved_refined_sim_caked_anchor_deg",
+            )
+            nominal_caked = _fit_prediction_pair(raw_entry, "sim_nominal_caked_deg")
+            refined_caked = _fit_prediction_pair(raw_entry, "sim_refined_caked_deg")
+            missing_fields: List[str] = []
+            if saved_anchor is None:
+                missing_fields.append("saved_refined_sim_caked_anchor_deg")
+            if nominal_caked is None:
+                missing_fields.append("sim_nominal_caked_deg")
+            if refined_caked is None:
+                missing_fields.append("sim_refined_caked_deg")
+            nominal_delta: Tuple[float, float] | None = None
+            refined_delta: Tuple[float, float] | None = None
+            mismatch = bool(missing_fields)
+            if saved_anchor is not None and nominal_caked is not None:
+                nominal_delta = (
+                    float(nominal_caked[0] - saved_anchor[0]),
+                    float(_angular_difference_deg(nominal_caked[1], saved_anchor[1])),
+                )
+                if abs(nominal_delta[0]) > 0.5 or abs(nominal_delta[1]) > 1.0:
+                    mismatch = True
+            if saved_anchor is not None and refined_caked is not None:
+                refined_delta = (
+                    float(refined_caked[0] - saved_anchor[0]),
+                    float(_angular_difference_deg(refined_caked[1], saved_anchor[1])),
+                )
+                if abs(refined_delta[0]) > 0.5 or abs(refined_delta[1]) > 1.0:
+                    mismatch = True
+            if bool(raw_entry.get("dynamic_baseline_anchor_offset_rejected", False)):
+                mismatch = True
+            if not mismatch:
+                continue
+            mismatches.append(
+                {
+                    "mismatch_reason": "dynamic_baseline_anchor_mismatch",
+                    "missing_prediction_fields": list(missing_fields),
+                    "branch": _nonnegative_index(raw_entry.get("source_branch_index")),
+                    "q_group_key": raw_entry.get("q_group_key"),
+                    "hkl": raw_entry.get("hkl"),
+                    "source_table_index": raw_entry.get("source_table_index"),
+                    "source_row_index": raw_entry.get("source_row_index"),
+                    "source_branch_index": raw_entry.get("source_branch_index"),
+                    "source_peak_index": raw_entry.get("source_peak_index"),
+                    "saved_refined_sim_caked_anchor_deg": saved_anchor,
+                    "sim_nominal_caked_deg": nominal_caked,
+                    "sim_refined_caked_deg": refined_caked,
+                    "nominal_minus_saved_refined_sim_caked_delta": nominal_delta,
+                    "refined_minus_saved_refined_sim_caked_delta": refined_delta,
+                    "dynamic_baseline_anchor_status": raw_entry.get(
+                        "dynamic_baseline_anchor_status"
+                    ),
+                    "dynamic_baseline_anchor_offset_caked_deg": raw_entry.get(
+                        "dynamic_baseline_anchor_offset_caked_deg"
+                    ),
+                    "fit_prediction_resolver_function": resolver_function,
+                }
+            )
+        return mismatches
+
     preflight_guard_enabled = bool(
         point_match_mode
         and dynamic_point_geometry_fit
@@ -20590,6 +21052,47 @@ def fit_geometry_parameters(
             point_match_summary=preflight_summary,
             prior_residual=preflight_prior_residual,
         )
+        preflight_anchor_mismatches = _manual_qr_dynamic_baseline_anchor_mismatches(
+            preflight_diagnostics,
+        )
+        if preflight_anchor_mismatches:
+            blocked_summary = copy.deepcopy(geometry_fit_debug_summary)
+            blocked_summary["optimizer_start_blocked_reason"] = (
+                "dynamic_baseline_anchor_mismatch"
+            )
+            blocked_summary["dynamic_baseline_anchor_mismatches"] = copy.deepcopy(
+                preflight_anchor_mismatches
+            )
+            blocked_result = OptimizeResult(
+                x=np.asarray(x0_arr, dtype=float).copy(),
+                fun=preflight_fun,
+                success=False,
+                status=0,
+                message=(
+                    "optimizer_start_blocked_reason="
+                    "dynamic_baseline_anchor_mismatch"
+                ),
+                nfev=0,
+                active_mask=np.zeros(np.asarray(x0_arr, dtype=float).shape, dtype=int),
+                optimality=float("nan"),
+            )
+            blocked_result.optimizer_start_blocked_reason = (
+                "dynamic_baseline_anchor_mismatch"
+            )
+            blocked_result.dynamic_baseline_anchor_mismatches = copy.deepcopy(
+                preflight_anchor_mismatches
+            )
+            blocked_result.objective_trace = copy.deepcopy(objective_trace_records)
+            blocked_result.point_match_diagnostics = [
+                dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)
+            ]
+            blocked_result.point_match_summary = _public_point_match_summary(
+                preflight_summary,
+            )
+            blocked_result.least_squares_called = False
+            blocked_result.optimizer_solve_called = False
+            blocked_result.geometry_fit_debug_summary = blocked_summary
+            return blocked_result
         preflight_mismatches = _manual_qr_prediction_resolver_mismatches(
             preflight_diagnostics,
         )

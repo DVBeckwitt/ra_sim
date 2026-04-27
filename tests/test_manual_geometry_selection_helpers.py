@@ -25779,6 +25779,173 @@ def _diag_new4_print_objective_residual_table(title, components):
         )
 
 
+def _diag_new4_saved_rows_by_key(saved_state, *, include_003):
+    allowed = set(_diag_new4_expected_inventory(include_003=include_003))
+    rows = {}
+    for raw in _diag_manual_entries_for_active_background(saved_state):
+        if not isinstance(raw, Mapping):
+            continue
+        entry = dict(raw)
+        key = _diag_new4_inventory_key(entry)
+        if key in allowed:
+            rows[key] = entry
+    return rows
+
+
+def _diag_new4_saved_anchor_row(saved_entry, dynamic_row, dataset):
+    saved_observed, _observed_source = _diag_observed_caked(saved_entry)
+    saved_display, _display_source = _diag_sim_visual_detector_display(saved_entry)
+    saved_native, _native_source = _diag_sim_visual_detector_native(saved_entry)
+    saved_caked, _caked_source = _diag_sim_visual_caked(saved_entry)
+    dynamic_nominal = _diag_row_pair(dynamic_row, "predicted_nominal_caked_deg")
+    dynamic_refined = _diag_row_pair(dynamic_row, "predicted_refined_caked_deg")
+    dynamic_nominal_native = _diag_row_pair(dynamic_row, "sim_nominal_native_px")
+    dynamic_nominal_detector = _diag_row_pair(dynamic_row, "sim_nominal_detector_px")
+    projected_saved_native = _diag_project_native_for_test(dataset, saved_native)
+    return {
+        "saved_observed_caked_deg": saved_observed,
+        "saved_refined_sim_detector_display_px": saved_display,
+        "saved_refined_sim_detector_native_px": saved_native,
+        "saved_refined_sim_caked_deg": saved_caked,
+        "saved_refined_sim_native_projected_caked_deg": projected_saved_native,
+        "dynamic_nominal_detector_px": dynamic_nominal_detector,
+        "dynamic_nominal_native_px": dynamic_nominal_native,
+        "dynamic_nominal_caked_deg": dynamic_nominal,
+        "dynamic_refined_caked_deg": dynamic_refined,
+        "sim_refinement_status": dynamic_row.get("sim_refinement_status"),
+        "sim_refinement_delta_caked_deg": _diag_row_pair(
+            dynamic_row,
+            "sim_refinement_delta_caked_deg",
+        ),
+        "dynamic_nominal_minus_saved_refined_sim_caked_delta": _diag_caked_delta(
+            dynamic_nominal,
+            saved_caked,
+        ),
+        "dynamic_refined_minus_saved_refined_sim_caked_delta": _diag_caked_delta(
+            dynamic_refined,
+            saved_caked,
+        ),
+        "dynamic_refined_minus_observed_caked_delta": _diag_caked_delta(
+            dynamic_refined,
+            saved_observed,
+        ),
+        "saved_native_projected_minus_saved_caked_delta": _diag_caked_delta(
+            projected_saved_native,
+            saved_caked,
+        ),
+    }
+
+
+def _diag_new4_anchor_delta_ok(delta, *, tth_tol=0.5, phi_tol=1.0):
+    try:
+        return bool(
+            np.isfinite(float(delta[0]))
+            and np.isfinite(float(delta[1]))
+            and abs(float(delta[0])) <= float(tth_tol)
+            and abs(float(delta[1])) <= float(phi_tol)
+        )
+    except Exception:
+        return False
+
+
+def _diag_new4_print_saved_dynamic_anchor_table(title, anchor_rows):
+    print(title)
+    print(
+        "q_group | hkl | branch | source_table | source_row | source_peak | branch_id | "
+        "saved_observed_caked | saved_sim_display | saved_sim_native | saved_sim_caked | "
+        "dynamic_nominal_detector | dynamic_nominal_native | dynamic_nominal_caked | "
+        "dynamic_refined_caked | refinement_status | refinement_delta | "
+        "nominal_minus_saved | refined_minus_saved | refined_minus_observed"
+    )
+    for key in sorted(anchor_rows, key=repr):
+        row = anchor_rows[key]
+        q_group, hkl, table_idx, row_idx, branch_idx, peak_idx = key
+        print(
+            f"{q_group} | {hkl} | {branch_idx} | {table_idx} | {row_idx} | "
+            f"{peak_idx} | {row.get('branch_id')} | "
+            f"{_diag_fmt_pair(row['saved_observed_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['saved_refined_sim_detector_display_px'])} | "
+            f"{_diag_fmt_pair(row['saved_refined_sim_detector_native_px'])} | "
+            f"{_diag_fmt_pair(row['saved_refined_sim_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['dynamic_nominal_detector_px'])} | "
+            f"{_diag_fmt_pair(row['dynamic_nominal_native_px'])} | "
+            f"{_diag_fmt_pair(row['dynamic_nominal_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['dynamic_refined_caked_deg'])} | "
+            f"{row.get('sim_refinement_status')} | "
+            f"{_diag_fmt_pair(row['sim_refinement_delta_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['dynamic_nominal_minus_saved_refined_sim_caked_delta'])} | "
+            f"{_diag_fmt_pair(row['dynamic_refined_minus_saved_refined_sim_caked_delta'])} | "
+            f"{_diag_fmt_pair(row['dynamic_refined_minus_observed_caked_delta'])}"
+        )
+
+
+def _diag_new4_build_anchor_rows(context, dataset, record, *, include_003):
+    saved_rows = _diag_new4_saved_rows_by_key(
+        context["saved_state"],
+        include_003=include_003,
+    )
+    dynamic_rows = _diag_new4_point_rows(record, include_003=include_003)
+    out = {}
+    for key in _diag_new4_expected_inventory(include_003=include_003):
+        saved_entry = saved_rows.get(key, {})
+        dynamic_row = dynamic_rows.get(key, {})
+        row = _diag_new4_saved_anchor_row(saved_entry, dynamic_row, dataset)
+        row.update(
+            {
+                "q_group_key": key[0],
+                "hkl": key[1],
+                "source_table_index": key[2],
+                "source_row_index": key[3],
+                "source_branch_index": key[4],
+                "source_peak_index": key[5],
+                "branch_id": saved_entry.get("branch_id", dynamic_row.get("branch_id")),
+                "dynamic_row": dynamic_row,
+                "saved_entry": saved_entry,
+            }
+        )
+        out[key] = row
+    return out
+
+
+def _diag_new4_first_anchor_failure(anchor_rows):
+    for key in sorted(anchor_rows, key=repr):
+        row = anchor_rows[key]
+        if not _diag_new4_anchor_delta_ok(
+            row["dynamic_nominal_minus_saved_refined_sim_caked_delta"]
+        ):
+            return key, "dynamic_nominal_caked_deg", row
+        if not _diag_new4_anchor_delta_ok(
+            row["dynamic_refined_minus_saved_refined_sim_caked_delta"]
+        ):
+            return key, "dynamic_refined_caked_deg", row
+    return None
+
+
+def _diag_new4_classify_anchor_divergence(row):
+    saved_native = np.asarray(row["saved_refined_sim_detector_native_px"], dtype=float)
+    dynamic_native = np.asarray(row["dynamic_nominal_native_px"], dtype=float)
+    native_delta = dynamic_native - saved_native
+    native_dist = (
+        float(np.linalg.norm(native_delta))
+        if np.all(np.isfinite(native_delta))
+        else float("inf")
+    )
+    saved_projection_delta = row["saved_native_projected_minus_saved_caked_delta"]
+    nominal_delta = row["dynamic_nominal_minus_saved_refined_sim_caked_delta"]
+    refined_delta = row["dynamic_refined_minus_saved_refined_sim_caked_delta"]
+    if native_dist > 2.0:
+        return "A. identity_resolves_wrong_candidate"
+    if not _diag_new4_anchor_delta_ok(nominal_delta):
+        return "B. caked_projection_mismatch"
+    if not _diag_new4_anchor_delta_ok(saved_projection_delta):
+        return "D. saved_state_anchor_inconsistent"
+    if _diag_new4_anchor_delta_ok(nominal_delta) and not _diag_new4_anchor_delta_ok(
+        refined_delta
+    ):
+        return "C. caked_refinement_jumps_to_wrong_peak"
+    return "unknown"
+
+
 def _diag_new4_print_cache_signature_table(title, rows):
     print(title)
     print(
@@ -25859,6 +26026,149 @@ def test_new4_fit_prediction_pipeline_regenerates_detector_simulation(tmp_path) 
         assert str(row.get("predicted_source", "")).startswith(
             "dynamic_trial_simulation:locked_manual_qr_fit_prediction"
         )
+
+
+def test_new4_dynamic_baseline_matches_saved_refined_sim_centers(tmp_path) -> None:
+    include_003 = False
+    context, dataset, _run, record, rows, components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=include_003,
+    )
+    anchor_rows = _diag_new4_build_anchor_rows(
+        context,
+        dataset,
+        record,
+        include_003=include_003,
+    )
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print(f"background_index={_NEW4_FIRST_IMAGE_BACKGROUND_INDEX}")
+    print(f"background_name={_NEW4_FIRST_IMAGE_BACKGROUND_NAME}")
+    print("selected_first_image_branch_inventory_Mode_A_entries=14")
+    _diag_new4_print_saved_dynamic_anchor_table(
+        "saved_sim_vs_dynamic_nominal_refined_table",
+        anchor_rows,
+    )
+    first_failure = _diag_new4_first_anchor_failure(anchor_rows)
+    if first_failure is not None:
+        key, field, row = first_failure
+        print("first_failure=dynamic_baseline_prediction_does_not_match_saved_sim_anchor")
+        print(f"first_bad_branch={key}")
+        print(f"first_bad_field={field}")
+        print(
+            "expected_saved_sim="
+            f"{_diag_fmt_pair(row['saved_refined_sim_caked_deg'])}"
+        )
+        actual = (
+            row["dynamic_nominal_caked_deg"]
+            if field == "dynamic_nominal_caked_deg"
+            else row["dynamic_refined_caked_deg"]
+        )
+        print(f"actual_dynamic={_diag_fmt_pair(actual)}")
+    assert len(rows) == 14
+    assert len(components) == 28
+    assert first_failure is None
+
+
+def test_new4_dynamic_prediction_divergence_locator(tmp_path) -> None:
+    include_003 = False
+    context, dataset, _run, record, _rows, _components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=include_003,
+    )
+    anchor_rows = _diag_new4_build_anchor_rows(
+        context,
+        dataset,
+        record,
+        include_003=include_003,
+    )
+    print("dynamic_prediction_divergence_locator")
+    print(
+        "q_group | hkl | branch | classification | saved_native | dynamic_native | "
+        "saved_caked | dynamic_nominal | dynamic_refined | saved_native_projection_delta"
+    )
+    failures = []
+    for key in sorted(anchor_rows, key=repr):
+        row = anchor_rows[key]
+        nominal_ok = _diag_new4_anchor_delta_ok(
+            row["dynamic_nominal_minus_saved_refined_sim_caked_delta"]
+        )
+        refined_ok = _diag_new4_anchor_delta_ok(
+            row["dynamic_refined_minus_saved_refined_sim_caked_delta"]
+        )
+        classification = "ok"
+        if not (nominal_ok and refined_ok):
+            classification = _diag_new4_classify_anchor_divergence(row)
+            failures.append((key, classification))
+        q_group, hkl, _table, _row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {classification} | "
+            f"{_diag_fmt_pair(row['saved_refined_sim_detector_native_px'])} | "
+            f"{_diag_fmt_pair(row['dynamic_nominal_native_px'])} | "
+            f"{_diag_fmt_pair(row['saved_refined_sim_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['dynamic_nominal_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['dynamic_refined_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['saved_native_projected_minus_saved_caked_delta'])}"
+        )
+    if failures:
+        print(f"first_failure_classification={failures[0][1]}")
+        print(f"first_bad_branch={failures[0][0]}")
+    allowed = {
+        "A. identity_resolves_wrong_candidate",
+        "B. caked_projection_mismatch",
+        "C. caked_refinement_jumps_to_wrong_peak",
+        "D. saved_state_anchor_inconsistent",
+    }
+    assert all(classification in allowed for _key, classification in failures)
+
+
+def _diag_poison_new4_first_anchor(dataset):
+    poisoned = dict(dataset)
+    target_key = _diag_new4_expected_inventory(include_003=False)[0]
+    pair_fields = (
+        "provider_pairs",
+        "manual_point_pairs",
+        "measured_display",
+        "measured_for_fit",
+        "initial_pairs_display",
+    )
+    for field in pair_fields:
+        entries = [
+            dict(entry)
+            for entry in poisoned.get(field, ()) or ()
+            if isinstance(entry, Mapping)
+        ]
+        for entry in entries:
+            if _diag_new4_inventory_key(entry) != target_key:
+                continue
+            entry["refined_sim_caked_x"] = 999.0
+            entry["refined_sim_caked_y"] = 111.0
+            entry["sim_refined_caked_deg"] = (999.0, 111.0)
+            entry["sim_visual_caked_deg"] = (999.0, 111.0)
+        poisoned[field] = entries
+    spec = dict(poisoned.get("spec", {}) or {})
+    spec["manual_point_pairs"] = [dict(entry) for entry in poisoned["manual_point_pairs"]]
+    spec["measured_peaks"] = [dict(entry) for entry in poisoned["measured_for_fit"]]
+    poisoned["spec"] = spec
+    return poisoned
+
+
+def test_new4_qr_objective_refuses_wrong_baseline_dynamic_predictions(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    poisoned = _diag_poison_new4_first_anchor(dataset)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        poisoned,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        optimizer_overrides={"max_nfev": 1},
+        qr_only_dataset_filter=_diag_new4_filter_factory(False),
+    )
+    result = fit_run["result"]
+    blocked_reason = str(getattr(result, "optimizer_start_blocked_reason", "") or "")
+    print(f"optimizer_start_blocked_reason={blocked_reason}")
+    assert blocked_reason == "dynamic_baseline_anchor_mismatch"
+    assert int(getattr(result, "nfev", 0) or 0) == 0
 
 
 def test_new4_fit_prediction_pipeline_refines_in_caked_space(tmp_path) -> None:
