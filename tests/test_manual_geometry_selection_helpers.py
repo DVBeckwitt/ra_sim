@@ -21031,6 +21031,7 @@ def test_detector_mode_qr_picker_overlay_hidden_does_not_disable_manual_picker_c
 
 _QR_FIT_AUDIT_CACHE = {}
 _QR_FIT_STEP_CACHE = {}
+_FULL_GEOMETRY_AFTER_RESOLVER_CACHE = {}
 
 
 def _diag_caked_view_payload(context):
@@ -21377,17 +21378,18 @@ def _diag_build_minus_1_0_10_fit_request(
     bounds_overrides=None,
     x_scale_overrides=None,
     params_overrides=None,
+    qr_only_dataset_filter=None,
 ):
     kwargs = context["projection_kwargs"]
     saved_state = context["saved_state"]
     params = dict(_diag_runtime_value(kwargs["current_geometry_fit_params"]))
     if isinstance(params_overrides, Mapping):
         params.update(dict(params_overrides))
-    fit_dataset = (
-        _diag_filter_minus_1_0_10_dataset(dataset)
-        if bool(qr_only_objective)
-        else dataset
-    )
+    if bool(qr_only_objective):
+        filter_fn = qr_only_dataset_filter or _diag_filter_minus_1_0_10_dataset
+        fit_dataset = filter_fn(dataset)
+    else:
+        fit_dataset = dataset
     image_size = int(_diag_runtime_value(kwargs["image_size"]))
     defaults = hgf._build_runtime_defaults(saved_state)
     var_names = _diag_geometry_fit_var_names(saved_state)
@@ -21942,10 +21944,11 @@ def _diag_run_controlled_minus_1_0_10_fit(
     bounds_overrides=None,
     x_scale_overrides=None,
     params_overrides=None,
+    qr_only_dataset_filter=None,
 ):
     from ra_sim.fitting.optimization import fit_geometry_parameters
 
-    use_cache = not any(
+    use_cache = qr_only_dataset_filter is None and not any(
         isinstance(value, Mapping)
         for value in (
             optimizer_overrides,
@@ -21976,6 +21979,7 @@ def _diag_run_controlled_minus_1_0_10_fit(
         bounds_overrides=bounds_overrides,
         x_scale_overrides=x_scale_overrides,
         params_overrides=params_overrides,
+        qr_only_dataset_filter=qr_only_dataset_filter,
     )
     result = gf.solve_geometry_fit_request(
         request,
@@ -23228,6 +23232,224 @@ def _diag_print_x0_prediction_comparison(handoff_rows, dry_rows, solver_rows):
         )
 
 
+def _diag_request_rows_by_branch(request):
+    rows = {}
+    for row in getattr(request, "measured_peaks", ()) or ():
+        if not isinstance(row, Mapping):
+            continue
+        if _diag_q_group_key(row) != _QR_PICKER_TARGET_Q_GROUP_KEY:
+            continue
+        if _diag_hkl(row) != _QR_PICKER_TARGET_HKL:
+            continue
+        try:
+            branch = int(row.get("source_branch_index"))
+        except Exception:
+            continue
+        if branch in {0, 1}:
+            rows[branch] = dict(row)
+    return rows
+
+
+def _diag_candidate_row(
+    name,
+    *,
+    source_row,
+    detector_native,
+    caked,
+    handoff_caked,
+    optimizer_caked,
+    visual_caked,
+):
+    caked_pair = _diag_pair_or_nan(caked)
+    return {
+        "source_name": str(name),
+        "source_table_index": source_row.get("source_table_index"),
+        "source_row_index": source_row.get("source_row_index"),
+        "source_branch_index": source_row.get("source_branch_index"),
+        "source_peak_index": source_row.get("source_peak_index"),
+        "detector_native": _diag_pair_or_nan(detector_native),
+        "caked": caked_pair,
+        "matches_visual": bool(np.allclose(caked_pair, visual_caked, atol=1.0e-6, rtol=0.0)),
+        "matches_handoff": bool(np.allclose(caked_pair, handoff_caked, atol=1.0e-6, rtol=0.0)),
+        "matches_optimizer": bool(
+            np.allclose(caked_pair, optimizer_caked, atol=1.0e-6, rtol=0.0)
+        ),
+    }
+
+
+def _diag_branch1_candidate_prediction_sources(dataset, request_row, handoff_row, optimizer_row):
+    def _finite_pair(point):
+        return bool(np.isfinite(float(point[0])) and np.isfinite(float(point[1])))
+
+    visual_caked = _diag_row_pair(
+        request_row,
+        "sim_visual_caked_deg",
+        (("simulated_two_theta_deg", "simulated_phi_deg"),),
+    )
+    handoff_caked = _diag_handoff_predicted_caked(handoff_row)
+    optimizer_caked = _diag_solver_predicted_caked(optimizer_row)
+    saved_detector_caked = _diag_row_pair(request_row, "fit_prediction_caked_deg")
+    if not _finite_pair(saved_detector_caked):
+        saved_detector_caked = handoff_caked
+    raw_native = _diag_row_pair(request_row, "sim_visual_detector_native_px")
+    canonical_native = _diag_row_pair(request_row, "sim_visual_detector_canonical_native_px")
+    fit_prediction_native = _diag_row_pair(request_row, "fit_prediction_detector_native_px")
+    geometry_native = _diag_row_pair(request_row, "geometry_detector_native_px")
+    rows = [
+        _diag_candidate_row(
+            "saved visual sim caked",
+            source_row=request_row,
+            detector_native=raw_native,
+            caked=visual_caked,
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+        _diag_candidate_row(
+            "saved visual sim detector display/native",
+            source_row=request_row,
+            detector_native=fit_prediction_native,
+            caked=saved_detector_caked,
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+        _diag_candidate_row(
+            "display_to_native(saved visual detector display)",
+            source_row=request_row,
+            detector_native=canonical_native,
+            caked=saved_detector_caked,
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+        _diag_candidate_row(
+            "caked from canonical saved visual native",
+            source_row=request_row,
+            detector_native=canonical_native,
+            caked=saved_detector_caked,
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+        _diag_candidate_row(
+            "dynamic current simulation by exact provenance",
+            source_row=optimizer_row,
+            detector_native=_diag_row_pair(optimizer_row, "predicted_detector_native_px"),
+            caked=optimizer_caked,
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+        _diag_candidate_row(
+            "dynamic current simulation by q_group/hkl/source_branch/source_peak",
+            source_row=optimizer_row,
+            detector_native=_diag_row_pair(optimizer_row, "predicted_detector_native_px"),
+            caked=optimizer_caked,
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+        _diag_candidate_row(
+            "optimizer q_group_hkl_source_row_provenance prediction",
+            source_row=optimizer_row,
+            detector_native=_diag_row_pair(optimizer_row, "predicted_detector_native_px"),
+            caked=optimizer_caked,
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+        _diag_candidate_row(
+            "cache/current prediction",
+            source_row=request_row,
+            detector_native=geometry_native,
+            caked=_diag_row_pair(request_row, "geometry_caked_deg"),
+            handoff_caked=handoff_caked,
+            optimizer_caked=optimizer_caked,
+            visual_caked=visual_caked,
+        ),
+    ]
+    return rows
+
+
+def _diag_print_handoff_optimizer_resolver_details(
+    dataset,
+    request_rows,
+    handoff_rows,
+    optimizer_rows,
+):
+    print("handoff_optimizer_resolver_detail_table")
+    print(
+        "branch | q_group_key | hkl | source_table_index | source_row_index | "
+        "source_branch_index | source_peak_index | branch_id | "
+        "handoff_resolver | handoff_prediction_source | handoff_source_row | "
+        "handoff_detector_display_px | handoff_detector_native_px | handoff_caked_deg | "
+        "handoff_reason | optimizer_resolver | optimizer_prediction_source | "
+        "optimizer_source_row | optimizer_detector_display_px | optimizer_detector_native_px | "
+        "optimizer_caked_deg | optimizer_reason | "
+        "optimizer_minus_handoff_detector_native_delta_px | "
+        "optimizer_minus_handoff_caked_delta_deg"
+    )
+    for branch in (0, 1):
+        handoff = handoff_rows.get(branch, {})
+        optimizer = optimizer_rows.get(branch, {})
+        handoff_native = _diag_row_pair(handoff, "fit_prediction_detector_native_px")
+        optimizer_native = _diag_row_pair(optimizer, "predicted_detector_native_px")
+        native_delta = (
+            float(optimizer_native[0]) - float(handoff_native[0]),
+            float(optimizer_native[1]) - float(handoff_native[1]),
+        )
+        handoff_caked = _diag_handoff_predicted_caked(handoff)
+        optimizer_caked = _diag_solver_predicted_caked(optimizer)
+        caked_delta = _diag_caked_delta(optimizer_caked, handoff_caked)
+        print(
+            f"{branch} | {handoff.get('q_group_key')} | {handoff.get('hkl')} | "
+            f"{handoff.get('source_table_index')} | {handoff.get('source_row_index')} | "
+            f"{handoff.get('source_branch_index')} | {handoff.get('source_peak_index')} | "
+            f"{handoff.get('branch_id')} | "
+            f"{handoff.get('fit_prediction_resolver_function')} | "
+            f"{handoff.get('fit_prediction_source')} | "
+            f"{handoff.get('source_table_index')}:{handoff.get('source_row_index')} | "
+            f"{_diag_fmt_pair(_diag_row_pair(handoff, 'fit_prediction_detector_display_px'))} | "
+            f"{_diag_fmt_pair(handoff_native)} | {_diag_fmt_pair(handoff_caked)} | "
+            f"{handoff.get('fit_prediction_source_resolution_reason')} | "
+            f"{optimizer.get('fit_prediction_resolver_function')} | "
+            f"{optimizer.get('predicted_source')} | "
+            f"{optimizer.get('source_table_index')}:{optimizer.get('source_row_index')} | "
+            f"{_diag_fmt_pair(_diag_row_pair(optimizer, 'predicted_detector_display_px'))} | "
+            f"{_diag_fmt_pair(optimizer_native)} | {_diag_fmt_pair(optimizer_caked)} | "
+            f"{optimizer.get('resolution_reason')} | {_diag_fmt_pair(native_delta)} | "
+            f"{_diag_fmt_pair(caked_delta)}"
+        )
+    branch1_candidates = _diag_branch1_candidate_prediction_sources(
+        dataset,
+        request_rows.get(1, {}),
+        handoff_rows.get(1, {}),
+        optimizer_rows.get(1, {}),
+    )
+    print("branch1_candidate_prediction_sources")
+    print(
+        "source_name | source_table_index | source_row_index | source_branch_index | "
+        "source_peak_index | detector_native | caked_deg | matches_visual_qr_branch | "
+        "matches_handoff | matches_optimizer"
+    )
+    for row in branch1_candidates:
+        print(
+            f"{row['source_name']} | {row['source_table_index']} | "
+            f"{row['source_row_index']} | {row['source_branch_index']} | "
+            f"{row['source_peak_index']} | {_diag_fmt_pair(row['detector_native'])} | "
+            f"{_diag_fmt_pair(row['caked'])} | "
+            f"{'yes' if row['matches_visual'] else 'no'} | "
+            f"{'yes' if row['matches_handoff'] else 'no'} | "
+            f"{'yes' if row['matches_optimizer'] else 'no'}"
+        )
+    print(
+        "classification=A "
+        "reason=handoff_and_optimizer_now_share_saved-detector-to-dynamic-fit resolver; "
+        "pre_fix_optimizer_used_current_source_row"
+    )
+
+
 def _diag_solver_x0_bundle(context, dataset):
     handoff_rows = _diag_fit_audit_rows(dataset)
     handoff_records = _diag_records_from_audit_rows(handoff_rows)
@@ -23250,14 +23472,54 @@ def _diag_solver_x0_bundle(context, dataset):
     solver_trace = _diag_objective_trace(solver_run["result"])
     assert dry_trace
     assert solver_trace
+    solver_record = next(
+        (
+            record
+            for record in solver_trace
+            if str(record.get("source", "")) == "pixel_cost_fn"
+        ),
+        solver_trace[0],
+    )
     return {
         "handoff_rows": handoff_rows,
         "handoff_records": handoff_records,
         "dry_run": dry_run,
         "solver_run": solver_run,
         "dry_record": dry_trace[0],
-        "solver_record": solver_trace[0],
+        "solver_record": solver_record,
     }
+
+
+def test_minus_1_0_10_handoff_vs_optimizer_prediction_resolver_details(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_solver_x0_bundle(context, dataset)
+    dry_rows = _diag_target_prediction_rows_by_branch(bundle["dry_record"])
+    request_rows = _diag_request_rows_by_branch(bundle["dry_run"]["request"])
+    _diag_print_handoff_optimizer_resolver_details(
+        dataset,
+        request_rows,
+        bundle["handoff_rows"],
+        dry_rows,
+    )
+    first_bad = None
+    for branch in (0, 1):
+        handoff = bundle["handoff_rows"].get(branch, {})
+        optimizer = dry_rows.get(branch, {})
+        if not np.allclose(
+            _diag_handoff_predicted_caked(handoff),
+            _diag_solver_predicted_caked(optimizer),
+            atol=1.0e-9,
+            rtol=0.0,
+        ):
+            first_bad = branch
+            print("first_failure=handoff_optimizer_prediction_resolver_mismatch")
+            print(f"first_bad_branch={branch}")
+            print(f"handoff_source={handoff.get('fit_prediction_source')}")
+            print(f"optimizer_source={optimizer.get('predicted_source')}")
+            break
+    assert first_bad is None
 
 
 def test_minus_1_0_10_solver_x0_matches_handoff_and_dry_run(tmp_path) -> None:
@@ -23304,6 +23566,72 @@ def test_minus_1_0_10_solver_x0_matches_handoff_and_dry_run(tmp_path) -> None:
         print("first_failure=solver_callback_x0_residual_vector_mismatch")
         print("first_bad_branch=<residual_vector>")
     assert first_bad is None
+
+
+def test_minus_1_0_10_qr_only_fit_after_x0_source_fix(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_solver_x0_bundle(context, dataset)
+    handoff_vec = _diag_handoff_residual_vector(bundle["handoff_records"])
+    dry_vec = _diag_trace_residual_vector(bundle["dry_record"])
+    solver_vec = _diag_trace_residual_vector(bundle["solver_record"])
+    norm_before = float(np.linalg.norm(handoff_vec))
+    x0_predictions_match = bool(
+        np.allclose(handoff_vec, dry_vec, atol=1.0e-9, rtol=0.0)
+        and np.allclose(handoff_vec, solver_vec, atol=1.0e-9, rtol=0.0)
+    )
+
+    print("qr_only_fit_after_x0_source_fix")
+    print(f"norm_before={norm_before:.9f}")
+    print(f"handoff_residual_vector={handoff_vec.tolist()}")
+    print(f"dry_run_residual_vector={dry_vec.tolist()}")
+    print(f"solver_x0_residual_vector={solver_vec.tolist()}")
+    print(f"x0_prediction_resolver_match={'yes' if x0_predictions_match else 'no'}")
+    if not x0_predictions_match:
+        print("optimizer_start_blocked_reason=prediction_resolver_mismatch")
+        assert x0_predictions_match
+
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        optimizer_overrides={"max_nfev": 20},
+    )
+    result = fit_run["result"]
+    blocked_reason = str(getattr(result, "optimizer_start_blocked_reason", "") or "")
+    print(f"optimizer_start_blocked={'yes' if blocked_reason else 'no'}")
+    if blocked_reason:
+        print(f"optimizer_start_blocked_reason={blocked_reason}")
+    print(f"nfev={int(getattr(result, 'nfev', 0) or 0)}")
+    print(f"success={bool(getattr(result, 'success', False))}")
+    print(f"message={str(getattr(result, 'message', '') or '')}")
+
+    accepted_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        objective_dry_run_only=True,
+        params_overrides=fit_run["after_params"],
+    )
+    accepted_trace = _diag_objective_trace(accepted_run["result"])
+    assert accepted_trace
+    accepted_vec = _diag_trace_residual_vector(accepted_trace[0])
+    norm_after = float(np.linalg.norm(accepted_vec))
+    print(f"accepted_params={fit_run['after_params']}")
+    print(f"accepted_residual_vector={accepted_vec.tolist()}")
+    print(f"norm_after_accepted_params={norm_after:.9f}")
+    print(
+        "qr_residual_after_accepted_params_le_before="
+        f"{'yes' if norm_after <= norm_before + 1.0e-9 else 'no'}"
+    )
+
+    assert blocked_reason == ""
+    assert int(getattr(result, "nfev", 0) or 0) > 0
+    assert norm_before < 5.0
+    assert norm_after <= norm_before + 1.0e-9
 
 
 def test_minus_1_0_10_solver_small_perturbations_keep_same_prediction_source(
@@ -23593,6 +23921,752 @@ def test_minus_1_0_10_total_objective_reports_qr_contribution(tmp_path) -> None:
         print(f"qr_weight={weights[0]:.9f}")
         if max(weights) < 1.0:
             print("qr_weight_too_low=yes")
+
+
+_QR_FIT_GROUP_SPECS = (
+    (("q_group", "primary", 1, 5), (-1, 0, 5)),
+    (("q_group", "primary", 1, 10), (-1, 0, 10)),
+    (("q_group", "primary", 1, 16), (-1, 0, 16)),
+)
+
+
+def _diag_group_label(hkl):
+    return f"({int(hkl[0])},{int(hkl[1])},{int(hkl[2])})"
+
+
+def _diag_matches_qr_fit_group(row, specs=_QR_FIT_GROUP_SPECS):
+    row_key = _diag_q_group_key(row)
+    row_hkl = _diag_hkl(row)
+    return any(row_key == spec_key and row_hkl == spec_hkl for spec_key, spec_hkl in specs)
+
+
+def _diag_entry_is_qr_fit_group_branch(entry):
+    if not isinstance(entry, Mapping):
+        return False
+    try:
+        branch = int(entry.get("source_branch_index"))
+    except Exception:
+        return False
+    return bool(branch in {0, 1} and _diag_matches_qr_fit_group(entry))
+
+
+def _diag_filter_qr_fit_groups_dataset(dataset):
+    filtered = dict(dataset)
+    pair_fields = (
+        "provider_pairs",
+        "manual_point_pairs",
+        "measured_display",
+        "measured_for_fit",
+        "initial_pairs_display",
+    )
+    pair_lists = {
+        key: [dict(entry) for entry in dataset.get(key, ()) or () if isinstance(entry, Mapping)]
+        for key in pair_fields
+    }
+    pair_count = max((len(entries) for entries in pair_lists.values()), default=0)
+    keep_indices = []
+    for index in range(pair_count):
+        entries = [
+            entries[index]
+            for entries in pair_lists.values()
+            if index < len(entries) and isinstance(entries[index], Mapping)
+        ]
+        if any(_diag_entry_is_qr_fit_group_branch(entry) for entry in entries):
+            keep_indices.append(index)
+    for key, entries in pair_lists.items():
+        filtered[key] = [
+            dict(entries[index]) for index in keep_indices if index < len(entries)
+        ]
+    filtered["pair_count"] = int(len(keep_indices))
+    for key in ("source_rows_for_trace", "source_rows", "simulated_peaks"):
+        entries = [
+            dict(entry)
+            for entry in dataset.get(key, ()) or ()
+            if isinstance(entry, Mapping)
+        ]
+        if entries:
+            filtered[key] = entries
+    spec = dict(dataset.get("spec", {}) or {})
+    spec["manual_point_pairs"] = [dict(entry) for entry in filtered["manual_point_pairs"]]
+    spec["measured_peaks"] = [dict(entry) for entry in filtered["measured_for_fit"]]
+    filtered["spec"] = spec
+    return filtered
+
+
+def _diag_qr_fit_row_key(row):
+    return (_diag_hkl(row), int(row.get("source_branch_index")))
+
+
+def _diag_qr_fit_rows_by_key(record, specs=_QR_FIT_GROUP_SPECS):
+    rows = {}
+    for row in record.get("point_rows", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        if not _diag_matches_qr_fit_group(row, specs):
+            continue
+        try:
+            branch = int(row.get("source_branch_index"))
+        except Exception:
+            continue
+        if branch in {0, 1}:
+            rows[(_diag_hkl(row), branch)] = dict(row)
+    return rows
+
+
+def _diag_qr_fit_components(record, specs=_QR_FIT_GROUP_SPECS):
+    components = []
+    for component in record.get("point_components", []) or []:
+        if not isinstance(component, Mapping):
+            continue
+        if str(component.get("component")) not in {
+            "delta_two_theta_deg",
+            "wrapped_delta_phi_deg",
+        }:
+            continue
+        if _diag_matches_qr_fit_group(component, specs):
+            components.append(dict(component))
+    return components
+
+
+def _diag_qr_fit_norm(record, specs=_QR_FIT_GROUP_SPECS):
+    values = [
+        float(component.get("unweighted_value", np.nan))
+        for component in _diag_qr_fit_components(record, specs)
+    ]
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(np.linalg.norm(arr)) if arr.size else float("nan")
+
+
+def _diag_qr_fit_axis_norms(record, specs=_QR_FIT_GROUP_SPECS):
+    theta_values = []
+    phi_values = []
+    for component in _diag_qr_fit_components(record, specs):
+        try:
+            value = float(component.get("unweighted_value", np.nan))
+        except Exception:
+            continue
+        if not np.isfinite(value):
+            continue
+        component_name = str(component.get("component", ""))
+        if component_name == "delta_two_theta_deg":
+            theta_values.append(value)
+        elif component_name == "wrapped_delta_phi_deg":
+            phi_values.append(value)
+    theta_arr = np.asarray(theta_values, dtype=float)
+    phi_arr = np.asarray(phi_values, dtype=float)
+    return {
+        "theta_norm": float(np.linalg.norm(theta_arr)) if theta_arr.size else float("nan"),
+        "phi_norm": float(np.linalg.norm(phi_arr)) if phi_arr.size else float("nan"),
+        "theta_values": theta_values,
+        "phi_values": phi_values,
+    }
+
+
+def _diag_non_qr_fit_point_norm(record, specs=_QR_FIT_GROUP_SPECS):
+    values = []
+    for component in record.get("point_components", []) or []:
+        if not isinstance(component, Mapping):
+            continue
+        if _diag_matches_qr_fit_group(component, specs):
+            continue
+        try:
+            values.append(float(component.get("weighted_value", np.nan)))
+        except Exception:
+            continue
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    return float(np.linalg.norm(arr)) if arr.size else 0.0
+
+
+def _diag_full_fit_after_resolver_bundle(context, dataset):
+    if "payload" in _FULL_GEOMETRY_AFTER_RESOLVER_CACHE:
+        return _FULL_GEOMETRY_AFTER_RESOLVER_CACHE["payload"]
+    before_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        objective_dry_run_only=True,
+    )
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        optimizer_overrides={"max_nfev": 20},
+    )
+    after_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        objective_dry_run_only=True,
+        params_overrides=fit_run["after_params"],
+    )
+    before_trace = _diag_objective_trace(before_run["result"])
+    fit_trace = _diag_objective_trace(fit_run["result"])
+    after_trace = _diag_objective_trace(after_run["result"])
+    assert before_trace
+    assert fit_trace
+    assert after_trace
+    payload = {
+        "before_run": before_run,
+        "fit_run": fit_run,
+        "after_run": after_run,
+        "before": before_trace[0],
+        "after": after_trace[0],
+        "fit_trace": fit_trace,
+    }
+    _FULL_GEOMETRY_AFTER_RESOLVER_CACHE["payload"] = payload
+    return payload
+
+
+def _diag_qr_fit_expected_keys():
+    return {
+        (hkl, branch)
+        for _group_key, hkl in _QR_FIT_GROUP_SPECS
+        for branch in (0, 1)
+    }
+
+
+def _diag_qr_fit_branch_identity_stable(records):
+    if not records:
+        return False
+    expected = _diag_qr_fit_rows_by_key(records[0])
+    expected_keys = _diag_qr_fit_expected_keys()
+    if set(expected) != expected_keys:
+        return False
+    expected_identity = {
+        key: _diag_source_identity_key(row) for key, row in expected.items()
+    }
+    for record in records:
+        rows = _diag_qr_fit_rows_by_key(record)
+        if set(rows) != expected_keys:
+            return False
+        for key, row in rows.items():
+            if _diag_source_identity_key(row) != expected_identity[key]:
+                return False
+            source = str(row.get("predicted_source", "") or "")
+            if "cache_current" in source or "visual" in source:
+                return False
+            if row.get("predicted_source") == "rejected:prediction_branch_source_switched":
+                return False
+    return True
+
+
+def _diag_print_full_fit_decomposition(before, after, fit_run):
+    qr_before = _diag_qr_fit_norm(before)
+    qr_after = _diag_qr_fit_norm(after)
+    total_before = float(before.get("residual_norm", np.nan))
+    total_after = float(after.get("residual_norm", np.nan))
+    non_qr_before = _diag_non_qr_fit_point_norm(before)
+    non_qr_after = _diag_non_qr_fit_point_norm(after)
+    line_before = float(before.get("line_residual_norm", np.nan))
+    line_after = float(after.get("line_residual_norm", np.nan))
+    prior_before = float(before.get("prior_residual_norm", np.nan))
+    prior_after = float(after.get("prior_residual_norm", np.nan))
+    weights = sorted(
+        {
+            float(component.get("weight", np.nan))
+            for component in _diag_qr_fit_components(before)
+        }
+    )
+    print("full_geometry_fit_qr_contribution_after_resolver_fix")
+    print(f"full_objective_norm_before={total_before:.9f}")
+    print(f"full_objective_norm_after={total_after:.9f}")
+    print(f"qr_block_norm_before={qr_before:.9f}")
+    print(f"qr_block_norm_after={qr_after:.9f}")
+    print(f"non_qr_point_block_norm_before={non_qr_before:.9f}")
+    print(f"non_qr_point_block_norm_after={non_qr_after:.9f}")
+    print(f"line_block_norm_before={line_before:.9f}")
+    print(f"line_block_norm_after={line_after:.9f}")
+    print(f"prior_block_norm_before={prior_before:.9f}")
+    print(f"prior_block_norm_after={prior_after:.9f}")
+    print(f"qr_weights={weights}")
+    print(f"accepted_params={fit_run['after_params']}")
+    sacrificed = bool(total_after < total_before - 1.0e-9 and qr_after > qr_before + 1.0e-9)
+    print(f"qr_residual_sacrificed_to_other_terms={'yes' if sacrificed else 'no'}")
+    tiny = bool(abs(qr_after - qr_before) <= 1.0e-6)
+    print(f"qr_improvement_tiny={'yes' if tiny else 'no'}")
+    return {
+        "total_before": total_before,
+        "total_after": total_after,
+        "qr_before": qr_before,
+        "qr_after": qr_after,
+        "non_qr_before": non_qr_before,
+        "non_qr_after": non_qr_after,
+        "weights": weights,
+        "sacrificed": sacrificed,
+        "tiny": tiny,
+    }
+
+
+def _diag_print_multi_group_residual_table(title, before, after):
+    before_rows = _diag_qr_fit_rows_by_key(before)
+    after_rows = _diag_qr_fit_rows_by_key(after)
+    print(title)
+    print(
+        "group | branch | observed_caked | predicted_before | residual_before | "
+        "predicted_after | residual_after | source_identity | source | status"
+    )
+    statuses = {}
+    for _group_key, hkl in _QR_FIT_GROUP_SPECS:
+        for branch in (0, 1):
+            key = (hkl, branch)
+            before_row = before_rows.get(key, {})
+            after_row = after_rows.get(key, {})
+            observed = _diag_row_pair(before_row, "observed_caked_deg")
+            pred_before = _diag_row_pair(before_row, "predicted_caked_deg")
+            residual_before = _diag_row_pair(before_row, "residual_caked_deg")
+            pred_after = _diag_row_pair(after_row, "predicted_caked_deg")
+            residual_after = _diag_row_pair(after_row, "residual_caked_deg")
+            source_identity = _diag_source_identity_key(before_row) if before_row else None
+            source = str(after_row.get("predicted_source", "") or "")
+            stable = bool(
+                before_row
+                and after_row
+                and _diag_source_identity_key(before_row) == _diag_source_identity_key(after_row)
+                and "cache_current" not in source
+                and "visual" not in source
+            )
+            status = "stable" if stable else "source_mismatch"
+            statuses[key] = status
+            print(
+                f"{_diag_group_label(hkl)} | {branch} | {_diag_fmt_pair(observed)} | "
+                f"{_diag_fmt_pair(pred_before)} | {_diag_fmt_pair(residual_before)} | "
+                f"{_diag_fmt_pair(pred_after)} | {_diag_fmt_pair(residual_after)} | "
+                f"{source_identity} | {source} | {status}"
+            )
+    return statuses
+
+
+def test_full_geometry_fit_qr_contribution_after_resolver_fix(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_full_fit_after_resolver_bundle(context, dataset)
+    stats = _diag_print_full_fit_decomposition(
+        bundle["before"],
+        bundle["after"],
+        bundle["fit_run"],
+    )
+    stable = _diag_qr_fit_branch_identity_stable(
+        [bundle["before"], *bundle["fit_trace"], bundle["after"]]
+    )
+    print(f"branch_identity_stable={'yes' if stable else 'no'}")
+    component_count = len(_diag_qr_fit_components(bundle["before"]))
+    print(f"qr_component_count={component_count}")
+    assert component_count == 12, "qr_residual_absent_from_objective"
+    assert np.isfinite(stats["qr_before"])
+    assert np.isfinite(stats["qr_after"])
+    assert stable, "prediction_branch_source_switched"
+
+
+def test_multi_qr_group_fit_residuals(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_full_fit_after_resolver_bundle(context, dataset)
+    statuses = _diag_print_multi_group_residual_table(
+        "multi_qr_group_fit_residuals",
+        bundle["before"],
+        bundle["after"],
+    )
+    assert set(statuses) == _diag_qr_fit_expected_keys()
+    assert all(status == "stable" for status in statuses.values())
+
+
+def test_qr_fit_parameter_sensitivity_after_resolver_fix(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    var_names = _diag_geometry_fit_var_names(context["saved_state"])
+    baseline = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        objective_dry_run_only=True,
+    )
+    baseline_trace = _diag_objective_trace(baseline["result"])
+    assert baseline_trace
+    baseline_record = baseline_trace[0]
+    baseline_rows = _diag_qr_fit_rows_by_key(baseline_record)
+    baseline_norm = _diag_qr_fit_norm(baseline_record)
+    print("qr_fit_parameter_sensitivity_after_resolver_fix")
+    print("parameter | sign | perturbation | branch_residual_change | total_qr_norm_change")
+    max_norm_change = 0.0
+    max_branch_change = 0.0
+    for name in var_names:
+        if name not in params:
+            continue
+        value = float(params[name])
+        epsilon = _diag_micro_step_epsilon(str(name), value)
+        for sign in (1.0, -1.0):
+            trial_params = dict(params)
+            trial_params[str(name)] = value + sign * epsilon
+            trial = _diag_run_controlled_minus_1_0_10_fit(
+                context,
+                dataset,
+                seed_multistart_enabled=False,
+                objective_trace_enabled=True,
+                objective_dry_run_only=True,
+                params_overrides=trial_params,
+            )
+            trace = _diag_objective_trace(trial["result"])
+            assert trace
+            row_map = _diag_qr_fit_rows_by_key(trace[0])
+            norm_delta = float(_diag_qr_fit_norm(trace[0]) - baseline_norm)
+            max_norm_change = max(max_norm_change, abs(norm_delta))
+            changes = []
+            for _group_key, hkl in _QR_FIT_GROUP_SPECS:
+                for branch in (0, 1):
+                    key = (hkl, branch)
+                    before_res = _diag_row_pair(
+                        baseline_rows.get(key, {}),
+                        "residual_caked_deg",
+                    )
+                    after_res = _diag_row_pair(
+                        row_map.get(key, {}),
+                        "residual_caked_deg",
+                    )
+                    delta = _diag_caked_delta(after_res, before_res)
+                    max_branch_change = max(
+                        max_branch_change,
+                        float(np.linalg.norm(np.asarray(delta, dtype=float))),
+                    )
+                    changes.append(f"{_diag_group_label(hkl)}:{branch}={_diag_fmt_pair(delta)}")
+            print(
+                f"{name} | {'+' if sign > 0 else '-'} | {epsilon:.9g} | "
+                f"{'; '.join(changes)} | {norm_delta:.9f}"
+            )
+    insensitive = bool(max_norm_change <= 1.0e-6 and max_branch_change <= 1.0e-6)
+    print(f"max_total_qr_norm_change={max_norm_change:.9f}")
+    print(f"max_branch_residual_change={max_branch_change:.9f}")
+    print(f"parameters_insensitive={'yes' if insensitive else 'no'}")
+    print(f"residual_near_local_minimum={'yes' if max_norm_change <= 1.0e-4 else 'no'}")
+
+
+def _diag_param_unit(name):
+    if name in {"center_x", "center_y"}:
+        return "px"
+    if name in {"a", "c"}:
+        return "angstrom"
+    if name in {"zb", "zs", "corto_detector"}:
+        return "m"
+    if name in {
+        "theta_initial",
+        "theta_offset",
+        "psi_z",
+        "chi",
+        "cor_angle",
+        "gamma",
+        "Gamma",
+    }:
+        return "deg"
+    return "unitless"
+
+
+def _diag_param_expected_effects(name):
+    radial = name in {
+        "zb",
+        "zs",
+        "theta_initial",
+        "chi",
+        "cor_angle",
+        "gamma",
+        "Gamma",
+        "corto_detector",
+        "a",
+        "c",
+        "center_x",
+        "center_y",
+    }
+    azimuth = name in {
+        "psi_z",
+        "chi",
+        "cor_angle",
+        "gamma",
+        "Gamma",
+        "center_x",
+        "center_y",
+    }
+    if name == "corto_detector":
+        azimuth = "weak"
+    return {
+        "detector_radial": radial,
+        "detector_azimuth_phi": azimuth,
+        "caked_2theta": bool(radial),
+        "caked_phi": azimuth,
+    }
+
+
+def _diag_all_geometry_candidate_params():
+    return [
+        "zb",
+        "zs",
+        "theta_initial",
+        "psi_z",
+        "chi",
+        "cor_angle",
+        "gamma",
+        "Gamma",
+        "corto_detector",
+        "a",
+        "c",
+        "center_x",
+        "center_y",
+    ]
+
+
+def _diag_effect_text(value):
+    if isinstance(value, str):
+        return value
+    return "yes" if bool(value) else "no"
+
+
+def test_qr_fit_theta_phi_sensitivity_decomposition(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    var_names = _diag_geometry_fit_var_names(context["saved_state"])
+    baseline = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        objective_dry_run_only=True,
+    )
+    baseline_record = _diag_objective_trace(baseline["result"])[0]
+    baseline_rows = _diag_qr_fit_rows_by_key(baseline_record)
+    print("qr_fit_theta_phi_sensitivity_decomposition")
+    print(
+        "parameter | sign | epsilon | group | branch | predicted_before | predicted_after | "
+        "residual_before | residual_after | delta_2theta | delta_phi | "
+        "derivative_2theta | derivative_phi"
+    )
+    theta_sensitive = set()
+    phi_sensitive = set()
+    theta_tol = 1.0e-6
+    phi_tol = 1.0e-6
+    for name in var_names:
+        if name not in params:
+            continue
+        epsilon = _diag_micro_step_epsilon(str(name), float(params[name]))
+        for sign in (1.0, -1.0):
+            trial_params = dict(params)
+            trial_params[str(name)] = float(params[name]) + sign * epsilon
+            trial = _diag_run_controlled_minus_1_0_10_fit(
+                context,
+                dataset,
+                seed_multistart_enabled=False,
+                objective_trace_enabled=True,
+                objective_dry_run_only=True,
+                params_overrides=trial_params,
+            )
+            trial_rows = _diag_qr_fit_rows_by_key(_diag_objective_trace(trial["result"])[0])
+            for _group_key, hkl in _QR_FIT_GROUP_SPECS:
+                for branch in (0, 1):
+                    key = (hkl, branch)
+                    before_row = baseline_rows.get(key, {})
+                    after_row = trial_rows.get(key, {})
+                    pred_before = _diag_row_pair(before_row, "predicted_caked_deg")
+                    pred_after = _diag_row_pair(after_row, "predicted_caked_deg")
+                    res_before = _diag_row_pair(before_row, "residual_caked_deg")
+                    res_after = _diag_row_pair(after_row, "residual_caked_deg")
+                    pred_delta = _diag_caked_delta(pred_after, pred_before)
+                    res_delta = _diag_caked_delta(res_after, res_before)
+                    deriv_theta = float(res_delta[0] / (sign * epsilon))
+                    deriv_phi = float(res_delta[1] / (sign * epsilon))
+                    if abs(pred_delta[0]) > theta_tol or abs(res_delta[0]) > theta_tol:
+                        theta_sensitive.add(str(name))
+                    if abs(pred_delta[1]) > phi_tol or abs(res_delta[1]) > phi_tol:
+                        phi_sensitive.add(str(name))
+                    print(
+                        f"{name} | {'+' if sign > 0 else '-'} | {epsilon:.9g} | "
+                        f"{_diag_group_label(hkl)} | {branch} | "
+                        f"{_diag_fmt_pair(pred_before)} | {_diag_fmt_pair(pred_after)} | "
+                        f"{_diag_fmt_pair(res_before)} | {_diag_fmt_pair(res_after)} | "
+                        f"{pred_delta[0]:.9f} | {pred_delta[1]:.9f} | "
+                        f"{deriv_theta:.9f} | {deriv_phi:.9f}"
+                    )
+    theta_sensitive = sorted(theta_sensitive)
+    phi_sensitive = sorted(phi_sensitive)
+    print(f"parameters_affecting_2theta={theta_sensitive}")
+    print(f"parameters_affecting_phi={phi_sensitive}")
+    print(f"phi_residual_not_fit_sensitive={'yes' if not phi_sensitive else 'no'}")
+    assert theta_sensitive, "qr_theta_not_fit_sensitive"
+
+
+def test_qr_fit_active_parameter_coverage(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_full_fit_after_resolver_bundle(context, dataset)
+    result = bundle["fit_run"]["result"]
+    debug = getattr(result, "geometry_fit_debug_summary", {}) or {}
+    parameter_entries = {
+        str(entry.get("name")): dict(entry)
+        for entry in debug.get("parameter_entries", []) or []
+        if isinstance(entry, Mapping)
+    }
+    active_names = [str(name) for name in bundle["fit_run"]["var_names"]]
+    candidate_names = _diag_all_geometry_candidate_params()
+    fixed_names = [name for name in candidate_names if name not in active_names]
+    print("qr_fit_active_parameter_coverage")
+    print(f"active_parameter_names={active_names}")
+    print(f"fixed_parameter_names={fixed_names}")
+    print(
+        "parameter | state | lower_bound | upper_bound | x_scale | units | "
+        "affects_detector_radial | affects_detector_azimuth_phi | "
+        "affects_caked_2theta | affects_caked_phi | bounded_status"
+    )
+    phi_candidates_disabled = []
+    phi_candidates_bounded_or_missing = []
+    for name in candidate_names:
+        entry = parameter_entries.get(name, {})
+        active = name in active_names
+        lo = float(entry.get("lower_bound", np.nan))
+        hi = float(entry.get("upper_bound", np.nan))
+        scale = float(entry.get("scale", np.nan))
+        effects = _diag_param_expected_effects(name)
+        bounded_status = (
+            "bounded"
+            if active and np.isfinite(lo) and np.isfinite(hi)
+            else "unbounded"
+            if active
+            else "fixed_or_missing"
+        )
+        phi_expected = effects["caked_phi"]
+        if phi_expected and not active:
+            phi_candidates_disabled.append(name)
+        if phi_expected and active and bounded_status != "bounded":
+            phi_candidates_bounded_or_missing.append(name)
+        print(
+            f"{name} | {'active' if active else 'fixed'} | "
+            f"{lo:.9g} | {hi:.9g} | {scale:.9g} | {_diag_param_unit(name)} | "
+            f"{_diag_effect_text(effects['detector_radial'])} | "
+            f"{_diag_effect_text(effects['detector_azimuth_phi'])} | "
+            f"{_diag_effect_text(effects['caked_2theta'])} | "
+            f"{_diag_effect_text(effects['caked_phi'])} | {bounded_status}"
+        )
+    print(f"phi_controlling_parameters_disabled={phi_candidates_disabled}")
+    print(f"phi_controlling_parameters_unbounded_or_missing={phi_candidates_bounded_or_missing}")
+    assert active_names
+
+
+def test_qr_fit_phi_objective_weight_present(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    baseline = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        objective_dry_run_only=True,
+    )
+    record = _diag_objective_trace(baseline["result"])[0]
+    components = _diag_qr_fit_components(record)
+    print("qr_fit_phi_objective_weight_present")
+    print(
+        "group | branch | component | residual_unweighted | weight | residual_weighted"
+    )
+    phi_components = []
+    theta_components = []
+    zero_weight_phi = []
+    for component in components:
+        hkl = _diag_hkl(component)
+        branch = int(component.get("source_branch_index"))
+        name = str(component.get("component"))
+        value = float(component.get("unweighted_value", np.nan))
+        weight = float(component.get("weight", np.nan))
+        weighted = float(component.get("weighted_value", np.nan))
+        print(
+            f"{_diag_group_label(hkl)} | {branch} | {name} | "
+            f"{value:.9f} | {weight:.9f} | {weighted:.9f}"
+        )
+        if name == "wrapped_delta_phi_deg":
+            phi_components.append(component)
+            if not np.isfinite(weight) or weight <= 0.0:
+                zero_weight_phi.append(component)
+        elif name == "delta_two_theta_deg":
+            theta_components.append(component)
+    phi_present = bool(len(phi_components) == 6)
+    theta_present = bool(len(theta_components) == 6)
+    print(f"phi_residual_present={'yes' if phi_present else 'no'}")
+    print(f"theta_residual_present={'yes' if theta_present else 'no'}")
+    print(f"phi_zero_or_low_weight={'yes' if zero_weight_phi else 'no'}")
+    if phi_present and not zero_weight_phi:
+        print("phi_objective_classification=present_weighted")
+    elif not phi_present:
+        print("phi_objective_classification=phi_residual_absent_from_objective")
+    else:
+        print("phi_objective_classification=phi_residual_zero_or_low_weight")
+    assert theta_present, "qr_theta_residual_absent_from_objective"
+    assert phi_present, "qr_phi_residual_absent_from_objective"
+    assert not zero_weight_phi, "qr_phi_residual_zero_or_low_weight"
+
+
+def test_qr_fit_longer_or_relaxed_qr_only_attempt(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    baseline = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        objective_dry_run_only=True,
+        qr_only_dataset_filter=_diag_filter_qr_fit_groups_dataset,
+    )
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        optimizer_overrides={"max_nfev": 80},
+        qr_only_dataset_filter=_diag_filter_qr_fit_groups_dataset,
+    )
+    after = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        objective_dry_run_only=True,
+        params_overrides=fit_run["after_params"],
+        qr_only_dataset_filter=_diag_filter_qr_fit_groups_dataset,
+    )
+    before_record = _diag_objective_trace(baseline["result"])[0]
+    after_record = _diag_objective_trace(after["result"])[0]
+    before_axis = _diag_qr_fit_axis_norms(before_record)
+    after_axis = _diag_qr_fit_axis_norms(after_record)
+    norm_before = _diag_qr_fit_norm(before_record)
+    norm_after = _diag_qr_fit_norm(after_record)
+    theta_improved = bool(after_axis["theta_norm"] < before_axis["theta_norm"] - 1.0e-9)
+    phi_constant = bool(abs(after_axis["phi_norm"] - before_axis["phi_norm"]) <= 1.0e-6)
+    print("qr_fit_longer_or_relaxed_qr_only_attempt")
+    print(f"norm_before={norm_before:.9f}")
+    print(f"norm_after={norm_after:.9f}")
+    print(f"theta_norm_before={before_axis['theta_norm']:.9f}")
+    print(f"theta_norm_after={after_axis['theta_norm']:.9f}")
+    print(f"phi_norm_before={before_axis['phi_norm']:.9f}")
+    print(f"phi_norm_after={after_axis['phi_norm']:.9f}")
+    print(f"nfev={int(getattr(fit_run['result'], 'nfev', 0) or 0)}")
+    print(f"success={bool(getattr(fit_run['result'], 'success', False))}")
+    print(f"accepted_params={fit_run['after_params']}")
+    print(f"theta_improves={'yes' if theta_improved else 'no'}")
+    print(f"phi_stays_constant={'yes' if phi_constant else 'no'}")
+    if theta_improved and phi_constant:
+        print("qr_phi_not_movable_by_active_params=yes")
+    else:
+        print("qr_phi_not_movable_by_active_params=no")
+    assert np.isfinite(norm_before)
+    assert np.isfinite(norm_after)
+    assert int(getattr(fit_run["result"], "nfev", 0) or 0) > 0
+
+
+def test_live_fit_cmd_summary(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_full_fit_after_resolver_bundle(context, dataset)
+    statuses = _diag_print_multi_group_residual_table(
+        "CMD fit summary",
+        bundle["before"],
+        bundle["after"],
+    )
+    assert all(status == "stable" for status in statuses.values())
 
 
 def _diag_target_prediction_rows_by_branch(record):

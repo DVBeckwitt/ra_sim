@@ -158,35 +158,27 @@ Status by work type:
   across detector visual/native points, caked `2theta,phi`, manual/background
   observed values, visual simulation points, fit observed values, and fit
   predictions.
-- Bug/error fixed: the geometric optimizer objective now includes the selected
-  Qr/Qz caked residuals. The previous first failure was Class B: request rows
-  were fixed, but the objective resolver rejected provider-local rows with
-  `prediction_branch_source_switched` and `source_row_provenance_not_found`.
-- Fix target: `ra_sim/fitting/optimization.py::_resolve_fixed_source_matches`
-  and `_resolve_geometry_fit_correspondence`.
-- Feature added: an objective dry-run mode evaluates the production objective
-  without calling `least_squares`, so rung 1 can prove residual-vector content,
+- Bug/error fixed: handoff/audit, optimizer dry-run, and solver callback now use
+  one authoritative fixed-manual Qr prediction resolver,
+  `_resolve_fixed_manual_qr_fit_prediction`. Branch 1 previously disagreed at
+  x0 because the handoff path used `(40.427885, -36.750000)` while the optimizer
+  path used `(41.312142, -113.750000)`; both paths now resolve the same locked
+  source and caked position.
+- Bug/error fixed: the geometric optimizer objective includes the selected
+  Qr/Qz caked residuals. Dry-run evaluates the production objective without
+  calling `least_squares`, so rung 1 proves residual-vector content,
   fixed-source counts, fallback counts, and Qr weights before any solve rung.
-- Feature added: focused fitter diagnostics print the optimizer residual vector,
-  branch identity trace, Qr-only before/after norm, and full-fit objective
-  decomposition.
-- Review hardening fixed before commit: saved provider-local detector points
-  are tried only after the current hit-table resolver runs. They are accepted
-  only with non-ambiguous stale-row proof or canonical saved-source identity
-  proof; raw native pixels without a canonical display/native proof require the
-  stale-row proof. Duplicate-HKL local rows without branch proof stay rejected
-  even when saved detector pixels are present.
-- Offset-cache bug fixed: saved-simulation fit-space alignment offsets are
-  primed from explicit baseline params before seed scoring or least-squares
-  solve, and diagnostics label the offset source as `baseline_params` instead
-  of depending on whichever evaluation happened to run first.
-- Blast-zone follow-up fixed: provider-local stale-row recovery now remains
-  fail-closed for duplicate-HKL ambiguous rows and rows without provider-local
-  provenance, saved detector-point shortcuts cannot bypass the current
-  hit-table row resolver, non-fixed branch lookups prefer branch identity over
-  stale row indices, measured and simulated caked-bundle signatures are
-  reported separately, and geometry-fit cache signature serialization is
-  guarded against recursive objects.
+- Guard added: optimizer startup compares handoff prediction and solver
+  callback prediction at x0 and blocks with
+  `optimizer_start_blocked_reason=prediction_resolver_mismatch` if they differ.
+- Feature added: focused fitter diagnostics print resolver details, candidate
+  source rows, solver inputs, trial history, Qr-only before/after norm,
+  full-fit objective decomposition, multi-group residuals, and theta/phi
+  sensitivity.
+- Remaining limitation: Qr phi residuals are present in the objective and
+  weighted, but active parameters do not meaningfully move phi. Classification:
+  C, active params cannot move phi enough; this is parameterization/coverage,
+  not resolver mismatch, objective omission, or zero phi weight.
 
 Validated current counters:
 
@@ -211,29 +203,47 @@ Target baseline residuals:
 
 | Branch | Observed caked deg | Predicted caked deg | Residual caked deg | Norm |
 | ---: | --- | --- | --- | ---: |
-| 0 | `(40.142509, 35.566836)` | `(33.274985, 131.750000)` | `(-6.867524, 96.183164)` | `96.428024169` |
-| 1 | `(40.853020, -37.565855)` | `(37.122146, 40.589187)` | `(-3.730874, 78.155042)` | `78.244041237` |
+| 0 | `(40.142509, 35.566836)` | `(40.230385, 36.649182)` | `(0.087876, 1.082346)` | `1.085907480` |
+| 1 | `(40.853020, -37.565855)` | `(40.427885, -36.750000)` | `(-0.425135, 0.815855)` | `0.919977798` |
 
 Solve evidence:
 
-- Qr-only fit ran `nfev=70` and reduced target Qr norm
-  `124.179281018 -> 98.275666096`.
-- Full fit kept the Qr block present and improved total objective norm
-  `257.403969114 -> 256.495280344`; Qr block norm moved
-  `124.179281018 -> 124.145313592`.
-- Branch identity stayed fixed during optimizer evaluations:
-  target rows remained on `q_group_key=("q_group","primary",1,10)`,
-  `hkl=(-1,0,10)`, tables `160/167`, branches `0/1`, with no nearest-row
-  rematch to unrelated cache rows.
-- Regression status after review fixes: `tests/test_geometry_fitting.py`
-  passes in full (`175 passed`), the focused Qr/Qz fitter/rung objective tests
-  in `tests/test_manual_geometry_selection_helpers.py` pass (`8 passed`), and
-  `tests/test_gui_runtime_import_safe.py -k "toggle_caked_2d"` passes
-  (`4 passed`).
+- Qr-only target fit starts at the correct residual scale and accepts a reducing
+  step: `1.423219664 -> 1.419117984`, `success=True`.
+- Full fit keeps the Qr block present and improves both total and Qr objective:
+  full objective `6.847163064 -> 6.731263668`, Qr block
+  `2.819315157 -> 2.644004804`, non-Qr point block
+  `6.183053304 -> 6.168734874`, line block `0.839616529 -> 0.515615371`,
+  prior block `0 -> 0`, `qr_weights=[1.0]`.
+- Branch identity stayed fixed during optimizer evaluations. Target rows remain
+  locked on `q_group_key=("q_group","primary",1,10)`, `hkl=(-1,0,10)`, tables
+  `160/167`, branches `0/1`, with no nearest-row rematch, cache row switch, or
+  visual-source mismatch.
+- Multi-group Qr audit after the resolver fix:
 
-Current conclusion: the full geometric fitter is optimizing the same target
-Qr/Qz caked residuals reported by the CMD/rung audit. Detector-native pixel
-residuals remain diagnostic only for this objective.
+| Group | Branch | Residual before | Residual after | Status |
+| --- | ---: | --- | --- | --- |
+| `(-1,0,5)` | 0 | `(0.013923, 0.670630)` | `(0.380536, 0.670630)` | stable source |
+| `(-1,0,5)` | 1 | `(-0.569134, 0.823943)` | `(-0.207086, 0.823943)` | stable source |
+| `(-1,0,10)` | 0 | `(0.087876, 1.082346)` | `(0.507454, 1.075339)` | stable source |
+| `(-1,0,10)` | 1 | `(-0.425135, 0.815855)` | `(-0.002868, 0.815855)` | stable source |
+| `(-1,0,16)` | 0 | `(-0.502506, 1.018640)` | `(-0.136533, 1.018640)` | stable source |
+| `(-1,0,16)` | 1 | `(-0.993222, 1.481088)` | `(-0.587420, 1.481088)` | stable source |
+
+- Theta/phi sensitivity diagnosis: only `corto_detector` affects phi above the
+  tiny tolerance, and the movement is weak/sparse. `center_x` and `center_y`
+  are fixed in this 9-parameter GUI/runtime contract, so the active set mostly
+  improves Qr by 2theta.
+- Latest focused verification: `py_compile` passed for optimizer/GUI/runtime
+  modules; focused Qr phi diagnostics passed (`4 passed, 381 deselected`);
+  `tests/test_gui_runtime_import_safe.py -k "toggle_caked_2d"` passed
+  (`4 passed, 308 deselected`).
+
+Current conclusion: the full geometric fitter now optimizes the same target
+Qr/Qz caked residuals reported by the CMD/rung audit, and Qr residuals improve
+rather than being sacrificed to other terms. Remaining Qr weakness is phi
+parameter sensitivity, not point picking, transforms, source resolution, or
+objective assembly.
 
 ## Validated Ladder State
 

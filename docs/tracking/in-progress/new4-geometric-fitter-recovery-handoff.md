@@ -22,10 +22,21 @@ Last updated: 2026-04-26
   and 1 across detector visual/native, caked `2theta,phi`,
   manual/background observed, visual simulation, fit observed, and fit
   prediction values.
-- Target `(-1,0,10)` optimizer objective rung is green: the Qr residual block
-  is present in caked degrees, residuals are `predicted - observed`, Qr weights
-  are `[1.0]`, dry-run evaluates the objective without `least_squares`, and
-  branch identity stays fixed during solve evaluation.
+- Target `(-1,0,10)` optimizer objective rung is green: handoff/audit,
+  optimizer dry-run, and solver callback use the same locked Qr prediction
+  resolver at x0; the Qr residual block is present in caked degrees, residuals
+  are `predicted - observed`, Qr weights are `[1.0]`, dry-run evaluates the
+  objective without `least_squares`, and branch identity stays fixed during
+  solve evaluation.
+- Qr-only fit starts at the correct residual scale and accepts a small reducing
+  step: `1.423219664 -> 1.419117984`, `success=True`.
+- Full geometric fit keeps the Qr block live and improves the full objective:
+  total `6.847163064 -> 6.731263668`, Qr block
+  `2.819315157 -> 2.644004804`, `branch_identity_stable=yes`, and
+  `qr_residual_sacrificed_to_other_terms=no`.
+- Remaining Qr limitation is phi parameter sensitivity. Phi residuals are
+  present and weighted, but active params cannot meaningfully move phi; current
+  classification is C, active params cannot move phi enough.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.
@@ -84,40 +95,42 @@ Last updated: 2026-04-26
   not mix it with the exact-caked path.
 - Real full headless geometric-fit smoke is now run for
   `artifacts/geometry_fit_gui_states/new4.json`, background `0`. The optimizer
-  request stayed exact-caked and pair/source identity stayed clean, but the run
-  still rejected with `accepted == false`, `detector_rms_px ==
-  914.4948551954421`, and `unweighted_peak_max_px == 1698.2499036720524`.
-  First divergence versus the passing ladder comparator is a seed/start-state
-  split: real headless fit uses the 9-variable GUI/runtime contract
-  (`zb,zs,theta_initial,psi_z,chi,cor_angle,gamma,Gamma,corto_detector`) with
-  13 identity-mode seeds and selected `axis:zb-1`, while the passing ladder
-  comparator uses the 6-variable New4 candidate bundle
-  (`corto_detector,theta_initial,cor_angle,chi,zs,zb`) and a different seed
-  family. `full_beam_polish` is disabled in the real headless run, so
-  candidate-selection is not the first divergence.
+  request stays exact-caked and pair/source identity stays clean. Earlier
+  seed/start-state split evidence remains useful for baseline/full-beam
+  comparison, but the current Qr diagnostic path proves the full objective and
+  Qr block both improve with locked source identity.
 - Baseline, GUI fit button, and unrestricted feature-combination runs should
   still be treated as unvalidated.
 
 This handoff is the bounded-through-Rung-7 feature-gate recovery state for
-`new4`. Do not use it as approval for full fitter, GUI, baseline, or unrestricted
-feature-combination solves.
+`new4` plus the current Qr resolver/full-objective diagnostic state. Do not use
+it as approval for GUI, baseline, or unrestricted feature-combination solves.
 
 Status by work type:
 
-- Bug/error: target `(-1,0,10)` Qr/Qz objective absence is fixed. Resolver
-  failure class was B: fixed provider-local request rows reached the optimizer,
-  but the objective resolver rejected them as source-row provenance loss. The
-  resolver now preserves provider-local proof, fails closed for ambiguous
-  duplicate-HKL rows, and only uses saved detector-native simulation points
-  after stale-row proof or canonical saved-source identity proof. Raw native
-  saved pixels without canonical display/native proof still require stale-row
-  proof.
+- Bug/error: target `(-1,0,10)` Qr/Qz objective absence and prediction-resolver
+  split are fixed. Handoff/audit, optimizer dry-run, and solver callback call
+  the shared fixed-manual Qr fit resolver and agree at x0. If they diverge,
+  optimizer start is blocked with
+  `optimizer_start_blocked_reason=prediction_resolver_mismatch`.
+- Bug/error: fixed provider-local request rows now stay locked through the
+  optimizer. The resolver preserves provider-local proof, fails closed for
+  ambiguous duplicate-HKL rows, and only uses saved detector-native simulation
+  points after stale-row proof or canonical saved-source identity proof. Raw
+  native saved pixels without canonical display/native proof still require
+  stale-row proof.
 - Review hardening: saved-simulation fit-space offset caching is baseline
   primed before seed scoring or least-squares solve, so seed/multistart order
   cannot decide the Qr/Qz residual alignment offset.
 - Feature: objective dry-run and residual-vector audit tests now prove Qr
   residual-vector membership before solve. Full-fit decomposition reports total,
-  Qr, non-Qr, line, and prior block norms before/after.
+  Qr, non-Qr, line, and prior block norms before/after; current evidence is
+  total `6.847163064 -> 6.731263668` and Qr
+  `2.819315157 -> 2.644004804`.
+- Feature/status: multi-group Qr diagnostics for `(-1,0,5)`, `(-1,0,10)`, and
+  `(-1,0,16)` keep branch/source identity stable. Qr residual improvements are
+  mostly in 2theta; phi residuals remain nearly unchanged because active params
+  have little phi leverage.
 - Feature: controlled Rung 7 passed `dynamic_reanchor`, `discrete_modes`,
   `seed_multistart`, `full_beam_polish`, and `identifiability_features` in the
   fixed comparator `codex_restore_rung7_features_fix_20260423`; the exact-caked
@@ -125,11 +138,10 @@ Status by work type:
 - Bug/error: exact-caked preflight ordering/harness blockers are closed; current
   Rung 2 expected baseline is `11/2` under the unchanged threshold rule and
   does not require solver, residual, runtime, or caked-routing changes.
-- Full headless fit bug/error: request construction is still clean, but the
-  real `fit-geometry` path fails before the ladder's passing
-  candidate-selection/full-beam stage. Current classification is
-  `seed/start state issue`; optimizer convergence, acceptance thresholds, and
-  detector-space reporting are not the first divergence.
+- Full fit bug/error/status: request construction is clean, the Qr block is not
+  silently dropped, and the full objective improves. Remaining Qr issue is
+  active-parameter phi sensitivity, not optimizer convergence, acceptance
+  thresholds, source identity, or detector-space reporting.
 - Timing feature: current-run Rung 0-5 timing JSON and stdout table are
   available for opt-in ladder runs.
 - Timing bug/error: review follow-up is closed. Timing collection excludes
@@ -154,8 +166,8 @@ Status by work type:
   focused `theta10` child timeout after `defaults_30` passed.
 - Not validated: baseline, GUI fit, and unrestricted feature combinations
   remain unclaimed. Full-beam validation is green only as bounded ladder
-  evidence, and the real full headless fit is now smoke-tested but still
-  failing with the seed/start-state split above.
+  evidence; current full-fit claim is limited to locked-source Qr contribution
+  and objective decomposition diagnostics.
 
 ## GUI timing harness checkpoint
 

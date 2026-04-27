@@ -5020,6 +5020,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "display_to_native_saved_sim_detector_display_px_source",
             "display_to_native_saved_sim_detector_display_px_proof_source",
             "saved_sim_detector_native_rejected_reason",
+            "fit_prediction_resolver_function",
+            "prediction_source",
         ):
             if key in resolution_payload:
                 fields[key] = _dynamic_reanchor_jsonable(resolution_payload.get(key))
@@ -13084,6 +13086,9 @@ def _provider_local_saved_sim_detector_point(
     requested_branch = int(requested_branch_values[0])
 
     assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
+    if assignment == "provider_local_duplicate_hkl_unproven":
+        payload["prediction_source_status"] = "unavailable_ambiguous"
+        return None, payload, "provider_local_duplicate_hkl_unproven"
     stale_row_proof_available = bool(
         entry.get("provider_local_stale_row_proof_available", False)
     )
@@ -13093,9 +13098,6 @@ def _provider_local_saved_sim_detector_point(
         requested_branch=requested_branch,
     )
     payload["provider_local_saved_sim_identity_proven"] = bool(saved_identity_proven)
-    if assignment == "provider_local_duplicate_hkl_unproven":
-        payload["prediction_source_status"] = "unavailable_ambiguous"
-        return None, payload, "provider_local_duplicate_hkl_unproven"
     if not _provider_local_subset_provenance(entry) and not saved_identity_proven:
         payload["prediction_source_status"] = "unavailable"
         return None, payload, "provider_local_subset_provenance_missing"
@@ -13298,6 +13300,23 @@ def _provider_local_saved_sim_detector_point(
     return None, payload, "provider_local_saved_sim_detector_missing"
 
 
+def _resolve_fixed_manual_qr_fit_prediction(
+    pair: Mapping[str, object],
+) -> Tuple[Optional[Tuple[float, float]], Dict[str, object], str]:
+    """Resolve the fit prediction point for a locked manual Qr pair."""
+
+    point, payload, reason = _provider_local_saved_sim_detector_point(pair)
+    payload = dict(payload)
+    payload["fit_prediction_resolver_function"] = "_resolve_fixed_manual_qr_fit_prediction"
+    if point is None:
+        return None, payload, str(reason)
+    payload.setdefault("resolution_kind", "fixed_source")
+    payload.setdefault("resolution_reason", str(reason))
+    payload["prediction_source"] = "dynamic_current_simulation:locked_manual_qr_fit_prediction"
+    payload["source_row_preferred_over_branch_representative"] = True
+    return point, payload, str(payload.get("resolution_reason", reason))
+
+
 def _provider_local_saved_sim_identity_proven(
     entry: Mapping[str, object],
     *,
@@ -13346,93 +13365,6 @@ def _provider_local_saved_sim_identity_proven(
             continue
         return True
     return False
-
-
-def _provider_local_saved_sim_fallback_allowed_after_row_resolver(
-    entry: Mapping[str, object],
-    stale_payload: Mapping[str, object],
-) -> Tuple[bool, str]:
-    def _point_available(key: str) -> bool:
-        raw_point = entry.get(key)
-        if not isinstance(raw_point, (tuple, list)) or len(raw_point) < 2:
-            return False
-        try:
-            x_val = float(raw_point[0])
-            y_val = float(raw_point[1])
-        except Exception:
-            return False
-        return bool(np.isfinite(x_val) and np.isfinite(y_val))
-
-    def _source_proves_display_to_native(source: object) -> bool:
-        text = str(source or "").strip().lower()
-        return bool(
-            text
-            and (
-                "display_to_native" in text
-                or "display->native" in text
-                or "display native roundtrip" in text
-            )
-        )
-
-    saved_display_to_native_available = bool(
-        _point_available("sim_visual_detector_display_px")
-        or _point_available("fit_prediction_detector_display_px")
-        or _point_available("sim_display")
-    ) and any(
-        _point_available(point_key) and _source_proves_display_to_native(entry.get(source_key))
-        for point_key, source_key in (
-            (
-                "sim_visual_detector_canonical_native_px",
-                "sim_visual_detector_canonical_native_source",
-            ),
-            ("fit_prediction_detector_native_px", "fit_prediction_detector_native_px_source"),
-            ("sim_native", "sim_native_source"),
-        )
-    )
-    assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
-    if assignment == "provider_local_duplicate_hkl_unproven":
-        return False, "provider_local_duplicate_hkl_unproven"
-    requested_hkl = _normalized_hkl_key(entry.get("hkl"))
-    if requested_hkl is None:
-        return False, "provider_local_hkl_missing"
-    requested_branch_values = [
-        int(value)
-        for value in (
-            _nonnegative_index(entry.get("source_branch_index")),
-            _nonnegative_index(entry.get("source_peak_index")),
-            _nonnegative_index(entry.get("resolved_peak_index")),
-        )
-        if value in {0, 1}
-    ]
-    if not requested_branch_values:
-        return False, "missing_provider_local_branch_identity"
-    if len(set(requested_branch_values)) > 1:
-        return False, "provider_local_branch_identity_conflict"
-    requested_branch = int(requested_branch_values[0])
-    saved_identity_proven = _provider_local_saved_sim_identity_proven(
-        entry,
-        requested_hkl=requested_hkl,
-        requested_branch=requested_branch,
-    )
-    if stale_payload.get("prediction_source_status") == "unavailable_ambiguous":
-        if (
-            assignment == "provider_local_duplicate_hkl_branch"
-            and bool(entry.get("provider_local_subset_branch_provenance", False))
-            and saved_display_to_native_available
-            and saved_identity_proven
-        ):
-            return (
-                True,
-                "provider_local_saved_sim_display_to_native_after_branch_provenance",
-            )
-        return False, str(
-            stale_payload.get("resolution_reason")
-            or stale_payload.get("branch_resolution_reason")
-            or "provider_local_ambiguous"
-        )
-    if saved_identity_proven:
-        return True, "provider_local_saved_sim_identity_proven_after_row_resolver"
-    return False, "provider_local_saved_sim_requires_proven_row"
 
 
 def _provider_local_saved_sim_caked_reference(
@@ -13615,7 +13547,7 @@ def _resolve_fixed_source_matches(
                 entry,
                 row_records,
             )
-            if exact_row is None:
+            if exact_row is None and not resolved_from_peak:
                 (
                     stale_row,
                     stale_payload,
@@ -13683,72 +13615,28 @@ def _resolve_fixed_source_matches(
                             "source_row_preferred_over_branch_representative": True,
                         }
                 else:
-                    (
-                        saved_fallback_allowed,
-                        saved_fallback_reject_reason,
-                    ) = _provider_local_saved_sim_fallback_allowed_after_row_resolver(
-                        entry,
-                        stale_payload,
+                    resolution_reason = (
+                        str(stale_reason)
+                        if stale_payload.get("prediction_source_status")
+                        == "unavailable_ambiguous"
+                        else "prediction_branch_source_switched"
                     )
-                    if saved_fallback_allowed:
-                        saved_entry = dict(entry)
-                        saved_entry[
-                            "provider_local_saved_sim_detector_fallback_after_row_resolver"
-                        ] = True
-                        saved_entry[
-                            "provider_local_saved_sim_detector_fallback_reason"
-                        ] = str(saved_fallback_reject_reason)
-                        saved_point, saved_payload, saved_reason = (
-                            _provider_local_saved_sim_detector_point(saved_entry)
-                        )
-                        if saved_point is not None:
-                            sim_col = float(saved_point[0])
-                            sim_row = float(saved_point[1])
-                            requested_hkl = _normalized_hkl_key(entry.get("hkl"))
-                            sim_hkl = (
-                                tuple(int(v) for v in requested_hkl)
-                                if requested_hkl is not None
-                                else None
-                            )
-                            resolved_from_peak = True
-                            resolved_diag_reason = str(
-                                saved_payload.get("resolution_reason", saved_reason)
-                            )
-                            resolved_diag_extra = {
-                                **dict(exact_payload),
-                                **dict(stale_payload),
-                                **dict(saved_payload),
-                                "resolution_subreason": str(exact_reason),
-                                "provider_local_stale_row_proof_reason": str(stale_reason),
-                                "provider_local_saved_sim_detector_fallback_reason": str(
-                                    saved_fallback_reject_reason
-                                ),
-                            }
-                    if resolved_from_peak:
-                        pass
-                    else:
-                        resolution_reason = (
-                            str(stale_reason)
-                            if stale_payload.get("prediction_source_status")
-                            == "unavailable_ambiguous"
-                            else "prediction_branch_source_switched"
-                        )
-                        _store_resolution_diag(
-                            entry,
-                            {
-                                **base_diag,
-                                **dict(exact_payload),
-                                **dict(stale_payload),
-                                "resolution_kind": "fixed_source",
-                                "resolution_reason": resolution_reason,
-                                "resolution_subreason": str(stale_reason),
-                                "provider_local_saved_sim_detector_fallback_rejected_reason": str(
-                                    saved_fallback_reject_reason
-                                ),
-                                "source_row_count": int(len(row_records)),
-                            },
-                        )
-                        continue
+                    _store_resolution_diag(
+                        entry,
+                        {
+                            **base_diag,
+                            **dict(exact_payload),
+                            **dict(stale_payload),
+                            "resolution_kind": "fixed_source",
+                            "resolution_reason": resolution_reason,
+                            "resolution_subreason": str(stale_reason),
+                            "provider_local_saved_sim_detector_fallback_rejected_reason": (
+                                str(stale_reason)
+                            ),
+                            "source_row_count": int(len(row_records)),
+                        },
+                    )
+                    continue
             if exact_row is None and not resolved_from_peak:
                 continue
             if not resolved_from_peak:
@@ -14758,56 +14646,6 @@ def _resolve_geometry_fit_correspondence(
                     sim_hkl=_branch_sim_hkl(stale_row),
                     extra=recovered_extra,
                 )
-            (
-                saved_fallback_allowed,
-                saved_fallback_reject_reason,
-            ) = _provider_local_saved_sim_fallback_allowed_after_row_resolver(
-                correspondence,
-                stale_payload,
-            )
-            if saved_fallback_allowed:
-                saved_correspondence = dict(correspondence)
-                saved_correspondence[
-                    "provider_local_saved_sim_detector_fallback_after_row_resolver"
-                ] = True
-                saved_correspondence["provider_local_saved_sim_detector_fallback_reason"] = (
-                    str(saved_fallback_reject_reason)
-                )
-                saved_point, saved_payload, saved_reason = (
-                    _provider_local_saved_sim_detector_point(saved_correspondence)
-                )
-                if saved_point is not None:
-                    saved_extra = dict(branch_trace)
-                    saved_extra.update(dict(exact_source_row_payload))
-                    saved_extra.update(dict(stale_payload))
-                    saved_extra.update(dict(saved_payload))
-                    saved_extra.update(
-                        {
-                            "branch_resolution_reason": str(saved_reason),
-                            "resolution_subreason": str(stale_reason),
-                            "provider_local_stale_row_proof_reason": str(stale_reason),
-                            "provider_local_saved_sim_detector_fallback_reason": str(
-                                saved_fallback_reject_reason
-                            ),
-                            "projection_available": True,
-                            "projection_finite": True,
-                            "off_detector": False,
-                            "trusted_full_reflection_remapped": bool(
-                                trusted_full_reflection_remapped
-                            ),
-                            "source_row_preferred_over_branch_representative": True,
-                        }
-                    )
-                    return (
-                        float(saved_point[0]),
-                        float(saved_point[1]),
-                    ), _payload(
-                        str(saved_payload.get("resolution_reason", saved_reason)),
-                        table_idx=table_idx,
-                        peak_idx=saved_payload.get("resolved_peak_index", peak_idx),
-                        sim_hkl=correspondence.get("hkl"),
-                        extra=saved_extra,
-                    )
             switched_extra = dict(branch_trace)
             switched_extra.update(
                 {
@@ -14816,7 +14654,7 @@ def _resolve_geometry_fit_correspondence(
                     "source_row_rejection_reason": str(stale_reason),
                     "source_row_resolution_required": True,
                     "provider_local_saved_sim_detector_fallback_rejected_reason": str(
-                        saved_fallback_reject_reason
+                        stale_reason
                     ),
                     "projection_available": False,
                     "projection_finite": False,
@@ -18332,6 +18170,10 @@ def fit_geometry_parameters(
                 "resolution_kind": str(raw_entry.get("resolution_kind", "")),
                 "resolution_reason": str(raw_entry.get("resolution_reason", "")),
                 "resolution_subreason": str(raw_entry.get("resolution_subreason", "")),
+                "fit_prediction_resolver_function": str(
+                    raw_entry.get("fit_prediction_resolver_function", "")
+                    or raw_entry.get("resolver_function", "")
+                ),
                 "source_row_resolution_required": bool(
                     raw_entry.get("source_row_resolution_required", False)
                 ),
@@ -18343,6 +18185,14 @@ def fit_geometry_parameters(
                 "coordinate_space": "caked_deg",
                 "units": "deg",
                 "weight": float(weight),
+                "predicted_detector_display_px": [
+                    float(raw_entry.get("simulated_x", np.nan)),
+                    float(raw_entry.get("simulated_y", np.nan)),
+                ],
+                "predicted_detector_native_px": [
+                    float(raw_entry.get("simulated_native_col", np.nan)),
+                    float(raw_entry.get("simulated_native_row", np.nan)),
+                ],
                 "observed_caked_deg": [
                     float(raw_entry.get("measured_two_theta_deg", np.nan)),
                     float(raw_entry.get("measured_phi_deg", np.nan)),
@@ -19008,6 +18858,156 @@ def fit_geometry_parameters(
         "dataset_entries": dataset_debug_entries,
     }
     geometry_fit_stage_timings: Dict[str, float] = {}
+
+    def _fit_prediction_pair(
+        entry: Mapping[str, object],
+        key: str,
+    ) -> Tuple[float, float] | None:
+        raw_value = entry.get(key)
+        if not isinstance(raw_value, (list, tuple, np.ndarray)) or len(raw_value) < 2:
+            return None
+        try:
+            point = (float(raw_value[0]), float(raw_value[1]))
+        except Exception:
+            return None
+        if not (np.isfinite(point[0]) and np.isfinite(point[1])):
+            return None
+        return point
+
+    def _manual_qr_prediction_resolver_mismatches(
+        diagnostics: Sequence[Mapping[str, object]],
+    ) -> List[Dict[str, object]]:
+        mismatches: List[Dict[str, object]] = []
+        for raw_entry in diagnostics:
+            if not isinstance(raw_entry, Mapping):
+                continue
+            if not _fixed_manual_pair_requires_exact_source_row(raw_entry):
+                continue
+            expected_caked = _fit_prediction_pair(raw_entry, "fit_prediction_caked_deg")
+            actual_caked = (
+                float(raw_entry.get("simulated_two_theta_deg", np.nan)),
+                float(raw_entry.get("simulated_phi_deg", np.nan)),
+            )
+            expected_native = _fit_prediction_pair(
+                raw_entry,
+                "fit_prediction_detector_native_px",
+            )
+            actual_native = (
+                float(raw_entry.get("simulated_native_col", np.nan)),
+                float(raw_entry.get("simulated_native_row", np.nan)),
+            )
+            caked_mismatch = False
+            native_mismatch = False
+            if expected_caked is not None and np.all(np.isfinite(actual_caked)):
+                caked_mismatch = bool(
+                    abs(float(actual_caked[0] - expected_caked[0])) > 1.0e-6
+                    or abs(
+                        float(
+                            _angular_difference_deg(
+                                float(actual_caked[1]),
+                                float(expected_caked[1]),
+                            )
+                        )
+                    )
+                    > 1.0e-6
+                )
+            if expected_native is not None and np.all(np.isfinite(actual_native)):
+                native_mismatch = bool(
+                    not np.allclose(actual_native, expected_native, atol=1.0e-6, rtol=0.0)
+                )
+            if not (caked_mismatch or native_mismatch):
+                continue
+            mismatches.append(
+                {
+                    "branch": _nonnegative_index(raw_entry.get("source_branch_index")),
+                    "q_group_key": raw_entry.get("q_group_key"),
+                    "hkl": raw_entry.get("hkl"),
+                    "source_table_index": raw_entry.get("source_table_index"),
+                    "source_row_index": raw_entry.get("source_row_index"),
+                    "source_branch_index": raw_entry.get("source_branch_index"),
+                    "source_peak_index": raw_entry.get("source_peak_index"),
+                    "expected_caked": expected_caked,
+                    "actual_caked": actual_caked,
+                    "expected_native": expected_native,
+                    "actual_native": actual_native,
+                    "prediction_source": raw_entry.get("prediction_source"),
+                    "resolution_reason": raw_entry.get("resolution_reason"),
+                    "fit_prediction_resolver_function": raw_entry.get(
+                        "fit_prediction_resolver_function"
+                    ),
+                }
+            )
+        return mismatches
+
+    preflight_guard_enabled = bool(
+        point_match_mode
+        and dynamic_point_geometry_fit
+        and manual_point_fit_mode
+        and _config_bool(
+            solver_cfg.get("fixed_manual_prediction_preflight_guard", True),
+            True,
+        )
+    )
+    if preflight_guard_enabled:
+        preflight_local = _apply_trial_params(np.asarray(x0_arr, dtype=float))
+        (
+            preflight_residual,
+            preflight_diagnostics,
+            preflight_summary,
+        ) = point_match_evaluator(preflight_local, collect_diagnostics=True)
+        preflight_prior_residual = _parameter_prior_residuals(x0_arr)
+        preflight_fun = np.asarray(preflight_residual, dtype=float)
+        if preflight_prior_residual.size:
+            if preflight_fun.size:
+                preflight_fun = np.concatenate(
+                    [preflight_fun, np.asarray(preflight_prior_residual, dtype=float)]
+                )
+            else:
+                preflight_fun = np.asarray(preflight_prior_residual, dtype=float)
+        _record_objective_trace(
+            source="optimizer_start_preflight",
+            x_trial=x0_arr,
+            residual_arr=preflight_fun,
+            point_match_diagnostics=preflight_diagnostics,
+            point_match_summary=preflight_summary,
+            prior_residual=preflight_prior_residual,
+        )
+        preflight_mismatches = _manual_qr_prediction_resolver_mismatches(
+            preflight_diagnostics,
+        )
+        if preflight_mismatches:
+            blocked_summary = copy.deepcopy(geometry_fit_debug_summary)
+            blocked_summary["optimizer_start_blocked_reason"] = (
+                "prediction_resolver_mismatch"
+            )
+            blocked_summary["prediction_resolver_mismatches"] = copy.deepcopy(
+                preflight_mismatches
+            )
+            blocked_result = OptimizeResult(
+                x=np.asarray(x0_arr, dtype=float).copy(),
+                fun=preflight_fun,
+                success=False,
+                status=0,
+                message="optimizer_start_blocked_reason=prediction_resolver_mismatch",
+                nfev=0,
+                active_mask=np.zeros(np.asarray(x0_arr, dtype=float).shape, dtype=int),
+                optimality=float("nan"),
+            )
+            blocked_result.optimizer_start_blocked_reason = "prediction_resolver_mismatch"
+            blocked_result.prediction_resolver_mismatches = copy.deepcopy(
+                preflight_mismatches
+            )
+            blocked_result.objective_trace = copy.deepcopy(objective_trace_records)
+            blocked_result.point_match_diagnostics = [
+                dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)
+            ]
+            blocked_result.point_match_summary = _public_point_match_summary(
+                preflight_summary,
+            )
+            blocked_result.least_squares_called = False
+            blocked_result.optimizer_solve_called = False
+            blocked_result.geometry_fit_debug_summary = blocked_summary
+            return blocked_result
 
     all_candidate_param_names = [
         str(name)

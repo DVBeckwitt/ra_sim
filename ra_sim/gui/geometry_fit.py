@@ -31,6 +31,7 @@ from ra_sim.fitting.background_peak_matching import (
 from ra_sim.fitting.optimization import (
     _detector_pixels_to_fit_space,
     _fit_space_pixel_size_provenance,
+    _resolve_fixed_manual_qr_fit_prediction,
 )
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
@@ -3072,6 +3073,42 @@ def build_geometry_fit_qr_handoff_audit_rows(
             fit_entry,
             initial_entry,
         )
+        resolver_identity = _geometry_fit_source_identity_from_pair(provider_pair, manual_pair)
+        resolver_entry: dict[str, object] = {}
+        for resolver_source in (
+            display_entry,
+            fit_entry,
+            initial_entry,
+            provider_pair,
+            manual_pair,
+        ):
+            if isinstance(resolver_source, Mapping):
+                resolver_entry.update(dict(resolver_source))
+        if resolver_identity:
+            resolver_entry["provider_selected_source_identity_canonical"] = copy.deepcopy(
+                resolver_identity
+            )
+        resolver_entry["fit_source_resolution_kind"] = "provider_fixed_source_local"
+        resolver_entry["optimizer_request_has_fixed_source"] = True
+        resolver_entry["optimizer_request_source"] = "provider_pair"
+        resolver_entry["optimizer_request_fallback_row"] = False
+        if branch_idx in {0, 1}:
+            resolver_entry["source_branch_index"] = int(branch_idx)
+            resolver_entry["source_peak_index"] = int(branch_idx)
+            resolver_entry["resolved_peak_index"] = int(branch_idx)
+        if hkl is not None:
+            resolver_entry["hkl"] = tuple(int(value) for value in hkl)
+        if q_group_key is not None:
+            resolver_entry["q_group_key"] = q_group_key
+        if source_table_index is not None:
+            resolver_entry["source_table_index"] = source_table_index
+        if source_row_index is not None:
+            resolver_entry["source_row_index"] = source_row_index
+        (
+            resolved_prediction_native,
+            resolved_prediction_payload,
+            resolved_prediction_reason,
+        ) = _resolve_fixed_manual_qr_fit_prediction(resolver_entry)
         fit_prediction_display = _geometry_fit_audit_point_from_tuple_key(
             (initial_entry,),
             "sim_display",
@@ -3080,6 +3117,20 @@ def build_geometry_fit_qr_handoff_audit_rows(
             (initial_entry,),
             "sim_native",
         )
+        if resolved_prediction_native is not None:
+            fit_prediction_native = (
+                float(resolved_prediction_native[0]),
+                float(resolved_prediction_native[1]),
+            )
+            resolved_display = resolved_prediction_payload.get("saved_sim_detector_display_px")
+            if isinstance(resolved_display, (list, tuple)) and len(resolved_display) >= 2:
+                try:
+                    fit_prediction_display = (
+                        float(resolved_display[0]),
+                        float(resolved_display[1]),
+                    )
+                except Exception:
+                    pass
         fit_prediction_display_from_native = None
         fit_prediction_display_unavailable_reason = None
         if fit_prediction_display is None and fit_prediction_native is not None:
@@ -3238,6 +3289,14 @@ def build_geometry_fit_qr_handoff_audit_rows(
             "fit_observed_detector_native_px": fit_observed_native,
             "fit_observed_caked_deg": fit_observed_caked,
             "fit_prediction_source": fit_prediction_source,
+            "fit_prediction_resolver_function": str(
+                resolved_prediction_payload.get(
+                    "fit_prediction_resolver_function",
+                    "_resolve_fixed_manual_qr_fit_prediction",
+                )
+            ),
+            "fit_prediction_source_resolution_reason": str(resolved_prediction_reason),
+            "fit_prediction_source_resolution_payload": dict(resolved_prediction_payload),
             "fit_prediction_detector_display_px": fit_prediction_display,
             "fit_prediction_detector_display_px_unavailable_reason": (
                 fit_prediction_display_unavailable_reason

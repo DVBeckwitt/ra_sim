@@ -3581,7 +3581,77 @@ def test_resolve_fixed_source_matches_saved_detector_rejects_ambiguous_stale_row
     assert diag["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
     assert diag["prediction_source_status"] == "unavailable_ambiguous"
     assert diag["provider_local_saved_sim_detector_fallback_rejected_reason"] == (
-        "provider_local_ambiguous"
+        "provider_local_duplicate_hkl_unproven"
+    )
+
+
+def test_resolve_fixed_source_matches_saved_detector_waits_for_row_proof() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
+        },
+        sim_visual_detector_display_px=(9.0, 8.0),
+        sim_visual_detector_canonical_native_px=(19.0, 18.0),
+        sim_visual_detector_canonical_native_source=(
+            "display_to_native_sim_coords(unit_test)"
+        ),
+    )
+    hit_tables = [np.asarray([[1.0, 4.0, 4.0, -10.0, 3.0, 0.0, 0.0]], dtype=np.float64)]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert resolved == []
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_kind"] == "fixed_source"
+    assert diag["resolution_reason"] == "prediction_branch_source_switched"
+    assert diag["resolution_subreason"] == "provider_local_hkl_mismatch"
+    assert diag["provider_local_saved_sim_detector_fallback_rejected_reason"] == (
+        "provider_local_hkl_mismatch"
+    )
+
+
+def test_geometry_fit_correspondence_saved_detector_waits_for_row_proof() -> None:
+    correspondence = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
+        },
+        sim_visual_detector_display_px=(9.0, 8.0),
+        sim_visual_detector_canonical_native_px=(19.0, 18.0),
+        sim_visual_detector_canonical_native_source=(
+            "display_to_native_sim_coords(unit_test)"
+        ),
+    )
+    hit_tables = [np.asarray([[1.0, 4.0, 4.0, -10.0, 3.0, 0.0, 0.0]], dtype=np.float64)]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "prediction_branch_source_switched"
+    assert payload["resolution_subreason"] == "provider_local_hkl_mismatch"
+    assert payload["provider_local_saved_sim_detector_fallback_rejected_reason"] == (
+        "provider_local_hkl_mismatch"
     )
 
 
