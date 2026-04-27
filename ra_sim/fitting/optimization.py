@@ -15843,6 +15843,20 @@ def _nearest_caked_axis_index(axis: np.ndarray, value: float, *, angular: bool =
     return int(np.nanargmin(distances))
 
 
+def _caked_axis_bin_size_deg(axis: np.ndarray, *, angular: bool = False) -> float:
+    values = np.asarray(axis, dtype=np.float64).reshape(-1)
+    if values.size < 2:
+        return float("nan")
+    diffs = np.diff(values)
+    if angular:
+        diffs = ((diffs + 180.0) % 360.0) - 180.0
+    diffs = np.abs(diffs[np.isfinite(diffs)])
+    diffs = diffs[diffs > 0.0]
+    if diffs.size <= 0:
+        return float("nan")
+    return float(np.median(diffs))
+
+
 def _refine_sim_caked_peak_from_image(
     image: object,
     radial_axis: object,
@@ -15900,8 +15914,21 @@ def _refine_sim_caked_peak_from_image(
         "refined": refined,
         "delta": delta_pair,
         "delta_norm": float(math.hypot(delta_pair[0], delta_pair[1])),
+        "caked_bin_size_two_theta_deg": _caked_axis_bin_size_deg(radial),
+        "caked_bin_size_phi_deg": _caked_axis_bin_size_deg(azimuth, angular=True),
+        "nominal_pixel_index": [int(row_seed), int(col_seed)],
+        "local_max_pixel_index": [int(refined_row), int(refined_col)],
+        "local_max_patch_index": [int(local_row), int(local_col)],
         "window_bounds": [int(c0), int(c1), int(r0), int(r1)],
+        "window_size": [int(r1 - r0), int(c1 - c0)],
+        "search_window_half_size_bins": [
+            int(phi_half_window_bins),
+            int(tth_half_window_bins),
+        ],
         "peak_value": float(finite_patch[local_row, local_col]),
+        "subpixel_refinement_method": "none",
+        "subpixel_refinement_status": "integer_bin_argmax",
+        "refined_bin_center_only": True,
     }
 
 
@@ -17068,8 +17095,26 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "sim_refinement_delta_caked_norm_deg": float(
                 math.hypot(float(delta[0]), float(delta[1]))
             ),
+            "sim_refinement_caked_bin_size_two_theta_deg": refinement.get(
+                "caked_bin_size_two_theta_deg"
+            ),
+            "sim_refinement_caked_bin_size_phi_deg": refinement.get(
+                "caked_bin_size_phi_deg"
+            ),
+            "sim_refinement_nominal_pixel_index": refinement.get("nominal_pixel_index"),
+            "sim_refinement_local_max_pixel_index": refinement.get("local_max_pixel_index"),
+            "sim_refinement_local_max_patch_index": refinement.get("local_max_patch_index"),
             "sim_refinement_peak_value": refinement.get("peak_value"),
             "sim_refinement_window_bounds": refinement.get("window_bounds"),
+            "sim_refinement_window_size": refinement.get("window_size"),
+            "sim_refinement_search_window_half_size_bins": refinement.get(
+                "search_window_half_size_bins"
+            ),
+            "sim_refinement_subpixel_method": refinement.get("subpixel_refinement_method"),
+            "sim_refinement_subpixel_status": refinement.get("subpixel_refinement_status"),
+            "sim_refinement_bin_center_only": bool(
+                refinement.get("refined_bin_center_only", False)
+            ),
         }
     )
     return out
@@ -17177,6 +17222,9 @@ def _measured_fit_space_diag_fields(
             meta.get("anchor_source"),
         ),
         "fit_space_projector_kind": meta.get("fit_space_projector_kind"),
+        "measured_fit_space_local_params_signature": meta.get(
+            "fit_space_local_params_signature"
+        ),
         "measured_cake_bundle_signature": meta.get("cake_bundle_signature"),
         "cake_bundle_signature": meta.get("cake_bundle_signature"),
         "measured_invalid_projection_reason": meta.get("invalid_projection_reason"),
@@ -17596,10 +17644,18 @@ def _measured_fit_space_anchor(
         if current_theoretical is not None and np.isfinite(current_theoretical):
             metadata["current_theoretical_two_theta_deg"] = float(current_theoretical)
 
+    projection_input = _measured_fit_space_projection_input(entry)
+    exact_projectable_detector_anchor = bool(
+        isinstance(dataset_ctx, GeometryFitDatasetContext)
+        and callable(dataset_ctx.fit_space_projector)
+        and str(dataset_ctx.fit_space_projector_kind or "") == "exact_caked_bundle"
+        and str(projection_input.get("status", "")) == "projectable"
+    )
     if (
         bool(entry.get("fit_space_anchor_override", False))
         and np.isfinite(base_two_theta)
         and np.isfinite(base_phi)
+        and not exact_projectable_detector_anchor
     ):
         metadata["anchor_source"] = "cached_fit_space_anchor"
         metadata["fit_space_source"] = "cached_fit_space_anchor"
@@ -17615,7 +17671,6 @@ def _measured_fit_space_anchor(
             metadata,
         )
 
-    projection_input = _measured_fit_space_projection_input(entry)
     metadata["measured_detector_field_name"] = projection_input.get("field_name")
     metadata["measured_detector_input_frame"] = projection_input.get("input_frame")
     metadata["measured_detector_frame_reason"] = str(
@@ -20099,6 +20154,22 @@ def fit_geometry_parameters(
                     float(raw_entry.get("simulated_native_col", np.nan)),
                     float(raw_entry.get("simulated_native_row", np.nan)),
                 ],
+                "observed_detector_native_px": [
+                    float(raw_entry.get("measured_native_col", np.nan)),
+                    float(raw_entry.get("measured_native_row", np.nan)),
+                ],
+                "observed_detector_field_name": raw_entry.get("measured_detector_field_name"),
+                "observed_detector_input_frame": raw_entry.get("measured_detector_input_frame"),
+                "observed_detector_frame_reason": raw_entry.get(
+                    "measured_detector_frame_reason"
+                ),
+                "observed_caked_projection_signature": raw_entry.get(
+                    "measured_fit_space_local_params_signature"
+                ),
+                "observed_caked_bundle_signature": raw_entry.get(
+                    "measured_cake_bundle_signature"
+                ),
+                "observed_fit_space_source": raw_entry.get("measured_fit_space_source"),
                 "observed_caked_deg": [
                     float(raw_entry.get("measured_two_theta_deg", np.nan)),
                     float(raw_entry.get("measured_phi_deg", np.nan)),
@@ -20129,6 +20200,40 @@ def fit_geometry_parameters(
                     raw_entry.get("sim_refinement_delta_caked_deg")
                 ),
                 "sim_refinement_status": str(raw_entry.get("sim_refinement_status", "")),
+                "sim_refinement_caked_bin_size_two_theta_deg": raw_entry.get(
+                    "sim_refinement_caked_bin_size_two_theta_deg"
+                ),
+                "sim_refinement_caked_bin_size_phi_deg": raw_entry.get(
+                    "sim_refinement_caked_bin_size_phi_deg"
+                ),
+                "sim_refinement_nominal_pixel_index": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_nominal_pixel_index")
+                ),
+                "sim_refinement_local_max_pixel_index": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_local_max_pixel_index")
+                ),
+                "sim_refinement_local_max_patch_index": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_local_max_patch_index")
+                ),
+                "sim_refinement_peak_value": raw_entry.get("sim_refinement_peak_value"),
+                "sim_refinement_window_bounds": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_window_bounds")
+                ),
+                "sim_refinement_window_size": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_window_size")
+                ),
+                "sim_refinement_search_window_half_size_bins": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_search_window_half_size_bins")
+                ),
+                "sim_refinement_subpixel_method": str(
+                    raw_entry.get("sim_refinement_subpixel_method", "")
+                ),
+                "sim_refinement_subpixel_status": str(
+                    raw_entry.get("sim_refinement_subpixel_status", "")
+                ),
+                "sim_refinement_bin_center_only": bool(
+                    raw_entry.get("sim_refinement_bin_center_only", False)
+                ),
                 "params_signature": raw_entry.get("params_signature"),
                 "detector_simulation_signature": raw_entry.get(
                     "detector_simulation_signature"

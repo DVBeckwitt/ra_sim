@@ -28,21 +28,22 @@ Last updated: 2026-04-27
   are `predicted - observed`, Qr weights are `[1.0]`, dry-run evaluates the
   objective without `least_squares`, and branch identity stays fixed during
   solve evaluation.
-- Earlier target `(-1,0,10)` Qr-only reducer evidence remains historical.
-  Current full Mode A dynamic/refined Qr-only smoke starts only after 14/14
-  branch coverage, runs `nfev=2`, keeps branch identity stable, and reduces
-  the refined dynamic residual norm `4.833668706 -> 4.811337654`. Theta norm
-  improves `2.737359853 -> 2.693012769`; phi norm is essentially unchanged
-  at `3.983869249 -> 3.987060602`.
+- Earlier target `(-1,0,10)` and early full Mode A Qr-only reducer evidence
+  remains historical. The latest refined-center diagnostic starts after 14/14
+  branch coverage and 28/28 Qr components, runs `nfev=7`, keeps branch identity
+  stable, and accepts no parameter step. Theta, phi, and total norms are
+  unchanged.
 - Earlier full-fit decomposition remains ladder evidence for the prior
   fixed-source path. Current full Mode A claim is narrower: objective coverage,
   refined caked residual use, no stale prediction cache, and fail-closed partial
   objective gating are green. Full GUI/baseline convergence remains
   unvalidated.
-- Current Qr pipeline classification is
-  `F. dynamic_refined_prediction_pipeline_working`. The remaining fit-quality
-  caveat is phi reduction: the complete Qr-only smoke slightly reduces total
-  and theta norm, but does not reduce phi norm.
+- Current Qr pipeline structural classification is complete, but the current
+  center-objective classification is `refinement_bin_limited`. Observed caked
+  centers are recomputed from fixed detector/native points under trial geometry,
+  simulated caked centers are recomputed from trial simulation output, and
+  branch identity stays stable. The simulated caked peak refinement itself is
+  integer-bin only, with no subpixel method.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.
@@ -107,6 +108,13 @@ Last updated: 2026-04-27
   intensity, and computes residuals as `refined_sim_caked - observed_caked`.
   Mode A resolves 14/14 branches and 28/28 caked residual components; partial
   Qr objectives fail closed with `qr_fit_objective_incomplete=yes`.
+- New4 refined-center diagnostics are green for recomputation but red for
+  subpixel numerical resolution. Caked bins are `0.071355959` degrees in
+  `2theta` and `0.5` degrees in `phi`; all 14 simulated refinements report
+  `subpixel_refinement_method=none`,
+  `subpixel_refinement_status=integer_bin_argmax`, and
+  `refined_bin_center_only=True`. This explains the snapped refined values such
+  as `(40.132644,-36.750000)` and `(57.472142,-10.250000)`.
 - New4 dynamic baseline anchor validation is green for all 14 Mode A branches.
   The pre-fix first bad branch was `(-1,0,10)` branch 1, source table 160 row
   120. After detector-native row correction, the divergence localized to
@@ -156,12 +164,20 @@ Status by work type:
   projection, baseline caked anchor alignment, local refinement limits, and a
   fail-closed baseline anchor gate.
 - Feature/status: Qr-only fit now starts only after full Mode A coverage and
-  baseline anchor validation pass. Current smoke result is norm
-  `4.833668706 -> 4.811337654`, theta
-  `2.737359853 -> 2.693012769`, phi
-  `3.983869249 -> 3.987060602`, `nfev=2`, branch identity stable. This proves
-  the dynamic/refined pipeline is working; it does not claim strong phi
-  convergence.
+  baseline anchor validation pass. Current refined-center objective result is
+  theta `20.415070959 -> 20.415070959`, phi
+  `4.053221387 -> 4.053221387`, total
+  `20.813546691 -> 20.813546691`, `nfev=7`, branch identity stable, and
+  accepted parameter changes `<none>`. Classification is
+  `refinement_bin_limited`, not theta/phi improvement.
+- Full-fit status: the complete dynamic/refined objective includes all 28 Qr
+  components. Current full fit reports total
+  `40.029486770 -> 40.029486770`, Qr
+  `20.813546691 -> 20.813546691`, theta
+  `20.415070959 -> 20.415070959`, phi
+  `4.053221387 -> 4.053221387`, and non-Qr
+  `31.031629300 -> 31.031629300`. It accepts no parameter step; exact reason
+  for no Qr improvement is `refinement bin limited`.
 - Bug/error: target `(-1,0,10)` Qr/Qz objective absence and prediction-resolver
   split are fixed. Handoff/audit, optimizer dry-run, and solver callback call
   the shared fixed-manual Qr fit resolver and agree at x0. If they diverge,
@@ -386,34 +402,39 @@ Old `new4_preflight_report.json` and `new4_fresh_all.json` may be stale or diagn
 
 ## Tests and commands that passed
 
-Current New4 dynamic/refined Qr prediction gate:
+Current New4 refined-center objective gate:
 
 ```powershell
 python -m py_compile ra_sim/fitting/optimization.py ra_sim/gui/geometry_fit.py ra_sim/gui/manual_geometry.py ra_sim/gui/_runtime/runtime_session.py
-pytest tests/test_manual_geometry_selection_helpers.py -k "dynamic_baseline_matches_saved_refined_sim_centers or dynamic_prediction_divergence_locator or qr_objective_refuses_wrong_baseline_dynamic_predictions or objective_uses_refined_sim_caked_residual_all_mode_a or qr_only_fit_with_complete_dynamic_refined_predictions" -s -q
+pytest tests/test_manual_geometry_selection_helpers.py -k "caked_refinement_bin_resolution or observed_trial_caked_recomputed or sim_trial_caked_recomputed or refined_objective_theta_phi_decomposition or full_fit_with_dynamic_refined_center_objective" -s -q
 pytest tests/test_gui_runtime_import_safe.py -k "toggle_caked_2d" -q
 ```
 
 Expected/current summary:
 
-- `test_new4_dynamic_baseline_matches_saved_refined_sim_centers`: all 14 Mode
-  A saved refined sim centers match dynamic baseline nominal/refined caked
-  predictions within tolerance.
-- `test_new4_dynamic_prediction_divergence_locator`: no remaining divergence;
-  historical first failure was `(-1,0,10)` branch 1, classified as
-  `B. caked_projection_mismatch`.
-- `test_new4_qr_objective_refuses_wrong_baseline_dynamic_predictions`: poisoned
-  anchor blocks optimizer start with
-  `optimizer_start_blocked_reason=dynamic_baseline_anchor_mismatch`.
-- `test_new4_objective_uses_refined_sim_caked_residual_all_mode_a`: 28/28
-  components equal `refined_sim_caked - observed_caked`.
-- `test_new4_qr_only_fit_with_complete_dynamic_refined_predictions`: Qr-only
-  starts after 14/14 coverage; norm `4.833668706 -> 4.811337654`, `nfev=2`,
-  branch identity stable, classification
-  `F. dynamic_refined_prediction_pipeline_working`.
-- Command results: `py_compile` passed, targeted New4 prediction tests
-  `5 passed, 400 deselected`, runtime import-safe toggle test
-  `4 passed, 308 deselected`.
+- `test_new4_caked_refinement_bin_resolution_and_subpixel_status`: all 14 Mode
+  A branches print nominal/refined caked centers, caked bin size, nominal/local
+  max pixel indices, local max intensity, window size, subpixel status, and
+  refinement delta. Current status is
+  `caked_refinement_integer_bin_only=yes` and
+  `caked_subpixel_refinement_missing=yes`.
+- `test_new4_observed_trial_caked_recomputed_from_detector_center`: observed
+  detector/native pixels stay fixed while observed trial caked centers move
+  under finite `corto_detector` change. Current status is
+  `observed_caked_static_under_trial_geometry=no`.
+- `test_new4_sim_trial_caked_recomputed_from_detector_sim`: dynamic simulated
+  detector image signatures change for all 14 branches, nominal/refined caked
+  centers move under trial params, and branch identity stays stable. Current
+  status is `sim_refined_caked_static_under_trial_params=no`.
+- `test_new4_refined_objective_theta_phi_decomposition_after_pipeline_fix`:
+  Qr-only theta, phi, and total norms are unchanged over `nfev=7`; accepted
+  parameter changes are `<none>`; classification is `refinement_bin_limited`.
+- `test_new4_full_fit_with_dynamic_refined_center_objective`: full fit includes
+  all 28 Qr components, preserves branch identity, accepts no parameter step,
+  and reports no Qr improvement because `refinement bin limited`.
+- Command results: `py_compile` passed, targeted New4 refined-center tests
+  `5 passed, 406 deselected`, runtime import-safe toggle test
+  `4 passed, 309 deselected`.
 
 Provider parity:
 

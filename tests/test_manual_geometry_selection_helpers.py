@@ -26027,6 +26027,705 @@ def _diag_new4_print_cache_signature_table(title, rows):
         )
 
 
+def _diag_index_text(value):
+    if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
+        try:
+            return f"({int(value[0])},{int(value[1])})"
+        except Exception:
+            pass
+    return "(nan,nan)"
+
+
+def _diag_window_text(value):
+    if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
+        try:
+            return f"{int(value[0])}x{int(value[1])}"
+        except Exception:
+            pass
+    return "nan"
+
+
+def _diag_yes_no(value):
+    return "yes" if bool(value) else "no"
+
+
+def _diag_new4_refinement_bin_limited(rows):
+    return bool(rows) and all(
+        bool(row.get("sim_refinement_bin_center_only", False))
+        or str(row.get("sim_refinement_subpixel_status", "")).startswith("integer")
+        for row in rows.values()
+    )
+
+
+def _diag_new4_trial_candidates(context, baseline_run, *, include_003):
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    active_names = [str(name) for name in baseline_run["var_names"] if str(name) in params]
+    param_entries = _diag_param_entries_from_result(baseline_run["result"])
+    for name in active_names:
+        base_value = float(params[name])
+        for trial_label, trial_value in _diag_finite_sweep_trial_values(
+            name,
+            base_value,
+            param_entries.get(name, {}),
+        ):
+            if np.isclose(float(trial_value), base_value, atol=1.0e-12, rtol=0.0):
+                continue
+            trial_params = dict(params)
+            trial_params[name] = float(trial_value)
+            try:
+                trial_run = _diag_solve_new4_existing_request(
+                    baseline_run,
+                    params_overrides=trial_params,
+                )
+                trial_record = _diag_objective_trace(trial_run["result"])[0]
+                _diag_assert_new4_objective_record(trial_record, include_003=include_003)
+            except RuntimeError as exc:
+                if "qr_fit_objective_incomplete=yes" not in str(exc):
+                    raise
+                continue
+            except AssertionError:
+                continue
+            yield name, trial_label, float(trial_value), trial_run, trial_record
+
+
+def _diag_new4_ordered_trial_values(name, base_value, param_entry):
+    trials = [
+        (label, value)
+        for label, value in _diag_finite_sweep_trial_values(name, base_value, param_entry)
+        if not np.isclose(float(value), float(base_value), atol=1.0e-12, rtol=0.0)
+    ]
+    rank = {
+        "baseline+50pct_x_scale": 0,
+        "baseline-50pct_x_scale": 1,
+        "baseline+10pct_range": 2,
+        "baseline-10pct_range": 3,
+        "baseline+25pct_range": 4,
+        "baseline-25pct_range": 5,
+        "upper_bound": 6,
+        "lower_bound": 7,
+    }
+    return sorted(trials, key=lambda item: rank.get(str(item[0]), 99))
+
+
+def _diag_new4_best_observed_trial(context, baseline_run, baseline_record, *, include_003):
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    active_names = [str(name) for name in baseline_run["var_names"] if str(name) in params]
+    param_entries = _diag_param_entries_from_result(baseline_run["result"])
+    preferred = [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+        "chi",
+        "psi_z",
+        "zs",
+        "zb",
+    ]
+    ordered_names = [name for name in preferred if name in active_names] + [
+        name for name in active_names if name not in preferred
+    ]
+    baseline_rows = _diag_new4_point_rows(baseline_record, include_003=include_003)
+    best = None
+    best_motion = -1.0
+    for name in ordered_names:
+        base_value = float(params[name])
+        for label, value in _diag_new4_ordered_trial_values(
+            name,
+            base_value,
+            param_entries.get(name, {}),
+        ):
+            trial_params = dict(params)
+            trial_params[name] = float(value)
+            try:
+                trial_run = _diag_solve_new4_existing_request(
+                    baseline_run,
+                    params_overrides=trial_params,
+                )
+                trial_record = _diag_objective_trace(trial_run["result"])[0]
+                _diag_assert_new4_objective_record(trial_record, include_003=include_003)
+            except RuntimeError as exc:
+                if "qr_fit_objective_incomplete=yes" not in str(exc):
+                    raise
+                continue
+            except AssertionError:
+                continue
+            trial_rows = _diag_new4_point_rows(trial_record, include_003=include_003)
+            observed_motion = []
+            native_motion = []
+            for key, before_row in baseline_rows.items():
+                after_row = trial_rows[key]
+                observed_motion.append(
+                    float(
+                        np.linalg.norm(
+                            np.asarray(
+                                _diag_caked_delta(
+                                    _diag_row_pair(after_row, "observed_caked_deg"),
+                                    _diag_row_pair(before_row, "observed_caked_deg"),
+                                ),
+                                dtype=float,
+                            )
+                        )
+                    )
+                )
+                native_motion.append(
+                    float(
+                        np.linalg.norm(
+                            np.asarray(
+                                _diag_row_pair(after_row, "observed_detector_native_px"),
+                                dtype=float,
+                            )
+                            - np.asarray(
+                                _diag_row_pair(before_row, "observed_detector_native_px"),
+                                dtype=float,
+                            )
+                        )
+                    )
+                )
+            max_observed = max(observed_motion, default=0.0)
+            max_native = max(native_motion, default=0.0)
+            if max_observed > best_motion:
+                best_motion = float(max_observed)
+                best = (name, label, value, trial_run, trial_record, max_observed, max_native)
+            if max_observed > 1.0e-6 and max_native <= 1.0e-9:
+                return best
+    assert best is not None
+    return best
+
+
+def _diag_new4_best_sim_trial(context, baseline_run, baseline_record, *, include_003):
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    active_names = [str(name) for name in baseline_run["var_names"] if str(name) in params]
+    param_entries = _diag_param_entries_from_result(baseline_run["result"])
+    preferred = [
+        "corto_detector",
+        "theta_initial",
+        "cor_angle",
+        "chi",
+        "psi_z",
+        "zs",
+        "zb",
+    ]
+    ordered_names = [name for name in preferred if name in active_names] + [
+        name for name in active_names if name not in preferred
+    ]
+    baseline_rows = _diag_new4_point_rows(baseline_record, include_003=include_003)
+    best = None
+    best_score = -1.0
+    for name in ordered_names:
+        base_value = float(params[name])
+        for label, value in _diag_new4_ordered_trial_values(
+            name,
+            base_value,
+            param_entries.get(name, {}),
+        ):
+            trial_params = dict(params)
+            trial_params[name] = float(value)
+            try:
+                trial_run = _diag_solve_new4_existing_request(
+                    baseline_run,
+                    params_overrides=trial_params,
+                )
+                trial_record = _diag_objective_trace(trial_run["result"])[0]
+                _diag_assert_new4_objective_record(trial_record, include_003=include_003)
+            except RuntimeError as exc:
+                if "qr_fit_objective_incomplete=yes" not in str(exc):
+                    raise
+                continue
+            except AssertionError:
+                continue
+            trial_rows = _diag_new4_point_rows(trial_record, include_003=include_003)
+            detector_sig_changed = 0
+            caked_sig_changed = 0
+            nominal_detector_motion = []
+            nominal_native_motion = []
+            nominal_caked_motion = []
+            refined_caked_motion = []
+            for key, before_row in baseline_rows.items():
+                after_row = trial_rows[key]
+                detector_sig_changed += int(
+                    before_row.get("detector_simulation_signature")
+                    != after_row.get("detector_simulation_signature")
+                )
+                caked_sig_changed += int(
+                    before_row.get("caked_simulation_signature")
+                    != after_row.get("caked_simulation_signature")
+                )
+                nominal_detector_motion.append(
+                    float(
+                        np.linalg.norm(
+                            np.asarray(_diag_row_pair(after_row, "sim_nominal_detector_px"))
+                            - np.asarray(_diag_row_pair(before_row, "sim_nominal_detector_px"))
+                        )
+                    )
+                )
+                nominal_native_motion.append(
+                    float(
+                        np.linalg.norm(
+                            np.asarray(_diag_row_pair(after_row, "sim_nominal_native_px"))
+                            - np.asarray(_diag_row_pair(before_row, "sim_nominal_native_px"))
+                        )
+                    )
+                )
+                nominal_caked_motion.append(
+                    float(
+                        np.linalg.norm(
+                            np.asarray(
+                                _diag_caked_delta(
+                                    _diag_row_pair(after_row, "predicted_nominal_caked_deg"),
+                                    _diag_row_pair(before_row, "predicted_nominal_caked_deg"),
+                                )
+                            )
+                        )
+                    )
+                )
+                refined_caked_motion.append(
+                    float(
+                        np.linalg.norm(
+                            np.asarray(
+                                _diag_caked_delta(
+                                    _diag_row_pair(after_row, "predicted_refined_caked_deg"),
+                                    _diag_row_pair(before_row, "predicted_refined_caked_deg"),
+                                )
+                            )
+                        )
+                    )
+                )
+            metrics = {
+                "detector_sig_changed": int(detector_sig_changed),
+                "caked_sig_changed": int(caked_sig_changed),
+                "nominal_detector_motion": max(nominal_detector_motion, default=0.0),
+                "nominal_native_motion": max(nominal_native_motion, default=0.0),
+                "nominal_caked_motion": max(nominal_caked_motion, default=0.0),
+                "refined_caked_motion": max(refined_caked_motion, default=0.0),
+            }
+            score = (
+                float(metrics["detector_sig_changed"])
+                + float(metrics["caked_sig_changed"])
+                + float(metrics["nominal_detector_motion"])
+                + float(metrics["nominal_native_motion"])
+                + float(metrics["nominal_caked_motion"])
+                + float(metrics["refined_caked_motion"])
+            )
+            if score > best_score:
+                best_score = float(score)
+                best = (name, label, value, trial_run, trial_record, metrics)
+            if (
+                int(metrics["detector_sig_changed"]) > 0
+                and float(metrics["nominal_caked_motion"]) > 1.0e-9
+                and float(metrics["refined_caked_motion"]) > 1.0e-9
+            ):
+                return best
+    assert best is not None
+    return best
+
+
+def _diag_new4_param_change_text(fit_run):
+    before = dict(fit_run.get("before_params", {}) or {})
+    after = dict(fit_run.get("after_params", {}) or {})
+    parts = []
+    for name in sorted(before):
+        if name not in after:
+            continue
+        if not np.isclose(float(before[name]), float(after[name]), atol=1.0e-12, rtol=0.0):
+            parts.append(f"{name}:{float(before[name]):.9g}->{float(after[name]):.9g}")
+    return ", ".join(parts) if parts else "<none>"
+
+
+def _diag_new4_residual_rows(before, after, *, include_003):
+    before_rows = _diag_new4_point_rows(before, include_003=include_003)
+    after_rows = _diag_new4_point_rows(after, include_003=include_003)
+    rows = []
+    for key in sorted(before_rows, key=repr):
+        before_row = before_rows[key]
+        after_row = after_rows[key]
+        rows.append(
+            (
+                key,
+                _diag_row_pair(before_row, "observed_caked_deg"),
+                _diag_row_pair(before_row, "predicted_refined_caked_deg"),
+                _diag_row_pair(after_row, "predicted_refined_caked_deg"),
+                _diag_row_pair(before_row, "residual_caked_deg"),
+                _diag_row_pair(after_row, "residual_caked_deg"),
+            )
+        )
+    return rows
+
+
+def _diag_new4_print_branch_residual_table(title, before, after, *, include_003):
+    print(title)
+    print(
+        "q_group | hkl | branch | observed | refined_before | refined_after | "
+        "residual_before | residual_after"
+    )
+    for key, observed, pred_before, pred_after, residual_before, residual_after in (
+        _diag_new4_residual_rows(before, after, include_003=include_003)
+    ):
+        q_group, hkl, _table, _row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {_diag_fmt_pair(observed)} | "
+            f"{_diag_fmt_pair(pred_before)} | {_diag_fmt_pair(pred_after)} | "
+            f"{_diag_fmt_pair(residual_before)} | {_diag_fmt_pair(residual_after)}"
+        )
+
+
+def _diag_new4_classify_theta_phi(
+    before,
+    after,
+    *,
+    include_003,
+    bin_limited,
+):
+    axis_before = _diag_new4_axis_norms(before, include_003=include_003)
+    axis_after = _diag_new4_axis_norms(after, include_003=include_003)
+    total_before = _diag_new4_norm(before, include_003=include_003)
+    total_after = _diag_new4_norm(after, include_003=include_003)
+    theta_delta = float(axis_after["theta_norm"] - axis_before["theta_norm"])
+    phi_delta = float(axis_after["phi_norm"] - axis_before["phi_norm"])
+    total_delta = float(total_after - total_before)
+    tol = 1.0e-6
+    if phi_delta < -tol:
+        return "phi_improves"
+    if theta_delta < -tol and abs(phi_delta) <= tol:
+        return "theta_improves_phi_static"
+    if abs(total_delta) <= tol and bool(bin_limited):
+        return "refinement_bin_limited"
+    if abs(total_delta) <= tol:
+        return "no_meaningful_change"
+    if bool(bin_limited) and phi_delta >= -tol:
+        return "refinement_bin_limited"
+    return "no_meaningful_change"
+
+
+def test_new4_caked_refinement_bin_resolution_and_subpixel_status(tmp_path) -> None:
+    _context, _dataset, _run, _record, rows, _components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=False,
+    )
+    print("caked_refinement_bin_resolution_and_subpixel_status")
+    print(
+        "q_group | hkl | branch | nominal_caked | refined_caked | bin_2theta | "
+        "bin_phi | nominal_pixel | local_max_pixel | local_max_intensity | "
+        "search_window | subpixel_method | subpixel_status | refinement_delta | "
+        "bin_center_only"
+    )
+    integer_only_flags = []
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        q_group, hkl, _table, _source_row, branch, _peak = key
+        bin_tth = float(row.get("sim_refinement_caked_bin_size_two_theta_deg", np.nan))
+        bin_phi = float(row.get("sim_refinement_caked_bin_size_phi_deg", np.nan))
+        nominal_pixel = row.get("sim_refinement_nominal_pixel_index")
+        local_max_pixel = row.get("sim_refinement_local_max_pixel_index")
+        intensity = float(row.get("sim_refinement_peak_value", np.nan))
+        method = str(row.get("sim_refinement_subpixel_method", ""))
+        status = str(row.get("sim_refinement_subpixel_status", ""))
+        bin_center_only = bool(row.get("sim_refinement_bin_center_only", False))
+        integer_only_flags.append(bin_center_only or status.startswith("integer"))
+        print(
+            f"{q_group} | {hkl} | {branch} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'predicted_nominal_caked_deg'))} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'predicted_refined_caked_deg'))} | "
+            f"{bin_tth:.9f} | {bin_phi:.9f} | {_diag_index_text(nominal_pixel)} | "
+            f"{_diag_index_text(local_max_pixel)} | {intensity:.9f} | "
+            f"{_diag_window_text(row.get('sim_refinement_window_size'))} | "
+            f"{method} | {status} | "
+            f"{_diag_fmt_pair(_diag_row_pair(row, 'sim_refinement_delta_caked_deg'))} | "
+            f"{_diag_yes_no(bin_center_only)}"
+        )
+        assert np.isfinite(bin_tth) and bin_tth > 0.0
+        assert np.isfinite(bin_phi) and bin_phi > 0.0
+        assert _diag_index_text(nominal_pixel) != "(nan,nan)"
+        assert _diag_index_text(local_max_pixel) != "(nan,nan)"
+        assert np.isfinite(intensity)
+    integer_only = bool(integer_only_flags) and all(integer_only_flags)
+    print(f"caked_refinement_integer_bin_only={_diag_yes_no(integer_only)}")
+    print(f"caked_subpixel_refinement_missing={_diag_yes_no(integer_only)}")
+    assert len(rows) == 14
+
+
+def test_new4_observed_trial_caked_recomputed_from_detector_center(tmp_path) -> None:
+    include_003 = False
+    context, _dataset, baseline_run, baseline_record, baseline_rows, _components = (
+        _diag_new4_pipeline_baseline(tmp_path, include_003=include_003)
+    )
+    name, trial_label, trial_value, _trial_run, trial_record, max_observed, max_native = (
+        _diag_new4_best_observed_trial(
+            context,
+            baseline_run,
+            baseline_record,
+            include_003=include_003,
+        )
+    )
+    trial_rows = _diag_new4_point_rows(trial_record, include_003=include_003)
+    saved_rows = _diag_new4_saved_rows_by_key(context["saved_state"], include_003=include_003)
+    print("observed_trial_caked_recomputed_from_detector_center")
+    print(f"finite_trial_parameter={name}")
+    print(f"finite_trial_value={trial_label}={trial_value:.9g}")
+    print(
+        "q_group | hkl | branch | observed_detector_native_px | observed_saved_caked | "
+        "observed_trial_caked_baseline | observed_trial_caked_changed | delta | "
+        "native_fixed | source | sig_before | sig_after"
+    )
+    for key in sorted(baseline_rows, key=repr):
+        before_row = baseline_rows[key]
+        after_row = trial_rows[key]
+        saved_caked, _saved_source = _diag_observed_caked(saved_rows.get(key, {}))
+        native_before = _diag_row_pair(before_row, "observed_detector_native_px")
+        native_after = _diag_row_pair(after_row, "observed_detector_native_px")
+        observed_before = _diag_row_pair(before_row, "observed_caked_deg")
+        observed_after = _diag_row_pair(after_row, "observed_caked_deg")
+        delta = _diag_caked_delta(observed_after, observed_before)
+        native_fixed = np.allclose(native_before, native_after, atol=1.0e-9, rtol=0.0)
+        q_group, hkl, _table, _row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {_diag_fmt_pair(native_before)} | "
+            f"{_diag_fmt_pair(saved_caked)} | {_diag_fmt_pair(observed_before)} | "
+            f"{_diag_fmt_pair(observed_after)} | {_diag_fmt_pair(delta)} | "
+            f"{_diag_yes_no(native_fixed)} | {after_row.get('observed_fit_space_source')} | "
+            f"{before_row.get('observed_caked_projection_signature')} | "
+            f"{after_row.get('observed_caked_projection_signature')}"
+        )
+        assert native_fixed
+        assert after_row.get("observed_fit_space_source") == "dataset_fit_space_projector"
+    static = bool(max_observed <= 1.0e-9)
+    print(f"observed_detector_native_max_motion_px={max_native:.12f}")
+    print(f"observed_trial_caked_max_motion_deg={max_observed:.12f}")
+    print(f"observed_caked_static_under_trial_geometry={_diag_yes_no(static)}")
+    assert not static
+
+
+def test_new4_sim_trial_caked_recomputed_from_detector_sim(tmp_path) -> None:
+    include_003 = False
+    context, _dataset, baseline_run, baseline_record, baseline_rows, _components = (
+        _diag_new4_pipeline_baseline(tmp_path, include_003=include_003)
+    )
+    name, trial_label, trial_value, _trial_run, trial_record, metrics = (
+        _diag_new4_best_sim_trial(
+            context,
+            baseline_run,
+            baseline_record,
+            include_003=include_003,
+        )
+    )
+    trial_rows = _diag_new4_point_rows(trial_record, include_003=include_003)
+    print("sim_trial_caked_recomputed_from_detector_sim")
+    print(f"finite_trial_parameter={name}")
+    print(f"finite_trial_value={trial_label}={trial_value:.9g}")
+    print(
+        "q_group | hkl | branch | detector_sig_changed | nominal_detector_delta | "
+        "nominal_native_delta | nominal_caked_delta | refined_caked_delta | "
+        "branch_identity_stable"
+    )
+    reused_refined = True
+    stable_all = True
+    for key in sorted(baseline_rows, key=repr):
+        before_row = baseline_rows[key]
+        after_row = trial_rows[key]
+        detector_sig_changed = (
+            before_row.get("detector_simulation_signature")
+            != after_row.get("detector_simulation_signature")
+        )
+        nominal_detector_delta = tuple(
+            np.asarray(_diag_row_pair(after_row, "sim_nominal_detector_px"))
+            - np.asarray(_diag_row_pair(before_row, "sim_nominal_detector_px"))
+        )
+        nominal_native_delta = tuple(
+            np.asarray(_diag_row_pair(after_row, "sim_nominal_native_px"))
+            - np.asarray(_diag_row_pair(before_row, "sim_nominal_native_px"))
+        )
+        nominal_caked_delta = _diag_caked_delta(
+            _diag_row_pair(after_row, "predicted_nominal_caked_deg"),
+            _diag_row_pair(before_row, "predicted_nominal_caked_deg"),
+        )
+        refined_caked_delta = _diag_caked_delta(
+            _diag_row_pair(after_row, "predicted_refined_caked_deg"),
+            _diag_row_pair(before_row, "predicted_refined_caked_deg"),
+        )
+        branch_stable = _diag_source_identity_key(before_row) == _diag_source_identity_key(
+            after_row
+        )
+        stable_all = stable_all and branch_stable
+        reused_refined = reused_refined and np.allclose(
+            refined_caked_delta,
+            (0.0, 0.0),
+            atol=1.0e-12,
+            rtol=0.0,
+        )
+        q_group, hkl, _table, _row, branch, _peak = key
+        print(
+            f"{q_group} | {hkl} | {branch} | {_diag_yes_no(detector_sig_changed)} | "
+            f"{_diag_fmt_pair(nominal_detector_delta)} | "
+            f"{_diag_fmt_pair(nominal_native_delta)} | "
+            f"{_diag_fmt_pair(nominal_caked_delta)} | "
+            f"{_diag_fmt_pair(refined_caked_delta)} | {_diag_yes_no(branch_stable)}"
+        )
+    print(f"dynamic_detector_sim_signature_changes={metrics['detector_sig_changed']}")
+    print(f"nominal_detector_max_motion={metrics['nominal_detector_motion']:.12f}")
+    print(f"nominal_native_max_motion={metrics['nominal_native_motion']:.12f}")
+    print(f"nominal_caked_max_motion={metrics['nominal_caked_motion']:.12f}")
+    print(f"refined_caked_max_motion={metrics['refined_caked_motion']:.12f}")
+    detector_native_static = bool(
+        float(metrics["nominal_detector_motion"]) <= 1.0e-9
+        and float(metrics["nominal_native_motion"]) <= 1.0e-9
+    )
+    print(
+        "sim_nominal_detector_native_static_under_trial_params="
+        f"{_diag_yes_no(detector_native_static)}"
+    )
+    print(f"sim_refined_caked_static_under_trial_params={_diag_yes_no(reused_refined)}")
+    assert stable_all
+    assert int(metrics["detector_sig_changed"]) > 0
+    assert float(metrics["nominal_caked_motion"]) > 1.0e-9
+    assert float(metrics["refined_caked_motion"]) > 1.0e-9
+    assert not reused_refined
+
+
+def test_new4_refined_objective_theta_phi_decomposition_after_pipeline_fix(tmp_path) -> None:
+    include_003 = False
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    before_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+    )
+    before = _diag_objective_trace(before_run["result"])[0]
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        optimizer_overrides={"max_nfev": 20},
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+    after_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+        params_overrides=fit_run["after_params"],
+    )
+    after = _diag_objective_trace(after_run["result"])[0]
+    rows_before, components_before = _diag_assert_new4_objective_record(
+        before,
+        include_003=include_003,
+    )
+    _diag_assert_new4_objective_record(after, include_003=include_003)
+    axis_before = _diag_new4_axis_norms(before, include_003=include_003)
+    axis_after = _diag_new4_axis_norms(after, include_003=include_003)
+    total_before = _diag_new4_norm(before, include_003=include_003)
+    total_after = _diag_new4_norm(after, include_003=include_003)
+    bin_limited = _diag_new4_refinement_bin_limited(rows_before)
+    classification = _diag_new4_classify_theta_phi(
+        before,
+        after,
+        include_003=include_003,
+        bin_limited=bin_limited,
+    )
+    print("refined_objective_theta_phi_decomposition_after_pipeline_fix")
+    print(f"theta_norm_before={float(axis_before['theta_norm']):.9f}")
+    print(f"theta_norm_after={float(axis_after['theta_norm']):.9f}")
+    print(f"phi_norm_before={float(axis_before['phi_norm']):.9f}")
+    print(f"phi_norm_after={float(axis_after['phi_norm']):.9f}")
+    print(f"total_norm_before={total_before:.9f}")
+    print(f"total_norm_after={total_after:.9f}")
+    print(f"parameter_changes={_diag_new4_param_change_text(fit_run)}")
+    print(f"nfev={int(getattr(fit_run['result'], 'nfev', 0) or 0)}")
+    print(f"refinement_bin_limited={_diag_yes_no(bin_limited)}")
+    print(f"classification={classification}")
+    _diag_new4_print_branch_residual_table(
+        "qr_only_per_branch_residual_before_after",
+        before,
+        after,
+        include_003=include_003,
+    )
+    assert len(components_before) == 28
+    assert classification in {
+        "theta_improves_phi_static",
+        "phi_improves",
+        "no_meaningful_change",
+        "refinement_bin_limited",
+    }
+
+
+def test_new4_full_fit_with_dynamic_refined_center_objective(tmp_path) -> None:
+    include_003 = False
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    before_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=False,
+    )
+    before = _diag_objective_trace(before_run["result"])[0]
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        optimizer_overrides={"max_nfev": 20},
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+    after_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=False,
+        params_overrides=fit_run["after_params"],
+    )
+    after = _diag_objective_trace(after_run["result"])[0]
+    rows_before, components_before = _diag_assert_new4_objective_record(
+        before,
+        include_003=include_003,
+    )
+    _diag_assert_new4_objective_record(after, include_003=include_003)
+    stats = _diag_print_new4_full_fit_decomposition(
+        before,
+        after,
+        fit_run,
+        include_003=include_003,
+    )
+    print(f"nfev={int(getattr(fit_run['result'], 'nfev', 0) or 0)}")
+    print(f"accepted_params={fit_run['after_params']}")
+    print(f"parameter_changes={_diag_new4_param_change_text(fit_run)}")
+    bin_limited = _diag_new4_refinement_bin_limited(rows_before)
+    no_step = int(getattr(fit_run["result"], "nfev", 0) or 0) <= 0
+    qr_improved = bool(stats["qr_after"] < stats["qr_before"] - 1.0e-6)
+    phi_before = float(stats["phi_before"])
+    phi_after = float(stats["phi_after"])
+    non_qr_improved = bool(stats["non_qr_after"] < stats["non_qr_before"] - 1.0e-6)
+    total_improved = bool(stats["total_after"] < stats["total_before"] - 1.0e-6)
+    if qr_improved:
+        reason = "Qr improves"
+    elif no_step:
+        reason = "no accepted step"
+    elif bool(bin_limited):
+        reason = "refinement bin limited"
+    elif phi_after >= phi_before - 1.0e-6:
+        reason = "parameterization cannot move phi"
+    elif total_improved or non_qr_improved:
+        reason = "Qr sacrificed to other terms"
+    else:
+        reason = "no accepted step"
+    print(f"full_fit_qr_outcome={reason}")
+    _diag_new4_print_branch_residual_table(
+        "full_fit_per_branch_residual_before_after",
+        before,
+        after,
+        include_003=include_003,
+    )
+    assert len(rows_before) == 14
+    assert len(components_before) == 28
+    assert stats["component_count"] == 28
+    assert stats["stable"]
+    if not qr_improved:
+        assert reason in {
+            "Qr sacrificed to other terms",
+            "no accepted step",
+            "refinement bin limited",
+            "parameterization cannot move phi",
+        }
+
+
 def test_new4_fit_prediction_pipeline_regenerates_detector_simulation(tmp_path) -> None:
     include_003 = False
     context, dataset, baseline_run, baseline_record, baseline_rows, _components = (

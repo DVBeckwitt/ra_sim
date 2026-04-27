@@ -107,9 +107,14 @@ the real headless path, so candidate-selection is not the first divergence. No
 full-headless baseline convergence patch is claimed yet. 2026-04-27 update:
 New4 Mode A dynamic/refined Qr prediction now resolves 14/14 saved first-image
 branches and 28/28 caked residual components using a durable locked identity
-key. Partial Qr objective coverage fails closed. Remaining status: dynamic
-pipeline is working, but phi-controlling fit leverage is still missing or
-fixed.
+key. Partial Qr objective coverage fails closed. Latest refined-center
+diagnostics prove observed caked centers and simulated refined caked centers
+are recomputed under trial geometry, but simulated refinement is integer
+caked-bin argmax only (`2theta` bin `0.071355959 deg`, `phi` bin `0.5 deg`).
+Qr-only and full dynamic/refined fits accepted no parameter step over `nfev=7`;
+theta, phi, Qr, and full objective norms stayed unchanged. Current reason:
+`refinement_bin_limited`, not branch identity, stale observed caked values, or
+stale simulated refined caked reuse.
 
 ## Known bugs
 

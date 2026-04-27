@@ -16,11 +16,13 @@ locked dynamic identities, produce 28/28 caked residual components, and compute
 residuals as `refined_sim_caked - observed_caked` in weighted caked degrees.
 Baseline dynamic predictions now reproduce the saved refined sim centers before
 solver start; a poisoned or drifting x0 anchor blocks optimization with
-`optimizer_start_blocked_reason=dynamic_baseline_anchor_mismatch`. Current
-Qr-only smoke after the anchor fix is `4.833668706 -> 4.811337654` over
-`nfev=2`, with branch identity stable and classification
-`F. dynamic_refined_prediction_pipeline_working`. Full GUI/baseline convergence
-is still not claimed here.
+`optimizer_start_blocked_reason=dynamic_baseline_anchor_mismatch`. The refined
+center diagnostic now proves both observed caked centers and simulated refined
+caked centers are recomputed under changed trial geometry, but the simulated
+peak refinement is integer caked-bin argmax only. The current Qr-only and full
+dynamic/refined objectives are classified `refinement_bin_limited`: theta, phi,
+and total norms are unchanged over `nfev=7`, no parameter step is accepted, and
+full GUI/baseline convergence is still not claimed here.
 
 Point-provider parity is fixed for the manual-geometry handoff layer, and the
 next validation step is a bounded `new4` optimizer ladder. The manual Qr picker
