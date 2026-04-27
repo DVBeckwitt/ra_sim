@@ -21191,7 +21191,7 @@ def _diag_filter_minus_1_0_10_dataset(dataset):
         entries = [
             dict(entry)
             for entry in dataset.get(key, ()) or ()
-            if isinstance(entry, Mapping) and _diag_entry_is_minus_1_0_10_branch(entry)
+            if isinstance(entry, Mapping)
         ]
         if entries:
             filtered[key] = entries
@@ -21373,10 +21373,16 @@ def _diag_build_minus_1_0_10_fit_request(
     objective_trace_enabled=False,
     qr_only_objective=False,
     objective_dry_run_only=False,
+    optimizer_overrides=None,
+    bounds_overrides=None,
+    x_scale_overrides=None,
+    params_overrides=None,
 ):
     kwargs = context["projection_kwargs"]
     saved_state = context["saved_state"]
     params = dict(_diag_runtime_value(kwargs["current_geometry_fit_params"]))
+    if isinstance(params_overrides, Mapping):
+        params.update(dict(params_overrides))
     fit_dataset = (
         _diag_filter_minus_1_0_10_dataset(dataset)
         if bool(qr_only_objective)
@@ -21422,6 +21428,8 @@ def _diag_build_minus_1_0_10_fit_request(
             "objective_trace_max_evals": 512,
         }
     )
+    if isinstance(optimizer_overrides, Mapping):
+        optimizer_cfg.update(dict(optimizer_overrides))
     if qr_only_objective:
         optimizer_cfg.update(
             {
@@ -21443,6 +21451,10 @@ def _diag_build_minus_1_0_10_fit_request(
     runtime_cfg["optimizer"] = optimizer_cfg
     runtime_cfg["solver"] = dict(optimizer_cfg)
     runtime_cfg["seed_search"] = seed_search_cfg
+    if isinstance(bounds_overrides, Mapping):
+        runtime_cfg["bounds"] = dict(bounds_overrides)
+    if isinstance(x_scale_overrides, Mapping):
+        runtime_cfg["x_scale"] = dict(x_scale_overrides)
     if qr_only_objective:
         runtime_cfg["priors"] = {}
     runtime_cfg["use_numba"] = False
@@ -21926,18 +21938,32 @@ def _diag_run_controlled_minus_1_0_10_fit(
     objective_trace_enabled=False,
     qr_only_objective=False,
     objective_dry_run_only=False,
+    optimizer_overrides=None,
+    bounds_overrides=None,
+    x_scale_overrides=None,
+    params_overrides=None,
 ):
     from ra_sim.fitting.optimization import fit_geometry_parameters
 
+    use_cache = not any(
+        isinstance(value, Mapping)
+        for value in (
+            optimizer_overrides,
+            bounds_overrides,
+            x_scale_overrides,
+            params_overrides,
+        )
+    )
     cache_key = (
         bool(seed_multistart_enabled),
         bool(objective_trace_enabled),
         bool(qr_only_objective),
         bool(objective_dry_run_only),
     )
-    cached = _QR_FIT_STEP_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
+    if use_cache:
+        cached = _QR_FIT_STEP_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
     request, var_names = _diag_build_minus_1_0_10_fit_request(
         context,
@@ -21946,6 +21972,10 @@ def _diag_run_controlled_minus_1_0_10_fit(
         objective_trace_enabled=objective_trace_enabled,
         qr_only_objective=qr_only_objective,
         objective_dry_run_only=objective_dry_run_only,
+        optimizer_overrides=optimizer_overrides,
+        bounds_overrides=bounds_overrides,
+        x_scale_overrides=x_scale_overrides,
+        params_overrides=params_overrides,
     )
     result = gf.solve_geometry_fit_request(
         request,
@@ -21975,7 +22005,8 @@ def _diag_run_controlled_minus_1_0_10_fit(
         "valid_evaluation": bool(nfev > 0),
         "params_accepted": bool(nfev > 0 and getattr(result, "x", None) is not None),
     }
-    _QR_FIT_STEP_CACHE[cache_key] = payload
+    if use_cache:
+        _QR_FIT_STEP_CACHE[cache_key] = payload
     return payload
 
 
@@ -22603,6 +22634,856 @@ def test_minus_1_0_10_qr_only_objective_does_not_accept_worse_solution(
     )
 
 
+def _diag_param_delta_text(var_names, delta):
+    return {
+        str(name): float(delta[idx])
+        for idx, name in enumerate(var_names)
+        if idx < len(delta)
+    }
+
+
+def _diag_branch_identity_tuple(row):
+    return (
+        _diag_q_group_key(row),
+        _diag_hkl(row),
+        row.get("source_table_index"),
+        row.get("source_row_index"),
+        row.get("source_branch_index"),
+        row.get("source_peak_index"),
+        row.get("branch_id"),
+    )
+
+
+def _diag_trace_branch_identity_stable(record, expected_by_branch):
+    rows = _diag_target_prediction_rows_by_branch(record)
+    if set(rows) != set(expected_by_branch):
+        return False
+    for branch, row in rows.items():
+        if _diag_branch_identity_tuple(row) != expected_by_branch[branch]:
+            return False
+        if row.get("predicted_source") == "rejected:prediction_branch_source_switched":
+            return False
+    return True
+
+
+def _diag_trace_pair(record, branch, key):
+    row = _diag_target_prediction_rows_by_branch(record).get(int(branch), {})
+    return _diag_pair_or_nan(row.get(key))
+
+
+def _diag_trace_eval_status(record, result, baseline_x):
+    x = np.asarray(record.get("x", ()), dtype=float).reshape(-1)
+    if x.size == baseline_x.size and np.allclose(x, baseline_x, atol=1.0e-12, rtol=0.0):
+        return "baseline"
+    final_x = np.asarray(getattr(result, "x", ()), dtype=float).reshape(-1)
+    if (
+        bool(getattr(result, "success", False))
+        and final_x.size == x.size
+        and np.allclose(x, final_x, atol=1.0e-12, rtol=0.0)
+    ):
+        return "accepted"
+    return "rejected"
+
+
+def _diag_first_bad_qr_eval(trace, baseline_norm=None):
+    if not trace:
+        return None
+    reference_norm = (
+        float(baseline_norm)
+        if baseline_norm is not None and np.isfinite(float(baseline_norm))
+        else _diag_qr_norm_from_objective_record(trace[0])
+    )
+    first_norm = _diag_qr_norm_from_objective_record(trace[0])
+    if np.isfinite(reference_norm) and np.isfinite(first_norm):
+        if reference_norm < 5.0 and first_norm > max(10.0, 10.0 * reference_norm):
+            return trace[0]
+    previous_norm = first_norm
+    for record in trace[1:]:
+        norm = _diag_qr_norm_from_objective_record(record)
+        if (
+            np.isfinite(previous_norm)
+            and np.isfinite(norm)
+            and previous_norm < 5.0
+            and norm > max(10.0, 10.0 * reference_norm)
+        ):
+            return record
+        previous_norm = norm
+    return None
+
+
+def _diag_caked_delta(after, before):
+    return (
+        float(after[0]) - float(before[0]),
+        float(((float(after[1]) - float(before[1]) + 180.0) % 360.0) - 180.0),
+    )
+
+
+def _diag_parameter_sensitivity_epsilon(name, value):
+    if name in {"zb", "zs"}:
+        return 1.0e-6
+    if name in {"theta_initial", "theta_offset", "psi_z", "chi", "cor_angle", "gamma", "Gamma"}:
+        return 1.0e-4
+    if name == "corto_detector":
+        return 1.0e-6
+    if name in {"a", "c"}:
+        return 1.0e-5
+    if name in {"center_x", "center_y"}:
+        return 1.0e-3
+    return max(1.0e-8 * max(abs(float(value)), 1.0), 1.0e-8)
+
+
+def _diag_micro_step_epsilon(name, value):
+    return 0.05 * _diag_parameter_sensitivity_epsilon(name, value)
+
+
+def _diag_prediction_delta_max_norm(baseline_records, trial_records):
+    max_norm = 0.0
+    for branch in sorted(baseline_records):
+        delta = _diag_caked_delta(
+            trial_records[branch]["predicted_caked"],
+            baseline_records[branch]["predicted_caked"],
+        )
+        max_norm = max(max_norm, float(np.linalg.norm(np.asarray(delta, dtype=float))))
+    return float(max_norm)
+
+
+def _diag_print_qr_trial_history(trace, result, var_names):
+    assert trace
+    baseline_x = np.asarray(trace[0].get("x", ()), dtype=float).reshape(-1)
+    expected_by_branch = {
+        branch: _diag_branch_identity_tuple(row)
+        for branch, row in _diag_target_prediction_rows_by_branch(trace[0]).items()
+    }
+    print("qr_only_trial_history")
+    print(
+        "eval | status | x | delta_from_baseline | pred_b0 | pred_b1 | "
+        "residual_b0 | residual_b1 | total_qr_norm | branch_identity_stable"
+    )
+    for record in trace:
+        x = np.asarray(record.get("x", ()), dtype=float).reshape(-1)
+        delta = x - baseline_x if x.size == baseline_x.size else np.asarray([], dtype=float)
+        print(
+            f"{int(record.get('eval_index', -1))} | "
+            f"{_diag_trace_eval_status(record, result, baseline_x)} | "
+            f"{_diag_param_delta_text(var_names, x)} | "
+            f"{_diag_param_delta_text(var_names, delta)} | "
+            f"{_diag_fmt_pair(_diag_trace_pair(record, 0, 'predicted_caked_deg'))} | "
+            f"{_diag_fmt_pair(_diag_trace_pair(record, 1, 'predicted_caked_deg'))} | "
+            f"{_diag_fmt_pair(_diag_trace_pair(record, 0, 'residual_caked_deg'))} | "
+            f"{_diag_fmt_pair(_diag_trace_pair(record, 1, 'residual_caked_deg'))} | "
+            f"{_diag_qr_norm_from_objective_record(record):.9f} | "
+            f"{'yes' if _diag_trace_branch_identity_stable(record, expected_by_branch) else 'no'}"
+        )
+
+
+def test_minus_1_0_10_qr_only_trial_history(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    baseline_records = _diag_records_from_audit_rows(_diag_fit_audit_rows(dataset))
+    baseline_norm = _diag_total_residual_norm(baseline_records)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+    )
+    result = fit_run["result"]
+    trace = _diag_objective_trace(result)
+    assert trace
+    print(f"handoff_baseline_qr_norm={baseline_norm:.9f}")
+    _diag_print_qr_trial_history(trace, result, fit_run["var_names"])
+    first_bad = _diag_first_bad_qr_eval(trace, baseline_norm)
+    assert first_bad is not None, "first_bad_eval_not_found"
+    baseline_x = np.asarray(trace[0].get("x", ()), dtype=float).reshape(-1)
+    bad_x = np.asarray(first_bad.get("x", ()), dtype=float).reshape(-1)
+    bad_delta = bad_x - baseline_x
+    print(f"first_bad_eval_index={int(first_bad.get('eval_index', -1))}")
+    print(f"first_bad_parameter_delta={_diag_param_delta_text(fit_run['var_names'], bad_delta)}")
+
+
+def test_minus_1_0_10_qr_parameter_sensitivity_scale(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    var_names = _diag_geometry_fit_var_names(context["saved_state"])
+    baseline_rows = _diag_recompute_fit_audit_rows(context, dataset, params)
+    baseline_records = _diag_records_from_audit_rows(baseline_rows)
+    baseline_norm = _diag_total_residual_norm(baseline_records)
+    print("qr_parameter_sensitivity_scale")
+    print(
+        "param | sign | epsilon | pred_delta_b0 | pred_delta_b1 | "
+        "residual_norm_delta | derivative_estimate"
+    )
+    suspects = []
+    for name in var_names:
+        if name not in params:
+            continue
+        value = float(params[name])
+        epsilon = _diag_parameter_sensitivity_epsilon(name, value)
+        records_by_sign = {}
+        norms_by_sign = {}
+        for sign in (1.0, -1.0):
+            trial_params = dict(params)
+            trial_params[name] = value + sign * epsilon
+            trial_rows = _diag_recompute_fit_audit_rows(context, dataset, trial_params)
+            trial_records = _diag_records_from_audit_rows(trial_rows)
+            records_by_sign[sign] = trial_records
+            norms_by_sign[sign] = _diag_total_residual_norm(trial_records)
+        derivative = (norms_by_sign[1.0] - norms_by_sign[-1.0]) / (2.0 * epsilon)
+        for sign in (1.0, -1.0):
+            trial_records = records_by_sign[sign]
+            pred_delta_b0 = _diag_caked_delta(
+                trial_records[0]["predicted_caked"],
+                baseline_records[0]["predicted_caked"],
+            )
+            pred_delta_b1 = _diag_caked_delta(
+                trial_records[1]["predicted_caked"],
+                baseline_records[1]["predicted_caked"],
+            )
+            max_move = max(
+                float(np.linalg.norm(np.asarray(pred_delta_b0, dtype=float))),
+                float(np.linalg.norm(np.asarray(pred_delta_b1, dtype=float))),
+            )
+            if max_move > 10.0:
+                suspects.append(str(name))
+            print(
+                f"{name} | {'+' if sign > 0 else '-'} | {epsilon:.9g} | "
+                f"{_diag_fmt_pair(pred_delta_b0)} | {_diag_fmt_pair(pred_delta_b1)} | "
+                f"{(norms_by_sign[sign] - baseline_norm):.9f} | {derivative:.9f}"
+            )
+    suspects = sorted(set(suspects))
+    print(f"extreme_sensitivity_parameters={suspects}")
+    print(f"parameter_scaling_suspect={'yes' if suspects else 'no'}")
+
+
+def test_minus_1_0_10_qr_only_bounded_micro_step(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    var_names = _diag_geometry_fit_var_names(context["saved_state"])
+    bounds = {
+        str(name): {
+            "mode": "relative",
+            "min": -_diag_micro_step_epsilon(str(name), params.get(str(name), 0.0)),
+            "max": _diag_micro_step_epsilon(str(name), params.get(str(name), 0.0)),
+        }
+        for name in var_names
+    }
+    baseline_records = _diag_records_from_audit_rows(_diag_fit_audit_rows(dataset))
+    baseline_norm = _diag_total_residual_norm(baseline_records)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        bounds_overrides=bounds,
+        optimizer_overrides={"max_nfev": 20},
+    )
+    result = fit_run["result"]
+    nfev = int(getattr(result, "nfev", 0) or 0)
+    trace = _diag_objective_trace(result)
+    after_records = None
+    after_unavailable_reason = ""
+    try:
+        after_records = _diag_after_records_from_fit_result(baseline_records, result)
+        after_norm = _diag_total_residual_norm(after_records)
+    except AssertionError:
+        after_unavailable_reason = "nonfinite_or_missing_target_prediction"
+        after_norm = _diag_qr_norm_from_objective_record(trace[-1]) if trace else float("nan")
+    optimizer_before_norm = (
+        _diag_qr_norm_from_objective_record(trace[0]) if trace else float("nan")
+    )
+    comparison_before_norm = (
+        optimizer_before_norm if np.isfinite(optimizer_before_norm) else baseline_norm
+    )
+    prediction_changed = (
+        _diag_predictions_changed(baseline_records, after_records)
+        if after_records is not None
+        else bool(
+            len(trace) >= 2
+            and not np.allclose(
+                np.asarray(trace[-1].get("x", ()), dtype=float),
+                np.asarray(trace[0].get("x", ()), dtype=float),
+                atol=1.0e-12,
+                rtol=0.0,
+            )
+        )
+    )
+    print("qr_only_bounded_micro_step")
+    print(f"micro_bounds={bounds}")
+    print(f"nfev={nfev}")
+    print(f"prediction_recomputed={'yes' if trace else 'no'}")
+    print(f"prediction_changed={'yes' if prediction_changed else 'no'}")
+    print(f"handoff_residual_before={baseline_norm:.9f}")
+    print(f"optimizer_residual_before={optimizer_before_norm:.9f}")
+    print(f"residual_after={after_norm:.9f}")
+    if after_records is not None:
+        _diag_print_fit_step_table(baseline_records, after_records)
+    else:
+        print(f"final_residual_table=<unavailable reason={after_unavailable_reason}>")
+    if after_norm <= comparison_before_norm + 1.0e-9:
+        print("bounded_micro_step_reduces_qr_residual=yes")
+        if after_norm <= baseline_norm + 1.0e-9:
+            print("qr_remaining_issue=step_scale_or_trust_region")
+        else:
+            print("qr_remaining_issue=optimizer_baseline_prediction_mismatch")
+    else:
+        print("bounded_micro_step_reduces_qr_residual=no")
+        print("parameterization_cannot_reduce_qr_residual")
+    assert nfev > 0
+    assert trace
+    assert prediction_changed
+    assert after_norm <= comparison_before_norm + 1.0e-9
+
+
+def test_minus_1_0_10_qr_residual_phi_wrap_continuity(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    var_names = _diag_geometry_fit_var_names(context["saved_state"])
+    baseline_rows = _diag_recompute_fit_audit_rows(context, dataset, params)
+    baseline_records = _diag_records_from_audit_rows(baseline_rows)
+    baseline_identity = {
+        branch: _diag_branch_identity_tuple(row) for branch, row in baseline_rows.items()
+    }
+    print("qr_residual_phi_wrap_continuity")
+    print(
+        "param | sign | epsilon | residual_phi_delta_b0 | residual_phi_delta_b1 | "
+        "branch_identity_stable"
+    )
+    failures = []
+    for name in var_names:
+        if name not in params:
+            continue
+        value = float(params[name])
+        epsilon = _diag_micro_step_epsilon(name, value)
+        for sign in (1.0, -1.0):
+            trial_params = dict(params)
+            trial_params[name] = value + sign * epsilon
+            trial_rows = _diag_recompute_fit_audit_rows(context, dataset, trial_params)
+            trial_records = _diag_records_from_audit_rows(trial_rows)
+            identity_stable = set(trial_rows) == set(baseline_identity)
+            if identity_stable:
+                identity_stable = all(
+                    _diag_branch_identity_tuple(trial_rows[branch])
+                    == baseline_identity[branch]
+                    for branch in baseline_identity
+                )
+            phi_deltas = {}
+            for branch in sorted(baseline_records):
+                phi_deltas[branch] = float(
+                    (
+                        trial_records[branch]["residual_caked"][1]
+                        - baseline_records[branch]["residual_caked"][1]
+                        + 180.0
+                    )
+                    % 360.0
+                    - 180.0
+                )
+                if abs(phi_deltas[branch]) > 90.0:
+                    failures.append((name, sign, branch, phi_deltas[branch], "phi_jump"))
+            if not identity_stable:
+                failures.append((name, sign, "all", float("nan"), "branch_identity_flip"))
+            print(
+                f"{name} | {'+' if sign > 0 else '-'} | {epsilon:.9g} | "
+                f"{phi_deltas.get(0, np.nan):.9f} | {phi_deltas.get(1, np.nan):.9f} | "
+                f"{'yes' if identity_stable else 'no'}"
+            )
+    print(f"phi_wrap_discontinuity_failures={failures}")
+    assert not failures, "qr_residual_phi_wrap_discontinuity"
+
+
+def test_minus_1_0_10_qr_only_solver_inputs_are_scaled(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    baseline_records = _diag_records_from_audit_rows(_diag_fit_audit_rows(dataset))
+    baseline_norm = _diag_total_residual_norm(baseline_records)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+    )
+    request = fit_run["request"]
+    result = fit_run["result"]
+    trace = _diag_objective_trace(result)
+    assert trace
+    debug = getattr(result, "geometry_fit_debug_summary", {}) or {}
+    parameter_entries = {
+        str(entry.get("name")): dict(entry)
+        for entry in debug.get("parameter_entries", []) or []
+        if isinstance(entry, Mapping)
+    }
+    var_names = [str(name) for name in fit_run["var_names"]]
+    x0 = [float(fit_run["before_params"][name]) for name in var_names]
+    x_scale = [float(parameter_entries.get(name, {}).get("scale", np.nan)) for name in var_names]
+    lower_bounds = [
+        float(parameter_entries.get(name, {}).get("lower_bound", np.nan))
+        for name in var_names
+    ]
+    upper_bounds = [
+        float(parameter_entries.get(name, {}).get("upper_bound", np.nan))
+        for name in var_names
+    ]
+    jacobian = getattr(result, "jac", None)
+    first_bad = _diag_first_bad_qr_eval(trace, baseline_norm)
+    scaling_suspect = False
+    baseline_prediction_mismatch = False
+    if first_bad is not None:
+        baseline_x = np.asarray(trace[0].get("x", ()), dtype=float).reshape(-1)
+        bad_x = np.asarray(first_bad.get("x", ()), dtype=float).reshape(-1)
+        scale = np.asarray(x_scale, dtype=float)
+        if bad_x.size == baseline_x.size and scale.size == bad_x.size:
+            delta = bad_x - baseline_x
+            finite_scale = np.where(np.isfinite(scale) & (scale > 0.0), scale, 1.0)
+            scaled_delta_norm = float(np.linalg.norm(delta / finite_scale))
+            raw_delta_norm = float(np.linalg.norm(delta))
+            baseline_prediction_mismatch = bool(raw_delta_norm <= 1.0e-15)
+            scaling_suspect = bool(raw_delta_norm > 1.0e-15 and scaled_delta_norm < 1.0e-3)
+            print(f"first_bad_scaled_delta_norm={scaled_delta_norm:.12f}")
+    unbounded = any(
+        not (np.isfinite(lo) and np.isfinite(hi))
+        for lo, hi in zip(lower_bounds, upper_bounds)
+    )
+    scaling_suspect = bool(scaling_suspect or unbounded)
+    optimizer_cfg = request.refinement_config.get("optimizer", {})
+    print("qr_only_solver_inputs")
+    print(f"x0={dict(zip(var_names, x0))}")
+    print(f"x_scale={dict(zip(var_names, x_scale))}")
+    print(f"bounds={dict(zip(var_names, zip(lower_bounds, upper_bounds)))}")
+    print(f"residual_vector={trace[0].get('residual_vector')}")
+    if jacobian is None:
+        print("jacobian=<unavailable>")
+    else:
+        print(f"jacobian={np.array2string(np.asarray(jacobian, dtype=float), precision=9)}")
+    print(f"method={optimizer_cfg.get('method', 'trf')}")
+    print(f"loss={optimizer_cfg.get('loss', 'linear')}")
+    print("ftol=default(1e-8)")
+    print("xtol=default(1e-8)")
+    print("gtol=default(1e-8)")
+    print(f"max_nfev={max(20, int(optimizer_cfg.get('max_nfev', 120)))}")
+    print(
+        "optimizer_baseline_prediction_mismatch="
+        f"{'yes' if baseline_prediction_mismatch else 'no'}"
+    )
+    print(f"optimizer_scaling_suspect={'yes' if scaling_suspect else 'no'}")
+    assert x0
+    assert len(x_scale) == len(x0)
+    assert trace[0].get("residual_vector")
+
+
+def _diag_source_identity(row):
+    return {
+        "q_group_key": _diag_q_group_key(row),
+        "hkl": _diag_hkl(row),
+        "source_table_index": row.get("source_table_index"),
+        "source_row_index": row.get("source_row_index"),
+        "source_branch_index": row.get("source_branch_index"),
+        "source_peak_index": row.get("source_peak_index"),
+        "branch_id": row.get("branch_id"),
+    }
+
+
+def _diag_source_identity_key(row):
+    identity = _diag_source_identity(row)
+    return (
+        identity["q_group_key"],
+        identity["hkl"],
+        identity["source_table_index"],
+        identity["source_row_index"],
+        identity["source_branch_index"],
+        identity["source_peak_index"],
+        identity["branch_id"],
+    )
+
+
+def _diag_locked_correspondence_key(row):
+    identity = _diag_source_identity(row)
+    return (
+        identity["q_group_key"],
+        identity["hkl"],
+        identity["source_table_index"],
+        identity["source_row_index"],
+        identity["source_branch_index"],
+        identity["source_peak_index"],
+    )
+
+
+def _diag_prediction_source_text(row):
+    source = str(row.get("fit_prediction_source", row.get("predicted_source", "")) or "")
+    reason = str(row.get("resolution_reason", row.get("correspondence_resolution_reason", "")) or "")
+    subreason = str(row.get("resolution_subreason", "") or "")
+    return source, reason, subreason
+
+
+def _diag_resolver_function_text(row):
+    source, reason, subreason = _diag_prediction_source_text(row)
+    if "q_group_hkl_source_row_provenance" in source or reason == "resolved_source_row":
+        return "q_group_hkl_source_row_provenance"
+    if "branch_representative" in source or reason == "resolved_source_peak":
+        return "branch_representative_fallback"
+    if reason:
+        return reason
+    return subreason or "unknown"
+
+
+def _diag_cache_id_text(row):
+    for key in (
+        "source_rows_cache_id",
+        "source_row_cache_id",
+        "simulation_cache_id",
+        "source_snapshot_id",
+        "source_rows_hash",
+    ):
+        value = row.get(key)
+        if value is not None:
+            return str(value)
+    return "<unavailable>"
+
+
+def _diag_handoff_predicted_caked(row):
+    return _diag_row_pair(row, "fit_prediction_caked_deg")
+
+
+def _diag_solver_predicted_caked(row):
+    return _diag_row_pair(row, "predicted_caked_deg")
+
+
+def _diag_handoff_residual_vector(records):
+    values = []
+    for branch in sorted(records):
+        residual = records[branch]["residual_caked"]
+        values.extend([float(residual[0]), float(residual[1])])
+    return np.asarray(values, dtype=float)
+
+
+def _diag_trace_residual_vector(record):
+    values = []
+    rows = _diag_target_prediction_rows_by_branch(record)
+    for branch in sorted(rows):
+        residual = _diag_pair_or_nan(rows[branch].get("residual_caked_deg"))
+        values.extend([float(residual[0]), float(residual[1])])
+    return np.asarray(values, dtype=float)
+
+
+def _diag_source_rows_hash(rows):
+    normalized = []
+    for row in rows or ():
+        if not isinstance(row, Mapping) or not _diag_entry_is_minus_1_0_10_branch(row):
+            continue
+        normalized.append(
+            {
+                "q_group_key": repr(_diag_q_group_key(row)),
+                "hkl": repr(_diag_hkl(row)),
+                "source_table_index": row.get("source_table_index"),
+                "source_row_index": row.get("source_row_index"),
+                "source_branch_index": row.get("source_branch_index"),
+                "source_peak_index": row.get("source_peak_index"),
+                "predicted_caked": _diag_pair_or_nan(
+                    row.get(
+                        "fit_prediction_caked_deg",
+                        row.get(
+                            "predicted_caked_deg",
+                            (
+                                row.get("simulated_two_theta_deg"),
+                                row.get("simulated_phi_deg"),
+                            ),
+                        ),
+                    )
+                ),
+            }
+        )
+    text = repr(sorted(normalized, key=repr))
+    import hashlib
+
+    return hashlib.sha1(text.encode("utf-8")).hexdigest(), normalized
+
+
+def _diag_print_x0_prediction_comparison(handoff_rows, dry_rows, solver_rows):
+    print("handoff_dry_run_solver_x0_prediction_table")
+    print(
+        "branch | q_group_key | hkl | source_table_index | source_row_index | "
+        "source_branch_index | source_peak_index | branch_id | handoff_predicted_caked | "
+        "dry_run_predicted_caked | solver_x0_predicted_caked | "
+        "handoff_minus_dry_run_delta | handoff_minus_solver_x0_delta | "
+        "resolver_function | prediction_source | source_match_reason | cache_id"
+    )
+    for branch in (0, 1):
+        handoff = handoff_rows.get(branch, {})
+        dry = dry_rows.get(branch, {})
+        solver = solver_rows.get(branch, {})
+        handoff_pred = _diag_handoff_predicted_caked(handoff)
+        dry_pred = _diag_solver_predicted_caked(dry)
+        solver_pred = _diag_solver_predicted_caked(solver)
+        handoff_minus_dry = _diag_caked_delta(handoff_pred, dry_pred)
+        handoff_minus_solver = _diag_caked_delta(handoff_pred, solver_pred)
+        source, reason, subreason = _diag_prediction_source_text(solver)
+        print(
+            f"{branch} | {handoff.get('q_group_key')} | {handoff.get('hkl')} | "
+            f"{handoff.get('source_table_index')} | {handoff.get('source_row_index')} | "
+            f"{handoff.get('source_branch_index')} | {handoff.get('source_peak_index')} | "
+            f"{handoff.get('branch_id')} | {_diag_fmt_pair(handoff_pred)} | "
+            f"{_diag_fmt_pair(dry_pred)} | {_diag_fmt_pair(solver_pred)} | "
+            f"{_diag_fmt_pair(handoff_minus_dry)} | {_diag_fmt_pair(handoff_minus_solver)} | "
+            f"{_diag_resolver_function_text(solver)} | {source} | "
+            f"{reason or subreason} | {_diag_cache_id_text(solver)}"
+        )
+
+
+def _diag_solver_x0_bundle(context, dataset):
+    handoff_rows = _diag_fit_audit_rows(dataset)
+    handoff_records = _diag_records_from_audit_rows(handoff_rows)
+    dry_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        objective_dry_run_only=True,
+    )
+    solver_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+    )
+    dry_trace = _diag_objective_trace(dry_run["result"])
+    solver_trace = _diag_objective_trace(solver_run["result"])
+    assert dry_trace
+    assert solver_trace
+    return {
+        "handoff_rows": handoff_rows,
+        "handoff_records": handoff_records,
+        "dry_run": dry_run,
+        "solver_run": solver_run,
+        "dry_record": dry_trace[0],
+        "solver_record": solver_trace[0],
+    }
+
+
+def test_minus_1_0_10_solver_x0_matches_handoff_and_dry_run(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_solver_x0_bundle(context, dataset)
+    handoff_rows = bundle["handoff_rows"]
+    dry_rows = _diag_target_prediction_rows_by_branch(bundle["dry_record"])
+    solver_rows = _diag_target_prediction_rows_by_branch(bundle["solver_record"])
+    _diag_print_x0_prediction_comparison(handoff_rows, dry_rows, solver_rows)
+
+    handoff_vec = _diag_handoff_residual_vector(bundle["handoff_records"])
+    dry_vec = _diag_trace_residual_vector(bundle["dry_record"])
+    solver_vec = _diag_trace_residual_vector(bundle["solver_record"])
+    print(f"handoff_residual_vector={handoff_vec.tolist()}")
+    print(f"dry_run_residual_vector={dry_vec.tolist()}")
+    print(f"solver_x0_residual_vector={solver_vec.tolist()}")
+
+    first_bad = None
+    for branch in (0, 1):
+        handoff_pred = _diag_handoff_predicted_caked(handoff_rows.get(branch, {}))
+        dry_pred = _diag_solver_predicted_caked(dry_rows.get(branch, {}))
+        solver_pred = _diag_solver_predicted_caked(solver_rows.get(branch, {}))
+        if not (
+            np.allclose(handoff_pred, dry_pred, atol=1.0e-9, rtol=0.0)
+            and np.allclose(handoff_pred, solver_pred, atol=1.0e-9, rtol=0.0)
+        ):
+            first_bad = branch
+            print("first_failure=solver_callback_x0_prediction_mismatch")
+            print(f"first_bad_branch={branch}")
+            print(
+                "expected_source="
+                f"{_diag_prediction_source_text(handoff_rows.get(branch, {}))[0]}"
+            )
+            print(
+                "actual_source="
+                f"{_diag_prediction_source_text(solver_rows.get(branch, {}))[0]}"
+            )
+            break
+    if first_bad is None and not (
+        np.allclose(handoff_vec, dry_vec, atol=1.0e-9, rtol=0.0)
+        and np.allclose(handoff_vec, solver_vec, atol=1.0e-9, rtol=0.0)
+    ):
+        first_bad = -1
+        print("first_failure=solver_callback_x0_residual_vector_mismatch")
+        print("first_bad_branch=<residual_vector>")
+    assert first_bad is None
+
+
+def test_minus_1_0_10_solver_small_perturbations_keep_same_prediction_source(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    var_names = _diag_geometry_fit_var_names(context["saved_state"])
+    baseline = _diag_solver_x0_bundle(context, dataset)
+    baseline_rows = _diag_target_prediction_rows_by_branch(baseline["dry_record"])
+    print("solver_small_perturbation_prediction_source_table")
+    print(
+        "param | epsilon | branch | baseline_predicted_caked | plus_predicted_caked | "
+        "minus_predicted_caked | baseline_source_identity | plus_source_identity | "
+        "minus_source_identity | delta_plus | delta_minus | derivative_estimate | "
+        "source_changed | discontinuity"
+    )
+    failures = []
+    for name in var_names:
+        if name not in params:
+            continue
+        epsilon = _diag_micro_step_epsilon(str(name), params[name])
+        records_by_sign = {}
+        for sign in (1.0, -1.0):
+            trial_params = dict(params)
+            trial_params[str(name)] = float(params[str(name)]) + sign * epsilon
+            fit_run = _diag_run_controlled_minus_1_0_10_fit(
+                context,
+                dataset,
+                seed_multistart_enabled=False,
+                objective_trace_enabled=True,
+                qr_only_objective=True,
+                objective_dry_run_only=True,
+                params_overrides=trial_params,
+            )
+            trace = _diag_objective_trace(fit_run["result"])
+            assert trace
+            records_by_sign[sign] = _diag_target_prediction_rows_by_branch(trace[0])
+        for branch in (0, 1):
+            baseline_row = baseline_rows.get(branch, {})
+            plus_row = records_by_sign[1.0].get(branch, {})
+            minus_row = records_by_sign[-1.0].get(branch, {})
+            baseline_pred = _diag_solver_predicted_caked(baseline_row)
+            plus_pred = _diag_solver_predicted_caked(plus_row)
+            minus_pred = _diag_solver_predicted_caked(minus_row)
+            delta_plus = _diag_caked_delta(plus_pred, baseline_pred)
+            delta_minus = _diag_caked_delta(minus_pred, baseline_pred)
+            derivative = (
+                (np.asarray(plus_pred, dtype=float) - np.asarray(minus_pred, dtype=float))
+                / (2.0 * epsilon)
+            )
+            baseline_id = _diag_source_identity_key(baseline_row)
+            plus_id = _diag_source_identity_key(plus_row)
+            minus_id = _diag_source_identity_key(minus_row)
+            source_changed = bool(plus_id != baseline_id or minus_id != baseline_id)
+            discontinuity = bool(
+                max(
+                    float(np.linalg.norm(np.asarray(delta_plus, dtype=float))),
+                    float(np.linalg.norm(np.asarray(delta_minus, dtype=float))),
+                )
+                > 10.0
+            )
+            if source_changed or discontinuity:
+                failures.append((str(name), branch, source_changed, discontinuity))
+            print(
+                f"{name} | {epsilon:.9g} | {branch} | {_diag_fmt_pair(baseline_pred)} | "
+                f"{_diag_fmt_pair(plus_pred)} | {_diag_fmt_pair(minus_pred)} | "
+                f"{baseline_id} | {plus_id} | {minus_id} | {_diag_fmt_pair(delta_plus)} | "
+                f"{_diag_fmt_pair(delta_minus)} | {_diag_fmt_pair(derivative)} | "
+                f"{'yes' if source_changed else 'no'} | "
+                f"{'yes' if discontinuity else 'no'}"
+            )
+    if failures:
+        print("first_failure=prediction_source_or_phi_discontinuity")
+        print(f"first_bad_perturbation={failures[0]}")
+    assert not failures
+
+
+def test_minus_1_0_10_solver_callback_uses_locked_correspondence(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_solver_x0_bundle(context, dataset)
+    locked = {
+        branch: _diag_locked_correspondence_key(row)
+        for branch, row in bundle["handoff_rows"].items()
+        if branch in {0, 1}
+    }
+    solver_rows = _diag_target_prediction_rows_by_branch(bundle["solver_record"])
+    callback = {
+        branch: _diag_locked_correspondence_key(row)
+        for branch, row in solver_rows.items()
+        if branch in {0, 1}
+    }
+    print(f"locked_branch_0_source={locked.get(0)}")
+    print(f"locked_branch_1_source={locked.get(1)}")
+    print(f"solver_callback_branch_0_source={callback.get(0)}")
+    print(f"solver_callback_branch_1_source={callback.get(1)}")
+    locked_equals_callback = bool(locked == callback)
+    print(f"locked_equals_callback={'yes' if locked_equals_callback else 'no'}")
+    if not locked_equals_callback:
+        print("first_failure=fixed_correspondence_lost_inside_solver_callback")
+    assert locked_equals_callback
+
+
+def test_minus_1_0_10_x0_params_reconstruct_exact_baseline(tmp_path) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+    )
+    var_names = [str(name) for name in fit_run["var_names"]]
+    baseline_params = {
+        name: float(
+            dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))[
+                name
+            ]
+        )
+        for name in var_names
+    }
+    x0 = np.asarray(
+        [float(fit_run["request"].params[name]) for name in var_names],
+        dtype=float,
+    ).reshape(-1)
+    reconstructed = {name: float(x0[idx]) for idx, name in enumerate(var_names)}
+    diffs = {
+        name: float(reconstructed[name] - baseline_params[name])
+        for name in var_names
+    }
+    print(f"baseline_params={baseline_params}")
+    print(f"x0={x0.tolist()}")
+    print(f"reconstructed_params_from_x0={reconstructed}")
+    print(f"per_param_diff={diffs}")
+    ok = all(abs(value) <= 1.0e-12 for value in diffs.values())
+    if not ok:
+        print("first_failure=x0_param_reconstruction_not_identity")
+    assert ok
+
+
+def test_minus_1_0_10_solver_source_rows_not_rebuilt_differently_at_x0(
+    tmp_path,
+) -> None:
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    bundle = _diag_solver_x0_bundle(context, dataset)
+    before_hash, before_rows = _diag_source_rows_hash(dataset.get("source_rows_for_trace", ()))
+    solver_rows = _diag_target_prediction_rows_by_branch(bundle["solver_record"])
+    callback_hash, callback_rows = _diag_source_rows_hash(solver_rows.values())
+    print("solver_source_rows_x0")
+    print(f"before_solver_source_rows_hash={before_hash}")
+    print(f"inside_solver_eval1_rows_hash={callback_hash}")
+    print(f"before_solver_rows={before_rows}")
+    print(f"inside_solver_eval1_rows={callback_rows}")
+    for branch in (0, 1):
+        row = solver_rows.get(branch, {})
+        print(
+            "solver_eval1_row | "
+            f"branch={branch} | q_group_key={row.get('q_group_key')} | "
+            f"hkl={row.get('hkl')} | source_branch_index={row.get('source_branch_index')} | "
+            f"source_table_index={row.get('source_table_index')} | "
+            f"source_row_index={row.get('source_row_index')} | "
+            f"predicted_caked={_diag_fmt_pair(_diag_solver_predicted_caked(row))}"
+        )
+    locked = {
+        branch: _diag_locked_correspondence_key(row)
+        for branch, row in bundle["handoff_rows"].items()
+        if branch in {0, 1}
+    }
+    callback = {
+        branch: _diag_locked_correspondence_key(row)
+        for branch, row in solver_rows.items()
+        if branch in {0, 1}
+    }
+    source_ok = bool(locked == callback)
+    print(f"source_rows_locked_branch_match={'yes' if source_ok else 'no'}")
+    if not source_ok:
+        print("first_failure=source_rows_changed_between_dry_run_and_solver")
+    assert source_ok
+
+
 def test_minus_1_0_10_fit_prediction_identity_stable_during_step(tmp_path) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     fit_run = _diag_run_controlled_minus_1_0_10_fit(
@@ -22987,7 +23868,13 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
             entry["fit_prediction_detector_display_px"] = initial_row["sim_display"]
         if "sim_native" in initial_row:
             entry["fit_prediction_detector_native_px"] = initial_row["sim_native"]
+            entry["fit_prediction_detector_native_px_source"] = (
+                "display_to_native_sim_coords(sim_display)"
+            )
             entry["sim_visual_detector_canonical_native_px"] = initial_row["sim_native"]
+            entry["sim_visual_detector_canonical_native_source"] = (
+                "display_to_native_sim_coords(sim_display)"
+            )
         entry["fit_prediction_detector_display_px"] = handoff_row[
             "fit_prediction_detector_display_px"
         ]
@@ -22997,9 +23884,15 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
         entry["fit_prediction_detector_native_px"] = handoff_row[
             "fit_prediction_detector_native_px"
         ]
+        entry["fit_prediction_detector_native_px_source"] = (
+            "display_to_native_sim_coords(sim_display)"
+        )
         entry["sim_visual_detector_canonical_native_px"] = handoff_row[
             "fit_prediction_detector_native_px"
         ]
+        entry["sim_visual_detector_canonical_native_source"] = (
+            "display_to_native_sim_coords(sim_display)"
+        )
         display_point = entry["sim_visual_detector_display_px"]
         wrong_native = callbacks.background_display_to_native_detector_coords(
             float(display_point[0]),
@@ -23012,6 +23905,23 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
             )
         point, payload, reason = opt._provider_local_saved_sim_detector_point(entry)
         assert point is not None, (branch, reason, payload)
+        raw_only_entry = dict(entry)
+        for key in (
+            "sim_visual_detector_canonical_native_px",
+            "sim_visual_detector_canonical_native_source",
+            "fit_prediction_detector_native_px",
+            "fit_prediction_detector_native_px_source",
+            "sim_native",
+            "sim_native_source",
+        ):
+            raw_only_entry.pop(key, None)
+        raw_only_point, raw_only_payload, raw_only_reason = (
+            opt._provider_local_saved_sim_detector_point(raw_only_entry)
+        )
+        assert raw_only_point is None, (branch, raw_only_reason, raw_only_payload)
+        assert raw_only_payload.get("saved_sim_detector_native_rejected_reason") == (
+            "display_native_unproven"
+        )
         row = dict(payload)
         row["caked_from_saved_native"] = entry.get("sim_visual_caked_deg")
         row["caked_from_display_to_native"] = handoff_row["fit_prediction_caked_deg"]
@@ -23182,6 +24092,12 @@ def test_minus_1_0_10_qr_only_fit_reduces_residual_after_correspondence_fix(
         )
         print(f"qr_only_after_norm_not_reduced_reason={reason}")
         assert reason
+        accepted_worse_step = bool(
+            getattr(result, "success", False)
+            and np.isfinite(after_norm)
+            and after_norm > baseline_norm + 1.0e-9
+        )
+        assert not accepted_worse_step, f"accepted_worse_qr_norm:{reason}"
     else:
         assert np.isfinite(after_norm)
 
@@ -23301,6 +24217,23 @@ def test_qr_residual_objective_units_are_not_mixed_unweighted(tmp_path) -> None:
         )
         assert vector.shape == weighted.shape
         assert np.allclose(vector, weighted, atol=1.0e-9, rtol=0.0)
+        offset_source = str(
+            diag.get("provider_local_saved_sim_fit_space_offset_source", "") or ""
+        )
+        if offset_source:
+            assert offset_source != "first_eval_unprimed"
+            if diag.get("provider_local_saved_sim_fit_space_reference_aligned"):
+                assert (
+                    diag.get("provider_local_saved_sim_fit_space_offset_baseline_primed")
+                    is True
+                )
+            else:
+                assert (
+                    diag.get(
+                        "provider_local_saved_sim_fit_space_offset_unavailable_reason"
+                    )
+                    == "baseline_offset_not_primed"
+                )
 
 
 def test_minus_1_0_10_fit_observed_matches_manual_refined_visual(tmp_path) -> None:

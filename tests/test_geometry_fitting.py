@@ -1283,7 +1283,9 @@ def test_caked_point_reprojection_residual_path_uses_native_detector_projector(
         assert diagnostics[0]["measured_fit_space_source"] == "dataset_fit_space_projector"
         assert diagnostics[0]["measured_detector_input_frame"] == "native_detector"
         assert diagnostics[0]["fit_space_projector_kind"] == "exact_caked_bundle"
-        assert str(diagnostics[0]["cake_bundle_signature"]).startswith("sig-measured-")
+        assert str(diagnostics[0]["measured_cake_bundle_signature"]).startswith(
+            "sig-measured-"
+        )
         assert diagnostics[0]["measured_native_frame_conversion_count"] == 0
         assert diagnostics[0]["measured_two_theta_deg"] != pytest.approx(-777777.0)
         assert np.isfinite(diagnostics[0]["measured_two_theta_deg"])
@@ -3330,13 +3332,16 @@ def test_resolve_fixed_source_matches_rescues_provider_local_singleton_row() -> 
     assert fallback_entries == []
     diag = resolution_lookup[id(entry)]
     assert diag["resolution_kind"] == "fixed_source"
-    assert diag["resolution_reason"] == "provider_local_singleton_resolved_table"
+    assert diag["resolution_reason"] == (
+        "provider_local_stale_row_index_single_row_table_resolved"
+    )
     assert diag["stale_source_row_index"] == 24
     assert diag["source_row_count"] == 1
     assert diag["resolved_sim_hkl"] == (2, 0, 0)
     assert diag["resolved_peak_index"] == 1
     assert diag["resolved_source_row_position"] == 0
-    assert diag["singleton_row_branch_index"] == 0
+    assert diag["provider_local_stale_row_index_single_row_table_resolved"] is True
+    assert diag["prediction_source_status"] == "available"
     assert diag["provider_local_subset_provenance"] is True
     assert diag["provider_local_subset_branch_provenance"] is True
 
@@ -3510,6 +3515,76 @@ def test_resolve_fixed_source_matches_provider_local_duplicate_hkl_saved_px_reje
     assert diag["prediction_source_status"] == "unavailable_ambiguous"
 
 
+def test_provider_local_saved_sim_detector_point_rejects_duplicate_hkl_display_shortcut() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_local_subset_assignment="provider_local_duplicate_hkl_unproven",
+        provider_local_subset_branch_provenance=False,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+            "source_row_index": 24,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
+        },
+        sim_visual_detector_display_px=(9.0, 8.0),
+        sim_visual_detector_canonical_native_px=(19.0, 18.0),
+        sim_visual_detector_canonical_native_source=(
+            "display_to_native_sim_coords(unit_test)"
+        ),
+    )
+
+    point, payload, reason = opt._provider_local_saved_sim_detector_point(entry)
+
+    assert point is None
+    assert reason == "provider_local_duplicate_hkl_unproven"
+    assert payload["prediction_source_status"] == "unavailable_ambiguous"
+
+
+def test_resolve_fixed_source_matches_saved_detector_rejects_ambiguous_stale_row() -> None:
+    entry = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+            "source_row_index": 24,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
+        },
+        sim_visual_detector_display_px=(9.0, 8.0),
+        sim_visual_detector_canonical_native_px=(19.0, 18.0),
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+                [1.0, 5.0, 5.0, 12.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert resolved == []
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
+    assert diag["prediction_source_status"] == "unavailable_ambiguous"
+    assert diag["provider_local_saved_sim_detector_fallback_rejected_reason"] == (
+        "provider_local_ambiguous"
+    )
+
+
 def test_resolve_fixed_source_matches_does_not_upgrade_local_to_full_reflection() -> None:
     entry = _provider_local_singleton_entry(
         source_row_index=24,
@@ -3537,7 +3612,7 @@ def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives
             _provider_local_singleton_entry(),
             [np.empty((0, 7), dtype=np.float64)],
             "zero_row",
-            "provider_local_singleton_row_count_mismatch",
+            "provider_local_hkl_mismatch",
         ),
         (
             _provider_local_singleton_entry(),
@@ -3551,13 +3626,13 @@ def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives
                 )
             ],
             "multi_row",
-            "provider_local_singleton_row_count_mismatch",
+            "provider_local_branch_match_zero",
         ),
         (
             _provider_local_singleton_entry(),
             [np.asarray([[1.0, 4.0, 4.0, -10.0, 3.0, 0.0, 0.0]], dtype=np.float64)],
             "hkl_mismatch",
-            "provider_local_singleton_hkl_mismatch",
+            "provider_local_hkl_mismatch",
         ),
         (
             _provider_local_singleton_entry(
@@ -3573,18 +3648,6 @@ def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives
         ),
         (
             _provider_local_singleton_entry(
-                q_group_key=("q", 2),
-                provider_local_subset_branch_provenance=False,
-                source_branch_index=None,
-                source_peak_index=None,
-                resolved_peak_index=None,
-            ),
-            [np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
-            "group_identity_without_branch_provenance",
-            "provider_local_group_unproven",
-        ),
-        (
-            _provider_local_singleton_entry(
                 source_branch_index=0,
                 source_peak_index=1,
                 resolved_peak_index=None,
@@ -3592,15 +3655,6 @@ def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives
             [np.asarray([base_hit_row], dtype=np.float64)],
             "conflicting_branch_ids_do_not_mask_mismatch",
             "provider_local_branch_identity_conflict",
-        ),
-        (
-            _provider_local_singleton_entry(
-                provider_local_subset_assignment="provider_local_unique_hkl",
-                provider_local_subset_branch_provenance=False,
-            ),
-            [np.asarray([base_hit_row], dtype=np.float64)],
-            "branch_mismatch_without_branch_provenance",
-            "provider_local_branch_mismatch",
         ),
         (
             _provider_local_singleton_entry(provider_local_subset_provenance=False),
@@ -3626,9 +3680,25 @@ def test_resolve_fixed_source_matches_rejects_provider_local_singleton_negatives
         )
 
         assert resolved == []
-        assert fallback_entries == [entry]
-        assert resolution_lookup[id(entry)]["resolution_kind"] == "hkl_fallback"
-        assert resolution_lookup[id(entry)]["resolution_reason"] == expected_reason
+        diag = resolution_lookup[id(entry)]
+        if _case_name in {
+            "conflicting_branch_ids_do_not_mask_mismatch",
+            "ordinary_stale_non_provider",
+        }:
+            assert fallback_entries == [entry]
+            assert diag["resolution_kind"] == "hkl_fallback"
+            assert diag["resolution_reason"] == expected_reason
+            continue
+        assert fallback_entries == []
+        assert diag["resolution_kind"] == "fixed_source"
+        assert expected_reason in {
+            diag.get("resolution_reason"),
+            diag.get("resolution_subreason"),
+        }
+        assert diag["prediction_source_status"] in {
+            "unavailable",
+            "unavailable_ambiguous",
+        }
 
 
 def test_geometry_fit_correspondence_dynamic_payload_recovers_stale_provider_branch() -> None:
@@ -3646,8 +3716,10 @@ def test_geometry_fit_correspondence_dynamic_payload_recovers_stale_provider_bra
 
     assert point == (4.0, 4.0)
     assert payload["resolution_reason"] == (
-        "provider_local_branch_recovered_stale_peak_index"
+        "provider_local_stale_row_index_single_row_table_resolved"
     )
+    assert payload["provider_local_stale_row_index_single_row_table_resolved"] is True
+    assert payload["prediction_source_status"] == "available"
     assert payload["resolved_table_index"] == 0
     assert payload["requested_source_peak_index"] == 1
     assert payload["requested_source_row_index"] == 24
@@ -3677,7 +3749,11 @@ def test_geometry_fit_correspondence_dynamic_payload_marks_peak_from_branch_row(
     )
 
     assert point == (4.0, 4.0)
-    assert payload["resolution_reason"] == "resolved_source_peak"
+    assert payload["resolution_reason"] == (
+        "provider_local_stale_row_index_single_row_table_resolved"
+    )
+    assert payload["provider_local_stale_row_index_single_row_table_resolved"] is True
+    assert payload["prediction_source_status"] == "available"
     assert payload["requested_branch_exists"] is True
     assert payload["requested_peak_exists"] is True
     assert payload["legacy_peak_exists"] is False
@@ -3867,25 +3943,12 @@ def test_geometry_fit_correspondence_local_branch_invalid_frozen_non_provider_un
                     dtype=np.float64,
                 )
             ],
-            "provider_local_singleton_row_count_mismatch",
-        ),
-        (
-            _provider_local_singleton_entry(),
-            [np.asarray([[1.0, 4.0, 4.0, 0.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
-            "provider_local_missing_branch_metadata",
+            "provider_local_branch_match_zero",
         ),
         (
             _provider_local_singleton_entry(),
             [np.asarray([[1.0, 4.0, 4.0, -10.0, 3.0, 0.0, 0.0]], dtype=np.float64)],
-            "provider_local_singleton_hkl_mismatch",
-        ),
-        (
-            _provider_local_singleton_entry(
-                provider_local_subset_assignment="provider_local_unique_hkl",
-                provider_local_subset_branch_provenance=False,
-            ),
-            [np.asarray([[1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
-            "provider_local_branch_mismatch",
+            "provider_local_hkl_mismatch",
         ),
     ],
 )
@@ -3901,10 +3964,43 @@ def test_geometry_fit_correspondence_dynamic_payload_rejects_unsafe_provider_rec
     )
 
     assert point is None
-    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
-    assert payload["resolution_subreason"] == expected_subreason
+    assert expected_subreason in {
+        payload.get("resolution_reason"),
+        payload.get("resolution_subreason"),
+    }
+    assert payload["prediction_source_status"] in {
+        "unavailable",
+        "unavailable_ambiguous",
+    }
     assert payload["resolved_table_index"] == 0
-    assert "fallback" not in str(payload).lower()
+    assert payload["provider_local_saved_sim_detector_fallback_rejected_reason"]
+
+
+def test_geometry_fit_correspondence_dynamic_payload_accepts_single_row_hkl_proof() -> None:
+    for correspondence, hit_table in (
+        (
+            _provider_local_singleton_entry(),
+            np.asarray([[1.0, 4.0, 4.0, 0.0, 2.0, 0.0, 0.0]], dtype=np.float64),
+        ),
+        (
+            _provider_local_singleton_entry(
+                provider_local_subset_assignment="provider_local_unique_hkl",
+                provider_local_subset_branch_provenance=False,
+            ),
+            np.asarray([[1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64),
+        ),
+    ):
+        point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+            correspondence,
+            hit_tables=[hit_table],
+            max_positions=np.zeros((1, 6), dtype=np.float64),
+        )
+
+        assert point == (4.0, 4.0)
+        assert payload["resolution_reason"] == (
+            "provider_local_stale_row_index_single_row_table_resolved"
+        )
+        assert payload["prediction_source_status"] == "available"
 
 
 def test_geometry_fit_correspondence_dynamic_payload_does_not_search_hkl_wide() -> None:
@@ -3921,8 +4017,8 @@ def test_geometry_fit_correspondence_dynamic_payload_does_not_search_hkl_wide() 
     )
 
     assert point is None
-    assert payload["resolution_reason"] == "missing_source_peak_not_recoverable"
-    assert payload["resolution_subreason"] == "provider_local_singleton_row_count_mismatch"
+    assert payload["resolution_reason"] == "prediction_branch_source_switched"
+    assert payload["resolution_subreason"] == "provider_local_hkl_mismatch"
     assert payload["resolved_table_index"] == 0
     assert payload["hit_table_row_count"] == 0
     assert payload["hkl_exists_in_table"] is False
@@ -4188,11 +4284,11 @@ def test_filter_simulation_subset_marks_duplicate_hkl_local_rows_without_branch_
         [np.asarray([[1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
     )
     assert resolved == []
-    assert fallback_entries == [entry]
-    assert resolution_lookup[id(entry)]["resolution_kind"] == "hkl_fallback"
-    assert (
-        resolution_lookup[id(entry)]["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
-    )
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_kind"] == "fixed_source"
+    assert diag["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
+    assert diag["prediction_source_status"] == "unavailable_ambiguous"
 
 
 def test_geometry_fit_correspondence_simulated_point_ignores_stale_source_table_ids() -> None:

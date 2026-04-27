@@ -529,7 +529,7 @@ def _geometry_fit_projection_signature(
     if not isinstance(payload, Mapping):
         return None
     try:
-        canonical = repr(_geometry_fit_cache_jsonable(dict(payload)))
+        canonical = repr(_geometry_fit_cache_jsonable(payload))
     except Exception:
         return None
     return hashlib.sha1(canonical.encode("utf-8")).hexdigest()
@@ -2100,6 +2100,18 @@ def _geometry_fit_point_list(point: object) -> list[float] | None:
     return [float(x_val), float(y_val)]
 
 
+def _geometry_fit_sim_native_source_is_display_to_native(source: object) -> bool:
+    text = str(source or "").strip().lower()
+    return bool(
+        text
+        and (
+            "display_to_native" in text
+            or "display->native" in text
+            or "display native roundtrip" in text
+        )
+    )
+
+
 def _geometry_fit_points_match(
     left: object,
     right: object,
@@ -3088,9 +3100,12 @@ def build_geometry_fit_qr_handoff_audit_rows(
             (("simulated_two_theta_deg", "simulated_phi_deg"),),
         )
         fit_prediction_caked_projection_reason = ""
+        fit_prediction_projection_theta_initial = None
         if fit_prediction_native is not None:
             projection_params = dict(base_fit_params or {})
-            projection_params["theta_initial"] = 0.0
+            fit_prediction_projection_theta_initial = _geometry_fit_finite_float(
+                projection_params.get("theta_initial")
+            )
             projected_prediction_caked, projected_prediction_reason = (
                 _geometry_fit_audit_project_native_to_caked(
                     fit_prediction_native,
@@ -3230,6 +3245,11 @@ def build_geometry_fit_qr_handoff_audit_rows(
             "fit_prediction_detector_native_px": fit_prediction_native,
             "fit_prediction_caked_deg": fit_prediction_caked,
             "fit_prediction_caked_projection_reason": fit_prediction_caked_projection_reason,
+            "fit_prediction_projection_theta_initial_deg": (
+                float(fit_prediction_projection_theta_initial)
+                if fit_prediction_projection_theta_initial is not None
+                else None
+            ),
             "observed_source": "background/manual",
             "predicted_source": "simulation",
             "observed_detector_native_px": fit_observed_native,
@@ -8818,6 +8838,9 @@ def build_geometry_manual_fit_dataset(
                         and np.isfinite(sim_native_point[1])
                     ):
                         initial_entry["sim_native"] = sim_native_point
+                        initial_entry["sim_native_source"] = (
+                            f"display_to_native_sim_coords({source_text or 'sim_display'})"
+                        )
         elif point_frame == "caked_2theta_phi":
             initial_entry["simulated_two_theta_deg"] = float(point_list[0])
             initial_entry["simulated_phi_deg"] = float(point_list[1])
@@ -8832,11 +8855,13 @@ def build_geometry_manual_fit_dataset(
                 )
             if picker_owned:
                 initial_entry.pop("sim_native", None)
+                initial_entry.pop("sim_native_source", None)
         elif point_frame == "detector_native":
             initial_entry["sim_native"] = (
                 float(point_list[0]),
                 float(point_list[1]),
             )
+            initial_entry["sim_native_source"] = str(source_text or "provider_detector_native")
 
     raw_selected_entries = list(
         manual_dataset_bindings.geometry_manual_pairs_for_index(background_idx) or ()
@@ -11094,18 +11119,25 @@ def build_geometry_manual_fit_dataset(
                 "refined_sim_native_x",
                 "refined_sim_native_y",
             )
+            sim_native_point_source = (
+                "refined_sim_native_px" if sim_native_point is not None else ""
+            )
             if sim_native_point is None:
                 sim_native_point = _entry_point(
                     overlay_source_entry,
                     "native_col",
                     "native_row",
                 )
+                if sim_native_point is not None:
+                    sim_native_point_source = "overlay_source_native_col_row"
             if sim_native_point is None:
                 sim_native_point = _entry_point(
                     overlay_source_entry,
                     "sim_native_x",
                     "sim_native_y",
                 )
+                if sim_native_point is not None:
+                    sim_native_point_source = "overlay_source_sim_native_xy"
             if sim_native_point is None:
                 try:
                     sim_col_raw = float(overlay_source_entry.get("sim_col_raw", sim_col))
@@ -11135,6 +11167,7 @@ def build_geometry_manual_fit_dataset(
                             float(sim_native[0]),
                             float(sim_native[1]),
                         )
+                        sim_native_point_source = "display_to_native_sim_coords(sim_col_raw)"
             if sim_native_point is None and not use_caked_display:
                 refined_display_point = _entry_point(
                     entry,
@@ -11164,11 +11197,14 @@ def build_geometry_manual_fit_dataset(
                             float(inverse_projected[0]),
                             float(inverse_projected[1]),
                         )
+                        sim_native_point_source = "default_unrotate_refined_sim_display"
             if sim_native_point is not None:
                 initial_entry["sim_native"] = (
                     float(sim_native_point[0]),
                     float(sim_native_point[1]),
                 )
+                if sim_native_point_source:
+                    initial_entry["sim_native_source"] = sim_native_point_source
         provider_overwrites_existing_sim = bool(
             provider_simulated_point_source in _GEOMETRY_FIT_PICKER_OWNED_POINT_SOURCES
         )
@@ -11241,17 +11277,18 @@ def build_geometry_manual_fit_dataset(
             continue
         try:
             sim_native_raw = initial_entry.get("sim_native")
+            sim_native_from_display = manual_dataset_bindings.display_to_native_sim_coords(
+                float(sim_display[0]),
+                float(sim_display[1]),
+                sim_native_shape,
+            )
             if isinstance(sim_native_raw, (list, tuple, np.ndarray)) and len(sim_native_raw) >= 2:
                 sim_native = (
                     float(sim_native_raw[0]),
                     float(sim_native_raw[1]),
                 )
             else:
-                sim_native = manual_dataset_bindings.display_to_native_sim_coords(
-                    float(sim_display[0]),
-                    float(sim_display[1]),
-                    sim_native_shape,
-                )
+                sim_native = sim_native_from_display
             mx = float(measured_entry.get("x"))
             my = float(measured_entry.get("y"))
         except Exception:
@@ -11263,6 +11300,13 @@ def build_geometry_manual_fit_dataset(
             and np.isfinite(my)
         ):
             continue
+        if (
+            not _geometry_fit_sim_native_source_is_display_to_native(
+                initial_entry.get("sim_native_source")
+            )
+            and _geometry_fit_points_match(sim_native, sim_native_from_display, tol=1.0e-6)
+        ):
+            initial_entry["sim_native_source"] = "display_to_native_sim_coords(sim_display)"
         sim_orientation_points.append((float(sim_native[0]), float(sim_native[1])))
         meas_orientation_points.append((float(mx), float(my)))
 
@@ -13254,17 +13298,56 @@ def _geometry_fit_cache_normalized_hkl(
         return None
 
 
-def _geometry_fit_cache_jsonable(value: object) -> object:
+def _geometry_fit_cache_jsonable(
+    value: object,
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> object:
     """Convert one cache metadata value into a stable JSON-safe shape."""
 
+    if _seen is None:
+        _seen = set()
+    if int(_depth) > 20:
+        return "<max_depth>"
     if isinstance(value, Mapping):
-        return {str(key): _geometry_fit_cache_jsonable(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_geometry_fit_cache_jsonable(item) for item in value]
-    if isinstance(value, list):
-        return [_geometry_fit_cache_jsonable(item) for item in value]
+        marker = id(value)
+        if marker in _seen:
+            return "<cycle>"
+        _seen.add(marker)
+        try:
+            return [
+                (
+                    str(key),
+                    _geometry_fit_cache_jsonable(item, _seen, int(_depth) + 1),
+                )
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            ]
+        finally:
+            _seen.discard(marker)
+    if isinstance(value, (tuple, list)):
+        marker = id(value)
+        if marker in _seen:
+            return "<cycle>"
+        _seen.add(marker)
+        try:
+            return [
+                _geometry_fit_cache_jsonable(item, _seen, int(_depth) + 1)
+                for item in value
+            ]
+        finally:
+            _seen.discard(marker)
     if isinstance(value, np.ndarray):
-        return [_geometry_fit_cache_jsonable(item) for item in value.tolist()]
+        marker = id(value)
+        if marker in _seen:
+            return "<cycle>"
+        _seen.add(marker)
+        try:
+            return [
+                _geometry_fit_cache_jsonable(item, _seen, int(_depth) + 1)
+                for item in value.tolist()
+            ]
+        finally:
+            _seen.discard(marker)
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -16065,7 +16148,12 @@ def _build_geometry_fit_optimizer_request_rows(
     ]
     if not provider_pairs and not manual_pairs:
         return [], {}
-    pair_count = max(len(provider_pairs), len(manual_pairs), len(measured_rows))
+    pair_count = max(
+        len(provider_pairs),
+        len(manual_pairs),
+        len(measured_rows),
+        len(initial_rows),
+    )
     rows: list[dict[str, object]] = []
     row_reports: list[dict[str, object]] = []
     provider_identity_match = True
@@ -16085,19 +16173,32 @@ def _build_geometry_fit_optimizer_request_rows(
         row = copy.deepcopy(dict(measured_row))
         sim_display = _geometry_fit_point_list(initial_row.get("sim_display"))
         sim_native = _geometry_fit_point_list(initial_row.get("sim_native"))
+        sim_native_source = str(initial_row.get("sim_native_source") or "").strip()
         if sim_display is not None:
             row["fit_prediction_detector_display_px"] = (
                 float(sim_display[0]),
                 float(sim_display[1]),
             )
+            row["fit_prediction_detector_display_px_source"] = "sim_display"
         if sim_native is not None:
             canonical_native = (float(sim_native[0]), float(sim_native[1]))
             row["fit_prediction_detector_native_px"] = canonical_native
-            row["sim_visual_detector_canonical_native_px"] = canonical_native
-            row["sim_visual_detector_canonical_native_source"] = "sim_native"
+            if sim_native_source:
+                row["fit_prediction_detector_native_px_source"] = sim_native_source
+            if sim_display is not None and _geometry_fit_sim_native_source_is_display_to_native(
+                sim_native_source
+            ):
+                row["sim_visual_detector_canonical_native_px"] = canonical_native
+                row["sim_visual_detector_canonical_native_source"] = sim_native_source
+        projection_theta = _geometry_fit_finite_float(
+            dataset.get("theta_effective", dataset.get("theta_base"))
+        )
+        if projection_theta is not None:
+            row["sim_visual_detector_projection_theta_initial_deg"] = float(projection_theta)
         for sim_key in (
             "sim_display",
             "sim_native",
+            "sim_native_source",
             "simulated_two_theta_deg",
             "simulated_phi_deg",
         ):

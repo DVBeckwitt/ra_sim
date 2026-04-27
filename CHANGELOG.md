@@ -34,6 +34,7 @@
   - Extended bundle save/load fields to include confidence, ring sigma, optimizer metadata, coordinate-frame metadata, and compatibility keys.
   - Updated `ra_sim/fitting/optimization.py` with robust solver config, restart support, one-to-one point matching, weighted residuals, and missing-pair penalties.
   - Kept New4 ladder lean solve rungs fast by disabling identifiability diagnostics by default, preserving the explicit `identifiability_features` diagnostic run, and throttling running heartbeat writes while keeping full residual traces in final reports.
+  - Fixed the `(-1,0,10)` Qr/Qz geometric-fitter objective handoff so provider-local fixed-source rows resolve without HKL fallback, selected caked residuals enter the optimizer vector, saved detector-point shortcuts cannot bypass ambiguous row rejection, and baseline fit-space offsets are primed from explicit baseline params instead of the first objective evaluation.
 
 - **GUI and UX updates**
   - Made simulation GUI startup default to diagnostics-off, with saved debug settings and one-run debug mode kept as explicit opt-in choices.

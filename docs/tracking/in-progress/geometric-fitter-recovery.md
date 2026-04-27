@@ -180,6 +180,13 @@ Status by work type:
   primed from explicit baseline params before seed scoring or least-squares
   solve, and diagnostics label the offset source as `baseline_params` instead
   of depending on whichever evaluation happened to run first.
+- Blast-zone follow-up fixed: provider-local stale-row recovery now remains
+  fail-closed for duplicate-HKL ambiguous rows and rows without provider-local
+  provenance, saved detector-point shortcuts cannot bypass the current
+  hit-table row resolver, non-fixed branch lookups prefer branch identity over
+  stale row indices, measured and simulated caked-bundle signatures are
+  reported separately, and geometry-fit cache signature serialization is
+  guarded against recursive objects.
 
 Validated current counters:
 
@@ -218,6 +225,11 @@ Solve evidence:
   target rows remained on `q_group_key=("q_group","primary",1,10)`,
   `hkl=(-1,0,10)`, tables `160/167`, branches `0/1`, with no nearest-row
   rematch to unrelated cache rows.
+- Regression status after review fixes: `tests/test_geometry_fitting.py`
+  passes in full (`175 passed`), the focused Qr/Qz fitter/rung objective tests
+  in `tests/test_manual_geometry_selection_helpers.py` pass (`8 passed`), and
+  `tests/test_gui_runtime_import_safe.py -k "toggle_caked_2d"` passes
+  (`4 passed`).
 
 Current conclusion: the full geometric fitter is optimizing the same target
 Qr/Qz caked residuals reported by the CMD/rung audit. Detector-native pixel
