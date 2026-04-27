@@ -1443,7 +1443,7 @@ def build_runtime_integration_range_update_bootstrap(
         "selected_qr_rod_key": "",
         "qz_min": -1.0,
         "qz_max": 1.0,
-        "delta_qr": 0.01,
+        "delta_qr": 0.25,
     }
     if range_defaults:
         normalized_range_defaults.update(range_defaults)

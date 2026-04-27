@@ -1454,7 +1454,7 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "selected_qr_rod_key": "",
                 "qz_min": -1.0,
                 "qz_max": 1.0,
-                "delta_qr": 0.01,
+                "delta_qr": 0.25,
             },
         ),
         (

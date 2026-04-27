@@ -583,7 +583,7 @@ class IntegrationRangeControlsViewState:
     qz_max_slider: Any = None
     qz_max_entry_var: Any = None
     qz_max_entry: Any = None
-    delta_qr_value: float = 0.01
+    delta_qr_value: float = 0.25
     delta_qr_container: Any = None
     delta_qr_var: Any = None
     delta_qr_label_var: Any = None

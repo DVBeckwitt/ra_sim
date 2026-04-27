@@ -305,6 +305,7 @@ def test_integration_range_drag_binding_factory_builds_live_bindings(
         set_status_text_factory=build_status,
         caked_custom_mask_signature_factory=lambda: ("mask-sig", 1),
         detector_geometry_signature_factory=lambda: ("geom-sig", 1),
+        caked_qr_rod_drag_context_factory=lambda: {"qr": 1.25},
     )
 
     assert factory()["drag_state"] == "drag-state"
@@ -318,6 +319,7 @@ def test_integration_range_drag_binding_factory_builds_live_bindings(
     assert callable(calls[0]["set_status_text"])
     assert calls[0]["caked_custom_mask_signature_factory"]() == ("mask-sig", 1)
     assert calls[0]["detector_geometry_signature_factory"]() == ("geom-sig", 1)
+    assert calls[0]["caked_qr_rod_drag_context_factory"]() == {"qr": 1.25}
     assert "update_integration_region_visuals" not in calls[0]
     assert calls[0]["schedule_range_update"] is not calls[1]["schedule_range_update"]
     assert calls[0]["draw_idle"] is not calls[1]["draw_idle"]
@@ -437,7 +439,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].selected_qr_rod_combobox = _FakeEntry(state="disabled")
         kwargs["view_state"].qz_min_slider = _FakeSlider(-2.0, 2.0)
         kwargs["view_state"].qz_max_slider = _FakeSlider(-2.0, 2.0)
-        kwargs["view_state"].delta_qr_slider = _FakeSlider(0.0, 0.25)
+        kwargs["view_state"].delta_qr_slider = _FakeSlider(0.0, 1.0)
         kwargs["view_state"].qz_min_entry = _FakeEntry(state="disabled")
         kwargs["view_state"].qz_max_entry = _FakeEntry(state="disabled")
         kwargs["view_state"].delta_qr_entry = _FakeEntry(state="disabled")
@@ -464,8 +466,8 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.phi_min_entry_var.get() == "-15.0000"
     assert view_state.qz_min_label_var.get() == "-1.0000"
     assert view_state.qz_max_entry_var.get() == "1.0000"
-    assert view_state.delta_qr_label_var.get() == "0.0100"
-    assert view_state.delta_qr_entry_var.get() == "0.0100"
+    assert view_state.delta_qr_label_var.get() == "0.2500"
+    assert view_state.delta_qr_entry_var.get() == "0.2500"
     assert view_state.selected_qr_rod_display_var.get() == "phase-a m=1 | Qr=1.2500 A^-1"
     assert view_state.selected_qr_rod_combobox.state == "disabled"
     assert view_state.qz_min_slider.state == "disabled"
@@ -501,6 +503,9 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.qz_min_slider.state == "normal"
     assert view_state.qz_max_entry.state == "normal"
     assert view_state.delta_qr_slider.state == "normal"
+    assert view_state.tth_min_slider.state == "disabled"
+    assert view_state.phi_min_slider.state == "normal"
+    assert view_state.phi_max_slider.state == "normal"
     assert refresh_calls == ["refresh", "refresh"]
     assert disable_peak_pick_calls == ["disable"]
 
@@ -520,7 +525,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert show_1d_var.get() is True
     assert view_state.phi_max_label_var.get() == "15.0"
     assert view_state.phi_max_entry_var.get() == "15.0000"
-    assert refresh_calls == ["refresh", "refresh", "refresh"]
+    assert refresh_calls == ["refresh", "refresh", "refresh", "refresh"]
 
     show_1d_var.set(False)
     view_state.delta_qr_entry_var.set("9.0")
@@ -529,16 +534,23 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         view_state.delta_qr_var,
         view_state.delta_qr_slider,
     )
-    assert view_state.delta_qr_var.get() == 0.25
+    assert view_state.delta_qr_var.get() == 1.0
     assert show_1d_var.get() is True
-    assert view_state.delta_qr_label_var.get() == "0.2500"
-    assert view_state.delta_qr_entry_var.get() == "0.2500"
+    assert view_state.delta_qr_label_var.get() == "1.0000"
+    assert view_state.delta_qr_entry_var.get() == "1.0000"
     show_1d_var.set(False)
     callback_refs["on_selected_qr_rod_changed"]("phase-a m=1 | Qr=1.2500 A^-1")
     assert view_state.selected_qr_rod_key_var.get() == "phase-a|1"
     assert show_1d_var.get() is True
     assert schedule_calls == ["range", "range", "range", "range", "range", "range", "range"]
-    assert refresh_calls == ["refresh", "refresh", "refresh", "refresh", "refresh"]
+    assert refresh_calls == [
+        "refresh",
+        "refresh",
+        "refresh",
+        "refresh",
+        "refresh",
+        "refresh",
+    ]
 
     view_state.phi_min_var.set(-7.25)
     trace_callback = view_state.phi_min_var.trace_calls[0][1]
@@ -567,6 +579,7 @@ def test_integration_range_drag_bindings_default_custom_mask_factory_is_none() -
     assert bindings.caked_custom_mask_factory is None
     assert bindings.caked_custom_mask_signature_factory is None
     assert bindings.detector_geometry_signature_factory is None
+    assert bindings.caked_qr_rod_drag_context_factory is None
 
 
 def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes() -> None:
@@ -1760,6 +1773,226 @@ def test_integration_range_drag_runtime_helpers_handle_suppress_and_caked_drag()
     assert drag_state.mode is None
     assert drag_rect.visible is False
     assert len(draw_calls) >= 3
+
+
+def test_qz_bounds_from_caked_drag_for_qr_rod_uses_projected_trace_samples() -> None:
+    projected_samples = {
+        "two_theta": np.asarray([1.0, 2.0, 3.0, 3.8], dtype=float),
+        "phi": np.asarray([-1.0, 0.0, 1.0, 0.0], dtype=float),
+        "qz": np.asarray([0.0, 1.0, 3.0, 8.0], dtype=float),
+    }
+
+    assert integration_range_drag.qz_bounds_from_caked_drag_for_qr_rod(
+        projected_samples,
+        x0=1.5,
+        y0=-0.5,
+        x1=3.5,
+        y1=1.5,
+    ) == (1.0, 3.0)
+    assert integration_range_drag.qz_bounds_from_caked_drag_for_qr_rod(
+        projected_samples,
+        x0=1.5,
+        y0=-0.5,
+        x1=3.5,
+        y1=1.5,
+        phi_min=0.5,
+        phi_max=1.5,
+    ) == (3.0, 3.0)
+    assert (
+        integration_range_drag.qz_bounds_from_caked_drag_for_qr_rod(
+            projected_samples,
+            x0=1.5,
+            y0=5.0,
+            x1=3.5,
+            y1=6.0,
+        )
+        is None
+    )
+
+
+def test_selected_qr_rod_caked_drag_updates_only_qz_bounds(monkeypatch) -> None:
+    axis = _FakeAxis(xlim=(0.0, 4.0), ylim=(-2.0, 2.0))
+    drag_state = state.IntegrationRangeDragState()
+    view_state = _range_view_state()
+    view_state.tth_min_var.set(10.0)
+    view_state.tth_max_var.set(20.0)
+    view_state.phi_min_var.set(-5.0)
+    view_state.phi_max_var.set(5.0)
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    view_state.qz_min_var = _FakeVar(-9.0)
+    view_state.qz_max_var = _FakeVar(9.0)
+    view_state.delta_qr_var = _FakeVar(0.3)
+    view_state.qz_min_label_var = _FakeVar("")
+    view_state.qz_min_entry_var = _FakeVar("")
+    view_state.qz_max_label_var = _FakeVar("")
+    view_state.qz_max_entry_var = _FakeVar("")
+    view_state.delta_qr_label_var = _FakeVar("")
+    view_state.delta_qr_entry_var = _FakeVar("")
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-1.0, 0.0, 1.0], dtype=float)
+    projected_samples = {
+        "two_theta": np.asarray([1.0, 2.0, 3.0, 3.8], dtype=float),
+        "phi": np.asarray([-1.0, 0.0, 1.0, 0.0], dtype=float),
+        "qz": np.asarray([0.0, 1.0, 3.0, 8.0], dtype=float),
+    }
+    monkeypatch.setattr(
+        integration_range_drag.gui_qr_cylinder_overlay,
+        "build_selected_qr_rod_qz_caked_mask",
+        lambda **kwargs: {
+            "mask": np.ones((azimuth_axis.size, radial_axis.size), dtype=bool),
+            "signature": (
+                "preview",
+                round(float(kwargs["qz_min"]), 4),
+                round(float(kwargs["qz_max"]), 4),
+            ),
+        },
+    )
+    overlay = _FakeOverlay()
+    schedule_calls = []
+    status_messages = []
+    show_1d_var = _FakeVar(False)
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=axis,
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: True,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(True),
+        last_sim_res2_factory=lambda: None,
+        set_status_text=status_messages.append,
+        caked_qr_rod_drag_context_factory=lambda: {
+            "qr": 1.25,
+            "selected_entry": {"key": ("phase-a", 1), "qr": 1.25},
+            "config": object(),
+            "projection_context": {"ctx": True},
+            "projected_samples": projected_samples,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+        },
+    )
+
+    started = integration_range_drag.handle_runtime_integration_drag_press(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=1.5, ydata=-0.5),
+    )
+    assert started is True
+    assert drag_state.active is True
+    assert drag_state.mode == "caked_qr_rod"
+    assert "Rectangle drag is disabled" not in " ".join(status_messages)
+
+    moved = integration_range_drag.handle_runtime_integration_drag_motion(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=3.5, ydata=1.5),
+    )
+    assert moved is True
+    assert overlay.data is not None
+
+    released = integration_range_drag.handle_runtime_integration_drag_release(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=3.5, ydata=1.5),
+    )
+
+    assert released is True
+    assert drag_state.active is False
+    assert drag_state.mode is None
+    assert view_state.qz_min_var.get() == 1.0
+    assert view_state.qz_max_var.get() == 3.0
+    assert view_state.qz_min_entry_var.get() == "1.0000"
+    assert view_state.qz_max_entry_var.get() == "3.0000"
+    assert view_state.tth_min_var.get() == 10.0
+    assert view_state.tth_max_var.get() == 20.0
+    assert view_state.phi_min_var.get() == -5.0
+    assert view_state.phi_max_var.get() == 5.0
+    assert show_1d_var.get() is True
+    assert schedule_calls == [True]
+    assert status_messages[-1] == "Selected Qr rod Qz range set: Qz=[1.0000, 3.0000] A^-1"
+
+
+def test_selected_qr_rod_caked_drag_without_qr_intersection_leaves_controls(
+    monkeypatch,
+) -> None:
+    axis = _FakeAxis(xlim=(0.0, 4.0), ylim=(-2.0, 2.0))
+    drag_state = state.IntegrationRangeDragState()
+    view_state = _range_view_state()
+    view_state.tth_min_var.set(10.0)
+    view_state.tth_max_var.set(20.0)
+    view_state.phi_min_var.set(-5.0)
+    view_state.phi_max_var.set(5.0)
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    view_state.qz_min_var = _FakeVar(-9.0)
+    view_state.qz_max_var = _FakeVar(9.0)
+    view_state.delta_qr_var = _FakeVar(0.3)
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-1.0, 0.0, 1.0], dtype=float)
+    projected_samples = {
+        "two_theta": np.asarray([0.2, 3.8], dtype=float),
+        "phi": np.asarray([-1.8, 1.8], dtype=float),
+        "qz": np.asarray([-2.0, 2.0], dtype=float),
+    }
+    schedule_calls = []
+    status_messages = []
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=axis,
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: True,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        schedule_range_update=lambda: schedule_calls.append(True),
+        last_sim_res2_factory=lambda: None,
+        set_status_text=status_messages.append,
+        caked_qr_rod_drag_context_factory=lambda: {
+            "qr": 1.25,
+            "selected_entry": {"key": ("phase-a", 1), "qr": 1.25},
+            "config": object(),
+            "projection_context": {"ctx": True},
+            "projected_samples": projected_samples,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+        },
+    )
+
+    assert integration_range_drag.handle_runtime_integration_drag_press(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=1.5, ydata=-0.5),
+    )
+    assert integration_range_drag.handle_runtime_integration_drag_motion(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=3.5, ydata=1.5),
+    )
+    assert integration_range_drag.handle_runtime_integration_drag_release(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=3.5, ydata=1.5),
+    )
+
+    assert drag_state.active is False
+    assert drag_state.mode is None
+    assert view_state.qz_min_var.get() == -9.0
+    assert view_state.qz_max_var.get() == 9.0
+    assert view_state.tth_min_var.get() == 10.0
+    assert view_state.tth_max_var.get() == 20.0
+    assert view_state.phi_min_var.get() == -5.0
+    assert view_state.phi_max_var.get() == 5.0
+    assert schedule_calls == []
+    assert status_messages[-1] == "Drag across the selected Qr rod to set a Qz range."
 
 
 def test_raw_release_with_incomplete_drag_restores_current_region_visuals() -> None:

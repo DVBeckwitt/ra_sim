@@ -5088,6 +5088,42 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "fit_qr_branch_key",
             "fit_qr_branch_key_missing_fields",
             "fit_qr_branch_identity",
+            "locked_qr_fit_key",
+            "locked_qr_fit_key_missing_fields",
+            "locked_qr_fit_identity",
+            "best_sample_index",
+            "mosaic_top_rank_key",
+            "selection_reason",
+            "resolved_best_sample_index",
+            "resolved_mosaic_top_rank_key",
+            "resolved_selection_reason",
+            "locked_representative_intensity",
+            "locked_qr_detector_point_source",
+            "locked_representative_detector_image_available",
+            "locked_representative_detector_image_unavailable_reason",
+            "locked_representative_detector_deposit_native_point",
+            "locked_representative_detector_deposit_display_point",
+            "locked_representative_detector_deposit_intensity",
+            "locked_representative_detector_deposit_nonzero_count",
+            "locked_representative_detector_deposit_sum_intensity",
+            "locked_representative_caked_deposit_deg",
+            "locked_representative_caked_deposit_fractional_pixel_index",
+            "locked_representative_caked_deposit_intensity",
+            "locked_representative_caked_deposit_nonzero_count",
+            "locked_representative_caked_deposit_sum_intensity",
+            "sim_refinement_caked_image_source",
+            "sim_refinement_policy",
+            "sim_refinement_fallback_used",
+            "sim_refinement_local_max_intensity",
+            "sim_refinement_local_sum_intensity",
+            "sim_refinement_local_nonzero_count",
+            "sim_refinement_subpixel",
+            "sim_refinement_caked_global_nonzero_count",
+            "sim_refinement_caked_global_sum_intensity",
+            "sim_refinement_caked_global_max_intensity",
+            "sim_refinement_caked_global_max_pixel_index",
+            "sim_refinement_caked_global_max_caked_deg",
+            "sim_refinement_caked_global_max_delta_from_nominal_deg",
             "identity_missing_fields",
             "trial_source_rows_available",
             "trial_source_rows_count",
@@ -12106,7 +12142,7 @@ def _valid_hit_row_records(hit_table: object) -> List[Dict[str, object]]:
             or not np.isfinite(row[6])
         ):
             continue
-        source_table_index, source_row_index, _best_sample_index = extract_hit_row_provenance(row)
+        source_table_index, source_row_index, best_sample_index = extract_hit_row_provenance(row)
         if source_row_index is None:
             source_row_index = int(row_position)
         rows.append(
@@ -12117,6 +12153,9 @@ def _valid_hit_row_records(hit_table: object) -> List[Dict[str, object]]:
                     int(source_table_index) if source_table_index is not None else None
                 ),
                 "source_row_index": int(source_row_index),
+                "best_sample_index": (
+                    int(best_sample_index) if best_sample_index is not None else None
+                ),
             }
         )
     return rows
@@ -15867,44 +15906,144 @@ def _refine_sim_caked_peak_from_image(
     tth_half_window_bins: int = 1,
     phi_half_window_bins: int = 1,
 ) -> Dict[str, object]:
+    def _unavailable(
+        status: str,
+        *,
+        image_shape: Sequence[int] | None = None,
+        radial_size: int | None = None,
+        azimuth_size: int | None = None,
+        nominal_pixel_index: Sequence[int] | None = None,
+        window_bounds: Sequence[int] | None = None,
+        window_size: Sequence[int] | None = None,
+        local_max: float = 0.0,
+        local_sum: float = 0.0,
+        nonzero_count: int = 0,
+        caked_image_available: bool = False,
+        local_window_in_bounds: bool = False,
+    ) -> Dict[str, object]:
+        result: Dict[str, object] = {
+            "status": str(status),
+            "refined": None,
+            "delta": None,
+            "caked_image_available": bool(caked_image_available),
+            "local_window_in_bounds": bool(local_window_in_bounds),
+            "local_max_intensity": float(local_max) if np.isfinite(local_max) else 0.0,
+            "local_sum_intensity": float(local_sum) if np.isfinite(local_sum) else 0.0,
+            "local_nonzero_count": int(nonzero_count),
+            "peak_value": float(local_max) if np.isfinite(local_max) else 0.0,
+            "subpixel_refinement_method": "none",
+            "subpixel_refinement_status": "none",
+            "refined_bin_center_only": False,
+        }
+        if image_shape is not None:
+            result["image_shape"] = [int(v) for v in image_shape]
+        if radial_size is not None:
+            result["radial_axis_size"] = int(radial_size)
+        if azimuth_size is not None:
+            result["azimuth_axis_size"] = int(azimuth_size)
+        if nominal_pixel_index is not None:
+            result["nominal_pixel_index"] = [int(v) for v in nominal_pixel_index]
+        if window_bounds is not None:
+            result["window_bounds"] = [int(v) for v in window_bounds]
+        if window_size is not None:
+            result["window_size"] = [int(v) for v in window_size]
+        result["search_window_half_size_bins"] = [
+            int(phi_half_window_bins),
+            int(tth_half_window_bins),
+        ]
+        return result
+
     try:
         img = np.asarray(image, dtype=np.float64)
         radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
         azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
     except Exception:
-        return {"status": "no_sim_image", "refined": None, "delta": None}
+        return _unavailable("no_sim_image")
     if img.ndim != 2 or img.size <= 0 or radial.size <= 0 or azimuth.size <= 0:
-        return {"status": "no_sim_image", "refined": None, "delta": None}
+        return _unavailable(
+            "no_sim_image",
+            image_shape=list(img.shape) if getattr(img, "ndim", 0) >= 1 else None,
+            radial_size=int(radial.size),
+            azimuth_size=int(azimuth.size),
+        )
     if img.shape[0] != azimuth.size or img.shape[1] != radial.size:
-        return {
-            "status": "sim_image_axis_shape_mismatch",
-            "refined": None,
-            "delta": None,
-            "image_shape": [int(img.shape[0]), int(img.shape[1])],
-            "radial_axis_size": int(radial.size),
-            "azimuth_axis_size": int(azimuth.size),
-        }
+        return _unavailable(
+            "sim_image_axis_shape_mismatch",
+            image_shape=[int(img.shape[0]), int(img.shape[1])],
+            radial_size=int(radial.size),
+            azimuth_size=int(azimuth.size),
+            caked_image_available=True,
+        )
     col_seed = _nearest_caked_axis_index(radial, float(two_theta_deg))
     row_seed = _nearest_caked_axis_index(azimuth, float(phi_deg), angular=True)
     if col_seed is None or row_seed is None:
-        return {"status": "outside_window", "refined": None, "delta": None}
+        return _unavailable(
+            "outside_window",
+            image_shape=[int(img.shape[0]), int(img.shape[1])],
+            radial_size=int(radial.size),
+            azimuth_size=int(azimuth.size),
+            caked_image_available=True,
+        )
     c0 = max(0, int(col_seed) - int(tth_half_window_bins))
     c1 = min(int(img.shape[1]), int(col_seed) + int(tth_half_window_bins) + 1)
     r0 = max(0, int(row_seed) - int(phi_half_window_bins))
     r1 = min(int(img.shape[0]), int(row_seed) + int(phi_half_window_bins) + 1)
     if c0 >= c1 or r0 >= r1:
-        return {"status": "outside_window", "refined": None, "delta": None}
+        return _unavailable(
+            "outside_window",
+            image_shape=[int(img.shape[0]), int(img.shape[1])],
+            radial_size=int(radial.size),
+            azimuth_size=int(azimuth.size),
+            nominal_pixel_index=[int(row_seed), int(col_seed)],
+            window_bounds=[int(c0), int(c1), int(r0), int(r1)],
+            window_size=[0, 0],
+            caked_image_available=True,
+        )
     patch = np.asarray(img[r0:r1, c0:c1], dtype=np.float64)
-    if patch.size <= 0 or not np.isfinite(patch).any():
-        return {"status": "no_peak_found", "refined": None, "delta": None}
+    positive_patch = np.where(np.isfinite(patch) & (patch > 0.0), patch, 0.0)
+    finite_values = patch[np.isfinite(patch)]
+    local_sum = float(np.sum(positive_patch, dtype=np.float64))
+    local_max_value = (
+        float(np.max(positive_patch)) if positive_patch.size else 0.0
+    )
+    nonzero_count = int(np.count_nonzero(positive_patch > 0.0))
+    common_unavailable = {
+        "image_shape": [int(img.shape[0]), int(img.shape[1])],
+        "radial_size": int(radial.size),
+        "azimuth_size": int(azimuth.size),
+        "nominal_pixel_index": [int(row_seed), int(col_seed)],
+        "window_bounds": [int(c0), int(c1), int(r0), int(r1)],
+        "window_size": [int(r1 - r0), int(c1 - c0)],
+        "local_max": float(local_max_value),
+        "local_sum": float(local_sum),
+        "nonzero_count": int(nonzero_count),
+        "caked_image_available": True,
+        "local_window_in_bounds": True,
+    }
+    if patch.size <= 0 or finite_values.size <= 0:
+        return _unavailable("unavailable_zero_intensity_window", **common_unavailable)
+    if (
+        int(nonzero_count) <= 0
+        or not (float(local_sum) > 0.0)
+        or not (float(local_max_value) > 0.0)
+    ):
+        return _unavailable("unavailable_zero_intensity_window", **common_unavailable)
+
     finite_patch = np.where(np.isfinite(patch), patch, -np.inf)
-    if not np.isfinite(finite_patch).any():
-        return {"status": "no_peak_found", "refined": None, "delta": None}
     local_flat = int(np.nanargmax(finite_patch))
     local_row, local_col = np.unravel_index(local_flat, patch.shape)
-    refined_col = int(c0 + local_col)
-    refined_row = int(r0 + local_row)
-    refined = (float(radial[refined_col]), float(azimuth[refined_row]))
+    local_max_col = int(c0 + local_col)
+    local_max_row = int(r0 + local_row)
+    rows_grid = np.arange(r0, r1, dtype=np.float64)[:, None]
+    cols_grid = np.arange(c0, c1, dtype=np.float64)[None, :]
+    refined_row = float(np.sum(rows_grid * positive_patch) / local_sum)
+    refined_col = float(np.sum(cols_grid * positive_patch) / local_sum)
+    radial_index = np.arange(radial.size, dtype=np.float64)
+    azimuth_index = np.arange(azimuth.size, dtype=np.float64)
+    refined = (
+        float(np.interp(refined_col, radial_index, radial)),
+        float(np.interp(refined_row, azimuth_index, azimuth)),
+    )
     delta_pair = (
         float(refined[0] - float(two_theta_deg)),
         float(_angular_difference_deg(refined[1], float(phi_deg))),
@@ -15917,7 +16056,7 @@ def _refine_sim_caked_peak_from_image(
         "caked_bin_size_two_theta_deg": _caked_axis_bin_size_deg(radial),
         "caked_bin_size_phi_deg": _caked_axis_bin_size_deg(azimuth, angular=True),
         "nominal_pixel_index": [int(row_seed), int(col_seed)],
-        "local_max_pixel_index": [int(refined_row), int(refined_col)],
+        "local_max_pixel_index": [int(local_max_row), int(local_max_col)],
         "local_max_patch_index": [int(local_row), int(local_col)],
         "window_bounds": [int(c0), int(c1), int(r0), int(r1)],
         "window_size": [int(r1 - r0), int(c1 - c0)],
@@ -15926,9 +16065,14 @@ def _refine_sim_caked_peak_from_image(
             int(tth_half_window_bins),
         ],
         "peak_value": float(finite_patch[local_row, local_col]),
-        "subpixel_refinement_method": "none",
-        "subpixel_refinement_status": "integer_bin_argmax",
-        "refined_bin_center_only": True,
+        "local_max_intensity": float(local_max_value),
+        "local_sum_intensity": float(local_sum),
+        "local_nonzero_count": int(nonzero_count),
+        "caked_image_available": True,
+        "local_window_in_bounds": True,
+        "subpixel_refinement_method": "centroid",
+        "subpixel_refinement_status": "centroid",
+        "refined_bin_center_only": False,
     }
 
 
@@ -16029,6 +16173,270 @@ def _fit_qr_first_value(
     return None
 
 
+def _fit_qr_rank_key_tuple(value: object) -> Tuple[object, ...] | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        items: List[object] = []
+        for item in value:
+            if isinstance(item, np.ndarray):
+                item = item.tolist()
+            if isinstance(item, (list, tuple)):
+                nested = _fit_qr_rank_key_tuple(item)
+                items.append(tuple(nested) if nested is not None else None)
+                continue
+            if isinstance(item, (np.integer, int)):
+                items.append(int(item))
+                continue
+            if isinstance(item, (np.floating, float)):
+                numeric = float(item)
+                items.append(float(numeric) if np.isfinite(numeric) else str(numeric))
+                continue
+            if isinstance(item, (bool, np.bool_)):
+                items.append(bool(item))
+                continue
+            items.append(str(item) if item is not None else None)
+        return tuple(items)
+    if isinstance(value, (np.integer, int)):
+        return (int(value),)
+    if isinstance(value, (np.floating, float)):
+        numeric = float(value)
+        return (float(numeric) if np.isfinite(numeric) else str(numeric),)
+    return (str(value),)
+
+
+def _fit_qr_source_row_intensity(row: object) -> float:
+    if isinstance(row, Mapping):
+        for key in (
+            "weight",
+            "intensity",
+            "sim_intensity",
+            "total_intensity",
+            "mosaic_weight",
+        ):
+            if key not in row:
+                continue
+            try:
+                value = float(row.get(key))
+            except Exception:
+                continue
+            if np.isfinite(value) and value > 0.0:
+                return float(value)
+    try:
+        arr = np.asarray(row, dtype=np.float64).reshape(-1)
+    except Exception:
+        arr = np.asarray([], dtype=np.float64)
+    if arr.size >= 1 and np.isfinite(arr[0]) and abs(float(arr[0])) > 0.0:
+        return float(abs(arr[0]))
+    return float("nan")
+
+
+def _fit_qr_locked_detector_image_payload(
+    sim_buffer: object,
+    native_point: Sequence[object],
+    intensity: object,
+    *,
+    image_size: int,
+) -> Dict[str, object]:
+    try:
+        base = np.asarray(sim_buffer, dtype=np.float64)
+    except Exception:
+        base = np.asarray([], dtype=np.float64)
+    if base.ndim == 2 and base.size > 0:
+        shape = (int(base.shape[0]), int(base.shape[1]))
+        image = np.zeros(shape, dtype=np.float64)
+    else:
+        side = int(image_size)
+        if side <= 0:
+            return {
+                "available": False,
+                "unavailable_reason": "locked_representative_detector_image_shape_unavailable",
+                "image": None,
+                "deposit_nonzero_count": 0,
+                "deposit_sum_intensity": 0.0,
+            }
+        shape = (side, side)
+        image = np.zeros(shape, dtype=np.float64)
+    try:
+        col = float(native_point[0])
+        row = float(native_point[1])
+        deposit_intensity = float(intensity)
+    except Exception:
+        return {
+            "available": False,
+            "unavailable_reason": "locked_representative_detector_image_input_invalid",
+            "image": image,
+            "deposit_nonzero_count": 0,
+            "deposit_sum_intensity": 0.0,
+        }
+    if not (
+        np.isfinite(col)
+        and np.isfinite(row)
+        and np.isfinite(deposit_intensity)
+        and deposit_intensity > 0.0
+    ):
+        return {
+            "available": False,
+            "unavailable_reason": "locked_representative_intensity_unavailable",
+            "image": image,
+            "deposit_nonzero_count": 0,
+            "deposit_sum_intensity": 0.0,
+        }
+    height, width = shape
+    if col < 0.0 or row < 0.0 or col > float(width - 1) or row > float(height - 1):
+        return {
+            "available": False,
+            "unavailable_reason": "locked_representative_native_point_off_detector",
+            "image": image,
+            "deposit_nonzero_count": 0,
+            "deposit_sum_intensity": 0.0,
+        }
+    c_floor = int(math.floor(col))
+    r_floor = int(math.floor(row))
+    c_ceil = min(c_floor + 1, width - 1)
+    r_ceil = min(r_floor + 1, height - 1)
+    dc = float(col - c_floor)
+    dr = float(row - r_floor)
+    deposits = (
+        (r_floor, c_floor, (1.0 - dr) * (1.0 - dc)),
+        (r_floor, c_ceil, (1.0 - dr) * dc),
+        (r_ceil, c_floor, dr * (1.0 - dc)),
+        (r_ceil, c_ceil, dr * dc),
+    )
+    for rr, cc, weight in deposits:
+        if weight > 0.0:
+            image[int(rr), int(cc)] += float(deposit_intensity) * float(weight)
+    if not np.any(image > 0.0):
+        nearest_c = int(np.clip(round(col), 0, width - 1))
+        nearest_r = int(np.clip(round(row), 0, height - 1))
+        image[nearest_r, nearest_c] = float(deposit_intensity)
+    return {
+        "available": True,
+        "unavailable_reason": "",
+        "image": image,
+        "deposit_native_point": [float(col), float(row)],
+        "deposit_intensity": float(deposit_intensity),
+        "deposit_nonzero_count": int(np.count_nonzero(image > 0.0)),
+        "deposit_sum_intensity": float(np.sum(image, dtype=np.float64)),
+        "deposit_max_intensity": float(np.max(image)) if image.size else 0.0,
+        "detector_simulation_signature": _fit_prediction_array_signature(image),
+    }
+
+
+def _fit_qr_axis_fractional_index(
+    axis: np.ndarray,
+    value: float,
+    *,
+    angular: bool = False,
+) -> float:
+    values = np.asarray(axis, dtype=np.float64).reshape(-1)
+    if values.size <= 0 or not np.isfinite(float(value)):
+        return float("nan")
+    if values.size == 1:
+        return 0.0
+    target = float(value)
+    if angular:
+        nearest_idx = _nearest_caked_axis_index(values, target, angular=True)
+        if nearest_idx is None:
+            return float("nan")
+        nearest_value = float(values[int(nearest_idx)])
+        target = nearest_value + float(_angular_difference_deg(target, nearest_value))
+    if values[0] <= values[-1]:
+        clipped = float(np.clip(target, values[0], values[-1]))
+        return float(np.interp(clipped, values, np.arange(values.size, dtype=np.float64)))
+    reversed_values = values[::-1]
+    clipped = float(np.clip(target, reversed_values[0], reversed_values[-1]))
+    reversed_fraction = float(
+        np.interp(clipped, reversed_values, np.arange(values.size, dtype=np.float64))
+    )
+    return float((values.size - 1) - reversed_fraction)
+
+
+def _fit_qr_locked_projected_caked_image_payload(
+    radial_axis: object,
+    azimuth_axis: object,
+    caked_point: Sequence[object],
+    intensity: object,
+) -> Dict[str, object]:
+    try:
+        radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+        azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+        two_theta = float(caked_point[0])
+        phi = float(caked_point[1])
+        deposit_intensity = float(intensity)
+    except Exception:
+        return {
+            "available": False,
+            "unavailable_reason": "locked_projected_caked_image_input_invalid",
+            "image": None,
+            "deposit_nonzero_count": 0,
+            "deposit_sum_intensity": 0.0,
+        }
+    if (
+        radial.size <= 0
+        or azimuth.size <= 0
+        or not np.isfinite(two_theta)
+        or not np.isfinite(phi)
+        or not np.isfinite(deposit_intensity)
+        or deposit_intensity <= 0.0
+    ):
+        return {
+            "available": False,
+            "unavailable_reason": "locked_projected_caked_image_unavailable",
+            "image": None,
+            "deposit_nonzero_count": 0,
+            "deposit_sum_intensity": 0.0,
+        }
+    col_f = _fit_qr_axis_fractional_index(radial, two_theta)
+    row_f = _fit_qr_axis_fractional_index(azimuth, phi, angular=True)
+    if not (np.isfinite(col_f) and np.isfinite(row_f)):
+        return {
+            "available": False,
+            "unavailable_reason": "locked_projected_caked_point_outside_axes",
+            "image": None,
+            "deposit_nonzero_count": 0,
+            "deposit_sum_intensity": 0.0,
+        }
+    height = int(azimuth.size)
+    width = int(radial.size)
+    image = np.zeros((height, width), dtype=np.float64)
+    c_floor = int(math.floor(float(col_f)))
+    r_floor = int(math.floor(float(row_f)))
+    c_floor = int(np.clip(c_floor, 0, width - 1))
+    r_floor = int(np.clip(r_floor, 0, height - 1))
+    c_ceil = min(c_floor + 1, width - 1)
+    r_ceil = min(r_floor + 1, height - 1)
+    dc = float(np.clip(col_f - c_floor, 0.0, 1.0))
+    dr = float(np.clip(row_f - r_floor, 0.0, 1.0))
+    deposits = (
+        (r_floor, c_floor, (1.0 - dr) * (1.0 - dc)),
+        (r_floor, c_ceil, (1.0 - dr) * dc),
+        (r_ceil, c_floor, dr * (1.0 - dc)),
+        (r_ceil, c_ceil, dr * dc),
+    )
+    for rr, cc, weight in deposits:
+        if weight > 0.0:
+            image[int(rr), int(cc)] += float(deposit_intensity) * float(weight)
+    if not np.any(image > 0.0):
+        image[int(round(row_f)), int(round(col_f))] = float(deposit_intensity)
+    return {
+        "available": True,
+        "unavailable_reason": "",
+        "image": image,
+        "radial_axis": radial,
+        "azimuth_axis": azimuth,
+        "deposit_caked_deg": [float(two_theta), float(phi)],
+        "deposit_fractional_pixel_index": [float(row_f), float(col_f)],
+        "deposit_intensity": float(deposit_intensity),
+        "deposit_nonzero_count": int(np.count_nonzero(image > 0.0)),
+        "deposit_sum_intensity": float(np.sum(image, dtype=np.float64)),
+        "deposit_max_intensity": float(np.max(image)) if image.size else 0.0,
+        "caked_simulation_signature": _fit_prediction_array_signature(image),
+    }
+
+
 def _fit_qr_branch_index(entry: Mapping[str, object]) -> Optional[int]:
     identity = _fit_qr_identity_source(entry)
     for key in (
@@ -16092,6 +16500,18 @@ def _fit_qr_branch_key_payload(
     branch_id = str(_fit_qr_first_value(entry, identity, ("branch_id",)) or "").strip()
     if branch_id.startswith("unknown:"):
         branch_id = ""
+    branch_source = str(
+        _fit_qr_first_value(entry, identity, ("branch_source",)) or ""
+    ).strip()
+    best_sample_index = _nonnegative_index(
+        _fit_qr_first_value(entry, identity, ("best_sample_index", "frozen_best_sample_index"))
+    )
+    mosaic_top_rank_key = _fit_qr_rank_key_tuple(
+        _fit_qr_first_value(entry, identity, ("mosaic_top_rank_key",))
+    )
+    selection_reason = str(
+        _fit_qr_first_value(entry, identity, ("selection_reason",)) or ""
+    ).strip()
 
     missing: List[str] = []
     if q_group_key is None:
@@ -16114,6 +16534,12 @@ def _fit_qr_branch_key_payload(
         missing.append("source_reflection_is_full")
     if not branch_id:
         missing.append("branch_id")
+    if best_sample_index is None:
+        missing.append("best_sample_index")
+    if mosaic_top_rank_key is None:
+        missing.append("mosaic_top_rank_key")
+    if not selection_reason:
+        missing.append("selection_reason")
 
     payload = {
         "source_label": source_label,
@@ -16127,6 +16553,10 @@ def _fit_qr_branch_key_payload(
         "source_reflection_namespace": source_reflection_namespace,
         "source_reflection_is_full": source_reflection_is_full,
         "branch_id": branch_id or None,
+        "branch_source": branch_source or None,
+        "best_sample_index": best_sample_index,
+        "mosaic_top_rank_key": mosaic_top_rank_key,
+        "selection_reason": selection_reason or None,
     }
     key = (
         "fit_qr_branch",
@@ -16141,8 +16571,43 @@ def _fit_qr_branch_key_payload(
         str(source_reflection_namespace) if source_reflection_namespace not in (None, "") else None,
         bool(source_reflection_is_full) if source_reflection_is_full not in (None, "") else None,
         branch_id or None,
+        int(best_sample_index) if best_sample_index is not None else None,
     )
     return key, missing, payload
+
+
+def _fit_qr_locked_fit_key_payload(
+    entry: Mapping[str, object],
+) -> Tuple[Tuple[object, ...], List[str], Dict[str, object]]:
+    key, missing, payload = _fit_qr_branch_key_payload(entry)
+    locked_payload = {
+        "q_group_key": payload.get("q_group_key"),
+        "hkl": payload.get("hkl"),
+        "source_branch_index": payload.get("source_branch_index"),
+        "source_peak_index": payload.get("source_peak_index"),
+        "source_table_index": payload.get("source_table_index"),
+        "source_row_index": payload.get("source_row_index"),
+        "branch_id": payload.get("branch_id"),
+        "branch_source": payload.get("branch_source"),
+        "best_sample_index": payload.get("best_sample_index"),
+        "mosaic_top_rank_key": payload.get("mosaic_top_rank_key"),
+        "selection_reason": payload.get("selection_reason"),
+    }
+    locked_key = (
+        "locked_qr_fit_key",
+        tuple(payload.get("q_group_key") or ()),
+        tuple(payload.get("hkl") or ()),
+        payload.get("source_branch_index"),
+        payload.get("source_peak_index"),
+        payload.get("source_table_index"),
+        payload.get("source_row_index"),
+        payload.get("branch_id"),
+        payload.get("branch_source"),
+        payload.get("best_sample_index"),
+        tuple(payload.get("mosaic_top_rank_key") or ()),
+        payload.get("selection_reason"),
+    )
+    return locked_key, missing, locked_payload
 
 
 def _fit_qr_branch_key_for_match(entry: Mapping[str, object]) -> Tuple[object, ...]:
@@ -16277,6 +16742,9 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
     locked_key, missing_fields, locked_payload = _fit_qr_branch_key_payload(
         locked_correspondence
     )
+    locked_fit_key, locked_fit_missing, locked_fit_payload = _fit_qr_locked_fit_key_payload(
+        locked_correspondence
+    )
     rows = [
         dict(entry)
         for entry in (source_rows_payload.get("rows", ()) or ())
@@ -16320,6 +16788,14 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         "fit_qr_branch_key": _dynamic_reanchor_jsonable(locked_key),
         "fit_qr_branch_key_missing_fields": list(missing_fields),
         "fit_qr_branch_identity": _dynamic_reanchor_jsonable(locked_payload),
+        "locked_qr_fit_key": _dynamic_reanchor_jsonable(locked_fit_key),
+        "locked_qr_fit_key_missing_fields": list(locked_fit_missing),
+        "locked_qr_fit_identity": _dynamic_reanchor_jsonable(locked_fit_payload),
+        "best_sample_index": locked_fit_payload.get("best_sample_index"),
+        "mosaic_top_rank_key": _dynamic_reanchor_jsonable(
+            locked_fit_payload.get("mosaic_top_rank_key")
+        ),
+        "selection_reason": locked_fit_payload.get("selection_reason"),
         "trial_source_rows_available": bool(source_rows_payload.get("available", False)),
         "trial_source_rows_count": int(source_rows_payload.get("row_count", len(rows)) or 0),
         "trial_source_rows_signature": source_rows_payload.get("source_rows_signature"),
@@ -16357,10 +16833,21 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         return None, payload
     row = dict(candidate.get("row") or {})
     point_payload = dict(candidate.get("point_payload") or {})
+    candidate_identity = dict(candidate.get("candidate_identity") or {})
     native_col = _safe_float(row.get("native_col", row.get("sim_native_x")), float("nan"))
     native_row = _safe_float(row.get("native_row", row.get("sim_native_y")), float("nan"))
     caked_theta = _safe_float(row.get("caked_x", row.get("raw_caked_x")), float("nan"))
     caked_phi = _safe_float(row.get("caked_y", row.get("raw_caked_y")), float("nan"))
+    row_best_sample = _nonnegative_index(
+        row.get("best_sample_index", candidate_identity.get("best_sample_index"))
+    )
+    row_rank_key = _fit_qr_rank_key_tuple(
+        row.get("mosaic_top_rank_key", candidate_identity.get("mosaic_top_rank_key"))
+    )
+    row_selection_reason = str(
+        row.get("selection_reason", candidate_identity.get("selection_reason")) or ""
+    ).strip()
+    representative_intensity = _fit_qr_source_row_intensity(row)
     payload.update(
         {
             "resolution_reason": "locked_fit_qr_branch_key_resolved",
@@ -16379,6 +16866,10 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
             "resolved_detector_point_source": point_payload.get("point_source"),
             "resolved_detector_display_px": point_payload.get("display_px"),
             "resolved_detector_native_px": point_payload.get("native_px"),
+            "resolved_best_sample_index": row_best_sample,
+            "resolved_mosaic_top_rank_key": _dynamic_reanchor_jsonable(row_rank_key),
+            "resolved_selection_reason": row_selection_reason or None,
+            "locked_representative_intensity": float(representative_intensity),
             "sim_nominal_detector_native_px_from_source_row": [
                 float(native_col),
                 float(native_row),
@@ -16574,6 +17065,9 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
     trusted_full_reflection_local_index_map: Optional[Mapping[int, int]] = None,
 ) -> Tuple[Optional[Tuple[float, float]], Dict[str, object]]:
     requested_hkl = _normalized_hkl_key(locked_correspondence.get("hkl"))
+    locked_fit_key, locked_fit_missing, locked_fit_payload = _fit_qr_locked_fit_key_payload(
+        locked_correspondence
+    )
     requested_branch: Optional[int] = None
     for key in (
         "source_branch_index",
@@ -16585,6 +17079,7 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
         if idx in {0, 1}:
             requested_branch = int(idx)
             break
+    requested_best_sample = _nonnegative_index(locked_fit_payload.get("best_sample_index"))
 
     payload: Dict[str, object] = {
         "resolution_kind": "fixed_source",
@@ -16593,6 +17088,14 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
         "prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
         "locked_qr_hkl": requested_hkl,
         "locked_qr_branch_index": requested_branch,
+        "locked_qr_fit_key": _dynamic_reanchor_jsonable(locked_fit_key),
+        "locked_qr_fit_key_missing_fields": list(locked_fit_missing),
+        "locked_qr_fit_identity": _dynamic_reanchor_jsonable(locked_fit_payload),
+        "best_sample_index": requested_best_sample,
+        "mosaic_top_rank_key": _dynamic_reanchor_jsonable(
+            locked_fit_payload.get("mosaic_top_rank_key")
+        ),
+        "selection_reason": locked_fit_payload.get("selection_reason"),
     }
     if requested_hkl is None:
         payload["resolution_reason"] = "locked_qr_hkl_missing"
@@ -16663,6 +17166,7 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
             record_table = _nonnegative_index(record.get("source_table_index"))
             record_row = _nonnegative_index(record.get("source_row_index"))
             row_position = _nonnegative_index(record.get("row_position"))
+            record_best_sample = _nonnegative_index(record.get("best_sample_index"))
             table_identity_match = bool(
                 int(table_idx) in table_candidates
                 or int(table_idx) in saved_table_set
@@ -16685,8 +17189,18 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
                         int(record_row) if record_row is not None else None
                     ),
                     "row_position": int(row_position) if row_position is not None else None,
+                    "record_best_sample_index": (
+                        int(record_best_sample) if record_best_sample is not None else None
+                    ),
                     "table_identity_match": bool(table_identity_match),
                     "row_identity_match": bool(row_identity_match),
+                    "best_sample_identity_match": bool(
+                        requested_best_sample is None
+                        or (
+                            record_best_sample is not None
+                            and int(record_best_sample) == int(requested_best_sample)
+                        )
+                    ),
                 }
             )
 
@@ -16695,6 +17209,9 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
             "locked_qr_requested_table_indices": sorted(saved_table_set),
             "locked_qr_candidate_local_table_indices": list(table_candidates),
             "locked_qr_requested_row_indices": sorted(saved_row_set),
+            "locked_qr_requested_best_sample_index": (
+                int(requested_best_sample) if requested_best_sample is not None else None
+            ),
             "locked_qr_hkl_match_row_count": int(hkl_match_count),
             "locked_qr_hkl_branch_candidate_count": int(len(candidates)),
             "locked_qr_table_identity_candidate_count": int(table_candidate_hits),
@@ -16729,7 +17246,17 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
                 "resolved_source_row_position": candidate.get("row_position"),
                 "resolved_source_row_index": candidate.get("record_source_row_index"),
                 "resolved_source_table_index": candidate.get("record_source_table_index"),
+                "resolved_best_sample_index": candidate.get("record_best_sample_index"),
+                "resolved_mosaic_top_rank_key": _dynamic_reanchor_jsonable(
+                    locked_fit_payload.get("mosaic_top_rank_key")
+                ),
+                "resolved_selection_reason": locked_fit_payload.get("selection_reason"),
                 "resolved_sim_hkl": tuple(int(v) for v in requested_hkl),
+                "locked_representative_intensity": _fit_qr_source_row_intensity(row),
+                "resolved_detector_point_input_frame": "native_detector",
+                "resolved_detector_point_source": "locked_hit_table_row",
+                "resolved_detector_native_px": [float(sim_col), float(sim_row)],
+                "resolved_detector_display_px": [float(sim_col), float(sim_row)],
                 "projection_available": True,
                 "projection_finite": True,
                 "off_detector": False,
@@ -16740,20 +17267,11 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
     exact_table_row = [
         row
         for row in candidates
-        if bool(row.get("table_identity_match")) and bool(row.get("row_identity_match"))
+        if bool(row.get("table_identity_match"))
+        and bool(row.get("row_identity_match"))
+        and bool(row.get("best_sample_identity_match"))
     ]
-    resolved = _unique_candidate(exact_table_row, "locked_qr_table_row_hkl_branch_resolved")
-    if resolved is not None:
-        return resolved
-    exact_table = [row for row in candidates if bool(row.get("table_identity_match"))]
-    resolved = _unique_candidate(exact_table, "locked_qr_table_hkl_branch_resolved")
-    if resolved is not None:
-        return resolved
-    exact_row = [row for row in candidates if bool(row.get("row_identity_match"))]
-    resolved = _unique_candidate(exact_row, "locked_qr_row_hkl_branch_resolved")
-    if resolved is not None:
-        return resolved
-    resolved = _unique_candidate(candidates, "locked_qr_unique_hkl_branch_resolved")
+    resolved = _unique_candidate(exact_table_row, "locked_fit_qr_branch_key_resolved")
     if resolved is not None:
         return resolved
 
@@ -16765,10 +17283,18 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
             else "locked_qr_candidate_missing"
         )
         return None, result
-    result["resolution_reason"] = "locked_qr_hkl_branch_ambiguous"
+    result["resolution_reason"] = (
+        "locked_qr_representative_missing"
+        if len(exact_table_row) == 0
+        else "locked_qr_representative_ambiguous"
+    )
     result["locked_qr_exact_table_row_candidate_count"] = int(len(exact_table_row))
-    result["locked_qr_exact_table_candidate_count"] = int(len(exact_table))
-    result["locked_qr_exact_row_candidate_count"] = int(len(exact_row))
+    result["locked_qr_exact_table_candidate_count"] = int(
+        len([row for row in candidates if bool(row.get("table_identity_match"))])
+    )
+    result["locked_qr_exact_row_candidate_count"] = int(
+        len([row for row in candidates if bool(row.get("row_identity_match"))])
+    )
     return None, result
 
 
@@ -16809,19 +17335,58 @@ def _resolve_qr_fit_prediction_from_trial_params(
         params_signature=params_signature,
         fit_context=fit_context,
     )
-    sim_point, resolution_payload = _resolve_locked_qr_trial_detector_point_from_source_rows(
-        locked_correspondence,
-        source_rows_payload=source_rows_payload,
-    )
-    if sim_point is None and not callable(
-        getattr(dataset_ctx, "qr_fit_trial_source_rows_builder", None)
-    ):
-        sim_point, resolution_payload = _resolve_locked_qr_trial_detector_point_from_hit_tables(
+    hit_table_payload: Dict[str, object] = {
+        "resolution_reason": "locked_hit_table_resolver_not_attempted"
+    }
+    sim_point: Optional[Tuple[float, float]] = None
+    resolution_payload: Dict[str, object]
+    if hit_tables:
+        sim_point, hit_table_payload = _resolve_locked_qr_trial_detector_point_from_hit_tables(
             locked_correspondence,
             hit_tables=hit_tables,
             trusted_full_reflection_local_index_map=fit_context.get(
                 "trusted_full_reflection_local_index_map"
             ),
+        )
+    if sim_point is not None:
+        resolution_payload = dict(hit_table_payload)
+        resolution_payload.update(
+            {
+                "trial_source_rows_available": bool(
+                    source_rows_payload.get("available", False)
+                ),
+                "trial_source_rows_count": int(
+                    source_rows_payload.get(
+                        "row_count",
+                        len(source_rows_payload.get("rows", ()) or ()),
+                    )
+                    or 0
+                ),
+                "trial_source_rows_signature": source_rows_payload.get(
+                    "source_rows_signature"
+                ),
+                "trial_source_rows_source": source_rows_payload.get("source"),
+                "source_rows_rebuilt_or_reused": source_rows_payload.get(
+                    "source_rows_rebuilt_or_reused"
+                ),
+                "reuse_valid_for_same_params_signature": source_rows_payload.get(
+                    "reuse_valid_for_same_params_signature"
+                ),
+                "locked_qr_detector_point_source": "trial_hit_tables_locked_representative",
+            }
+        )
+    else:
+        source_point, source_payload = _resolve_locked_qr_trial_detector_point_from_source_rows(
+            locked_correspondence,
+            source_rows_payload=source_rows_payload,
+        )
+        sim_point = source_point
+        resolution_payload = dict(source_payload)
+        resolution_payload["hit_table_resolution_reason"] = hit_table_payload.get(
+            "resolution_reason"
+        )
+        resolution_payload["locked_qr_detector_point_source"] = (
+            "trial_source_rows_locked_representative"
         )
     out.update(dict(resolution_payload))
     if sim_point is None:
@@ -16958,9 +17523,69 @@ def _resolve_qr_fit_prediction_from_trial_params(
             ),
         }
     )
+    detector_deposit_px = out.get("sim_nominal_detector_px")
+    representative_intensity = _safe_float(
+        resolution_payload.get("locked_representative_intensity"),
+        float("nan"),
+    )
+    locked_detector_payload = _fit_qr_locked_detector_image_payload(
+        sim_buffer,
+        detector_deposit_px if isinstance(detector_deposit_px, Sequence) else (),
+        representative_intensity,
+        image_size=image_size,
+    )
+    out.update(
+        {
+            "locked_representative_detector_image_available": bool(
+                locked_detector_payload.get("available", False)
+            ),
+            "locked_representative_detector_image_unavailable_reason": str(
+                locked_detector_payload.get("unavailable_reason", "")
+            ),
+            "locked_representative_detector_deposit_display_point": locked_detector_payload.get(
+                "deposit_native_point"
+            ),
+            "locked_representative_detector_deposit_intensity": locked_detector_payload.get(
+                "deposit_intensity"
+            ),
+            "locked_representative_detector_deposit_nonzero_count": locked_detector_payload.get(
+                "deposit_nonzero_count"
+            ),
+            "locked_representative_detector_deposit_sum_intensity": locked_detector_payload.get(
+                "deposit_sum_intensity"
+            ),
+            "sim_refinement_caked_image_source": (
+                "locked_mosaic_representative_detector_image"
+            ),
+            "sim_refinement_policy": "refined_only_fail_closed",
+            "sim_refinement_fallback_used": False,
+        }
+    )
+    if not bool(locked_detector_payload.get("available", False)):
+        reason = str(
+            locked_detector_payload.get("unavailable_reason")
+            or "locked_representative_detector_image_unavailable"
+        )
+        out.update(
+            {
+                "available": False,
+                "unavailable_reason": reason,
+                "sim_refinement_status": "unavailable_zero_intensity_window",
+                "sim_refinement_subpixel": "no",
+                "sim_refinement_subpixel_status": "none",
+                "sim_refinement_subpixel_method": "none",
+                "sim_refinement_bin_center_only": False,
+                "sim_refinement_peak_value": 0.0,
+                "sim_refinement_local_max_intensity": 0.0,
+                "sim_refinement_local_sum_intensity": 0.0,
+                "sim_refinement_local_nonzero_count": 0,
+            }
+        )
+        return out
+    selected_sim_buffer = locked_detector_payload.get("image")
     caked_payload = _build_trial_sim_caked_image_payload(
         dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
-        sim_buffer=sim_buffer,
+        sim_buffer=selected_sim_buffer,
         trial_params=trial_params,
     )
     out.update(
@@ -16968,20 +17593,26 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "caked_simulation_signature": caked_payload.get("caked_simulation_signature"),
             "simulation_cache_signature": caked_payload.get(
                 "detector_simulation_signature",
-                detector_sim_signature,
+                locked_detector_payload.get("detector_simulation_signature"),
             ),
             "detector_simulation_signature": caked_payload.get(
                 "detector_simulation_signature",
-                detector_sim_signature,
+                locked_detector_payload.get("detector_simulation_signature"),
             ),
             "simulation_source_signature": caked_payload.get(
                 "detector_simulation_signature",
-                detector_sim_signature,
+                locked_detector_payload.get("detector_simulation_signature"),
             ),
             "sim_caked_image_builder_kind": (
                 dataset_ctx.sim_caked_image_builder_kind
                 if isinstance(dataset_ctx, GeometryFitDatasetContext)
                 else None
+            ),
+            "sim_refinement_caked_image_source": (
+                "locked_mosaic_representative_detector_image:"
+                f"{dataset_ctx.sim_caked_image_builder_kind}"
+                if isinstance(dataset_ctx, GeometryFitDatasetContext)
+                else "locked_mosaic_representative_detector_image"
             ),
         }
     )
@@ -16992,21 +17623,172 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "unavailable_reason": str(
                     caked_payload.get("unavailable_reason") or "sim_caked_image_unavailable"
                 ),
-                "sim_refinement_status": str(
+                "sim_refinement_status": "unavailable_zero_intensity_window",
+                "sim_refinement_unavailable_reason": str(
                     caked_payload.get("unavailable_reason") or "sim_caked_image_unavailable"
                 ),
+                "sim_refinement_subpixel": "no",
+                "sim_refinement_subpixel_status": "none",
+                "sim_refinement_subpixel_method": "none",
+                "sim_refinement_bin_center_only": False,
+                "sim_refinement_peak_value": 0.0,
+                "sim_refinement_local_max_intensity": 0.0,
+                "sim_refinement_local_sum_intensity": 0.0,
+                "sim_refinement_local_nonzero_count": 0,
             }
         )
         return out
-    refinement = _refine_sim_caked_peak_from_image(
-        caked_payload.get("image"),
+    projected_caked_payload = _fit_qr_locked_projected_caked_image_payload(
         caked_payload.get("radial_axis"),
         caked_payload.get("azimuth_axis"),
+        raw_nominal_caked,
+        representative_intensity,
+    )
+    if not bool(projected_caked_payload.get("available", False)):
+        reason = str(
+            projected_caked_payload.get("unavailable_reason")
+            or "locked_projected_caked_image_unavailable"
+        )
+        out.update(
+            {
+                "available": False,
+                "unavailable_reason": reason,
+                "sim_refinement_status": "unavailable_zero_intensity_window",
+                "sim_refinement_unavailable_reason": reason,
+                "sim_refinement_subpixel": "no",
+                "sim_refinement_subpixel_status": "none",
+                "sim_refinement_subpixel_method": "none",
+                "sim_refinement_bin_center_only": False,
+                "sim_refinement_peak_value": 0.0,
+                "sim_refinement_local_max_intensity": 0.0,
+                "sim_refinement_local_sum_intensity": 0.0,
+                "sim_refinement_local_nonzero_count": 0,
+            }
+        )
+        return out
+    refinement_caked_payload = dict(caked_payload)
+    refinement_caked_payload.update(
+        {
+            "image": projected_caked_payload.get("image"),
+            "radial_axis": projected_caked_payload.get("radial_axis"),
+            "azimuth_axis": projected_caked_payload.get("azimuth_axis"),
+            "caked_simulation_signature": projected_caked_payload.get(
+                "caked_simulation_signature"
+            ),
+        }
+    )
+    out.update(
+        {
+            "caked_simulation_signature": projected_caked_payload.get(
+                "caked_simulation_signature"
+            ),
+            "sim_refinement_caked_image_source": (
+                "locked_mosaic_representative_projected_caked_image:"
+                f"{dataset_ctx.sim_caked_image_builder_kind}"
+                if isinstance(dataset_ctx, GeometryFitDatasetContext)
+                else "locked_mosaic_representative_projected_caked_image"
+            ),
+            "locked_representative_caked_deposit_deg": projected_caked_payload.get(
+                "deposit_caked_deg"
+            ),
+            "locked_representative_caked_deposit_fractional_pixel_index": (
+                projected_caked_payload.get("deposit_fractional_pixel_index")
+            ),
+            "locked_representative_caked_deposit_intensity": projected_caked_payload.get(
+                "deposit_intensity"
+            ),
+            "locked_representative_caked_deposit_nonzero_count": projected_caked_payload.get(
+                "deposit_nonzero_count"
+            ),
+            "locked_representative_caked_deposit_sum_intensity": projected_caked_payload.get(
+                "deposit_sum_intensity"
+            ),
+        }
+    )
+    try:
+        caked_img_for_stats = np.asarray(
+            refinement_caked_payload.get("image"), dtype=np.float64
+        )
+        caked_radial_for_stats = np.asarray(
+            refinement_caked_payload.get("radial_axis"), dtype=np.float64
+        ).reshape(-1)
+        caked_azimuth_for_stats = np.asarray(
+            refinement_caked_payload.get("azimuth_axis"), dtype=np.float64
+        ).reshape(-1)
+    except Exception:
+        caked_img_for_stats = np.asarray([], dtype=np.float64)
+        caked_radial_for_stats = np.asarray([], dtype=np.float64)
+        caked_azimuth_for_stats = np.asarray([], dtype=np.float64)
+    if caked_img_for_stats.ndim == 2 and caked_img_for_stats.size > 0:
+        positive_caked = np.where(
+            np.isfinite(caked_img_for_stats) & (caked_img_for_stats > 0.0),
+            caked_img_for_stats,
+            0.0,
+        )
+        out["sim_refinement_caked_global_nonzero_count"] = int(
+            np.count_nonzero(positive_caked > 0.0)
+        )
+        out["sim_refinement_caked_global_sum_intensity"] = float(
+            np.sum(positive_caked, dtype=np.float64)
+        )
+        out["sim_refinement_caked_global_max_intensity"] = (
+            float(np.max(positive_caked)) if positive_caked.size else 0.0
+        )
+        if np.any(positive_caked > 0.0):
+            max_flat = int(np.argmax(positive_caked))
+            max_row, max_col = np.unravel_index(max_flat, positive_caked.shape)
+            out["sim_refinement_caked_global_max_pixel_index"] = [
+                int(max_row),
+                int(max_col),
+            ]
+            if (
+                0 <= int(max_col) < caked_radial_for_stats.size
+                and 0 <= int(max_row) < caked_azimuth_for_stats.size
+            ):
+                global_max_caked = (
+                    float(caked_radial_for_stats[int(max_col)]),
+                    float(caked_azimuth_for_stats[int(max_row)]),
+                )
+                out["sim_refinement_caked_global_max_caked_deg"] = [
+                    float(global_max_caked[0]),
+                    float(global_max_caked[1]),
+                ]
+                out["sim_refinement_caked_global_max_delta_from_nominal_deg"] = [
+                    float(global_max_caked[0] - raw_nominal_caked[0]),
+                    float(_angular_difference_deg(global_max_caked[1], raw_nominal_caked[1])),
+                ]
+    refinement = _refine_sim_caked_peak_from_image(
+        refinement_caked_payload.get("image"),
+        refinement_caked_payload.get("radial_axis"),
+        refinement_caked_payload.get("azimuth_axis"),
         float(raw_nominal_caked[0]),
         float(raw_nominal_caked[1]),
     )
     status = str(refinement.get("status", "no_peak_found"))
     out["sim_refinement_status"] = status
+    out.update(
+        {
+            "sim_refinement_window_bounds": refinement.get("window_bounds"),
+            "sim_refinement_window_size": refinement.get("window_size"),
+            "sim_refinement_peak_value": refinement.get("peak_value"),
+            "sim_refinement_local_max_intensity": refinement.get("local_max_intensity"),
+            "sim_refinement_local_sum_intensity": refinement.get("local_sum_intensity"),
+            "sim_refinement_local_nonzero_count": refinement.get("local_nonzero_count"),
+            "sim_refinement_subpixel_method": refinement.get(
+                "subpixel_refinement_method"
+            ),
+            "sim_refinement_subpixel_status": refinement.get(
+                "subpixel_refinement_status"
+            ),
+            "sim_refinement_subpixel": "yes"
+            if str(refinement.get("subpixel_refinement_status", "")).lower()
+            not in {"", "none", "integer_bin_argmax"}
+            else "no",
+            "sim_refinement_bin_center_only": bool(
+                refinement.get("refined_bin_center_only", False)
+            ),
+        }
+    )
     if status != "refined" or refinement.get("refined") is None:
         out.update({"available": False, "unavailable_reason": status})
         return out
@@ -17105,6 +17887,9 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "sim_refinement_local_max_pixel_index": refinement.get("local_max_pixel_index"),
             "sim_refinement_local_max_patch_index": refinement.get("local_max_patch_index"),
             "sim_refinement_peak_value": refinement.get("peak_value"),
+            "sim_refinement_local_max_intensity": refinement.get("local_max_intensity"),
+            "sim_refinement_local_sum_intensity": refinement.get("local_sum_intensity"),
+            "sim_refinement_local_nonzero_count": refinement.get("local_nonzero_count"),
             "sim_refinement_window_bounds": refinement.get("window_bounds"),
             "sim_refinement_window_size": refinement.get("window_size"),
             "sim_refinement_search_window_half_size_bins": refinement.get(
@@ -17112,6 +17897,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
             ),
             "sim_refinement_subpixel_method": refinement.get("subpixel_refinement_method"),
             "sim_refinement_subpixel_status": refinement.get("subpixel_refinement_status"),
+            "sim_refinement_subpixel": "yes",
             "sim_refinement_bin_center_only": bool(
                 refinement.get("refined_bin_center_only", False)
             ),
@@ -17221,6 +18007,8 @@ def _measured_fit_space_diag_fields(
             "fit_space_source",
             meta.get("anchor_source"),
         ),
+        "measured_cached_two_theta_deg": meta.get("cached_two_theta_deg"),
+        "measured_cached_phi_deg": meta.get("cached_phi_deg"),
         "fit_space_projector_kind": meta.get("fit_space_projector_kind"),
         "measured_fit_space_local_params_signature": meta.get(
             "fit_space_local_params_signature"
@@ -17606,6 +18394,10 @@ def _measured_fit_space_anchor(
     except Exception:
         base_two_theta = float("nan")
         base_phi = float("nan")
+    if np.isfinite(base_two_theta):
+        metadata["cached_two_theta_deg"] = float(base_two_theta)
+    if np.isfinite(base_phi):
+        metadata["cached_phi_deg"] = float(base_phi)
 
     try:
         reference_two_theta = float(entry.get("background_reference_two_theta_deg", np.nan))
@@ -20114,6 +20906,33 @@ def fit_geometry_parameters(
                 "branch_id": _objective_trace_jsonable(
                     raw_entry.get("branch_id", raw_entry.get("branch_group_key"))
                 ),
+                "best_sample_index": _objective_trace_jsonable(
+                    raw_entry.get("best_sample_index")
+                ),
+                "mosaic_top_rank_key": _objective_trace_jsonable(
+                    raw_entry.get("mosaic_top_rank_key")
+                ),
+                "selection_reason": _objective_trace_jsonable(
+                    raw_entry.get("selection_reason")
+                ),
+                "locked_qr_fit_key": _objective_trace_jsonable(
+                    raw_entry.get("locked_qr_fit_key")
+                ),
+                "locked_qr_fit_identity": _objective_trace_jsonable(
+                    raw_entry.get("locked_qr_fit_identity")
+                ),
+                "resolved_best_sample_index": _objective_trace_jsonable(
+                    raw_entry.get("resolved_best_sample_index")
+                ),
+                "resolved_mosaic_top_rank_key": _objective_trace_jsonable(
+                    raw_entry.get("resolved_mosaic_top_rank_key")
+                ),
+                "resolved_selection_reason": _objective_trace_jsonable(
+                    raw_entry.get("resolved_selection_reason")
+                ),
+                "locked_representative_intensity": raw_entry.get(
+                    "locked_representative_intensity"
+                ),
                 "match_status": str(raw_entry.get("match_status", "")),
                 "match_kind": str(raw_entry.get("match_kind", "")),
                 "resolution_kind": str(raw_entry.get("resolution_kind", "")),
@@ -20174,6 +20993,10 @@ def fit_geometry_parameters(
                     float(raw_entry.get("measured_two_theta_deg", np.nan)),
                     float(raw_entry.get("measured_phi_deg", np.nan)),
                 ],
+                "observed_saved_caked_deg": [
+                    float(raw_entry.get("measured_cached_two_theta_deg", np.nan)),
+                    float(raw_entry.get("measured_cached_phi_deg", np.nan)),
+                ],
                 "predicted_caked_deg": [
                     float(raw_entry.get("simulated_two_theta_deg", np.nan)),
                     float(raw_entry.get("simulated_phi_deg", np.nan)),
@@ -20216,6 +21039,15 @@ def fit_geometry_parameters(
                     raw_entry.get("sim_refinement_local_max_patch_index")
                 ),
                 "sim_refinement_peak_value": raw_entry.get("sim_refinement_peak_value"),
+                "sim_refinement_local_max_intensity": raw_entry.get(
+                    "sim_refinement_local_max_intensity"
+                ),
+                "sim_refinement_local_sum_intensity": raw_entry.get(
+                    "sim_refinement_local_sum_intensity"
+                ),
+                "sim_refinement_local_nonzero_count": raw_entry.get(
+                    "sim_refinement_local_nonzero_count"
+                ),
                 "sim_refinement_window_bounds": _objective_trace_jsonable(
                     raw_entry.get("sim_refinement_window_bounds")
                 ),
@@ -20231,8 +21063,71 @@ def fit_geometry_parameters(
                 "sim_refinement_subpixel_status": str(
                     raw_entry.get("sim_refinement_subpixel_status", "")
                 ),
+                "sim_refinement_subpixel": str(
+                    raw_entry.get("sim_refinement_subpixel", "")
+                ),
                 "sim_refinement_bin_center_only": bool(
                     raw_entry.get("sim_refinement_bin_center_only", False)
+                ),
+                "sim_refinement_caked_image_source": raw_entry.get(
+                    "sim_refinement_caked_image_source"
+                ),
+                "sim_refinement_policy": raw_entry.get("sim_refinement_policy"),
+                "sim_refinement_fallback_used": bool(
+                    raw_entry.get("sim_refinement_fallback_used", False)
+                ),
+                "locked_qr_detector_point_source": raw_entry.get(
+                    "locked_qr_detector_point_source"
+                ),
+                "locked_representative_detector_deposit_nonzero_count": raw_entry.get(
+                    "locked_representative_detector_deposit_nonzero_count"
+                ),
+                "locked_representative_detector_deposit_sum_intensity": raw_entry.get(
+                    "locked_representative_detector_deposit_sum_intensity"
+                ),
+                "locked_representative_detector_deposit_display_point": _objective_trace_jsonable(
+                    raw_entry.get("locked_representative_detector_deposit_display_point")
+                ),
+                "locked_representative_caked_deposit_deg": _objective_trace_jsonable(
+                    raw_entry.get("locked_representative_caked_deposit_deg")
+                ),
+                "locked_representative_caked_deposit_fractional_pixel_index": (
+                    _objective_trace_jsonable(
+                        raw_entry.get(
+                            "locked_representative_caked_deposit_fractional_pixel_index"
+                        )
+                    )
+                ),
+                "locked_representative_caked_deposit_intensity": raw_entry.get(
+                    "locked_representative_caked_deposit_intensity"
+                ),
+                "locked_representative_caked_deposit_nonzero_count": raw_entry.get(
+                    "locked_representative_caked_deposit_nonzero_count"
+                ),
+                "locked_representative_caked_deposit_sum_intensity": raw_entry.get(
+                    "locked_representative_caked_deposit_sum_intensity"
+                ),
+                "sim_refinement_caked_global_nonzero_count": raw_entry.get(
+                    "sim_refinement_caked_global_nonzero_count"
+                ),
+                "sim_refinement_caked_global_sum_intensity": raw_entry.get(
+                    "sim_refinement_caked_global_sum_intensity"
+                ),
+                "sim_refinement_caked_global_max_intensity": raw_entry.get(
+                    "sim_refinement_caked_global_max_intensity"
+                ),
+                "sim_refinement_caked_global_max_pixel_index": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_caked_global_max_pixel_index")
+                ),
+                "sim_refinement_caked_global_max_caked_deg": _objective_trace_jsonable(
+                    raw_entry.get("sim_refinement_caked_global_max_caked_deg")
+                ),
+                "sim_refinement_caked_global_max_delta_from_nominal_deg": (
+                    _objective_trace_jsonable(
+                        raw_entry.get(
+                            "sim_refinement_caked_global_max_delta_from_nominal_deg"
+                        )
+                    )
                 ),
                 "params_signature": raw_entry.get("params_signature"),
                 "detector_simulation_signature": raw_entry.get(
@@ -21124,6 +22019,61 @@ def fit_geometry_parameters(
             )
         return mismatches
 
+    def _manual_qr_x0_saved_manual_projection_mismatches(
+        diagnostics: Sequence[Mapping[str, object]],
+    ) -> List[Dict[str, object]]:
+        mismatches: List[Dict[str, object]] = []
+        for raw_entry in diagnostics:
+            if not isinstance(raw_entry, Mapping):
+                continue
+            if str(raw_entry.get("measured_fit_space_source", "") or "") != (
+                "dataset_fit_space_projector"
+            ):
+                continue
+            try:
+                saved_two_theta = float(raw_entry.get("measured_cached_two_theta_deg", np.nan))
+                saved_phi = float(raw_entry.get("measured_cached_phi_deg", np.nan))
+                fit_two_theta = float(raw_entry.get("measured_two_theta_deg", np.nan))
+                fit_phi = float(raw_entry.get("measured_phi_deg", np.nan))
+            except Exception:
+                continue
+            if not (
+                np.isfinite(saved_two_theta)
+                and np.isfinite(saved_phi)
+                and np.isfinite(fit_two_theta)
+                and np.isfinite(fit_phi)
+            ):
+                continue
+            delta_two_theta = float(fit_two_theta - saved_two_theta)
+            delta_phi = float(_angular_difference_deg(fit_phi, saved_phi))
+            if abs(delta_two_theta) <= 0.25 and abs(delta_phi) <= 0.5:
+                continue
+            mismatches.append(
+                {
+                    "mismatch_reason": "x0_saved_manual_projection_mismatch",
+                    "branch": _nonnegative_index(raw_entry.get("source_branch_index")),
+                    "q_group_key": raw_entry.get("q_group_key"),
+                    "hkl": raw_entry.get("hkl"),
+                    "source_table_index": raw_entry.get("source_table_index"),
+                    "source_row_index": raw_entry.get("source_row_index"),
+                    "source_branch_index": raw_entry.get("source_branch_index"),
+                    "source_peak_index": raw_entry.get("source_peak_index"),
+                    "saved_manual_caked_deg": (float(saved_two_theta), float(saved_phi)),
+                    "fit_observed_caked_x0": (float(fit_two_theta), float(fit_phi)),
+                    "delta_2theta": float(delta_two_theta),
+                    "delta_phi_wrapped": float(delta_phi),
+                    "measured_detector_field_name": raw_entry.get(
+                        "measured_detector_field_name"
+                    ),
+                    "measured_detector_input_frame": raw_entry.get(
+                        "measured_detector_input_frame"
+                    ),
+                    "fit_space_projector_kind": raw_entry.get("fit_space_projector_kind"),
+                    "cake_bundle_signature": raw_entry.get("cake_bundle_signature"),
+                }
+            )
+        return mismatches
+
     preflight_guard_enabled = bool(
         point_match_mode
         and dynamic_point_geometry_fit
@@ -21187,6 +22137,147 @@ def fit_geometry_parameters(
             blocked_result.dynamic_baseline_anchor_mismatches = copy.deepcopy(
                 preflight_anchor_mismatches
             )
+            blocked_result.objective_trace = copy.deepcopy(objective_trace_records)
+            blocked_result.point_match_diagnostics = [
+                dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)
+            ]
+            blocked_result.point_match_summary = _public_point_match_summary(
+                preflight_summary,
+            )
+            blocked_result.least_squares_called = False
+            blocked_result.optimizer_solve_called = False
+            blocked_result.geometry_fit_debug_summary = blocked_summary
+            return blocked_result
+        preflight_saved_projection_mismatches = (
+            _manual_qr_x0_saved_manual_projection_mismatches(preflight_diagnostics)
+        )
+        if preflight_saved_projection_mismatches:
+            blocked_summary = copy.deepcopy(geometry_fit_debug_summary)
+            blocked_summary["optimizer_start_blocked_reason"] = (
+                "x0_saved_manual_projection_mismatch"
+            )
+            blocked_summary["x0_saved_manual_projection_mismatches"] = copy.deepcopy(
+                preflight_saved_projection_mismatches
+            )
+            blocked_result = OptimizeResult(
+                x=np.asarray(x0_arr, dtype=float).copy(),
+                fun=preflight_fun,
+                success=False,
+                status=0,
+                message=(
+                    "optimizer_start_blocked_reason="
+                    "x0_saved_manual_projection_mismatch"
+                ),
+                nfev=0,
+                active_mask=np.zeros(np.asarray(x0_arr, dtype=float).shape, dtype=int),
+                optimality=float("nan"),
+            )
+            blocked_result.optimizer_start_blocked_reason = (
+                "x0_saved_manual_projection_mismatch"
+            )
+            blocked_result.x0_saved_manual_projection_mismatches = copy.deepcopy(
+                preflight_saved_projection_mismatches
+            )
+            blocked_result.objective_trace = copy.deepcopy(objective_trace_records)
+            blocked_result.point_match_diagnostics = [
+                dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)
+            ]
+            blocked_result.point_match_summary = _public_point_match_summary(
+                preflight_summary,
+            )
+            blocked_result.least_squares_called = False
+            blocked_result.optimizer_solve_called = False
+            blocked_result.geometry_fit_debug_summary = blocked_summary
+            return blocked_result
+        locked_refinement_failures: List[Dict[str, object]] = []
+        fallback_count = 0
+        for raw_entry in preflight_diagnostics:
+            if not isinstance(raw_entry, Mapping):
+                continue
+            if str(raw_entry.get("fit_prediction_resolver_function", "")) != (
+                "_resolve_qr_fit_prediction_from_trial_params"
+            ):
+                continue
+            if bool(raw_entry.get("sim_refinement_fallback_used", False)):
+                fallback_count += 1
+                continue
+            status = str(raw_entry.get("sim_refinement_status", "") or "")
+            subpixel_status = str(
+                raw_entry.get("sim_refinement_subpixel_status", "") or ""
+            ).lower()
+            local_max = _safe_float(
+                raw_entry.get("sim_refinement_local_max_intensity"),
+                float("nan"),
+            )
+            local_sum = _safe_float(
+                raw_entry.get("sim_refinement_local_sum_intensity"),
+                float("nan"),
+            )
+            try:
+                nonzero_count = int(raw_entry.get("sim_refinement_local_nonzero_count", 0) or 0)
+            except Exception:
+                nonzero_count = 0
+            bad = (
+                status != "refined"
+                or subpixel_status in {"", "none", "integer_bin_argmax"}
+                or bool(raw_entry.get("sim_refinement_bin_center_only", False))
+                or not (np.isfinite(local_max) and local_max > 0.0)
+                or not (np.isfinite(local_sum) and local_sum > 0.0)
+                or int(nonzero_count) <= 0
+            )
+            if bad:
+                locked_refinement_failures.append(
+                    {
+                        "hkl": _dynamic_reanchor_jsonable(raw_entry.get("hkl")),
+                        "branch": _nonnegative_index(
+                            raw_entry.get("source_branch_index")
+                        ),
+                        "best_sample_index": raw_entry.get("best_sample_index"),
+                        "mosaic_top_rank_key": _dynamic_reanchor_jsonable(
+                            raw_entry.get("mosaic_top_rank_key")
+                        ),
+                        "status": status,
+                        "subpixel_status": subpixel_status,
+                        "bin_center_only": bool(
+                            raw_entry.get("sim_refinement_bin_center_only", False)
+                        ),
+                        "local_max_intensity": local_max,
+                        "local_sum_intensity": local_sum,
+                        "local_nonzero_count": int(nonzero_count),
+                        "sim_refinement_caked_image_source": raw_entry.get(
+                            "sim_refinement_caked_image_source"
+                        ),
+                    }
+                )
+        if locked_refinement_failures:
+            blocked_summary = copy.deepcopy(geometry_fit_debug_summary)
+            blocked_summary["optimizer_start_blocked_reason"] = (
+                "locked_mosaic_refinement_unavailable"
+            )
+            blocked_summary["locked_mosaic_refinement_failures"] = copy.deepcopy(
+                locked_refinement_failures
+            )
+            blocked_summary["locked_mosaic_nominal_fallback_count"] = int(fallback_count)
+            blocked_result = OptimizeResult(
+                x=np.asarray(x0_arr, dtype=float).copy(),
+                fun=preflight_fun,
+                success=False,
+                status=0,
+                message=(
+                    "optimizer_start_blocked_reason="
+                    "locked_mosaic_refinement_unavailable"
+                ),
+                nfev=0,
+                active_mask=np.zeros(np.asarray(x0_arr, dtype=float).shape, dtype=int),
+                optimality=float("nan"),
+            )
+            blocked_result.optimizer_start_blocked_reason = (
+                "locked_mosaic_refinement_unavailable"
+            )
+            blocked_result.locked_mosaic_refinement_failures = copy.deepcopy(
+                locked_refinement_failures
+            )
+            blocked_result.locked_mosaic_nominal_fallback_count = int(fallback_count)
             blocked_result.objective_trace = copy.deepcopy(objective_trace_records)
             blocked_result.point_match_diagnostics = [
                 dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)

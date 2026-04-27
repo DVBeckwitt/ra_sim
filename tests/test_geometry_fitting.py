@@ -3407,7 +3407,7 @@ def test_resolve_fixed_source_matches_provider_local_stale_row_unique_branch() -
     assert diag["prediction_source_status"] == "available"
 
 
-def test_resolve_fixed_source_matches_saved_detector_uses_stale_row_proof() -> None:
+def test_resolve_fixed_source_matches_saved_detector_is_diagnostic_after_stale_row_proof() -> None:
     entry = _provider_local_singleton_entry(
         source_row_index=24,
         source_branch_index=1,
@@ -3431,14 +3431,13 @@ def test_resolve_fixed_source_matches_saved_detector_uses_stale_row_proof() -> N
     )
 
     assert len(resolved) == 1
-    assert resolved[0][1] == (9.0, 8.0)
+    assert resolved[0][1] == (4.0, 4.0)
     assert fallback_entries == []
     diag = resolution_lookup[id(entry)]
-    assert diag["resolution_reason"] == "provider_local_saved_sim_detector_native_px"
-    assert diag["provider_local_stale_row_proof_reason"] == (
-        "provider_local_stale_row_index_branch_resolved"
-    )
-    assert diag["provider_local_saved_sim_detector_branch_resolved"] is True
+    assert diag["resolution_reason"] == "provider_local_stale_row_index_branch_resolved"
+    assert diag["provider_local_stale_row_index_branch_resolved"] is True
+    assert diag["provider_local_saved_sim_detector_diagnostic_only"] is True
+    assert diag["prediction_source_status"] == "available"
 
 
 def test_resolve_fixed_source_matches_provider_local_duplicate_hkl_ambiguous_rejects() -> None:

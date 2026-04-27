@@ -84,6 +84,7 @@ class QrCylinderDetectorTrace:
     branch_sign: int
     detector_col: np.ndarray
     detector_row: np.ndarray
+    qz: np.ndarray
     valid_mask: np.ndarray
 
 
@@ -901,6 +902,7 @@ def project_qr_cylinder_to_detector(
         k_tx_prime = kx + qx
         k_ty_prime = ky + qy
         k_tz_prime = branch_sign * sqrt_term
+        qz = k_tz_prime - kz
 
         kr = np.sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
         twotheta_t_prime = np.zeros_like(kr, dtype=np.float64)
@@ -924,8 +926,10 @@ def project_qr_cylinder_to_detector(
 
         branch_cols = np.full_like(cols, np.nan, dtype=np.float64)
         branch_rows = np.full_like(rows, np.nan, dtype=np.float64)
+        branch_qz = np.full_like(qz, np.nan, dtype=np.float64)
         branch_cols[valid] = cols[valid]
         branch_rows[valid] = rows[valid]
+        branch_qz[valid] = qz[valid]
 
         if np.any(valid):
             traces.append(
@@ -934,6 +938,7 @@ def project_qr_cylinder_to_detector(
                     branch_sign=int(branch_sign),
                     detector_col=branch_cols,
                     detector_row=branch_rows,
+                    qz=branch_qz,
                     valid_mask=valid,
                 )
             )

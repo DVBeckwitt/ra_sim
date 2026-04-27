@@ -760,6 +760,436 @@ def interpolate_trace_to_caked_coords(
     return tth, phi
 
 
+def _trace_qz_array(trace: Any, shape: tuple[int, ...]) -> np.ndarray:
+    try:
+        qz_values = np.asarray(getattr(trace, "qz"), dtype=np.float64)
+    except Exception:
+        return np.full(shape, np.nan, dtype=np.float64)
+    if qz_values.shape != shape:
+        return np.full(shape, np.nan, dtype=np.float64)
+    return qz_values
+
+
+def _project_qr_cylinder_caked_trace_samples(
+    *,
+    qr_value: float,
+    config: QrCylinderOverlayRenderConfig,
+    projection_context: Mapping[str, object] | None,
+    project_traces: Callable[..., Sequence[Any]] = project_qr_cylinder_to_detector,
+) -> list[dict[str, object]]:
+    """Project one Qr cylinder and carry physical Qz with each caked sample."""
+
+    geometry = _trace_geometry(config)
+    traces = project_traces(
+        qr_value=float(qr_value),
+        geometry=geometry,
+        wavelength=float(config.wavelength),
+        n2=config.n2,
+        phi_samples=int(config.phi_samples),
+    )
+    projected: list[dict[str, object]] = []
+    for trace in traces:
+        detector_cols = np.asarray(getattr(trace, "detector_col"), dtype=np.float64)
+        detector_rows = np.asarray(getattr(trace, "detector_row"), dtype=np.float64)
+        valid_mask = np.asarray(getattr(trace, "valid_mask", None), dtype=bool)
+        if detector_cols.shape != detector_rows.shape or valid_mask.shape != detector_cols.shape:
+            continue
+        qz = _trace_qz_array(trace, detector_cols.shape)
+        two_theta, phi = interpolate_trace_to_caked_coords(
+            detector_cols=detector_cols,
+            detector_rows=detector_rows,
+            valid_mask=valid_mask,
+            projection_context=projection_context,
+            two_theta_limits=config.two_theta_limits,
+        )
+        visible = (
+            np.isfinite(two_theta)
+            & np.isfinite(phi)
+            & np.isfinite(qz)
+            & valid_mask
+        )
+        if not np.any(visible):
+            continue
+        projected.append(
+            {
+                "branch_sign": int(getattr(trace, "branch_sign", 0)),
+                "two_theta": two_theta,
+                "phi": phi,
+                "qz": qz,
+                "valid_mask": visible,
+            }
+        )
+    return projected
+
+
+def _selected_qr_entry_signature(selected_entry: Mapping[str, object], qr_value: float) -> tuple:
+    try:
+        m_value: object = int(selected_entry.get("m", 0))
+    except Exception:
+        m_value = str(selected_entry.get("m", ""))
+    return (
+        selected_entry.get("key"),
+        str(selected_entry.get("source", "primary")),
+        m_value,
+        round(float(qr_value), 10),
+    )
+
+
+def _overlay_signature_entry(selected_entry: Mapping[str, object], qr_value: float) -> dict[str, object]:
+    entry = dict(selected_entry)
+    entry["qr"] = float(qr_value)
+    entry.setdefault("source", "primary")
+    entry.setdefault("m", 0)
+    return entry
+
+
+def project_selected_qr_rod_caked_samples(
+    *,
+    selected_entry: Mapping[str, object],
+    config: QrCylinderOverlayRenderConfig,
+    projection_context: Mapping[str, object] | None,
+    project_traces: Callable[..., Sequence[Any]] = project_qr_cylinder_to_detector,
+) -> dict[str, object] | None:
+    """Return projected caked samples and physical Qz for one selected Qr rod."""
+
+    try:
+        qr_value = float(selected_entry["qr"])
+    except Exception:
+        return None
+    if not np.isfinite(qr_value) or qr_value < 0.0:
+        return None
+
+    projection_signature = _projection_context_signature(projection_context)
+    if projection_signature is None:
+        return None
+
+    try:
+        samples = _project_qr_cylinder_caked_trace_samples(
+            qr_value=qr_value,
+            config=config,
+            projection_context=projection_context,
+            project_traces=project_traces,
+        )
+    except Exception:
+        return None
+    if not samples:
+        return None
+
+    two_theta_parts: list[np.ndarray] = []
+    phi_parts: list[np.ndarray] = []
+    qz_parts: list[np.ndarray] = []
+    branch_parts: list[np.ndarray] = []
+    for sample in samples:
+        valid = np.asarray(sample["valid_mask"], dtype=bool)
+        if not np.any(valid):
+            continue
+        two_theta_parts.append(np.asarray(sample["two_theta"], dtype=np.float64)[valid])
+        phi_parts.append(np.asarray(sample["phi"], dtype=np.float64)[valid])
+        qz_parts.append(np.asarray(sample["qz"], dtype=np.float64)[valid])
+        branch_parts.append(
+            np.full(
+                int(np.count_nonzero(valid)),
+                int(sample.get("branch_sign", 0)),
+                dtype=np.int16,
+            )
+        )
+    if not two_theta_parts:
+        return None
+
+    signature_entry = _overlay_signature_entry(selected_entry, qr_value)
+    signature = (
+        "selected_qr_rod_caked_samples",
+        _selected_qr_entry_signature(selected_entry, qr_value),
+        build_qr_cylinder_overlay_signature(
+            [signature_entry],
+            config=config,
+            projection_context=projection_context,
+        ),
+    )
+    return {
+        "two_theta": np.concatenate(two_theta_parts).astype(np.float64, copy=False),
+        "phi": np.concatenate(phi_parts).astype(np.float64, copy=False),
+        "qz": np.concatenate(qz_parts).astype(np.float64, copy=False),
+        "branch_sign": np.concatenate(branch_parts).astype(np.int16, copy=False),
+        "branches": samples,
+        "signature": signature,
+    }
+
+
+def build_selected_qr_rod_qz_caked_mask_signature(
+    *,
+    selected_entry: Mapping[str, object],
+    config: QrCylinderOverlayRenderConfig,
+    projection_context: Mapping[str, object] | None,
+    radial_axis: object,
+    azimuth_axis: object,
+    delta_qr: float,
+    qz_min: float,
+    qz_max: float,
+    phi_min: float = -180.0,
+    phi_max: float = 180.0,
+) -> tuple[object, ...] | None:
+    """Return the geometry-aware cache signature for a selected-Qr rod ROI mask."""
+
+    try:
+        qr0 = float(selected_entry["qr"])
+        delta_qr_value = float(delta_qr)
+        qz_lo, qz_hi = sorted((float(qz_min), float(qz_max)))
+        phi_lo = float(phi_min)
+        phi_hi = float(phi_max)
+        radial_values = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+        azimuth_values = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if (
+        not np.isfinite(qr0)
+        or qr0 < 0.0
+        or not np.isfinite(delta_qr_value)
+        or delta_qr_value <= 0.0
+        or not np.isfinite(qz_lo)
+        or not np.isfinite(qz_hi)
+        or not np.isfinite(phi_lo)
+        or not np.isfinite(phi_hi)
+        or radial_values.size <= 0
+        or azimuth_values.size <= 0
+        or not np.all(np.isfinite(radial_values))
+        or not np.all(np.isfinite(azimuth_values))
+    ):
+        return None
+
+    projection_signature = _projection_context_signature(projection_context)
+    radial_signature = _float64_axis_digest(radial_values)
+    azimuth_signature = _float64_axis_digest(azimuth_values)
+    if projection_signature is None or radial_signature is None or azimuth_signature is None:
+        return None
+
+    signature_entry = _overlay_signature_entry(selected_entry, qr0)
+    return (
+        "selected_qr_rod_qz_caked_mask",
+        _selected_qr_entry_signature(selected_entry, qr0),
+        round(float(delta_qr_value), 10),
+        round(float(qz_lo), 10),
+        round(float(qz_hi), 10),
+        round(float(phi_lo), 10),
+        round(float(phi_hi), 10),
+        build_qr_cylinder_overlay_signature(
+            [signature_entry],
+            config=config,
+            projection_context=projection_context,
+        ),
+        radial_signature,
+        azimuth_signature,
+    )
+
+
+def build_selected_qr_rod_qz_caked_mask(
+    *,
+    selected_entry: Mapping[str, object],
+    config: QrCylinderOverlayRenderConfig,
+    projection_context: Mapping[str, object] | None,
+    radial_axis: object,
+    azimuth_axis: object,
+    delta_qr: float,
+    qz_min: float,
+    qz_max: float,
+    phi_min: float = -180.0,
+    phi_max: float = 180.0,
+    project_traces: Callable[..., Sequence[Any]] = project_qr_cylinder_to_detector,
+) -> dict[str, object] | None:
+    """Build one selected-Qr ROI mask from geometry-projected Qr-cylinder traces."""
+
+    try:
+        qr0 = float(selected_entry["qr"])
+        delta_qr_value = float(delta_qr)
+        qz_lo, qz_hi = sorted((float(qz_min), float(qz_max)))
+        phi_lo = float(phi_min)
+        phi_hi = float(phi_max)
+        radial_values = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+        azimuth_values = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if (
+        not np.isfinite(qr0)
+        or qr0 < 0.0
+        or not np.isfinite(delta_qr_value)
+        or delta_qr_value <= 0.0
+        or not np.isfinite(qz_lo)
+        or not np.isfinite(qz_hi)
+        or not np.isfinite(phi_lo)
+        or not np.isfinite(phi_hi)
+        or radial_values.size <= 0
+        or azimuth_values.size <= 0
+        or not np.all(np.isfinite(radial_values))
+        or not np.all(np.isfinite(azimuth_values))
+    ):
+        return None
+
+    signature = build_selected_qr_rod_qz_caked_mask_signature(
+        selected_entry=selected_entry,
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_values,
+        azimuth_axis=azimuth_values,
+        delta_qr=delta_qr_value,
+        qz_min=qz_lo,
+        qz_max=qz_hi,
+        phi_min=phi_lo,
+        phi_max=phi_hi,
+    )
+    if signature is None:
+        return None
+
+    try:
+        low_samples = _project_qr_cylinder_caked_trace_samples(
+            qr_value=max(0.0, qr0 - delta_qr_value),
+            config=config,
+            projection_context=projection_context,
+            project_traces=project_traces,
+        )
+        high_samples = _project_qr_cylinder_caked_trace_samples(
+            qr_value=qr0 + delta_qr_value,
+            config=config,
+            projection_context=projection_context,
+            project_traces=project_traces,
+        )
+        center_samples = _project_qr_cylinder_caked_trace_samples(
+            qr_value=qr0,
+            config=config,
+            projection_context=projection_context,
+            project_traces=project_traces,
+        )
+    except Exception:
+        return None
+
+    low_by_branch = {int(sample["branch_sign"]): sample for sample in low_samples}
+    high_by_branch = {int(sample["branch_sign"]): sample for sample in high_samples}
+    center_by_branch = {int(sample["branch_sign"]): sample for sample in center_samples}
+    mask = np.zeros((azimuth_values.size, radial_values.size), dtype=bool)
+
+    def _stamp_points(
+        target_mask: np.ndarray,
+        tth_points_raw: np.ndarray,
+        phi_points_raw: np.ndarray,
+    ) -> None:
+        finite = np.isfinite(tth_points_raw) & np.isfinite(phi_points_raw)
+        if not np.any(finite):
+            return
+        tth_points = np.asarray(tth_points_raw[finite], dtype=np.float64)
+        phi_points = np.asarray(phi_points_raw[finite], dtype=np.float64)
+        radial_indices = np.abs(radial_values[None, :] - tth_points[:, None]).argmin(axis=1)
+        azimuth_indices = np.abs(azimuth_values[None, :] - phi_points[:, None]).argmin(axis=1)
+        target_mask[azimuth_indices, radial_indices] = True
+
+    def _rasterize_run(
+        target_mask: np.ndarray,
+        low_tth_run: np.ndarray,
+        low_phi_run: np.ndarray,
+        high_tth_run: np.ndarray,
+        high_phi_run: np.ndarray,
+    ) -> None:
+        if low_tth_run.size < 2 or high_tth_run.size < 2:
+            return
+        polygon_x = np.concatenate((low_tth_run, high_tth_run[::-1]))
+        polygon_y = np.concatenate((low_phi_run, high_phi_run[::-1]))
+        if polygon_x.size < 4:
+            return
+        finite_polygon = np.isfinite(polygon_x) & np.isfinite(polygon_y)
+        if int(np.count_nonzero(finite_polygon)) < 4:
+            return
+
+        x_min = float(np.min(polygon_x[finite_polygon]))
+        x_max = float(np.max(polygon_x[finite_polygon]))
+        y_min = float(np.min(polygon_y[finite_polygon]))
+        y_max = float(np.max(polygon_y[finite_polygon]))
+        radial_idx = np.flatnonzero((radial_values >= x_min) & (radial_values <= x_max))
+        azimuth_idx = np.flatnonzero((azimuth_values >= y_min) & (azimuth_values <= y_max))
+        if radial_idx.size > 0 and azimuth_idx.size > 0:
+            grid_x, grid_y = np.meshgrid(radial_values[radial_idx], azimuth_values[azimuth_idx])
+            points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+            path = Path(np.column_stack((polygon_x, polygon_y)))
+            contained = path.contains_points(points, radius=1.0e-12).reshape(
+                azimuth_idx.size,
+                radial_idx.size,
+            )
+            target_mask[np.ix_(azimuth_idx, radial_idx)] |= contained
+
+    def _run_slices(selected: np.ndarray, low_phi: np.ndarray, high_phi: np.ndarray) -> list[slice]:
+        selected_idx = np.flatnonzero(selected)
+        if selected_idx.size <= 0:
+            return []
+        runs: list[slice] = []
+        start = int(selected_idx[0])
+        previous = int(selected_idx[0])
+        for idx in (int(value) for value in selected_idx[1:]):
+            seam_break = (
+                abs(float(low_phi[idx]) - float(low_phi[previous])) > 180.0
+                or abs(float(high_phi[idx]) - float(high_phi[previous])) > 180.0
+            )
+            if idx != previous + 1 or seam_break:
+                runs.append(slice(start, previous + 1))
+                start = idx
+            previous = idx
+        runs.append(slice(start, previous + 1))
+        return runs
+
+    def _phi_in_window(phi_values: np.ndarray) -> np.ndarray:
+        if phi_hi >= phi_lo:
+            return (phi_values >= phi_lo) & (phi_values <= phi_hi)
+        return (phi_values >= phi_lo) | (phi_values <= phi_hi)
+
+    for branch_sign in sorted(set(low_by_branch) & set(high_by_branch) & set(center_by_branch)):
+        low_sample = low_by_branch[branch_sign]
+        high_sample = high_by_branch[branch_sign]
+        center_sample = center_by_branch[branch_sign]
+        low_tth = np.asarray(low_sample["two_theta"], dtype=np.float64)
+        low_phi = np.asarray(low_sample["phi"], dtype=np.float64)
+        high_tth = np.asarray(high_sample["two_theta"], dtype=np.float64)
+        high_phi = np.asarray(high_sample["phi"], dtype=np.float64)
+        center_tth = np.asarray(center_sample["two_theta"], dtype=np.float64)
+        center_phi = np.asarray(center_sample["phi"], dtype=np.float64)
+        center_qz = np.asarray(center_sample["qz"], dtype=np.float64)
+        if not (
+            low_tth.shape
+            == low_phi.shape
+            == high_tth.shape
+            == high_phi.shape
+            == center_tth.shape
+            == center_phi.shape
+            == center_qz.shape
+        ):
+            continue
+        selected = (
+            np.isfinite(low_tth)
+            & np.isfinite(low_phi)
+            & np.isfinite(high_tth)
+            & np.isfinite(high_phi)
+            & np.isfinite(center_tth)
+            & np.isfinite(center_phi)
+            & np.isfinite(center_qz)
+            & (center_qz >= qz_lo)
+            & (center_qz <= qz_hi)
+            & _phi_in_window(center_phi)
+        )
+        if not np.any(selected):
+            continue
+        _stamp_points(mask, center_tth[selected], center_phi[selected])
+        _stamp_points(mask, low_tth[selected], low_phi[selected])
+        _stamp_points(mask, high_tth[selected], high_phi[selected])
+        for run_slice in _run_slices(selected, low_phi, high_phi):
+            _rasterize_run(
+                mask,
+                low_tth[run_slice],
+                low_phi[run_slice],
+                high_tth[run_slice],
+                high_phi[run_slice],
+            )
+
+    return {
+        "mask": mask,
+        "signature": signature,
+    }
+
+
 def build_qr_cylinder_caked_band_masks(
     entries: Sequence[dict[str, object]],
     *,

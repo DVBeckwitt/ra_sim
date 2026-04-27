@@ -7060,7 +7060,8 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
         delta_qr = float(roi_values.get("delta_qr", 0.0))
         qz_min = float(roi_values.get("qz_min", 0.0))
         qz_max = float(roi_values.get("qz_max", 0.0))
-        wavelength_m = float(lambda_) * 1.0e-10
+        phi_min = float(roi_values.get("phi_min", -180.0))
+        phi_max = float(roi_values.get("phi_max", 180.0))
     except Exception:
         return None
     if delta_qr <= 0.0:
@@ -7084,46 +7085,112 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     if radial_axis.size <= 0 or azimuth_axis.size <= 0:
         return None
 
-    encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
-    signature = (
-        encoded_key,
-        round(float(selected_entry.get("qr", 0.0)), 10),
-        round(delta_qr, 10),
-        round(qz_lo, 10),
-        round(qz_hi, 10),
-        round(wavelength_m, 16),
-        gui_qr_cylinder_overlay._float64_axis_digest(radial_axis),
-        gui_qr_cylinder_overlay._float64_axis_digest(azimuth_axis),
+    config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
+    if not callable(config_factory):
+        return None
+    try:
+        config = config_factory()
+    except Exception:
+        return None
+    if not isinstance(config, gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig):
+        return None
+    projection_context = _current_qr_cylinder_caked_projection_context()
+    if projection_context is None:
+        return None
+
+    signature = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask_signature(
+        selected_entry=selected_entry,
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=delta_qr,
+        qz_min=qz_lo,
+        qz_max=qz_hi,
+        phi_min=phi_min,
+        phi_max=phi_max,
     )
+    encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+    if signature is None:
+        return None
     cache = geometry_runtime_state.qr_cylinder_band_cache
     if cache.get("signature") != signature:
-        try:
-            qr_map, qz_map = gui_controllers.caked_axes_to_qr_qz_maps(
-                radial_axis,
-                azimuth_axis,
-                wavelength_m=wavelength_m,
-            )
-        except Exception:
-            return None
-        mask = (
-            np.isfinite(qr_map)
-            & np.isfinite(qz_map)
-            & (np.abs(qr_map - float(selected_entry.get("qr", np.nan))) <= delta_qr)
-            & (qz_map >= qz_lo)
-            & (qz_map <= qz_hi)
+        mask_result = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+            selected_entry=selected_entry,
+            config=config,
+            projection_context=projection_context,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            delta_qr=delta_qr,
+            qz_min=qz_lo,
+            qz_max=qz_hi,
+            phi_min=phi_min,
+            phi_max=phi_max,
         )
+        if not isinstance(mask_result, Mapping):
+            return None
+        mask = np.asarray(mask_result.get("mask"), dtype=bool)
+        if tuple(mask.shape) != (int(azimuth_axis.size), int(radial_axis.size)):
+            return None
         cache["signature"] = signature
         cache["result"] = {
             "selected_entry": dict(selected_entry),
             "selected_qr_rod_key": encoded_key,
-            "mask": np.asarray(mask, dtype=bool),
+            "mask": mask,
             "signature": signature,
-            "qz_extent": (
-                float(np.min(qz_map[np.isfinite(qz_map)])),
-                float(np.max(qz_map[np.isfinite(qz_map)])),
-            ),
         }
     return cache.get("result")
+
+
+def _current_selected_qr_rod_drag_context() -> dict[str, object] | None:
+    if not _active_caked_primary_view():
+        return None
+
+    roi_values = _current_analysis_roi_values()
+    if not bool(roi_values.get("integrate_selected_qr_rod", False)):
+        return None
+
+    selected_entry = _current_selected_qr_rod_entry(_analysis_selected_qr_rod_entries())
+    if selected_entry is None:
+        return None
+    try:
+        qr_value = float(selected_entry["qr"])
+    except Exception:
+        return None
+    if not np.isfinite(qr_value):
+        return None
+
+    radial_axis = np.asarray(
+        simulation_runtime_state.last_caked_radial_values,
+        dtype=float,
+    ).reshape(-1)
+    azimuth_axis = np.asarray(
+        simulation_runtime_state.last_caked_azimuth_values,
+        dtype=float,
+    ).reshape(-1)
+    radial_axis = radial_axis[(radial_axis >= 0.0) & (radial_axis <= 90.0)]
+    if radial_axis.size <= 0 or azimuth_axis.size <= 0:
+        return None
+    config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
+    if not callable(config_factory):
+        return None
+    try:
+        config = config_factory()
+    except Exception:
+        return None
+    if not isinstance(config, gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig):
+        return None
+    projection_context = _current_qr_cylinder_caked_projection_context()
+    if projection_context is None:
+        return None
+    return {
+        "qr": float(qr_value),
+        "selected_entry": dict(selected_entry),
+        "config": config,
+        "projection_context": projection_context,
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+    }
 
 
 def _scattering_angles_to_detector_pixel(
@@ -8018,6 +8085,8 @@ def _sync_selected_qr_rod_controls_state() -> None:
         getattr(range_view_state, "tth_min_entry", None),
         getattr(range_view_state, "tth_max_slider", None),
         getattr(range_view_state, "tth_max_entry", None),
+    )
+    phi_widgets = (
         getattr(range_view_state, "phi_min_slider", None),
         getattr(range_view_state, "phi_min_entry", None),
         getattr(range_view_state, "phi_max_slider", None),
@@ -8037,12 +8106,16 @@ def _sync_selected_qr_rod_controls_state() -> None:
         _set_runtime_widget_enabled(toggle_widget, False)
         for widget in rectangle_widgets:
             _set_runtime_widget_enabled(widget, True)
+        for widget in phi_widgets:
+            _set_runtime_widget_enabled(widget, True)
         for widget in rod_widgets:
             _set_runtime_widget_enabled(widget, False)
     else:
         _set_runtime_widget_enabled(toggle_widget, has_options)
         for widget in rectangle_widgets:
             _set_runtime_widget_enabled(widget, not rod_mode_enabled)
+        for widget in phi_widgets:
+            _set_runtime_widget_enabled(widget, True)
         for widget in rod_widgets:
             _set_runtime_widget_enabled(widget, bool(has_options and rod_mode_enabled))
 
@@ -9108,6 +9181,7 @@ def _initialize_runtime_controls_block_15() -> None:
             detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get(
                 "sig"
             ),
+            caked_qr_rod_drag_context_factory=lambda: _current_selected_qr_rod_drag_context(),
             set_status_text_factory=lambda: (
                 (lambda text: progress_label_positions.config(text=text))
                 if "progress_label_positions" in globals()
@@ -18230,12 +18304,12 @@ def reset_to_defaults():
         qz_lo, qz_hi = sorted((float(qz_extent[0]), float(qz_extent[1])))
     qz_min_var.set(qz_lo)
     qz_max_var.set(qz_hi)
-    delta_qr_var.set(0.01)
+    delta_qr_var.set(0.25)
     integration_range_controls_view_state.integrate_selected_qr_rod_value = False
     integration_range_controls_view_state.selected_qr_rod_key_value = ""
     integration_range_controls_view_state.qz_min_value = float(qz_lo)
     integration_range_controls_view_state.qz_max_value = float(qz_hi)
-    integration_range_controls_view_state.delta_qr_value = 0.01
+    integration_range_controls_view_state.delta_qr_value = 0.25
     analysis_view_controls_view_state.show_1d_var.set(False)
     analysis_view_controls_view_state.show_caked_2d_var.set(False)
     vmin_caked_var.set(0.0)
@@ -26918,7 +26992,7 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         ("phi_max", 15.0),
         ("qz_min", -1.0),
         ("qz_max", 1.0),
-        ("delta_qr", 0.01),
+        ("delta_qr", 0.25),
     )
     for key, fallback in numeric_specs:
         if key not in snapshot:
@@ -27005,7 +27079,7 @@ def _current_analysis_roi_values() -> dict[str, object]:
             ),
             "delta_qr": _read_analysis_range_value(
                 globals().get("delta_qr_var"),
-                _read_analysis_cached_range_value("delta_qr_value", 0.01),
+                _read_analysis_cached_range_value("delta_qr_value", 0.25),
             ),
         }
     )
@@ -28267,10 +28341,16 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
         _request_overlay_canvas_redraw()
 
 
-def _render_analysis_peak_tools_controls(parent) -> None:
+def _render_analysis_peak_tools_controls(
+    parent,
+    *,
+    range_values: Mapping[str, object] | None = None,
+) -> None:
     _clear_widget_children(parent)
+    peak_tools_host = ttk.Frame(parent)
+    peak_tools_host.pack(side=tk.TOP, fill=tk.X)
     gui_views.create_analysis_peak_tools_controls(
-        parent=parent,
+        parent=peak_tools_host,
         view_state=analysis_peak_tools_view_state,
         on_find_peaks_in_box=_find_analysis_peaks_in_selected_box,
         on_toggle_pick_mode=_toggle_analysis_peak_pick_mode,
@@ -28315,6 +28395,12 @@ def _render_analysis_peak_tools_controls(parent) -> None:
         selection_status_text=_analysis_peak_selection_status_text(),
         fit_results_text=_analysis_peak_fit_results_text(),
     )
+    integration_range_host = ttk.Frame(parent, padding=(0, 10, 0, 0))
+    integration_range_host.pack(side=tk.TOP, fill=tk.X)
+    _render_analysis_integration_range_controls(
+        parent=integration_range_host,
+        range_values=range_values,
+    )
 
 
 def _render_analysis_export_controls(parent) -> None:
@@ -28329,13 +28415,11 @@ def _render_analysis_export_controls(parent) -> None:
     )
 
 
-def _render_analysis_plot_controls(
+def _render_analysis_integration_range_controls(
     *,
     parent,
     range_values: Mapping[str, object] | None = None,
 ) -> None:
-    global canvas_1d
-    global analysis_1d_interaction_bindings
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
     global integrate_selected_qr_rod_var, selected_qr_rod_key_var
     global qz_min_var, qz_max_var, delta_qr_var
@@ -28347,16 +28431,8 @@ def _render_analysis_plot_controls(
     if not callable(refresh_region_visuals_callback):
         refresh_region_visuals_callback = None
 
-    analysis_1d_interaction_bindings = None
-    plot_host = ttk.Frame(parent)
-    plot_host.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-    range_host = ttk.Frame(parent, padding=(0, 10, 0, 0))
-    range_host.pack(side=tk.TOP, fill=tk.X)
-
-    _mount_analysis_figure(plot_host)
-
     gui_integration_range_drag.create_runtime_integration_range_controls(
-        parent=range_host,
+        parent=parent,
         views_module=gui_views,
         view_state=integration_range_controls_view_state,
         show_1d_var=analysis_view_controls_view_state.show_1d_var,
@@ -28369,7 +28445,7 @@ def _render_analysis_plot_controls(
         selected_qr_rod_options=_selected_qr_rod_option_pairs(_analysis_selected_qr_rod_entries()),
         qz_min=float(values.get("qz_min", -1.0)),
         qz_max=float(values.get("qz_max", 1.0)),
-        delta_qr=float(values.get("delta_qr", 0.01)),
+        delta_qr=float(values.get("delta_qr", 0.25)),
         schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
         disable_peak_pick=lambda: _set_analysis_peak_pick_mode(False),
         refresh_region_visuals=refresh_region_visuals_callback,
@@ -28407,6 +28483,24 @@ def _render_analysis_plot_controls(
     ):
         raise RuntimeError("Integration-range controls did not create the expected widgets.")
 
+    _render_analysis_peak_overlays(redraw=False)
+
+
+def _render_analysis_plot_controls(
+    *,
+    parent,
+    range_values: Mapping[str, object] | None = None,
+) -> None:
+    global canvas_1d
+    global analysis_1d_interaction_bindings
+
+    _ = range_values
+    _clear_widget_children(parent)
+    analysis_1d_interaction_bindings = None
+    plot_host = ttk.Frame(parent)
+    plot_host.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    _mount_analysis_figure(plot_host)
     _render_analysis_peak_overlays(redraw=False)
     canvas_1d.draw_idle()
 
@@ -29126,7 +29220,10 @@ def _show_analysis_tab_detached_placeholders() -> None:
     _clear_widget_children(app_shell_view_state.analysis_peak_tools_frame)
     ttk.Label(
         app_shell_view_state.analysis_peak_tools_frame,
-        text="Peak picking and fitting controls moved to the detached Analyze window.",
+        text=(
+            "Peak picking, fitting, and integration controls moved to the detached "
+            "Analyze window."
+        ),
         justify=tk.LEFT,
         wraplength=360,
     ).pack(fill=tk.X, padx=6, pady=(4, 6))
@@ -29176,10 +29273,12 @@ def _dock_analysis_window(*, restore_tab: bool = True) -> None:
     gui_views.close_analysis_popout_window(analysis_popout_view_state)
     if restore_tab:
         _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
-        _render_analysis_peak_tools_controls(app_shell_view_state.analysis_peak_tools_frame)
+        _render_analysis_peak_tools_controls(
+            app_shell_view_state.analysis_peak_tools_frame,
+            range_values=range_values,
+        )
         _render_analysis_plot_controls(
             parent=app_shell_view_state.plot_frame_1d,
-            range_values=range_values,
         )
         _refresh_analysis_integration_if_visible()
         analysis_surfaces_initialized = True
@@ -29200,20 +29299,24 @@ def _pop_out_analysis_window() -> None:
     try:
         _show_analysis_tab_detached_placeholders()
         _render_analysis_export_controls(analysis_popout_view_state.exports_frame)
-        _render_analysis_peak_tools_controls(analysis_popout_view_state.peak_tools_frame)
+        _render_analysis_peak_tools_controls(
+            analysis_popout_view_state.peak_tools_frame,
+            range_values=range_values,
+        )
         _render_analysis_plot_controls(
             parent=analysis_popout_view_state.plot_frame,
-            range_values=range_values,
         )
         _refresh_analysis_integration_if_visible()
         analysis_surfaces_initialized = True
     except Exception:
         gui_views.close_analysis_popout_window(analysis_popout_view_state)
         _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
-        _render_analysis_peak_tools_controls(app_shell_view_state.analysis_peak_tools_frame)
+        _render_analysis_peak_tools_controls(
+            app_shell_view_state.analysis_peak_tools_frame,
+            range_values=range_values,
+        )
         _render_analysis_plot_controls(
             parent=app_shell_view_state.plot_frame_1d,
-            range_values=range_values,
         )
         analysis_surfaces_initialized = True
         _set_analysis_popout_button_state(detached=False)

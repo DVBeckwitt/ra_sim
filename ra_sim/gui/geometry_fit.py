@@ -12078,8 +12078,6 @@ def build_geometry_manual_fit_dataset(
             base_theta_value = _effective_theta_for_projection(params_i)
             active_theta_value = _effective_theta_for_projection(active_params)
             theta_adjustment_deg = 0.0
-            if np.isfinite(base_theta_value) and np.isfinite(active_theta_value):
-                theta_adjustment_deg = float(active_theta_value - base_theta_value)
             active_bundle = _resolve_dynamic_reanchor_cached_caked_bundle(
                 active_params,
                 prefer_rebuild_bundle=prefer_rebuild_bundle,
@@ -12117,7 +12115,7 @@ def build_geometry_manual_fit_dataset(
                         native_frame_conversion_count
                     )
                     return invalid_projection
-                projected_two_theta.append(float(two_theta_deg) + float(theta_adjustment_deg))
+                projected_two_theta.append(float(two_theta_deg))
                 projected_phi.append(float(phi_deg))
 
             return {
@@ -12142,6 +12140,9 @@ def build_geometry_manual_fit_dataset(
                 "native_frame_conversion_source": native_frame_conversion_source,
                 "native_frame_conversion_count": int(native_frame_conversion_count),
                 "caked_projection_source": "fit_space_projector_native_detector",
+                "theta_initial_base_deg": float(base_theta_value),
+                "theta_initial_active_deg": float(active_theta_value),
+                "theta_initial_adjustment_applied_deg": float(theta_adjustment_deg),
             }
 
         def _fit_space_projector(

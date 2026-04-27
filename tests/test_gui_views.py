@@ -2991,7 +2991,8 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.qz_min_slider.cget("from") == -0.75
     assert view_state.qz_max_slider.cget("to") == 1.25
     assert view_state.delta_qr_slider.cget("from") == 0.0
-    assert view_state.delta_qr_slider.cget("to") == 0.25
+    assert view_state.delta_qr_slider.cget("to") == 1.0
+    assert any(label.text == "Qr half-width (A^-1):" for label in _FakeLabel.created)
     assert view_state.selected_qr_rod_combobox.state == "readonly"
     assert view_state.qz_min_slider.state == "disabled"
     assert view_state.delta_qr_entry.state == "disabled"
@@ -3018,7 +3019,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert apply_calls == [
         ("1.5000", 1.5, 0.0, 90.0),
         ("18.7000", 18.7, -180.0, 180.0),
-        ("0.0200", 0.02, 0.0, 0.25),
+        ("0.0200", 0.02, 0.0, 1.0),
     ]
 
     view_state.tth_min_var.set(4.0)

@@ -340,6 +340,61 @@ def caked_axes_to_qr_qz_maps(
     )
 
 
+def q_space_rect_mask_for_qr_centers(
+    radial_deg: object,
+    azimuth_deg: object,
+    *,
+    wavelength_m: object,
+    qr_centers: Sequence[object],
+    qz_min: object,
+    qz_max: object,
+    delta_qr: object,
+) -> np.ndarray:
+    """Return a caked-bin mask for one or more Q-space Qr/Qz rectangles."""
+
+    radial_arr = np.asarray(radial_deg, dtype=np.float64).reshape(-1)
+    azimuth_arr = np.asarray(azimuth_deg, dtype=np.float64).reshape(-1)
+    empty_mask = np.zeros((azimuth_arr.size, radial_arr.size), dtype=bool)
+
+    try:
+        delta_value = float(delta_qr)
+    except (TypeError, ValueError):
+        delta_value = float("nan")
+    if not np.isfinite(delta_value) or delta_value <= 0.0:
+        return empty_mask
+
+    centers: list[float] = []
+    center_iterable = () if qr_centers is None else qr_centers
+    for raw_center in center_iterable:
+        try:
+            center_value = float(raw_center)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(center_value):
+            centers.append(float(center_value))
+    if not centers:
+        return empty_mask
+
+    try:
+        qz_lo, qz_hi = sorted((float(qz_min), float(qz_max)))
+    except (TypeError, ValueError):
+        return empty_mask
+    if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)):
+        return empty_mask
+
+    qr_map, qz_map = caked_axes_to_qr_qz_maps(
+        radial_arr,
+        azimuth_arr,
+        wavelength_m=wavelength_m,
+    )
+    finite_mask = np.isfinite(qr_map) & np.isfinite(qz_map)
+    qz_mask = (qz_map >= qz_lo) & (qz_map <= qz_hi)
+    qr_mask = np.zeros_like(finite_mask, dtype=bool)
+    for center_value in centers:
+        qr_mask |= np.abs(qr_map - center_value) <= delta_value
+    return np.asarray(finite_mask & qr_mask & qz_mask, dtype=bool)
+
+
 def caked_image_to_q_space_payload(
     image: object,
     radial_deg: object,

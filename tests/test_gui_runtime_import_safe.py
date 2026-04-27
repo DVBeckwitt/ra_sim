@@ -18871,6 +18871,14 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
     assert (
         "def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:" in source
     )
+    payload_start = source.index(
+        "def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:"
+    )
+    payload_end = source.index("def _current_selected_qr_rod_drag_context()", payload_start)
+    payload_block = source[payload_start:payload_end]
+    assert "build_selected_qr_rod_qz_caked_mask(" in payload_block
+    assert "q_space_rect_mask_for_qr_centers" not in payload_block
+    assert "caked_axes_to_qr_qz_maps" not in payload_block
     assert "def _sync_selected_qr_rod_controls_state() -> None:" in source
     assert "def _invalidate_qr_cylinder_band_cache() -> None:" in source
 
@@ -18884,7 +18892,7 @@ def test_runtime_impl_reset_to_defaults_resets_selected_qr_rod_controls() -> Non
     assert "integrate_selected_qr_rod_var.set(False)" in block
     assert 'selected_qr_rod_key_var.set("")' in block
     assert "qz_extent = _current_caked_qz_extent()" in block
-    assert "delta_qr_var.set(0.01)" in block
+    assert "delta_qr_var.set(0.25)" in block
     assert "_sync_selected_qr_rod_controls_state()" in block
 
 
@@ -18993,7 +19001,8 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    build_calls: list[float] = []
+    signature_calls: list[dict[str, object]] = []
+    mask_calls: list[dict[str, object]] = []
     encoded_key = runtime_session.gui_controllers.encode_bragg_qr_group_key(("phase-a", 1))
     monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: True)
 
@@ -19031,17 +19040,75 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
         lambda: [{"key": ("phase-a", 1), "qr": 1.25}],
         raising=False,
     )
-    monkeypatch.setattr(runtime_session, "lambda_", 1.54, raising=False)
+    config_values = {"gamma": 1.5}
+
+    def _render_config():
+        return runtime_session.gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
+            render_in_caked_space=True,
+            image_size=64,
+            display_rotate_k=-1,
+            center_col=10.0,
+            center_row=11.0,
+            distance_cor_to_detector=123.0,
+            gamma_deg=config_values["gamma"],
+            Gamma_deg=2.5,
+            chi_deg=3.5,
+            psi_deg=4.5,
+            psi_z_deg=5.5,
+            zs=6.5,
+            zb=7.5,
+            theta_initial_deg=8.5,
+            cor_angle_deg=9.5,
+            pixel_size_m=1.0e-4,
+            wavelength=1.54,
+            n2=1.1 + 0.0j,
+        )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "qr_cylinder_overlay_render_config_factory",
+        _render_config,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_qr_cylinder_caked_projection_context",
+        lambda: {"projection": "context"},
+    )
     monkeypatch.setattr(
         runtime_session.gui_controllers,
         "caked_axes_to_qr_qz_maps",
-        lambda radial_axis, azimuth_axis, *, wavelength_m: (
-            build_calls.append(float(wavelength_m))
-            or (
-                np.asarray([[1.24, 1.25], [1.26, 1.27]], dtype=float),
-                np.asarray([[-0.5, 0.5], [-0.25, 1.75]], dtype=float),
-            )
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("selected-Qr ROI must use projected cylinder geometry")
         ),
+    )
+
+    def _signature(**kwargs):
+        signature_calls.append(dict(kwargs))
+        return (
+            "selected",
+            round(float(kwargs["selected_entry"]["qr"]), 10),
+            round(float(kwargs["delta_qr"]), 10),
+            round(float(kwargs["qz_min"]), 10),
+            round(float(kwargs["qz_max"]), 10),
+            round(float(kwargs["phi_min"]), 10),
+            round(float(kwargs["phi_max"]), 10),
+            round(float(kwargs["config"].gamma_deg), 10),
+        )
+
+    monkeypatch.setattr(
+        runtime_session.gui_qr_cylinder_overlay,
+        "build_selected_qr_rod_qz_caked_mask_signature",
+        _signature,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_qr_cylinder_overlay,
+        "build_selected_qr_rod_qz_caked_mask",
+        lambda **kwargs: mask_calls.append(dict(kwargs))
+        or {
+            "mask": np.asarray([[True, True], [True, False]], dtype=bool),
+            "signature": _signature(**kwargs),
+        },
     )
     for name in (
         "integrate_selected_qr_rod_var",
@@ -19054,10 +19121,11 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
 
     result = runtime_session._current_selected_qr_rod_caked_mask_payload()
     cached = runtime_session._current_selected_qr_rod_caked_mask_payload()
-    monkeypatch.setattr(runtime_session, "lambda_", 1.55, raising=False)
+    config_values["gamma"] = 9.5
     changed = runtime_session._current_selected_qr_rod_caked_mask_payload()
 
-    assert build_calls == [1.54e-10, 1.55e-10]
+    assert len(mask_calls) == 2
+    assert len(signature_calls) >= 3
     assert cached is result
     assert result["selected_qr_rod_key"] == encoded_key
     np.testing.assert_array_equal(
@@ -19229,6 +19297,8 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_disables_non_caked_
     assert qz_min_slider.state_value == "normal"
     assert delta_entry.state_value == "normal"
     assert tth_min_slider.state_value == "disabled"
+    assert phi_min_slider.state_value == "normal"
+    assert phi_max_entry.state_value == "normal"
 
 
 def test_runtime_session_current_qr_cylinder_caked_projection_context_prefers_live_bundle_shape(
@@ -19386,9 +19456,18 @@ def test_runtime_impl_lazy_mounts_analysis_surfaces() -> None:
     assert "fig_1d = None" in source
     assert "def _ensure_analysis_figure() -> None:" in source
     assert "def ensure_analysis_surfaces_initialized() -> None:" in source
+    assert "def _render_analysis_integration_range_controls(" in source
+    peak_tools_start = source.index("def _render_analysis_peak_tools_controls(")
+    export_controls_start = source.index("def _render_analysis_export_controls(", peak_tools_start)
+    peak_tools_block = source[peak_tools_start:export_controls_start]
+    plot_controls_start = source.index("def _render_analysis_plot_controls(")
+    restore_axis_start = source.index("def _restore_analysis_peak_axis_view(", plot_controls_start)
+    plot_controls_block = source[plot_controls_start:restore_axis_start]
     assert "_show_analysis_tab_lazy_placeholders()" in source
     assert "plt.subplots(2, 1, figsize=(5, 8))" not in lazy_block
     assert "_mount_analysis_figure(app_shell_view_state.plot_frame_1d)" not in source
+    assert "_render_analysis_integration_range_controls(" in peak_tools_block
+    assert "create_runtime_integration_range_controls(" not in plot_controls_block
     assert "ensure_analysis_surfaces_initialized()" in source
 
 

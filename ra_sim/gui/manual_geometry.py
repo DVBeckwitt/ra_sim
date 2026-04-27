@@ -5870,10 +5870,17 @@ def _geometry_manual_caked_refinement_window_status(
         return "outside_window"
     patch = np.asarray(img[r0:r1, c0:c1], dtype=float)
     if patch.size <= 0 or not np.isfinite(patch).any():
-        return "no_peak_found"
+        return "unavailable_zero_intensity_window"
     finite_patch = patch[np.isfinite(patch)]
     if finite_patch.size == 0:
-        return "no_peak_found"
+        return "unavailable_zero_intensity_window"
+    local_positive = np.where(np.isfinite(patch) & (patch > 0.0), patch, 0.0)
+    if (
+        int(np.count_nonzero(local_positive > 0.0)) <= 0
+        or not (float(np.sum(local_positive, dtype=float)) > 0.0)
+        or not (float(np.max(local_positive)) > 0.0)
+    ):
+        return "unavailable_zero_intensity_window"
     if not (float(np.nanmax(finite_patch)) > float(np.nanmin(finite_patch))):
         return "no_peak_found"
     baseline = float(np.nanpercentile(patch, 35.0))

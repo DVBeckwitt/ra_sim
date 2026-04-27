@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 from matplotlib.patches import Rectangle
 from ra_sim.gui import controllers as gui_controllers
+from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.simulation.exact_cake_portable import raw_phi_to_gui_phi
 
 _ACTIVE_DRAG_EDGE_COLOR = "#ff7a00"
@@ -27,9 +28,10 @@ _DEFAULT_PHI_MIN = -15.0
 _DEFAULT_PHI_MAX = 15.0
 _DEFAULT_QZ_MIN = -1.0
 _DEFAULT_QZ_MAX = 1.0
+_DEFAULT_DELTA_QR = 0.25
 _TTH_SLIDER_BOUNDS = (0.0, 90.0)
 _PHI_SLIDER_BOUNDS = (-180.0, 180.0)
-_DELTA_QR_SLIDER_BOUNDS = (0.0, 0.25)
+_DELTA_QR_SLIDER_BOUNDS = (0.0, 1.0)
 _DISPLAY_COORD_EPSILON = 1.0e-9
 _RUNTIME_RANGE_TEXT_FORMATS: dict[str, tuple[str, str]] = {
     "tth_min": ("{:.1f}", "{:.4f}"),
@@ -69,6 +71,7 @@ class IntegrationRangeDragBindings:
     caked_custom_mask_factory: object = None
     caked_custom_mask_signature_factory: object = None
     detector_geometry_signature_factory: object = None
+    caked_qr_rod_drag_context_factory: object = None
 
 
 @dataclass(frozen=True)
@@ -1093,6 +1096,187 @@ def update_runtime_raw_drag_preview(
     return bool(updated)
 
 
+def qz_bounds_from_caked_drag_for_qr_rod(
+    projected_samples,
+    *,
+    x0,
+    y0,
+    x1,
+    y1,
+    phi_min: float | None = None,
+    phi_max: float | None = None,
+) -> tuple[float, float] | None:
+    """Return Qz bounds selected by a caked drag across projected Qr-rod samples."""
+
+    try:
+        two_theta = np.asarray(projected_samples.get("two_theta"), dtype=float).reshape(-1)
+        phi = np.asarray(projected_samples.get("phi"), dtype=float).reshape(-1)
+        qz = np.asarray(projected_samples.get("qz"), dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if two_theta.size <= 0 or two_theta.shape != phi.shape or two_theta.shape != qz.shape:
+        return None
+
+    try:
+        x_lo, x_hi = sorted((float(x0), float(x1)))
+        y_lo, y_hi = sorted((float(y0), float(y1)))
+    except Exception:
+        return None
+    if not all(np.isfinite(value) for value in (x_lo, x_hi, y_lo, y_hi)):
+        return None
+
+    phi_window = np.ones(phi.shape, dtype=bool)
+    if phi_min is not None and phi_max is not None:
+        try:
+            phi_lo = float(phi_min)
+            phi_hi = float(phi_max)
+        except Exception:
+            return None
+        if not (np.isfinite(phi_lo) and np.isfinite(phi_hi)):
+            return None
+        if phi_hi >= phi_lo:
+            phi_window = (phi >= phi_lo) & (phi <= phi_hi)
+        else:
+            phi_window = (phi >= phi_lo) | (phi <= phi_hi)
+
+    selected = (
+        np.isfinite(two_theta)
+        & np.isfinite(phi)
+        & np.isfinite(qz)
+        & phi_window
+        & (two_theta >= x_lo)
+        & (two_theta <= x_hi)
+        & (phi >= y_lo)
+        & (phi <= y_hi)
+    )
+    if not np.any(selected):
+        return None
+    selected_qz = qz[selected]
+    return float(np.min(selected_qz)), float(np.max(selected_qz))
+
+
+def _runtime_qr_rod_drag_context(
+    bindings: IntegrationRangeDragBindings,
+) -> Mapping[str, object] | None:
+    context = _resolve_runtime_value(getattr(bindings, "caked_qr_rod_drag_context_factory", None))
+    return context if isinstance(context, Mapping) else None
+
+
+def _projected_qr_rod_samples_from_context(
+    context: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    projected_samples = context.get("projected_samples")
+    if isinstance(projected_samples, Mapping):
+        return projected_samples
+    try:
+        selected_entry = context["selected_entry"]
+        config = context["config"]
+        projection_context = context["projection_context"]
+    except Exception:
+        return None
+    return gui_qr_cylinder_overlay.project_selected_qr_rod_caked_samples(
+        selected_entry=selected_entry,
+        config=config,
+        projection_context=projection_context,
+    )
+
+
+def update_runtime_qr_rod_drag_preview(bindings: IntegrationRangeDragBindings) -> bool:
+    """Refresh the selected-Qr rod drag preview as a temporary Q-space mask."""
+
+    drag_state = bindings.drag_state
+    if None in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1):
+        return False
+
+    context = _runtime_qr_rod_drag_context(bindings)
+    if context is None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        bindings.drag_select_rect.set_visible(False)
+        _draw_idle(bindings)
+        return False
+
+    view_state = bindings.range_view_state
+    if view_state is None:
+        return False
+    delta_qr = _get_runtime_range_value(view_state, "delta_qr", _DEFAULT_DELTA_QR)
+    phi_min = _get_runtime_range_value(view_state, "phi_min", _DEFAULT_PHI_MIN)
+    phi_max = _get_runtime_range_value(view_state, "phi_max", _DEFAULT_PHI_MAX)
+    try:
+        selected_entry = context["selected_entry"]
+        config = context["config"]
+        projection_context = context["projection_context"]
+        radial_axis = np.asarray(context["radial_axis"], dtype=float).reshape(-1)
+        azimuth_axis = np.asarray(context["azimuth_axis"], dtype=float).reshape(-1)
+    except Exception:
+        return False
+
+    projected_samples = _projected_qr_rod_samples_from_context(context)
+    if projected_samples is None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        bindings.drag_select_rect.set_visible(False)
+        _draw_idle(bindings)
+        return False
+
+    qz_bounds = qz_bounds_from_caked_drag_for_qr_rod(
+        projected_samples,
+        x0=drag_state.x0,
+        y0=drag_state.y0,
+        x1=drag_state.x1,
+        y1=drag_state.y1,
+        phi_min=phi_min,
+        phi_max=phi_max,
+    )
+    if qz_bounds is None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        bindings.drag_select_rect.set_visible(False)
+        _draw_idle(bindings)
+        return False
+
+    qz_lo, qz_hi = qz_bounds
+    try:
+        mask_payload = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+            selected_entry=selected_entry,
+            config=config,
+            projection_context=projection_context,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            qz_min=qz_lo,
+            qz_max=qz_hi,
+            phi_min=phi_min,
+            phi_max=phi_max,
+            delta_qr=delta_qr,
+        )
+    except Exception:
+        return False
+    if not isinstance(mask_payload, Mapping):
+        return False
+    mask = np.asarray(mask_payload.get("mask"), dtype=bool)
+
+    if not np.any(mask):
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        bindings.drag_select_rect.set_visible(False)
+        _draw_idle(bindings)
+        return False
+
+    _set_integration_overlay_image(
+        bindings,
+        mask.astype(float),
+        source_signature=(
+            "caked_selected_qr_rod_drag_preview",
+            mask_payload.get("signature"),
+        ),
+    )
+    bindings.integration_region_overlay.set_visible(True)
+    bindings.integration_region_rect.set_visible(False)
+    bindings.drag_select_rect.set_visible(False)
+    _draw_idle(bindings)
+    return True
+
+
 def set_runtime_integration_range_from_drag(
     bindings: IntegrationRangeDragBindings,
     x0: float,
@@ -1353,10 +1537,17 @@ def handle_runtime_integration_drag_press(
             "integrate_selected_qr_rod",
             False,
         ):
-            _set_status_text(
-                bindings,
-                "Rectangle drag is disabled while selected Qr rod ROI mode is active.",
-            )
+            drag_state.active = True
+            drag_state.mode = "caked_qr_rod"
+            drag_state.x0 = x0
+            drag_state.y0 = y0
+            drag_state.x1 = x0
+            drag_state.y1 = y0
+            drag_state.tth0 = None
+            drag_state.phi0 = None
+            drag_state.tth1 = None
+            drag_state.phi1 = None
+            update_runtime_qr_rod_drag_preview(bindings)
             return True
         drag_state.active = True
         drag_state.mode = "caked"
@@ -1431,6 +1622,24 @@ def handle_runtime_integration_drag_motion(
         )
         return True
 
+    if mode == "caked_qr_rod":
+        if not _runtime_caked_view_enabled(bindings):
+            return False
+
+        if (
+            getattr(event, "inaxes", None) is bindings.ax
+            and getattr(event, "xdata", None) is not None
+            and getattr(event, "ydata", None) is not None
+        ):
+            x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+            drag_state.x1 = x1
+            drag_state.y1 = y1
+        elif drag_state.x1 is None or drag_state.y1 is None:
+            return False
+
+        update_runtime_qr_rod_drag_preview(bindings)
+        return True
+
     if mode != "raw" or _runtime_caked_view_enabled(bindings):
         return False
 
@@ -1502,6 +1711,77 @@ def handle_runtime_integration_drag_release(
         _draw_idle(bindings)
         return True
 
+    if mode == "caked_qr_rod":
+        if (
+            _runtime_caked_view_enabled(bindings)
+            and getattr(event, "inaxes", None) is bindings.ax
+            and getattr(event, "xdata", None) is not None
+            and getattr(event, "ydata", None) is not None
+        ):
+            x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+            drag_state.x1 = x1
+            drag_state.y1 = y1
+
+        context = _runtime_qr_rod_drag_context(bindings)
+        qz_bounds = None
+        if (
+            context is not None
+            and None not in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1)
+        ):
+            try:
+                projected_samples = _projected_qr_rod_samples_from_context(context)
+                phi_min = _get_runtime_range_value(
+                    bindings.range_view_state,
+                    "phi_min",
+                    _DEFAULT_PHI_MIN,
+                )
+                phi_max = _get_runtime_range_value(
+                    bindings.range_view_state,
+                    "phi_max",
+                    _DEFAULT_PHI_MAX,
+                )
+                qz_bounds = qz_bounds_from_caked_drag_for_qr_rod(
+                    projected_samples,
+                    x0=drag_state.x0,
+                    y0=drag_state.y0,
+                    x1=drag_state.x1,
+                    y1=drag_state.y1,
+                    phi_min=phi_min,
+                    phi_max=phi_max,
+                )
+            except Exception:
+                qz_bounds = None
+
+        reset_runtime_integration_drag(bindings, redraw=False)
+        if qz_bounds is None or bindings.range_view_state is None:
+            update_runtime_integration_region_visuals(
+                bindings,
+                _runtime_ai(bindings),
+                _runtime_last_sim_res2(bindings),
+            )
+            _set_status_text(bindings, "Drag across the selected Qr rod to set a Qz range.")
+            _draw_idle(bindings)
+            return True
+
+        qz_lo, qz_hi = sorted((float(qz_bounds[0]), float(qz_bounds[1])))
+        _set_runtime_range_value(bindings.range_view_state, "qz_min", qz_lo)
+        _set_runtime_range_value(bindings.range_view_state, "qz_max", qz_hi)
+        _activate_runtime_1d_analysis(bindings.show_1d_var)
+        _sync_runtime_range_text_vars(bindings.range_view_state)
+        if callable(bindings.schedule_range_update):
+            bindings.schedule_range_update()
+        _set_status_text(
+            bindings,
+            f"Selected Qr rod Qz range set: Qz=[{qz_lo:.4f}, {qz_hi:.4f}] A^-1",
+        )
+        update_runtime_integration_region_visuals(
+            bindings,
+            _runtime_ai(bindings),
+            _runtime_last_sim_res2(bindings),
+        )
+        _draw_idle(bindings)
+        return True
+
     if mode == "raw":
         ai = _runtime_ai(bindings)
         applied = False
@@ -1569,6 +1849,7 @@ def make_runtime_integration_range_drag_bindings_factory(
     caked_custom_mask_factory: object = None,
     caked_custom_mask_signature_factory: object = None,
     detector_geometry_signature_factory: object = None,
+    caked_qr_rod_drag_context_factory: object = None,
 ):
     """Build a factory that resolves the live integration-range drag bindings."""
 
@@ -1599,6 +1880,7 @@ def make_runtime_integration_range_drag_bindings_factory(
             caked_custom_mask_factory=caked_custom_mask_factory,
             caked_custom_mask_signature_factory=caked_custom_mask_signature_factory,
             detector_geometry_signature_factory=detector_geometry_signature_factory,
+            caked_qr_rod_drag_context_factory=caked_qr_rod_drag_context_factory,
         )
 
     return _build
@@ -1783,12 +2065,16 @@ def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
         "tth_min_entry",
         "tth_max_slider",
         "tth_max_entry",
+    ):
+        _set_widget_enabled(getattr(view_state, widget_name, None), not rod_mode_enabled)
+
+    for widget_name in (
         "phi_min_slider",
         "phi_min_entry",
         "phi_max_slider",
         "phi_max_entry",
     ):
-        _set_widget_enabled(getattr(view_state, widget_name, None), not rod_mode_enabled)
+        _set_widget_enabled(getattr(view_state, widget_name, None), True)
 
     for widget_name in (
         "selected_qr_rod_combobox",
@@ -1952,7 +2238,7 @@ def create_runtime_integration_range_controls(
     selected_qr_rod_options: list[tuple[str, str]] | None = None,
     qz_min: float = _DEFAULT_QZ_MIN,
     qz_max: float = _DEFAULT_QZ_MAX,
-    delta_qr: float = 0.01,
+    delta_qr: float = _DEFAULT_DELTA_QR,
     schedule_range_update: Callable[..., object] | None,
     disable_peak_pick: Callable[[], object] | None = None,
     refresh_region_visuals: Callable[[], object] | None = None,
@@ -2000,12 +2286,14 @@ def create_runtime_integration_range_controls(
             value_var_name="phi_min_var",
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
+            refresh_region_visuals=refresh_region_visuals,
         ),
         on_phi_max_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="phi_max_var",
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
+            refresh_region_visuals=refresh_region_visuals,
         ),
         on_qz_min_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
@@ -2056,6 +2344,8 @@ def create_runtime_integration_range_controls(
                 refresh_region_visuals
                 if value_var
                 in (
+                    getattr(view_state, "phi_min_var", None),
+                    getattr(view_state, "phi_max_var", None),
                     getattr(view_state, "qz_min_var", None),
                     getattr(view_state, "qz_max_var", None),
                     getattr(view_state, "delta_qr_var", None),

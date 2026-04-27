@@ -3,6 +3,89 @@ import numpy as np
 from ra_sim.gui import controllers, state
 
 
+def test_q_space_rect_mask_for_qr_centers_builds_expected_mask() -> None:
+    radial = np.asarray([5.0, 10.0, 15.0, 20.0], dtype=float)
+    azimuth = np.asarray([-20.0, 0.0, 20.0], dtype=float)
+    wavelength_m = 1.54e-10
+    qr_map, qz_map = controllers.caked_axes_to_qr_qz_maps(
+        radial,
+        azimuth,
+        wavelength_m=wavelength_m,
+    )
+    qr_center = float(qr_map[2, 2])
+    delta_qr = 0.02
+    qz_min = float(qz_map[2, 2] - 0.01)
+    qz_max = float(qz_map[2, 2] + 0.01)
+
+    mask = controllers.q_space_rect_mask_for_qr_centers(
+        radial,
+        azimuth,
+        wavelength_m=wavelength_m,
+        qr_centers=[qr_center],
+        qz_min=qz_min,
+        qz_max=qz_max,
+        delta_qr=delta_qr,
+    )
+
+    expected = (
+        np.isfinite(qr_map)
+        & np.isfinite(qz_map)
+        & (np.abs(qr_map - qr_center) <= delta_qr)
+        & (qz_map >= qz_min)
+        & (qz_map <= qz_max)
+    )
+    assert mask.shape == (azimuth.size, radial.size)
+    np.testing.assert_array_equal(mask, expected)
+
+
+def test_q_space_rect_mask_for_qr_centers_supports_multiple_centers() -> None:
+    radial = np.asarray([5.0, 10.0, 15.0, 20.0], dtype=float)
+    azimuth = np.asarray([-20.0, 0.0, 20.0], dtype=float)
+    wavelength_m = 1.54e-10
+    qr_map, qz_map = controllers.caked_axes_to_qr_qz_maps(
+        radial,
+        azimuth,
+        wavelength_m=wavelength_m,
+    )
+    centers = [float(qr_map[0, 1]), float(qr_map[2, 3])]
+    delta_qr = 0.03
+    qz_min = float(np.min(qz_map) - 0.01)
+    qz_max = float(np.max(qz_map) + 0.01)
+
+    mask = controllers.q_space_rect_mask_for_qr_centers(
+        radial,
+        azimuth,
+        wavelength_m=wavelength_m,
+        qr_centers=centers,
+        qz_min=qz_min,
+        qz_max=qz_max,
+        delta_qr=delta_qr,
+    )
+
+    expected_qr = np.zeros_like(qr_map, dtype=bool)
+    for center in centers:
+        expected_qr |= np.abs(qr_map - center) <= delta_qr
+    np.testing.assert_array_equal(mask, expected_qr & np.isfinite(qz_map))
+
+
+def test_q_space_rect_mask_for_qr_centers_returns_empty_for_zero_delta() -> None:
+    radial = np.asarray([5.0, 10.0], dtype=float)
+    azimuth = np.asarray([-20.0, 20.0], dtype=float)
+
+    mask = controllers.q_space_rect_mask_for_qr_centers(
+        radial,
+        azimuth,
+        wavelength_m=1.54e-10,
+        qr_centers=[1.0],
+        qz_min=-1.0,
+        qz_max=1.0,
+        delta_qr=0.0,
+    )
+
+    assert mask.shape == (azimuth.size, radial.size)
+    assert not np.any(mask)
+
+
 def test_app_state_has_isolated_manual_geometry_state() -> None:
     app_state = state.AppState()
     other_state = state.AppState()

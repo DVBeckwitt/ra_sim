@@ -4505,7 +4505,7 @@ def create_integration_range_controls(
     frame.pack(side=tk.TOP, fill=tk.X, pady=5)
     range_frame = frame.frame
 
-    rectangle_section_frame = ttk.LabelFrame(range_frame, text="Rectangle ROI (2θ / φ)")
+    rectangle_section_frame = ttk.LabelFrame(range_frame, text="Caked angle bounds (2θ / φ)")
     rectangle_section_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 6))
 
     rod_section_frame = ttk.LabelFrame(range_frame, text="Selected Qr Rod ROI")
@@ -4694,10 +4694,10 @@ def create_integration_range_controls(
     _create_range_row(
         parent_frame=rod_section_frame,
         prefix="delta_qr",
-        label_text="ΔQr:",
+        label_text="Qr half-width (A^-1):",
         initial_value=delta_qr,
         lower_bound=0.0,
-        upper_bound=0.25,
+        upper_bound=1.0,
         slider_command=on_delta_qr_changed,
         label_format="{:.4f}",
         entry_format="{:.4f}",

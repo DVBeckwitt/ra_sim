@@ -1,0 +1,2341 @@
+{
+  "artifact_dir": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_caked_snapshots\\new4\\manual_point_audit",
+  "background_index": 0,
+  "background_name": "Bi2Se3_5m_5d.osc",
+  "background_vmax": 3000,
+  "background_vmin": 0,
+  "branch_count": 14,
+  "figures": [
+    "00_background_caked_manual_release_full.png",
+    "01_background_caked_manual_refined_full.png",
+    "02_background_caked_release_to_refined_overlay.png",
+    "03_background_caked_observed_vs_predicted_x0_full.png",
+    "04_background_detector_manual_release_to_refined_full.png",
+    "05_focus_q_group_primary_1_10_manual_x0.png",
+    "06_focus_q_group_primary_1_10_observed_vs_predicted_x0.png",
+    "07_branch_zoom_grid_manual_vs_predicted_x0.png"
+  ],
+  "largest_manual_saved_to_fitspace_shift": 0.20724103308930397,
+  "largest_observed_to_sim_refined_d2theta": 1.2861988230822732,
+  "largest_observed_to_sim_refined_dphi": 4.0,
+  "largest_refined_to_observed_shift": 0.0,
+  "largest_release_to_refined_shift": 3.4619423109071774,
+  "manual_fitspace_matches_fit_observed": true,
+  "per_branch_records": [
+    {
+      "branch_id": "unknown:((q_group,primary,1,10),source_branch,1)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        [
+          -1,
+          0,
+          10
+        ],
+        1,
+        1,
+        160,
+        120
+      ],
+      "fit_observed_caked_deg": [
+        40.85589083496425,
+        -37.73212752500453
+      ],
+      "fit_observed_detector_display_px": [
+        1849.5810985346227,
+        1082.9056033274035
+      ],
+      "fit_observed_detector_native_px": [
+        1081.8160006356104,
+        1150.9539056121614
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -1,
+        0,
+        10
+      ],
+      "key": "('q_group', 'primary', 1, 10)|(-1,0,10)|table=160|row=120|branch=1|peak=1",
+      "manual_detector_display_px": [
+        1848.0460943878386,
+        1081.8160006356104
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1081.8160006356104,
+        1150.9539056121614
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        40.85589083496425,
+        -37.73212752500453
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        1832.0342637875463,
+        1084.9353947634536
+      ],
+      "manual_release_detector_native_px": [
+        1084.9353947634536,
+        1166.9657362124537
+      ],
+      "manual_release_fitspace_caked_deg": [
+        40.31665024185768,
+        -36.74999999182833
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        40.31780585352589,
+        -36.594368646334914
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        40.85298785727099,
+        -37.56585258715225
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        0.0029029776932603113,
+        -0.16627493785227898
+      ],
+      "objective_row_index": 3,
+      "observed_to_sim_nominal_caked": [
+        -0.6262738631697999,
+        1.45715247009079
+      ],
+      "observed_to_sim_refined_caked": [
+        -0.6262738631697999,
+        1.45715247009079
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        0.5392405931065696,
+        -0.9821275331761967
+      ],
+      "release_saved_to_manual_saved_caked": [
+        0.5351820037450992,
+        -0.9714839408173361
+      ],
+      "residual_2theta": -0.6262738631697999,
+      "residual_caked_deg": [
+        -0.6262738631697999,
+        1.45715247009079
+      ],
+      "residual_norm": 1.5860366555604306,
+      "residual_phi_wrapped": 1.45715247009079,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1913.6748352048344,
+        1829.272053528747
+      ],
+      "sim_nominal_detector_native_px": [
+        1085.3251647951656,
+        1169.727946471253
+      ],
+      "sim_nominal_x0_caked_deg": [
+        40.22961697179445,
+        -36.27497505491374
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1913.6748352048344,
+        1829.272053528747
+      ],
+      "sim_refined_detector_native_px": [
+        1085.3251647951656,
+        1169.727946471253
+      ],
+      "sim_refined_x0_caked_deg": [
+        40.22961697179445,
+        -36.27497505491374
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        40.23099696365823,
+        -36.41500571700365
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        1829.272053528747,
+        1085.3251647951656
+      ],
+      "sim_saved_detector_native_px": [
+        1085.3251647951656,
+        1169.727946471253
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_row_index": 120,
+      "source_table_index": 160
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,1,10),source_branch,0)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        [
+          -1,
+          0,
+          10
+        ],
+        0,
+        0,
+        160,
+        42
+      ],
+      "fit_observed_caked_deg": [
+        40.14114634317084,
+        35.71393112448442
+      ],
+      "fit_observed_detector_display_px": [
+        1083.416284315024,
+        1082.387555972898
+      ],
+      "fit_observed_detector_native_px": [
+        1081.4190956439036,
+        1914.2781176331991
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -1,
+        0,
+        10
+      ],
+      "key": "('q_group', 'primary', 1, 10)|(-1,0,10)|table=160|row=42|branch=0|peak=0",
+      "manual_detector_display_px": [
+        1084.7218823668009,
+        1081.4190956439036
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1081.4190956439036,
+        1914.2781176331991
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        40.14114634317084,
+        35.71393112448442
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        1079.8108061597068,
+        1080.0952314774422
+      ],
+      "manual_release_detector_native_px": [
+        1080.0952314774422,
+        1919.1891938402932
+      ],
+      "manual_release_fitspace_caked_deg": [
+        40.31922143260553,
+        35.75053528224129
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        40.31780585352589,
+        35.85703138933479
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        40.14250893640562,
+        35.566836371696525
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.001362593234780718,
+        0.1470947527878934
+      ],
+      "objective_row_index": 2,
+      "observed_to_sim_nominal_caked": [
+        0.035557977535631835,
+        0.536068875515582
+      ],
+      "observed_to_sim_refined_caked": [
+        0.03555797753562473,
+        0.536068875515582
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        10
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        -0.1780750894346923,
+        -0.036604157756869427
+      ],
+      "release_saved_to_manual_saved_caked": [
+        -0.17529691712027073,
+        -0.2901950176382684
+      ],
+      "residual_2theta": 0.03555797753562473,
+      "residual_caked_deg": [
+        0.03555797753562473,
+        0.536068875515582
+      ],
+      "residual_norm": 0.5372468790630287,
+      "residual_phi_wrapped": 0.536068875515582,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1913.4801482099376,
+        1077.7377490307258
+      ],
+      "sim_nominal_detector_native_px": [
+        1085.5198517900624,
+        1921.2622509692742
+      ],
+      "sim_nominal_x0_caked_deg": [
+        40.17670432070647,
+        36.25
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1913.4801482099376,
+        1077.7377490307258
+      ],
+      "sim_refined_detector_native_px": [
+        1085.5198517900624,
+        1921.2622509692742
+      ],
+      "sim_refined_x0_caked_deg": [
+        40.17670432070646,
+        36.25
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        40.17722458552713,
+        36.296562316778335
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        1077.7377490307258,
+        1085.5198517900624
+      ],
+      "sim_saved_detector_native_px": [
+        1085.5198517900624,
+        1921.2622509692742
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_row_index": 42,
+      "source_table_index": 160
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,1,16),source_branch,1)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        [
+          -1,
+          0,
+          16
+        ],
+        1,
+        1,
+        222,
+        32
+      ],
+      "fit_observed_caked_deg": [
+        58.11942877861077,
+        -13.75
+      ],
+      "fit_observed_detector_display_px": [
+        1739.228344577286,
+        424.64161909176806
+      ],
+      "fit_observed_detector_native_px": [
+        424.4464172768861,
+        1260.1381691570386
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -1,
+        0,
+        16
+      ],
+      "key": "('q_group', 'primary', 1, 16)|(-1,0,16)|table=222|row=32|branch=1|peak=1",
+      "manual_detector_display_px": [
+        1738.8618308429614,
+        424.4464172768861
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        424.4464172768861,
+        1260.1381691570386
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        58.11942877861077,
+        -13.75
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        1664.1600222692412,
+        432.6572216741936
+      ],
+      "manual_release_detector_native_px": [
+        432.6572216741936,
+        1334.8399777307588
+      ],
+      "manual_release_fitspace_caked_deg": [
+        57.61993706412302,
+        -10.25
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        57.611703684213886,
+        -10.306692527198123
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        58.12163672200126,
+        -13.730873138822204
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.002207943390494904,
+        -0.019126861177795718
+      ],
+      "objective_row_index": 13,
+      "observed_to_sim_nominal_caked": [
+        -0.5708476737002854,
+        4.0
+      ],
+      "observed_to_sim_refined_caked": [
+        -0.5708476737002854,
+        4.0
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        0.4994917144877462,
+        -3.5
+      ],
+      "release_saved_to_manual_saved_caked": [
+        0.509933037787377,
+        -3.424180611624081
+      ],
+      "residual_2theta": -0.5708476737002854,
+      "residual_caked_deg": [
+        -0.5708476737002854,
+        4.0
+      ],
+      "residual_norm": 4.040528067786317,
+      "residual_phi_wrapped": 4.0,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        2566.5409270295863,
+        1648.8941034402421
+      ],
+      "sim_nominal_detector_native_px": [
+        432.4590729704136,
+        1350.1058965597579
+      ],
+      "sim_nominal_x0_caked_deg": [
+        57.54858110491048,
+        -9.75
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        2566.5409270295863,
+        1648.8941034402421
+      ],
+      "sim_refined_detector_native_px": [
+        432.4590729704136,
+        1350.1058965597579
+      ],
+      "sim_refined_x0_caked_deg": [
+        57.54858110491048,
+        -9.75
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        57.55830145721158,
+        -9.57561440130047
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        1648.8941034402421,
+        432.4590729704137
+      ],
+      "sim_saved_detector_native_px": [
+        432.4590729704136,
+        1350.1058965597579
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_row_index": 32,
+      "source_table_index": 222
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,1,16),source_branch,0)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        [
+          -1,
+          0,
+          16
+        ],
+        0,
+        0,
+        222,
+        75
+      ],
+      "fit_observed_caked_deg": [
+        57.69129302333556,
+        11.75
+      ],
+      "fit_observed_detector_display_px": [
+        1211.1032070954675,
+        434.7902971722106
+      ],
+      "fit_observed_detector_native_px": [
+        434.577504771753,
+        1787.5409475259203
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -1,
+        0,
+        16
+      ],
+      "key": "('q_group', 'primary', 1, 16)|(-1,0,16)|table=222|row=75|branch=0|peak=0",
+      "manual_detector_display_px": [
+        1211.4590524740797,
+        434.577504771753
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        434.577504771753,
+        1787.5409475259203
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        57.69129302333556,
+        11.75
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        1256.0654146040026,
+        430.03750140307756
+      ],
+      "manual_release_detector_native_px": [
+        430.03750140307756,
+        1742.9345853959974
+      ],
+      "manual_release_fitspace_caked_deg": [
+        57.6193973696333,
+        9.75
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        57.611703684213886,
+        9.569355270198002
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        57.6942711427288,
+        11.731077251970873
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.0029781193932407746,
+        0.018922748029126524
+      ],
+      "objective_row_index": 12,
+      "observed_to_sim_nominal_caked": [
+        -0.493547270697384,
+        0.0
+      ],
+      "observed_to_sim_refined_caked": [
+        -0.493547270697384,
+        0.0
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        16
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        0.07189565370226347,
+        2.0
+      ],
+      "release_saved_to_manual_saved_caked": [
+        0.08256745851491587,
+        2.161721981772871
+      ],
+      "residual_2theta": -0.493547270697384,
+      "residual_caked_deg": [
+        -0.493547270697384,
+        0.0
+      ],
+      "residual_norm": 0.493547270697384,
+      "residual_phi_wrapped": 0.0,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        2543.3288071164325,
+        1218.192307648577
+      ],
+      "sim_nominal_detector_native_px": [
+        455.6711928835676,
+        1780.807692351423
+      ],
+      "sim_nominal_x0_caked_deg": [
+        57.19774575263818,
+        11.75
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        2543.3288071164325,
+        1218.192307648577
+      ],
+      "sim_refined_detector_native_px": [
+        455.6711928835676,
+        1780.807692351423
+      ],
+      "sim_refined_x0_caked_deg": [
+        57.19774575263818,
+        11.75
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        57.20744956292302,
+        11.617708356651946
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        1218.192307648577,
+        455.6711928835675
+      ],
+      "sim_saved_detector_native_px": [
+        455.6711928835676,
+        1780.807692351423
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_row_index": 75,
+      "source_table_index": 222
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,1,5),source_branch,0)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        [
+          -1,
+          0,
+          5
+        ],
+        0,
+        0,
+        111,
+        11
+      ],
+      "fit_observed_caked_deg": [
+        29.29161614738359,
+        57.18141608120496
+      ],
+      "fit_observed_detector_display_px": [
+        1099.0406145327788,
+        1367.8974415510181
+      ],
+      "fit_observed_detector_native_px": [
+        1367.267889372774,
+        1899.552000106583
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -1,
+        0,
+        5
+      ],
+      "key": "('q_group', 'primary', 1, 5)|(-1,0,5)|table=111|row=11|branch=0|peak=0",
+      "manual_detector_display_px": [
+        1099.447999893417,
+        1367.267889372774
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1367.267889372774,
+        1899.552000106583
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        29.29161614738359,
+        57.18141608120496
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        1096.2950461792134,
+        1370.2794474533787
+      ],
+      "manual_release_detector_native_px": [
+        1370.2794474533787,
+        1902.7049538207866
+      ],
+      "manual_release_fitspace_caked_deg": [
+        29.349185815045292,
+        57.74806331996294
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        29.350943814553005,
+        57.65656768325309
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        29.29165538323298,
+        57.079371399827465
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -3.923584938902991e-05,
+        0.10204468137749245
+      ],
+      "objective_row_index": 0,
+      "observed_to_sim_nominal_caked": [
+        0.1276914632511179,
+        0.9992269866677361
+      ],
+      "observed_to_sim_refined_caked": [
+        0.1276914632511179,
+        0.9992269866677361
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        -0.057569667661702795,
+        -0.5666472387579802
+      ],
+      "release_saved_to_manual_saved_caked": [
+        -0.05928843132002726,
+        -0.5771962834256215
+      ],
+      "residual_2theta": 0.1276914632511179,
+      "residual_caked_deg": [
+        0.1276914632511179,
+        0.9992269866677361
+      ],
+      "residual_norm": 1.007352808440169,
+      "residual_phi_wrapped": 0.9992269866677361,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1626.7057441301424,
+        1093.649087249921
+      ],
+      "sim_nominal_detector_native_px": [
+        1372.2942558698576,
+        1905.350912750079
+      ],
+      "sim_nominal_x0_caked_deg": [
+        29.419307610634707,
+        58.180643067872694
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1626.7057441301424,
+        1093.649087249921
+      ],
+      "sim_refined_detector_native_px": [
+        1372.2942558698576,
+        1905.350912750079
+      ],
+      "sim_refined_x0_caked_deg": [
+        29.419307610634707,
+        58.180643067872694
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        29.419171965030486,
+        58.078123650228775
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        1093.649087249921,
+        1372.2942558698576
+      ],
+      "sim_saved_detector_native_px": [
+        1372.2942558698576,
+        1905.350912750079
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_row_index": 11,
+      "source_table_index": 111
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,1,5),source_branch,1)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        [
+          -1,
+          0,
+          5
+        ],
+        1,
+        1,
+        111,
+        172
+      ],
+      "fit_observed_caked_deg": [
+        29.862404174117902,
+        -59.16048751370546
+      ],
+      "fit_observed_detector_display_px": [
+        1822.3490818580196,
+        1375.1670978111897
+      ],
+      "fit_observed_detector_native_px": [
+        1374.6237260643284,
+        1177.0062778399551
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -1,
+        0,
+        5
+      ],
+      "key": "('q_group', 'primary', 1, 5)|(-1,0,5)|table=111|row=172|branch=1|peak=1",
+      "manual_detector_display_px": [
+        1821.9937221600449,
+        1374.6237260643284
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1374.6237260643284,
+        1177.0062778399551
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        29.862404174117902,
+        -59.16048751370546
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        1818.2459441348426,
+        1382.0582677070388
+      ],
+      "manual_release_detector_native_px": [
+        1382.0582677070388,
+        1180.7540558651574
+      ],
+      "manual_release_fitspace_caked_deg": [
+        29.453992572527092,
+        -59.75
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        29.45639441108159,
+        -59.676230604601386
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        29.861006834273667,
+        -59.073952446488136
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        0.0013973398442352902,
+        -0.08653506721731219
+      ],
+      "objective_row_index": 1,
+      "observed_to_sim_nominal_caked": [
+        -0.5199505468375385,
+        0.9104875137054478
+      ],
+      "observed_to_sim_refined_caked": [
+        -0.5199505468375385,
+        0.9104875137054478
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        1,
+        5
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        0.40841160159081014,
+        0.5895124862945522
+      ],
+      "release_saved_to_manual_saved_caked": [
+        0.40461242319207713,
+        0.6022781581132506
+      ],
+      "residual_2theta": -0.5199505468375385,
+      "residual_caked_deg": [
+        -0.5199505468375385,
+        0.9104875137054478
+      ],
+      "residual_norm": 1.0484922907538154,
+      "residual_phi_wrapped": 0.9104875137054478,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1624.5029516958325,
+        1811.420825960439
+      ],
+      "sim_nominal_detector_native_px": [
+        1374.4970483041675,
+        1187.579174039561
+      ],
+      "sim_nominal_x0_caked_deg": [
+        29.342453627280364,
+        -58.25
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1624.5029516958325,
+        1811.420825960439
+      ],
+      "sim_refined_detector_native_px": [
+        1374.4970483041675,
+        1187.579174039561
+      ],
+      "sim_refined_x0_caked_deg": [
+        29.342453627280364,
+        -58.25
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        29.343273417986975,
+        -58.32021751677512
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        1811.420825960439,
+        1374.4970483041675
+      ],
+      "sim_saved_detector_native_px": [
+        1374.4970483041675,
+        1187.579174039561
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_row_index": 172,
+      "source_table_index": 111
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,3,15),source_branch,1)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          3,
+          15
+        ],
+        [
+          -2,
+          1,
+          15
+        ],
+        1,
+        1,
+        302,
+        122
+      ],
+      "fit_observed_caked_deg": [
+        67.68112731309063,
+        -35.75
+      ],
+      "fit_observed_detector_display_px": [
+        2520.0302314301593,
+        113.19599485368539
+      ],
+      "fit_observed_detector_native_px": [
+        112.11445803623793,
+        480.97484431571365
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        1,
+        15
+      ],
+      "key": "('q_group', 'primary', 3, 15)|(-2,1,15)|table=302|row=122|branch=1|peak=1",
+      "manual_detector_display_px": [
+        2518.0251556842863,
+        112.11445803623793
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        112.11445803623793,
+        480.97484431571365
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        67.68112731309063,
+        -35.75
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        2431.2297173564993,
+        146.69524963344867
+      ],
+      "manual_release_detector_native_px": [
+        146.69524963344867,
+        567.7702826435007
+      ],
+      "manual_release_fitspace_caked_deg": [
+        66.77482238396459,
+        -34.24048552390124
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        66.78590558220081,
+        -34.02971731763864
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        67.6779617812805,
+        -35.67914023128429
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        0.003165531810125799,
+        -0.07085976871570665
+      ],
+      "objective_row_index": 9,
+      "observed_to_sim_nominal_caked": [
+        -1.2861988230822732,
+        1.0
+      ],
+      "observed_to_sim_refined_caked": [
+        -1.2861988230822732,
+        1.0
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        3,
+        15
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        0.906304929126037,
+        -1.509514476098758
+      ],
+      "release_saved_to_manual_saved_caked": [
+        0.8920561990796898,
+        -1.649422913645651
+      ],
+      "residual_2theta": -1.2861988230822732,
+      "residual_caked_deg": [
+        -1.2861988230822732,
+        1.0
+      ],
+      "residual_norm": 1.6292045336599774,
+      "residual_phi_wrapped": 1.0,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        2813.9044755986865,
+        2426.8122287366978
+      ],
+      "sim_nominal_detector_native_px": [
+        185.0955244013136,
+        572.1877712633022
+      ],
+      "sim_nominal_x0_caked_deg": [
+        66.39492849000835,
+        -34.75
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        2813.9044755986865,
+        2426.8122287366978
+      ],
+      "sim_refined_detector_native_px": [
+        185.0955244013136,
+        572.1877712633022
+      ],
+      "sim_refined_x0_caked_deg": [
+        66.39492849000835,
+        -34.75
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        66.37311018180672,
+        -34.62554234639941
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        2426.8122287366978,
+        185.09552440131347
+      ],
+      "sim_saved_detector_native_px": [
+        185.0955244013136,
+        572.1877712633022
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_row_index": 122,
+      "source_table_index": 302
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,3,15),source_branch,0)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          3,
+          15
+        ],
+        [
+          -2,
+          1,
+          15
+        ],
+        0,
+        0,
+        302,
+        49
+      ],
+      "fit_observed_caked_deg": [
+        66.32536408805245,
+        33.71954796119542
+      ],
+      "fit_observed_detector_display_px": [
+        503.016954987023,
+        173.104380000595
+      ],
+      "fit_observed_detector_native_px": [
+        169.73731512850944,
+        2491.261780585306
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        1,
+        15
+      ],
+      "key": "('q_group', 'primary', 3, 15)|(-2,1,15)|table=302|row=49|branch=0|peak=0",
+      "manual_detector_display_px": [
+        507.73821941469373,
+        169.73731512850944
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        169.73731512850944,
+        2491.261780585306
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        66.32536408805245,
+        33.71954796119542
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        459.39657509479247,
+        188.76593144954774
+      ],
+      "manual_release_detector_native_px": [
+        188.76593144954774,
+        2539.6034249052077
+      ],
+      "manual_release_fitspace_caked_deg": [
+        66.46807600647752,
+        35.25
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        66.46955379261506,
+        35.21586855716072
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        66.32781914986715,
+        33.52543804564243
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.0024550618147003433,
+        0.1941099155529855
+      ],
+      "objective_row_index": 8,
+      "observed_to_sim_nominal_caked": [
+        0.499491714487732,
+        0.030452038804583026
+      ],
+      "observed_to_sim_refined_caked": [
+        0.499491714487732,
+        0.030452038804583026
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        3,
+        15
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        -0.14271191842506425,
+        -1.530452038804583
+      ],
+      "release_saved_to_manual_saved_caked": [
+        -0.14173464274790604,
+        -1.6904305115182865
+      ],
+      "residual_2theta": 0.499491714487732,
+      "residual_caked_deg": [
+        0.499491714487732,
+        0.030452038804583026
+      ],
+      "residual_norm": 0.5004191238444528,
+      "residual_phi_wrapped": 0.030452038804583026,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        2858.4804210863613,
+        478.2483466697995
+      ],
+      "sim_nominal_detector_native_px": [
+        140.51957891363878,
+        2520.7516533302005
+      ],
+      "sim_nominal_x0_caked_deg": [
+        66.82485580254018,
+        33.75
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        2858.4804210863613,
+        478.2483466697995
+      ],
+      "sim_refined_detector_native_px": [
+        140.51957891363878,
+        2520.7516533302005
+      ],
+      "sim_refined_x0_caked_deg": [
+        66.82485580254018,
+        33.75
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        66.81865181121891,
+        33.80176919124224
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        478.2483466697995,
+        140.51957891363872
+      ],
+      "sim_saved_detector_native_px": [
+        140.51957891363878,
+        2520.7516533302005
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_row_index": 49,
+      "source_table_index": 302
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,3,6),source_branch,1)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          3,
+          6
+        ],
+        [
+          -2,
+          1,
+          6
+        ],
+        1,
+        1,
+        280,
+        118
+      ],
+      "fit_observed_caked_deg": [
+        48.77120719377949,
+        -67.74449172179189
+      ],
+      "fit_observed_detector_display_px": [
+        2244.7107630985925,
+        1271.7818415229458
+      ],
+      "fit_observed_detector_native_px": [
+        1269.005107016917,
+        755.3605754924929
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        1,
+        6
+      ],
+      "key": "('q_group', 'primary', 3, 6)|(-2,1,6)|table=280|row=118|branch=1|peak=1",
+      "manual_detector_display_px": [
+        2243.639424507507,
+        1269.005107016917
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1269.005107016917,
+        755.3605754924929
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        48.77120719377949,
+        -67.74449172179189
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        2229.3224375650234,
+        1302.3356342959576
+      ],
+      "manual_release_detector_native_px": [
+        1302.3356342959576,
+        769.6775624349766
+      ],
+      "manual_release_fitspace_caked_deg": [
+        47.91426164223433,
+        -69.25
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        47.91024880358403,
+        -69.2936730872124
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        48.77360472167572,
+        -67.54539633014544
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.0023975278962282687,
+        -0.19909539164643775
+      ],
+      "objective_row_index": 5,
+      "observed_to_sim_nominal_caked": [
+        -0.966291992979869,
+        0.9944917217918885
+      ],
+      "observed_to_sim_refined_caked": [
+        -0.966291992979869,
+        0.9944917217918885
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        3,
+        6
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        0.8569455515451594,
+        1.5055082782081115
+      ],
+      "release_saved_to_manual_saved_caked": [
+        0.8633559180916848,
+        1.7482767570669466
+      ],
+      "residual_2theta": -0.966291992979869,
+      "residual_caked_deg": [
+        -0.966291992979869,
+        0.9944917217918885
+      ],
+      "residual_norm": 1.3866268425245496,
+      "residual_phi_wrapped": 0.9944917217918885,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1729.5391868186225,
+        2212.716648735395
+      ],
+      "sim_nominal_detector_native_px": [
+        1269.4608131813775,
+        786.2833512646048
+      ],
+      "sim_nominal_x0_caked_deg": [
+        47.80491520079962,
+        -66.75
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1729.5391868186225,
+        2212.716648735395
+      ],
+      "sim_refined_detector_native_px": [
+        1269.4608131813775,
+        786.2833512646048
+      ],
+      "sim_refined_x0_caked_deg": [
+        47.80491520079962,
+        -66.75
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        47.803640780831884,
+        -66.7563960926617
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        2212.716648735395,
+        1269.4608131813775
+      ],
+      "sim_saved_detector_native_px": [
+        1269.4608131813775,
+        786.2833512646048
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_row_index": 118,
+      "source_table_index": 280
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,3,6),source_branch,0)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          3,
+          6
+        ],
+        [
+          -2,
+          1,
+          6
+        ],
+        0,
+        0,
+        280,
+        29
+      ],
+      "fit_observed_caked_deg": [
+        47.41934426171434,
+        65.75
+      ],
+      "fit_observed_detector_display_px": [
+        708.4668078524714,
+        1260.7110885310806
+      ],
+      "fit_observed_detector_native_px": [
+        1260.4622934743652,
+        2290.3842424271324
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        1,
+        6
+      ],
+      "key": "('q_group', 'primary', 3, 6)|(-2,1,6)|table=280|row=29|branch=0|peak=0",
+      "manual_detector_display_px": [
+        708.6157575728677,
+        1260.4622934743652
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1260.4622934743652,
+        2290.3842424271324
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        47.41934426171434,
+        65.75
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        696.0079303111376,
+        1269.0219764663927
+      ],
+      "manual_release_detector_native_px": [
+        1269.0219764663927,
+        2302.9920696888626
+      ],
+      "manual_release_fitspace_caked_deg": [
+        47.701194545797584,
+        66.75
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        47.699347610526864,
+        66.63284733369008
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        47.41821201303779,
+        65.72980483407483
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        0.0011322486765550366,
+        0.020195165925173342
+      ],
+      "objective_row_index": 4,
+      "observed_to_sim_nominal_caked": [
+        0.26300136508666583,
+        1.198638424870353
+      ],
+      "observed_to_sim_refined_caked": [
+        0.26300136508666583,
+        1.198638424870353
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        3,
+        6
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        -0.28185028408324087,
+        -1.0
+      ],
+      "release_saved_to_manual_saved_caked": [
+        -0.2811355974890759,
+        -0.9030424996152533
+      ],
+      "residual_2theta": 0.26300136508666583,
+      "residual_caked_deg": [
+        0.26300136508666583,
+        1.198638424870353
+      ],
+      "residual_norm": 1.2271527173148136,
+      "residual_phi_wrapped": 1.198638424870353,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1724.9975629078638,
+        694.4613625017209
+      ],
+      "sim_nominal_detector_native_px": [
+        1274.0024370921362,
+        2304.538637498279
+      ],
+      "sim_nominal_x0_caked_deg": [
+        47.68234562680101,
+        66.94863842487035
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1724.9975629078638,
+        694.4613625017209
+      ],
+      "sim_refined_detector_native_px": [
+        1274.0024370921362,
+        2304.538637498279
+      ],
+      "sim_refined_x0_caked_deg": [
+        47.68234562680101,
+        66.94863842487035
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        47.68060224342444,
+        66.99366398924099
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        694.4613625017209,
+        1274.0024370921362
+      ],
+      "sim_saved_detector_native_px": [
+        1274.0024370921362,
+        2304.538637498279
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_row_index": 29,
+      "source_table_index": 280
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,4,10),source_branch,1)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          4,
+          10
+        ],
+        [
+          -2,
+          0,
+          10
+        ],
+        1,
+        1,
+        404,
+        154
+      ],
+      "fit_observed_caked_deg": [
+        62.115362494512816,
+        -56.75
+      ],
+      "fit_observed_detector_display_px": [
+        2637.9903278899114,
+        818.7601788224005
+      ],
+      "fit_observed_detector_native_px": [
+        814.4592413636611,
+        363.8011846037962
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        0,
+        10
+      ],
+      "key": "('q_group', 'primary', 4, 10)|(-2,0,10)|table=404|row=154|branch=1|peak=1",
+      "manual_detector_display_px": [
+        2635.198815396204,
+        814.4592413636611
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        814.4592413636611,
+        363.8011846037962
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        62.115362494512816,
+        -56.75
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        2589.4557036397614,
+        896.369221375524
+      ],
+      "manual_release_detector_native_px": [
+        896.369221375524,
+        409.5442963602386
+      ],
+      "manual_release_fitspace_caked_deg": [
+        60.68465366435329,
+        -58.25
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        60.66977098354286,
+        -58.393904940253236
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        62.116121074200144,
+        -56.542760355258025
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.0007585796873286199,
+        -0.20723964474197487
+      ],
+      "objective_row_index": 7,
+      "observed_to_sim_nominal_caked": [
+        -0.7849155513379031,
+        1.5
+      ],
+      "observed_to_sim_refined_caked": [
+        -0.7849155513379031,
+        1.5
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        4,
+        10
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        1.4307088301595243,
+        1.5
+      ],
+      "release_saved_to_manual_saved_caked": [
+        1.4463500906572833,
+        1.851144584995211
+      ],
+      "residual_2theta": -0.7849155513379031,
+      "residual_caked_deg": [
+        -0.7849155513379031,
+        1.5
+      ],
+      "residual_norm": 1.6929537568203346,
+      "residual_phi_wrapped": 1.5,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        2181.2587431756956,
+        2582.2987843879678
+      ],
+      "sim_nominal_detector_native_px": [
+        817.7412568243042,
+        416.70121561203223
+      ],
+      "sim_nominal_x0_caked_deg": [
+        61.33044694317491,
+        -55.25
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        2181.2587431756956,
+        2582.2987843879678
+      ],
+      "sim_refined_detector_native_px": [
+        817.7412568243042,
+        416.70121561203223
+      ],
+      "sim_refined_x0_caked_deg": [
+        61.33044694317491,
+        -55.25
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        61.33298049761197,
+        -55.43893026911381
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        2582.2987843879678,
+        817.7412568243044
+      ],
+      "sim_saved_detector_native_px": [
+        817.7412568243042,
+        416.70121561203223
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_row_index": 154,
+      "source_table_index": 404
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,4,10),source_branch,0)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          4,
+          10
+        ],
+        [
+          -2,
+          0,
+          10
+        ],
+        0,
+        0,
+        404,
+        34
+      ],
+      "fit_observed_caked_deg": [
+        60.47417543262447,
+        54.749373234122345
+      ],
+      "fit_observed_detector_display_px": [
+        371.2104097220877,
+        831.6385331832226
+      ],
+      "fit_observed_detector_native_px": [
+        827.9561686827686,
+        2625.13547287336
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        0,
+        10
+      ],
+      "key": "('q_group', 'primary', 4, 10)|(-2,0,10)|table=404|row=34|branch=0|peak=0",
+      "manual_detector_display_px": [
+        373.8645271266402,
+        827.9561686827686
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        827.9561686827686,
+        2625.13547287336
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        60.47417543262447,
+        54.749373234122345
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        326.6314598704107,
+        847.0872299359913
+      ],
+      "manual_release_detector_native_px": [
+        847.0872299359913,
+        2672.3685401295893
+      ],
+      "manual_release_fitspace_caked_deg": [
+        60.973667147112224,
+        56.25
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        60.986122773128606,
+        56.374242018904994
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        60.473757865132754,
+        54.552955632408384
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        0.0004175674917163974,
+        0.19641760171396072
+      ],
+      "objective_row_index": 6,
+      "observed_to_sim_nominal_caked": [
+        0.4277245784079611,
+        0.9261699801095915
+      ],
+      "observed_to_sim_refined_caked": [
+        0.4277245784079611,
+        0.9261699801096199
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        4,
+        10
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        -0.4994917144877533,
+        -1.500626765877655
+      ],
+      "release_saved_to_manual_saved_caked": [
+        -0.5123649079958525,
+        -1.8212863864966096
+      ],
+      "residual_2theta": 0.4277245784079611,
+      "residual_caked_deg": [
+        0.4277245784079611,
+        0.9261699801096199
+      ],
+      "residual_norm": 1.0201662349982585,
+      "residual_phi_wrapped": 0.9261699801096199,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        2165.6899527897995,
+        342.18021602122553
+      ],
+      "sim_nominal_detector_native_px": [
+        833.3100472102004,
+        2656.8197839787745
+      ],
+      "sim_nominal_x0_caked_deg": [
+        60.90190001103243,
+        55.675543214231936
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        2165.6899527897995,
+        342.18021602122553
+      ],
+      "sim_refined_detector_native_px": [
+        833.3100472102004,
+        2656.8197839787745
+      ],
+      "sim_refined_x0_caked_deg": [
+        60.90190001103243,
+        55.675543214231965
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        60.893056707783735,
+        55.520054641029645
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        342.18021602122553,
+        833.3100472102005
+      ],
+      "sim_saved_detector_native_px": [
+        833.3100472102004,
+        2656.8197839787745
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_row_index": 34,
+      "source_table_index": 404
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,4,5),source_branch,0)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          4,
+          5
+        ],
+        [
+          -2,
+          0,
+          5
+        ],
+        0,
+        0,
+        356,
+        13
+      ],
+      "fit_observed_caked_deg": [
+        52.98161825531962,
+        72.24007736900089
+      ],
+      "fit_observed_detector_display_px": [
+        505.4003216307186,
+        1292.536053415724
+      ],
+      "fit_observed_detector_native_px": [
+        1289.5662621095626,
+        2492.704948690008
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        0,
+        5
+      ],
+      "key": "('q_group', 'primary', 4, 5)|(-2,0,5)|table=356|row=13|branch=0|peak=0",
+      "manual_detector_display_px": [
+        506.2950513099919,
+        1289.5662621095626
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1289.5662621095626,
+        2492.704948690008
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        52.98161825531962,
+        72.24007736900089
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        486.5152982295277,
+        1289.5156008896067
+      ],
+      "manual_release_detector_native_px": [
+        1289.5156008896067,
+        2512.4847017704724
+      ],
+      "manual_release_fitspace_caked_deg": [
+        53.49228662774693,
+        72.25
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        53.499130419599055,
+        72.4033128232567
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        52.983467479637184,
+        72.06146500485426
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.0018492243175671774,
+        0.1786123641466304
+      ],
+      "objective_row_index": 10,
+      "observed_to_sim_nominal_caked": [
+        0.14283360206004403,
+        0.9917580410819653
+      ],
+      "observed_to_sim_refined_caked": [
+        0.14283360206004403,
+        0.9917580410819653
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        4,
+        5
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        -0.5106683724273111,
+        -0.009922630999113835
+      ],
+      "release_saved_to_manual_saved_caked": [
+        -0.5156629399618708,
+        -0.34184781840244227
+      ],
+      "residual_2theta": 0.14283360206004403,
+      "residual_caked_deg": [
+        0.14283360206004403,
+        0.9917580410819653
+      ],
+      "residual_norm": 1.0019907434343813,
+      "residual_phi_wrapped": 0.9917580410819653,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1694.9309472497196,
+        496.1643675627729
+      ],
+      "sim_nominal_detector_native_px": [
+        1304.0690527502804,
+        2502.835632437227
+      ],
+      "sim_nominal_x0_caked_deg": [
+        53.12445185737966,
+        73.23183541008285
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1694.9309472497196,
+        496.1643675627729
+      ],
+      "sim_refined_detector_native_px": [
+        1304.0690527502804,
+        2502.835632437227
+      ],
+      "sim_refined_x0_caked_deg": [
+        53.12445185737966,
+        73.23183541008285
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        53.13016180563768,
+        73.03084162751375
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        496.1643675627729,
+        1304.0690527502804
+      ],
+      "sim_saved_detector_native_px": [
+        1304.0690527502804,
+        2502.835632437227
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 0,
+      "source_peak_index": 0,
+      "source_row_index": 13,
+      "source_table_index": 356
+    },
+    {
+      "branch_id": "unknown:((q_group,primary,4,5),source_branch,1)",
+      "branch_key": [
+        [
+          "q_group",
+          "primary",
+          4,
+          5
+        ],
+        [
+          -2,
+          0,
+          5
+        ],
+        1,
+        1,
+        356,
+        161
+      ],
+      "fit_observed_caked_deg": [
+        54.623378511029124,
+        -74.2135114484198
+      ],
+      "fit_observed_detector_display_px": [
+        2469.037745196339,
+        1308.561107063712
+      ],
+      "fit_observed_detector_native_px": [
+        1305.605008188723,
+        530.7464001836211
+      ],
+      "fit_observed_fit_space_source": "dataset_fit_space_projector",
+      "fit_observed_source": "background/manual",
+      "hkl": [
+        -2,
+        0,
+        5
+      ],
+      "key": "('q_group', 'primary', 4, 5)|(-2,0,5)|table=356|row=161|branch=1|peak=1",
+      "manual_detector_display_px": [
+        2468.253599816379,
+        1305.605008188723
+      ],
+      "manual_detector_display_source": "entry_detector_display",
+      "manual_detector_native_px": [
+        1305.605008188723,
+        530.7464001836211
+      ],
+      "manual_detector_native_source": "entry_detector_native",
+      "manual_fitspace_caked_deg": [
+        54.623378511029124,
+        -74.2135114484198
+      ],
+      "manual_fitspace_matches_fit_observed": true,
+      "manual_fitspace_source": "entry_detector_native+fit_space_projector",
+      "manual_fitspace_to_fit_observed_caked": [
+        0.0,
+        0.0
+      ],
+      "manual_release_detector_display_px": [
+        2437.145251614307,
+        1309.554708812961
+      ],
+      "manual_release_detector_native_px": [
+        1309.554708812961,
+        561.8547483856928
+      ],
+      "manual_release_fitspace_caked_deg": [
+        53.828578447414905,
+        -73.75
+      ],
+      "manual_release_fitspace_source": "raw_detector_native_px+fit_space_projector",
+      "manual_release_saved_caked_deg": [
+        53.81548220918482,
+        -73.7818129124309
+      ],
+      "manual_release_saved_source": "raw_caked_x/raw_caked_y",
+      "manual_saved_caked_deg": [
+        54.62486379972498,
+        -74.04761908090259
+      ],
+      "manual_saved_caked_source": "entry_caked_deg",
+      "manual_saved_to_fitspace_caked": [
+        -0.001485288695853626,
+        -0.16589236751718772
+      ],
+      "objective_row_index": 11,
+      "observed_to_sim_nominal_caked": [
+        -1.1963167541009199,
+        0.9635114484198084
+      ],
+      "observed_to_sim_refined_caked": [
+        -1.1963167541009199,
+        0.9635114484198084
+      ],
+      "predicted_source_rejects_stale_visual": true,
+      "q_group_key": [
+        "q_group",
+        "primary",
+        4,
+        5
+      ],
+      "release_fitspace_to_manual_fitspace_caked": [
+        0.7948000636142183,
+        -0.4635114484198084
+      ],
+      "release_saved_to_manual_saved_caked": [
+        0.8093815905401556,
+        -0.26580616847169836
+      ],
+      "residual_2theta": -1.1963167541009199,
+      "residual_caked_deg": [
+        -1.1963167541009199,
+        0.9635114484198084
+      ],
+      "residual_norm": 1.5360755474190055,
+      "residual_phi_wrapped": 0.9635114484198084,
+      "selection_origin": "caked",
+      "sim_nominal_detector_display_px": [
+        1691.5363132837747,
+        2421.7419638208025
+      ],
+      "sim_nominal_detector_native_px": [
+        1307.4636867162253,
+        577.2580361791975
+      ],
+      "sim_nominal_x0_caked_deg": [
+        53.427061756928204,
+        -73.25
+      ],
+      "sim_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+      "sim_refined_detector_display_px": [
+        1691.5363132837747,
+        2421.7419638208025
+      ],
+      "sim_refined_detector_native_px": [
+        1307.4636867162253,
+        577.2580361791975
+      ],
+      "sim_refined_x0_caked_deg": [
+        53.427061756928204,
+        -73.25
+      ],
+      "sim_refinement_method": "centroid",
+      "sim_refinement_status": "refined",
+      "sim_saved_caked_deg": [
+        53.43448437752808,
+        -73.42436691438843
+      ],
+      "sim_saved_caked_source": "entry_visual_caked",
+      "sim_saved_detector_display_px": [
+        2421.7419638208025,
+        1307.4636867162253
+      ],
+      "sim_saved_detector_native_px": [
+        1307.4636867162253,
+        577.2580361791975
+      ],
+      "sim_saved_display_source": "entry_visual_detector_display",
+      "sim_saved_native_source": "entry_visual_detector_native",
+      "source_branch_index": 1,
+      "source_peak_index": 1,
+      "source_row_index": 161,
+      "source_table_index": 356
+    }
+  ],
+  "plotted_points_match_objective_inputs": true,
+  "points_csv": "manual_point_audit_points.csv",
+  "residual_component_count": 28,
+  "state_path": "C:\\Users\\Kenpo\\.local\\share\\ra_sim\\new4.json",
+  "subset_mode": "Mode A paired Qr branches only"
+}
