@@ -142,6 +142,20 @@ def test_extract_provenance_helpers_return_optional_indices() -> None:
     assert schema.extract_hit_row_provenance(hit_row[:7]) == (None, None, None)
 
 
+def test_cache_table_to_hit_table_preserves_representative_best_sample_index() -> None:
+    detector_current = np.array(
+        [[0.3, 0.4, 11.5, 21.5, 3.0, 31.0, 1.0, 0.0, 2.0, 0, 0, 0, 0, 0, 5, 6, 12]],
+        dtype=np.float64,
+    )
+
+    hit_table = schema.cache_table_to_hit_table(detector_current)
+
+    assert hit_table.shape == (1, schema.HIT_ROW_WITH_PROVENANCE_WIDTH)
+    assert float(hit_table[0, schema.HIT_ROW_COL_SOURCE_TABLE_INDEX]) == pytest.approx(5.0)
+    assert float(hit_table[0, schema.HIT_ROW_COL_SOURCE_ROW_INDEX]) == pytest.approx(6.0)
+    assert float(hit_table[0, schema.HIT_ROW_COL_BEST_SAMPLE_INDEX]) == pytest.approx(12.0)
+
+
 def test_extract_cached_caked_angles_reads_legacy_and_current_layouts() -> None:
     legacy_row = np.array(
         [0, 0, 10, 20, 8, 0.25, 1, 0, 2, 0, 0, 0, 0, 0, 17.5, -32.0],

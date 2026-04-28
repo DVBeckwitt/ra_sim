@@ -1,215 +1,179 @@
-"""Benchmark the weighted-event parallel sample kernel.
-
-The default fixture patches only setup/Q solving so the benchmark focuses on
-the weighted-event sample kernel and remains stable across machines. It still
-uses the production ``process_peaks_parallel`` dispatcher, pass helpers, image
-deposition, hit-table building, representative merge, and stats publication.
-"""
+"""Benchmark weighted-event threaded chunk execution."""
 
 from __future__ import annotations
 
 import argparse
-import statistics
+import sys
 import time
-from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from ra_sim.simulation import diffraction
 
 
-def _base_kwargs(*, n_samp: int, events_per_beam_phase: int, collect_hit_tables: bool):
-    image_size = 64
-    return dict(
-        miller=np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
-        intensities=np.array([1.0], dtype=np.float64),
-        image_size=image_size,
-        av=4.0,
-        cv=7.0,
-        lambda_=1.54,
-        image=np.zeros((image_size, image_size), dtype=np.float64),
-        Distance_CoR_to_Detector=1.0,
-        gamma_deg=0.0,
-        Gamma_deg=0.0,
-        chi_deg=0.0,
-        psi_deg=0.0,
-        psi_z_deg=0.0,
-        zs=0.0,
-        zb=0.0,
-        n2=1.0 + 0.0j,
-        beam_x_array=np.zeros(n_samp, dtype=np.float64),
-        beam_y_array=np.zeros(n_samp, dtype=np.float64),
-        theta_array=np.zeros(n_samp, dtype=np.float64),
-        phi_array=np.zeros(n_samp, dtype=np.float64),
-        sigma_pv_deg=0.5,
-        gamma_pv_deg=0.4,
-        eta_pv=0.2,
-        wavelength_array=np.ones(n_samp, dtype=np.float64),
-        debye_x=0.0,
-        debye_y=0.0,
-        center=np.array([image_size / 2.0, image_size / 2.0], dtype=np.float64),
-        theta_initial_deg=0.0,
-        cor_angle_deg=0.0,
-        unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
-        n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
-        save_flag=0,
-        collect_hit_tables=collect_hit_tables,
-        accumulate_image=True,
-        events_per_beam_phase=events_per_beam_phase,
-        exit_projection_mode=diffraction.EXIT_PROJECTION_REFRACTED,
-    )
+def _base_process_kwargs(*, n_samp: int, image_size: int) -> dict[str, object]:
+    miller = np.asarray([[1.0, 0.0, 1.0], [2.0, 0.0, 1.0]], dtype=np.float64)
+    return {
+        "miller": miller,
+        "intensities": np.ones(miller.shape[0], dtype=np.float64),
+        "image_size": int(image_size),
+        "av": 4.0,
+        "cv": 7.0,
+        "lambda_": 1.54,
+        "image": np.zeros((int(image_size), int(image_size)), dtype=np.float64),
+        "Distance_CoR_to_Detector": 0.1,
+        "gamma_deg": 0.0,
+        "Gamma_deg": 0.0,
+        "chi_deg": 0.0,
+        "psi_deg": 0.0,
+        "psi_z_deg": 0.0,
+        "zs": 0.0,
+        "zb": 0.0,
+        "n2": 1.0 + 0.0j,
+        "beam_x_array": np.linspace(-1.0e-4, 1.0e-4, int(n_samp), dtype=np.float64),
+        "beam_y_array": np.zeros(int(n_samp), dtype=np.float64),
+        "theta_array": np.full(int(n_samp), 0.1, dtype=np.float64),
+        "phi_array": np.zeros(int(n_samp), dtype=np.float64),
+        "sigma_pv_deg": 2.0,
+        "gamma_pv_deg": 2.0,
+        "eta_pv": 0.2,
+        "wavelength_array": np.ones(int(n_samp), dtype=np.float64),
+        "debye_x": 0.0,
+        "debye_y": 0.0,
+        "center": np.asarray([image_size / 2.0, image_size / 2.0], dtype=np.float64),
+        "theta_initial_deg": 0.0,
+        "cor_angle_deg": 0.0,
+        "unit_x": np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        "n_detector": np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        "save_flag": 0,
+        "collect_hit_tables": False,
+        "accumulate_image": False,
+        "pixel_size_m": 1.0,
+        "solve_q_steps": 64,
+    }
 
 
-@contextmanager
-def _controlled_weighted_backend():
-    original_precompute = diffraction._precompute_sample_terms
-    original_default_precompute = diffraction._DEFAULT_PRECOMPUTE_SAMPLE_TERMS
-    original_solve_q = diffraction.solve_q
-    original_default_solve_q = diffraction._DEFAULT_SOLVE_Q
-    original_lut_builder = diffraction._build_fast_optics_lut_row
-
-    def fake_precompute(
-        wavelength_array,
-        _n2,
-        n2_sample_array,
-        beam_x_array,
-        _beam_y_array,
-        _theta_array,
-        _phi_array,
-        _zb,
-        _thickness,
-        _sample_width_m,
-        _sample_length_m,
-        _optics_mode,
-        _theta_initial_deg,
-        _cor_angle_deg,
-        _psi_z_deg,
-        _R_z_R_y,
-        _R_ZY_n,
-        _P0,
-    ):
-        n_samp = int(np.asarray(beam_x_array, dtype=np.float64).shape[0])
-        sample_terms = np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64)
-        sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_KX_SCAT] = 0.0
-        sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_L_IN] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_N2_REAL] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(n_samp)
-        return (
-            np.eye(3, dtype=np.float64),
-            sample_terms,
-            np.asarray(n2_sample_array, dtype=np.complex128).copy(),
-            np.ones(n_samp, dtype=np.complex128),
-            0,
-        )
-
-    def fake_solve_q(k_in_crystal, *_args, **_kwargs):
-        sample_idx = int(round(float(np.asarray(k_in_crystal, dtype=np.float64)[0])))
-        intensity_shift = 1.0 + 0.01 * float(sample_idx % 17)
-        return (
-            np.array(
-                [
-                    [-1.0e-5, 1.0, 0.0, 1.0 * intensity_shift],
-                    [1.0e-5, 1.0, 0.0, 2.0 * intensity_shift],
-                    [2.0e-5, 1.0, 0.0, 0.5 * intensity_shift],
-                ],
-                dtype=np.float64,
-            ),
-            0,
-        )
-
-    def fake_fast_optics_lut_row(lut_row, *_args):
-        lut_row[:, :] = 0.0
-        lut_row[:, diffraction._FAST_OPTICS_COL_TF2] = 1.0
-        lut_row[:, diffraction._FAST_OPTICS_COL_L_OUT] = 1.0
-        lut_row[:, diffraction._FAST_OPTICS_COL_OUT_ANGLE] = 0.0
-
-    diffraction._precompute_sample_terms = fake_precompute
-    diffraction._DEFAULT_PRECOMPUTE_SAMPLE_TERMS = fake_precompute
-    diffraction.solve_q = fake_solve_q
-    diffraction._DEFAULT_SOLVE_Q = fake_solve_q
-    diffraction._build_fast_optics_lut_row = fake_fast_optics_lut_row
-    try:
-        yield
-    finally:
-        diffraction._precompute_sample_terms = original_precompute
-        diffraction._DEFAULT_PRECOMPUTE_SAMPLE_TERMS = original_default_precompute
-        diffraction.solve_q = original_solve_q
-        diffraction._DEFAULT_SOLVE_Q = original_default_solve_q
-        diffraction._build_fast_optics_lut_row = original_lut_builder
+def _representative_row_count() -> int:
+    hit_tables = diffraction.get_last_process_peaks_representative_hit_tables()
+    if not hit_tables:
+        return 0
+    row_count = 0
+    for table in hit_tables:
+        arr = np.asarray(table, dtype=np.float64)
+        if arr.ndim >= 2:
+            row_count += int(arr.shape[0])
+    return int(row_count)
 
 
-def _run_once(*, n_samp, events_per_beam_phase, collect_hit_tables, numba_thread_count):
-    kwargs = _base_kwargs(
-        n_samp=n_samp,
-        events_per_beam_phase=events_per_beam_phase,
-        collect_hit_tables=collect_hit_tables,
-    )
+def _time_run(*, n_samp: int, image_size: int, events: int, workers: int) -> dict[str, Any]:
+    kwargs = _base_process_kwargs(n_samp=n_samp, image_size=image_size)
+    kwargs["events_per_beam_phase"] = int(events)
+    kwargs["numba_thread_count"] = int(workers)
     start = time.perf_counter()
-    diffraction.process_peaks_parallel(
-        **kwargs,
-        numba_thread_count=numba_thread_count,
-    )
-    runtime_s = time.perf_counter() - start
-    return runtime_s, diffraction.get_last_process_peaks_weighted_event_stats()
+    diffraction.process_peaks_parallel(**kwargs)
+    elapsed_s = time.perf_counter() - start
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    return {
+        "elapsed_s": float(elapsed_s),
+        "parallel_backend": str(stats.get("parallel_backend", "")),
+        "parallel_worker_count": int(stats.get("parallel_worker_count", 0)),
+        "branch_representative_row_count": _representative_row_count(),
+    }
+
+
+def _validate_backend(*, requested_workers: int, n_samp: int, diagnostics: dict[str, Any]) -> None:
+    backend = str(diagnostics.get("parallel_backend", ""))
+    if backend == "weighted_events_python":
+        raise RuntimeError("weighted-events benchmark used Python fallback")
+    if int(requested_workers) <= 1:
+        if backend not in {"fast_serial", "serial_njit"}:
+            raise RuntimeError(f"threads=1 expected serial backend, got {backend!r}")
+    elif int(n_samp) > 1 and backend != "threaded_njit_chunks":
+        raise RuntimeError(
+            f"threads={int(requested_workers)} expected threaded_njit_chunks, got {backend!r}"
+        )
+
+
+def run_benchmark(
+    *,
+    samples: int = 32,
+    image_size: int = 64,
+    events: int = 5,
+    workers: tuple[int, ...] = (1, 2, 4),
+    iterations: int = 3,
+) -> dict[str, Any]:
+    # Warm compile both serial and threaded paths before timing.
+    _time_run(n_samp=max(2, min(samples, 4)), image_size=image_size, events=1, workers=1)
+    if max(workers) > 1:
+        _time_run(n_samp=max(2, min(samples, 4)), image_size=image_size, events=1, workers=2)
+
+    results: dict[str, Any] = {}
+    for worker_count in workers:
+        total = 0.0
+        last_diagnostics: dict[str, Any] = {}
+        for _idx in range(int(iterations)):
+            last_diagnostics = _time_run(
+                n_samp=int(samples),
+                image_size=int(image_size),
+                events=int(events),
+                workers=int(worker_count),
+            )
+            _validate_backend(
+                requested_workers=int(worker_count),
+                n_samp=int(samples),
+                diagnostics=last_diagnostics,
+            )
+            total += float(last_diagnostics["elapsed_s"])
+        avg = total / max(int(iterations), 1)
+        prefix = f"threads_{int(worker_count)}"
+        results[f"{prefix}_avg_s"] = avg
+        results[f"{prefix}_parallel_backend"] = str(last_diagnostics["parallel_backend"])
+        results[f"{prefix}_parallel_worker_count"] = int(
+            last_diagnostics["parallel_worker_count"]
+        )
+        results[f"{prefix}_branch_representative_row_count"] = int(
+            last_diagnostics["branch_representative_row_count"]
+        )
+    baseline = results.get("workers_1_avg_s", 0.0)
+    baseline = results.get("threads_1_avg_s", baseline)
+    for worker_count in workers:
+        key = f"threads_{int(worker_count)}_avg_s"
+        if worker_count == 1 or results.get(key, 0.0) <= 0.0:
+            continue
+        results[f"threads_{int(worker_count)}_speedup_vs_1"] = float(baseline) / float(
+            results[key]
+        )
+    return results
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--runs", type=int, default=5)
-    parser.add_argument("--threads", type=int, nargs="*", default=[1, 2, 4, 8])
-    parser.add_argument("--n-samp", type=int, nargs="*", default=[64, 256, 1024])
-    parser.add_argument("--events", type=int, nargs="*", default=[10, 50])
+    parser = argparse.ArgumentParser(description="Benchmark weighted-event chunk backend.")
+    parser.add_argument("--samples", "--n-samp", dest="samples", type=int, default=32, help="Beam samples per run.")
+    parser.add_argument("--image-size", type=int, default=64, help="Square detector image size.")
+    parser.add_argument("--events", type=int, default=5, help="Events per beam phase.")
+    parser.add_argument("--workers", "--threads", dest="workers", type=int, nargs="+", default=[1, 2, 4], help="Worker counts.")
+    parser.add_argument("--iterations", "--runs", dest="iterations", type=int, default=3, help="Timed iterations per worker count.")
     args = parser.parse_args()
 
-    print(
-        "n_samp,events_per_beam_phase,collect_hit_tables,numba_thread_count,"
-        "runtime_s,speedup_vs_1_thread,n_solve_q_calls,n_project_candidate_calls,"
-        "n_valid_candidates,n_selected_events,parallel_worker_count,parallel_qset_count"
+    results = run_benchmark(
+        samples=args.samples,
+        image_size=args.image_size,
+        events=args.events,
+        workers=tuple(int(value) for value in args.workers),
+        iterations=args.iterations,
     )
-    with _controlled_weighted_backend():
-        for n_samp in args.n_samp:
-            for events_per_beam_phase in args.events:
-                for collect_hit_tables in (False, True):
-                    baselines = {}
-                    for numba_thread_count in args.threads:
-                        _run_once(
-                            n_samp=n_samp,
-                            events_per_beam_phase=events_per_beam_phase,
-                            collect_hit_tables=collect_hit_tables,
-                            numba_thread_count=numba_thread_count,
-                        )
-                        samples = []
-                        last_stats = {}
-                        for _ in range(max(int(args.runs), 1)):
-                            runtime_s, last_stats = _run_once(
-                                n_samp=n_samp,
-                                events_per_beam_phase=events_per_beam_phase,
-                                collect_hit_tables=collect_hit_tables,
-                                numba_thread_count=numba_thread_count,
-                            )
-                            samples.append(float(runtime_s))
-                        median_s = statistics.median(samples)
-                        if int(numba_thread_count) == 1:
-                            baselines[(n_samp, events_per_beam_phase, collect_hit_tables)] = median_s
-                        baseline = baselines.get(
-                            (n_samp, events_per_beam_phase, collect_hit_tables),
-                            median_s,
-                        )
-                        speedup = baseline / median_s if median_s > 0.0 else 0.0
-                        print(
-                            f"{n_samp},{events_per_beam_phase},{collect_hit_tables},"
-                            f"{numba_thread_count},{median_s:.6f},{speedup:.3f},"
-                            f"{last_stats.get('n_solve_q_calls', 0)},"
-                            f"{last_stats.get('n_project_candidate_calls', 0)},"
-                            f"{last_stats.get('n_valid_candidates', 0)},"
-                            f"{last_stats.get('n_selected_events', 0)},"
-                            f"{last_stats.get('parallel_worker_count', 1)},"
-                            f"{last_stats.get('parallel_qset_count', 0)}"
-                        )
+    print("Benchmark results:")
+    for key, val in results.items():
+        if isinstance(val, float):
+            print(f"  {key}: {val:.6f}")
+        else:
+            print(f"  {key}: {val}")
 
 
 if __name__ == "__main__":

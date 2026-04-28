@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from ra_sim.gui import geometry_q_group_manager, state
+from ra_sim.simulation import diffraction, intersection_cache_schema as cache_schema
 
 
 class _FakeVar:
@@ -3034,6 +3035,166 @@ def test_collapse_qr_qz_selection_peaks_leaves_ungrouped_rows_independent() -> N
     assert collapsed_count == 0
     assert [entry["source_row_index"] for entry in collapsed] == [1, 2]
     assert all(entry.get("q_group_key") is None for entry in collapsed)
+
+
+def _single_collapsed_source_row(
+    rows: list[dict[str, object]],
+    *,
+    profile_cache: dict[str, object] | None = None,
+) -> int:
+    collapsed, _collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        rows,
+        profile_cache=profile_cache,
+    )
+
+    assert len(collapsed) == 1
+    return int(collapsed[0]["source_row_index"])
+
+
+def test_qr_selection_mosaic_top_rank_uses_fallbacks_before_intensity() -> None:
+    key = ("q_group", "primary", 1, 2)
+
+    def _row(source_row: int, **overrides) -> dict[str, object]:
+        row = {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "hkl": (1, 0, 2),
+            "mosaic_weight": 0.9,
+            "theta_offset": 0.0,
+            "phi_offset": 0.0,
+            "beam_x_offset": 0.0,
+            "beam_y_offset": 0.0,
+            "wavelength_offset": 0.0,
+            "weight": 1.0,
+            "intensity": 1.0,
+            "source_row_index": source_row,
+        }
+        row.update(overrides)
+        return row
+
+    assert (
+        _single_collapsed_source_row(
+            [
+                _row(10, theta_offset=0.3, intensity=100.0, weight=100.0),
+                _row(11, theta_offset=0.01),
+            ]
+        )
+        == 11
+    )
+    assert (
+        _single_collapsed_source_row(
+            [
+                _row(20, beam_x_offset=0.3, intensity=100.0, weight=100.0),
+                _row(21, beam_x_offset=0.01),
+            ]
+        )
+        == 21
+    )
+    assert (
+        _single_collapsed_source_row(
+            [
+                _row(30, best_sample_index=0, intensity=100.0, weight=100.0),
+                _row(31, best_sample_index=1),
+            ],
+            profile_cache={
+                "wavelength_array": np.asarray([1.50, 1.54, 1.60], dtype=float),
+            },
+        )
+        == 31
+    )
+
+
+def _weighted_event_representative_qr_selection_context(monkeypatch):
+    profile_cache = {
+        "beam_x_array": np.asarray([0.5, 0.5], dtype=float),
+        "beam_y_array": np.asarray([0.0, 0.0], dtype=float),
+        "theta_array": np.asarray([0.0, 0.2], dtype=float),
+        "phi_array": np.asarray([0.0, 0.2], dtype=float),
+        "wavelength_array": np.asarray([1.54, 1.56], dtype=float),
+        "sample_weights": np.asarray([0.9, 0.1], dtype=float),
+    }
+    sampled_hit_tables = [
+        np.asarray(
+            [[100.0, 10.0, 10.0, 0.5, 1.0, 0.0, 2.0, 0.0, 101.0, 1.0]],
+            dtype=float,
+        )
+    ]
+    representative_hit_tables = [
+        np.asarray(
+            [[1.0, 20.0, 20.0, 0.5, 1.0, 0.0, 2.0, 0.0, 100.0, 0.0]],
+            dtype=float,
+        )
+    ]
+
+    monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
+    diffraction._set_last_intersection_cache([])
+    diffraction._set_last_intersection_cache_from_hit_tables(
+        sampled_hit_tables,
+        5.0,
+        7.0,
+        beam_x_array=profile_cache["beam_x_array"],
+        beam_y_array=profile_cache["beam_y_array"],
+        theta_array=profile_cache["theta_array"],
+        phi_array=profile_cache["phi_array"],
+        wavelength_array=profile_cache["wavelength_array"],
+        representative_hit_tables=representative_hit_tables,
+    )
+
+    representative_hit_tables_for_gui = diffraction.intersection_cache_to_hit_tables(
+        diffraction.get_last_intersection_cache()
+    )
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        representative_hit_tables_for_gui,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        primary_a=5.0,
+        primary_c=7.0,
+        profile_cache=profile_cache,
+    )
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        peaks,
+        profile_cache=profile_cache,
+    )
+    return {
+        "profile_cache": profile_cache,
+        "sampled_cache": diffraction.get_last_intersection_cache_views()["sampled_event_rows"],
+        "representative_cache": diffraction.get_last_intersection_cache(),
+        "peaks": peaks,
+        "collapsed": collapsed,
+        "collapsed_count": collapsed_count,
+    }
+
+
+def test_qr_selection_uses_weighted_event_mosaic_top_representative(monkeypatch) -> None:
+    context = _weighted_event_representative_qr_selection_context(monkeypatch)
+
+    assert len(context["peaks"]) == 1
+    assert len(context["collapsed"]) == 1
+    selected = context["collapsed"][0]
+    assert selected["best_sample_index"] == 0
+    assert selected["source_row_index"] == 100
+    assert selected["mosaic_weight"] == pytest.approx(0.9)
+    assert selected["weight"] == pytest.approx(1.0)
+    assert context["collapsed_count"] == 0
+
+
+def test_qr_selection_does_not_use_weighted_sampled_event_when_representative_exists(
+    monkeypatch,
+) -> None:
+    context = _weighted_event_representative_qr_selection_context(monkeypatch)
+
+    sampled_rows = np.vstack(context["sampled_cache"])
+    assert sampled_rows[0, cache_schema.CACHE_COL_INTENSITY] == pytest.approx(100.0)
+    assert sampled_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX] == pytest.approx(1.0)
+
+    representative_rows = np.vstack(context["representative_cache"])
+    assert representative_rows[0, cache_schema.CACHE_COL_INTENSITY] == pytest.approx(1.0)
+    assert representative_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX] == pytest.approx(0.0)
+
+    selected = context["collapsed"][0]
+    assert selected["best_sample_index"] == 0
+    assert selected["source_row_index"] == 100
 
 
 def test_collapse_geometry_fit_simulated_peaks_uses_profile_cache_branch_before_unknown() -> None:

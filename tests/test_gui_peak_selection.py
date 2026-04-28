@@ -5685,6 +5685,86 @@ def test_canvas_hkl_pick_uses_clicked_branch_then_mosaic_top_candidate() -> None
     assert captured["selected_display"] == (20.0, 20.0)
 
 
+def test_qr_selection_preserves_clicked_branch_then_mosaic_top_candidate() -> None:
+    records = [
+        {
+            "hkl": (1, 0, 2),
+            "display_col": 10.0,
+            "display_row": 10.0,
+            "native_col": 10.0,
+            "native_row": 10.0,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "best_sample_index": 1,
+            "source_row_index": 30,
+        },
+        {
+            "hkl": (1, 0, 2),
+            "display_col": 20.0,
+            "display_row": 20.0,
+            "native_col": 20.0,
+            "native_row": 20.0,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "best_sample_index": 0,
+            "source_row_index": 31,
+        },
+        {
+            "hkl": (1, 0, 2),
+            "display_col": 10.2,
+            "display_row": 10.2,
+            "native_col": 10.2,
+            "native_row": 10.2,
+            "branch_id": "-x",
+            "branch_source": "generated",
+            "best_sample_index": 2,
+            "source_row_index": 41,
+        },
+    ]
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(r["display_col"], r["display_row"]) for r in records],
+        peak_millers=[(1, 0, 2)] * 3,
+        peak_intensities=[100.0, 1.0, 200.0],
+        peak_records=records,
+        peak_positions_filtered=True,
+    )
+    runtime_state.profile_cache = {
+        "sample_weights": np.asarray([0.9, 0.1, 0.99], dtype=float),
+    }
+    captured: dict[str, object] = {}
+
+    assert peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        state.PeakSelectionState(),
+        10.05,
+        10.05,
+        config=peak_selection.build_selected_peak_canvas_pick_config(
+            image_size=64,
+            primary_a=5.0,
+            primary_c=7.0,
+            max_distance_px=15.0,
+            min_separation_px=0.0,
+            image_shape=(64, 64),
+        ),
+        ensure_peak_overlay_data=lambda **_kwargs: None,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        simulate_ideal_hkl_native_center=lambda *_args, **_kwargs: None,
+        select_peak_by_index=lambda idx, **kwargs: captured.update({"idx": idx, **kwargs}) or True,
+        set_pick_mode=lambda _enabled: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=lambda _text: None,
+    )
+
+    selected = captured["record_override"]
+    assert selected["branch_id"] == "+x"
+    assert selected["best_sample_index"] == 0
+    assert selected["source_row_index"] == 31
+    assert selected["mosaic_weight"] == pytest.approx(0.9)
+    assert captured["selected_display"] == (20.0, 20.0)
+
+
 def test_select_peak_by_hkl_caked_view_refines_to_local_caked_peak_top() -> None:
     radial = np.linspace(0.0, 30.0, 301)
     azimuth = np.linspace(-5.0, 5.0, 201)

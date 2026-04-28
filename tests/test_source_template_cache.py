@@ -159,69 +159,11 @@ def test_grouped_source_expansion_path_is_not_used(monkeypatch):
 
 
 def test_source_template_and_clustering_disabled(monkeypatch):
-    original_args = (np.array([[1.0, 0.0, 1.0]], dtype=np.float64),)
-    original_kwargs = {"events_per_beam_phase": 50}
-    clustered_args, clustered_kwargs, cluster_meta = diffraction._prepare_clustered_process_peaks_call(
-        original_args,
-        original_kwargs,
-    )
+    with monkeypatch.context() as scoped:
+        test_source_template_cache_is_not_used_when_weighted_events_are_enabled(scoped)
 
-    assert clustered_args is original_args
-    assert clustered_kwargs == original_kwargs
-    assert cluster_meta is None
-    assert (
-        diffraction._maybe_run_process_peaks_safe_cache(
-            original_args,
-            original_kwargs,
-            enable_safe_cache=True,
-        )
-        is None
-    )
-
-    def fake_precompute(*_args, **_kwargs):
-        sample_terms = np.zeros((1, diffraction._SAMPLE_COLS), dtype=np.float64)
-        sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_L_IN] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_N2_REAL] = 1.0
-        return (
-            np.eye(3, dtype=np.float64),
-            sample_terms,
-            np.ones(1, dtype=np.complex128),
-            np.ones(1, dtype=np.complex128),
-            0,
-        )
-
-    def fake_solve_q(*_args, **_kwargs):
-        return np.array([[10.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0
-
-    def fake_project(**kwargs):
-        return True, 0.0, float(kwargs["Qx"]), 0.0, float(kwargs["reflection_intensity"])
-
-    monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute)
-    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
-    monkeypatch.setattr(diffraction, "_project_weighted_candidate", fake_project)
-    monkeypatch.setattr(
-        diffraction,
-        "_build_source_unit_template",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("source-template replay must not run")
-        ),
-    )
-    monkeypatch.setattr(
-        diffraction,
-        "_copy_scaled_hit_table",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("grouped source expansion must not emit weighted events")
-        ),
-    )
-
-    result = _call_safe([1.0, 2.0], save_flag=0, events_per_beam_phase=7)
-
-    assert sum(np.asarray(table, dtype=np.float64).shape[0] for table in result[1]) == 7
-    assert diffraction.get_last_process_peaks_safe_stats()["used_safe_cache"] is False
+    with monkeypatch.context() as scoped:
+        test_grouped_source_expansion_path_is_not_used(scoped)
 
 
 def test_safe_wrapper_reports_source_template_cache_disabled(monkeypatch):

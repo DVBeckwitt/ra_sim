@@ -373,6 +373,21 @@ def wavelength_offset_metric(
 ) -> float | None:
     if not isinstance(entry, Mapping):
         return None
+    if profile_cache is not None:
+        idx_float = _finite_float(entry.get("best_sample_index"))
+        if idx_float is not None:
+            idx = int(idx_float)
+            try:
+                values = np.asarray(profile_cache.get("wavelength_array"), dtype=float).reshape(
+                    -1
+                )
+            except Exception:
+                values = np.empty((0,), dtype=float)
+            if 0 <= idx < int(values.size) and np.isfinite(values[idx]):
+                finite_values = values[np.isfinite(values)]
+                if finite_values.size > 0:
+                    center = float(np.mean(finite_values))
+                    return float(abs(float(values[idx]) - center))
     value = _offset_value(
         entry,
         "wavelength_offset",
@@ -400,9 +415,9 @@ def mosaic_top_rank_key(
 ) -> tuple[object, ...]:
     """Stable serializable key for selecting the mosaic-top representative.
 
-    Mosaic top means the ray with highest true ``mosaic_weight``. When true
-    mosaic weight is absent or non-finite, angular mosaic distance
-    ``theta_offset**2 + phi_offset**2`` is the fallback metric.
+    Mosaic top means the ray with highest true ``mosaic_weight``. Tied or
+    missing true mosaic weight falls through angular, beam, wavelength, and
+    intensity/mass terms before source order.
     """
 
     if not isinstance(entry, Mapping):
@@ -428,7 +443,7 @@ def mosaic_top_rank_key(
     if mosaic is not None:
         metric_mode = 0
         primary = -float(mosaic)
-        angular_key = _RANK_MISSING_VALUE
+        angular_key = float(angular) if angular is not None else _RANK_MISSING_VALUE
     else:
         metric_mode = 1
         primary = _RANK_MISSING_VALUE
