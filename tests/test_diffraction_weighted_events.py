@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -12,6 +14,13 @@ def test_compute_intensity_array_is_serial_njit():
     assert diffraction.compute_intensity_array is diffraction.compute_intensity_array_serial
     target_options = getattr(diffraction.compute_intensity_array_serial, "targetoptions", {})
     assert not bool(target_options.get("parallel", False))
+    helper_source = inspect.getsource(diffraction.compute_intensity_array_serial.py_func)
+    assert "prange" not in helper_source
+    assert "parallel=True" not in helper_source
+    uniform_source = inspect.getsource(diffraction._solve_q_uniform.py_func)
+    full_circle_source = inspect.getsource(diffraction._solve_q_uniform_full_circle.py_func)
+    assert "compute_intensity_array_serial" in uniform_source
+    assert "compute_intensity_array_serial" in full_circle_source
 
     qx = np.array([0.0, 0.1], dtype=np.float64)
     qy = np.array([1.0, 1.1], dtype=np.float64)
@@ -1247,6 +1256,28 @@ def test_parallel_weighted_event_stats_report_worker_count():
     assert not hasattr(diffraction, "_weighted_event_sample_kernel_parallel")
 
 
+def test_weighted_event_threaded_backend_does_not_use_prange_kernel():
+    assert not hasattr(diffraction, "_weighted_event_sample_kernel_parallel")
+    assert hasattr(diffraction, "_weighted_event_sample_chunk_kernel")
+    assert hasattr(diffraction, "_run_weighted_event_sample_chunks")
+
+    source = inspect.getsource(diffraction._weighted_event_sample_chunk_kernel.py_func)
+    assert "prange" not in source
+    assert "get_thread_id" not in source
+
+    diffraction.process_peaks_parallel(
+        **_base_process_kwargs(n_samp=2),
+        save_flag=0,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        events_per_beam_phase=2,
+        numba_thread_count=2,
+    )
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["parallel_backend"] == "threaded_njit_chunks"
+    assert stats["parallel_worker_count"] == 2
+
+
 def test_parallel_weighted_events_match_serial_image():
     serial = diffraction.process_peaks_parallel(
         **_base_process_kwargs(n_samp=2),
@@ -1794,13 +1825,41 @@ def test_weighted_events_original_plan_compliance_matrix(capsys):
         "status",
         "notes",
     }
-    assert len(_WEIGHTED_EVENT_PLAN_COMPLIANCE_MATRIX) == 20
+    expected_plan_items = [
+        "normal path avoids Python sampler",
+        "explicit Python fallback/debug path still exists",
+        "P(i)=v_i/V",
+        "deposit=V/E",
+        "E is per beam phase, not per peak",
+        "duplicate selected events preserved",
+        "off-detector candidates excluded from V",
+        "no source-template replay",
+        "no clustered beam replacement",
+        "no grouped source emission",
+        "no representative/cache row sampling",
+        "representative rows separate from sampled rows",
+        "get_last_intersection_cache representative-facing",
+        "get_last_intersection_cache_views split sampled/representative views",
+        "serial fast path and parallel path agree",
+        "real solve_q path works",
+        "no silent fallback in normal parallel tests",
+        "solve_q JIT does not crash allocate_sched",
+        "mosaic-top beam event preserved per final Qr/L/branch slot",
+        "Qr selection uses mosaic-top representative, not sampled event rows",
+    ]
+    incomplete = False
+    incomplete = incomplete or len(_WEIGHTED_EVENT_PLAN_COMPLIANCE_MATRIX) != len(
+        expected_plan_items
+    )
+    incomplete = incomplete or [
+        row.get("plan_item") for row in _WEIGHTED_EVENT_PLAN_COMPLIANCE_MATRIX
+    ] != expected_plan_items
     for row in _WEIGHTED_EVENT_PLAN_COMPLIANCE_MATRIX:
-        assert set(row) == required_fields
-        assert all(str(row[field]).strip() for field in required_fields)
-        assert row["status"] == "pass"
-        row_text = " ".join(str(row[field]).lower() for field in required_fields)
-        assert "untested" not in row_text
+        incomplete = incomplete or set(row) != required_fields
+        incomplete = incomplete or not all(str(row.get(field, "")).strip() for field in required_fields)
+        incomplete = incomplete or row.get("status") != "pass"
+        row_text = " ".join(str(row.get(field, "")).lower() for field in required_fields)
+        incomplete = incomplete or "untested" in row_text
 
     with capsys.disabled():
         print("plan_item | implementation_location | test_name | status | notes")
@@ -1812,7 +1871,26 @@ def test_weighted_events_original_plan_compliance_matrix(capsys):
                 f"{row['status']} | "
                 f"{row['notes']}"
             )
-        print("original_plan_validation_incomplete=no")
+        print(f"original_plan_validation_incomplete={'yes' if incomplete else 'no'}")
+    assert not incomplete
+
+
+def test_weighted_event_merge_diagnostics_marker_contract():
+    required = {
+        "test_solve_q_real_jit_does_not_crash_allocate_sched",
+        "test_compute_intensity_array_is_serial_njit",
+        "test_representative_choice_uses_true_mosaic_weight_before_mass",
+        "test_representative_choice_preserves_mosaic_top_sample_index_in_hit_row",
+        "test_mosaic_top_representative_survives_even_when_unsampled",
+        "test_weighted_events_dispatcher_path_matrix",
+        "test_weighted_events_parallel_from_bound_matches_serial_controlled_backend",
+        "test_weighted_events_parallel_from_bound_matches_serial_real_solve_q_small",
+        "test_weighted_events_original_plan_compliance_matrix",
+    }
+
+    module_globals = globals()
+    missing = sorted(name for name in required if name not in module_globals)
+    assert not missing, missing
 
 
 def test_weighted_event_invariant_matrix_has_no_untested_entries():

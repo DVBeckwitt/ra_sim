@@ -93,6 +93,24 @@ Feature status:
 
 ## Validation
 
+## Merge diagnostics
+
+Run focused diagnostics before treating a full-suite result as meaningful:
+
+```bash
+python scripts/diagnostics/validate_weighted_event_merge.py --skip-full-pytest
+```
+
+To include the broader suite after the focused gate:
+
+```bash
+python scripts/diagnostics/validate_weighted_event_merge.py --full-pytest
+```
+
+The diagnostics runner checks compliance-matrix markers, backend names,
+benchmark import hygiene, representative cache behavior, Qr selection behavior,
+and the weighted-event benchmark smoke output.
+
 Passed in this worktree:
 
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_solve_q_real_jit_does_not_crash_allocate_sched -q`

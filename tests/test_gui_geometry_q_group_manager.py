@@ -3197,6 +3197,55 @@ def test_qr_selection_does_not_use_weighted_sampled_event_when_representative_ex
     assert selected["source_row_index"] == 100
 
 
+def test_qr_selection_preserves_clicked_branch_then_mosaic_top_candidate() -> None:
+    key = ("q_group", "primary", 1, 2)
+    rows = [
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "hkl": (1, 0, 2),
+            "best_sample_index": 1,
+            "source_row_index": 30,
+            "mosaic_weight": 0.1,
+            "weight": 100.0,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "hkl": (1, 0, 2),
+            "best_sample_index": 0,
+            "source_row_index": 31,
+            "mosaic_weight": 0.9,
+            "weight": 1.0,
+        },
+        {
+            "q_group_key": key,
+            "branch_id": "-x",
+            "branch_source": "generated",
+            "hkl": (1, 0, 2),
+            "best_sample_index": 2,
+            "source_row_index": 41,
+            "mosaic_weight": 0.99,
+            "weight": 200.0,
+        },
+    ]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        rows,
+        profile_cache={"sample_weights": np.asarray([0.9, 0.1, 0.99], dtype=float)},
+    )
+
+    assert collapsed_count == 1
+    by_branch = {entry["branch_id"]: entry for entry in collapsed}
+    assert set(by_branch) == {"+x", "-x"}
+    assert by_branch["+x"]["best_sample_index"] == 0
+    assert by_branch["+x"]["source_row_index"] == 31
+    assert by_branch["+x"]["mosaic_weight"] == pytest.approx(0.9)
+    assert by_branch["-x"]["source_row_index"] == 41
+
+
 def test_collapse_geometry_fit_simulated_peaks_uses_profile_cache_branch_before_unknown() -> None:
     key = ("q_group", "primary", 1, 0)
     raw_entries = [

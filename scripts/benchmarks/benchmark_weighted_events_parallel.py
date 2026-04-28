@@ -14,7 +14,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import ra_sim
 from ra_sim.simulation import diffraction
+
+ra_sim_path = Path(ra_sim.__file__).resolve()
+if REPO_ROOT not in ra_sim_path.parents:
+    raise RuntimeError(f"benchmark imported stale ra_sim: {ra_sim_path}")
 
 
 def _base_process_kwargs(*, n_samp: int, image_size: int) -> dict[str, object]:
