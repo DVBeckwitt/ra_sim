@@ -2,6 +2,9 @@
 
 ## Unreleased (since `e11bec1` on 2026-02-13)
 
+- **Release and versioning**
+  - Set the active development version to `1.0.0.dev0`, documented the 1.0 release sequence, and surfaced the resolved package version in the simulation GUI title and Help tab.
+
 - **Simulation performance**
   - Made best-sample provenance buffers lazy for image-only/no-cache forward and QR rod simulations while preserving explicit caller buffers and cache-building provenance.
   - Vectorized primary-cache hit-table rematerialization, filtered impossible off-detector rows before integer casts, and skipped optional last-intersection cache builds when retention is disabled.
@@ -41,6 +44,7 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
+  - Hardened GUI runtime prune reuse/fill QR selector cache handling so explicit QR/Qz masks persist, stale source-row snapshots are not retained across incompatible hit-table identity, and runtime traces report selector retention/deferred refresh/fitter handoff validity.
   - Tightened Background tab copy with shorter labels, buttons, hints, status text, presets, tooltips, and diagnostics wording without changing subtraction behavior or saved-state keys.
   - Reworked the diffuse background-subtraction controls into a workflow-oriented Background tab with presets, explained sliders, diagnostics, and dirty/auto-preview status feedback while preserving saved-state and headless configuration keys.
   - Added linked GUI sampling controls: beam phase samples now default to 75, events per beam phase tracks the same count by default, and an `Independent` toggle enables separate event-count control when needed.

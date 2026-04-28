@@ -1,0 +1,61 @@
+{
+  "_purpose": "Root-level config for make_dissertation_figures.py. Paths are relative to the RA-SIM repo root unless absolute.",
+  "output": {
+    "out": "dissertation_figures",
+    "formats": ["pdf", "png"],
+    "dpi": 300,
+    "clean": false,
+    "copy_to": "../Beckwitt-Thesis/Figures"
+  },
+  "figures": {
+    "which": []
+  },
+  "inputs": {
+    "state": "",
+    "image": "",
+    "sim_image": "",
+    "baseline_image": "",
+    "hbn_bundle": "",
+    "hbn_overlay": "",
+    "matched_peaks": "",
+    "mosaic_profile_csv": "",
+    "ordered_qz_csv": "",
+    "disorder_profile_csv": "",
+    "pbi2_cif": "",
+    "poni": ""
+  },
+  "simulation": {
+    "run_sim": false,
+    "sim_samples": null,
+    "sim_image_size": null
+  },
+  "geometry": {
+    "pixel_size_m": null,
+    "distance_m": null,
+    "center_row_px": null,
+    "center_col_px": null,
+    "wavelength_m": null,
+    "gamma_deg": null,
+    "Gamma_deg": null,
+    "chi_deg": null,
+    "psi_deg": null,
+    "psi_z_deg": null,
+    "theta_initial_deg": null,
+    "cor_angle_deg": null,
+    "zs": null,
+    "zb": null
+  },
+  "regions": {
+    "qr_range": [0.4, 0.7],
+    "qz_range": [1.0, 4.0],
+    "roi": [1200, 1320, 1450, 1600],
+    "profile_axis": "row"
+  },
+  "binning": {
+    "npt_rad": 500,
+    "npt_azim": 360,
+    "npt_qr": 400,
+    "npt_qz": 400,
+    "max_pixels": 1200000
+  }
+}

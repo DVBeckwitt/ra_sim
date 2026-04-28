@@ -31,6 +31,7 @@ def _state() -> SimpleNamespace:
         disabled_qr_sets={("primary", 1)},
         disabled_qz_sections={("primary", 1, 0)},
         pending_legacy_disabled_qz_sections={("primary", 2, 1)},
+        refresh_requested=True,
         last_analysis_signature=("analysis",),
         last_caked_geometry_signature=("caked",),
         last_q_space_payload_signature=("q-space",),
@@ -140,6 +141,54 @@ def test_prune_reuse_unchanged_qgroup_keeps_handoff_cache_fast() -> None:
     assert _handoff_snapshot(state) == snapshot
 
 
+def test_prune_reuse_retains_qr_selector_entries_when_q_group_content_unchanged() -> None:
+    state = _state()
+    entries = list(state.geometry_q_group_entries_cache)
+    signature = state.geometry_q_group_entries_cache_signature
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        q_group_content_signature_changed=False,
+        hit_table_signature_changed=False,
+    )
+
+    assert policy.retain_geometry_q_group_entries is True
+    assert policy.require_q_group_refresh_after_apply is False
+    assert state.geometry_q_group_entries_cache == entries
+    assert state.geometry_q_group_entries_cache_signature == signature
+
+
+def test_prune_reuse_defers_qr_selector_replacement_when_q_group_content_changes() -> None:
+    state = _state()
+    entries = list(state.geometry_q_group_entries_cache)
+    signature = state.geometry_q_group_entries_cache_signature
+
+    pre_apply_policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        q_group_content_signature_changed=False,
+        hit_table_signature_changed=True,
+    )
+
+    assert pre_apply_policy.retain_geometry_q_group_entries is True
+    assert pre_apply_policy.retain_source_row_snapshots is False
+    assert state.geometry_q_group_entries_cache == entries
+    assert state.geometry_q_group_entries_cache_signature == signature
+    assert state.source_row_snapshots == {}
+
+    post_apply_policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        q_group_content_signature_changed=True,
+        hit_table_signature_changed=False,
+    )
+
+    assert post_apply_policy.require_q_group_refresh_after_apply is True
+    assert state.geometry_q_group_entries_cache == []
+    assert state.geometry_q_group_entries_cache_signature is None
+
+
 def test_prune_fill_defers_qgroup_refresh_until_rows_exist_fast() -> None:
     state = _state()
     masks = _mask_snapshot(state)
@@ -159,6 +208,84 @@ def test_prune_fill_defers_qgroup_refresh_until_rows_exist_fast() -> None:
     assert state.stored_intersection_cache is None
     assert state.manual_pick_cache_signature is None
     assert _mask_snapshot(state) == masks
+
+
+def test_prune_fill_does_not_consume_q_group_refresh_before_rows_apply() -> None:
+    state = _state()
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_FILL,
+        q_group_content_signature_changed=True,
+        hit_table_signature_changed=True,
+    )
+
+    assert policy.defer_q_group_refresh_until_rows_available is True
+    assert state.refresh_requested is True
+    assert state.geometry_q_group_entries_cache
+
+
+def test_prune_fill_refreshes_q_group_entries_after_missing_rows_apply() -> None:
+    state = _state()
+    masks = _mask_snapshot(state)
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        q_group_content_signature_changed=True,
+        hit_table_signature_changed=False,
+    )
+    state.geometry_q_group_entries_cache_signature = ("new-q-group-cache",)
+    state.geometry_q_group_entries_cache = [{"q_group_key": ("q_group", "primary", 2, 8)}]
+
+    assert policy.require_q_group_refresh_after_apply is True
+    assert state.geometry_q_group_entries_cache_signature == ("new-q-group-cache",)
+    assert state.geometry_q_group_entries_cache == [
+        {"q_group_key": ("q_group", "primary", 2, 8)}
+    ]
+    assert _mask_snapshot(state) == masks
+
+
+def test_prune_fast_paths_do_not_clear_qr_disabled_masks() -> None:
+    for action, kwargs in (
+        (
+            UpdateAction.PRIMARY_PRUNE_REUSE,
+            {
+                "q_group_content_signature_changed": True,
+                "hit_table_signature_changed": True,
+            },
+        ),
+        (
+            UpdateAction.PRIMARY_PRUNE_FILL,
+            {
+                "q_group_content_signature_changed": True,
+                "hit_table_signature_changed": True,
+            },
+        ),
+    ):
+        state = _state()
+        masks = _mask_snapshot(state)
+
+        invalidate_for_update_action(state, action, **kwargs)
+
+        assert _mask_snapshot(state) == masks
+
+
+def test_prune_reuse_clears_source_rows_when_hit_table_identity_changes() -> None:
+    state = _state()
+    entries = list(state.geometry_q_group_entries_cache)
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        q_group_content_signature_changed=False,
+        hit_table_signature_changed=True,
+    )
+
+    assert policy.retain_geometry_q_group_entries is True
+    assert policy.retain_source_row_snapshots is False
+    assert state.geometry_q_group_entries_cache == entries
+    assert state.source_row_snapshots == {}
 
 
 def test_full_simulation_retains_qr_masks_but_clears_stale_source_rows_fast() -> None:

@@ -161,9 +161,14 @@ def test_optimized_update_sequence_worker_call_counts(monkeypatch) -> None:
     prune_bias["value"] = 0.2
     runtime_session.do_update()
     assert requested_jobs == []
-    assert _last_trace_event(trace_events, "do_update_complete")["update_action"] == (
-        "primary_prune_reuse"
-    )
+    prune_reuse_trace = _last_trace_event(trace_events, "do_update_complete")
+    assert prune_reuse_trace["update_action"] == "primary_prune_reuse"
+    assert prune_reuse_trace["primary_prune_cache_mode"] == "reuse"
+    assert prune_reuse_trace["qr_selector_entries_retained"] is True
+    assert prune_reuse_trace["qr_selector_refresh_deferred"] is False
+    assert prune_reuse_trace["source_row_snapshots_retained"] is False
+    assert prune_reuse_trace["q_group_content_signature_changed"] is True
+    assert prune_reuse_trace["geometry_fitter_handoff_valid"] is False
 
     trace_events.clear()
     runtime_session.display_controls_view_state.simulation_max_var.set(2.0)

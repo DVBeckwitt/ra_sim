@@ -96,6 +96,33 @@ def test_trace_reports_primary_prune_fill() -> None:
     assert "missing_contribution_count=2" in line
 
 
+def test_prune_trace_reports_qr_selector_retention_or_refresh() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "primary_prune_reuse",
+            "primary_prune_cache_mode": "reuse",
+            "qr_selector_entries_retained": True,
+            "qr_selector_entries_refreshed": False,
+            "qr_selector_refresh_deferred": False,
+            "source_row_snapshots_retained": True,
+            "q_group_content_signature_changed": False,
+            "geometry_fitter_handoff_valid": True,
+        },
+    )
+
+    assert "update_action=primary_prune_reuse" in line
+    assert "primary_prune_cache_mode=reuse" in line
+    assert "qr_selector_entries_retained=true" in line
+    assert "qr_selector_entries_refreshed=false" in line
+    assert "qr_selector_refresh_deferred=false" in line
+    assert "source_row_snapshots_retained=true" in line
+    assert "q_group_content_signature_changed=false" in line
+    assert "geometry_fitter_handoff_valid=true" in line
+
+
 def test_trace_reports_display_only() -> None:
     line = runtime_update_trace.format_runtime_update_trace_line(
         "do_update_complete",

@@ -12031,7 +12031,7 @@ def _invalidate_for_update_action(
     hit_table_signature_changed: bool | None = None,
     q_group_content_signature_changed: bool | None = None,
     detector_geometry_changed: bool | None = None,
-) -> None:
+) -> object:
     policy = gui_runtime_invalidation.invalidate_for_update_action(
         simulation_runtime_state,
         action,
@@ -12045,6 +12045,7 @@ def _invalidate_for_update_action(
         and not policy.defer_q_group_refresh_until_rows_available
     ):
         _request_geometry_q_group_refresh_if_available()
+    return policy
 
 
 def _store_secondary_detector_relative_cache(
@@ -17522,6 +17523,12 @@ def do_update():
         "missing_contribution_count": None,
         "center_remap_used": None,
         "primary_prune_cache_mode": None,
+        "qr_selector_entries_retained": None,
+        "qr_selector_entries_refreshed": None,
+        "qr_selector_refresh_deferred": None,
+        "source_row_snapshots_retained": None,
+        "q_group_content_signature_changed": None,
+        "geometry_fitter_handoff_valid": None,
         "classifier_update_action": None,
         "classifier_update_reason": None,
         "classifier_requires_worker": None,
@@ -17554,6 +17561,62 @@ def do_update():
         if primary_prune_cache_mode is not None:
             update_decision_trace["primary_prune_cache_mode"] = str(
                 primary_prune_cache_mode
+            )
+
+    def _set_qr_selector_trace(
+        *,
+        policy: object = None,
+        qr_selector_entries_retained: bool | None = None,
+        qr_selector_entries_refreshed: bool | None = None,
+        qr_selector_refresh_deferred: bool | None = None,
+        source_row_snapshots_retained: bool | None = None,
+        q_group_content_signature_changed: bool | None = None,
+        geometry_fitter_handoff_valid: bool | None = None,
+    ) -> None:
+        if policy is not None:
+            if qr_selector_entries_retained is None:
+                qr_selector_entries_retained = bool(
+                    getattr(policy, "retain_geometry_q_group_entries", False)
+                )
+            if qr_selector_refresh_deferred is None:
+                qr_selector_refresh_deferred = bool(
+                    getattr(policy, "defer_q_group_refresh_until_rows_available", False)
+                )
+            if source_row_snapshots_retained is None:
+                source_row_snapshots_retained = bool(
+                    getattr(policy, "retain_source_row_snapshots", False)
+                )
+            if geometry_fitter_handoff_valid is None:
+                geometry_fitter_handoff_valid = bool(
+                    getattr(policy, "retain_geometry_q_group_entries", False)
+                    and getattr(policy, "retain_source_row_snapshots", False)
+                    and getattr(policy, "retain_intersection_caches", False)
+                    and getattr(policy, "retain_manual_pick_cache", False)
+                    and not getattr(policy, "require_q_group_refresh_after_apply", False)
+                )
+        if qr_selector_entries_retained is not None:
+            update_decision_trace["qr_selector_entries_retained"] = bool(
+                qr_selector_entries_retained
+            )
+        if qr_selector_entries_refreshed is not None:
+            update_decision_trace["qr_selector_entries_refreshed"] = bool(
+                qr_selector_entries_refreshed
+            )
+        if qr_selector_refresh_deferred is not None:
+            update_decision_trace["qr_selector_refresh_deferred"] = bool(
+                qr_selector_refresh_deferred
+            )
+        if source_row_snapshots_retained is not None:
+            update_decision_trace["source_row_snapshots_retained"] = bool(
+                source_row_snapshots_retained
+            )
+        if q_group_content_signature_changed is not None:
+            update_decision_trace["q_group_content_signature_changed"] = bool(
+                q_group_content_signature_changed
+            )
+        if geometry_fitter_handoff_valid is not None:
+            update_decision_trace["geometry_fitter_handoff_valid"] = bool(
+                geometry_fitter_handoff_valid
             )
 
     def _decision_action() -> str:
@@ -17988,6 +18051,12 @@ def do_update():
         (collect_hit_tables_requested and not hit_tables_reusable) or selection_cache_refresh_needed
     )
     build_intersection_cache_for_job = bool(selection_cache_refresh_needed)
+    pre_update_row_content_signature = getattr(
+        simulation_runtime_state,
+        "stored_q_group_content_signature",
+        None,
+    )
+    pre_update_hit_table_signature = current_hit_table_signature
 
     new_sim_sig = new_sim_image_sig + (
         int(collect_hit_tables_for_job),
@@ -18992,18 +19061,38 @@ def do_update():
             in {UpdateAction.PRIMARY_PRUNE_REUSE, UpdateAction.PRIMARY_PRUNE_FILL}
             else UpdateAction.FULL_SIMULATION
         )
-        _invalidate_picker_handoff_caches_for_update_action(
+        prune_hit_table_identity_changed = bool(
+            pre_picker_action
+            in {UpdateAction.PRIMARY_PRUNE_REUSE, UpdateAction.PRIMARY_PRUNE_FILL}
+            and requested_hit_table_sig != pre_update_hit_table_signature
+        )
+        pre_picker_policy = _invalidate_picker_handoff_caches_for_update_action(
             pre_picker_action,
             physics_signature_changed=pre_picker_action is UpdateAction.FULL_SIMULATION,
-            hit_table_signature_changed=pre_picker_action is UpdateAction.FULL_SIMULATION,
+            hit_table_signature_changed=(
+                pre_picker_action is UpdateAction.FULL_SIMULATION
+                or prune_hit_table_identity_changed
+            ),
             q_group_content_signature_changed=(
                 pre_picker_action is UpdateAction.FULL_SIMULATION
+                or pre_picker_action is UpdateAction.PRIMARY_PRUNE_FILL
             ),
             detector_geometry_changed=(
                 pre_picker_action is UpdateAction.FULL_SIMULATION
                 and previous_center_pair != current_center_pair
             ),
         )
+        if pre_picker_action in {
+            UpdateAction.PRIMARY_PRUNE_REUSE,
+            UpdateAction.PRIMARY_PRUNE_FILL,
+        }:
+            _set_qr_selector_trace(
+                policy=pre_picker_policy,
+                q_group_content_signature_changed=(
+                    True if pre_picker_action is UpdateAction.PRIMARY_PRUNE_FILL else False
+                ),
+                qr_selector_entries_refreshed=False,
+            )
         simulation_runtime_state.peak_positions.clear()
         simulation_runtime_state.peak_millers.clear()
         simulation_runtime_state.peak_intensities.clear()
@@ -19041,12 +19130,17 @@ def do_update():
             primary_prune_cache_mode=incremental_sf_prune_action.mode,
         )
         if incremental_sf_prune_action.mode == "reuse":
-            _invalidate_for_update_action(
+            reuse_policy = _invalidate_for_update_action(
                 UpdateAction.PRIMARY_PRUNE_REUSE,
                 physics_signature_changed=False,
-                hit_table_signature_changed=False,
+                hit_table_signature_changed=prune_hit_table_identity_changed,
                 q_group_content_signature_changed=False,
                 detector_geometry_changed=False,
+            )
+            _set_qr_selector_trace(
+                policy=reuse_policy,
+                q_group_content_signature_changed=False,
+                qr_selector_entries_refreshed=False,
             )
             rematerialize_start_time = perf_counter()
             simulation_runtime_state.primary_contribution_cache_signature = (
@@ -19081,12 +19175,17 @@ def do_update():
             simulation_runtime_state.update_phase = "applying"
             _refresh_run_status_bar()
         elif incremental_sf_prune_action.mode == "fill":
-            _invalidate_for_update_action(
+            fill_policy = _invalidate_for_update_action(
                 UpdateAction.PRIMARY_PRUNE_FILL,
                 physics_signature_changed=False,
-                hit_table_signature_changed=False,
-                q_group_content_signature_changed=False,
+                hit_table_signature_changed=prune_hit_table_identity_changed,
+                q_group_content_signature_changed=True,
                 detector_geometry_changed=False,
+            )
+            _set_qr_selector_trace(
+                policy=fill_policy,
+                q_group_content_signature_changed=True,
+                qr_selector_entries_refreshed=False,
             )
             subset_payload = _build_scaled_primary_subset_payload(
                 incremental_sf_prune_action.missing_keys
@@ -19320,11 +19419,7 @@ def do_update():
         simulation_runtime_state.update_running = False
         return
 
-    previous_row_content_signature = getattr(
-        simulation_runtime_state,
-        "stored_q_group_content_signature",
-        None,
-    )
+    previous_row_content_signature = pre_update_row_content_signature
     applied_active_peak_row_sides: tuple[str, ...] = ()
     applied_primary_raw_rows_fresh = False
     applied_secondary_raw_rows_fresh = False
@@ -19402,6 +19497,23 @@ def do_update():
         run_secondary = bool(combined_state_diagnostics.get("run_secondary", False))
         updated_image = simulation_runtime_state.stored_sim_image
         max_positions_local = list(simulation_runtime_state.stored_max_positions_local or [])
+    if _decision_action() in {"primary_prune_reuse", "primary_prune_fill"}:
+        current_prune_row_content_signature = getattr(
+            simulation_runtime_state,
+            "stored_q_group_content_signature",
+            None,
+        )
+        prune_q_group_content_changed = bool(
+            current_prune_row_content_signature != previous_row_content_signature
+        )
+        _set_qr_selector_trace(
+            q_group_content_signature_changed=prune_q_group_content_changed,
+            geometry_fitter_handoff_valid=bool(
+                not prune_q_group_content_changed
+                and update_decision_trace.get("source_row_snapshots_retained") is True
+                and update_decision_trace.get("qr_selector_refresh_deferred") is False
+            ),
+        )
     if not _decision_action():
         _set_update_decision(
             update_action="combine_only",
@@ -19487,6 +19599,13 @@ def do_update():
                     q_group_bindings_factory()
                 )
             )
+            if _decision_action() in {"primary_prune_reuse", "primary_prune_fill"}:
+                _set_qr_selector_trace(
+                    qr_selector_entries_retained=True,
+                    qr_selector_entries_refreshed=True,
+                    qr_selector_refresh_deferred=False,
+                    geometry_fitter_handoff_valid=bool(listed_entries),
+                )
             progress_label_geometry.config(
                 text=(
                     f"Updated listed Qr/Qz peaks: {len(listed_entries)} groups, "

@@ -31,6 +31,7 @@ downstream of green mosaic fitting.
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
+| Fast-path cache audit and QR selector policy | bug | - | none | p2 | 2026-04-28 | [fast-path-cache-audit-phase1.md](in-progress/fast-path-cache-audit-phase1.md) |
 
 Replay status note: `Sim caked detector replay` remains in progress. Latest
 replay-only patch removed saved-background gating, tightened replay eligibility
@@ -63,6 +64,16 @@ tests for radial/phi-block/slow-caked mode comparisons, manual GUI
 preview/orientation checks, tooltip/preset interaction checks, saved-state
 headless override checks, and real diagnostic artifact inspection still need
 project input data.
+
+Fast-path cache audit and QR selector policy status note:
+Phases 1-4 are implemented and locally validated. QR/Qz masks remain explicit
+user/state data and are not cleared by runtime cache invalidation. Selective
+invalidation is policy-gated, optional New4 tests skip cleanly when artifacts
+are absent, and prune reuse/fill now report QR selector retention, deferred
+refresh, source-row retention, q-group content changes, and geometry-fitter
+handoff validity in the runtime trace. Bug/error status: no known failing local
+Phase 4 gate tests after `70 passed`, local Phase 3.5 gate `445 passed`, and
+workflow slice `26 passed, 2 skipped`.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,

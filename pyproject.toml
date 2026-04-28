@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ra_sim"
-version = "0.1.0"
+version = "1.0.0.dev0"
 description = "DWBA forward simulation and refinement for 2D oriented powder diffraction"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -16,6 +16,7 @@ you need implementation-level detail.
 - [testing-and-validation.md](testing-and-validation.md): test, validation, timing, benchmark, fixture, and automation index
 - [gui-workflow.md](gui-workflow.md): operator workflow through calibrant, GUI, and refinement stages
 - [architecture.md](architecture.md): package layout, major subsystems, and where to edit
+- [release-versioning.md](release-versioning.md): package version source of truth and the 1.0 release sequence
 - [adr/index.md](adr/index.md): accepted architecture decision records
 - [debug-and-cache.md](debug-and-cache.md): debug controls, output locations, and cache retention
 - [troubleshooting.md](troubleshooting.md): common setup, config, and workflow failures
@@ -28,6 +29,7 @@ If you need to:
 - change simulation/fitting code: read [architecture.md](architecture.md) and then the code map in [simulation_and_fitting.md](simulation_and_fitting.md#code-map)
 - understand stable architecture decisions: read [adr/index.md](adr/index.md)
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
+- check release version policy: read [release-versioning.md](release-versioning.md)
 - inspect live recovery work or substantial investigations: start with [tracking/index.md](tracking/index.md)
 - inspect the current fitter project order: start with [tracking/index.md](tracking/index.md)
 - implement the selected-pair mosaic profile plan: read [tracking/in-progress/mosaic-fitter.md](tracking/in-progress/mosaic-fitter.md) and [the canonical mosaic section](simulation_and_fitting.md#mosaic-shape-fitting-legacy-mosaic-width-fitting-and-image-space-refinement)

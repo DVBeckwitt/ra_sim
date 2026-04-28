@@ -2,19 +2,21 @@
 
 Date: 2026-04-28
 
-Scope: Phases 1-3.5 of fast-path cache verification, selective invalidation,
-and local validation gating.
+Scope: Phases 1-4 of fast-path cache verification, selective invalidation,
+local validation gating, and prune-specific QR selector lifecycle hardening.
 
 ## Current Status
 
 - Feature status: implemented and validated for QR selector cache policy,
   selective runtime invalidation, local optional-artifact skips, slow/manual
-  geometry markers, fast geometry-fitter handoff checks, and geometry objective
-  source-row reuse baselines.
+  geometry markers, fast geometry-fitter handoff checks, geometry objective
+  source-row reuse baselines, and prune reuse/fill QR selector lifecycle trace.
 - Bug status: fixed for overbroad fast-path invalidation of QR selector entries,
   source-row snapshots, intersection caches, and fitter handoff state; fixed
-  local checkpoint failures caused by absent optional New4 artifacts.
-- Error status: no known failing local Phase 3.5 gate tests.
+  local checkpoint failures caused by absent optional New4 artifacts; fixed
+  prune reuse/fill trace and invalidation sequencing so content changes do not
+  advertise a valid geometry-fitter handoff before refreshed rows exist.
+- Error status: no known failing local Phase 4 or Phase 3.5 gate tests.
 - Compatibility status: QR disabled/enabled masks remain explicit user/state
   data and are not cleared by cache invalidation.
 
@@ -147,3 +149,46 @@ Phase 3.5 validation:
 - py-compile gate passed
 - static audits found no cache invalidation mutation of QR/Qz masks and no
   broad picker helper reachability from non-physics fast paths
+
+## Phase 4 Prune Lifecycle Hardening
+
+Phase 4 made prune reuse/fill cache lifecycle explicit without changing the
+dependency classifier, display/combine paths, detector-center remap, or geometry
+objective cache.
+
+Feature status:
+
+- Prune reuse and prune fill now capture pre-update q-group content and
+  hit-table signatures before artifact application.
+- Runtime traces report QR selector retention/refresh decisions with:
+  `qr_selector_entries_retained`, `qr_selector_entries_refreshed`,
+  `qr_selector_refresh_deferred`, `source_row_snapshots_retained`,
+  `q_group_content_signature_changed`, and `geometry_fitter_handoff_valid`.
+- Prune reuse with compatible signatures retains QR selector entries and
+  source-row snapshots; incompatible hit-table identity clears stale source
+  rows.
+- Prune fill keeps old QR selector entries while missing contribution rows are
+  pending, keeps refresh deferred until rows exist, and does not clear explicit
+  QR/Qz masks.
+
+Bug/error status:
+
+- Fixed the prune trace timing bug where the previous q-group content signature
+  could be read after artifact reset/application, hiding whether content
+  actually changed.
+- A changed q-group content signature now marks
+  `geometry_fitter_handoff_valid=false` until refreshed selector rows exist.
+- No stale source-row retention or QR/Qz mask mutation was found by the Phase 4
+  synthetic and runtime scenario tests.
+
+Phase 4 validation:
+
+- `python -m py_compile ra_sim/fitting/optimization.py ra_sim/gui/geometry_fit.py ra_sim/gui/manual_geometry.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_invalidation.py ra_sim/gui/runtime_qr_selector_cache_policy.py`
+  passed.
+- `python -m pytest tests/test_gui_runtime_primary_cache.py tests/test_gui_runtime_update_trace.py tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py tests/test_runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py -q`
+  passed, `70 passed`.
+- Local Phase 3.5 gate rerun passed, `445 passed`.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
+  passed with `26 passed, 2 skipped`.
+- Static QR/Qz mask mutation audit still shows only controller/state-load/user
+  selection sites, not runtime invalidation.
