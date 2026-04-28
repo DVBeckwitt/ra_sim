@@ -111,6 +111,19 @@ Validation status as of 2026-04-28:
 - `python -m compileall ra_sim/gui tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_update_dependencies.py -q`
   passed
 
+Repository hygiene status:
+
+- fast-path implementation lives in `e756ba0`
+  (`perf(gui): add update fast paths`)
+- validation status lives in `32c6ac9`
+  (`docs(gui): record fast-path validation`)
+- final audit confirmed the fast-path commit contains only fast-path
+  docs/code/tests; unrelated dirty files were left unstaged
+- commit-time Git worktree cleanup warnings were permission warnings only and
+  did not block commit creation
+- `git diff --check` found no whitespace errors, only CRLF normalization
+  warnings in the dirty worktree
+
 ## Geometry Qr/Qz and HKL Picker State
 
 Manual Qr/Qz picking uses a structural group cache derived from the active

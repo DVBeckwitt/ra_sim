@@ -86,3 +86,17 @@ python -m compileall ra_sim/gui tests/test_gui_runtime_optimization_scenarios.py
 
 No wall-clock performance assertion was added. Performance regression coverage
 uses deterministic worker-call counts instead.
+
+Repository hygiene status after final audit:
+
+- Fast-path feature commit: `e756ba0 perf(gui): add update fast paths`.
+- Validation-doc commit: `32c6ac9 docs(gui): record fast-path validation`.
+- `git show --stat --oneline e756ba0` and
+  `git show --name-only --oneline e756ba0` showed only fast-path docs, code,
+  and tests.
+- Unrelated dirty worktree files were intentionally left unstaged and out of
+  the fast-path commits.
+- Git worktree-cleanup permission warnings during commit did not prevent commit
+  creation.
+- `git diff --check` reported no whitespace errors; only CRLF normalization
+  warnings in the dirty worktree.
