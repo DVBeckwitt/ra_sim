@@ -70,18 +70,30 @@ What changed:
   and prove sampled-event rows are not used when representative rows exist.
 - threaded chunk stats report `parallel_backend="threaded_njit_chunks"` and
   `parallel_worker_count`.
+- added `scripts/diagnostics/validate_weighted_event_merge.py` as the
+  branch-local focused merge gate;
+- benchmark smoke now asserts it imported `ra_sim` from the current checkout,
+  not a stale installed package.
 
 Bug/error status:
 
 - requested representative carry-through fix is implemented on fast path;
 - targeted weighted-event and cache tests are green;
 - requested caked-Qr representative-pick proof is green;
+- branch-local focused diagnostics pass with
+  `original_plan_validation_incomplete=no`,
+  `threads_1_parallel_backend: fast_serial`, and
+  `threads_2_parallel_backend: threaded_njit_chunks`;
+- production weighted-event, cache, and GUI selection surfaces match the shared
+  validated worktree commit used as merge source;
 - broader manual-geometry replay/workflow suites were already red in this
   worktree and remain red for adjacent replay/finalizer paths not changed in
   this patch;
-- full-suite run is not green, with additional unrelated failures in CLI mock
-  expectations, CIF-hash/reference docs, testing-index drift, and local Tk
-  runtime availability.
+- full-suite run is not green. The first clean `-x` failure is
+  `tests/test_cli_geometry_fit.py::test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only`,
+  where the CLI mock does not accept `seed_policy`; later broader geometry-fit
+  failures are in `ra_sim/fitting/optimization.py`, outside the
+  weighted-event representative-cache patch.
 
 Feature status:
 
@@ -89,7 +101,9 @@ Feature status:
 - sampled rows still preserve duplicates and remain separate from
   representative-facing cache rows;
 - representative cache is hardened for QR click, caked click, and geometry-fit
-  source selection.
+  source selection;
+- future weighted-event merges can be validated with one focused command before
+  broad-suite triage.
 
 ## Validation
 
@@ -113,6 +127,14 @@ and the weighted-event benchmark smoke output.
 
 Passed in this worktree:
 
+- `python scripts/diagnostics/validate_weighted_event_merge.py --skip-full-pytest`
+  passed and printed the required compliance and backend markers;
+- `python scripts/diagnostics/validate_weighted_event_merge.py --full-pytest`
+  passed the focused diagnostics and benchmark phases, then failed during the
+  broader `python -m pytest tests -q --durations=20` phase on unrelated
+  full-suite failures;
+- `python -m pytest tests -q --durations=20 -x` first failed at
+  `tests/test_cli_geometry_fit.py::test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only`;
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_solve_q_real_jit_does_not_crash_allocate_sched -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_compute_intensity_array_is_serial_njit -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_representative_choice_uses_true_mosaic_weight_before_mass -q`
@@ -140,6 +162,8 @@ Passed in this worktree:
 
 Still failing in this worktree:
 
+- `python scripts/diagnostics/validate_weighted_event_merge.py --full-pytest`
+  only because the optional full-suite phase fails after the focused gate;
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py -q`
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py tests/test_gui_geometry_fit_workflow.py -q`
 - `python -m pytest tests -q --durations=20`
