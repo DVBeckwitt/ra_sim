@@ -113,6 +113,16 @@ Feature status:
 - future weighted-event merges can be validated with one focused command before
   broad-suite triage.
 
+Committed branch status:
+
+- current branch head is `f7a93f3 feat(diffraction): add worker control`;
+- the worker-control feature is committed and focused weighted-event diagnostics
+  were green before commit;
+- the later core-scaling benchmark experiment was discarded by resetting back to
+  `HEAD`, so it is not part of the committed branch;
+- remaining known failures are broader project/test-data issues, not
+  weighted-event worker-control regressions.
+
 ## Validation
 
 ## Manual worker control
