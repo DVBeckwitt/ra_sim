@@ -563,11 +563,17 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "tail_fill_events": 0,
     "time_precompute": 0.0,
     "time_solve_q": 0.0,
+    "time_chunk_compute": 0.0,
     "time_project": 0.0,
     "time_select": 0.0,
     "time_emit_cache": 0.0,
     "pass1_total_mass": 0.0,
     "pass2_total_mass": 0.0,
+    "n_raw_beam_phases": 0,
+    "n_effective_beam_phases": 0,
+    "n_exact_solve_q_phase_groups": 0,
+    "phase_weight_sum": 0.0,
+    "phase_event_count_total": 0,
     "parallel_backend": "fast_serial",
     "parallel_worker_count": 1,
     "parallel_requested_worker_count": None,
@@ -5052,11 +5058,14 @@ def _weighted_event_sample_chunk_kernel(
     num_peaks,
     n_samp,
     image_size,
-    events_per_beam_phase,
+    phase_event_counts,
     collect_tables,
     accumulate_image_flag,
-    all_q_data,
-    all_q_counts,
+    q_values,
+    qset_offsets,
+    qset_lengths,
+    qset_status,
+    qset_id_by_sample_peak,
     all_status,
     peak_valid,
     peak_h,
@@ -5174,10 +5183,11 @@ def _weighted_event_sample_chunk_kernel(
         for peak_idx in range(num_peaks):
             if int(peak_valid[peak_idx]) == 0:
                 continue
-            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-            if rep_idx < 0:
-                rep_idx = sample_idx
-            sample_candidate_capacity += int(all_q_counts[peak_idx, rep_idx])
+            qset_id = int(qset_id_by_sample_peak[sample_idx, peak_idx])
+            if qset_id < 0:
+                continue
+            all_status[peak_idx, sample_idx] = int(qset_status[qset_id])
+            sample_candidate_capacity += int(qset_lengths[qset_id])
         if sample_candidate_capacity > candidate_buffer_capacity_max:
             candidate_buffer_capacity_max = int(sample_candidate_capacity)
         sample_use_candidate_reuse = (
@@ -5196,11 +5206,12 @@ def _weighted_event_sample_chunk_kernel(
             K = float(peak_k[peak_idx])
             L = float(peak_l[peak_idx])
             reflection_intensity = float(peak_reflection_intensity[peak_idx])
-            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-            if rep_idx < 0:
-                rep_idx = sample_idx
-            q_rows = int(all_q_counts[peak_idx, rep_idx])
-            all_q = all_q_data[peak_idx, rep_idx, :q_rows, :]
+            qset_id = int(qset_id_by_sample_peak[sample_idx, peak_idx])
+            if qset_id < 0:
+                continue
+            offset = int(qset_offsets[qset_id])
+            q_rows = int(qset_lengths[qset_id])
+            all_q = q_values[offset : offset + q_rows, :]
             if sample_use_candidate_reuse:
                 peak_mass, valid_count, project_calls, candidate_count = (
                     _weighted_event_project_store_for_qset(
@@ -5317,8 +5328,9 @@ def _weighted_event_sample_chunk_kernel(
                 _flush_local_pixel_cache(image_part, int(image_size), cache_keys, cache_values)
             continue
 
-        targets = _weighted_event_targets(sample_total_mass, events_per_beam_phase, sample_idx)
-        deposit = _weighted_event_deposit(sample_total_mass, events_per_beam_phase)
+        event_count = int(phase_event_counts[sample_idx])
+        targets = _weighted_event_targets(sample_total_mass, event_count, sample_idx)
+        deposit = _weighted_event_deposit(sample_total_mass, event_count)
         if targets.size <= 0 or (not np.isfinite(deposit)) or deposit <= 0.0:
             if accumulate_image_flag and cache_entry_count > 0:
                 _flush_local_pixel_cache(image_part, int(image_size), cache_keys, cache_values)
@@ -5389,11 +5401,12 @@ def _weighted_event_sample_chunk_kernel(
                 K = float(peak_k[peak_idx])
                 L = float(peak_l[peak_idx])
                 reflection_intensity = float(peak_reflection_intensity[peak_idx])
-                rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-                if rep_idx < 0:
-                    rep_idx = sample_idx
-                q_rows = int(all_q_counts[peak_idx, rep_idx])
-                all_q = all_q_data[peak_idx, rep_idx, :q_rows, :]
+                qset_id = int(qset_id_by_sample_peak[sample_idx, peak_idx])
+                if qset_id < 0:
+                    continue
+                offset = int(qset_offsets[qset_id])
+                q_rows = int(qset_lengths[qset_id])
+                all_q = q_values[offset : offset + q_rows, :]
                 (
                     target_idx,
                     cumulative_mass,
@@ -5916,100 +5929,6 @@ def _precompute_weighted_event_qsets(
         float(time_solve_q),
         float(time_qset_index),
     )
-
-
-def _precompute_weighted_event_all_q_tables(
-    *,
-    num_peaks,
-    n_samp,
-    sample_terms,
-    sample_weight_array,
-    peak_valid,
-    peak_h,
-    peak_k,
-    peak_l,
-    peak_gr0,
-    peak_gz0,
-    sigma_rad,
-    gamma_rad_m,
-    eta_pv,
-    solve_q_steps_i,
-    solve_q_rel_tol_i,
-    solve_q_mode_i,
-    default_solve_q_dtheta,
-    default_solve_q_cos,
-    default_solve_q_sin,
-    all_status,
-):
-    q_cache: dict[tuple[int, int], tuple[np.ndarray, int]] = {}
-    max_q_rows = 0
-    n_solve_q_calls = 0
-    time_solve_q = 0.0
-    has_sample_weight_array = sample_weight_array is not None
-
-    for sample_idx in range(int(n_samp)):
-        if sample_terms[sample_idx, _SAMPLE_COL_VALID] <= 0.5:
-            continue
-        if has_sample_weight_array:
-            sample_weight = float(sample_weight_array[sample_idx])
-            if not np.isfinite(sample_weight) or sample_weight <= 0.0:
-                continue
-        for peak_idx in range(int(num_peaks)):
-            if int(peak_valid[peak_idx]) == 0:
-                continue
-            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-            if rep_idx < 0:
-                rep_idx = sample_idx
-            cache_key = (int(peak_idx), int(rep_idx))
-            cached = q_cache.get(cache_key)
-            if cached is None:
-                k_in_crystal = np.array(
-                    [
-                        sample_terms[rep_idx, _SAMPLE_COL_KX_SCAT],
-                        sample_terms[rep_idx, _SAMPLE_COL_KY_SCAT],
-                        sample_terms[rep_idx, _SAMPLE_COL_RE_KZ],
-                    ],
-                    dtype=np.float64,
-                )
-                G_vec = np.array([0.0, peak_gr0[peak_idx], peak_gz0[peak_idx]], dtype=np.float64)
-                solve_start = time.perf_counter()
-                all_q_raw, stat = solve_q(
-                    k_in_crystal,
-                    float(sample_terms[rep_idx, _SAMPLE_COL_K_SCAT]),
-                    G_vec,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    float(peak_h[peak_idx]),
-                    float(peak_k[peak_idx]),
-                    float(peak_l[peak_idx]),
-                    solve_q_steps_i,
-                    DEFAULT_SOLVE_Q_BASE_INTERVALS,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    default_solve_q_dtheta,
-                    default_solve_q_cos,
-                    default_solve_q_sin,
-                )
-                time_solve_q += time.perf_counter() - solve_start
-                all_q = np.asarray(all_q_raw, dtype=np.float64).reshape(-1, 4)
-                cached = (all_q, int(stat))
-                q_cache[cache_key] = cached
-                max_q_rows = max(max_q_rows, int(all_q.shape[0]))
-                n_solve_q_calls += 1
-            all_status[peak_idx, sample_idx] = int(cached[1])
-
-    q_width = max(int(max_q_rows), 1)
-    all_q_data = np.zeros((int(num_peaks), max(int(n_samp), 1), q_width, 4), dtype=np.float64)
-    all_q_counts = np.zeros((int(num_peaks), max(int(n_samp), 1)), dtype=np.int64)
-    for (peak_idx, rep_idx), (all_q, _stat) in q_cache.items():
-        rows = int(all_q.shape[0])
-        if rows <= 0:
-            continue
-        all_q_data[int(peak_idx), int(rep_idx), :rows, :] = all_q
-        all_q_counts[int(peak_idx), int(rep_idx)] = int(rows)
-
-    return all_q_data, all_q_counts, int(n_solve_q_calls), float(time_solve_q)
 
 
 @njit(fastmath=True, cache=True)
@@ -7474,6 +7393,8 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     )
     all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
     event_counts = np.zeros((num_peaks, n_samp), dtype=np.int64)
+    phase_event_counts = np.full(n_samp, int(events_per_beam_phase), dtype=np.int64)
+    flat_capacity_total = int(np.sum(phase_event_counts)) if n_samp > 0 else 0
 
     if save_flag == 1:
         max_solutions = 2000000
@@ -7484,7 +7405,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         q_count = np.zeros(1, dtype=np.int64)
 
     if collect_tables:
-        flat_capacity = max(n_samp * int(events_per_beam_phase), 0)
+        flat_capacity = max(int(flat_capacity_total), 0)
         flat_event_rows = np.empty(
             (flat_capacity, HIT_ROW_WITH_PROVENANCE_WIDTH),
             dtype=np.float64,
@@ -7539,6 +7460,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
 
     time_precompute = 0.0
     time_solve_q = 0.0
+    time_chunk_compute = 0.0
     time_project = 0.0
     time_select = 0.0
     time_emit_cache = 0.0
@@ -7563,6 +7485,11 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     n_qset_lookup_entries = 0
     n_qset_reuse_hits = 0
     time_qset_index = 0.0
+    n_raw_beam_phases = int(n_samp)
+    n_effective_beam_phases = 0
+    n_exact_solve_q_phase_groups = 0
+    phase_weight_sum = 0.0
+    phase_event_count_total = 0
     try:
         weighted_event_candidate_buffer_max_bytes = int(
             weighted_event_candidate_buffer_max_bytes
@@ -7635,6 +7562,23 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         sample_wavelength_top_distances[finite_wavelength] = np.abs(
             wavelength_array[finite_wavelength] - mean_wavelength
         )
+    solve_q_phase_reps = set()
+    for phase_idx in range(n_samp):
+        if sample_terms[phase_idx, _SAMPLE_COL_VALID] <= 0.5:
+            continue
+        phase_weight = 1.0
+        if sample_weight_array is not None:
+            phase_weight = float(sample_weight_array[phase_idx])
+            if (not np.isfinite(phase_weight)) or phase_weight <= 0.0:
+                continue
+        rep_idx = int(sample_terms[phase_idx, _SAMPLE_COL_SOLVE_Q_REP])
+        if rep_idx < 0 or rep_idx >= n_samp:
+            rep_idx = phase_idx
+        solve_q_phase_reps.add(int(rep_idx))
+        n_effective_beam_phases += 1
+        phase_weight_sum += float(phase_weight)
+        phase_event_count_total += int(phase_event_counts[phase_idx])
+    n_exact_solve_q_phase_groups = int(len(solve_q_phase_reps))
     use_exact_optics = int(optics_mode) == OPTICS_MODE_EXACT
     fast_optics_ready = np.zeros(n_samp, dtype=np.uint8)
     fast_optics_lut = np.zeros(
@@ -7707,38 +7651,49 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         projection_debug_row_tthp_sums=projection_debug_row_tthp_sums,
         projection_debug_row_tth_sums=projection_debug_row_tth_sums,
     ):
-        solve_start = time.perf_counter()
-        all_q_data, all_q_counts, n_solve_q_calls, precomputed_solve_time = (
-            _precompute_weighted_event_all_q_tables(
-                num_peaks=num_peaks,
-                n_samp=n_samp,
-                sample_terms=sample_terms,
-                sample_weight_array=sample_weight_array,
-                peak_valid=peak_valid,
-                peak_h=peak_h,
-                peak_k=peak_k,
-                peak_l=peak_l,
-                peak_gr0=peak_gr0,
-                peak_gz0=peak_gz0,
-                sigma_rad=sigma_rad,
-                gamma_rad_m=gamma_rad_m,
-                eta_pv=eta_pv,
-                solve_q_steps_i=solve_q_steps_i,
-                solve_q_rel_tol_i=solve_q_rel_tol_i,
-                solve_q_mode_i=solve_q_mode_i,
-                default_solve_q_dtheta=default_solve_q_dtheta,
-                default_solve_q_cos=default_solve_q_cos,
-                default_solve_q_sin=default_solve_q_sin,
-                all_status=all_status,
-            )
+        q_precompute_start = time.perf_counter()
+        (
+            q_values,
+            qset_offsets,
+            qset_lengths,
+            qset_status,
+            qset_id_by_sample_peak,
+            n_solve_q_calls,
+            precomputed_solve_time,
+            _precomputed_qset_index_time,
+        ) = _precompute_weighted_event_qsets(
+            num_peaks=num_peaks,
+            n_samp=n_samp,
+            sample_terms=sample_terms,
+            sample_weight_array=sample_weight_array,
+            peak_valid=peak_valid,
+            peak_h=peak_h,
+            peak_k=peak_k,
+            peak_l=peak_l,
+            peak_gr0=peak_gr0,
+            peak_gz0=peak_gz0,
+            sigma_rad=sigma_rad,
+            gamma_rad_m=gamma_rad_m,
+            eta_pv=eta_pv,
+            solve_q_steps_i=solve_q_steps_i,
+            solve_q_rel_tol_i=solve_q_rel_tol_i,
+            solve_q_mode_i=solve_q_mode_i,
+            default_solve_q_dtheta=default_solve_q_dtheta,
+            default_solve_q_cos=default_solve_q_cos,
+            default_solve_q_sin=default_solve_q_sin,
         )
-        time_solve_q += max(float(precomputed_solve_time), time.perf_counter() - solve_start)
+        q_precompute_elapsed = time.perf_counter() - q_precompute_start
+        time_solve_q += float(precomputed_solve_time)
+        time_qset_index += max(
+            0.0,
+            float(q_precompute_elapsed) - float(precomputed_solve_time),
+        )
 
         chunks = _weighted_event_chunk_bounds(n_samp, worker_count)
         active_worker_count = max(int(worker_count), 1)
-        n_qsets_precomputed = int(n_solve_q_calls)
-        n_qset_lookup_entries = 0
-        n_qset_reuse_hits = 0
+        n_qsets_precomputed = int(qset_offsets.shape[0])
+        n_qset_lookup_entries = int(np.count_nonzero(qset_id_by_sample_peak >= 0))
+        n_qset_reuse_hits = max(0, int(n_qset_lookup_entries) - int(n_qsets_precomputed))
         max_sample_candidate_capacity = 0
         for candidate_sample_idx in range(n_samp):
             if sample_terms[candidate_sample_idx, _SAMPLE_COL_VALID] <= 0.5:
@@ -7751,11 +7706,10 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             for candidate_peak_idx in range(num_peaks):
                 if int(peak_valid[candidate_peak_idx]) == 0:
                     continue
-                n_qset_lookup_entries += 1
-                rep_idx = int(sample_terms[candidate_sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-                if rep_idx < 0:
-                    rep_idx = candidate_sample_idx
-                sample_candidate_capacity += int(all_q_counts[candidate_peak_idx, rep_idx])
+                qset_id = int(qset_id_by_sample_peak[candidate_sample_idx, candidate_peak_idx])
+                if qset_id < 0:
+                    continue
+                sample_candidate_capacity += int(qset_lengths[qset_id])
             max_sample_candidate_capacity = max(
                 int(max_sample_candidate_capacity),
                 int(sample_candidate_capacity),
@@ -7768,13 +7722,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         chunk_candidate_capacity = (
             int(max_sample_candidate_capacity) if chunk_reuse_projected_candidates else 0
         )
-        n_qset_reuse_hits = max(
-            0,
-            int(n_qset_lookup_entries) - int(n_qsets_precomputed),
-        )
         if collect_tables:
             max_worker_flat_capacity = max(
-                (stop - start) * int(events_per_beam_phase)
+                int(np.sum(phase_event_counts[start:stop]))
                 for _worker_slot, start, stop in chunks
             )
             flat_event_rows_parts = np.empty(
@@ -7902,11 +7852,14 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 int(num_peaks),
                 int(n_samp),
                 int(image_size),
-                int(events_per_beam_phase),
+                phase_event_counts,
                 bool(collect_tables),
                 bool(accumulate_image_flag),
-                all_q_data,
-                all_q_counts,
+                q_values,
+                qset_offsets,
+                qset_lengths,
+                qset_status,
+                qset_id_by_sample_peak,
                 all_status,
                 peak_valid,
                 peak_h,
@@ -7970,7 +7923,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             n_samp=n_samp,
             worker_count=active_worker_count,
         )
-        time_project += time.perf_counter() - chunk_start
+        time_chunk_compute += time.perf_counter() - chunk_start
 
         if accumulate_image_flag and len(chunks) > 0:
             image += np.sum(image_parts[:active_worker_count, :, :], axis=0)
@@ -8126,11 +8079,17 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             tail_fill_events=int(tail_fill_events),
             time_precompute=float(time_precompute),
             time_solve_q=float(time_solve_q),
+            time_chunk_compute=float(time_chunk_compute),
             time_project=float(time_project),
             time_select=float(time_select),
             time_emit_cache=float(time_emit_cache),
             pass1_total_mass=float(pass1_total_mass),
             pass2_total_mass=float(pass2_total_mass),
+            n_raw_beam_phases=int(n_raw_beam_phases),
+            n_effective_beam_phases=int(n_effective_beam_phases),
+            n_exact_solve_q_phase_groups=int(n_exact_solve_q_phase_groups),
+            phase_weight_sum=float(phase_weight_sum),
+            phase_event_count_total=int(phase_event_count_total),
             parallel_backend="threaded_njit_chunks",
             parallel_worker_count=int(active_worker_count),
             parallel_requested_worker_count=requested_worker_count,
@@ -8360,8 +8319,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             continue
 
         select_start = time.perf_counter()
-        targets = _weighted_event_targets(sample_total_mass, events_per_beam_phase, sample_idx)
-        deposit = _weighted_event_deposit(sample_total_mass, events_per_beam_phase)
+        event_count = int(phase_event_counts[sample_idx])
+        targets = _weighted_event_targets(sample_total_mass, event_count, sample_idx)
+        deposit = _weighted_event_deposit(sample_total_mass, event_count)
         time_select += time.perf_counter() - select_start
         if targets.size <= 0 or not np.isfinite(deposit) or deposit <= 0.0:
             if accumulate_image_flag and cache_entry_count > 0:
@@ -8640,11 +8600,17 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         tail_fill_events=int(tail_fill_events),
         time_precompute=float(time_precompute),
         time_solve_q=float(time_solve_q),
+        time_chunk_compute=float(time_chunk_compute),
         time_project=float(time_project),
         time_select=float(time_select),
         time_emit_cache=float(time_emit_cache),
         pass1_total_mass=float(pass1_total_mass),
         pass2_total_mass=float(pass2_total_mass),
+        n_raw_beam_phases=int(n_raw_beam_phases),
+        n_effective_beam_phases=int(n_effective_beam_phases),
+        n_exact_solve_q_phase_groups=int(n_exact_solve_q_phase_groups),
+        phase_weight_sum=float(phase_weight_sum),
+        phase_event_count_total=int(phase_event_count_total),
         parallel_backend="fast_serial",
         parallel_worker_count=1,
         parallel_requested_worker_count=requested_worker_count,

@@ -1426,6 +1426,25 @@ def test_fast_runtime_stats_show_solve_q_reuse_and_pass_mass_consistency():
     assert stats["time_select"] <= stats["time_solve_q"] + stats["time_project"] + 1.0
 
 
+def test_fast_runtime_stats_report_unclustered_phase_counts():
+    diffraction.process_peaks_parallel(
+        **_base_process_kwargs(n_samp=3),
+        save_flag=0,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        sample_weights=np.array([1.0, 0.0, 2.0], dtype=np.float64),
+        events_per_beam_phase=4,
+        numba_thread_count=1,
+    )
+
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["n_raw_beam_phases"] == 3
+    assert stats["n_effective_beam_phases"] == 2
+    assert stats["n_exact_solve_q_phase_groups"] == 1
+    assert stats["phase_weight_sum"] == pytest.approx(3.0)
+    assert stats["phase_event_count_total"] == 8
+
+
 def test_fast_serial_precomputed_qsets_reuse_representative_solve(monkeypatch):
     _install_streaming_fast_outer_backend(
         monkeypatch,
@@ -1787,6 +1806,18 @@ def test_manual_worker_count_clamps_to_available_cpu(monkeypatch):
     assert source == "explicit"
 
 
+def test_manual_worker_count_clamp_applies_to_process_stats(monkeypatch):
+    monkeypatch.setattr(parallel_utils, "system_cpu_worker_count", lambda: 2)
+
+    stats = _run_weighted_event_worker_probe(n_samp=4, numba_thread_count=99)
+
+    assert stats["parallel_backend"] == "threaded_njit_chunks"
+    assert stats["parallel_worker_count"] == 2
+    assert stats["parallel_requested_worker_count"] == 99
+    assert stats["parallel_effective_worker_count"] == 2
+    assert stats["parallel_worker_count_source"] == "explicit"
+
+
 def test_auto_worker_count_stays_serial_for_tiny_jobs(monkeypatch):
     monkeypatch.delenv(parallel_utils.WEIGHTED_EVENT_WORKERS_ENV, raising=False)
 
@@ -1855,12 +1886,16 @@ def test_weighted_event_worker_count_invalid_env_falls_back_to_auto(monkeypatch)
 
 def test_weighted_event_threaded_backend_does_not_use_prange_kernel():
     assert not hasattr(diffraction, "_weighted_event_sample_kernel_parallel")
+    assert not hasattr(diffraction, "_precompute_weighted_event_all_q_tables")
     assert hasattr(diffraction, "_weighted_event_sample_chunk_kernel")
     assert hasattr(diffraction, "_run_weighted_event_sample_chunks")
 
     source = inspect.getsource(diffraction._weighted_event_sample_chunk_kernel.py_func)
     assert "prange" not in source
     assert "get_thread_id" not in source
+    assert "all_q_data" not in source
+    assert "all_q_counts" not in source
+    assert "phase_event_counts" in source
 
     diffraction.process_peaks_parallel(
         **_base_process_kwargs(n_samp=2),
@@ -1873,6 +1908,8 @@ def test_weighted_event_threaded_backend_does_not_use_prange_kernel():
     stats = diffraction.get_last_process_peaks_weighted_event_stats()
     assert stats["parallel_backend"] == "threaded_njit_chunks"
     assert stats["parallel_worker_count"] == 2
+    assert stats["time_chunk_compute"] > 0.0
+    assert stats["time_project"] == 0.0
 
 
 def test_parallel_weighted_events_match_serial_image():
