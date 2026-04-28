@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from ra_sim import cli
+from ra_sim import headless_geometry_fit
 
 
 def _get_subparser_choices(parser):
@@ -53,6 +54,38 @@ def test_cli_build_parser_accepts_fit_geometry_active_vars_option() -> None:
     )
 
     assert args.active_vars == "corto_detector,theta_initial,cor_angle,chi,zs,zb"
+
+
+def test_cli_build_parser_accepts_background_subtraction_options() -> None:
+    if getattr(cli, "_cmd_fit_geometry", None) is None:
+        pytest.skip("fit-geometry CLI command is not available in this checkout")
+
+    parser = cli._build_parser()
+    args = parser.parse_args(
+        [
+            "fit-geometry",
+            "saved_state.json",
+            "--background-subtraction",
+            "radial-plus-caked-2d",
+            "--background-subtraction-scale",
+            "0.7",
+            "--background-subtraction-diagnostics",
+        ]
+    )
+
+    assert args.background_subtraction == "radial-plus-caked-2d"
+    assert args.background_subtraction_scale == 0.7
+    assert args.background_subtraction_diagnostics is True
+
+    mosaic_args = parser.parse_args(
+        [
+            "fit-mosaic-shape",
+            "saved_state.json",
+            "--background-subtraction",
+            "off",
+        ]
+    )
+    assert mosaic_args.background_subtraction == "off"
 
 
 def test_cli_build_parser_includes_fit_mosaic_shape_command() -> None:
@@ -227,6 +260,51 @@ def test_cmd_fit_geometry_passes_active_vars_to_runner(monkeypatch, tmp_path) ->
         "zs",
         "zb",
     ]
+    assert captured["kwargs"]["background_subtraction_mode"] == "saved"
+
+
+def test_cmd_fit_geometry_passes_background_subtraction_overrides(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    cmd = _require_fit_geometry_command()
+
+    input_path = tmp_path / "saved_gui_state.json"
+    output_path = tmp_path / "fit_gui_state.json"
+    loaded_payload = {"type": "ra_sim.gui_state", "state": {"geometry": {}}}
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "load_gui_state_file", lambda path: loaded_payload)
+    monkeypatch.setattr(cli, "save_gui_state_file", lambda path, state, **kwargs: None)
+
+    def _fake_runner(*args, **kwargs):
+        captured["kwargs"] = dict(kwargs)
+        return loaded_payload["state"], {"accepted": True}
+
+    monkeypatch.setattr(cli, "run_headless_geometry_fit", _fake_runner)
+
+    args = SimpleNamespace(
+        state=str(input_path),
+        input_state=str(input_path),
+        gui_state=str(input_path),
+        source_state=str(input_path),
+        out_state=str(output_path),
+        output_state=str(output_path),
+        output=str(output_path),
+        in_place=False,
+        overwrite=False,
+        active_vars=None,
+        seed_policy=None,
+        background_subtraction="off",
+        background_subtraction_scale=0.6,
+        background_subtraction_diagnostics=True,
+    )
+
+    cmd(args)
+
+    assert captured["kwargs"]["background_subtraction_mode"] == "off"
+    assert captured["kwargs"]["background_subtraction_scale"] == 0.6
+    assert captured["kwargs"]["background_subtraction_diagnostics"] is True
 
 
 @pytest.mark.parametrize(
@@ -330,6 +408,92 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
         "matched_peaks_path": None,
         "rms_px": 1.25,
     }
+
+
+def test_run_headless_geometry_fit_forwards_background_subtraction_overrides(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    payload = {"type": "ra_sim.gui_state", "state": {"files": {"background_files": ["bg0.osc"]}}}
+    captured: dict[str, object] = {}
+
+    def _fake_shared_runner(state_arg, **kwargs):
+        captured["state"] = state_arg
+        captured["kwargs"] = dict(kwargs)
+        return SimpleNamespace(
+            state={"geometry": {"fit_result": "shared"}},
+            log_path=tmp_path / "shared_geometry_fit.log",
+            accepted=True,
+            rejection_reason=None,
+            rms_px=None,
+        )
+
+    monkeypatch.setattr(
+        cli.shared_headless_geometry_fit,
+        "run_headless_geometry_fit",
+        _fake_shared_runner,
+    )
+
+    state_result, _report = cli.run_headless_geometry_fit(
+        payload,
+        source_path=tmp_path / "state.json",
+        output_dir=tmp_path / "artifacts",
+        background_subtraction_mode="off",
+        background_subtraction_scale=0.5,
+        background_subtraction_diagnostics=True,
+    )
+
+    assert state_result["geometry"]["fit_result"] == "shared"
+    assert captured["kwargs"]["background_subtraction_mode"] == "off"
+    assert captured["kwargs"]["background_subtraction_scale"] == 0.5
+    assert captured["kwargs"]["background_subtraction_diagnostics"] is True
+
+
+def test_headless_background_subtraction_config_uses_saved_and_overrides() -> None:
+    defaults = SimpleNamespace(
+        fit_config={
+            "geometry": {
+                "background_subtraction": {
+                    "enabled": False,
+                    "mode": "radial_plus_caked_2d",
+                    "scale": 1.0,
+                    "diagnostics": True,
+                }
+            }
+        }
+    )
+    saved_state = {
+        "variables": {
+            "background_subtraction_enabled_var": True,
+            "background_subtraction_mode_var": "radial",
+            "background_subtraction_scale_var": 0.9,
+            "background_subtraction_diagnostics_var": False,
+        }
+    }
+
+    saved_cfg = headless_geometry_fit._headless_background_subtraction_config(
+        saved_state,
+        defaults,
+        mode_override="saved",
+        scale_override=None,
+        diagnostics_override=None,
+    )
+    off_cfg = headless_geometry_fit._headless_background_subtraction_config(
+        saved_state,
+        defaults,
+        mode_override="off",
+        scale_override=0.5,
+        diagnostics_override=True,
+    )
+
+    assert saved_cfg.enabled is True
+    assert saved_cfg.mode == "radial"
+    assert saved_cfg.scale == 0.9
+    assert saved_cfg.diagnostics is False
+    assert off_cfg.enabled is False
+    assert off_cfg.mode == "off"
+    assert off_cfg.scale == 0.5
+    assert off_cfg.diagnostics is True
 
 
 def test_run_headless_mosaic_shape_fit_forwards_to_geometry_runner(monkeypatch) -> None:

@@ -13,6 +13,7 @@ from ra_sim.io.data_loading import (
     save_geometry_placements_file,
     save_gui_state_file,
 )
+from ra_sim.gui import state_io
 
 
 def test_build_gui_state_payload_normalizes_numpy_and_path_values(tmp_path):
@@ -148,6 +149,75 @@ def test_load_gui_state_file_accepts_legacy_wrapper_without_type(tmp_path):
     assert loaded["metadata"]["entrypoint"] == "main.py"
     assert loaded["state"]["variables"]["show_1d_var"] is True
     assert loaded["state"]["flags"]["background_visible"] is False
+
+
+def test_collect_snapshot_persists_background_subtraction_vars() -> None:
+    class _FakeTkVar:
+        def __init__(self, value) -> None:
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    snapshot = state_io.collect_full_gui_state_snapshot(
+        global_items={
+            "background_subtraction_enabled_var": _FakeTkVar(True),
+            "background_subtraction_mode_var": _FakeTkVar("radial"),
+            "background_subtraction_apply_to_fit_var": _FakeTkVar(True),
+            "background_subtraction_apply_to_display_var": _FakeTkVar(False),
+            "background_subtraction_display_mode_var": _FakeTkVar("model"),
+            "background_subtraction_scale_var": _FakeTkVar(0.85),
+            "background_subtraction_radial_bin_width_deg_var": _FakeTkVar(0.2),
+            "background_subtraction_status_var": _FakeTkVar("transient"),
+        },
+        tk_variable_type=_FakeTkVar,
+        occ_vars=[],
+        atom_site_fract_vars=[],
+        geometry_q_group_rows=[],
+        geometry_disabled_qr_sets=[],
+        geometry_disabled_qz_sections=[],
+        geometry_manual_pairs=[],
+        geometry_peak_records=[],
+        selected_hkl_target=None,
+        primary_cif_path="primary.cif",
+        secondary_cif_path=None,
+        osc_files=["bg0.osc"],
+        current_background_index=0,
+        background_visible=True,
+        background_backend_rotation_k=0,
+        background_backend_flip_x=False,
+        background_backend_flip_y=False,
+        background_limits_user_override=False,
+        simulation_limits_user_override=False,
+        scale_factor_user_override=False,
+    )
+
+    variables = snapshot["variables"]
+    assert variables["background_subtraction_enabled_var"] is True
+    assert variables["background_subtraction_mode_var"] == "radial"
+    assert variables["background_subtraction_display_mode_var"] == "model"
+    assert variables["background_subtraction_scale_var"] == 0.85
+    assert variables["background_subtraction_radial_bin_width_deg_var"] == 0.2
+    assert "background_subtraction_status_var" not in variables
+
+
+def test_saved_state_without_background_subtraction_fields_still_loads(tmp_path) -> None:
+    file_path = tmp_path / "legacy_without_background_subtraction.json"
+    save_gui_state_file(
+        file_path,
+        {
+            "variables": {"gamma_var": 1.25},
+            "files": {"background_files": ["bg0.osc"]},
+        },
+    )
+
+    loaded = load_gui_state_file(file_path)["state"]
+
+    assert loaded["variables"]["gamma_var"] == 1.25
+    assert all(
+        not str(name).startswith("background_subtraction_")
+        for name in loaded["variables"]
+    )
 
 
 def test_build_geometry_placements_payload_normalizes_nested_values(tmp_path):

@@ -270,3 +270,33 @@ def test_match_simulated_peaks_to_peak_context_reuses_refined_candidates(
     assert len(second_matches) == 1
     assert first_call_count > 0
     assert len(refine_calls) == first_call_count
+
+
+def test_build_background_peak_context_accepts_background_subtracted_images():
+    yy, xx = np.mgrid[0:64, 0:64]
+    diffuse_halo = 18.0 * np.exp(-np.hypot(xx - 32.0, yy - 32.0) / 22.0) + 3.0
+    bragg = _synthetic_background(
+        (64, 64),
+        [(28.0, 30.0, 5.0, 1.0)],
+        noise_sigma=0.0,
+    )
+    corrected = diffuse_halo + bragg - diffuse_halo
+    cfg = _match_config(search_radius_px=4.0)
+
+    context = build_background_peak_context(corrected, cfg)
+    matches, _stats = match_simulated_peaks_to_peak_context(
+        [
+            {
+                "hkl": (1, 0, 0),
+                "label": "1,0,0",
+                "sim_col": 28.2,
+                "sim_row": 30.1,
+                "weight": 1.0,
+            }
+        ],
+        context,
+        cfg,
+    )
+
+    assert len(matches) == 1
+    assert math.hypot(float(matches[0]["x"]) - 28.0, float(matches[0]["y"]) - 30.0) < 1.0

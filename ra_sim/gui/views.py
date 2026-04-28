@@ -24,6 +24,7 @@ from .state import (
     AnalysisPeakToolsViewState,
     AnalysisPopoutViewState,
     BeamMosaicParameterSlidersViewState,
+    BackgroundSubtractionControlsViewState,
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
@@ -1173,12 +1174,14 @@ def create_app_shell(
     controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
 
     setup_tab = ttk.Frame(controls_notebook)
+    background_tab = ttk.Frame(controls_notebook)
     match_tab = ttk.Frame(controls_notebook)
     refine_tab = ttk.Frame(controls_notebook)
     simulation_tab = ttk.Frame(controls_notebook)
     analyze_tab = ttk.Frame(controls_notebook)
     help_tab = ttk.Frame(controls_notebook)
     controls_notebook.add(setup_tab, text="Setup")
+    controls_notebook.add(background_tab, text="Background")
     controls_notebook.add(match_tab, text="Match")
     controls_notebook.add(refine_tab, text="Refine")
     controls_notebook.add(simulation_tab, text="Simulation")
@@ -1187,6 +1190,10 @@ def create_app_shell(
 
     setup_scroll_frame, setup_body, setup_canvas = _create_scrolled_frame(setup_tab)
     setup_scroll_frame.pack(fill=tk.BOTH, expand=True)
+    background_scroll_frame, background_body, background_canvas = _create_scrolled_frame(
+        background_tab
+    )
+    background_scroll_frame.pack(fill=tk.BOTH, expand=True)
     match_scroll_frame, match_body, match_canvas = _create_scrolled_frame(match_tab)
     match_scroll_frame.pack(fill=tk.BOTH, expand=True)
     simulation_scroll_frame, simulation_body, simulation_canvas = _create_scrolled_frame(
@@ -1214,6 +1221,16 @@ def create_app_shell(
         key=("app-shell-scroll", id(view_state), "setup"),
         handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
             setup_canvas,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
+            event=event,
+        ),
+    )
+    _register_pointer_mousewheel_handler(
+        root,
+        key=("app-shell-scroll", id(view_state), "background"),
+        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+            background_canvas,
             pointer_x=pointer_x,
             pointer_y=pointer_y,
             event=event,
@@ -1267,6 +1284,7 @@ def create_app_shell(
         control_tab_var,
         {
             "setup": setup_tab,
+            "background": background_tab,
             "match": match_tab,
             "refine": refine_tab,
             "simulation": simulation_tab,
@@ -1578,6 +1596,7 @@ def create_app_shell(
     view_state.fit_health_secondary_label = fit_health_secondary_label
     view_state.controls_notebook = controls_notebook
     view_state.setup_tab = setup_tab
+    view_state.background_tab = background_tab
     view_state.match_tab = match_tab
     view_state.refine_tab = refine_tab
     view_state.simulation_tab = simulation_tab
@@ -1601,6 +1620,8 @@ def create_app_shell(
     )
     view_state.setup_body = setup_body
     view_state.setup_canvas = setup_canvas
+    view_state.background_body = background_body
+    view_state.background_canvas = background_canvas
     view_state.match_body = match_body
     view_state.match_canvas = match_canvas
     view_state.simulation_body = simulation_body
@@ -2367,6 +2388,162 @@ def create_background_file_controls(
 
     view_state.background_file_status_var = background_file_status_var
     view_state.background_file_status_label = background_file_status_label
+
+
+def create_background_subtraction_controls(
+    *,
+    parent: tk.Misc,
+    view_state: BackgroundSubtractionControlsViewState,
+    initial_values: Mapping[str, object],
+    on_fit_model: Callable[[], None],
+    on_apply: Callable[[], None],
+    on_reset: Callable[[], None],
+    on_export_diagnostics: Callable[[], None],
+) -> None:
+    """Create diffuse-background subtraction controls for the Background tab."""
+
+    def _initial_bool(key: str, default: bool) -> bool:
+        value = initial_values.get(key, default) if isinstance(initial_values, Mapping) else default
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _initial_float(key: str, default: float) -> float:
+        value = initial_values.get(key, default) if isinstance(initial_values, Mapping) else default
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _initial_text(key: str, default: str) -> str:
+        value = initial_values.get(key, default) if isinstance(initial_values, Mapping) else default
+        return str(value)
+
+    frame = ttk.LabelFrame(parent, text="Diffuse Background Subtraction", padding=(8, 6))
+    frame.pack(fill=tk.X, padx=5, pady=5)
+    frame.columnconfigure(1, weight=1)
+
+    enabled_var = tk.BooleanVar(value=_initial_bool("enabled", False))
+    mode_var = tk.StringVar(value=_initial_text("mode", "radial_plus_caked_2d"))
+    apply_to_fit_var = tk.BooleanVar(value=_initial_bool("apply_to_fit", True))
+    apply_to_display_var = tk.BooleanVar(value=_initial_bool("apply_to_display", False))
+    display_mode_var = tk.StringVar(value=_initial_text("display_mode", "raw"))
+    scale_var = tk.DoubleVar(value=_initial_float("scale", 1.0))
+    auto_scale_var = tk.BooleanVar(value=_initial_bool("auto_scale", False))
+    radial_bin_width_deg_var = tk.DoubleVar(value=_initial_float("radial_bin_width_deg", 0.10))
+    radial_quantile_var = tk.DoubleVar(value=_initial_float("radial_quantile", 0.35))
+    radial_smooth_sigma_deg_var = tk.DoubleVar(
+        value=_initial_float("radial_smooth_sigma_deg", 0.50)
+    )
+    caked_theta_window_deg_var = tk.DoubleVar(
+        value=_initial_float("caked_theta_window_deg", 1.5)
+    )
+    caked_phi_window_deg_var = tk.DoubleVar(value=_initial_float("caked_phi_window_deg", 15.0))
+    caked_quantile_var = tk.DoubleVar(value=_initial_float("caked_quantile", 0.35))
+    peak_mask_sigma_var = tk.DoubleVar(value=_initial_float("peak_mask_sigma", 4.0))
+    peak_mask_radius_px_var = tk.DoubleVar(value=_initial_float("peak_mask_radius_px", 10.0))
+    direct_beam_mask_radius_px_var = tk.DoubleVar(
+        value=_initial_float("direct_beam_mask_radius_px", 35.0)
+    )
+    clip_for_display_var = tk.BooleanVar(value=_initial_bool("clip_for_display", True))
+    diagnostics_var = tk.BooleanVar(value=_initial_bool("diagnostics", True))
+    status_var = tk.StringVar(value="Diffuse subtraction is off.")
+
+    row_index = 0
+
+    def _add_check(text: str, variable: object) -> object:
+        nonlocal row_index
+        check = ttk.Checkbutton(frame, text=text, variable=variable)
+        check.grid(row=row_index, column=0, columnspan=2, sticky=tk.W, pady=2)
+        row_index += 1
+        return check
+
+    def _add_combo(label: str, variable: object, values: Sequence[str]) -> object:
+        nonlocal row_index
+        ttk.Label(frame, text=label).grid(row=row_index, column=0, sticky=tk.W, pady=2)
+        combo = ttk.Combobox(frame, textvariable=variable, values=list(values), state="readonly")
+        combo.grid(row=row_index, column=1, sticky=tk.EW, pady=2)
+        row_index += 1
+        return combo
+
+    def _add_entry(label: str, variable: object) -> object:
+        nonlocal row_index
+        ttk.Label(frame, text=label).grid(row=row_index, column=0, sticky=tk.W, pady=2)
+        entry = ttk.Entry(frame, textvariable=variable, width=12)
+        entry.grid(row=row_index, column=1, sticky=tk.EW, pady=2)
+        row_index += 1
+        return entry
+
+    _add_check("Enable diffuse subtraction", enabled_var)
+    _add_combo(
+        "Mode",
+        mode_var,
+        ("off", "radial", "radial_plus_caked_2d"),
+    )
+    _add_check("Apply corrected image to fitting and auto-match", apply_to_fit_var)
+    _add_check("Apply corrected image to display", apply_to_display_var)
+    _add_combo(
+        "Display mode",
+        display_mode_var,
+        ("raw", "model", "subtracted", "residual", "mask"),
+    )
+    _add_entry("Scale", scale_var)
+    _add_check("Auto scale", auto_scale_var)
+    _add_entry("Radial bin width, degrees", radial_bin_width_deg_var)
+    _add_entry("Radial quantile", radial_quantile_var)
+    _add_entry("Radial smooth sigma, degrees", radial_smooth_sigma_deg_var)
+    _add_entry("Caked θ window, degrees", caked_theta_window_deg_var)
+    _add_entry("Caked φ window, degrees", caked_phi_window_deg_var)
+    _add_entry("Caked quantile", caked_quantile_var)
+    _add_entry("Peak mask sigma", peak_mask_sigma_var)
+    _add_entry("Peak mask radius, px", peak_mask_radius_px_var)
+    _add_entry("Direct beam mask radius, px", direct_beam_mask_radius_px_var)
+    _add_check("Clip negatives for display", clip_for_display_var)
+    _add_check("Write diagnostics", diagnostics_var)
+
+    actions = ttk.Frame(frame)
+    actions.grid(row=row_index, column=0, columnspan=2, sticky=tk.EW, pady=(6, 2))
+    row_index += 1
+    ttk.Button(actions, text="Fit model to current background", command=on_fit_model).pack(
+        side=tk.LEFT,
+        padx=(0, 4),
+    )
+    ttk.Button(actions, text="Apply / recompute", command=on_apply).pack(side=tk.LEFT, padx=4)
+    ttk.Button(actions, text="Reset defaults", command=on_reset).pack(side=tk.LEFT, padx=4)
+    ttk.Button(actions, text="Export diagnostics", command=on_export_diagnostics).pack(
+        side=tk.LEFT,
+        padx=4,
+    )
+
+    status_label = ttk.Label(
+        frame,
+        textvariable=status_var,
+        justify=tk.LEFT,
+        anchor=tk.W,
+        wraplength=520,
+    )
+    status_label.grid(row=row_index, column=0, columnspan=2, sticky=tk.EW, pady=(4, 0))
+
+    view_state.frame = frame
+    view_state.enabled_var = enabled_var
+    view_state.mode_var = mode_var
+    view_state.apply_to_fit_var = apply_to_fit_var
+    view_state.apply_to_display_var = apply_to_display_var
+    view_state.display_mode_var = display_mode_var
+    view_state.scale_var = scale_var
+    view_state.auto_scale_var = auto_scale_var
+    view_state.radial_bin_width_deg_var = radial_bin_width_deg_var
+    view_state.radial_quantile_var = radial_quantile_var
+    view_state.radial_smooth_sigma_deg_var = radial_smooth_sigma_deg_var
+    view_state.caked_theta_window_deg_var = caked_theta_window_deg_var
+    view_state.caked_phi_window_deg_var = caked_phi_window_deg_var
+    view_state.caked_quantile_var = caked_quantile_var
+    view_state.peak_mask_sigma_var = peak_mask_sigma_var
+    view_state.peak_mask_radius_px_var = peak_mask_radius_px_var
+    view_state.direct_beam_mask_radius_px_var = direct_beam_mask_radius_px_var
+    view_state.clip_for_display_var = clip_for_display_var
+    view_state.diagnostics_var = diagnostics_var
+    view_state.status_var = status_var
 
 
 def create_primary_cif_controls(

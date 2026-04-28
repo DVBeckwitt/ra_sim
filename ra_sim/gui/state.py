@@ -114,6 +114,32 @@ class BackgroundThetaControlsViewState:
 
 
 @dataclass
+class BackgroundSubtractionControlsViewState:
+    """Widget references and vars for diffuse-background subtraction controls."""
+
+    frame: Any = None
+    enabled_var: Any = None
+    mode_var: Any = None
+    apply_to_fit_var: Any = None
+    apply_to_display_var: Any = None
+    display_mode_var: Any = None
+    scale_var: Any = None
+    auto_scale_var: Any = None
+    radial_bin_width_deg_var: Any = None
+    radial_quantile_var: Any = None
+    radial_smooth_sigma_deg_var: Any = None
+    caked_theta_window_deg_var: Any = None
+    caked_phi_window_deg_var: Any = None
+    caked_quantile_var: Any = None
+    peak_mask_sigma_var: Any = None
+    peak_mask_radius_px_var: Any = None
+    direct_beam_mask_radius_px_var: Any = None
+    clip_for_display_var: Any = None
+    diagnostics_var: Any = None
+    status_var: Any = None
+
+
+@dataclass
 class WorkspacePanelsViewState:
     """Widget references for the workspace action/background/session panels."""
 
@@ -731,6 +757,7 @@ class AppShellViewState:
     fit_health_secondary_label: Any = None
     controls_notebook: Any = None
     setup_tab: Any = None
+    background_tab: Any = None
     match_tab: Any = None
     refine_tab: Any = None
     simulation_tab: Any = None
@@ -750,6 +777,8 @@ class AppShellViewState:
     geometry_fit_caked_roi_preview_checkbutton: Any = None
     setup_body: Any = None
     setup_canvas: Any = None
+    background_body: Any = None
+    background_canvas: Any = None
     match_body: Any = None
     match_canvas: Any = None
     simulation_body: Any = None
@@ -834,6 +863,9 @@ class BackgroundRuntimeState:
     backend_rotation_k: int = 3
     backend_flip_x: bool = False
     backend_flip_y: bool = False
+    background_subtraction_result: dict[str, object] | None = None
+    background_subtraction_signature: object = None
+    background_subtraction_cache: dict[object, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -1101,6 +1133,9 @@ class AppState:
     )
     background_theta_controls_view: BackgroundThetaControlsViewState = field(
         default_factory=BackgroundThetaControlsViewState
+    )
+    background_subtraction_controls_view: BackgroundSubtractionControlsViewState = field(
+        default_factory=BackgroundSubtractionControlsViewState
     )
     workspace_panels_view: WorkspacePanelsViewState = field(
         default_factory=WorkspacePanelsViewState

@@ -6135,6 +6135,39 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 fit_prediction_context,
                 measured_entry,
             )
+            if (
+                not bool(fit_prediction.get("available", False))
+                and not _fixed_manual_qr_pair_requires_shared_resolver(measured_entry)
+                and sim_two_theta_arr.size >= 1
+                and sim_phi_arr.size >= 1
+                and np.isfinite(sim_two_theta_arr[0])
+                and np.isfinite(sim_phi_arr[0])
+            ):
+                fit_prediction = {
+                    "available": True,
+                    "prediction_source": "direct_fit_space_projection",
+                    "fit_prediction_resolver_function": "direct_fit_space_projection",
+                    "resolution_reason": str(sim_reason),
+                    "sim_nominal_detector_px": [float(sim_col), float(sim_row)],
+                    "sim_nominal_detector_display_px": [float(sim_col), float(sim_row)],
+                    "sim_nominal_projection_input_px": [float(sim_col), float(sim_row)],
+                    "sim_nominal_projection_input_frame": str(sim_input_frame),
+                    "sim_nominal_caked_deg": [
+                        float(sim_two_theta_arr[0]),
+                        float(sim_phi_arr[0]),
+                    ],
+                    "sim_refined_caked_deg": [
+                        float(sim_two_theta_arr[0]),
+                        float(sim_phi_arr[0]),
+                    ],
+                    "projection_meta": dict(simulated_projection_meta),
+                    "params_signature": _fit_prediction_trial_params_signature(local),
+                    "simulation_cache_signature": _fit_prediction_array_signature(sim_buffer),
+                    "detector_simulation_signature": _fit_prediction_array_signature(sim_buffer),
+                    "source_rows_rebuilt_or_reused": None,
+                    "reuse_valid_for_same_params_signature": None,
+                    "stale_prediction_cache_used_for_trial_params": False,
+                }
         if not bool(fit_prediction.get("available", False)):
             unavailable_reason = str(
                 fit_prediction.get("unavailable_reason")

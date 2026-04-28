@@ -189,6 +189,13 @@ from ra_sim.simulation.types import (
     MosaicParams,
     SimulationRequest,
 )
+from ra_sim.fitting.diffuse_background import (
+    DiffuseBackgroundConfig,
+    diffuse_background_config_from_mapping,
+    diffuse_background_config_to_mapping,
+    fit_diffuse_background_native,
+    subtract_diffuse_background,
+)
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
@@ -2026,11 +2033,31 @@ def _show_azimuthal_radial_plot_demo() -> None:
 app_shell_view_state = app_state.app_shell_view
 status_panel_view_state = app_state.status_panel_view
 background_theta_controls_view_state = app_state.background_theta_controls_view
+background_subtraction_controls_view_state = app_state.background_subtraction_controls_view
 workspace_panels_view_state = app_state.workspace_panels_view
 background_backend_debug_view_state = app_state.background_backend_debug_view
 background_theta_list_var = None
 geometry_theta_offset_var = None
 geometry_fit_background_selection_var = None
+background_subtraction_enabled_var = None
+background_subtraction_mode_var = None
+background_subtraction_apply_to_fit_var = None
+background_subtraction_apply_to_display_var = None
+background_subtraction_display_mode_var = None
+background_subtraction_scale_var = None
+background_subtraction_auto_scale_var = None
+background_subtraction_radial_bin_width_deg_var = None
+background_subtraction_radial_quantile_var = None
+background_subtraction_radial_smooth_sigma_deg_var = None
+background_subtraction_caked_theta_window_deg_var = None
+background_subtraction_caked_phi_window_deg_var = None
+background_subtraction_caked_quantile_var = None
+background_subtraction_peak_mask_sigma_var = None
+background_subtraction_peak_mask_radius_px_var = None
+background_subtraction_direct_beam_mask_radius_px_var = None
+background_subtraction_clip_for_display_var = None
+background_subtraction_diagnostics_var = None
+background_subtraction_status_var = None
 fit_theta_checkbutton = None
 _geometry_fit_runtime_value_callbacks = None
 _geometry_fit_var_map: dict[str, object] = {}
@@ -2611,6 +2638,391 @@ def _get_current_background_backend() -> np.ndarray | None:
     """Return the background array used for backend comparisons (debug)."""
 
     return _apply_background_backend_orientation(_get_current_background_native())
+
+
+def _background_subtraction_defaults() -> dict[str, object]:
+    """Return diffuse-background subtraction defaults from instrument config."""
+
+    geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
+    subtraction_cfg = (
+        geometry_cfg.get("background_subtraction", {})
+        if isinstance(geometry_cfg, Mapping)
+        else {}
+    )
+    return diffuse_background_config_to_mapping(
+        diffuse_background_config_from_mapping(
+            subtraction_cfg if isinstance(subtraction_cfg, Mapping) else None
+        )
+    )
+
+
+def _background_subtraction_control_mapping() -> dict[str, object]:
+    view_state = background_subtraction_controls_view_state
+    return {
+        "enabled": _get_var_value(view_state.enabled_var, False),
+        "mode": _get_var_value(view_state.mode_var, "radial_plus_caked_2d"),
+        "apply_to_fit": _get_var_value(view_state.apply_to_fit_var, True),
+        "apply_to_display": _get_var_value(view_state.apply_to_display_var, False),
+        "display_mode": _get_var_value(view_state.display_mode_var, "raw"),
+        "scale": _get_var_value(view_state.scale_var, 1.0),
+        "auto_scale": _get_var_value(view_state.auto_scale_var, False),
+        "radial_bin_width_deg": _get_var_value(view_state.radial_bin_width_deg_var, 0.10),
+        "radial_quantile": _get_var_value(view_state.radial_quantile_var, 0.35),
+        "radial_smooth_sigma_deg": _get_var_value(
+            view_state.radial_smooth_sigma_deg_var,
+            0.50,
+        ),
+        "caked_theta_window_deg": _get_var_value(view_state.caked_theta_window_deg_var, 1.5),
+        "caked_phi_window_deg": _get_var_value(view_state.caked_phi_window_deg_var, 15.0),
+        "caked_quantile": _get_var_value(view_state.caked_quantile_var, 0.35),
+        "peak_mask_sigma": _get_var_value(view_state.peak_mask_sigma_var, 4.0),
+        "peak_mask_radius_px": _get_var_value(view_state.peak_mask_radius_px_var, 10.0),
+        "direct_beam_mask_radius_px": _get_var_value(
+            view_state.direct_beam_mask_radius_px_var,
+            35.0,
+        ),
+        "clip_for_display": _get_var_value(view_state.clip_for_display_var, True),
+        "diagnostics": _get_var_value(view_state.diagnostics_var, True),
+    }
+
+
+def _get_var_value(var: object, fallback: object) -> object:
+    getter = getattr(var, "get", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            return fallback
+    return fallback
+
+
+def _set_background_subtraction_status(text: str) -> None:
+    var = background_subtraction_controls_view_state.status_var
+    setter = getattr(var, "set", None)
+    if callable(setter):
+        try:
+            setter(str(text))
+        except Exception:
+            pass
+
+
+def _current_background_subtraction_config() -> DiffuseBackgroundConfig:
+    """Return the current diffuse-background subtraction GUI config."""
+
+    defaults_mapping = _background_subtraction_defaults()
+    defaults_mapping.update(_background_subtraction_control_mapping())
+    return diffuse_background_config_from_mapping(defaults_mapping)
+
+
+def _background_subtraction_geometry_signature(
+    *,
+    detector_shape: Sequence[object] | None = None,
+) -> tuple[object, ...]:
+    shape_signature = None
+    if detector_shape is not None:
+        try:
+            shape_signature = tuple(int(v) for v in tuple(detector_shape)[:2])
+        except Exception:
+            shape_signature = None
+    try:
+        distance = round(float(corto_detector_var.get()), 9)
+    except Exception:
+        distance = None
+    try:
+        center_x = round(float(center_x_var.get()), 6)
+        center_y = round(float(center_y_var.get()), 6)
+    except Exception:
+        center_x = center_y = None
+    try:
+        wavelength = round(float(lambda_) * 1.0e-10, 12)
+    except Exception:
+        wavelength = None
+    try:
+        pixel_size = round(float(pixel_size_m), 12)
+    except Exception:
+        pixel_size = None
+    return (
+        shape_signature,
+        center_x,
+        center_y,
+        distance,
+        pixel_size,
+        wavelength,
+    )
+
+
+def _background_subtraction_signature() -> tuple[object, ...]:
+    raw_background = background_runtime_state.current_background_image
+    try:
+        raw_shape = tuple(int(v) for v in np.asarray(raw_background).shape[:2])
+    except Exception:
+        raw_shape = None
+    config = _current_background_subtraction_config()
+    config_items = tuple(sorted(diffuse_background_config_to_mapping(config).items()))
+    return (
+        "background_subtraction",
+        int(background_runtime_state.current_background_index),
+        id(raw_background),
+        int(background_runtime_state.backend_rotation_k) % 4,
+        bool(background_runtime_state.backend_flip_x),
+        bool(background_runtime_state.backend_flip_y),
+        raw_shape,
+        _background_subtraction_geometry_signature(detector_shape=raw_shape),
+        config_items,
+    )
+
+
+def _invalidate_background_subtraction_cache() -> None:
+    background_runtime_state.background_subtraction_result = None
+    background_runtime_state.background_subtraction_signature = None
+    background_runtime_state.background_subtraction_cache.clear()
+    simulation_runtime_state.last_res2_background = None
+    simulation_runtime_state.normalization_scale_cache["sig"] = None
+    simulation_runtime_state.caking_cache = _empty_caking_cache()
+    _invalidate_cached_analysis_space_payloads(clear_caked=True, clear_q_space=True)
+    try:
+        _invalidate_analysis_cache(clear_visuals=True)
+    except Exception:
+        pass
+    try:
+        _clear_geometry_fit_dataset_cache()
+    except Exception:
+        pass
+
+
+def _background_subtraction_axes_for_image(
+    image: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
+    try:
+        ai = _get_azimuthal_integrator_cls()(
+            dist=float(corto_detector_var.get()),
+            poni1=float(center_x_var.get()) * float(pixel_size_m),
+            poni2=float(center_y_var.get()) * float(pixel_size_m),
+            rot1=0.0,
+            rot2=0.0,
+            rot3=0.0,
+            wavelength=float(lambda_) * 1.0e-10,
+            pixel1=float(pixel_size_m),
+            pixel2=float(pixel_size_m),
+        )
+    except Exception:
+        return None, None
+    detector_shape = tuple(int(v) for v in np.asarray(image).shape[:2])
+    try:
+        two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
+    except TypeError:
+        two_theta = np.rad2deg(ai.twoThetaArray(shape=detector_shape))
+    try:
+        raw_phi = ai.chiArray(shape=detector_shape, unit="deg")
+    except TypeError:
+        raw_phi = np.rad2deg(ai.chiArray(shape=detector_shape))
+    return np.asarray(two_theta, dtype=np.float64), np.asarray(raw_phi_to_gui_phi(raw_phi), dtype=np.float64)
+
+
+def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[str, object] | None:
+    """Fit or retrieve the current diffuse-background subtraction model."""
+
+    config = _current_background_subtraction_config()
+    if not config.enabled or config.mode == "off":
+        background_runtime_state.background_subtraction_result = None
+        background_runtime_state.background_subtraction_signature = None
+        _set_background_subtraction_status("Diffuse subtraction is off.")
+        return None
+    raw_background = _get_current_background_backend()
+    if raw_background is None:
+        _set_background_subtraction_status("No background image is loaded.")
+        return None
+    image = np.asarray(raw_background, dtype=np.float64)
+    signature = _background_subtraction_signature()
+    if not force:
+        cached = background_runtime_state.background_subtraction_cache.get(signature)
+        if isinstance(cached, dict):
+            background_runtime_state.background_subtraction_result = cached
+            background_runtime_state.background_subtraction_signature = signature
+            return cached
+
+    two_theta, phi = _background_subtraction_axes_for_image(image)
+    if two_theta is None or phi is None:
+        _set_background_subtraction_status("Unable to build detector angular maps.")
+        return None
+    radial_axis = getattr(simulation_runtime_state, "last_caked_radial_values", None)
+    azimuth_axis = getattr(simulation_runtime_state, "last_caked_azimuth_values", None)
+    if radial_axis is None or azimuth_axis is None:
+        finite_two_theta = two_theta[np.isfinite(two_theta)]
+        if finite_two_theta.size:
+            radial_axis = np.linspace(
+                float(np.nanmin(finite_two_theta)),
+                float(np.nanmax(finite_two_theta)),
+                500,
+            )
+        else:
+            radial_axis = None
+        azimuth_axis = np.linspace(-180.0, 180.0, 361)
+    try:
+        direct_center = (float(center_x_var.get()), float(center_y_var.get()))
+    except Exception:
+        direct_center = None
+    try:
+        result = fit_diffuse_background_native(
+            image,
+            two_theta_deg=two_theta,
+            phi_deg=phi,
+            caked_radial_axis_deg=radial_axis,
+            caked_azimuth_axis_deg=azimuth_axis,
+            config=config,
+            direct_beam_center_rc=direct_center,
+        )
+    except Exception as exc:
+        _set_background_subtraction_status(f"Diffuse model fit failed: {exc}")
+        return None
+    background_runtime_state.background_subtraction_cache[signature] = result
+    background_runtime_state.background_subtraction_result = result
+    background_runtime_state.background_subtraction_signature = signature
+    diagnostics = result.get("diagnostics", {}) if isinstance(result, Mapping) else {}
+    valid_fraction = diagnostics.get("valid_fraction", None) if isinstance(diagnostics, Mapping) else None
+    valid_text = ""
+    if valid_fraction is not None:
+        try:
+            valid_text = f" valid={float(valid_fraction):.1%}"
+        except Exception:
+            valid_text = ""
+    _set_background_subtraction_status(f"Diffuse model fit for current background.{valid_text}")
+    return result
+
+
+def _current_background_backend_for_comparison() -> np.ndarray | None:
+    """Return raw or corrected backend background according to fit settings."""
+
+    raw_background = _get_current_background_backend()
+    config = _current_background_subtraction_config()
+    if raw_background is None or not (config.enabled and config.apply_to_fit):
+        return raw_background
+    result = _fit_current_background_subtraction_model(force=False)
+    if isinstance(result, Mapping):
+        corrected = result.get("corrected")
+        try:
+            corrected_array = np.asarray(corrected, dtype=np.float64)
+        except Exception:
+            corrected_array = None
+        if isinstance(corrected_array, np.ndarray) and corrected_array.shape == np.asarray(raw_background).shape:
+            return corrected_array
+    return raw_background
+
+
+def _background_subtraction_backend_array_to_display(array: object) -> np.ndarray | None:
+    try:
+        native_like = np.asarray(array, dtype=np.float64)
+    except Exception:
+        return None
+    if native_like.ndim != 2:
+        return None
+    try:
+        k_mod = int(background_runtime_state.backend_rotation_k) % 4
+    except Exception:
+        k_mod = 0
+    if k_mod:
+        native_like = np.rot90(native_like, -k_mod)
+    if bool(background_runtime_state.backend_flip_x):
+        native_like = np.flip(native_like, axis=1)
+    if bool(background_runtime_state.backend_flip_y):
+        native_like = np.flip(native_like, axis=0)
+    return np.rot90(native_like, int(DISPLAY_ROTATE_K))
+
+
+def _current_background_display_for_mode() -> np.ndarray | None:
+    """Return raw/model/corrected/mask background for detector display."""
+
+    raw_display = background_runtime_state.current_background_display
+    config = _current_background_subtraction_config()
+    if raw_display is None or not (config.enabled and config.apply_to_display):
+        return raw_display
+    display_mode = str(config.display_mode)
+    if display_mode == "raw":
+        return raw_display
+    result = _fit_current_background_subtraction_model(force=False)
+    if not isinstance(result, Mapping):
+        return raw_display
+    if display_mode == "model":
+        display_array = _background_subtraction_backend_array_to_display(result.get("model"))
+        return display_array if display_array is not None else raw_display
+    if display_mode in {"subtracted", "residual"}:
+        corrected = np.asarray(result.get("corrected"), dtype=np.float64)
+        if display_mode == "subtracted" and bool(config.clip_for_display):
+            corrected = np.clip(corrected, 0.0, None)
+        display_array = _background_subtraction_backend_array_to_display(corrected)
+        return display_array if display_array is not None else raw_display
+    if display_mode == "mask":
+        valid = np.asarray(result.get("valid_mask"), dtype=bool)
+        excluded = np.asarray(result.get("exclusion_mask"), dtype=bool)
+        mask_display = np.where(valid & ~excluded, 1.0, np.where(valid, 0.35, np.nan))
+        display_array = _background_subtraction_backend_array_to_display(mask_display)
+        return display_array if display_array is not None else raw_display
+    return raw_display
+
+
+def _current_background_for_q_space_restore() -> np.ndarray | None:
+    config = _current_background_subtraction_config()
+    if config.enabled and config.apply_to_fit:
+        return _current_background_backend_for_comparison()
+    return _get_current_background_native()
+
+
+def _background_subtraction_json_safe(value: object) -> object:
+    if isinstance(value, DiffuseBackgroundConfig):
+        return diffuse_background_config_to_mapping(value)
+    if isinstance(value, Mapping):
+        return {str(k): _background_subtraction_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_background_subtraction_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return {
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+        }
+    if isinstance(value, (np.integer, np.floating)):
+        return value.item()
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
+
+
+def _export_current_background_subtraction_diagnostics() -> None:
+    result = _fit_current_background_subtraction_model(force=False)
+    if not isinstance(result, Mapping):
+        _set_background_subtraction_status("No fitted diffuse-background diagnostics to export.")
+        return
+    outdir = get_dir("downloads") / "background_subtraction"
+    outdir.mkdir(parents=True, exist_ok=True)
+    config = result.get("config")
+    diagnostics = dict(result.get("diagnostics", {}) or {})
+    diagnostics["cache_signature_summary"] = _live_cache_signature_summary(
+        background_runtime_state.background_subtraction_signature
+    )
+    (outdir / "background_subtraction_config.json").write_text(
+        json.dumps(_background_subtraction_json_safe(config), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (outdir / "background_subtraction_diagnostics.json").write_text(
+        json.dumps(_background_subtraction_json_safe(diagnostics), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    radial_centers = np.asarray(result.get("radial_bin_centers_deg", []), dtype=np.float64)
+    radial_profile = np.asarray(result.get("radial_profile", []), dtype=np.float64)
+    with (outdir / "background_radial_profile.csv").open("w", encoding="utf-8") as handle:
+        handle.write("two_theta_deg,background\n")
+        for theta_value, profile_value in zip(radial_centers, radial_profile, strict=False):
+            handle.write(f"{float(theta_value):.12g},{float(profile_value):.12g}\n")
+    for key, filename in (
+        ("raw", "background_raw_native.npy"),
+        ("model", "background_model_native.npy"),
+        ("corrected", "background_subtracted_native.npy"),
+        ("valid_mask", "background_valid_mask.npy"),
+        ("exclusion_mask", "background_exclusion_mask.npy"),
+    ):
+        value = result.get(key)
+        if value is not None:
+            np.save(outdir / filename, np.asarray(value))
+    _set_background_subtraction_status(f"Exported diffuse-background diagnostics to {outdir}.")
 
 
 def _backend_background_to_native_detector_coords(
@@ -3256,6 +3668,7 @@ def _initialize_runtime_shell_block_01() -> None:
     )
     if (
         app_shell_view_state.workspace_body is None
+        or app_shell_view_state.background_body is None
         or app_shell_view_state.fit_body is None
         or app_shell_view_state.simulation_body is None
         or app_shell_view_state.analysis_views_frame is None
@@ -4443,6 +4856,128 @@ def _initialize_runtime_controls_block_01() -> None:
     GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S = 0.03
     GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
     GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
+
+
+def _initialize_runtime_controls_block_background_subtraction() -> None:
+    global background_subtraction_enabled_var
+    global background_subtraction_mode_var
+    global background_subtraction_apply_to_fit_var
+    global background_subtraction_apply_to_display_var
+    global background_subtraction_display_mode_var
+    global background_subtraction_scale_var
+    global background_subtraction_auto_scale_var
+    global background_subtraction_radial_bin_width_deg_var
+    global background_subtraction_radial_quantile_var
+    global background_subtraction_radial_smooth_sigma_deg_var
+    global background_subtraction_caked_theta_window_deg_var
+    global background_subtraction_caked_phi_window_deg_var
+    global background_subtraction_caked_quantile_var
+    global background_subtraction_peak_mask_sigma_var
+    global background_subtraction_peak_mask_radius_px_var
+    global background_subtraction_direct_beam_mask_radius_px_var
+    global background_subtraction_clip_for_display_var
+    global background_subtraction_diagnostics_var
+    global background_subtraction_status_var
+
+    def _apply_and_recompute() -> None:
+        _invalidate_background_subtraction_cache()
+        _fit_current_background_subtraction_model(force=True)
+        schedule_update()
+
+    def _reset_defaults() -> None:
+        defaults_mapping = _background_subtraction_defaults()
+        view_state = background_subtraction_controls_view_state
+        for key, var in (
+            ("enabled", view_state.enabled_var),
+            ("mode", view_state.mode_var),
+            ("apply_to_fit", view_state.apply_to_fit_var),
+            ("apply_to_display", view_state.apply_to_display_var),
+            ("display_mode", view_state.display_mode_var),
+            ("scale", view_state.scale_var),
+            ("auto_scale", view_state.auto_scale_var),
+            ("radial_bin_width_deg", view_state.radial_bin_width_deg_var),
+            ("radial_quantile", view_state.radial_quantile_var),
+            ("radial_smooth_sigma_deg", view_state.radial_smooth_sigma_deg_var),
+            ("caked_theta_window_deg", view_state.caked_theta_window_deg_var),
+            ("caked_phi_window_deg", view_state.caked_phi_window_deg_var),
+            ("caked_quantile", view_state.caked_quantile_var),
+            ("peak_mask_sigma", view_state.peak_mask_sigma_var),
+            ("peak_mask_radius_px", view_state.peak_mask_radius_px_var),
+            ("direct_beam_mask_radius_px", view_state.direct_beam_mask_radius_px_var),
+            ("clip_for_display", view_state.clip_for_display_var),
+            ("diagnostics", view_state.diagnostics_var),
+        ):
+            setter = getattr(var, "set", None)
+            if callable(setter):
+                setter(defaults_mapping.get(key))
+        _set_background_subtraction_status("Diffuse subtraction settings reset.")
+        _apply_and_recompute()
+
+    gui_views.create_background_subtraction_controls(
+        parent=app_shell_view_state.background_body,
+        view_state=background_subtraction_controls_view_state,
+        initial_values=_background_subtraction_defaults(),
+        on_fit_model=lambda: _fit_current_background_subtraction_model(force=True),
+        on_apply=_apply_and_recompute,
+        on_reset=_reset_defaults,
+        on_export_diagnostics=_export_current_background_subtraction_diagnostics,
+    )
+    view_state = background_subtraction_controls_view_state
+    background_subtraction_enabled_var = view_state.enabled_var
+    background_subtraction_mode_var = view_state.mode_var
+    background_subtraction_apply_to_fit_var = view_state.apply_to_fit_var
+    background_subtraction_apply_to_display_var = view_state.apply_to_display_var
+    background_subtraction_display_mode_var = view_state.display_mode_var
+    background_subtraction_scale_var = view_state.scale_var
+    background_subtraction_auto_scale_var = view_state.auto_scale_var
+    background_subtraction_radial_bin_width_deg_var = view_state.radial_bin_width_deg_var
+    background_subtraction_radial_quantile_var = view_state.radial_quantile_var
+    background_subtraction_radial_smooth_sigma_deg_var = view_state.radial_smooth_sigma_deg_var
+    background_subtraction_caked_theta_window_deg_var = view_state.caked_theta_window_deg_var
+    background_subtraction_caked_phi_window_deg_var = view_state.caked_phi_window_deg_var
+    background_subtraction_caked_quantile_var = view_state.caked_quantile_var
+    background_subtraction_peak_mask_sigma_var = view_state.peak_mask_sigma_var
+    background_subtraction_peak_mask_radius_px_var = view_state.peak_mask_radius_px_var
+    background_subtraction_direct_beam_mask_radius_px_var = (
+        view_state.direct_beam_mask_radius_px_var
+    )
+    background_subtraction_clip_for_display_var = view_state.clip_for_display_var
+    background_subtraction_diagnostics_var = view_state.diagnostics_var
+    background_subtraction_status_var = view_state.status_var
+
+    def _on_control_change(*_args) -> None:
+        _invalidate_background_subtraction_cache()
+        config = _current_background_subtraction_config()
+        if config.enabled and (config.apply_to_fit or config.apply_to_display):
+            if not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
+                schedule_update()
+
+    for var in (
+        background_subtraction_enabled_var,
+        background_subtraction_mode_var,
+        background_subtraction_apply_to_fit_var,
+        background_subtraction_apply_to_display_var,
+        background_subtraction_display_mode_var,
+        background_subtraction_scale_var,
+        background_subtraction_auto_scale_var,
+        background_subtraction_radial_bin_width_deg_var,
+        background_subtraction_radial_quantile_var,
+        background_subtraction_radial_smooth_sigma_deg_var,
+        background_subtraction_caked_theta_window_deg_var,
+        background_subtraction_caked_phi_window_deg_var,
+        background_subtraction_caked_quantile_var,
+        background_subtraction_peak_mask_sigma_var,
+        background_subtraction_peak_mask_radius_px_var,
+        background_subtraction_direct_beam_mask_radius_px_var,
+        background_subtraction_clip_for_display_var,
+        background_subtraction_diagnostics_var,
+    ):
+        trace_add = getattr(var, "trace_add", None)
+        if callable(trace_add):
+            try:
+                trace_add("write", _on_control_change)
+            except Exception:
+                pass
 
 
 def _geometry_manual_position_error_px(
@@ -5974,19 +6509,31 @@ def _geometry_fit_caked_view_for_index(
         native_background = _get_current_background_native()
         if native_background is not None:
             detector_shape = np.asarray(native_background).shape[:2]
-    return _normalize_geometry_fit_caked_view_payload(
+    payload = {
+        "background": caked_background,
+        "detector_shape": detector_shape,
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "raw_azimuth_axis": (
+            np.asarray(transform_bundle.raw_azimuth_deg, dtype=np.float64)
+            if isinstance(transform_bundle, CakeTransformBundle)
+            else None
+        ),
+        "transform_bundle": transform_bundle,
+    }
+    subtraction_result = background_runtime_state.background_subtraction_result
+    if isinstance(subtraction_result, Mapping):
+        payload.update(
         {
-            "background": caked_background,
-            "detector_shape": detector_shape,
-            "radial_axis": radial_axis,
-            "azimuth_axis": azimuth_axis,
-            "raw_azimuth_axis": (
-                np.asarray(transform_bundle.raw_azimuth_deg, dtype=np.float64)
-                if isinstance(transform_bundle, CakeTransformBundle)
-                else None
-            ),
-            "transform_bundle": transform_bundle,
-        },
+                "background_raw": subtraction_result.get("raw"),
+                "background_model": subtraction_result.get("model"),
+                "background_subtracted": subtraction_result.get("corrected"),
+                "background_subtraction_config": subtraction_result.get("config"),
+                "background_subtraction_diagnostics": subtraction_result.get("diagnostics"),
+            }
+        )
+    return _normalize_geometry_fit_caked_view_payload(
+        payload,
         detector_shape=detector_shape,
         ai=simulation_runtime_state.ai_cache.get("ai"),
     )
@@ -7701,14 +8248,20 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
     ) -> tuple[list[dict[str, object]], tuple[object, ...]]:
         if not isinstance(cache_data, dict):
             return [], ("empty",)
-        grouped = gui_manual_geometry.geometry_manual_detector_picker_grouped_candidates_from_cache(
-            cache_data,
-            profile_cache=simulation_runtime_state.profile_cache,
-        )
-        signature_kind = "detector_picker_grouped"
+        grouped = cache_data.get("grouped_candidates")
+        signature_kind = "grouped"
         if not grouped:
-            grouped = cache_data.get("grouped_candidates")
-            signature_kind = "grouped"
+            manual_geometry_module = globals().get("gui_manual_geometry")
+            if manual_geometry_module is None:
+                from ra_sim.gui import manual_geometry as manual_geometry_module
+            runtime_state = globals().get("simulation_runtime_state")
+            grouped = (
+                manual_geometry_module.geometry_manual_detector_picker_grouped_candidates_from_cache(
+                    cache_data,
+                    profile_cache=getattr(runtime_state, "profile_cache", {}),
+                )
+            )
+            signature_kind = "detector_picker_grouped"
         if not isinstance(grouped, dict):
             return [], ("no_grouped_candidates",)
         rows: list[dict[str, object]] = []
@@ -10177,7 +10730,7 @@ def _auto_match_scale_factor_to_radial_peak():
     if sim_curve is None or bg_curve is None:
         ai = simulation_runtime_state.ai_cache.get("ai")
         sim_img = simulation_runtime_state.last_1d_integration_data.get("simulated_2d_image")
-        bg_img = _get_current_background_backend()
+        bg_img = _current_background_backend_for_comparison()
         if ai is not None and sim_img is not None and bg_img is not None:
             try:
                 tth_min, tth_max = sorted((float(tth_min_var.get()), float(tth_max_var.get())))
@@ -10318,7 +10871,7 @@ def _update_chi_square_display(force=False):
         return
 
     try:
-        native_background = _get_current_background_backend()
+        native_background = _current_background_backend_for_comparison()
         text = "Chi-Squared: N/A"
         if (
             background_runtime_state.visible
@@ -10444,21 +10997,19 @@ def apply_scale_factor_to_existing_results(
             _mark_chi_square_dirty()
         if not show_analysis_image:
             _sync_primary_raster_geometry(view_mode="detector")
-            if (
-                background_runtime_state.visible
-                and background_runtime_state.current_background_display is not None
-            ):
+            detector_background_source = _current_background_display_for_mode()
+            if background_runtime_state.visible and detector_background_source is not None:
                 _preview_sim_unused, preview_background_display = (
                     _geometry_fit_caked_roi_preview_images(
                         show_caked_image=False,
                         simulation_image=None,
-                        background_image=background_runtime_state.current_background_display,
+                        background_image=detector_background_source,
                     )
                 )
                 background_preview_source = (
                     preview_background_display
                     if isinstance(preview_background_display, np.ndarray)
-                    else background_runtime_state.current_background_display
+                    else detector_background_source
                 )
                 _store_primary_raster_source(
                     background_display,
@@ -10528,11 +11079,8 @@ def apply_scale_factor_to_existing_results(
             preview_background_source = (
                 simulation_runtime_state.last_caked_background_image_unscaled * scale
             )
-    elif (
-        background_runtime_state.visible
-        and background_runtime_state.current_background_display is not None
-    ):
-        preview_background_source = background_runtime_state.current_background_display
+    elif background_runtime_state.visible:
+        preview_background_source = _current_background_display_for_mode()
 
     simulation_source = (
         scaled_q_space
@@ -11510,7 +12058,7 @@ def _refresh_integration_from_cached_results():
         simulation_runtime_state.last_res2_sim = caking(simulation_runtime_state.unscaled_image, ai)
 
     bg_res2 = None
-    native_background = _get_current_background_backend()
+    native_background = _current_background_backend_for_comparison()
     if background_runtime_state.visible and native_background is not None:
         if simulation_runtime_state.last_res2_background is None:
             if not analysis_pending:
@@ -15351,7 +15899,7 @@ def _restore_caked_display_payload_from_cached_results(
             )
             bg_q_space_payload = _prepare_q_space_display_payload(
                 (
-                    _get_current_background_native()
+                    _current_background_for_q_space_restore()
                     if background_visible
                     and simulation_runtime_state.last_res2_background is not None
                     else None
@@ -16255,12 +16803,7 @@ def _apply_primary_figure_display_from_cached_results(
         _sync_primary_raster_geometry(view_mode=analysis_space_display_mode)
     else:
         detector_background_source = (
-            background_runtime_state.current_background_display
-            if (
-                background_runtime_state.visible
-                and background_runtime_state.current_background_display is not None
-            )
-            else None
+            _current_background_display_for_mode() if background_runtime_state.visible else None
         )
         detector_simulation_source = _refresh_global_detector_buffer_from_unscaled()
         if not isinstance(detector_simulation_source, np.ndarray):
@@ -17425,7 +17968,8 @@ def do_update():
     normalization_scale = 1.0
     normalization_sig = None
     normalization_cache_outcome = "disabled"
-    native_background = _get_current_background_backend()
+    native_background = _current_background_backend_for_comparison()
+    background_subtraction_sig = _background_subtraction_signature()
     if native_background is not None and display_image is not None:
         normalization_sig = (
             new_sim_image_sig,
@@ -17436,6 +17980,7 @@ def do_update():
             bool(background_runtime_state.backend_flip_y),
             tuple(display_image.shape),
             tuple(np.asarray(native_background).shape),
+            background_subtraction_sig,
         )
         if simulation_runtime_state.normalization_scale_cache.get("sig") == normalization_sig:
             normalization_scale = float(
@@ -17472,6 +18017,7 @@ def do_update():
             int(background_runtime_state.backend_rotation_k) % 4,
             bool(background_runtime_state.backend_flip_x),
             bool(background_runtime_state.backend_flip_y),
+            background_subtraction_sig,
         )
         if simulation_runtime_state.peak_intensities and normalization_scale != 1.0:
             simulation_runtime_state.peak_intensities[:] = [
@@ -17560,6 +18106,7 @@ def do_update():
             bool(background_runtime_state.backend_flip_x),
             bool(background_runtime_state.backend_flip_y),
             tuple(np.asarray(native_background).shape),
+            background_subtraction_sig,
         )
 
     show_caked_2d = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
@@ -19163,6 +19710,7 @@ def _load_background_files_for_import_state(
         refresh_background_file_status=_refresh_background_status,
         schedule_update=None,
     )
+    _invalidate_background_subtraction_cache()
 
 
 def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
@@ -20548,6 +21096,25 @@ def _geometry_manual_set_runtime_peak_cache_from_projected_rows(
     restored_intensities: list[float] = []
     use_caked_display = bool(_active_caked_primary_view())
 
+    def _detector_mode_projected_point(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        for key_x, key_y in (
+            ("sim_col_raw", "sim_row_raw"),
+            ("sim_col", "sim_row"),
+            ("display_col", "display_row"),
+        ):
+            try:
+                col = float(entry.get(key_x, np.nan))
+                row = float(entry.get(key_y, np.nan))
+            except Exception:
+                continue
+            if np.isfinite(col) and np.isfinite(row):
+                return float(col), float(row)
+        return None
+
     for raw_entry in normalized_projected_rows:
         peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
             raw_entry,
@@ -20563,7 +21130,9 @@ def _geometry_manual_set_runtime_peak_cache_from_projected_rows(
                 use_caked_display=use_caked_display,
             )
         except Exception:
-            continue
+            active_point = None
+        if active_point is None and not use_caked_display:
+            active_point = _detector_mode_projected_point(peak_record)
         if active_point is None:
             continue
         try:
@@ -20784,6 +21353,15 @@ def _geometry_fit_targeted_projection_view_mode() -> str:
     return normalized_mode
 
 
+def _geometry_fit_projection_signature_public(
+    signature: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        str(key): gui_geometry_fit._geometry_fit_cache_jsonable(value)
+        for key, value in signature.items()
+    }
+
+
 def _geometry_fit_targeted_projection_view_signature(
     background_index: int | None = None,
     *,
@@ -20842,7 +21420,7 @@ def _geometry_fit_targeted_projection_view_signature(
         signature["detector_shape"] = [int(v) for v in normalized_shape[:2]]
     if normalized_mode == "detector":
         signature["available"] = True
-        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+        return _geometry_fit_projection_signature_public(signature)
     preview_bins = analysis_preview_bins
     if preview_bins is None:
         preview_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
@@ -20854,7 +21432,7 @@ def _geometry_fit_targeted_projection_view_signature(
             signature["available"] = False
             signature["reason"] = "missing_background_projection_payload"
             signature["projection_payload_digest"] = None
-            return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+            return _geometry_fit_projection_signature_public(signature)
         signature["available"] = True
         signature["extent"] = list(_resolve_primary_q_space_extent())
         resolved_q_space_image = q_space_image
@@ -20874,7 +21452,7 @@ def _geometry_fit_targeted_projection_view_signature(
                 "analysis_bins": signature.get("analysis_bins"),
             }
         )
-        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+        return _geometry_fit_projection_signature_public(signature)
     if normalized_mode == "caked":
         normalized_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
             background_idx,
@@ -20914,8 +21492,8 @@ def _geometry_fit_targeted_projection_view_signature(
             signature["available"] = False
             signature["reason"] = "missing_background_caked_payload"
             signature["projection_payload_digest"] = None
-        return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
-    return gui_geometry_fit._geometry_fit_cache_jsonable(signature)
+        return _geometry_fit_projection_signature_public(signature)
+    return _geometry_fit_projection_signature_public(signature)
 
 
 def _geometry_fit_filter_hit_tables_for_required_branch_groups(
@@ -22682,7 +23260,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         params["theta_offset"] = 0.0
 
     native_background = _get_current_background_native()
-    backend_background = _get_current_background_backend()
+    backend_background = _current_background_backend_for_comparison()
     display_background = background_runtime_state.current_background_display
     if display_background is None and native_background is not None:
         display_background = np.rot90(native_background, DISPLAY_ROTATE_K)
@@ -24292,7 +24870,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 ],
             )
             native_background = _get_current_background_native()
-            backend_background = _get_current_background_backend()
+            backend_background = _current_background_backend_for_comparison()
             if backend_background is None:
                 backend_background = native_background
             measured_native = _unrotate_display_peaks(
@@ -26000,7 +26578,7 @@ def on_fit_ordered_structure_click():
     """Run the ordered-structure detector-space intensity refinement."""
 
     ordered_structure_fit = _get_ordered_structure_fit_module()
-    measured_image = _get_current_background_backend()
+    measured_image = _current_background_backend_for_comparison()
     if measured_image is None:
         progress_label_ordered_structure.config(
             text="Ordered structure fit unavailable: no current background image."
@@ -35004,6 +35582,7 @@ def ensure_runtime_controls_initialized() -> None:
     if _RUNTIME_CONTROLS_INITIALIZED:
         return
     _initialize_runtime_controls_block_01()
+    _initialize_runtime_controls_block_background_subtraction()
     _initialize_runtime_controls_block_02()
     _initialize_runtime_controls_block_03()
     _initialize_runtime_controls_block_04()

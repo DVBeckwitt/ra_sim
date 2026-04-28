@@ -1875,7 +1875,11 @@ def _geometry_fit_required_branch_group_keys_digest(
 def _geometry_fit_stable_projection_view_signature(
     projection_view_signature: object,
 ) -> object:
-    normalized_signature = _geometry_fit_cache_jsonable(projection_view_signature)
+    normalized_signature = (
+        dict(projection_view_signature)
+        if isinstance(projection_view_signature, Mapping)
+        else _geometry_fit_cache_jsonable(projection_view_signature)
+    )
     if not isinstance(normalized_signature, Mapping):
         return normalized_signature
     normalized_mode = str(normalized_signature.get("mode") or "").strip().lower()
@@ -1890,7 +1894,11 @@ def _geometry_fit_stable_projection_view_signature(
 def _geometry_fit_projection_signature_available(
     projection_view_signature: object,
 ) -> bool:
-    normalized_signature = _geometry_fit_cache_jsonable(projection_view_signature)
+    normalized_signature = (
+        dict(projection_view_signature)
+        if isinstance(projection_view_signature, Mapping)
+        else _geometry_fit_cache_jsonable(projection_view_signature)
+    )
     if not isinstance(normalized_signature, Mapping):
         return False
     return bool(normalized_signature.get("available", True))
@@ -1904,8 +1912,16 @@ def _geometry_fit_projected_rows_cacheable(
     requested_projection_view_signature: object,
     consumer: str | None,
 ) -> bool:
-    normalized_signature = _geometry_fit_cache_jsonable(projection_view_signature)
-    requested_signature = _geometry_fit_cache_jsonable(requested_projection_view_signature)
+    normalized_signature = (
+        dict(projection_view_signature)
+        if isinstance(projection_view_signature, Mapping)
+        else _geometry_fit_cache_jsonable(projection_view_signature)
+    )
+    requested_signature = (
+        dict(requested_projection_view_signature)
+        if isinstance(requested_projection_view_signature, Mapping)
+        else _geometry_fit_cache_jsonable(requested_projection_view_signature)
+    )
     stable_signature = _geometry_fit_stable_projection_view_signature(normalized_signature)
     stable_requested_signature = _geometry_fit_stable_projection_view_signature(requested_signature)
     if not projected_rows:
@@ -5174,7 +5190,11 @@ def rebuild_geometry_fit_source_rows(
         if projection_view_mode is not None and str(projection_view_mode).strip()
         else None
     )
-    normalized_projection_view_signature = _geometry_fit_cache_jsonable(projection_view_signature)
+    normalized_projection_view_signature = (
+        dict(projection_view_signature)
+        if isinstance(projection_view_signature, Mapping)
+        else _geometry_fit_cache_jsonable(projection_view_signature)
+    )
     normalized_projection_payload = (
         copy.deepcopy(dict(projection_payload)) if isinstance(projection_payload, Mapping) else None
     )

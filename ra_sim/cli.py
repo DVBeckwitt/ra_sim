@@ -714,6 +714,9 @@ def run_headless_geometry_fit(
     run_mosaic_shape_fit: bool = False,
     active_var_names: Sequence[str] | str | None = None,
     seed_policy: str | None = None,
+    background_subtraction_mode: object | None = None,
+    background_subtraction_scale: object | None = None,
+    background_subtraction_diagnostics: bool | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting directly from one saved GUI-state payload."""
 
@@ -728,12 +731,24 @@ def run_headless_geometry_fit(
         else None
     )
     if not run_mosaic_shape_fit:
+        shared_kwargs: dict[str, object] = {
+            "state_path": source_path,
+            "downloads_dir": output_dir,
+            "active_var_names": resolved_active_var_names,
+        }
+        if seed_policy is not None:
+            shared_kwargs["seed_policy"] = seed_policy
+        if background_subtraction_mode is not None:
+            shared_kwargs["background_subtraction_mode"] = background_subtraction_mode
+        if background_subtraction_scale is not None:
+            shared_kwargs["background_subtraction_scale"] = background_subtraction_scale
+        if background_subtraction_diagnostics is not None:
+            shared_kwargs["background_subtraction_diagnostics"] = (
+                background_subtraction_diagnostics
+            )
         shared_result = _load_shared_headless_geometry_fit().run_headless_geometry_fit(
             copy.deepcopy(dict(state)),
-            state_path=source_path,
-            downloads_dir=output_dir,
-            active_var_names=resolved_active_var_names,
-            seed_policy=seed_policy,
+            **shared_kwargs,
         )
         report: dict[str, object] = {
             "accepted": bool(shared_result.accepted),
@@ -808,6 +823,28 @@ def run_headless_geometry_fit(
     fit_cfg = inst.get("fit", {})
     fit_geometry_cfg = fit_cfg.get("geometry", {}) if isinstance(fit_cfg, Mapping) else {}
     fit_geometry_cfg = dict(fit_geometry_cfg) if isinstance(fit_geometry_cfg, Mapping) else {}
+    shared_headless = _load_shared_headless_geometry_fit()
+    build_subtraction_config = getattr(
+        shared_headless,
+        "_headless_background_subtraction_config",
+        None,
+    )
+    if callable(build_subtraction_config):
+        background_subtraction_config = build_subtraction_config(
+            updated_state,
+            SimpleNamespace(fit_config=dict(fit_cfg) if isinstance(fit_cfg, Mapping) else {}),
+            mode_override=background_subtraction_mode,
+            scale_override=background_subtraction_scale,
+            diagnostics_override=background_subtraction_diagnostics,
+        )
+    else:
+        background_subtraction_config = SimpleNamespace(
+            enabled=False,
+            apply_to_fit=True,
+            diagnostics=False,
+        )
+    background_subtraction_diagnostics_written: set[tuple[object, ...]] = set()
+    downloads_dir = Path(output_dir or Path(source_path).resolve().parent)
 
     image_size = int(detector_cfg.get("image_size", simulation_defaults.image_size))
     pixel_size_m = float(
@@ -1431,18 +1468,78 @@ def run_headless_geometry_fit(
         )
         if backend_background is None:
             backend_background = native_background
+        raw_backend_image = np.asarray(backend_background, dtype=np.float64)
+        backend_image = raw_backend_image
+        subtraction_result = None
+        if (
+            background_subtraction_config.enabled
+            and background_subtraction_config.apply_to_fit
+        ):
+            subtraction_result = (
+                shared_headless._headless_fit_background_subtraction_for_image(
+                    raw_backend_image,
+                    params=params_local,
+                    pixel_size_m=float(pixel_size_m),
+                    config=background_subtraction_config,
+                )
+            )
+            if isinstance(subtraction_result, Mapping):
+                corrected = np.asarray(
+                    subtraction_result.get("corrected"),
+                    dtype=np.float64,
+                )
+                if corrected.shape == raw_backend_image.shape:
+                    backend_image = corrected
+                if background_subtraction_config.diagnostics:
+                    diagnostics_signature = (
+                        int(background_idx),
+                        repr(
+                            sorted(
+                                (str(key), repr(value))
+                                for key, value in params_local.items()
+                            )
+                        ),
+                        tuple(
+                            sorted(
+                                shared_headless.diffuse_background_config_to_mapping(
+                                    background_subtraction_config
+                                ).items()
+                            )
+                        ),
+                    )
+                    if diagnostics_signature not in background_subtraction_diagnostics_written:
+                        shared_headless._write_headless_background_subtraction_diagnostics(
+                            subtraction_result,
+                            output_dir=downloads_dir,
+                            cache_signature_summary=repr(diagnostics_signature)[:240],
+                        )
+                        background_subtraction_diagnostics_written.add(
+                            diagnostics_signature
+                        )
         payload = (
-            _load_shared_headless_geometry_fit()._build_headless_geometry_fit_caked_view_payload(
-                np.asarray(backend_background, dtype=np.float64),
+            shared_headless._build_headless_geometry_fit_caked_view_payload(
+                backend_image,
                 params=params_local,
                 pixel_size_m=float(pixel_size_m),
             )
         )
         if not isinstance(payload, dict):
             return None
+        if isinstance(subtraction_result, Mapping):
+            payload.update(
+                {
+                    "background_raw": raw_backend_image,
+                    "background_model": subtraction_result.get("model"),
+                    "background_subtracted": subtraction_result.get("corrected"),
+                    "background_subtraction_config": background_subtraction_config,
+                    "background_subtraction_diagnostics": subtraction_result.get(
+                        "diagnostics"
+                    ),
+                }
+            )
         hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
             payload,
-            detector_shape=np.asarray(backend_background).shape[:2],
+            detector_shape=np.asarray(raw_backend_image).shape[:2],
             params=params_local,
             require_background=True,
         )
@@ -2173,14 +2270,28 @@ def run_headless_mosaic_shape_fit(
     *,
     source_path: str | Path,
     output_dir: str | Path | None = None,
+    background_subtraction_mode: object | None = None,
+    background_subtraction_scale: object | None = None,
+    background_subtraction_diagnostics: bool | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting followed by profile-based mosaic fitting from one saved GUI state."""
 
+    fit_kwargs: dict[str, object] = {
+        "source_path": source_path,
+        "output_dir": output_dir,
+        "run_mosaic_shape_fit": True,
+    }
+    if background_subtraction_mode is not None:
+        fit_kwargs["background_subtraction_mode"] = background_subtraction_mode
+    if background_subtraction_scale is not None:
+        fit_kwargs["background_subtraction_scale"] = background_subtraction_scale
+    if background_subtraction_diagnostics is not None:
+        fit_kwargs["background_subtraction_diagnostics"] = (
+            background_subtraction_diagnostics
+        )
     return run_headless_geometry_fit(
         payload,
-        source_path=source_path,
-        output_dir=output_dir,
-        run_mosaic_shape_fit=True,
+        **fit_kwargs,
     )
 
 
@@ -2747,6 +2858,21 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
                 output_dir=output_path.parent,
                 active_var_names=active_var_names,
                 seed_policy=seed_policy,
+                background_subtraction_mode=getattr(
+                    args,
+                    "background_subtraction",
+                    "saved",
+                ),
+                background_subtraction_scale=getattr(
+                    args,
+                    "background_subtraction_scale",
+                    None,
+                ),
+                background_subtraction_diagnostics=getattr(
+                    args,
+                    "background_subtraction_diagnostics",
+                    None,
+                ),
             )
         )
         save_gui_state_file(output_path, state_result)
@@ -2806,6 +2932,21 @@ def _cmd_fit_mosaic_shape(args: argparse.Namespace) -> None:
                 payload,
                 source_path=input_path,
                 output_dir=output_path.parent,
+                background_subtraction_mode=getattr(
+                    args,
+                    "background_subtraction",
+                    "saved",
+                ),
+                background_subtraction_scale=getattr(
+                    args,
+                    "background_subtraction_scale",
+                    None,
+                ),
+                background_subtraction_diagnostics=getattr(
+                    args,
+                    "background_subtraction_diagnostics",
+                    None,
+                ),
             )
         )
         save_gui_state_file(output_path, state_result)
@@ -2914,6 +3055,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional headless seed policy override.",
     )
+    fit_geometry_parser.add_argument(
+        "--background-subtraction",
+        choices=("saved", "off", "radial", "radial-plus-caked-2d"),
+        default="saved",
+        help="Diffuse-background subtraction override for fit input (default: saved).",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-subtraction-scale",
+        type=float,
+        default=None,
+        help="Override diffuse-background subtraction scale.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-subtraction-diagnostics",
+        action="store_true",
+        default=None,
+        help="Write diffuse-background subtraction diagnostics during headless fitting.",
+    )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
 
     fit_geometry_correlation_parser = subparsers.add_parser(
@@ -2977,6 +3136,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--in-place",
         action="store_true",
         help="Overwrite the input GUI state instead of writing a new file.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-subtraction",
+        choices=("saved", "off", "radial", "radial-plus-caked-2d"),
+        default="saved",
+        help="Diffuse-background subtraction override for fit input (default: saved).",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-subtraction-scale",
+        type=float,
+        default=None,
+        help="Override diffuse-background subtraction scale.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-subtraction-diagnostics",
+        action="store_true",
+        default=None,
+        help="Write diffuse-background subtraction diagnostics during headless fitting.",
     )
     fit_mosaic_shape_parser.set_defaults(func=_cmd_fit_mosaic_shape)
 
