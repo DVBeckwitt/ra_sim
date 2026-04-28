@@ -160,6 +160,46 @@ payload for hit testing and selected-marker placement. If either picker
 regresses, first check whether the failing path bypassed that shared candidate
 payload or treated detector/display aliases as caked coordinates.
 
+## QR Selector Fast-Path Cache Policy
+
+QR selector cache retention is centralized in
+`ra_sim/gui/runtime_qr_selector_cache_policy.py`. Runtime invalidation calls the
+policy before clearing selector entries, source-row snapshots, intersection
+caches, or manual-pick projection payloads.
+
+Status as of 2026-04-28:
+
+- feature status: implemented for display-only, combine-only, analysis-only,
+  primary-prune reuse, primary-prune fill, detector-center remap, and full
+  simulation update actions
+- bug status: fixed for overbroad fast-path invalidation that could clear QR
+  selector entries or fitter handoff data before replacement rows were ready
+- error status: targeted cache-policy and runtime-invalidation tests pass
+- compatibility status: `disabled_qr_sets`, `disabled_qz_sections`, and
+  `pending_legacy_disabled_qz_sections` remain explicit user/state selections
+  and are not cleared by cache invalidation
+
+Retention rules:
+
+- display-only, combine-only, and analysis-only actions retain selector and
+  fitter handoff caches
+- primary-prune reuse keeps q-group entries when content signatures are
+  unchanged and requests refresh when q-group content changes
+- primary-prune fill keeps old q-group entries until replacement rows apply
+- detector-center remap retains branch/source identity for exact remaps while
+  refreshing projection geometry when detector geometry changes
+- full simulation clears stale source rows and cache payloads when physics or
+  hit-table signatures change, but retains QR masks
+
+Validation:
+
+- `python -m pytest tests/test_runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py -q`
+  passed, `23 passed`
+- `python -m pytest tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_optimization_scenarios.py -q`
+  passed, `22 passed`
+- `python -m py_compile ra_sim/gui/runtime_invalidation.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py`
+  passed
+
 ## Weighted-event diffraction status
 
 Current status:

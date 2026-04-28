@@ -219,6 +219,9 @@ from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
 from ra_sim.gui import runtime_invalidation as gui_runtime_invalidation
+from ra_sim.gui import (
+    runtime_qr_selector_cache_policy as gui_runtime_qr_selector_cache_policy,
+)
 from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
 from ra_sim.gui.runtime_update_dependencies import (
     RuntimeCacheState,
@@ -6265,26 +6268,93 @@ def _apply_geometry_manual_pairs_snapshot(
 
 def _invalidate_peak_picker_caches(*, clear_source_snapshot: bool = False) -> None:
     """Drop cached picker-facing simulation/background state."""
+    _invalidate_manual_pick_projection_cache_only()
+    _invalidate_geometry_q_group_entries_cache_only()
+    if clear_source_snapshot:
+        _invalidate_source_row_snapshots_only(current_background_only=True)
+
+
+def _invalidate_geometry_q_group_entries_cache_only() -> None:
+    simulation_runtime_state.geometry_q_group_entries_cache_signature = None
+    simulation_runtime_state.geometry_q_group_entries_cache = []
+
+
+def _invalidate_source_row_snapshots_only(
+    *,
+    current_background_only: bool = False,
+) -> None:
+    source_row_snapshots = getattr(
+        simulation_runtime_state,
+        "source_row_snapshots",
+        None,
+    )
+    if not isinstance(source_row_snapshots, dict):
+        return
+    if not bool(current_background_only):
+        source_row_snapshots.clear()
+        return
+    try:
+        background_index = int(background_runtime_state.current_background_index)
+    except Exception:
+        return
+    source_row_snapshots.pop(background_index, None)
+
+
+def _invalidate_intersection_caches_only() -> None:
+    simulation_runtime_state.stored_intersection_cache = None
+    simulation_runtime_state.stored_primary_intersection_cache = None
+    simulation_runtime_state.stored_secondary_intersection_cache = None
+    simulation_runtime_state.stored_primary_intersection_cache_signature = None
+    simulation_runtime_state.stored_secondary_intersection_cache_signature = None
+
+
+def _invalidate_manual_pick_projection_cache_only() -> None:
     geometry_runtime_state.manual_pick_cache_signature = None
     geometry_runtime_state.manual_pick_cache_data = {}
     payload_cache = globals().get("_hkl_pick_simulation_points_payload_cache")
     if isinstance(payload_cache, dict):
         payload_cache.clear()
-    simulation_runtime_state.geometry_q_group_entries_cache_signature = None
-    simulation_runtime_state.geometry_q_group_entries_cache = []
-    if clear_source_snapshot:
-        try:
-            background_index = int(background_runtime_state.current_background_index)
-        except Exception:
-            background_index = None
-        if background_index is not None:
-            source_row_snapshots = getattr(
-                simulation_runtime_state,
-                "source_row_snapshots",
-                None,
-            )
-            if isinstance(source_row_snapshots, dict):
-                source_row_snapshots.pop(background_index, None)
+
+
+def _request_geometry_q_group_refresh_if_available() -> None:
+    try:
+        gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
+    except Exception:
+        return
+
+
+def _invalidate_picker_handoff_caches_for_update_action(
+    action: UpdateAction,
+    *,
+    physics_signature_changed: bool = False,
+    hit_table_signature_changed: bool = False,
+    q_group_content_signature_changed: bool = False,
+    detector_geometry_changed: bool = False,
+    current_background_snapshot_only: bool = False,
+):
+    policy = gui_runtime_qr_selector_cache_policy.qr_selector_cache_policy_for_update_action(
+        action,
+        physics_signature_changed=bool(physics_signature_changed),
+        hit_table_signature_changed=bool(hit_table_signature_changed),
+        q_group_content_signature_changed=bool(q_group_content_signature_changed),
+        detector_geometry_changed=bool(detector_geometry_changed),
+    )
+    if not policy.retain_manual_pick_cache:
+        _invalidate_manual_pick_projection_cache_only()
+    if not policy.retain_geometry_q_group_entries:
+        _invalidate_geometry_q_group_entries_cache_only()
+    if not policy.retain_source_row_snapshots:
+        _invalidate_source_row_snapshots_only(
+            current_background_only=bool(current_background_snapshot_only)
+        )
+    if not policy.retain_intersection_caches:
+        _invalidate_intersection_caches_only()
+    if (
+        policy.require_q_group_refresh_after_apply
+        and not policy.defer_q_group_refresh_until_rows_available
+    ):
+        _request_geometry_q_group_refresh_if_available()
+    return policy
 
 
 def _invalidate_geometry_manual_pick_cache() -> None:
@@ -11954,11 +12024,27 @@ def _apply_primary_cache_artifacts(payload: dict[str, object]) -> None:
     )
 
 
-def _invalidate_for_update_action(action: UpdateAction) -> None:
-    gui_runtime_invalidation.invalidate_for_update_action(
+def _invalidate_for_update_action(
+    action: UpdateAction,
+    *,
+    physics_signature_changed: bool | None = None,
+    hit_table_signature_changed: bool | None = None,
+    q_group_content_signature_changed: bool | None = None,
+    detector_geometry_changed: bool | None = None,
+) -> None:
+    policy = gui_runtime_invalidation.invalidate_for_update_action(
         simulation_runtime_state,
         action,
+        physics_signature_changed=physics_signature_changed,
+        hit_table_signature_changed=hit_table_signature_changed,
+        q_group_content_signature_changed=q_group_content_signature_changed,
+        detector_geometry_changed=detector_geometry_changed,
     )
+    if (
+        policy.require_q_group_refresh_after_apply
+        and not policy.defer_q_group_refresh_until_rows_available
+    ):
+        _request_geometry_q_group_refresh_if_available()
 
 
 def _store_secondary_detector_relative_cache(
@@ -18740,7 +18826,10 @@ def do_update():
             primary_available=bool(primary_available),
             secondary_available=bool(secondary_available),
         )
-        _invalidate_geometry_manual_pick_cache()
+        _invalidate_picker_handoff_caches_for_update_action(
+            UpdateAction.DETECTOR_CENTER_REMAP,
+            detector_geometry_changed=True,
+        )
         simulation_runtime_state.peak_positions.clear()
         simulation_runtime_state.peak_millers.clear()
         simulation_runtime_state.peak_intensities.clear()
@@ -18876,7 +18965,13 @@ def do_update():
         simulation_runtime_state.preview_active = False
         simulation_runtime_state.preview_sample_count = None
         _invalidate_analysis_cache(clear_visuals=True)
-        _invalidate_for_update_action(UpdateAction.DETECTOR_CENTER_REMAP)
+        _invalidate_for_update_action(
+            UpdateAction.DETECTOR_CENTER_REMAP,
+            physics_signature_changed=False,
+            hit_table_signature_changed=False,
+            q_group_content_signature_changed=False,
+            detector_geometry_changed=False,
+        )
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
         image_signature_changed = False
@@ -18891,7 +18986,24 @@ def do_update():
                 simulation_runtime_state.stored_secondary_sim_image is not None
             ),
         )
-        _invalidate_geometry_manual_pick_cache()
+        pre_picker_action = (
+            classifier_decision.action
+            if classifier_decision.action
+            in {UpdateAction.PRIMARY_PRUNE_REUSE, UpdateAction.PRIMARY_PRUNE_FILL}
+            else UpdateAction.FULL_SIMULATION
+        )
+        _invalidate_picker_handoff_caches_for_update_action(
+            pre_picker_action,
+            physics_signature_changed=pre_picker_action is UpdateAction.FULL_SIMULATION,
+            hit_table_signature_changed=pre_picker_action is UpdateAction.FULL_SIMULATION,
+            q_group_content_signature_changed=(
+                pre_picker_action is UpdateAction.FULL_SIMULATION
+            ),
+            detector_geometry_changed=(
+                pre_picker_action is UpdateAction.FULL_SIMULATION
+                and previous_center_pair != current_center_pair
+            ),
+        )
         simulation_runtime_state.peak_positions.clear()
         simulation_runtime_state.peak_millers.clear()
         simulation_runtime_state.peak_intensities.clear()
@@ -18929,7 +19041,13 @@ def do_update():
             primary_prune_cache_mode=incremental_sf_prune_action.mode,
         )
         if incremental_sf_prune_action.mode == "reuse":
-            _invalidate_for_update_action(UpdateAction.PRIMARY_PRUNE_REUSE)
+            _invalidate_for_update_action(
+                UpdateAction.PRIMARY_PRUNE_REUSE,
+                physics_signature_changed=False,
+                hit_table_signature_changed=False,
+                q_group_content_signature_changed=False,
+                detector_geometry_changed=False,
+            )
             rematerialize_start_time = perf_counter()
             simulation_runtime_state.primary_contribution_cache_signature = (
                 primary_contribution_cache_signature
@@ -18963,7 +19081,13 @@ def do_update():
             simulation_runtime_state.update_phase = "applying"
             _refresh_run_status_bar()
         elif incremental_sf_prune_action.mode == "fill":
-            _invalidate_for_update_action(UpdateAction.PRIMARY_PRUNE_FILL)
+            _invalidate_for_update_action(
+                UpdateAction.PRIMARY_PRUNE_FILL,
+                physics_signature_changed=False,
+                hit_table_signature_changed=False,
+                q_group_content_signature_changed=False,
+                detector_geometry_changed=False,
+            )
             subset_payload = _build_scaled_primary_subset_payload(
                 incremental_sf_prune_action.missing_keys
             )
@@ -19291,7 +19415,33 @@ def do_update():
     restore_diagnostics: dict[str, object] | None = None
     if applied_peak_row_refresh_payload is not None:
         if all_active_raw_rows_fresh:
-            _invalidate_peak_picker_caches(clear_source_snapshot=True)
+            applied_job_kind = str(
+                applied_peak_row_refresh_payload.get("job_kind", "full") or "full"
+            )
+            if applied_job_kind == "detector_center_remap":
+                applied_policy_action = UpdateAction.DETECTOR_CENTER_REMAP
+            elif applied_job_kind == "primary_fill":
+                applied_policy_action = UpdateAction.PRIMARY_PRUNE_FILL
+            else:
+                applied_policy_action = UpdateAction.FULL_SIMULATION
+            pending_row_content_signature = getattr(
+                simulation_runtime_state,
+                "stored_q_group_content_signature",
+                None,
+            )
+            _invalidate_picker_handoff_caches_for_update_action(
+                applied_policy_action,
+                physics_signature_changed=applied_policy_action
+                is UpdateAction.FULL_SIMULATION,
+                hit_table_signature_changed=applied_policy_action
+                in {UpdateAction.FULL_SIMULATION, UpdateAction.PRIMARY_PRUNE_FILL},
+                q_group_content_signature_changed=(
+                    applied_policy_action is not UpdateAction.DETECTOR_CENTER_REMAP
+                    and pending_row_content_signature != previous_row_content_signature
+                ),
+                detector_geometry_changed=False,
+                current_background_snapshot_only=False,
+            )
         restore_diagnostics = _restore_live_peak_rows_from_combined_hit_tables(
             active_peak_row_sides=applied_active_peak_row_sides,
             primary_raw_rows_fresh=applied_primary_raw_rows_fresh,
@@ -31791,7 +31941,13 @@ def _apply_events_per_beam_phase(*, trigger_update=True):
     _normalize_events_per_beam_phase_control(default=_default_events_per_beam_phase())
     _refresh_resolution_display()
     if trigger_update:
-        _invalidate_geometry_manual_pick_cache()
+        _invalidate_picker_handoff_caches_for_update_action(
+            UpdateAction.FULL_SIMULATION,
+            physics_signature_changed=True,
+            hit_table_signature_changed=True,
+            q_group_content_signature_changed=True,
+            detector_geometry_changed=False,
+        )
         simulation_runtime_state.last_sim_signature = None
         simulation_runtime_state.last_simulation_signature = None
         simulation_runtime_state.worker_ready_result = None

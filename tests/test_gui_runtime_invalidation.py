@@ -81,6 +81,44 @@ def _state() -> SimpleNamespace:
         selected_peak_record={"hkl": (1, 0, 0)},
         geometry_q_group_entries_cache_signature=("q-group",),
         geometry_q_group_entries_cache=[{"group": 1}],
+        geometry_q_group_refresh_requested=True,
+        refresh_requested=True,
+        disabled_qr_sets={("primary", 1)},
+        disabled_qz_sections={("secondary", 2, 0)},
+        pending_legacy_disabled_qz_sections={("primary", 3, 1)},
+        manual_pick_cache_signature=("manual",),
+        manual_pick_cache_data={"rows": [1]},
+        hkl_pick_simulation_points_payload_cache={"payload": True},
+    )
+
+
+def _handoff_snapshot(state: SimpleNamespace) -> dict[str, object]:
+    return {
+        "geometry_q_group_entries_cache_signature": (
+            state.geometry_q_group_entries_cache_signature
+        ),
+        "geometry_q_group_entries_cache": list(state.geometry_q_group_entries_cache),
+        "source_row_snapshots": dict(state.source_row_snapshots),
+        "stored_intersection_cache": state.stored_intersection_cache,
+        "stored_primary_intersection_cache": state.stored_primary_intersection_cache,
+        "stored_secondary_intersection_cache": state.stored_secondary_intersection_cache,
+        "manual_pick_cache_signature": state.manual_pick_cache_signature,
+        "manual_pick_cache_data": dict(state.manual_pick_cache_data),
+        "hkl_pick_simulation_points_payload_cache": dict(
+            state.hkl_pick_simulation_points_payload_cache
+        ),
+    }
+
+
+def _assert_handoff_snapshot(state: SimpleNamespace, snapshot: dict[str, object]) -> None:
+    assert _handoff_snapshot(state) == snapshot
+
+
+def _mask_snapshot(state: SimpleNamespace) -> tuple[object, object, object]:
+    return (
+        set(state.disabled_qr_sets),
+        set(state.disabled_qz_sections),
+        set(state.pending_legacy_disabled_qz_sections),
     )
 
 
@@ -115,7 +153,7 @@ def test_prune_reuse_preserves_primary_contribution_cache() -> None:
     assert state.primary_contribution_cache_signature == ("primary-contrib",)
     assert state.stored_primary_sim_image is not None
     assert state.stored_sim_image is None
-    assert state.stored_intersection_cache is None
+    assert state.stored_intersection_cache == ["primary-cache", "secondary-cache"]
 
 
 def test_detector_center_remap_clears_analysis_geometry_cache_only() -> None:
@@ -138,7 +176,7 @@ def test_detector_center_remap_clears_analysis_geometry_cache_only() -> None:
     assert state.last_q_space_image_unscaled is None
     assert state.last_caked_transform_bundle is None
     assert state.ai_cache == {}
-    assert state.source_row_snapshots == {}
+    assert state.source_row_snapshots == {0: {"row": 1}}
 
 
 def test_full_simulation_uses_broad_invalidation() -> None:
@@ -170,3 +208,140 @@ def test_primary_prune_fill_preserves_existing_contribution_cache() -> None:
     assert state.primary_hit_table_cache is primary_cache
     assert state.primary_relative_hit_table_cache is relative_cache
     assert state.stored_sim_image is combined_image
+
+
+def test_update_action_invalidation_keeps_explicit_q_group_selection_state() -> None:
+    for action in UpdateAction:
+        state = _state()
+        disabled_qr_sets = set(state.disabled_qr_sets)
+        disabled_qz_sections = set(state.disabled_qz_sections)
+        pending_legacy_disabled_qz_sections = set(
+            state.pending_legacy_disabled_qz_sections
+        )
+        refresh_requested = bool(state.refresh_requested)
+
+        invalidate_for_update_action(state, action)
+
+        assert state.disabled_qr_sets == disabled_qr_sets
+        assert state.disabled_qz_sections == disabled_qz_sections
+        assert (
+            state.pending_legacy_disabled_qz_sections
+            == pending_legacy_disabled_qz_sections
+        )
+        assert state.refresh_requested is refresh_requested
+
+
+def test_display_only_preserves_qr_selector_and_fitter_handoff_caches() -> None:
+    state = _state()
+    snapshot = _handoff_snapshot(state)
+
+    invalidate_for_update_action(state, UpdateAction.DISPLAY_ONLY)
+
+    _assert_handoff_snapshot(state, snapshot)
+
+
+def test_combine_only_preserves_qr_selector_and_fitter_handoff_caches() -> None:
+    state = _state()
+    snapshot = _handoff_snapshot(state)
+
+    invalidate_for_update_action(state, UpdateAction.COMBINE_ONLY)
+
+    _assert_handoff_snapshot(state, snapshot)
+
+
+def test_analysis_only_preserves_qr_selector_entries_and_masks() -> None:
+    state = _state()
+    entries = list(state.geometry_q_group_entries_cache)
+    masks = _mask_snapshot(state)
+
+    invalidate_for_update_action(state, UpdateAction.ANALYSIS_ONLY)
+
+    assert state.geometry_q_group_entries_cache == entries
+    assert _mask_snapshot(state) == masks
+    assert state.last_analysis_signature is None
+
+
+def test_prune_reuse_preserves_qr_selector_when_content_signature_unchanged() -> None:
+    state = _state()
+    snapshot = _handoff_snapshot(state)
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        q_group_content_signature_changed=False,
+        hit_table_signature_changed=False,
+    )
+
+    assert policy.require_q_group_refresh_after_apply is False
+    assert state.geometry_q_group_entries_cache == snapshot["geometry_q_group_entries_cache"]
+    assert state.source_row_snapshots == snapshot["source_row_snapshots"]
+    assert state.stored_intersection_cache == snapshot["stored_intersection_cache"]
+    assert state.manual_pick_cache_signature == snapshot["manual_pick_cache_signature"]
+
+
+def test_prune_reuse_schedules_refresh_when_content_signature_changes() -> None:
+    state = _state()
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        q_group_content_signature_changed=True,
+        hit_table_signature_changed=False,
+    )
+
+    assert policy.require_q_group_refresh_after_apply is True
+    assert state.geometry_q_group_entries_cache_signature is None
+    assert state.geometry_q_group_entries_cache == []
+    assert state.source_row_snapshots == {0: {"row": 1}}
+    assert state.stored_intersection_cache == ["primary-cache", "secondary-cache"]
+
+
+def test_prune_fill_keeps_old_qr_entries_until_rows_apply() -> None:
+    state = _state()
+    entries = list(state.geometry_q_group_entries_cache)
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.PRIMARY_PRUNE_FILL,
+        q_group_content_signature_changed=True,
+        hit_table_signature_changed=True,
+    )
+
+    assert policy.defer_q_group_refresh_until_rows_available is True
+    assert state.geometry_q_group_entries_cache == entries
+
+
+def test_full_simulation_clears_stale_rows_but_retains_qr_masks() -> None:
+    state = _state()
+    masks = _mask_snapshot(state)
+
+    invalidate_for_update_action(
+        state,
+        UpdateAction.FULL_SIMULATION,
+        physics_signature_changed=True,
+        hit_table_signature_changed=True,
+        q_group_content_signature_changed=True,
+        detector_geometry_changed=True,
+    )
+
+    assert state.source_row_snapshots == {}
+    assert state.geometry_q_group_entries_cache_signature is None
+    assert state.geometry_q_group_entries_cache == []
+    assert _mask_snapshot(state) == masks
+
+
+def test_cache_invalidation_never_clears_disabled_qr_or_qz_masks() -> None:
+    for action in UpdateAction:
+        state = _state()
+        masks = _mask_snapshot(state)
+
+        invalidate_for_update_action(
+            state,
+            action,
+            physics_signature_changed=True,
+            hit_table_signature_changed=True,
+            q_group_content_signature_changed=True,
+            detector_geometry_changed=True,
+        )
+
+        assert _mask_snapshot(state) == masks

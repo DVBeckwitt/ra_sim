@@ -506,3 +506,65 @@ def test_optimization_mosaic_image_cache_respects_retention_gate(
     assert len(process_calls) == expected_process_calls
     assert process_calls
     assert all(call.get("collect_hit_tables") is False for call in process_calls)
+
+
+def test_geometry_objective_reuses_trial_source_rows_for_same_params_signature() -> None:
+    builder_calls: list[dict[str, object]] = []
+
+    def build_source_rows(*, local_params):
+        builder_calls.append(dict(local_params))
+        return {
+            "rows": [
+                {
+                    "source_row_index": len(builder_calls),
+                    "hkl": (1, 0, 0),
+                }
+            ],
+            "source": "test-builder",
+        }
+
+    subset = optimization.ReflectionSimulationSubset(
+        miller=np.asarray([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.asarray([10.0], dtype=np.float64),
+        measured_entries=[],
+        original_indices=np.asarray([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = optimization.GeometryFitDatasetContext(
+        dataset_index=7,
+        label="background-7",
+        theta_initial=0.0,
+        subset=subset,
+        qr_fit_trial_source_rows_builder=build_source_rows,
+        qr_fit_trial_source_rows_builder_kind="test-builder-kind",
+    )
+    fit_context: dict[str, object] = {"prediction_source_rows_cache": {}}
+
+    first = optimization._build_trial_qr_source_rows_payload(
+        dataset_ctx,
+        trial_params={"center_x": 1.0},
+        params_signature="same-signature",
+        fit_context=fit_context,
+    )
+    second = optimization._build_trial_qr_source_rows_payload(
+        dataset_ctx,
+        trial_params={"center_x": 9.0},
+        params_signature="same-signature",
+        fit_context=fit_context,
+    )
+    third = optimization._build_trial_qr_source_rows_payload(
+        dataset_ctx,
+        trial_params={"center_x": 9.0},
+        params_signature="new-signature",
+        fit_context=fit_context,
+    )
+
+    assert len(builder_calls) == 2
+    assert first["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
+    assert second["rows"] == first["rows"]
+    assert second["source_rows_rebuilt_or_reused"] == "reused_for_same_params_signature"
+    assert second["reuse_valid_for_same_params_signature"] is True
+    assert third["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
