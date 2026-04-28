@@ -32,6 +32,7 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Hardened geometry-objective cache signatures so center-only reuse is gated by unchanged physics, dataset, point-provider, QR branch identity, source-row identity, manual selection, refined peak, objective mode, and active fit-parameter signatures.
   - Added diffuse-background `radial_plus_phi_blocks` and `radial_plus_phi_blocks_plus_caked_2d` modes with coarse phi/theta block residual modeling, component diagnostics, GUI controls, CLI mode support, and artifact exports.
   - Expanded `hbn_fitter/fitter.py` with uncertainty-aware ellipse refinement and point-sigma handling.
   - Added projective tilt optimization path with fallback to legacy optimization.

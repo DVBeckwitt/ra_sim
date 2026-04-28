@@ -2,9 +2,9 @@
 
 Date: 2026-04-28
 
-Scope: Phases 1-5 of fast-path cache verification, selective invalidation,
+Scope: Phases 1-6 of fast-path cache verification, selective invalidation,
 local validation gating, prune-specific QR selector lifecycle hardening, and
-detector-center remap geometry-fitter handoff hardening.
+detector-center remap plus geometry-objective cache signature hardening.
 
 ## Current Status
 
@@ -12,15 +12,20 @@ detector-center remap geometry-fitter handoff hardening.
   selective runtime invalidation, local optional-artifact skips, slow/manual
   geometry markers, fast geometry-fitter handoff checks, geometry objective
   source-row reuse baselines, prune reuse/fill QR selector lifecycle trace, and
-  detector-center remap projection/handoff trace.
+  detector-center remap projection/handoff trace. Phase 6 adds a pure geometry
+  objective cache signature/decision module and keys QR trial source-row reuse
+  on residual-defining objective identity.
 - Bug status: fixed for overbroad fast-path invalidation of QR selector entries,
   source-row snapshots, intersection caches, and fitter handoff state; fixed
   local checkpoint failures caused by absent optional New4 artifacts; fixed
   prune reuse/fill trace and invalidation sequencing so content changes do not
   advertise a valid geometry-fitter handoff before refreshed rows exist; fixed
   detector-center remap stale projection-cache handoff reporting and manual
-  geometry refresh stale-caked-field precedence.
-- Error status: no known failing local Phase 5, Phase 4, or Phase 3.5 gate
+  geometry refresh stale-caked-field precedence; fixed unsafe geometry
+  objective source-row cache reuse across QR branch/source-row/manual/refined
+  peak, point-provider, objective-mode, active-fit-parameter, and physics
+  signature changes.
+- Error status: no known failing local Phase 6, Phase 5, Phase 4, or Phase 3.5 gate
   tests.
 - Compatibility status: QR disabled/enabled masks remain explicit user/state
   data and are not cleared by cache invalidation.
@@ -31,7 +36,7 @@ detector-center remap geometry-fitter handoff hardening.
 - `tests/test_runtime_qr_selector_cache_policy.py`: present.
 - `tests/test_gui_runtime_invalidation.py`: present.
 - `tests/test_gui_runtime_optimization_scenarios.py`: present.
-- `tests/test_geometry_objective_cache.py`: missing. Equivalent baseline added to `tests/test_fit_cache_controls.py`.
+- `tests/test_geometry_objective_cache.py`: present.
 
 ## Mutation Map
 
@@ -47,8 +52,8 @@ runtime status is summarized in the Phase 2, Phase 3, and Phase 3.5 sections.
 | DETECTOR_CENTER_REMAP | Runtime center-remap fast path calls `_invalidate_geometry_manual_pick_cache`, rematerializes primary/secondary artifacts from detector-relative hit tables, updates side intersection cache signatures, then calls `_invalidate_analysis_cache(clear_visuals=True)` and `_invalidate_for_update_action(DETECTOR_CENTER_REMAP)`. The action invalidation clears analysis/caked/q-space caches and `source_row_snapshots`; the later restore path calls `_invalidate_peak_picker_caches(clear_source_snapshot=True)` and then captures a fresh source-row snapshot when rows are available. |
 | ANALYSIS_ONLY | `classify_update` can return `ANALYSIS_ONLY`; `runtime_invalidation` clears only analysis/caked/q-space caches for that action. Current `runtime_session.do_update` does not include `ANALYSIS_ONLY` in its fast-path allow-list, so the runtime path fails closed to `FULL_SIMULATION` rather than using the helper action directly. |
 | FULL_SIMULATION | `runtime_invalidation.invalidate_for_update_action(FULL_SIMULATION)` broadly clears combined artifacts, side artifacts, primary contribution caches, secondary remap caches, analysis caches, source snapshots, and peak selection/Q-group entry caches. Current `runtime_session.do_update` does not call this helper directly; full regeneration paths clear manual picker caches before requesting or applying full simulation work, and then overwrite stored side/combined artifacts from the result. |
-| GEOMETRY_OBJECTIVE_CACHE_REUSE | `optimization._build_trial_qr_source_rows_payload` reuses `fit_context["prediction_source_rows_cache"]` by `(dataset_index, params_signature, builder_kind)`, marking reused payloads as `source_rows_rebuilt_or_reused="reused_for_same_params_signature"` and `reuse_valid_for_same_params_signature=True`. `_resolve_saved_sim_caked_alignment` also reuses `dataset_ctx._qr_fit_saved_sim_caked_alignment_cache` by locked branch key and saved anchor. |
-| GEOMETRY_OBJECTIVE_FULL | `optimization._build_trial_qr_source_rows_payload` rebuilds rows on cache miss and stores the payload under the same key. `_resolve_qr_fit_prediction_from_trial_params` records rebuilt trial source rows and `stale_prediction_cache_used_for_trial_params=False`. Simulation image caches use `SimulationCache` and `_simulate_with_cache`, gated by `_retain_fit_simulation_cache`. |
+| GEOMETRY_OBJECTIVE_CACHE_REUSE | `optimization._build_trial_qr_source_rows_payload` reuses `fit_context["prediction_source_rows_cache"]` only when `(dataset_index, params_signature, builder_kind, objective_signature_key)` match, marking reused payloads as `source_rows_rebuilt_or_reused="reused_for_same_params_signature"` and `reuse_valid_for_same_params_signature=True`. `_resolve_saved_sim_caked_alignment` also reuses `dataset_ctx._qr_fit_saved_sim_caked_alignment_cache` by locked branch key and saved anchor. |
+| GEOMETRY_OBJECTIVE_FULL | `optimization._build_trial_qr_source_rows_payload` rebuilds rows on cache miss, stores the payload under the objective-signature-aware key, and reports `objective_cache_mode`, `objective_cache_hit`, `objective_cache_reject_reason`, and `objective_process_peaks_called`. `_resolve_qr_fit_prediction_from_trial_params` records rebuilt trial source rows and `stale_prediction_cache_used_for_trial_params=False`. Simulation image caches use `SimulationCache` and `_simulate_with_cache`, gated by `_retain_fit_simulation_cache`. |
 | STATE_LOAD | `state_io.apply_geometry_state_snapshot` applies explicit saved Q-group masks with `replace_geometry_q_group_masks`, requests a Q-group refresh, and calls `invalidate_geometry_manual_pick_cache`. Legacy saved rows queue pending legacy disabled Qz sections, request refresh, and invalidate manual pick cache. Runtime restored peak records also call `_invalidate_geometry_manual_pick_cache`. |
 | USER_SELECTION_CHANGE | `controllers.replace_geometry_q_group_masks`, `set_geometry_q_group_row_enabled`, `clear_geometry_q_group_masks`, `prune_geometry_q_group_masks`, and `resolve_pending_geometry_q_group_legacy_masks` are the explicit mask mutation sites for `disabled_qr_sets`, `disabled_qz_sections`, and `pending_legacy_disabled_qz_sections`. They update `mask_revision`; cache invalidation helpers do not mutate these explicit user selections. |
 | EXPLICIT_RESET | `runtime_session._initialize_runtime_controls_block_28`, `runtime_invalidation.invalidate_for_update_action(FULL_SIMULATION)`, and `primary_cache_helpers.reset_combined_simulation_artifacts` reset stored simulation/combined artifacts. `controllers.consume_geometry_q_group_refresh_request` explicitly clears only `refresh_requested`; update-action invalidation does not clear it. |
@@ -243,4 +248,48 @@ Phase 5 validation:
 - `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
   passed with `26 passed, 2 skipped`.
 - `python -m py_compile ra_sim/gui/runtime_detector_remap_cache.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_invalidation.py ra_sim/gui/runtime_qr_selector_cache_policy.py ra_sim/gui/manual_geometry.py ra_sim/gui/geometry_fit.py`
+  passed.
+
+## Phase 6 Geometry Objective Cache Signature Hardening
+
+Phase 6 hardened geometry objective cache signatures without redesigning the
+optimizer or changing GUI runtime detector-remap behavior.
+
+Feature status:
+
+- Added `ra_sim/fitting/geometry_objective_cache.py` with pure
+  `GeometryObjectiveSignature` and `GeometryObjectiveCacheDecision` helpers.
+- Center-only reuse is allowed only when physics, dataset, point-provider,
+  QR branch identity, source-row identity, manual selection, refined peak,
+  objective mode, and active fit-parameter signatures are unchanged and an
+  exact center-remap cache is available.
+- QR trial source-row cache reuse in `optimization._build_trial_qr_source_rows_payload`
+  is keyed by full objective signature identity in addition to dataset,
+  params signature, and builder kind.
+- Objective diagnostics now carry cache fields for mode, hit status, reject
+  reason, process-peaks requirement, changed signature fields, and residual
+  component count.
+
+Bug/error status:
+
+- Source rows are no longer reused across identical params signatures when
+  QR branch identity, source-row identity, manual picks, refined peaks,
+  point-provider rows, objective mode, active fit parameters, dataset identity,
+  or physics identity differ.
+- Distance and detector-orientation changes fail closed to full simulation.
+- Residual shape/order parity is covered by synthetic tests before center-remap
+  reuse can be considered valid.
+- No known failing local Phase 6 gate tests.
+
+Phase 6 validation:
+
+- `python -m pytest tests/test_geometry_objective_cache.py -q`
+  passed, `14 passed`.
+- `python -m pytest tests/test_geometry_objective_cache.py tests/test_fit_cache_controls.py tests/test_manual_geometry_selection_helpers.py -k "objective_cache or cache_control or stale_cache or dynamic_identity or no_partial_qr_objective_allowed or objective_uses_refined_sim_caked_residual" -q`
+  passed, `34 passed, 423 deselected`.
+- `python -m pytest tests/test_runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_update_dependencies.py tests/test_gui_runtime_primary_cache.py tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_update_trace.py tests/test_fit_cache_controls.py tests/test_gui_runtime_import_safe.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py -q`
+  passed, `457 passed`.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
+  passed with `26 passed, 2 skipped`.
+- `python -m py_compile ra_sim/fitting/optimization.py ra_sim/fitting/geometry_objective_cache.py ra_sim/gui/geometry_fit.py ra_sim/gui/manual_geometry.py`
   passed.

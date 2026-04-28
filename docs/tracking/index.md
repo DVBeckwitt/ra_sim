@@ -66,15 +66,18 @@ headless override checks, and real diagnostic artifact inspection still need
 project input data.
 
 Fast-path cache audit and QR selector policy status note:
-Phases 1-5 are implemented and locally validated. QR/Qz masks remain explicit
+Phases 1-6 are implemented and locally validated. QR/Qz masks remain explicit
 user/state data and are not cleared by runtime cache invalidation. Selective
 invalidation is policy-gated, optional New4 tests skip cleanly when artifacts
 are absent, prune reuse/fill report QR selector retention/deferred refresh and
 handoff validity, and detector-center remap now reports projection invalidation,
 branch/source identity retention, and full-simulation fallback reasons in the
-runtime trace. Bug/error status: no known failing local Phase 5 gate tests after
-`114 passed`, local Phase 3.5 gate `457 passed`, and workflow slice
-`26 passed, 2 skipped`.
+runtime trace. Phase 6 adds objective-cache signature gating so center-only
+reuse fails closed across QR branch/source-row/manual/refined peak,
+point-provider, objective-mode, active-fit-parameter, dataset, and physics
+changes. Bug/error status: no known failing local Phase 6 gate tests after
+`34 passed, 423 deselected`, local Phase 3.5 gate `457 passed`, and workflow
+slice `26 passed, 2 skipped`.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,

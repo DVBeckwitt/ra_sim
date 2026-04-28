@@ -19,6 +19,10 @@ from scipy.optimize import (
 from scipy.ndimage import distance_transform_edt, gaussian_filter, sobel, zoom
 from scipy.spatial import cKDTree
 
+from ra_sim.fitting.geometry_objective_cache import (
+    GeometryObjectiveSignature,
+    geometry_objective_signature_cache_key,
+)
 from ra_sim.fitting import optimization_mosaic_profiles as _mosaic_profiles
 from ra_sim.fitting import optimization_runtime as _runtime
 from ra_sim.fitting.optimization_runtime import SimulationCache
@@ -5132,6 +5136,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "trial_source_rows_same_q_group_hkl_count",
             "trial_source_rows_same_hkl_branch_count",
             "trial_source_rows_fit_qr_branch_key_candidate_count",
+            "objective_cache_mode",
+            "objective_cache_hit",
+            "objective_cache_reject_reason",
+            "objective_process_peaks_called",
+            "objective_signature_changed_fields",
+            "objective_residual_component_count",
             "ambiguous_candidate_count",
         ):
             if key in resolution_payload:
@@ -6351,6 +6361,14 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 ),
                 "reuse_valid_for_same_params_signature": fit_prediction.get(
                     "reuse_valid_for_same_params_signature"
+                ),
+                "objective_cache_mode": fit_prediction.get("objective_cache_mode"),
+                "objective_cache_hit": bool(fit_prediction.get("objective_cache_hit", False)),
+                "objective_cache_reject_reason": fit_prediction.get(
+                    "objective_cache_reject_reason"
+                ),
+                "objective_process_peaks_called": bool(
+                    fit_prediction.get("objective_process_peaks_called", False)
                 ),
             }
         )
@@ -15902,6 +15920,164 @@ def _fit_prediction_trial_params_signature(trial_params: Mapping[str, object] | 
     return _fit_prediction_signature(payload)
 
 
+def _geometry_objective_signature_for_dataset(
+    dataset_ctx: GeometryFitDatasetContext,
+    trial_params: Mapping[str, object],
+    fit_context: Mapping[str, object],
+) -> GeometryObjectiveSignature:
+    active_names = tuple(
+        sorted(
+            str(name)
+            for name in trial_params.get("_active_fit_param_names", ())
+            if str(name)
+        )
+    )
+    physics_names = (
+        "a",
+        "c",
+        "corto_detector",
+        "gamma",
+        "Gamma",
+        "chi",
+        "psi",
+        "psi_z",
+        "zs",
+        "zb",
+        "theta_initial",
+        "cor_angle",
+        "debye_x",
+        "debye_y",
+        "n2",
+        "lambda",
+        "pixel_size_m",
+        "optics_mode",
+    )
+    physics_payload = {
+        name: trial_params.get(name)
+        for name in physics_names
+        if name in trial_params
+    }
+    if isinstance(trial_params.get("mosaic_params"), Mapping):
+        physics_payload["mosaic_params"] = trial_params.get("mosaic_params")
+    center_raw = trial_params.get("center", ())
+    try:
+        center_arr = np.asarray(center_raw, dtype=np.float64).reshape(-1)
+        detector_center_sig = tuple(float(round(float(v), 12)) for v in center_arr[:2])
+    except Exception:
+        detector_center_sig = (_fit_prediction_signature(center_raw),)
+
+    subset = dataset_ctx.subset
+    measured_entries = [
+        dict(entry)
+        for entry in (subset.measured_entries or [])
+        if isinstance(entry, Mapping)
+    ]
+
+    def _entry_signature(fields: Sequence[str]) -> str:
+        return _fit_prediction_signature(
+            [
+                {field: entry.get(field) for field in fields if field in entry}
+                for entry in measured_entries
+            ]
+        )
+
+    qr_branch_fields = (
+        "q_group_key",
+        "branch_group_key",
+        "branch_id",
+        "hkl",
+        "source_branch_index",
+        "source_peak_index",
+        "resolved_peak_index",
+        "locked_qr_fit_key",
+        "mosaic_top_rank_key",
+        "best_sample_index",
+        "selection_reason",
+    )
+    source_row_fields = (
+        "source_table_index",
+        "source_row_index",
+        "resolved_table_index",
+        "resolved_source_row_index",
+        "resolved_source_row_position",
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+    )
+    manual_selection_fields = (
+        "pair_id",
+        "manual_pair_id",
+        "label",
+        "x",
+        "y",
+        "native_col",
+        "native_row",
+        "fit_detector_x",
+        "fit_detector_y",
+        "background_detector_x",
+        "background_detector_y",
+        "background_two_theta_deg",
+        "background_phi_deg",
+        "caked_x",
+        "caked_y",
+        "raw_caked_x",
+        "raw_caked_y",
+    )
+    refined_peak_fields = (
+        "refined_x",
+        "refined_y",
+        "refined_sim_x",
+        "refined_sim_y",
+        "refined_sim_caked_x",
+        "refined_sim_caked_y",
+        "sim_refined_caked_deg",
+        "predicted_refined_caked_deg",
+        "saved_refined_sim_caked_anchor_deg",
+        "sim_refinement_status",
+    )
+
+    dataset_sig = (
+        int(dataset_ctx.dataset_index),
+        str(dataset_ctx.label),
+        _fit_prediction_array_signature(subset.miller),
+        _fit_prediction_array_signature(subset.intensities),
+        _fit_prediction_array_signature(subset.original_indices),
+        int(subset.total_reflection_count),
+        int(subset.fixed_source_reflection_count),
+        int(subset.fallback_hkl_count),
+        bool(subset.reduced),
+    )
+    point_provider_sig = (
+        str(dataset_ctx.fit_space_projector_kind or ""),
+        str(dataset_ctx.fit_space_projector_unavailable_reason or ""),
+        str(dataset_ctx.sim_caked_image_builder_kind or ""),
+        str(dataset_ctx.qr_fit_trial_source_rows_builder_kind or ""),
+        bool(dataset_ctx.dynamic_reanchor_enabled),
+        bool(callable(dataset_ctx.fit_space_projector)),
+        bool(callable(dataset_ctx.sim_caked_image_builder)),
+        bool(callable(dataset_ctx.qr_fit_trial_source_rows_builder)),
+    )
+    objective_mode_sig = (
+        str(fit_context.get("objective_mode", "geometry_dynamic_point_matches")),
+        bool(fit_context.get("dynamic_point_geometry_fit", True)),
+        bool(fit_context.get("manual_point_fit_mode", True)),
+        bool(trial_params.get("_q_group_line_constraints_enabled", False)),
+        bool(trial_params.get("_uses_dynamic_qr_fit_prediction", True)),
+    )
+    return GeometryObjectiveSignature(
+        physics_sig=(_fit_prediction_signature(physics_payload),),
+        detector_center_sig=detector_center_sig,
+        dataset_sig=dataset_sig,
+        point_provider_sig=point_provider_sig,
+        qr_branch_identity_sig=(_entry_signature(qr_branch_fields),),
+        source_row_identity_sig=(_entry_signature(source_row_fields),),
+        manual_selection_sig=(_entry_signature(manual_selection_fields),),
+        refined_peak_sig=(_entry_signature(refined_peak_fields),),
+        objective_mode_sig=objective_mode_sig,
+        active_fit_parameter_sig=active_names,
+    )
+
+
 def _nearest_caked_axis_index(axis: np.ndarray, value: float, *, angular: bool = False) -> int | None:
     if axis.size <= 0 or not np.isfinite(float(value)):
         return None
@@ -16722,17 +16898,32 @@ def _build_trial_qr_source_rows_payload(
         return {
             "available": False,
             "unavailable_reason": "qr_fit_trial_source_rows_builder_unavailable",
+            "objective_cache_mode": "disabled",
+            "objective_cache_hit": False,
+            "objective_cache_reject_reason": "source_rows_builder_unavailable",
+            "objective_process_peaks_called": False,
         }
     cache = fit_context.get("prediction_source_rows_cache")
+    objective_signature = fit_context.get("objective_signature")
+    objective_signature_key = (
+        geometry_objective_signature_cache_key(objective_signature)
+        if isinstance(objective_signature, GeometryObjectiveSignature)
+        else None
+    )
     cache_key = (
         int(dataset_ctx.dataset_index),
         str(params_signature),
         str(dataset_ctx.qr_fit_trial_source_rows_builder_kind or ""),
+        objective_signature_key,
     )
     if isinstance(cache, dict) and cache_key in cache:
         cached = dict(cache[cache_key])
         cached["source_rows_rebuilt_or_reused"] = "reused_for_same_params_signature"
         cached["reuse_valid_for_same_params_signature"] = True
+        cached["objective_cache_mode"] = "full_simulation"
+        cached["objective_cache_hit"] = True
+        cached["objective_cache_reject_reason"] = None
+        cached["objective_process_peaks_called"] = False
         return cached
     try:
         payload = dataset_ctx.qr_fit_trial_source_rows_builder(local_params=trial_params)
@@ -16760,6 +16951,12 @@ def _build_trial_qr_source_rows_payload(
     result.setdefault("source_rows_rebuilt_or_reused", "rebuilt_for_trial_params")
     result.setdefault("reuse_valid_for_same_params_signature", True)
     result.setdefault("source_rows_signature", _fit_prediction_signature(rows))
+    result.setdefault("objective_cache_mode", "full_simulation")
+    result.setdefault("objective_cache_hit", False)
+    result.setdefault("objective_cache_reject_reason", "initial_evaluation")
+    result.setdefault("objective_process_peaks_called", True)
+    if objective_signature_key is not None:
+        result["objective_signature_key"] = objective_signature_key
     if not rows and not result.get("unavailable_reason"):
         result["unavailable_reason"] = "qr_fit_trial_source_rows_empty"
     if isinstance(cache, dict):
@@ -16841,6 +17038,14 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         ),
         "reuse_valid_for_same_params_signature": source_rows_payload.get(
             "reuse_valid_for_same_params_signature",
+        ),
+        "objective_cache_mode": source_rows_payload.get("objective_cache_mode"),
+        "objective_cache_hit": bool(source_rows_payload.get("objective_cache_hit", False)),
+        "objective_cache_reject_reason": source_rows_payload.get(
+            "objective_cache_reject_reason"
+        ),
+        "objective_process_peaks_called": bool(
+            source_rows_payload.get("objective_process_peaks_called", False)
         ),
     }
     if missing_fields:
@@ -17362,11 +17567,29 @@ def _resolve_qr_fit_prediction_from_trial_params(
     )
     out["fit_qr_branch_key"] = _dynamic_reanchor_jsonable(locked_key)
     out["fit_qr_branch_key_missing_fields"] = list(locked_missing_fields)
+    source_rows_fit_context: Mapping[str, object] = fit_context
+    if isinstance(dataset_ctx, GeometryFitDatasetContext):
+        source_rows_fit_context = dict(fit_context)
+        source_rows_fit_context["objective_signature"] = (
+            _geometry_objective_signature_for_dataset(
+                dataset_ctx,
+                trial_params,
+                fit_context,
+            )
+        )
+        source_rows_fit_context.setdefault(
+            "exact_center_remap_cache_available",
+            bool(
+                callable(dataset_ctx.fit_space_projector)
+                and str(dataset_ctx.fit_space_projector_kind or "")
+                == "exact_caked_bundle"
+            ),
+        )
     source_rows_payload = _build_trial_qr_source_rows_payload(
         dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
         trial_params=trial_params,
         params_signature=params_signature,
-        fit_context=fit_context,
+        fit_context=source_rows_fit_context,
     )
     hit_table_payload: Dict[str, object] = {
         "resolution_reason": "locked_hit_table_resolver_not_attempted"
@@ -17404,6 +17627,16 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 ),
                 "reuse_valid_for_same_params_signature": source_rows_payload.get(
                     "reuse_valid_for_same_params_signature"
+                ),
+                "objective_cache_mode": source_rows_payload.get("objective_cache_mode"),
+                "objective_cache_hit": bool(
+                    source_rows_payload.get("objective_cache_hit", False)
+                ),
+                "objective_cache_reject_reason": source_rows_payload.get(
+                    "objective_cache_reject_reason"
+                ),
+                "objective_process_peaks_called": bool(
+                    source_rows_payload.get("objective_process_peaks_called", False)
                 ),
                 "locked_qr_detector_point_source": "trial_hit_tables_locked_representative",
             }
@@ -21175,6 +21408,20 @@ def fit_geometry_parameters(
                 ),
                 "reuse_valid_for_same_params_signature": raw_entry.get(
                     "reuse_valid_for_same_params_signature"
+                ),
+                "objective_cache_mode": raw_entry.get("objective_cache_mode"),
+                "objective_cache_hit": bool(raw_entry.get("objective_cache_hit", False)),
+                "objective_cache_reject_reason": raw_entry.get(
+                    "objective_cache_reject_reason"
+                ),
+                "objective_process_peaks_called": bool(
+                    raw_entry.get("objective_process_peaks_called", False)
+                ),
+                "objective_signature_changed_fields": _objective_trace_jsonable(
+                    raw_entry.get("objective_signature_changed_fields")
+                ),
+                "objective_residual_component_count": raw_entry.get(
+                    "objective_residual_component_count"
                 ),
                 "trial_source_rows_count": raw_entry.get("trial_source_rows_count"),
                 "trial_source_rows_signature": raw_entry.get(
