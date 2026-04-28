@@ -174,7 +174,8 @@ Status as of 2026-04-28:
   simulation update actions; local Phase 3.5 validation also adds fast
   geometry-fitter handoff tests and optional New4 fixture skips; Phase 8 adds
   `scripts/debug/run_geometry_fitter_cache_regression_gate.py` as the repeatable
-  local/strict cache regression gate
+  local/strict cache regression gate; Phase 9 adds mixed-update and stale-worker
+  sequence coverage to that gate
 - bug status: fixed for overbroad fast-path invalidation that could clear QR
   selector entries or fitter handoff data before replacement rows were ready;
   fixed local New4 validation failures caused by absent optional artifacts
@@ -213,6 +214,9 @@ Validation:
 - `python scripts/debug/run_geometry_fitter_cache_regression_gate.py --mode local`
   passed; untracked local New4 artifacts are skipped by default unless
   `RA_SIM_ALLOW_UNTRACKED_NEW4=1` is set
+- Phase 9 local gate passed with the mixed-update suite included: fast gate
+  `497 passed`, manual identity `5 passed, 423 deselected`, workflow slice
+  `26 passed, 2 skipped`
 
 ## Weighted-event diffraction status
 

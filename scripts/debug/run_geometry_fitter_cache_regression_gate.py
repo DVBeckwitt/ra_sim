@@ -40,6 +40,7 @@ FAST_LOCAL_TESTS = (
     "tests/test_gui_runtime_geometry_fitter_handoff_fast.py",
     "tests/test_geometry_objective_cache.py",
     "tests/test_gui_runtime_geometry_fitter_cache_handoff.py",
+    "tests/test_gui_runtime_mixed_update_regressions.py",
 )
 
 WORKFLOW_SLICE = (

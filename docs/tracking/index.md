@@ -66,7 +66,7 @@ headless override checks, and real diagnostic artifact inspection still need
 project input data.
 
 Fast-path cache audit and QR selector policy status note:
-Phases 1-8 are implemented and locally validated. QR/Qz masks remain explicit
+Phases 1-9 are implemented and locally validated. QR/Qz masks remain explicit
 user/state data and are not cleared by runtime cache invalidation. Selective
 invalidation is policy-gated, optional New4 tests skip cleanly when artifacts
 are absent, prune reuse/fill report QR selector retention/deferred refresh and
@@ -79,9 +79,10 @@ changes. Phase 7 adds a synthetic end-to-end QR selector to geometry fitter
 handoff scenario covering fast-path sequencing, point-provider parity,
 projection invalidation, and objective-cache reuse/reject behavior. Phase 8
 adds `scripts/debug/run_geometry_fitter_cache_regression_gate.py` for repeatable
-local/strict cache regression validation. Bug/error status: no known failing
-local Phase 8 gate tests after the local script passed with fast gate
-`477 passed`, manual identity `5 passed, 423 deselected`, and workflow slice
+local/strict cache regression validation. Phase 9 adds the final mixed-update
+and stale-worker regression suite. Bug/error status: no known failing local
+Phase 9 gate tests after focused mixed gate `67 passed`, local script fast gate
+`497 passed`, manual identity `5 passed, 423 deselected`, and workflow slice
 `26 passed, 2 skipped`.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):

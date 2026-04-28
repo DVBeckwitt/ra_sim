@@ -38,6 +38,8 @@ def test_gate_local_mode_builds_fast_commands_without_slow_geometry(tmp_path) ->
     assert "fast local pytest gate" in names
     assert "manual identity gate" in names
     assert "workflow slice" in names
+    fast_gate = next(command for command in commands if command.name == "fast local pytest gate")
+    assert "tests/test_gui_runtime_mixed_update_regressions.py" in fast_gate.command
     slow_gate = next(command for command in commands if command.name == "slow_geometry gate")
     assert slow_gate.skipped
     assert slow_gate.skip_reason == "skipped local mode"

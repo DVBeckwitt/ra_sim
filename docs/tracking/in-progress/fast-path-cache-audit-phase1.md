@@ -2,7 +2,7 @@
 
 Date: 2026-04-28
 
-Scope: Phases 1-8 of fast-path cache verification, selective invalidation,
+Scope: Phases 1-9 of fast-path cache verification, selective invalidation,
 local validation gating, prune-specific QR selector lifecycle hardening, and
 detector-center remap plus geometry-objective cache signature and end-to-end
 handoff hardening.
@@ -19,7 +19,8 @@ handoff hardening.
   QR selector to geometry fitter handoff scenario that exercises fast-path
   invalidation, point-provider parity, projection invalidation, and objective
   cache reuse/reject decisions together. Phase 8 adds a repeatable local/strict
-  geometry-fitter cache regression gate script.
+  geometry-fitter cache regression gate script. Phase 9 adds final mixed-update
+  and stale-worker regression coverage.
 - Bug status: fixed for overbroad fast-path invalidation of QR selector entries,
   source-row snapshots, intersection caches, and fitter handoff state; fixed
   local checkpoint failures caused by absent optional New4 artifacts; fixed
@@ -31,8 +32,8 @@ handoff hardening.
   peak, point-provider, objective-mode, active-fit-parameter, and physics
   signature changes; added workflow coverage for handoff-validity regressions
   after display/combine/analysis/prune/detector-center fast paths.
-- Error status: no known failing local Phase 7, Phase 6, Phase 5, Phase 4, or
-  Phase 3.5 gate tests. Phase 8 local gate is green.
+- Error status: no known failing local Phase 9, Phase 8, Phase 7, Phase 6,
+  Phase 5, Phase 4, or Phase 3.5 gate tests. Phase 9 local gate is green.
 - Compatibility status: QR disabled/enabled masks remain explicit user/state
   data and are not cleared by cache invalidation.
 
@@ -44,6 +45,7 @@ handoff hardening.
 - `tests/test_gui_runtime_optimization_scenarios.py`: present.
 - `tests/test_geometry_objective_cache.py`: present.
 - `tests/test_gui_runtime_geometry_fitter_cache_handoff.py`: present.
+- `tests/test_gui_runtime_mixed_update_regressions.py`: present.
 - `scripts/debug/run_geometry_fitter_cache_regression_gate.py`: present.
 
 ## Mutation Map
@@ -392,3 +394,53 @@ Phase 8 validation:
   `477 passed`, manual identity gate passed with `5 passed, 423 deselected`,
   workflow slice passed with `26 passed, 2 skipped`, slow geometry skipped for
   local mode, and untracked New4 preflight/ladder scripts skipped by default.
+
+## Phase 9 Mixed-Update Regression Suite
+
+Phase 9 added final mixed-update and stale-worker regression coverage without
+changing production runtime or fitting behavior.
+
+Feature status:
+
+- Added `tests/test_gui_runtime_mixed_update_regressions.py` for unsafe mixed
+  classifier fallbacks, stale ready-result discard behavior, q-group refresh
+  lifecycle sequencing, and mixed objective-cache identity rejection.
+- Added trace-format coverage for mixed full-simulation fallback,
+  stale-fast-path ready-result discard, and prune-fill deferred refresh across
+  display updates.
+- Added the mixed suite to
+  `scripts/debug/run_geometry_fitter_cache_regression_gate.py` local mode and
+  updated the gate-script test so future local gates include it.
+
+Bug/error status:
+
+- Center plus distance, orientation, or pixel-size changes fail closed to full
+  simulation instead of detector-center remap.
+- Prune plus lattice/physics changes fail closed to full simulation.
+- Stale full and primary-fill ready results do not overwrite newer fast-path or
+  full-simulation state.
+- Q-group refresh remains pending through display/center sequences until rows
+  are refreshed, and handoff validity stays false while content or projection
+  state is stale.
+- Objective cache reuse is rejected after manual, refined peak, QR branch, or
+  point-provider identity changes in mixed sequences.
+
+Phase 9 validation:
+
+- `python -m pytest tests/test_gui_runtime_mixed_update_regressions.py -q`
+  passed, `17 passed`.
+- `python -m pytest tests/test_gui_runtime_mixed_update_regressions.py tests/test_gui_runtime_geometry_fitter_cache_handoff.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py tests/test_geometry_objective_cache.py tests/test_gui_runtime_update_trace.py tests/test_gui_runtime_optimization_scenarios.py -q`
+  passed, `67 passed`.
+- `python -m pytest tests/test_geometry_fitter_cache_regression_gate_script.py -q`
+  passed, `5 passed`.
+- `python -m py_compile ra_sim/fitting/optimization.py ra_sim/fitting/geometry_objective_cache.py ra_sim/gui/geometry_fit.py ra_sim/gui/manual_geometry.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_invalidation.py ra_sim/gui/runtime_qr_selector_cache_policy.py ra_sim/gui/runtime_detector_remap_cache.py scripts/debug/run_geometry_fitter_cache_regression_gate.py`
+  passed.
+- `python scripts/debug/run_geometry_fitter_cache_regression_gate.py --mode local`
+  passed. Summary: fast local pytest gate passed with `497 passed`, manual
+  identity gate passed with `5 passed, 423 deselected`, workflow slice passed
+  with `26 passed, 2 skipped`, slow geometry skipped for local mode, and
+  untracked New4 preflight/ladder scripts skipped by default.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
+  passed with `26 passed, 2 skipped`.
+- Static QR/Qz mutation audit still shows controller/state-load/selection
+  sites only, not runtime invalidation.

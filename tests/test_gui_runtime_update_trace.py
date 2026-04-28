@@ -205,6 +205,68 @@ def test_center_remap_trace_reports_projection_and_handoff_state() -> None:
     assert "center_remap_fallback_reason=none" in line
 
 
+def test_mixed_update_trace_reports_full_simulation_not_center_remap() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_return_waiting_for_simulation",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "full_simulation",
+            "requires_worker": True,
+            "center_remap_used": False,
+            "center_remap_fallback_reason": "physics_dependency_changed",
+            "primary_prune_cache_mode": "full",
+        },
+    )
+
+    assert "update_action=full_simulation" in line
+    assert "requires_worker=true" in line
+    assert "center_remap_used=false" in line
+    assert "center_remap_fallback_reason=physics_dependency_changed" in line
+    assert "primary_prune_cache_mode=full" in line
+
+
+def test_stale_worker_trace_reports_ignored_result() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_discard_stale_ready_fast_path_result",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "ready_job_kind": "full",
+            "ready_timing_update_id": 4,
+            "update_action": "display_only",
+        },
+    )
+
+    assert "event=do_update_discard_stale_ready_fast_path_result" in line
+    assert "ready_job_kind=full" in line
+    assert "ready_timing_update_id=4" in line
+    assert "update_action=display_only" in line
+
+
+def test_prune_fill_trace_keeps_refresh_deferred_across_display_update() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "display_only",
+            "requires_worker": False,
+            "qr_selector_entries_retained": True,
+            "qr_selector_refresh_deferred": True,
+            "q_group_content_signature_changed": True,
+            "geometry_fitter_handoff_valid": False,
+        },
+    )
+
+    assert "update_action=display_only" in line
+    assert "requires_worker=false" in line
+    assert "qr_selector_entries_retained=true" in line
+    assert "qr_selector_refresh_deferred=true" in line
+    assert "q_group_content_signature_changed=true" in line
+    assert "geometry_fitter_handoff_valid=false" in line
+
+
 def test_append_runtime_update_trace_line_writes_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         runtime_update_trace,

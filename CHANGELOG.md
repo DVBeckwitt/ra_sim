@@ -32,6 +32,7 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Added a mixed-update geometry-fitter cache regression suite covering unsafe mixed fast-path fallbacks, stale worker result handling, deferred q-group refresh, projection handoff validity, and objective-cache reject reasons.
   - Added a repeatable geometry-fitter cache regression gate script with local and strict modes, fast cache/handoff/objective coverage, workflow-slice validation, slow-geometry strict coverage, and optional New4 artifact handling.
   - Added a fast end-to-end QR selector to geometry-fitter handoff scenario covering fast-path invalidation sequencing, point-provider parity, projection-cache invalidation, and objective-cache reuse/reject behavior without requiring New4 artifacts.
   - Hardened geometry-objective cache signatures so center-only reuse is gated by unchanged physics, dataset, point-provider, QR branch identity, source-row identity, manual selection, refined peak, objective mode, and active fit-parameter signatures.
