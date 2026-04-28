@@ -3279,6 +3279,8 @@ def create_sampling_optics_controls(
     on_commit_events_per_phase: Callable[[object], None],
     on_rod_points_per_gz_slide: Callable[[object], None],
     on_commit_rod_points_per_gz: Callable[[object], None],
+    events_per_phase_independent: bool = False,
+    on_events_per_phase_independent_change: Callable[[], None] | None = None,
     **_ignored_legacy_sampling_kwargs,
 ) -> None:
     """Create the sample-count / optics controls and store their refs."""
@@ -3324,10 +3326,23 @@ def create_sampling_optics_controls(
 
     events_per_phase_frame = ttk.Frame(random_sampling_frame)
     events_per_phase_frame.pack(fill=tk.X, pady=(0, 2))
-    ttk.Label(events_per_phase_frame, text="Events per beam phase").pack(
+    events_per_phase_header = ttk.Frame(events_per_phase_frame)
+    events_per_phase_header.pack(fill=tk.X)
+    ttk.Label(events_per_phase_header, text="Events per beam phase").pack(
+        side=tk.LEFT,
         anchor=tk.W,
         padx=5,
     )
+    events_per_phase_independent_var = tk.BooleanVar(
+        value=bool(events_per_phase_independent)
+    )
+    events_per_phase_independent_checkbutton = ttk.Checkbutton(
+        events_per_phase_header,
+        text="Independent",
+        variable=events_per_phase_independent_var,
+        command=on_events_per_phase_independent_change,
+    )
+    events_per_phase_independent_checkbutton.pack(side=tk.RIGHT, padx=5)
 
     events_per_phase_row = ttk.Frame(events_per_phase_frame)
     events_per_phase_row.pack(fill=tk.X, padx=5, pady=(2, 0))
@@ -3429,6 +3444,10 @@ def create_sampling_optics_controls(
     view_state.events_per_phase_scale = events_per_phase_scale
     view_state.events_per_phase_value_var = events_per_phase_value_var
     view_state.events_per_phase_value_label = events_per_phase_value_label
+    view_state.events_per_phase_independent_var = events_per_phase_independent_var
+    view_state.events_per_phase_independent_checkbutton = (
+        events_per_phase_independent_checkbutton
+    )
     view_state.rod_points_per_gz_frame = rod_points_per_gz_frame
     view_state.rod_points_per_gz_var = rod_points_per_gz_var
     view_state.rod_points_per_gz_scale = rod_points_per_gz_scale
@@ -3450,6 +3469,7 @@ def create_sampling_optics_controls(
     view_state.optics_mode_var = optics_mode_var
     view_state.fast_optics_button = fast_optics_button
     view_state.exact_optics_button = exact_optics_button
+    _set_sampling_events_per_phase_scale_state(view_state, controls_enabled=True)
 
 
 def set_sampling_sample_count_text(
@@ -3535,6 +3555,31 @@ def _configure_widget_state(widget: object | None, state: str) -> None:
         configure(state=state)
 
 
+def _sampling_events_per_phase_is_independent(
+    view_state: SamplingOpticsControlsViewState,
+) -> bool:
+    independent_var = getattr(view_state, "events_per_phase_independent_var", None)
+    getter = getattr(independent_var, "get", None)
+    if not callable(getter):
+        return True
+    try:
+        return bool(getter())
+    except Exception:
+        return True
+
+
+def _set_sampling_events_per_phase_scale_state(
+    view_state: SamplingOpticsControlsViewState,
+    *,
+    controls_enabled: bool,
+) -> None:
+    enabled = controls_enabled and _sampling_events_per_phase_is_independent(view_state)
+    _configure_widget_state(
+        getattr(view_state, "events_per_phase_scale", None),
+        tk.NORMAL if enabled else tk.DISABLED,
+    )
+
+
 def set_sampling_sample_count_controls_enabled(
     view_state: SamplingOpticsControlsViewState,
     *,
@@ -3544,7 +3589,11 @@ def set_sampling_sample_count_controls_enabled(
 
     state_value = tk.NORMAL if enabled else tk.DISABLED
     _configure_widget_state(view_state.sample_count_scale, state_value)
-    _configure_widget_state(view_state.events_per_phase_scale, state_value)
+    _configure_widget_state(
+        getattr(view_state, "events_per_phase_independent_checkbutton", None),
+        state_value,
+    )
+    _set_sampling_events_per_phase_scale_state(view_state, controls_enabled=enabled)
 
 
 def set_sampling_custom_controls_enabled(
@@ -3569,7 +3618,14 @@ def set_sampling_method_controls_enabled(
     stratified_state = tk.NORMAL if stratified_enabled else tk.DISABLED
 
     _configure_widget_state(view_state.sample_count_scale, random_state)
-    _configure_widget_state(view_state.events_per_phase_scale, random_state)
+    _configure_widget_state(
+        getattr(view_state, "events_per_phase_independent_checkbutton", None),
+        random_state,
+    )
+    _set_sampling_events_per_phase_scale_state(
+        view_state,
+        controls_enabled=random_enabled,
+    )
 
     _configure_widget_state(view_state.seed_entry, stratified_state)
     _configure_widget_state(view_state.reset_sampling_button, stratified_state)

@@ -14,7 +14,7 @@ write_excel = False
 # functions in this module also run in import-safe and test contexts where
 # those inner assignments have not executed.
 defaults = {}
-DEFAULT_EVENTS_PER_BEAM_PHASE = 50
+DEFAULT_EVENTS_PER_BEAM_PHASE = 75
 MIN_EVENTS_PER_BEAM_PHASE = 1
 MAX_EVENTS_PER_BEAM_PHASE = 1000
 
@@ -1277,10 +1277,10 @@ def _initialize_runtime_state_block_01() -> None:
         "Medium": 250,
         "High": 500,
     }
-    DEFAULT_RANDOM_SAMPLE_COUNT = 50
+    DEFAULT_RANDOM_SAMPLE_COUNT = 75
     MIN_RANDOM_SAMPLE_COUNT = 1
     MAX_RANDOM_SAMPLE_COUNT = 5000
-    DEFAULT_EVENTS_PER_BEAM_PHASE = 50
+    DEFAULT_EVENTS_PER_BEAM_PHASE = 75
     MIN_EVENTS_PER_BEAM_PHASE = 1
     MAX_EVENTS_PER_BEAM_PHASE = 1000
     MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT = 50000
@@ -18806,6 +18806,15 @@ def reset_to_defaults():
     )
     resolution_var.set(CUSTOM_SAMPLING_OPTION)
     custom_samples_var.set(default_sample_count)
+    events_independent_var = getattr(
+        sampling_optics_controls_view_state,
+        "events_per_phase_independent_var",
+        None,
+    )
+    if events_independent_var is not None:
+        events_independent_var.set(False)
+    _sync_events_per_beam_phase_to_sample_count(default_sample_count)
+    _set_sampling_method_controls_state()
     pruning_defaults = gui_runtime_fit_analysis.resolve_runtime_pruning_control_defaults(
         structure_factor_pruning_module=gui_structure_factor_pruning,
         raw_prune_bias=defaults.get("sf_prune_bias", 0.0),
@@ -30138,7 +30147,45 @@ def _current_random_sample_count(default=None):
     return _parse_sample_count(raw_value, fallback)
 
 
+def _events_per_beam_phase_independent() -> bool:
+    independent_var = getattr(
+        sampling_optics_controls_view_state,
+        "events_per_phase_independent_var",
+        None,
+    )
+    getter = getattr(independent_var, "get", None)
+    if not callable(getter):
+        return True
+    try:
+        return bool(getter())
+    except Exception:
+        return True
+
+
+def _linked_events_per_beam_phase(sample_count=None) -> int:
+    if sample_count is None:
+        sample_count = _current_random_sample_count()
+    return _parse_events_per_beam_phase(sample_count, DEFAULT_EVENTS_PER_BEAM_PHASE)
+
+
+def _sync_events_per_beam_phase_to_sample_count(sample_count=None) -> int:
+    normalized = _linked_events_per_beam_phase(sample_count)
+    events_var = getattr(sampling_optics_controls_view_state, "events_per_phase_var", None)
+    if events_var is not None:
+        try:
+            current_value = int(round(float(events_var.get())))
+        except Exception:
+            current_value = normalized
+        if current_value != normalized:
+            events_var.set(normalized)
+    defaults["events_per_beam_phase"] = int(normalized)
+    return int(normalized)
+
+
 def _current_events_per_beam_phase(default=None):
+    if not _events_per_beam_phase_independent():
+        return _linked_events_per_beam_phase()
+
     fallback = _parse_events_per_beam_phase(
         default if default is not None else _default_events_per_beam_phase(),
         DEFAULT_EVENTS_PER_BEAM_PHASE,
@@ -30244,6 +30291,8 @@ def _normalize_random_sample_count_control(default=None) -> int:
     defaults["sampling_count"] = int(normalized)
     if resolution_var.get() != CUSTOM_SAMPLING_OPTION:
         resolution_var.set(CUSTOM_SAMPLING_OPTION)
+    if not _events_per_beam_phase_independent():
+        _sync_events_per_beam_phase_to_sample_count(normalized)
     return int(normalized)
 
 
@@ -30259,6 +30308,12 @@ def _normalize_events_per_beam_phase_control(default=None) -> int:
             events_var.set(normalized)
     defaults["events_per_beam_phase"] = int(normalized)
     return int(normalized)
+
+
+def _on_sample_count_var_changed():
+    if not _events_per_beam_phase_independent():
+        _sync_events_per_beam_phase_to_sample_count()
+    _refresh_resolution_display()
 
 
 def _preview_random_sample_count(_value=None):
@@ -30285,6 +30340,25 @@ def _apply_events_per_beam_phase(*, trigger_update=True):
     _normalize_events_per_beam_phase_control(default=_default_events_per_beam_phase())
     _refresh_resolution_display()
     if trigger_update:
+        _invalidate_geometry_manual_pick_cache()
+        simulation_runtime_state.last_sim_signature = None
+        simulation_runtime_state.last_simulation_signature = None
+        simulation_runtime_state.worker_ready_result = None
+        schedule_update()
+
+
+def _on_events_per_beam_phase_independent_change():
+    previous_events = _parse_events_per_beam_phase(
+        defaults.get("events_per_beam_phase", _default_events_per_beam_phase()),
+        DEFAULT_EVENTS_PER_BEAM_PHASE,
+    )
+    if _events_per_beam_phase_independent():
+        current_events = _normalize_events_per_beam_phase_control(default=previous_events)
+    else:
+        current_events = _sync_events_per_beam_phase_to_sample_count()
+    _set_sampling_method_controls_state()
+    _refresh_resolution_display()
+    if current_events != previous_events:
         _invalidate_geometry_manual_pick_cache()
         simulation_runtime_state.last_sim_signature = None
         simulation_runtime_state.last_simulation_signature = None
@@ -30415,9 +30489,7 @@ def _initialize_runtime_controls_block_46() -> None:
     initial_rod_points_per_gz = _current_rod_points_per_gz(
         default=defaults.get("rod_points_per_gz"),
     )
-    initial_events_per_phase = _current_events_per_beam_phase(
-        default=defaults.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE),
-    )
+    initial_events_per_phase = _linked_events_per_beam_phase(initial_sample_count)
 
     gui_views.create_sampling_optics_controls(
         parent=sampling_pruning_frame.frame,
@@ -30450,6 +30522,8 @@ def _initialize_runtime_controls_block_46() -> None:
         ),
         on_rod_points_per_gz_slide=_preview_rod_points_per_gz,
         on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(trigger_update=True),
+        events_per_phase_independent=False,
+        on_events_per_phase_independent_change=_on_events_per_beam_phase_independent_change,
     )
     custom_samples_var = sampling_optics_controls_view_state.sample_count_var
     resolution_var = tk.StringVar(value=CUSTOM_SAMPLING_OPTION)
@@ -30473,7 +30547,7 @@ def _initialize_runtime_controls_block_47() -> None:
     resolution_var.trace_add("write", on_resolution_option_change)
     sample_count_trace_add = getattr(sample_count_var, "trace_add", None)
     if callable(sample_count_trace_add):
-        sample_count_trace_add("write", lambda *_args: _refresh_resolution_display())
+        sample_count_trace_add("write", lambda *_args: _on_sample_count_var_changed())
 
 
 def on_optics_mode_change(*_):

@@ -531,6 +531,7 @@ class _FakeCheckbutton:
         self.kwargs = kwargs
         self.command = kwargs.get("command")
         self.variable = kwargs.get("variable")
+        self.state = kwargs.get("state")
         _FakeCheckbutton.created.append(self)
 
     def pack(self, **_kwargs) -> None:
@@ -538,6 +539,12 @@ class _FakeCheckbutton:
 
     def grid(self, **_kwargs) -> None:
         pass
+
+    def config(self, **kwargs) -> None:
+        self.state = kwargs.get("state", self.state)
+
+    def configure(self, **kwargs) -> None:
+        self.config(**kwargs)
 
 
 class _FakeVar:
@@ -2068,6 +2075,7 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     monkeypatch,
 ) -> None:
     _FakeButton.created = []
+    _FakeCheckbutton.created = []
     _FakeLabel.created = []
     _FakeRadiobutton.created = []
     _FakeScale.created = []
@@ -2075,7 +2083,9 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
     monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
     monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
     monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
     monkeypatch.setattr(views.tk, "IntVar", _FakeVar)
     monkeypatch.setattr(views.tk, "Scale", _FakeScale)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
@@ -2083,6 +2093,7 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     view_state = state.SamplingOpticsControlsViewState()
     sample_count_events = []
     events_events = []
+    independent_events = []
     rod_commits = []
 
     views.create_sampling_optics_controls(
@@ -2108,6 +2119,8 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         on_commit_events_per_phase=lambda _event: events_events.append(("commit", None)),
         on_rod_points_per_gz_slide=lambda _value: rod_commits.append("slide"),
         on_commit_rod_points_per_gz=lambda _event: rod_commits.append("commit"),
+        events_per_phase_independent=False,
+        on_events_per_phase_independent_change=lambda: independent_events.append("toggle"),
     )
 
     assert isinstance(view_state.sample_count_frame, _FakeFrame)
@@ -2120,6 +2133,9 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.ray_warning_var is None
     assert view_state.events_per_phase_var.get() == 50
     assert view_state.events_per_phase_value_var.get() == "50 events/phase"
+    assert view_state.events_per_phase_independent_var.get() is False
+    assert view_state.events_per_phase_independent_checkbutton is _FakeCheckbutton.created[0]
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "Independent"
     assert view_state.rod_points_per_gz_var.get() == 480
     assert view_state.rod_points_per_gz_value_var.get() == "480 / Gz"
     assert view_state.rod_point_total_var.get() == "Longest rod: 960 points"
@@ -2132,6 +2148,7 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.events_per_phase_scale.variable is view_state.events_per_phase_var
     assert view_state.events_per_phase_scale.cget("from") == 1
     assert view_state.events_per_phase_scale.cget("to") == 1000
+    assert view_state.events_per_phase_scale.state == tk.DISABLED
     assert any(label.text == "Events per beam phase" for label in _FakeLabel.created)
     assert [radio.value for radio in _FakeRadiobutton.created] == [
         "fast",
@@ -2155,9 +2172,14 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     views.set_sampling_sample_count_controls_enabled(view_state, enabled=False)
     assert view_state.sample_count_scale.state == tk.DISABLED
     assert view_state.events_per_phase_scale.state == tk.DISABLED
+    assert view_state.events_per_phase_independent_checkbutton.state == tk.DISABLED
 
     views.set_sampling_sample_count_controls_enabled(view_state, enabled=True)
     assert view_state.sample_count_scale.state == tk.NORMAL
+    assert view_state.events_per_phase_scale.state == tk.DISABLED
+    assert view_state.events_per_phase_independent_checkbutton.state == tk.NORMAL
+    view_state.events_per_phase_independent_var.set(True)
+    views.set_sampling_sample_count_controls_enabled(view_state, enabled=True)
     assert view_state.events_per_phase_scale.state == tk.NORMAL
 
     views.set_sampling_method_controls_enabled(
@@ -2166,15 +2188,19 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         stratified_enabled=True,
     )
     assert view_state.sample_count_scale.state == tk.DISABLED
+    assert view_state.events_per_phase_scale.state == tk.DISABLED
+    assert view_state.events_per_phase_independent_checkbutton.state == tk.DISABLED
 
     view_state.sample_count_scale.command("3600")
     view_state.sample_count_scale.bindings["<ButtonRelease-1>"][0](None)
     view_state.events_per_phase_scale.command("75")
     view_state.events_per_phase_scale.bindings["<ButtonRelease-1>"][0](None)
+    view_state.events_per_phase_independent_checkbutton.command()
     view_state.rod_points_per_gz_scale.command(512)
     view_state.rod_points_per_gz_scale.bindings["<ButtonRelease-1>"][0](None)
     assert sample_count_events == [("slide", "3600"), ("commit", None)]
     assert events_events == [("slide", "75"), ("commit", None)]
+    assert independent_events == ["toggle"]
     assert rod_commits == ["slide", "commit"]
 
 

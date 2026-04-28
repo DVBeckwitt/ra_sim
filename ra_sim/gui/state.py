@@ -314,6 +314,8 @@ class SamplingOpticsControlsViewState:
     events_per_phase_scale: Any = None
     events_per_phase_value_var: Any = None
     events_per_phase_value_label: Any = None
+    events_per_phase_independent_var: Any = None
+    events_per_phase_independent_checkbutton: Any = None
     rod_points_per_gz_frame: Any = None
     rod_points_per_gz_var: Any = None
     rod_points_per_gz_scale: Any = None
