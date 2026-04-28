@@ -44,6 +44,8 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
+  - Hardened GUI detector-center remap cache handling so exact remaps retain QR/Qz identity, invalidate stale manual/caked/q-space projection caches, report projection and handoff trace state, and fall back to full simulation for missing secondary exact caches or center-plus-physics changes.
+  - Fixed manual geometry refresh so detector-coordinate truth is not replaced by stale caked fields and refreshed caked coordinates update raw caked fields.
   - Hardened GUI runtime prune reuse/fill QR selector cache handling so explicit QR/Qz masks persist, stale source-row snapshots are not retained across incompatible hit-table identity, and runtime traces report selector retention/deferred refresh/fitter handoff validity.
   - Tightened Background tab copy with shorter labels, buttons, hints, status text, presets, tooltips, and diagnostics wording without changing subtraction behavior or saved-state keys.
   - Reworked the diffuse background-subtraction controls into a workflow-oriented Background tab with presets, explained sliders, diagnostics, and dirty/auto-preview status feedback while preserving saved-state and headless configuration keys.

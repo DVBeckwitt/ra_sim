@@ -176,6 +176,35 @@ def test_trace_reports_detector_center_remap() -> None:
     assert "update_reason=detector_center_changed_exact_cache_available" in line
 
 
+def test_center_remap_trace_reports_projection_and_handoff_state() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "detector_center_remap",
+            "requires_worker": False,
+            "center_remap_used": True,
+            "qr_selector_branch_identity_retained": True,
+            "source_row_snapshots_retained": True,
+            "detector_projection_cache_refreshed": True,
+            "caked_projection_cache_invalidated": True,
+            "geometry_fitter_handoff_valid": False,
+            "center_remap_fallback_reason": "none",
+        },
+    )
+
+    assert "update_action=detector_center_remap" in line
+    assert "requires_worker=false" in line
+    assert "center_remap_used=true" in line
+    assert "qr_selector_branch_identity_retained=true" in line
+    assert "source_row_snapshots_retained=true" in line
+    assert "detector_projection_cache_refreshed=true" in line
+    assert "caked_projection_cache_invalidated=true" in line
+    assert "geometry_fitter_handoff_valid=false" in line
+    assert "center_remap_fallback_reason=none" in line
+
+
 def test_append_runtime_update_trace_line_writes_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         runtime_update_trace,

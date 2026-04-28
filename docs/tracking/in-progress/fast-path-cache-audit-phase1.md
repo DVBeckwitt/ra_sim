@@ -2,21 +2,26 @@
 
 Date: 2026-04-28
 
-Scope: Phases 1-4 of fast-path cache verification, selective invalidation,
-local validation gating, and prune-specific QR selector lifecycle hardening.
+Scope: Phases 1-5 of fast-path cache verification, selective invalidation,
+local validation gating, prune-specific QR selector lifecycle hardening, and
+detector-center remap geometry-fitter handoff hardening.
 
 ## Current Status
 
 - Feature status: implemented and validated for QR selector cache policy,
   selective runtime invalidation, local optional-artifact skips, slow/manual
   geometry markers, fast geometry-fitter handoff checks, geometry objective
-  source-row reuse baselines, and prune reuse/fill QR selector lifecycle trace.
+  source-row reuse baselines, prune reuse/fill QR selector lifecycle trace, and
+  detector-center remap projection/handoff trace.
 - Bug status: fixed for overbroad fast-path invalidation of QR selector entries,
   source-row snapshots, intersection caches, and fitter handoff state; fixed
   local checkpoint failures caused by absent optional New4 artifacts; fixed
   prune reuse/fill trace and invalidation sequencing so content changes do not
-  advertise a valid geometry-fitter handoff before refreshed rows exist.
-- Error status: no known failing local Phase 4 or Phase 3.5 gate tests.
+  advertise a valid geometry-fitter handoff before refreshed rows exist; fixed
+  detector-center remap stale projection-cache handoff reporting and manual
+  geometry refresh stale-caked-field precedence.
+- Error status: no known failing local Phase 5, Phase 4, or Phase 3.5 gate
+  tests.
 - Compatibility status: QR disabled/enabled masks remain explicit user/state
   data and are not cleared by cache invalidation.
 
@@ -192,3 +197,50 @@ Phase 4 validation:
   passed with `26 passed, 2 skipped`.
 - Static QR/Qz mask mutation audit still shows only controller/state-load/user
   selection sites, not runtime invalidation.
+
+## Phase 5 Detector-Center Remap Hardening
+
+Phase 5 hardened exact detector-center remap without changing the dependency
+classifier or prune lifecycle.
+
+Feature status:
+
+- Exact detector-center remap still skips the full simulation worker when the
+  primary and any active secondary exact remap caches are available.
+- QR/Qz masks, QR branch identity, and source-row identity are retained during
+  exact remap.
+- Detector-native row/col data are translated for hit tables, max positions,
+  and intersection caches.
+- Manual picker projection caches, caked/q-space analysis caches, and geometry
+  fitter caking caches are invalidated when detector geometry changes and they
+  cannot be translated exactly.
+- Runtime trace now reports remap identity, projection invalidation, fitter
+  handoff validity, and fallback reasons with:
+  `qr_selector_branch_identity_retained`,
+  `detector_projection_cache_refreshed`,
+  `caked_projection_cache_invalidated`, and
+  `center_remap_fallback_reason`.
+- Missing secondary exact remap caches and center-plus-physics changes fall
+  closed to full simulation.
+
+Bug/error status:
+
+- Stale manual/caked/q-space projection data are no longer advertised as a
+  valid geometry-fitter handoff after detector-center remap.
+- Manual geometry refresh no longer lets stale `caked_x`/`raw_caked_x` fields
+  override explicit detector-coordinate truth when authoritative saved caked
+  background angles are absent.
+- Refreshed manual geometry caked coordinates now update raw caked fields so
+  follow-up refreshes do not reuse stale caked positions.
+- No known failing local Phase 5 gate tests.
+
+Phase 5 validation:
+
+- `python -m pytest tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py tests/test_manual_geometry_live_peak_cache.py tests/test_gui_runtime_update_trace.py tests/test_runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py -q`
+  passed, `114 passed`.
+- `python -m pytest tests/test_runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_update_dependencies.py tests/test_gui_runtime_primary_cache.py tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_update_trace.py tests/test_fit_cache_controls.py tests/test_gui_runtime_import_safe.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py -q`
+  passed, `457 passed`.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
+  passed with `26 passed, 2 skipped`.
+- `python -m py_compile ra_sim/gui/runtime_detector_remap_cache.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_invalidation.py ra_sim/gui/runtime_qr_selector_cache_policy.py ra_sim/gui/manual_geometry.py ra_sim/gui/geometry_fit.py`
+  passed.

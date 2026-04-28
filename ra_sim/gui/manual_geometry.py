@@ -674,10 +674,20 @@ def refresh_geometry_manual_pair_entry(
         source=raw_entry,
     )
     caked_background_is_authoritative = saved_background_caked_point is not None
+    saved_detector_point = _finite_pair("detector_x", "detector_y", source=raw_entry)
+    if saved_detector_point is None:
+        saved_detector_point = _finite_pair(
+            "background_detector_x",
+            "background_detector_y",
+            source=raw_entry,
+        )
+    detector_fields_are_authoritative = bool(
+        saved_background_caked_point is None and saved_detector_point is not None
+    )
     caked_point = saved_background_caked_point
-    if caked_point is None:
+    if caked_point is None and not detector_fields_are_authoritative:
         caked_point = _finite_pair("caked_x", "caked_y")
-    if caked_point is None:
+    if caked_point is None and not detector_fields_are_authoritative:
         caked_point = _finite_pair("raw_caked_x", "raw_caked_y")
     if caked_point is not None:
         normalized["background_two_theta_deg"] = float(caked_point[0])
@@ -1046,13 +1056,26 @@ def refresh_geometry_manual_pair_entry(
         saved_background_caked_point if caked_background_is_authoritative else recomputed_caked
     )
     if output_caked is not None:
+        if caked_background_is_authoritative and callable(
+            caked_angles_to_background_display_coords
+        ):
+            projected_output_display = _finite_tuple_pair(
+                caked_angles_to_background_display_coords(
+                    float(output_caked[0]),
+                    float(output_caked[1]),
+                )
+            )
+            if projected_output_display is not None:
+                normalized["x"] = float(projected_output_display[0])
+                normalized["y"] = float(projected_output_display[1])
+                normalized["display_col"] = float(projected_output_display[0])
+                normalized["display_row"] = float(projected_output_display[1])
         normalized["background_two_theta_deg"] = float(output_caked[0])
         normalized["background_phi_deg"] = float(output_caked[1])
         normalized["caked_x"] = float(output_caked[0])
         normalized["caked_y"] = float(output_caked[1])
-        if _finite_pair("raw_caked_x", "raw_caked_y") is None:
-            normalized["raw_caked_x"] = float(output_caked[0])
-            normalized["raw_caked_y"] = float(output_caked[1])
+        normalized["raw_caked_x"] = float(output_caked[0])
+        normalized["raw_caked_y"] = float(output_caked[1])
         normalized["two_theta_deg"] = float(output_caked[0])
         normalized["phi_deg"] = float(output_caked[1])
 

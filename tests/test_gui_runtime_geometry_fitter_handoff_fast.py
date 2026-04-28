@@ -288,6 +288,25 @@ def test_prune_reuse_clears_source_rows_when_hit_table_identity_changes() -> Non
     assert state.source_row_snapshots == {}
 
 
+def test_center_remap_invalidates_caked_projection_cache_fast() -> None:
+    state = _state()
+    masks = _mask_snapshot(state)
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.DETECTOR_CENTER_REMAP,
+        detector_geometry_changed=True,
+    )
+
+    assert policy.retain_geometry_q_group_entries is True
+    assert policy.retain_source_row_snapshots is True
+    assert policy.retain_manual_pick_cache is False
+    assert state.detector_projection_cache is None
+    assert state.caked_projection_cache is None
+    assert state.source_row_snapshots
+    assert _mask_snapshot(state) == masks
+
+
 def test_full_simulation_retains_qr_masks_but_clears_stale_source_rows_fast() -> None:
     state = _state()
     masks = _mask_snapshot(state)

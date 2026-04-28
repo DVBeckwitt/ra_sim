@@ -40,6 +40,8 @@ _ANALYSIS_GEOMETRY_FIELDS = (
     "last_caked_intersection_cache",
     "last_caked_intersection_cache_transform_bundle",
     "last_caked_intersection_cache_source_signature",
+    "detector_projection_cache",
+    "caked_projection_cache",
 )
 
 _PRIMARY_CACHE_FIELDS = (

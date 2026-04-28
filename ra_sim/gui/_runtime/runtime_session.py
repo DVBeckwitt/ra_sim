@@ -6323,6 +6323,58 @@ def _request_geometry_q_group_refresh_if_available() -> None:
         return
 
 
+def _manual_projection_cache_present() -> bool:
+    payload_cache = globals().get("_hkl_pick_simulation_points_payload_cache")
+    return bool(
+        getattr(geometry_runtime_state, "manual_pick_cache_signature", None) is not None
+        or getattr(geometry_runtime_state, "manual_pick_cache_data", None)
+        or (isinstance(payload_cache, dict) and payload_cache)
+    )
+
+
+def _caked_or_q_space_projection_cache_present() -> bool:
+    caking_cache = getattr(simulation_runtime_state, "caking_cache", None)
+    return bool(
+        getattr(simulation_runtime_state, "last_caked_image_unscaled", None) is not None
+        or getattr(simulation_runtime_state, "last_caked_extent", None) is not None
+        or getattr(simulation_runtime_state, "last_caked_background_image_unscaled", None)
+        is not None
+        or getattr(simulation_runtime_state, "last_caked_radial_values", None) is not None
+        or getattr(simulation_runtime_state, "last_caked_azimuth_values", None) is not None
+        or getattr(simulation_runtime_state, "last_caked_transform_bundle", None) is not None
+        or getattr(simulation_runtime_state, "last_caked_intersection_cache", None) is not None
+        or getattr(
+            simulation_runtime_state,
+            "last_caked_intersection_cache_transform_bundle",
+            None,
+        )
+        is not None
+        or getattr(simulation_runtime_state, "last_q_space_image_unscaled", None) is not None
+        or getattr(simulation_runtime_state, "last_q_space_extent", None) is not None
+        or getattr(simulation_runtime_state, "last_q_space_background_image_unscaled", None)
+        is not None
+        or getattr(simulation_runtime_state, "last_q_space_qr_values", None) is not None
+        or getattr(simulation_runtime_state, "last_q_space_qz_values", None) is not None
+        or getattr(simulation_runtime_state, "last_q_space_payload_signature", None)
+        is not None
+        or bool(getattr(simulation_runtime_state, "geometry_fit_caking_ai_cache", None))
+        or (
+            isinstance(caking_cache, dict)
+            and (
+                bool(caking_cache.get("sim_results"))
+                or bool(caking_cache.get("bg_results"))
+            )
+        )
+    )
+
+
+def _clear_detector_center_projection_caches() -> bool:
+    had_caked_or_q_space_projection_cache = _caked_or_q_space_projection_cache_present()
+    simulation_runtime_state.geometry_fit_caking_ai_cache = {}
+    simulation_runtime_state.caking_cache = _empty_caking_cache()
+    return bool(had_caked_or_q_space_projection_cache)
+
+
 def _invalidate_picker_handoff_caches_for_update_action(
     action: UpdateAction,
     *,
@@ -17529,6 +17581,10 @@ def do_update():
         "source_row_snapshots_retained": None,
         "q_group_content_signature_changed": None,
         "geometry_fitter_handoff_valid": None,
+        "qr_selector_branch_identity_retained": None,
+        "detector_projection_cache_refreshed": None,
+        "caked_projection_cache_invalidated": None,
+        "center_remap_fallback_reason": None,
         "classifier_update_action": None,
         "classifier_update_reason": None,
         "classifier_requires_worker": None,
@@ -17617,6 +17673,35 @@ def do_update():
         if geometry_fitter_handoff_valid is not None:
             update_decision_trace["geometry_fitter_handoff_valid"] = bool(
                 geometry_fitter_handoff_valid
+            )
+
+    def _set_detector_center_remap_trace(
+        *,
+        qr_selector_branch_identity_retained: bool | None = None,
+        detector_projection_cache_refreshed: bool | None = None,
+        caked_projection_cache_invalidated: bool | None = None,
+        geometry_fitter_handoff_valid: bool | None = None,
+        center_remap_fallback_reason: object = None,
+    ) -> None:
+        if qr_selector_branch_identity_retained is not None:
+            update_decision_trace["qr_selector_branch_identity_retained"] = bool(
+                qr_selector_branch_identity_retained
+            )
+        if detector_projection_cache_refreshed is not None:
+            update_decision_trace["detector_projection_cache_refreshed"] = bool(
+                detector_projection_cache_refreshed
+            )
+        if caked_projection_cache_invalidated is not None:
+            update_decision_trace["caked_projection_cache_invalidated"] = bool(
+                caked_projection_cache_invalidated
+            )
+        if geometry_fitter_handoff_valid is not None:
+            update_decision_trace["geometry_fitter_handoff_valid"] = bool(
+                geometry_fitter_handoff_valid
+            )
+        if center_remap_fallback_reason is not None:
+            update_decision_trace["center_remap_fallback_reason"] = str(
+                center_remap_fallback_reason
             )
 
     def _decision_action() -> str:
@@ -18359,6 +18444,17 @@ def do_update():
     previous_center_pair = _dependency_center_pair(previous_dependency_signatures)
     current_center_pair = (float(center_x_up), float(center_y_up))
 
+    def _detector_center_remap_cache_fallback_reason() -> str | None:
+        if previous_center_pair is None:
+            return "missing_previous_detector_center"
+        primary_ready = _primary_detector_remap_cache_ready()
+        secondary_ready = _secondary_detector_remap_cache_ready()
+        if not primary_ready:
+            return "primary_exact_cache_missing"
+        if not secondary_ready:
+            return "secondary_exact_cache_missing"
+        return None
+
     def _refresh_primary_relative_remap_cache_signature(
         detector_remap_cache_signature: object,
     ) -> None:
@@ -18431,6 +18527,29 @@ def do_update():
             action=UpdateAction.FULL_SIMULATION,
             reason=f"classifier_error:{type(exc).__name__}",
             requires_worker=True,
+        )
+    detector_center_signature_changed = bool(
+        previous_dependency_signatures is not None
+        and tuple(previous_dependency_signatures.detector_center_sig)
+        != tuple(current_dependency_signatures.detector_center_sig)
+    )
+    center_remap_fallback_reason = None
+    if (
+        detector_center_signature_changed
+        and classifier_decision.action is UpdateAction.FULL_SIMULATION
+    ):
+        center_remap_fallback_reason = (
+            (
+                _detector_center_remap_cache_fallback_reason()
+                or classifier_decision.reason
+            )
+            if classifier_decision.reason == "detector_center_changed_without_exact_cache"
+            else classifier_decision.reason
+        )
+        _set_detector_center_remap_trace(
+            detector_projection_cache_refreshed=False,
+            caked_projection_cache_invalidated=False,
+            center_remap_fallback_reason=center_remap_fallback_reason,
         )
     classifier_full_simulation_required = bool(
         classifier_decision.action is UpdateAction.FULL_SIMULATION
@@ -18880,6 +18999,8 @@ def do_update():
     if ready_simulation_result is None and center_remap_fast_path:
         _set_update_trace_stage("simulation_generation")
         remap_start_time = perf_counter()
+        remap_manual_projection_cache_present = _manual_projection_cache_present()
+        remap_caked_projection_cache_present = _caked_or_q_space_projection_cache_present()
         _set_update_decision(
             update_action="detector_center_remap",
             update_reason=classifier_decision.reason,
@@ -18895,9 +19016,13 @@ def do_update():
             primary_available=bool(primary_available),
             secondary_available=bool(secondary_available),
         )
-        _invalidate_picker_handoff_caches_for_update_action(
+        center_remap_policy = _invalidate_picker_handoff_caches_for_update_action(
             UpdateAction.DETECTOR_CENTER_REMAP,
             detector_geometry_changed=True,
+        )
+        _set_qr_selector_trace(
+            policy=center_remap_policy,
+            qr_selector_entries_refreshed=False,
         )
         simulation_runtime_state.peak_positions.clear()
         simulation_runtime_state.peak_millers.clear()
@@ -19034,12 +19159,26 @@ def do_update():
         simulation_runtime_state.preview_active = False
         simulation_runtime_state.preview_sample_count = None
         _invalidate_analysis_cache(clear_visuals=True)
+        caked_projection_cache_invalidated = _clear_detector_center_projection_caches()
         _invalidate_for_update_action(
             UpdateAction.DETECTOR_CENTER_REMAP,
             physics_signature_changed=False,
             hit_table_signature_changed=False,
             q_group_content_signature_changed=False,
             detector_geometry_changed=False,
+        )
+        _set_detector_center_remap_trace(
+            qr_selector_branch_identity_retained=True,
+            detector_projection_cache_refreshed=True,
+            caked_projection_cache_invalidated=bool(
+                remap_caked_projection_cache_present
+                or caked_projection_cache_invalidated
+            ),
+            geometry_fitter_handoff_valid=not bool(
+                remap_manual_projection_cache_present
+                or remap_caked_projection_cache_present
+                or caked_projection_cache_invalidated
+            ),
         )
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
@@ -19605,6 +19744,12 @@ def do_update():
                     qr_selector_entries_refreshed=True,
                     qr_selector_refresh_deferred=False,
                     geometry_fitter_handoff_valid=bool(listed_entries),
+                )
+            elif _decision_action() == "detector_center_remap":
+                _set_qr_selector_trace(
+                    qr_selector_entries_retained=True,
+                    qr_selector_entries_refreshed=True,
+                    qr_selector_refresh_deferred=False,
                 )
             progress_label_geometry.config(
                 text=(
