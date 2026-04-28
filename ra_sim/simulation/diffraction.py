@@ -10,8 +10,8 @@ from pathlib import Path
 from threading import local
 
 import numpy as np
-from ra_sim.config import get_dir
-from numba import get_num_threads, njit, prange
+from ra_sim.config import get_dir, get_instrument_config
+from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_BEST_SAMPLE_INDEX,
@@ -38,6 +38,7 @@ from ra_sim.utils.calculations import (
     complex_sqrt,
     fresnel_transmission,
 )
+from ra_sim.utils.parallel import resolve_weighted_event_worker_count
 from numba import types
 from numba.typed import List  #  only List lives here
 
@@ -174,15 +175,14 @@ def get_process_peaks_runtime_kwargs(*, numba_thread_count=None):
     """Return cache-friendly runtime kwargs for ``process_peaks_parallel``."""
 
     kwargs = get_default_solve_q_trig_kwargs()
-    thread_count = numba_thread_count
-    if thread_count is None:
-        try:
-            thread_count = int(get_num_threads())
-        except Exception:
-            thread_count = 1
-    if int(thread_count) < 1:
+    if numba_thread_count is None:
+        kwargs["numba_thread_count"] = None
+        return kwargs
+    try:
+        thread_count = int(numba_thread_count)
+    except Exception:
         thread_count = 1
-    kwargs["numba_thread_count"] = int(thread_count)
+    kwargs["numba_thread_count"] = max(int(thread_count), 1)
     return kwargs
 
 
@@ -205,7 +205,7 @@ def _resolve_process_peaks_runtime_values(
         float(default_solve_q_dtheta),
         default_solve_q_cos,
         default_solve_q_sin,
-        int(runtime_kwargs["numba_thread_count"]),
+        runtime_kwargs["numba_thread_count"],
     )
 
 
@@ -570,6 +570,9 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "pass2_total_mass": 0.0,
     "parallel_backend": "fast_serial",
     "parallel_worker_count": 1,
+    "parallel_requested_worker_count": None,
+    "parallel_effective_worker_count": 1,
+    "parallel_worker_count_source": "auto",
 }
 _LAST_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = dict(_EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS)
 
@@ -5657,6 +5660,77 @@ def _weighted_event_debug_arrays_clear(
     return all(arg is None for arg in debug_args)
 
 
+def _weighted_event_requested_worker_count_for_stats(requested):
+    if requested is None:
+        return None
+    try:
+        parsed = int(requested)
+    except Exception:
+        return None
+    return int(parsed) if parsed > 0 else None
+
+
+def _weighted_event_config_worker_count():
+    try:
+        config = get_instrument_config()
+    except Exception:
+        return None
+    if not isinstance(config, dict):
+        return None
+    instrument_config = config.get("instrument", config)
+    if not isinstance(instrument_config, dict):
+        return None
+    for section_name in ("simulation", "beam"):
+        section = instrument_config.get(section_name)
+        if isinstance(section, dict) and "weighted_event_worker_count" in section:
+            return section.get("weighted_event_worker_count")
+    return None
+
+
+def _resolve_weighted_event_fast_worker_count(
+    *,
+    requested_threads,
+    n_samp,
+    image_size,
+    accumulate_image,
+    save_flag,
+):
+    if int(save_flag) == 1 or int(n_samp) <= 1:
+        source = "explicit" if requested_threads is not None else "auto"
+        return 1, source
+
+    resolved_requested_threads = requested_threads
+    config_worker_count = None
+    used_config_worker_count = False
+    if requested_threads is None:
+        config_worker_count = _weighted_event_config_worker_count()
+        if _weighted_event_requested_worker_count_for_stats(config_worker_count) is not None:
+            resolved_requested_threads = config_worker_count
+            used_config_worker_count = True
+
+    worker_count, source = resolve_weighted_event_worker_count(
+        resolved_requested_threads,
+        n_samp=int(n_samp),
+        outer_workers=1,
+    )
+    if used_config_worker_count and source == "explicit":
+        source = "config"
+    worker_count = max(int(worker_count), 1)
+    if not bool(accumulate_image):
+        return int(worker_count), str(source)
+
+    image_size_i = int(image_size)
+    if image_size_i <= 0 or image_size_i > _THREAD_LOCAL_MAX_IMAGE_SIZE:
+        return 1, str(source)
+    bytes_per_image = image_size_i * image_size_i * 8
+    if bytes_per_image <= 0:
+        return 1, str(source)
+    max_workers_by_memory = int(_THREAD_LOCAL_IMAGE_MAX_BYTES // bytes_per_image)
+    if max_workers_by_memory <= 0:
+        return 1, str(source)
+    return int(max(1, min(worker_count, max_workers_by_memory))), str(source)
+
+
 def _weighted_event_parallel_eligible(
     *,
     worker_count,
@@ -7309,13 +7383,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
 ):
     del lambda_
     del sample_qr_ring_once
-    worker_count = 1
-    if numba_thread_count is not None:
-        try:
-            worker_count = int(numba_thread_count)
-        except Exception:
-            worker_count = 1
-    worker_count = max(int(worker_count), 1)
+    requested_worker_count = _weighted_event_requested_worker_count_for_stats(
+        numba_thread_count
+    )
 
     miller = np.asarray(miller, dtype=np.float64)
     intensities = np.asarray(intensities, dtype=np.float64).reshape(-1)
@@ -7395,6 +7465,13 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     n_samp = int(beam_x_array.size)
     collect_tables = bool(collect_hit_tables)
     accumulate_image_flag = bool(accumulate_image)
+    worker_count, worker_count_source = _resolve_weighted_event_fast_worker_count(
+        requested_threads=numba_thread_count,
+        n_samp=n_samp,
+        image_size=image_size,
+        accumulate_image=accumulate_image_flag,
+        save_flag=save_flag,
+    )
     all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
     event_counts = np.zeros((num_peaks, n_samp), dtype=np.int64)
 
@@ -8056,6 +8133,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             pass2_total_mass=float(pass2_total_mass),
             parallel_backend="threaded_njit_chunks",
             parallel_worker_count=int(active_worker_count),
+            parallel_requested_worker_count=requested_worker_count,
+            parallel_effective_worker_count=int(active_worker_count),
+            parallel_worker_count_source=str(worker_count_source),
         )
         return (
             image,
@@ -8565,6 +8645,11 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         time_emit_cache=float(time_emit_cache),
         pass1_total_mass=float(pass1_total_mass),
         pass2_total_mass=float(pass2_total_mass),
+        parallel_backend="fast_serial",
+        parallel_worker_count=1,
+        parallel_requested_worker_count=requested_worker_count,
+        parallel_effective_worker_count=1,
+        parallel_worker_count_source=str(worker_count_source),
     )
     return (
         image,
@@ -8658,7 +8743,7 @@ def _process_peaks_parallel_impl(
     default_solve_q_dtheta=-1.0,
     default_solve_q_cos=None,
     default_solve_q_sin=None,
-    numba_thread_count=1,
+    numba_thread_count=None,
     events_per_beam_phase=50,
 ):
     """Run weighted-event sampling through compiled helpers when hooks are default."""
@@ -8863,7 +8948,9 @@ def _process_peaks_parallel_weighted_events_python(
     events_per_beam_phase=50,
 ):
     del sample_qr_ring_once
-    del numba_thread_count
+    requested_worker_count = _weighted_event_requested_worker_count_for_stats(
+        numba_thread_count
+    )
 
     miller = np.asarray(miller, dtype=np.float64)
     intensities = np.asarray(intensities, dtype=np.float64).reshape(-1)
@@ -9299,6 +9386,9 @@ def _process_peaks_parallel_weighted_events_python(
     _set_last_process_peaks_weighted_event_stats(
         parallel_backend="weighted_events_python",
         parallel_worker_count=1,
+        parallel_requested_worker_count=requested_worker_count,
+        parallel_effective_worker_count=1,
+        parallel_worker_count_source="python_fallback",
     )
     return image, hit_tables, q_data, q_count, all_status, miss_tables, representative_hit_tables
 

@@ -63,6 +63,10 @@ instrument:
     include_rods: false
   output:
     write_excel: false
+  simulation:
+    # Weighted-event worker policy. Use auto for conservative sizing, or set
+    # a positive integer when a fixed inner worker count is desired.
+    weighted_event_worker_count: auto
   fit:
     geometry:
       # Per-parameter bounds and sensitivity settings used during geometry fitting.

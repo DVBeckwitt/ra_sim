@@ -714,6 +714,7 @@ def run_headless_geometry_fit(
     run_mosaic_shape_fit: bool = False,
     active_var_names: Sequence[str] | str | None = None,
     seed_policy: str | None = None,
+    weighted_event_workers: int | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting directly from one saved GUI-state payload."""
 
@@ -728,12 +729,18 @@ def run_headless_geometry_fit(
         else None
     )
     if not run_mosaic_shape_fit:
+        shared_kwargs: dict[str, object] = {
+            "state_path": source_path,
+            "downloads_dir": output_dir,
+            "active_var_names": resolved_active_var_names,
+        }
+        if seed_policy is not None:
+            shared_kwargs["seed_policy"] = seed_policy
+        if weighted_event_workers is not None:
+            shared_kwargs["weighted_event_workers"] = weighted_event_workers
         shared_result = _load_shared_headless_geometry_fit().run_headless_geometry_fit(
             copy.deepcopy(dict(state)),
-            state_path=source_path,
-            downloads_dir=output_dir,
-            active_var_names=resolved_active_var_names,
-            seed_policy=seed_policy,
+            **shared_kwargs,
         )
         report: dict[str, object] = {
             "accepted": bool(shared_result.accepted),
@@ -2747,6 +2754,7 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
                 output_dir=output_path.parent,
                 active_var_names=active_var_names,
                 seed_policy=seed_policy,
+                weighted_event_workers=getattr(args, "weighted_event_workers", None),
             )
         )
         save_gui_state_file(output_path, state_result)
@@ -2913,6 +2921,13 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("ladder-multistart",),
         default=None,
         help="Optional headless seed policy override.",
+    )
+    fit_geometry_parser.add_argument(
+        "--weighted-event-workers",
+        dest="weighted_event_workers",
+        type=int,
+        default=None,
+        help="Inner weighted-event worker count for headless geometry fitting.",
     )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
 

@@ -88,15 +88,26 @@ def _time_run(*, n_samp: int, image_size: int, events: int, workers: int) -> dic
         "elapsed_s": float(elapsed_s),
         "parallel_backend": str(stats.get("parallel_backend", "")),
         "parallel_worker_count": int(stats.get("parallel_worker_count", 0)),
+        "parallel_requested_worker_count": stats.get("parallel_requested_worker_count"),
+        "parallel_effective_worker_count": int(
+            stats.get("parallel_effective_worker_count", 0)
+        ),
+        "parallel_worker_count_source": str(stats.get("parallel_worker_count_source", "")),
         "branch_representative_row_count": _representative_row_count(),
     }
 
 
 def _validate_backend(*, requested_workers: int, n_samp: int, diagnostics: dict[str, Any]) -> None:
     backend = str(diagnostics.get("parallel_backend", ""))
+    effective_workers = int(
+        diagnostics.get(
+            "parallel_effective_worker_count",
+            diagnostics.get("parallel_worker_count", 0),
+        )
+    )
     if backend == "weighted_events_python":
         raise RuntimeError("weighted-events benchmark used Python fallback")
-    if int(requested_workers) <= 1:
+    if int(requested_workers) <= 1 or effective_workers <= 1:
         if backend not in {"fast_serial", "serial_njit"}:
             raise RuntimeError(f"threads=1 expected serial backend, got {backend!r}")
     elif int(n_samp) > 1 and backend != "threaded_njit_chunks":
@@ -141,6 +152,15 @@ def run_benchmark(
         results[f"{prefix}_parallel_backend"] = str(last_diagnostics["parallel_backend"])
         results[f"{prefix}_parallel_worker_count"] = int(
             last_diagnostics["parallel_worker_count"]
+        )
+        results[f"{prefix}_parallel_requested_worker_count"] = (
+            last_diagnostics["parallel_requested_worker_count"]
+        )
+        results[f"{prefix}_parallel_effective_worker_count"] = int(
+            last_diagnostics["parallel_effective_worker_count"]
+        )
+        results[f"{prefix}_parallel_worker_count_source"] = str(
+            last_diagnostics["parallel_worker_count_source"]
         )
         results[f"{prefix}_branch_representative_row_count"] = int(
             last_diagnostics["branch_representative_row_count"]

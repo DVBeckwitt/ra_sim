@@ -12,6 +12,7 @@ import weakref
 
 
 AUTO_PARALLEL_WORKER_RESERVE = 2
+WEIGHTED_EVENT_WORKERS_ENV = "RA_SIM_WEIGHTED_EVENT_WORKERS"
 
 try:
     from numba import get_num_threads as _numba_get_num_threads
@@ -119,6 +120,69 @@ def numba_threads_per_worker(
     if workers <= 1:
         return int(budget)
     return max(int(budget // workers), 1)
+
+
+def _positive_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value or value.lower() == "auto":
+            return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _auto_weighted_event_worker_count(n_samp: int) -> int:
+    n_samp_i = max(int(n_samp), 0)
+    if n_samp_i < 96:
+        return 1
+    if n_samp_i < 512:
+        return 2
+    if n_samp_i < 2048:
+        return 4
+    return 8
+
+
+def resolve_weighted_event_worker_count(
+    requested: int | str | None,
+    *,
+    n_samp: int,
+    outer_workers: int = 1,
+    auto: bool = True,
+) -> tuple[int, str]:
+    """Resolve weighted-event inner workers from explicit/env/auto policy."""
+
+    source = "auto"
+    requested_count = _positive_int_or_none(requested)
+    if requested_count is not None:
+        desired = requested_count
+        source = "explicit"
+    else:
+        env_value = os.environ.get(WEIGHTED_EVENT_WORKERS_ENV)
+        env_count = _positive_int_or_none(env_value)
+        if env_count is not None:
+            desired = env_count
+            source = "env"
+        else:
+            desired = _auto_weighted_event_worker_count(n_samp) if bool(auto) else 1
+            if env_value is not None and str(env_value).strip().lower() not in {"", "auto"}:
+                source = "auto_invalid_env"
+
+    try:
+        outer_workers_i = max(int(outer_workers), 1)
+    except (TypeError, ValueError):
+        outer_workers_i = 1
+
+    max_inner = max(system_cpu_worker_count() // outer_workers_i, 1)
+    effective = max(min(int(desired), int(max_inner)), 1)
+    n_samp_i = max(int(n_samp), 0)
+    if n_samp_i > 0:
+        effective = min(effective, n_samp_i)
+    return int(effective), source
 
 
 @contextmanager

@@ -69,7 +69,13 @@ What changed:
   build_geometry_fit_simulated_peaks(...) -> collapse_qr_qz_selection_peaks(...)`
   and prove sampled-event rows are not used when representative rows exist.
 - threaded chunk stats report `parallel_backend="threaded_njit_chunks"` and
-  `parallel_worker_count`.
+  `parallel_worker_count`;
+- weighted-event worker count now resolves through explicit API
+  `numba_thread_count`, `RA_SIM_WEIGHTED_EVENT_WORKERS`, then a conservative
+  Auto heuristic, and stats report requested/effective worker counts plus the
+  source;
+- headless geometry fitting exposes the same control with
+  `--weighted-event-workers`;
 - added `scripts/diagnostics/validate_weighted_event_merge.py` as the
   branch-local focused merge gate;
 - benchmark smoke now asserts it imported `ra_sim` from the current checkout,
@@ -89,11 +95,11 @@ Bug/error status:
 - broader manual-geometry replay/workflow suites were already red in this
   worktree and remain red for adjacent replay/finalizer paths not changed in
   this patch;
-- full-suite run is not green. The first clean `-x` failure is
-  `tests/test_cli_geometry_fit.py::test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only`,
-  where the CLI mock does not accept `seed_policy`; later broader geometry-fit
-  failures are in `ra_sim/fitting/optimization.py`, outside the
-  weighted-event representative-cache patch.
+- full-suite run is not green. The current clean `-x` failure is
+  `tests/test_compare_bi2se3_reference_tool.py::test_compare_tool_default_uses_two_theta_balanced_wavelength`,
+  where the Bi2Se3 CIF fixture hash differs from the expected reference hash;
+  this is outside the weighted-event representative-cache and worker-control
+  patch.
 
 Feature status:
 
@@ -102,10 +108,51 @@ Feature status:
   representative-facing cache rows;
 - representative cache is hardened for QR click, caked click, and geometry-fit
   source selection;
+- manual weighted-event worker control is available through Python API,
+  config, environment variable, headless CLI, and benchmark flags;
 - future weighted-event merges can be validated with one focused command before
   broad-suite triage.
 
 ## Validation
+
+## Manual worker control
+
+Python/API:
+
+```python
+diffraction.process_peaks_parallel(..., numba_thread_count=4)
+```
+
+Environment fallback:
+
+```bash
+RA_SIM_WEIGHTED_EVENT_WORKERS=4 python scripts/benchmarks/benchmark_weighted_events_parallel.py --runs 3 --threads 1 2 4 8 --n-samp 512 --events 10
+```
+
+Config fallback:
+
+```yaml
+instrument:
+  simulation:
+    weighted_event_worker_count: auto
+```
+
+Headless geometry-fit CLI:
+
+```bash
+python -m ra_sim fit-geometry state.json --weighted-event-workers 4
+```
+
+Benchmark:
+
+```bash
+python scripts/benchmarks/benchmark_weighted_events_parallel.py --runs 3 --threads 1 2 4 8 --n-samp 512 --events 10
+```
+
+Auto mode is conservative: tiny weighted-event runs stay serial, larger runs
+scale up gradually, and requested counts are clamped to available CPU capacity.
+Small simulations may be faster with one worker; more workers are not always
+faster.
 
 ## Merge diagnostics
 
@@ -134,12 +181,17 @@ Passed in this worktree:
   broader `python -m pytest tests -q --durations=20` phase on unrelated
   full-suite failures;
 - `python -m pytest tests -q --durations=20 -x` first failed at
-  `tests/test_cli_geometry_fit.py::test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only`;
+  `tests/test_compare_bi2se3_reference_tool.py::test_compare_tool_default_uses_two_theta_balanced_wavelength`
+  on CIF reference hash drift after 92 passing tests and 2 skipped tests;
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_solve_q_real_jit_does_not_crash_allocate_sched -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_compute_intensity_array_is_serial_njit -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_representative_choice_uses_true_mosaic_weight_before_mass -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_representative_choice_preserves_mosaic_top_sample_index_in_hit_row -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_mosaic_top_representative_survives_even_when_unsampled -q`
+- `python -m pytest tests/test_diffraction_weighted_events.py::test_manual_worker_count_one_routes_serial -q`
+- `python -m pytest tests/test_diffraction_weighted_events.py::test_manual_worker_count_two_routes_threaded_chunks -q`
+- `python -m pytest tests/test_diffraction_weighted_events.py::test_manual_worker_count_four_reports_four_workers_when_enough_samples -q`
+- `python -m pytest tests/test_diffraction_weighted_events.py::test_weighted_event_worker_count_config_override -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_weighted_events_dispatcher_path_matrix -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_weighted_events_parallel_from_bound_matches_serial_controlled_backend -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_weighted_events_parallel_from_bound_matches_serial_real_solve_q_small -q`
@@ -152,10 +204,13 @@ Passed in this worktree:
 - `python -m pytest tests/test_gui_geometry_q_group_manager.py tests/test_gui_peak_selection.py tests/test_intersection_cache_schema.py -q`
 - `python -m ruff check ra_sim/simulation/diffraction.py ra_sim/simulation/intersection_cache_schema.py ra_sim/gui/mosaic_top_selection.py ra_sim/gui/geometry_q_group_manager.py tests/test_diffraction_weighted_events.py tests/test_source_template_cache.py tests/test_intersection_cache_schema.py tests/test_gui_geometry_q_group_manager.py tests/test_gui_peak_selection.py scripts/benchmarks/benchmark_weighted_events_parallel.py`
 - `python -m py_compile ra_sim/simulation/diffraction.py ra_sim/simulation/intersection_cache_schema.py ra_sim/gui/mosaic_top_selection.py ra_sim/gui/geometry_q_group_manager.py tests/test_diffraction_weighted_events.py tests/test_source_template_cache.py tests/test_intersection_cache_schema.py tests/test_gui_geometry_q_group_manager.py tests/test_gui_peak_selection.py scripts/benchmarks/benchmark_weighted_events_parallel.py`
-- `python scripts/benchmarks/benchmark_weighted_events_parallel.py --runs 1 --threads 1 2 --n-samp 8 --events 2`
+- `python scripts/benchmarks/benchmark_weighted_events_parallel.py --runs 1 --threads 1 2 4 --n-samp 512 --events 2`
   reported `threads_1_parallel_backend: fast_serial`,
-  `threads_2_parallel_backend: threaded_njit_chunks`, and no
+  `threads_2_parallel_backend: threaded_njit_chunks`,
+  `threads_4_parallel_backend: threaded_njit_chunks`, and no
   `weighted_events_python` fallback;
+- `python scripts/benchmarks/benchmark_weighted_events_parallel.py --runs 1 --threads 1 2 4 8 --n-samp 512 --events 2`
+  verifies manual requested/effective worker reporting and CPU clamping;
 - `python scripts/benchmarks/benchmark_weighted_events_parallel.py --samples 2 --workers 1 2 --iterations 1 --events 1`
 - `python -m pytest tests/test_diffraction_constraints.py -q`
 - `python -m pytest tests/test_source_template_cache.py tests/test_peak_multiplicity_cache.py tests/test_diffraction_safe_wrapper.py -q`
@@ -172,7 +227,6 @@ Current failure buckets outside this patch:
 
 - manual geometry detector/caked replay refresh and replay-display tests;
 - geometry-fit workflow New4 finalizer/preflight tests;
-- CLI shared-runner mock expecting no `seed_policy`;
 - CIF/reference hash drift and testing-index drift;
 - local Tk backend availability for one projection-alignment test.
 

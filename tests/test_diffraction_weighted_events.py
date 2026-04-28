@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 
 import numpy as np
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from ra_sim.gui import geometry_q_group_manager as gqm
 from ra_sim.simulation import diffraction
 from ra_sim.simulation import intersection_cache_schema as cache_schema
+from ra_sim.utils import parallel as parallel_utils
 
 
 def test_compute_intensity_array_is_serial_njit():
@@ -1718,8 +1720,137 @@ def test_parallel_weighted_event_stats_report_worker_count():
     stats = diffraction.get_last_process_peaks_weighted_event_stats()
     assert stats["parallel_backend"] == "threaded_njit_chunks"
     assert stats["parallel_worker_count"] == 2
+    assert stats["parallel_requested_worker_count"] == 2
+    assert stats["parallel_effective_worker_count"] == 2
+    assert stats["parallel_worker_count_source"] == "explicit"
     assert stats["n_solve_q_calls"] == 1
     assert not hasattr(diffraction, "_weighted_event_sample_kernel_parallel")
+
+
+def _run_weighted_event_worker_probe(*, n_samp, numba_thread_count=None):
+    diffraction.process_peaks_parallel(
+        **_base_process_kwargs(n_samp=n_samp),
+        save_flag=0,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        events_per_beam_phase=1,
+        numba_thread_count=numba_thread_count,
+    )
+    return diffraction.get_last_process_peaks_weighted_event_stats()
+
+
+def test_manual_worker_count_one_routes_serial():
+    stats = _run_weighted_event_worker_probe(n_samp=2, numba_thread_count=1)
+
+    assert stats["parallel_backend"] == "fast_serial"
+    assert stats["parallel_worker_count"] == 1
+    assert stats["parallel_requested_worker_count"] == 1
+    assert stats["parallel_effective_worker_count"] == 1
+    assert stats["parallel_worker_count_source"] == "explicit"
+
+
+def test_manual_worker_count_two_routes_threaded_chunks():
+    if (os.cpu_count() or 1) < 2:
+        pytest.skip("requires at least two CPU workers")
+
+    stats = _run_weighted_event_worker_probe(n_samp=2, numba_thread_count=2)
+
+    assert stats["parallel_backend"] == "threaded_njit_chunks"
+    assert stats["parallel_worker_count"] == 2
+    assert stats["parallel_requested_worker_count"] == 2
+    assert stats["parallel_effective_worker_count"] == 2
+    assert stats["parallel_worker_count_source"] == "explicit"
+
+
+def test_manual_worker_count_four_reports_four_workers_when_enough_samples():
+    if (os.cpu_count() or 1) < 4:
+        pytest.skip("requires at least four CPU workers")
+
+    stats = _run_weighted_event_worker_probe(n_samp=512, numba_thread_count=4)
+
+    assert stats["parallel_backend"] == "threaded_njit_chunks"
+    assert stats["parallel_worker_count"] == 4
+    assert stats["parallel_requested_worker_count"] == 4
+    assert stats["parallel_effective_worker_count"] == 4
+    assert stats["parallel_worker_count_source"] == "explicit"
+
+
+def test_manual_worker_count_clamps_to_available_cpu(monkeypatch):
+    monkeypatch.setattr(parallel_utils, "system_cpu_worker_count", lambda: 2)
+
+    workers, source = parallel_utils.resolve_weighted_event_worker_count(
+        99,
+        n_samp=512,
+    )
+
+    assert workers == 2
+    assert source == "explicit"
+
+
+def test_auto_worker_count_stays_serial_for_tiny_jobs(monkeypatch):
+    monkeypatch.delenv(parallel_utils.WEIGHTED_EVENT_WORKERS_ENV, raising=False)
+
+    stats = _run_weighted_event_worker_probe(n_samp=2, numba_thread_count=None)
+
+    assert stats["parallel_backend"] == "fast_serial"
+    assert stats["parallel_worker_count"] == 1
+    assert stats["parallel_requested_worker_count"] is None
+    assert stats["parallel_effective_worker_count"] == 1
+    assert stats["parallel_worker_count_source"] == "auto"
+
+
+def test_auto_worker_count_uses_threaded_chunks_for_large_jobs(monkeypatch):
+    monkeypatch.delenv(parallel_utils.WEIGHTED_EVENT_WORKERS_ENV, raising=False)
+    expected_workers = min(4, os.cpu_count() or 1)
+    if expected_workers < 2:
+        pytest.skip("requires at least two CPU workers")
+
+    stats = _run_weighted_event_worker_probe(n_samp=512, numba_thread_count=None)
+
+    assert stats["parallel_backend"] == "threaded_njit_chunks"
+    assert stats["parallel_worker_count"] == expected_workers
+    assert stats["parallel_requested_worker_count"] is None
+    assert stats["parallel_effective_worker_count"] == expected_workers
+    assert stats["parallel_worker_count_source"] == "auto"
+
+
+def test_weighted_event_worker_count_env_override(monkeypatch):
+    monkeypatch.setenv(parallel_utils.WEIGHTED_EVENT_WORKERS_ENV, "4")
+    expected_workers = min(4, os.cpu_count() or 1)
+
+    stats = _run_weighted_event_worker_probe(n_samp=512, numba_thread_count=None)
+
+    assert stats["parallel_worker_count"] == expected_workers
+    assert stats["parallel_requested_worker_count"] is None
+    assert stats["parallel_effective_worker_count"] == expected_workers
+    assert stats["parallel_worker_count_source"] == "env"
+    if expected_workers > 1:
+        assert stats["parallel_backend"] == "threaded_njit_chunks"
+
+
+def test_weighted_event_worker_count_config_override(monkeypatch):
+    monkeypatch.delenv(parallel_utils.WEIGHTED_EVENT_WORKERS_ENV, raising=False)
+    monkeypatch.setattr(diffraction, "_weighted_event_config_worker_count", lambda: "4")
+    expected_workers = min(4, os.cpu_count() or 1)
+
+    stats = _run_weighted_event_worker_probe(n_samp=512, numba_thread_count=None)
+
+    assert stats["parallel_worker_count"] == expected_workers
+    assert stats["parallel_requested_worker_count"] is None
+    assert stats["parallel_effective_worker_count"] == expected_workers
+    assert stats["parallel_worker_count_source"] == "config"
+    if expected_workers > 1:
+        assert stats["parallel_backend"] == "threaded_njit_chunks"
+
+
+def test_weighted_event_worker_count_invalid_env_falls_back_to_auto(monkeypatch):
+    monkeypatch.setenv(parallel_utils.WEIGHTED_EVENT_WORKERS_ENV, "not-an-int")
+
+    stats = _run_weighted_event_worker_probe(n_samp=2, numba_thread_count=None)
+
+    assert stats["parallel_backend"] == "fast_serial"
+    assert stats["parallel_worker_count"] == 1
+    assert stats["parallel_worker_count_source"] == "auto_invalid_env"
 
 
 def test_weighted_event_threaded_backend_does_not_use_prange_kernel():
@@ -2348,6 +2479,10 @@ def test_weighted_event_merge_diagnostics_marker_contract():
         "test_representative_choice_uses_true_mosaic_weight_before_mass",
         "test_representative_choice_preserves_mosaic_top_sample_index_in_hit_row",
         "test_mosaic_top_representative_survives_even_when_unsampled",
+        "test_manual_worker_count_one_routes_serial",
+        "test_manual_worker_count_two_routes_threaded_chunks",
+        "test_manual_worker_count_four_reports_four_workers_when_enough_samples",
+        "test_weighted_event_worker_count_config_override",
         "test_weighted_events_dispatcher_path_matrix",
         "test_weighted_events_parallel_from_bound_matches_serial_controlled_backend",
         "test_weighted_events_parallel_from_bound_matches_serial_real_solve_q_small",

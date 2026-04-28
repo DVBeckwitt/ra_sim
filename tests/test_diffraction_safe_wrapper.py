@@ -149,7 +149,7 @@ def test_process_peaks_parallel_safe_injects_default_solve_q_trig_kwargs(monkeyp
         np.asarray(observed["default_solve_q_sin"], dtype=np.float64),
         expected["default_solve_q_sin"],
     )
-    assert int(observed["numba_thread_count"]) >= 1
+    assert observed["numba_thread_count"] is None
 
 
 def test_process_peaks_parallel_safe_omitted_events_forwards_default_fifty(monkeypatch):

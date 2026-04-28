@@ -1603,6 +1603,7 @@ def run_headless_geometry_fit(
     stamp: str | None = None,
     active_var_names: Sequence[object] | str | None = None,
     seed_policy: object | None = None,
+    weighted_event_workers: int | None = None,
 ) -> HeadlessGeometryFitResult:
     """Run the geometry fit described by ``saved_state`` and return the updated state."""
 
@@ -1612,6 +1613,14 @@ def run_headless_geometry_fit(
         active_var_names
     )
     resolved_seed_policy = normalize_headless_geometry_fit_seed_policy(seed_policy)
+    weighted_event_worker_count = None
+    if weighted_event_workers is not None:
+        try:
+            weighted_event_worker_count = int(weighted_event_workers)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Weighted-event workers must be a positive integer.") from exc
+        if weighted_event_worker_count < 1:
+            raise ValueError("Weighted-event workers must be a positive integer.")
 
     diffraction = _load_simulation_diffraction()
     fit_runtime = _load_fitting_runtime()
@@ -1892,9 +1901,18 @@ def run_headless_geometry_fit(
         )
     )
 
+    def _process_peaks_parallel_for_headless(*args, **kwargs):
+        call_kwargs = dict(kwargs)
+        if (
+            weighted_event_worker_count is not None
+            and call_kwargs.get("numba_thread_count") is None
+        ):
+            call_kwargs["numba_thread_count"] = int(weighted_event_worker_count)
+        return diffraction.process_peaks_parallel(*args, **call_kwargs)
+
     simulation_callbacks = (
         gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-            process_peaks_parallel=diffraction.process_peaks_parallel,
+            process_peaks_parallel=_process_peaks_parallel_for_headless,
             hit_tables_to_max_positions=diffraction.hit_tables_to_max_positions,
             native_sim_to_display_coords=lambda col, row, image_shape: (
                 gui_geometry_overlay.native_sim_to_display_coords(
