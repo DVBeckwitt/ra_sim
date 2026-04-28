@@ -2,9 +2,10 @@
 
 Date: 2026-04-28
 
-Scope: Phases 1-6 of fast-path cache verification, selective invalidation,
+Scope: Phases 1-7 of fast-path cache verification, selective invalidation,
 local validation gating, prune-specific QR selector lifecycle hardening, and
-detector-center remap plus geometry-objective cache signature hardening.
+detector-center remap plus geometry-objective cache signature and end-to-end
+handoff hardening.
 
 ## Current Status
 
@@ -14,7 +15,10 @@ detector-center remap plus geometry-objective cache signature hardening.
   source-row reuse baselines, prune reuse/fill QR selector lifecycle trace, and
   detector-center remap projection/handoff trace. Phase 6 adds a pure geometry
   objective cache signature/decision module and keys QR trial source-row reuse
-  on residual-defining objective identity.
+  on residual-defining objective identity. Phase 7 adds a synthetic end-to-end
+  QR selector to geometry fitter handoff scenario that exercises fast-path
+  invalidation, point-provider parity, projection invalidation, and objective
+  cache reuse/reject decisions together.
 - Bug status: fixed for overbroad fast-path invalidation of QR selector entries,
   source-row snapshots, intersection caches, and fitter handoff state; fixed
   local checkpoint failures caused by absent optional New4 artifacts; fixed
@@ -24,9 +28,10 @@ detector-center remap plus geometry-objective cache signature hardening.
   geometry refresh stale-caked-field precedence; fixed unsafe geometry
   objective source-row cache reuse across QR branch/source-row/manual/refined
   peak, point-provider, objective-mode, active-fit-parameter, and physics
-  signature changes.
-- Error status: no known failing local Phase 6, Phase 5, Phase 4, or Phase 3.5 gate
-  tests.
+  signature changes; added workflow coverage for handoff-validity regressions
+  after display/combine/analysis/prune/detector-center fast paths.
+- Error status: no known failing local Phase 7, Phase 6, Phase 5, Phase 4, or
+  Phase 3.5 gate tests.
 - Compatibility status: QR disabled/enabled masks remain explicit user/state
   data and are not cleared by cache invalidation.
 
@@ -37,6 +42,7 @@ detector-center remap plus geometry-objective cache signature hardening.
 - `tests/test_gui_runtime_invalidation.py`: present.
 - `tests/test_gui_runtime_optimization_scenarios.py`: present.
 - `tests/test_geometry_objective_cache.py`: present.
+- `tests/test_gui_runtime_geometry_fitter_cache_handoff.py`: present.
 
 ## Mutation Map
 
@@ -293,3 +299,49 @@ Phase 6 validation:
   passed with `26 passed, 2 skipped`.
 - `python -m py_compile ra_sim/fitting/optimization.py ra_sim/fitting/geometry_objective_cache.py ra_sim/gui/geometry_fit.py ra_sim/gui/manual_geometry.py`
   passed.
+
+## Phase 7 End-to-End Handoff Scenario
+
+Phase 7 added integrated synthetic workflow coverage without changing
+production code.
+
+Feature status:
+
+- Added `tests/test_gui_runtime_geometry_fitter_cache_handoff.py` to connect
+  runtime fast-path invalidation, QR selector identity, point-provider handoff,
+  projection-cache invalidation, and geometry objective cache decisions.
+- The scenario covers display/combine/analysis/prune-reuse retention,
+  prune-fill changed-content refresh deferral, detector-center projection
+  invalidation, center-only objective cache reuse, and objective-cache rejection
+  after manual selection or refined peak changes.
+- The synthetic point-provider report asserts manual picker pair count equals
+  point-provider pair count with zero fallback rows for complete handoff data.
+- The dry-run residual check verifies finite residual components without
+  running the full optimizer or requiring `new4.json`.
+
+Bug/error status:
+
+- `geometry_fitter_handoff_valid` is asserted false while q-group refresh is
+  pending or projection caches are invalidated.
+- QR/Qz masks stay unchanged across the full synthetic fast-path sequence.
+- Objective cache reuse is rejected after manual selection and refined peak
+  mutations in the same handoff workflow.
+- New4 artifact-backed tests remain optional and skip when the artifact is
+  absent.
+- No known failing local Phase 7 gate tests.
+
+Phase 7 validation:
+
+- `python -m pytest tests/test_gui_runtime_geometry_fitter_cache_handoff.py -q`
+  passed, `6 passed`.
+- `python -m pytest tests/test_gui_runtime_geometry_fitter_cache_handoff.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py tests/test_geometry_objective_cache.py tests/test_gui_runtime_update_trace.py tests/test_gui_runtime_optimization_scenarios.py -q`
+  passed, `47 passed`.
+- `python -m pytest tests/test_runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_update_dependencies.py tests/test_gui_runtime_primary_cache.py tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_update_trace.py tests/test_fit_cache_controls.py tests/test_gui_runtime_import_safe.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py tests/test_geometry_objective_cache.py -q`
+  passed, `471 passed`.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
+  passed with `26 passed, 2 skipped`.
+- `python -m py_compile ra_sim/fitting/optimization.py ra_sim/fitting/geometry_objective_cache.py ra_sim/gui/geometry_fit.py ra_sim/gui/manual_geometry.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_invalidation.py`
+  passed.
+- Static QR/Qz mutation audit showed only controller/state-load/test mutation
+  sites, not runtime invalidation.
+- No lingering Python/pytest process remained after the gate.
