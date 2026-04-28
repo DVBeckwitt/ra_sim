@@ -2,28 +2,34 @@
 
 Date: 2026-04-28
 
-Scope: Phases 1-3 of fast-path cache verification and selective invalidation.
+Scope: Phases 1-3.5 of fast-path cache verification, selective invalidation,
+and local validation gating.
 
 ## Current Status
 
 - Feature status: implemented and validated for QR selector cache policy,
-  selective runtime invalidation, and geometry objective source-row reuse
-  baselines.
+  selective runtime invalidation, local optional-artifact skips, slow/manual
+  geometry markers, fast geometry-fitter handoff checks, and geometry objective
+  source-row reuse baselines.
 - Bug status: fixed for overbroad fast-path invalidation of QR selector entries,
-  source-row snapshots, intersection caches, and fitter handoff state.
-- Error status: no known failing targeted tests after Phase 3 validation.
+  source-row snapshots, intersection caches, and fitter handoff state; fixed
+  local checkpoint failures caused by absent optional New4 artifacts.
+- Error status: no known failing local Phase 3.5 gate tests.
 - Compatibility status: QR disabled/enabled masks remain explicit user/state
   data and are not cleared by cache invalidation.
 
 ## File existence
 
-- `ra_sim/gui/runtime_qr_selector_cache_policy.py`: missing.
-- `tests/test_runtime_qr_selector_cache_policy.py`: missing. Equivalent baseline added to `tests/test_gui_runtime_invalidation.py`.
+- `ra_sim/gui/runtime_qr_selector_cache_policy.py`: present.
+- `tests/test_runtime_qr_selector_cache_policy.py`: present.
 - `tests/test_gui_runtime_invalidation.py`: present.
 - `tests/test_gui_runtime_optimization_scenarios.py`: present.
 - `tests/test_geometry_objective_cache.py`: missing. Equivalent baseline added to `tests/test_fit_cache_controls.py`.
 
 ## Mutation Map
+
+The table below records the Phase 1 pre-policy audit. Current post-policy
+runtime status is summarized in the Phase 2, Phase 3, and Phase 3.5 sections.
 
 | Classification | Mutation or reuse sites |
 | --- | --- |
@@ -107,3 +113,37 @@ Phase 3 validation:
   passed, `22 passed`
 - `python -m py_compile ra_sim/gui/runtime_invalidation.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py`
   passed
+
+## Phase 3.5 Local Validation Gate
+
+Phase 3.5 converted optional and slow geometry gates into explicit local-gate
+categories without changing production runtime behavior.
+
+Feature status:
+
+- New4 artifact-backed tests skip cleanly when
+  `artifacts/geometry_fit_gui_states/new4.json` is absent.
+- Long New4 caked/refined geometry diagnostics are marked `slow_geometry`.
+- `tests/test_gui_runtime_geometry_fitter_handoff_fast.py` provides fast
+  synthetic QR selector and geometry-fitter handoff coverage without running
+  the optimizer or requiring New4 artifacts.
+
+Bug/error status:
+
+- Missing New4 fixture now reports `skipped` instead of `FileNotFoundError`.
+- No stale QR selector, source-row, intersection-cache, or manual-pick handoff
+  defect was exposed by the fast substitute tests.
+- Slow/manual caked/refined objective slice remains excluded from the local gate
+  by instruction and is not counted as a pass.
+
+Phase 3.5 validation:
+
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
+  passed with `26 passed, 2 skipped`
+- `python -m pytest tests/test_gui_runtime_geometry_fitter_handoff_fast.py -q`
+  passed, `5 passed`
+- local Phase 3.5 pytest gate passed, `438 passed`
+- second manual geometry gate passed, `5 passed`
+- py-compile gate passed
+- static audits found no cache invalidation mutation of QR/Qz masks and no
+  broad picker helper reachability from non-physics fast paths

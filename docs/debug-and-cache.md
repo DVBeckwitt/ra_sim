@@ -171,10 +171,14 @@ Status as of 2026-04-28:
 
 - feature status: implemented for display-only, combine-only, analysis-only,
   primary-prune reuse, primary-prune fill, detector-center remap, and full
-  simulation update actions
+  simulation update actions; local Phase 3.5 validation also adds fast
+  geometry-fitter handoff tests and optional New4 fixture skips
 - bug status: fixed for overbroad fast-path invalidation that could clear QR
-  selector entries or fitter handoff data before replacement rows were ready
-- error status: targeted cache-policy and runtime-invalidation tests pass
+  selector entries or fitter handoff data before replacement rows were ready;
+  fixed local New4 validation failures caused by absent optional artifacts
+- error status: targeted cache-policy, runtime-invalidation, and fast handoff
+  tests pass; slow/manual caked-refined geometry diagnostics are excluded from
+  the local gate by instruction
 - compatibility status: `disabled_qr_sets`, `disabled_qz_sections`, and
   `pending_legacy_disabled_qz_sections` remain explicit user/state selections
   and are not cleared by cache invalidation
@@ -193,6 +197,11 @@ Retention rules:
 
 Validation:
 
+- `python -m pytest tests/test_gui_runtime_geometry_fitter_handoff_fast.py -q`
+  passed, `5 passed`
+- local Phase 3.5 gate passed, `438 passed`
+- New4 workflow slice passed locally with `26 passed, 2 skipped` when the
+  optional `artifacts/geometry_fit_gui_states/new4.json` fixture was absent
 - `python -m pytest tests/test_runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py -q`
   passed, `23 passed`
 - `python -m pytest tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_optimization_scenarios.py -q`

@@ -28178,6 +28178,7 @@ def _diag_new4_classify_theta_phi(
     return "no_meaningful_change"
 
 
+@pytest.mark.slow_geometry
 def test_new4_caked_refinement_bin_resolution_and_subpixel_status(tmp_path) -> None:
     _context, _dataset, _run, _record, rows, _components = _diag_new4_pipeline_baseline(
         tmp_path,
@@ -29923,6 +29924,7 @@ def test_new4_qr_only_fit_after_valid_locked_mosaic_refinement(tmp_path) -> None
     assert int(getattr(fit_run["result"], "nfev", 0) or 0) > 0
 
 
+@pytest.mark.slow_geometry
 def test_new4_observed_trial_caked_recomputed_from_detector_center(tmp_path) -> None:
     include_003 = False
     context, _dataset, baseline_run, baseline_record, baseline_rows, _components = (
@@ -29974,6 +29976,7 @@ def test_new4_observed_trial_caked_recomputed_from_detector_center(tmp_path) -> 
     assert not static
 
 
+@pytest.mark.slow_geometry
 def test_new4_sim_trial_caked_recomputed_from_detector_sim(tmp_path) -> None:
     include_003 = False
     context, _dataset, baseline_run, baseline_record, baseline_rows, _components = (
@@ -30062,6 +30065,7 @@ def test_new4_sim_trial_caked_recomputed_from_detector_sim(tmp_path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.diagnostic
+@pytest.mark.slow_geometry
 def test_new4_refined_objective_theta_phi_decomposition_after_pipeline_fix(tmp_path) -> None:
     include_003 = False
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)

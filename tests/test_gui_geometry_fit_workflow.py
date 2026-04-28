@@ -25,6 +25,17 @@ from ra_sim.gui import (
 from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+NEW4_STATE_LABEL = Path("artifacts/geometry_fit_gui_states/new4.json")
+NEW4_STATE_PATH = REPO_ROOT / NEW4_STATE_LABEL
+
+
+def require_new4_state() -> Path:
+    if not NEW4_STATE_PATH.exists():
+        pytest.skip(f"optional New4 fixture is absent: {NEW4_STATE_LABEL}")
+    return NEW4_STATE_PATH
+
+
 class _DummyVar:
     def __init__(self, value):
         self._value = value
@@ -3945,7 +3956,7 @@ def test_point_provider_parity_for_new4_saved_state_without_running_optimizer(
     monkeypatch,
 ) -> None:
     guard_state = _point_provider_optimizer_guard(monkeypatch)
-    repo_root = Path(__file__).resolve().parents[1]
+    state_path = require_new4_state()
     probe = _load_geometry_preflight_probe_module()
 
     def _fail_provider_only_boundary(*_args, **_kwargs):
@@ -3967,7 +3978,7 @@ def test_point_provider_parity_for_new4_saved_state_without_running_optimizer(
         _fail_provider_only_boundary,
     )
     report = probe._run_point_provider_report_only(
-        repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json",
+        state_path,
         background_index=0,
         optimizer_guard_state=guard_state,
     )
@@ -15116,8 +15127,7 @@ def test_new4_ladder_does_not_mutate_new4_state(monkeypatch, tmp_path) -> None:
 
 def test_new4_ladder_keeps_point_provider_report_green(monkeypatch, tmp_path) -> None:
     ladder = _load_new4_ladder_module()
-    repo_root = Path(__file__).resolve().parents[1]
-    state_path = repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+    state_path = require_new4_state()
     _install_fast_new4_ladder_stubs(monkeypatch, ladder)
 
     result = ladder.run_ladder(

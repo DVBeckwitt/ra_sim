@@ -87,6 +87,7 @@ markers = [
   "slow: slow diagnostics that should be run individually",
   "diagnostic: print/export-heavy diagnostic tests",
   "slow_baseline_fit: real geometry baseline fitting acceptance coverage",
+  "slow_geometry: slow/manual geometry fitter and caked-refinement regression tests",
 ]
 
 [tool.coverage.run]
