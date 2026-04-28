@@ -3469,7 +3469,7 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     )
 
     assert isinstance(view_state.frame, _FakeFrame)
-    assert view_state.frame.kwargs["text"] == "Background"
+    assert view_state.frame.kwargs["text"] == "Background subtraction"
     assert view_state.enabled_var.get() is True
     assert view_state.mode_var.get() == "radial"
     assert view_state.apply_to_fit_var.get() is True
@@ -3479,8 +3479,8 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     assert view_state.radial_bin_width_deg_var.get() == 0.2
     assert view_state.radial_quantile_var.get() == 0.35
     assert view_state.diagnostics_var.get() is False
-    assert view_state.status_var.get() == "Settings loaded. Press Fit model to update preview."
-    assert view_state.diagnostics_summary_var.get() == "No model fit yet."
+    assert view_state.status_var.get() == "Ready. Press Fit."
+    assert view_state.diagnostics_summary_var.get() == "No fit yet."
     assert view_state.scale_slider is created_sliders[0]["slider"]
     assert view_state.radial_smooth_sigma_deg_slider is created_sliders[1]["slider"]
     assert view_state.peak_mask_radius_px_slider is created_sliders[2]["slider"]
@@ -3492,16 +3492,16 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     assert view_state.caked_quantile_slider is created_sliders[8]["slider"]
     assert view_state.peak_mask_sigma_slider is created_sliders[9]["slider"]
     assert [item["label"] for item in created_sliders] == [
-        "Removal strength",
-        "Radial smoothness",
-        "Peak protection radius",
-        "Direct-beam exclusion radius",
-        "Radial detail / bin width",
-        "Radial baseline percentile",
-        "2D residual theta smoothness",
-        "2D residual phi smoothness",
-        "2D residual percentile",
-        "Peak masking sensitivity",
+        "Strength",
+        "Smoothness",
+        "Peak mask",
+        "Beam mask",
+        "2θ bin",
+        "Baseline",
+        "2D 2θ window",
+        "2D φ window",
+        "2D baseline",
+        "Peak sensitivity",
     ]
     assert set(view_state.preset_buttons) == {
         "conservative",
@@ -3512,22 +3512,22 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
         "reset_defaults",
     }
     assert {button.kwargs["text"] for button in _FakeButton.created} >= {
-        "Conservative",
+        "Safe",
         "Balanced",
-        "Aggressive",
-        "Protect Peaks",
-        "Direct Beam Heavy",
-        "Fit model to current background",
-        "Apply / recompute",
-        "Reset Defaults",
-        "Export diagnostics",
+        "Strong",
+        "Protect peaks",
+        "Beam-heavy",
+        "Fit",
+        "Apply",
+        "Reset",
+        "Export",
     }
 
     buttons_by_text = {button.kwargs["text"]: button for button in _FakeButton.created}
-    buttons_by_text["Fit model to current background"].command()
-    buttons_by_text["Apply / recompute"].command()
-    buttons_by_text["Reset Defaults"].command()
-    buttons_by_text["Export diagnostics"].command()
+    buttons_by_text["Fit"].command()
+    buttons_by_text["Apply"].command()
+    buttons_by_text["Reset"].command()
+    buttons_by_text["Export"].command()
     assert events == ["fit", "apply", "reset", "export"]
 
     buttons_by_text["Balanced"].command()
@@ -3535,7 +3535,7 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     assert view_state.mode_var.get() == "radial_plus_caked_2d"
     assert view_state.scale_var.get() == 1.0
     assert view_state.radial_quantile_var.get() == 0.35
-    assert view_state.status_var.get() == "Preset applied. Press Fit model to current background."
+    assert view_state.status_var.get() == "Preset set. Press Fit."
     assert events[-1] == ("preset", "balanced")
 
 

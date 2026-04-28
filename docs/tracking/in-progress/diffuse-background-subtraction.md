@@ -1,6 +1,6 @@
 # Diffuse background subtraction
 
-Status: implemented, UX-refined, validation-partial
+Status: implemented, copy-tightened, validation-partial
 Type: feature
 Owner: -
 Issue: none
@@ -33,6 +33,11 @@ Display clipping is limited to display paths.
   explained sliders, collapsible advanced controls, preview guidance, dirty
   status feedback, debounced auto-preview, and diagnostics summaries. This is
   a UI-only refinement over the existing subtraction model.
+- Tightened the visible Background tab copy into a compact control-panel style:
+  shorter labels, section names, preset names, button text, slider hints,
+  status text, diagnostics labels, and tooltips. This was copy-only and did
+  not change subtraction math, saved-state keys, CLI flags, headless behavior,
+  or cache behavior.
 - Wired corrected backgrounds into GUI caking, comparison, analysis, auto-match,
   and geometry-fit payloads only when `apply_to_fit` is enabled.
 - Added subtraction-aware cache signatures and invalidation so caked background
@@ -58,6 +63,16 @@ Passed:
 - `python -m pytest tests/test_gui_views.py tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py tests/test_cli_geometry_fit.py tests/test_diffuse_background.py -ra`
 - Combined targeted suite for the six files above: 419 passed.
 - Combined targeted UX/headless/numerical suite: 417 passed.
+- Copy-tightening targeted suite:
+  `python -m pytest tests/test_gui_views.py tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py -ra`
+  passed with 391 tests.
+- Copy-tightening broader relevant suite:
+  `python -m pytest tests/test_diffuse_background.py tests/test_background_peak_matching.py tests/test_gui_views.py tests/test_gui_state_io.py tests/test_cli_geometry_fit.py tests/test_gui_runtime_import_safe.py -ra`
+  passed with 426 tests.
+- Copy-tightening lint/whitespace checks:
+  `python -m ruff check ra_sim/gui/views.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_views.py`
+  and `git diff --check -- ra_sim/gui/views.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_views.py`
+  passed.
 - `python -m ruff check ra_sim/gui/views.py ra_sim/gui/state.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_views.py tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py`
 - `python -m ruff format --check ra_sim/gui/views.py ra_sim/gui/state.py tests/test_gui_views.py tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py`
 - Manual-geometry regression selectors and full
@@ -73,6 +88,8 @@ Full-suite status:
 - After the UX refinement, full `python -m pytest -ra` was attempted twice and
   timed out before completion. Per operator direction, no further full-suite
   chase was performed for this patch.
+- After the copy-tightening pass, full `python -m pytest -ra` was attempted
+  again and timed out after 20 minutes with no completed result.
 - Comparable `--tb=no` runs showed no candidate-only failures versus base:
   base had 290 failures, candidate had 261 failures, and candidate-only failure
   count was zero.

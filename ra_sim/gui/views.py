@@ -2520,8 +2520,10 @@ def create_background_subtraction_controls(
         except Exception:
             return str(fallback)
 
-    frame = ttk.LabelFrame(parent, text="Background", padding=(8, 6))
+    frame = ttk.LabelFrame(parent, text="Background subtraction", padding=(8, 6))
     frame.pack(fill=tk.X, padx=5, pady=5)
+    visible_hint_wraplength = 420
+    status_wraplength = 420
 
     enabled_var = tk.BooleanVar(value=_initial_bool("enabled", False))
     mode_var = tk.StringVar(value=_initial_text("mode", "radial_plus_caked_2d"))
@@ -2532,13 +2534,9 @@ def create_background_subtraction_controls(
     clip_for_display_var = tk.BooleanVar(value=_initial_bool("clip_for_display", True))
     diagnostics_var = tk.BooleanVar(value=_initial_bool("diagnostics", True))
     auto_preview_var = tk.BooleanVar(value=False)
-    initial_status = (
-        "Settings loaded. Press Fit model to update preview."
-        if _initial_bool("enabled", False)
-        else "Diffuse subtraction is off."
-    )
+    initial_status = "Ready. Press Fit." if _initial_bool("enabled", False) else "Off."
     status_var = tk.StringVar(value=initial_status)
-    diagnostics_summary_var = tk.StringVar(value="No model fit yet.")
+    diagnostics_summary_var = tk.StringVar(value="No fit yet.")
     fit_usage_var = tk.StringVar(value="")
 
     def _add_section(
@@ -2556,7 +2554,12 @@ def create_background_subtraction_controls(
                 set_summary(summary)
         return section
 
-    def _add_help_label(parent_frame: tk.Misc, text: str, *, wraplength: int = 680) -> ttk.Label:
+    def _add_help_label(
+        parent_frame: tk.Misc,
+        text: str,
+        *,
+        wraplength: int = visible_hint_wraplength,
+    ) -> ttk.Label:
         label = ttk.Label(
             parent_frame,
             text=text,
@@ -2621,11 +2624,7 @@ def create_background_subtraction_controls(
             parent,
             allow_range_expand=allow_range_expand,
         )
-        detail = _add_help_label(
-            parent,
-            f"{explanation}\nLow: {low_text}\nHigh: {high_text}",
-            wraplength=680,
-        )
+        detail = _add_help_label(parent, explanation)
         _attach_tooltip(slider, tooltip)
         _attach_tooltip(detail, tooltip)
         return slider_var, slider
@@ -2634,20 +2633,18 @@ def create_background_subtraction_controls(
     quick_frame.pack(fill=tk.X, padx=6, pady=(2, 6))
     _add_help_label(
         quick_frame,
-        "Diffuse background subtraction removes a smooth halo from the measured "
-        "background before comparison to simulation. Start with Balanced, fit the "
-        "model, inspect Model and Mask, then adjust strength or peak protection.",
+        "Remove the smooth halo before matching or comparing.",
     )
     _add_help_label(
         quick_frame,
-        "1. Choose preset -> 2. Fit model -> 3. Inspect model/mask -> 4. Apply to fitting",
+        "Preset -> Fit -> Preview -> Use for fit",
     )
     status_label = ttk.Label(
         quick_frame,
         textvariable=status_var,
         justify=tk.LEFT,
         anchor=tk.W,
-        wraplength=680,
+        wraplength=status_wraplength,
     )
     status_label.pack(fill=tk.X, padx=6, pady=(2, 0))
 
@@ -2655,11 +2652,11 @@ def create_background_subtraction_controls(
         frame,
         "Presets",
         expanded=True,
-        summary="start conservative, balanced, or aggressive",
+        summary="safe, balanced, strong",
     )
     _add_help_label(
         presets.frame,
-        "Presets only change the controls. Press Fit model to update the preview.",
+        "Presets set controls. Press Fit.",
     )
     preset_row = ttk.Frame(presets.frame)
     preset_row.pack(fill=tk.X, padx=6, pady=(0, 4))
@@ -2685,31 +2682,31 @@ def create_background_subtraction_controls(
         var_map = _preset_var_map()
         for key, value in values.items():
             _set_var_value(var_map.get(key), value)
-        _set_var_value(status_var, "Preset applied. Press Fit model to current background.")
+        _set_var_value(status_var, "Preset set. Press Fit.")
         if on_apply_preset is not None:
             on_apply_preset(name)
 
     for preset_key, label, tooltip in (
         (
             "conservative",
-            "Conservative",
-            "Leaves more halo but is least likely to hollow peaks.",
+            "Safe",
+            "Leaves more halo; least likely to hollow peaks.",
         ),
-        ("balanced", "Balanced", "Recommended starting point for most backgrounds."),
+        ("balanced", "Balanced", "Recommended starting point."),
         (
             "aggressive",
-            "Aggressive",
-            "Removes more residual halo but needs model/mask inspection.",
+            "Strong",
+            "Removes more halo; inspect model and mask.",
         ),
         (
             "protect_peaks",
-            "Protect Peaks",
-            "Uses stronger peak masking and gentler background percentiles.",
+            "Protect peaks",
+            "Stronger peak masking with gentler baselines.",
         ),
         (
             "direct_beam_heavy",
-            "Direct Beam Heavy",
-            "Excludes a larger central beam region before fitting the halo.",
+            "Beam-heavy",
+            "Excludes a larger beam-center region.",
         ),
     ):
         button = ttk.Button(
@@ -2720,138 +2717,123 @@ def create_background_subtraction_controls(
         button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
         _attach_tooltip(button, tooltip)
         preset_buttons[preset_key] = button
-    reset_button = ttk.Button(preset_row, text="Reset Defaults", command=on_reset)
+    reset_button = ttk.Button(preset_row, text="Reset", command=on_reset)
     reset_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-    _attach_tooltip(reset_button, "Restore configured defaults without fitting a new model.")
+    _attach_tooltip(reset_button, "Restore defaults without fitting.")
     preset_buttons["reset_defaults"] = reset_button
 
     basic = _add_section(
         frame,
-        "Basic Controls",
+        "Basic",
         expanded=True,
-        summary="strength, smoothness, peak and beam protection",
+        summary="strength 1.00",
     )
     _add_check(
         basic.frame,
-        "Enable diffuse subtraction",
+        "Enable",
         enabled_var,
-        tooltip="Turns the correction workflow on. Subtraction is off by default.",
+        tooltip="Turn subtraction on. Off keeps the raw image.",
     )
     _add_radio_group(
         basic.frame,
-        "Model mode",
+        "Model",
         mode_var,
         (
             ("off", "Off"),
             ("radial", "Radial"),
-            ("radial_plus_caked_2d", "Radial + caked 2D"),
+            ("radial_plus_caked_2d", "Radial + 2D"),
         ),
-        tooltip=(
-            "Radial is safest and fastest. Radial + caked 2D also removes slow "
-            "theta/phi residuals after caking."
-        ),
+        tooltip="Radial is safest. Radial + 2D also removes slow caked residuals.",
     )
     _add_check(
         basic.frame,
-        "Apply corrected image to fitting and auto-match",
+        "Use for fit",
         apply_to_fit_var,
-        tooltip=(
-            "When enabled, auto-match and geometry-fit comparison use the corrected "
-            "background. Leave off while only previewing."
-        ),
+        tooltip="When checked, auto-match and fit comparison use the subtracted image.",
     )
     _add_check(
         basic.frame,
-        "Auto-scale strength from current background",
+        "Auto scale",
         auto_scale_var,
-        tooltip=(
-            "Lets the fitter adjust the effective model scale from the current "
-            "background while keeping the strength slider as a multiplier."
-        ),
+        tooltip="Estimate strength automatically when fitting the model.",
     )
     fit_usage_label = ttk.Label(
         basic.frame,
         textvariable=fit_usage_var,
-        wraplength=680,
+        wraplength=status_wraplength,
         justify=tk.LEFT,
     )
     fit_usage_label.pack(fill=tk.X, padx=6, pady=(0, 4))
 
     scale_var, scale_slider = _add_explained_slider(
         parent=basic.frame,
-        label="Removal strength",
+        label="Strength",
         variable_key="scale",
         initial=1.00,
         min_value=0.00,
         max_value=2.00,
         step=0.01,
-        explanation="Multiplies the fitted background before subtraction.",
+        explanation="More removes more halo; too much hollows peaks.",
         low_text="Lower leaves more halo.",
         high_text="Higher removes more halo but can make peaks hollow.",
-        tooltip=(
-            "Multiplies the fitted model. Increase if diffuse halo remains. "
-            "Decrease if peaks become hollow or negative rings appear."
-        ),
+        tooltip="Model multiplier. Increase if halo remains. Decrease if peaks look hollow.",
         allow_range_expand=True,
     )
     radial_smooth_sigma_deg_var, radial_smooth_sigma_deg_slider = _add_explained_slider(
         parent=basic.frame,
-        label="Radial smoothness",
+        label="Smoothness",
         variable_key="radial_smooth_sigma_deg",
         initial=0.50,
         min_value=0.05,
         max_value=5.00,
         step=0.05,
-        explanation="Smooths the radial 2theta halo model.",
+        explanation="Higher is smoother and safer.",
         low_text="Follows local structure more closely.",
         high_text="Produces a smoother safer halo model.",
-        tooltip="Increase when the model looks noisy; decrease when broad structure is missed.",
+        tooltip="Smooths the radial halo model in 2θ.",
     )
     peak_mask_radius_px_var, peak_mask_radius_px_slider = _add_explained_slider(
         parent=basic.frame,
-        label="Peak protection radius",
+        label="Peak mask",
         variable_key="peak_mask_radius_px",
         initial=10.0,
         min_value=1.0,
         max_value=50.0,
         step=1.0,
-        explanation="Expands the mask around detected Bragg peaks.",
+        explanation="Higher protects peak shoulders.",
         low_text="Uses more pixels but may let peaks leak into the background model.",
         high_text="Protects peak shoulders but leaves less data for fitting.",
-        tooltip="Increase if Bragg peaks appear in the fitted model.",
+        tooltip="Expands the mask around detected peaks.",
     )
     direct_beam_mask_radius_px_var, direct_beam_mask_radius_px_slider = _add_explained_slider(
         parent=basic.frame,
-        label="Direct-beam exclusion radius",
+        label="Beam mask",
         variable_key="direct_beam_mask_radius_px",
         initial=35.0,
         min_value=0.0,
         max_value=150.0,
         step=1.0,
-        explanation="Excludes the intense beam-center region from background fitting.",
+        explanation="Higher ignores more beam-center pixels.",
         low_text="Fits closer to the beam center.",
         high_text="Avoids beam streaks but discards more low-angle data.",
-        tooltip="Increase if the central streak leaks into the model.",
+        tooltip="Excludes the beam-center region from the model fit.",
     )
 
     preview = _add_section(
         frame,
-        "Preview Controls",
+        "Preview",
         expanded=True,
         summary="raw, model, subtracted, residual, mask",
     )
     _add_check(
         preview.frame,
-        "Apply corrected image to display",
+        "Use for preview",
         apply_to_display_var,
-        tooltip=(
-            "When enabled, the detector preview can show the model, subtracted "
-            "image, residual, or mask. This does not by itself change fitting."
-        ),
+        tooltip="When checked, the preview can show raw, model, subtracted, residual, or mask.",
     )
     _add_radio_group(
         preview.frame,
-        "Display mode",
+        "Preview",
         display_mode_var,
         (
             ("raw", "Raw"),
@@ -2860,205 +2842,196 @@ def create_background_subtraction_controls(
             ("residual", "Residual"),
             ("mask", "Mask"),
         ),
-        tooltip="Choose which background-subtraction layer to show in the detector preview.",
+        tooltip="Choose what to display. This does not change fitting unless Use for fit is checked.",
     )
     _add_help_label(
         preview.frame,
-        "Raw: original measured detector image. Model: fitted diffuse background only. "
-        "Subtracted: raw minus fitted model. Residual: signed corrected image for "
-        "spotting over-subtraction. Mask: pixels excluded from the fit.",
+        "Raw, model, subtracted, residual, or mask.",
     )
     _add_check(
         preview.frame,
-        "Clip negative pixels for display only",
+        "Clip preview",
         clip_for_display_var,
-        tooltip="Keeps signed corrected values for fitting; clips only the preview image.",
+        tooltip="Only clips the displayed image. Fit data remains signed.",
     )
     auto_preview_checkbutton = _add_check(
         preview.frame,
-        "Auto-preview after slider changes",
+        "Auto-preview",
         auto_preview_var,
-        tooltip="When enabled, slider changes fit the model after a short debounce.",
+        tooltip="Fit after slider changes using a short debounce.",
     )
 
     radial = _add_section(
         frame,
-        "Advanced Radial Model",
+        "Radial",
         expanded=False,
-        summary="quantile 0.35, smooth 0.50 deg",
+        summary="base 0.35, smooth 0.50°",
     )
     radial_bin_width_deg_var, radial_bin_width_deg_slider = _add_explained_slider(
         parent=radial.frame,
-        label="Radial detail / bin width",
+        label="2θ bin",
         variable_key="radial_bin_width_deg",
         initial=0.10,
         min_value=0.02,
         max_value=1.00,
         step=0.01,
-        explanation="Width of 2theta bins used to estimate the radial halo.",
+        explanation="Lower is detailed; higher is stable.",
         low_text="More detail, noisier.",
         high_text="Smoother, more stable.",
-        tooltip="Increase when the radial model is noisy; decrease to follow sharper halos.",
+        tooltip="Bin width for estimating the radial halo.",
     )
     radial_quantile_var, radial_quantile_slider = _add_explained_slider(
         parent=radial.frame,
-        label="Radial baseline percentile",
+        label="Baseline",
         variable_key="radial_quantile",
         initial=0.35,
         min_value=0.05,
         max_value=0.80,
         step=0.01,
-        explanation=(
-            "Chooses which intensity percentile is treated as background in each 2theta bin."
-        ),
+        explanation="Lower preserves peaks; higher subtracts more.",
         low_text="Safer for preserving peaks, may under-subtract.",
         high_text="More aggressive subtraction, may absorb broad peaks.",
-        tooltip=(
-            "Lower values estimate the background from darker pixels and preserve "
-            "peaks. Higher values subtract more but can absorb broad peaks."
-        ),
+        tooltip="Percentile used as the radial background level.",
     )
 
     caked = _add_section(
         frame,
-        "Advanced 2D Caked Residual",
+        "2D residual",
         expanded=False,
-        summary="only for slow theta/phi residuals",
+        summary="slow 2θ/φ trends",
     )
     _add_help_label(
         caked.frame,
-        "Use these only when the radial model removes the main halo but the caked "
-        "image still has slow theta/phi structure.",
+        "Use if radial leaves slow 2θ/φ residuals.",
     )
     caked_theta_window_deg_var, caked_theta_window_deg_slider = _add_explained_slider(
         parent=caked.frame,
-        label="2D residual theta smoothness",
+        label="2D 2θ window",
         variable_key="caked_theta_window_deg",
         initial=1.5,
         min_value=0.25,
         max_value=8.00,
         step=0.25,
-        explanation="Smoothness of residual correction along 2theta in caked space.",
+        explanation="Higher smooths residuals along 2θ.",
         low_text="More adaptive, higher overfit risk.",
         high_text="Smoother, safer.",
-        tooltip="Increase when the caked residual model follows peak texture too closely.",
+        tooltip="Residual smoothing width along 2θ in caked space.",
     )
     caked_phi_window_deg_var, caked_phi_window_deg_slider = _add_explained_slider(
         parent=caked.frame,
-        label="2D residual phi smoothness",
+        label="2D φ window",
         variable_key="caked_phi_window_deg",
         initial=15.0,
         min_value=2.0,
         max_value=60.0,
         step=1.0,
-        explanation="Smoothness of residual correction along phi in caked space.",
+        explanation="Higher smooths residuals along φ.",
         low_text="Follows angular artifacts more closely.",
         high_text="Keeps only broad phi trends.",
-        tooltip="Increase when angular residual correction is too textured.",
+        tooltip="Residual smoothing width along φ in caked space.",
     )
     caked_quantile_var, caked_quantile_slider = _add_explained_slider(
         parent=caked.frame,
-        label="2D residual percentile",
+        label="2D baseline",
         variable_key="caked_quantile",
         initial=0.35,
         min_value=0.05,
         max_value=0.80,
         step=0.01,
-        explanation="Background percentile used for the residual 2D model.",
+        explanation="Lower preserves peaks; higher subtracts more.",
         low_text="Preserves peaks.",
         high_text="Removes more residual background.",
-        tooltip="Lower values protect peaks; higher values subtract more residual structure.",
+        tooltip="Percentile used for the 2D residual model.",
     )
 
     protection = _add_section(
         frame,
-        "Peak and Beam Protection",
+        "Masks",
         expanded=False,
-        summary="mask sensitivity and protected regions",
+        summary="peak 10 px, beam 35 px",
     )
     _add_help_label(
         protection.frame,
-        "If the model contains Bragg peaks, mask more peak pixels here or increase "
-        "Peak protection radius in Basic Controls.",
+        "If peaks leak into the model, mask more here.",
     )
     peak_mask_sigma_var, peak_mask_sigma_slider = _add_explained_slider(
         parent=protection.frame,
-        label="Peak masking sensitivity",
+        label="Peak sensitivity",
         variable_key="peak_mask_sigma",
         initial=4.0,
         min_value=1.0,
         max_value=10.0,
         step=0.1,
-        explanation="Threshold for detecting bright pixels to exclude from the background fit.",
+        explanation="Lower masks more bright pixels.",
         low_text="Masks more peaks; safer but can mask too much.",
         high_text="Masks fewer pixels; faster but may fit through peaks.",
-        tooltip="Lower this when Bragg peaks appear in the fitted model.",
+        tooltip="Threshold for detecting bright pixels to exclude from the fit.",
     )
 
     diagnostics = _add_section(
         frame,
-        "Diagnostics Summary",
+        "Diagnostics",
         expanded=True,
-        summary="fit quality and common fixes",
+        summary="status and tuning",
     )
     diagnostics_label = ttk.Label(
         diagnostics.frame,
         textvariable=diagnostics_summary_var,
-        wraplength=680,
+        wraplength=status_wraplength,
         justify=tk.LEFT,
     )
     diagnostics_label.pack(fill=tk.X, padx=6, pady=(2, 4))
     _attach_tooltip(
         diagnostics_label,
-        "Updated after the diffuse background model is fit for the current background.",
+        "Updated after Fit.",
     )
     _add_help_label(
         diagnostics.frame,
-        "If the model contains Bragg peaks: lower Peak masking sensitivity or increase "
-        "Peak protection radius.\n"
-        "If the halo remains: increase Removal strength or raise Radial baseline percentile.\n"
-        "If peaks become hollow: reduce Removal strength or lower Radial baseline percentile.\n"
-        "If the model looks noisy: increase Radial smoothness or increase Radial detail/bin width.\n"
-        "If the central streak leaks into the model: increase Direct-beam exclusion radius.",
+        "Tuning guide:\n"
+        "• Halo remains: raise Strength or Baseline.\n"
+        "• Peaks hollow: lower Strength or Baseline.\n"
+        "• Model has peaks: lower Peak sensitivity or raise Peak mask.\n"
+        "• Model noisy: raise Smoothness or 2θ bin.\n"
+        "• Beam streak leaks: raise Beam mask.",
     )
 
     actions = _add_section(frame, "Actions", expanded=True, summary="fit, apply, export")
     _add_check(
         actions.frame,
-        "Write diagnostics when exporting",
+        "Save diagnostics",
         diagnostics_var,
-        tooltip="Keeps diagnostic output enabled for export and saved-state reruns.",
+        tooltip="Exports model, masks, profile, and summary metrics.",
     )
     action_row = ttk.Frame(actions.frame)
     action_row.pack(fill=tk.X, padx=6, pady=(2, 4))
     fit_button = ttk.Button(
         action_row,
-        text="Fit model to current background",
+        text="Fit",
         command=on_fit_model,
     )
     fit_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-    apply_button = ttk.Button(action_row, text="Apply / recompute", command=on_apply)
+    apply_button = ttk.Button(action_row, text="Apply", command=on_apply)
     apply_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
     export_button = ttk.Button(
         action_row,
-        text="Export diagnostics",
+        text="Export",
         command=on_export_diagnostics,
     )
     export_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-    _attach_tooltip(fit_button, "Fit the diffuse model for the current background and settings.")
-    _attach_tooltip(apply_button, "Refit the model and refresh fitting/display outputs.")
-    _attach_tooltip(export_button, "Write model arrays and diagnostic summaries to downloads.")
+    _attach_tooltip(fit_button, "Fit the model for this image and settings.")
+    _attach_tooltip(apply_button, "Refit and refresh fit/preview outputs.")
+    _attach_tooltip(export_button, "Write arrays and diagnostic summary.")
 
     def _update_fit_usage_label(*_args: object) -> None:
         enabled = bool(getattr(enabled_var, "get", lambda: False)())
         mode = _var_text(mode_var, "off")
         apply_to_fit = bool(getattr(apply_to_fit_var, "get", lambda: False)())
         if enabled and mode != "off" and apply_to_fit:
-            text = "Corrected background is currently used for fitting and auto-match."
+            text = "Used for fit and auto-match."
         elif enabled and mode != "off":
-            text = "Preview only: fitting still uses raw background."
+            text = "Preview only. Fit uses raw."
         else:
-            text = "Subtraction is disabled. Raw background is used."
+            text = "Off. Fit uses raw."
         _set_var_value(fit_usage_var, text)
 
     def _refresh_summaries(*_args: object) -> None:
@@ -3066,21 +3039,20 @@ def create_background_subtraction_controls(
             (
                 basic,
                 (
-                    f"strength {_var_float(scale_var, 1.0):.2f}, "
-                    f"{_var_text(mode_var, 'radial_plus_caked_2d')}"
+                    f"strength {_var_float(scale_var, 1.0):.2f}"
                 ),
             ),
             (
                 radial,
                 (
-                    f"quantile {_var_float(radial_quantile_var, 0.35):.2f}, "
-                    f"smooth {_var_float(radial_smooth_sigma_deg_var, 0.50):.2f} deg"
+                    f"base {_var_float(radial_quantile_var, 0.35):.2f}, "
+                    f"smooth {_var_float(radial_smooth_sigma_deg_var, 0.50):.2f}°"
                 ),
             ),
             (
                 protection,
                 (
-                    f"radius {_var_float(peak_mask_radius_px_var, 10.0):.0f} px, "
+                    f"peak {_var_float(peak_mask_radius_px_var, 10.0):.0f} px, "
                     f"beam {_var_float(direct_beam_mask_radius_px_var, 35.0):.0f} px"
                 ),
             ),
