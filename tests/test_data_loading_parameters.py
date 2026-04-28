@@ -112,3 +112,26 @@ def test_load_parameters_ignores_removed_stratified_sampling_fields(tmp_path) ->
     assert sampling_seed_var.get() == "0"
     assert legacy_stratified_vars["x_mean"].get() == "0"
     assert legacy_stratified_vars["x_samples"].get() == "1"
+
+
+def test_load_parameters_defaults_missing_sampling_count_to_seventy_five(tmp_path) -> None:
+    file_path = tmp_path / "params.npy"
+    np.save(
+        file_path,
+        {
+            "sampling_resolution": "Custom",
+            "rod_points_per_gz": 275,
+        },
+    )
+
+    vars_ = _required_parameter_vars()
+    custom_samples_var = _Var("12")
+
+    message = load_parameters(
+        file_path,
+        *vars_,
+        custom_samples_var=custom_samples_var,
+    )
+
+    assert message == "Parameters loaded from parameters.npy"
+    assert custom_samples_var.get() == "75"

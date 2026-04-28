@@ -15,6 +15,7 @@ write_excel = False
 # those inner assignments have not executed.
 defaults = {}
 DEFAULT_EVENTS_PER_BEAM_PHASE = 75
+DEFAULT_LINKED_EVENTS_PER_SAMPLE = 2
 MIN_EVENTS_PER_BEAM_PHASE = 1
 MAX_EVENTS_PER_BEAM_PHASE = 1000
 
@@ -1161,6 +1162,10 @@ def _initialize_runtime_state_block_01() -> None:
         DEFAULT_RANDOM_SAMPLE_COUNT, \
         MIN_RANDOM_SAMPLE_COUNT, \
         MAX_RANDOM_SAMPLE_COUNT, \
+        DEFAULT_EVENTS_PER_BEAM_PHASE, \
+        DEFAULT_LINKED_EVENTS_PER_SAMPLE, \
+        MIN_EVENTS_PER_BEAM_PHASE, \
+        MAX_EVENTS_PER_BEAM_PHASE, \
         MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT
     global \
         MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS, \
@@ -1293,6 +1298,7 @@ def _initialize_runtime_state_block_01() -> None:
     MIN_RANDOM_SAMPLE_COUNT = 1
     MAX_RANDOM_SAMPLE_COUNT = 5000
     DEFAULT_EVENTS_PER_BEAM_PHASE = 75
+    DEFAULT_LINKED_EVENTS_PER_SAMPLE = 2
     MIN_EVENTS_PER_BEAM_PHASE = 1
     MAX_EVENTS_PER_BEAM_PHASE = 1000
     MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT = 50000
@@ -21634,6 +21640,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
                 tk_variable_type=tk.Variable,
             )
         )
+        _apply_loaded_sample_count_default(variables)
     if bool(structure_model_state.has_second_cif):
         try:
             update_weights()
@@ -32030,7 +32037,9 @@ def _events_per_beam_phase_independent() -> bool:
 def _linked_events_per_beam_phase(sample_count=None) -> int:
     if sample_count is None:
         sample_count = _current_random_sample_count()
-    return _parse_events_per_beam_phase(sample_count, DEFAULT_EVENTS_PER_BEAM_PHASE)
+    normalized_samples = _parse_sample_count(sample_count, DEFAULT_EVENTS_PER_BEAM_PHASE)
+    linked_events = int(normalized_samples) * int(DEFAULT_LINKED_EVENTS_PER_SAMPLE)
+    return _parse_events_per_beam_phase(linked_events, DEFAULT_EVENTS_PER_BEAM_PHASE)
 
 
 def _sync_events_per_beam_phase_to_sample_count(sample_count=None) -> int:
@@ -32045,6 +32054,26 @@ def _sync_events_per_beam_phase_to_sample_count(sample_count=None) -> int:
             events_var.set(normalized)
     defaults["events_per_beam_phase"] = int(normalized)
     return int(normalized)
+
+
+def _loaded_state_has_sample_count(saved_variables: Mapping[str, object] | None) -> bool:
+    if not isinstance(saved_variables, Mapping):
+        return False
+    return any(key in saved_variables for key in ("sample_count_var", "custom_samples_var"))
+
+
+def _apply_loaded_sample_count_default(saved_variables: Mapping[str, object] | None) -> None:
+    if _loaded_state_has_sample_count(saved_variables):
+        return
+    normalized = _parse_sample_count(DEFAULT_RANDOM_SAMPLE_COUNT, DEFAULT_RANDOM_SAMPLE_COUNT)
+    sample_count_var = getattr(sampling_optics_controls_view_state, "sample_count_var", None)
+    if sample_count_var is not None:
+        sample_count_var.set(normalized)
+    defaults["sampling_count"] = int(normalized)
+    if resolution_var.get() != CUSTOM_SAMPLING_OPTION:
+        resolution_var.set(CUSTOM_SAMPLING_OPTION)
+    if not _events_per_beam_phase_independent():
+        _sync_events_per_beam_phase_to_sample_count(normalized)
 
 
 def _current_events_per_beam_phase(default=None):
@@ -32361,6 +32390,7 @@ def _initialize_runtime_controls_block_46() -> None:
         default=defaults.get("rod_points_per_gz"),
     )
     initial_events_per_phase = _linked_events_per_beam_phase(initial_sample_count)
+    defaults["events_per_beam_phase"] = int(initial_events_per_phase)
 
     gui_views.create_sampling_optics_controls(
         parent=sampling_pruning_frame.frame,

@@ -48,6 +48,7 @@ class _FakeVar:
 def _restore_runtime_session_globals():
     names = (
         "DEFAULT_EVENTS_PER_BEAM_PHASE",
+        "DEFAULT_LINKED_EVENTS_PER_SAMPLE",
         "MIN_EVENTS_PER_BEAM_PHASE",
         "MAX_EVENTS_PER_BEAM_PHASE",
         "DEFAULT_RANDOM_SAMPLE_COUNT",
@@ -115,7 +116,9 @@ def test_geometry_source_signature_includes_events_per_beam_phase():
     assert sig_a != sig_b
 
 
-def test_apply_events_per_beam_phase_invalidates_simulation_without_regenerating_mosaic(monkeypatch):
+def test_apply_events_per_beam_phase_invalidates_simulation_without_regenerating_mosaic(
+    monkeypatch,
+):
     runtime_session.DEFAULT_EVENTS_PER_BEAM_PHASE = 50
     runtime_session.MIN_EVENTS_PER_BEAM_PHASE = 1
     runtime_session.MAX_EVENTS_PER_BEAM_PHASE = 1000
@@ -132,15 +135,15 @@ def test_apply_events_per_beam_phase_invalidates_simulation_without_regenerating
         worker_ready_result=object(),
     )
 
-    invalidated = {"count": 0}
+    invalidations = []
     scheduled = {"count": 0}
     update_mosaic = {"count": 0}
 
     monkeypatch.setattr(runtime_session, "_refresh_resolution_display", lambda: None)
     monkeypatch.setattr(
         runtime_session,
-        "_invalidate_geometry_manual_pick_cache",
-        lambda: invalidated.__setitem__("count", invalidated["count"] + 1),
+        "_invalidate_picker_handoff_caches_for_update_action",
+        lambda *args, **kwargs: invalidations.append((args, kwargs)),
     )
     monkeypatch.setattr(
         runtime_session,
@@ -156,7 +159,17 @@ def test_apply_events_per_beam_phase_invalidates_simulation_without_regenerating
     runtime_session._apply_events_per_beam_phase(trigger_update=True)
 
     assert runtime_session.defaults["events_per_beam_phase"] == 75
-    assert invalidated["count"] == 1
+    assert invalidations == [
+        (
+            (runtime_session.UpdateAction.FULL_SIMULATION,),
+            {
+                "physics_signature_changed": True,
+                "hit_table_signature_changed": True,
+                "q_group_content_signature_changed": True,
+                "detector_geometry_changed": False,
+            },
+        )
+    ]
     assert scheduled["count"] == 1
     assert update_mosaic["count"] == 0
     assert runtime_session.simulation_runtime_state.last_sim_signature is None
@@ -194,6 +207,7 @@ def _install_sampling_control_test_state(
     runtime_session.MIN_RANDOM_SAMPLE_COUNT = 1
     runtime_session.MAX_RANDOM_SAMPLE_COUNT = 5000
     runtime_session.DEFAULT_EVENTS_PER_BEAM_PHASE = 75
+    runtime_session.DEFAULT_LINKED_EVENTS_PER_SAMPLE = 2
     runtime_session.MIN_EVENTS_PER_BEAM_PHASE = 1
     runtime_session.MAX_EVENTS_PER_BEAM_PHASE = 1000
     runtime_session.CUSTOM_SAMPLING_OPTION = "Custom"
@@ -220,7 +234,7 @@ def _install_sampling_control_test_state(
     )
 
 
-def test_linked_events_per_beam_phase_tracks_sample_count(monkeypatch):
+def test_linked_events_per_beam_phase_tracks_two_events_per_sample(monkeypatch):
     _install_sampling_control_test_state(
         sample_count=125,
         events_per_phase=40,
@@ -232,8 +246,8 @@ def test_linked_events_per_beam_phase_tracks_sample_count(monkeypatch):
 
     assert normalized == 125
     assert runtime_session.defaults["sampling_count"] == 125
-    assert runtime_session.defaults["events_per_beam_phase"] == 125
-    assert runtime_session.sampling_optics_controls_view_state.events_per_phase_var.get() == 125
+    assert runtime_session.defaults["events_per_beam_phase"] == 250
+    assert runtime_session.sampling_optics_controls_view_state.events_per_phase_var.get() == 250
 
 
 def test_independent_events_per_beam_phase_stops_tracking_sample_count(monkeypatch):
@@ -250,6 +264,23 @@ def test_independent_events_per_beam_phase_stops_tracking_sample_count(monkeypat
     assert runtime_session.defaults["sampling_count"] == 125
     assert runtime_session.defaults["events_per_beam_phase"] == 40
     assert runtime_session.sampling_optics_controls_view_state.events_per_phase_var.get() == 40
+
+
+def test_loaded_state_without_sample_count_defaults_to_seventy_five():
+    _install_sampling_control_test_state(
+        sample_count=12,
+        events_per_phase=24,
+        independent=False,
+    )
+    runtime_session.resolution_var = _FakeVar("Low")
+
+    runtime_session._apply_loaded_sample_count_default({})
+
+    assert runtime_session.resolution_var.get() == "Custom"
+    assert runtime_session.defaults["sampling_count"] == 75
+    assert runtime_session.sampling_optics_controls_view_state.sample_count_var.get() == 75
+    assert runtime_session.defaults["events_per_beam_phase"] == 150
+    assert runtime_session.sampling_optics_controls_view_state.events_per_phase_var.get() == 150
 
 
 def test_turning_off_independent_events_relinks_and_invalidates(monkeypatch):
@@ -274,8 +305,8 @@ def test_turning_off_independent_events_relinks_and_invalidates(monkeypatch):
 
     runtime_session._on_events_per_beam_phase_independent_change()
 
-    assert runtime_session.defaults["events_per_beam_phase"] == 125
-    assert runtime_session.sampling_optics_controls_view_state.events_per_phase_var.get() == 125
+    assert runtime_session.defaults["events_per_beam_phase"] == 250
+    assert runtime_session.sampling_optics_controls_view_state.events_per_phase_var.get() == 250
     assert invalidated["count"] == 1
     assert scheduled["count"] == 1
     assert runtime_session.simulation_runtime_state.last_sim_signature is None

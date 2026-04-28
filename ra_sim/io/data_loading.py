@@ -327,6 +327,7 @@ def load_parameters(
     solve_q_steps_var=None,
     solve_q_rel_tol_var=None,
     solve_q_mode_var=None,
+    default_sample_count=75,
     **_ignored_legacy_sampling_kwargs,
 ):
     """
@@ -373,15 +374,17 @@ def load_parameters(
         if custom_samples_var is not None:
             stored_custom_count = params.get(
                 'sampling_custom_count',
-                params.get('sampling_count'),
+                params.get('sampling_count', default_sample_count),
             )
-            if stored_custom_count is not None:
+            try:
+                parsed_custom_count = int(round(float(stored_custom_count)))
+            except (TypeError, ValueError):
                 try:
-                    parsed_custom_count = int(round(float(stored_custom_count)))
+                    parsed_custom_count = int(round(float(default_sample_count)))
                 except (TypeError, ValueError):
-                    parsed_custom_count = None
-                if parsed_custom_count is not None and parsed_custom_count > 0:
-                    custom_samples_var.set(str(parsed_custom_count))
+                    parsed_custom_count = 75
+            if parsed_custom_count > 0:
+                custom_samples_var.set(str(parsed_custom_count))
         if rod_points_per_gz_var is not None:
             stored_rod_points = params.get('rod_points_per_gz')
             if stored_rod_points is not None:
