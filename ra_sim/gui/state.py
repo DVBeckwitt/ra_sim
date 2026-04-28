@@ -118,24 +118,39 @@ class BackgroundSubtractionControlsViewState:
     """Widget references and vars for diffuse-background subtraction controls."""
 
     frame: Any = None
+    preset_buttons: dict[str, Any] = field(default_factory=dict)
     enabled_var: Any = None
     mode_var: Any = None
     apply_to_fit_var: Any = None
     apply_to_display_var: Any = None
     display_mode_var: Any = None
     scale_var: Any = None
+    scale_slider: Any = None
     auto_scale_var: Any = None
     radial_bin_width_deg_var: Any = None
+    radial_bin_width_deg_slider: Any = None
     radial_quantile_var: Any = None
+    radial_quantile_slider: Any = None
     radial_smooth_sigma_deg_var: Any = None
+    radial_smooth_sigma_deg_slider: Any = None
     caked_theta_window_deg_var: Any = None
+    caked_theta_window_deg_slider: Any = None
     caked_phi_window_deg_var: Any = None
+    caked_phi_window_deg_slider: Any = None
     caked_quantile_var: Any = None
+    caked_quantile_slider: Any = None
     peak_mask_sigma_var: Any = None
+    peak_mask_sigma_slider: Any = None
     peak_mask_radius_px_var: Any = None
+    peak_mask_radius_px_slider: Any = None
     direct_beam_mask_radius_px_var: Any = None
+    direct_beam_mask_radius_px_slider: Any = None
     clip_for_display_var: Any = None
     diagnostics_var: Any = None
+    diagnostics_summary_var: Any = None
+    diagnostics_summary_label: Any = None
+    auto_preview_var: Any = None
+    auto_preview_checkbutton: Any = None
     status_var: Any = None
 
 
@@ -868,6 +883,7 @@ class BackgroundRuntimeState:
     background_subtraction_result: dict[str, object] | None = None
     background_subtraction_signature: object = None
     background_subtraction_cache: dict[object, object] = field(default_factory=dict)
+    background_subtraction_preview_after_id: Any = None
 
 
 @dataclass

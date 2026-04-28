@@ -1,5 +1,7 @@
 import tkinter as tk
 
+import pytest
+
 from ra_sim.gui import state, views
 
 
@@ -3378,12 +3380,56 @@ def test_create_background_theta_controls_stores_vars_and_binds_apply(monkeypatc
     assert applied == ["apply", "apply", "apply"]
 
 
+def test_background_subtraction_preset_values_are_stable() -> None:
+    balanced = views.background_subtraction_preset_values("Balanced")
+    protect_peaks = views.background_subtraction_preset_values("Protect Peaks")
+    aggressive = views.background_subtraction_preset_values("aggressive")
+
+    assert balanced["enabled"] is True
+    assert balanced["scale"] == 1.0
+    assert balanced["mode"] == "radial_plus_caked_2d"
+    assert protect_peaks["radial_quantile"] < balanced["radial_quantile"]
+    assert protect_peaks["peak_mask_radius_px"] > balanced["peak_mask_radius_px"]
+    assert aggressive["scale"] > balanced["scale"]
+    assert aggressive["radial_quantile"] > balanced["radial_quantile"]
+    with pytest.raises(KeyError):
+        views.background_subtraction_preset_values("unknown")
+
+
 def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     monkeypatch,
 ) -> None:
     _FakeLabel.created = []
     _FakeButton.created = []
     _FakeCheckbutton.created = []
+    _FakeRadiobutton.created = []
+    created_sliders = []
+
+    def _fake_create_slider(
+        label,
+        min_val,
+        max_val,
+        initial_val,
+        step_size,
+        parent,
+        update_callback=None,
+        **kwargs,
+    ):
+        var = _FakeVar(initial_val)
+        slider = _FakeScale(parent, from_=min_val, to=max_val)
+        created_sliders.append(
+            {
+                "label": label,
+                "var": var,
+                "slider": slider,
+                "step": step_size,
+                "parent": parent,
+                "update_callback": update_callback,
+                "kwargs": kwargs,
+            }
+        )
+        return var, slider
+
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
@@ -3391,12 +3437,15 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     monkeypatch.setattr(views.ttk, "Combobox", _FakeEntry)
     monkeypatch.setattr(views.ttk, "Button", _FakeButton)
     monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views, "create_slider", _fake_create_slider)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
     monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
     monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
 
     view_state = state.BackgroundSubtractionControlsViewState()
-    events: list[str] = []
+    events: list[object] = []
 
     views.create_background_subtraction_controls(
         parent=object(),
@@ -3416,10 +3465,11 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
         on_apply=lambda: events.append("apply"),
         on_reset=lambda: events.append("reset"),
         on_export_diagnostics=lambda: events.append("export"),
+        on_apply_preset=lambda name: events.append(("preset", name)),
     )
 
     assert isinstance(view_state.frame, _FakeFrame)
-    assert view_state.frame.kwargs["text"] == "Diffuse Background Subtraction"
+    assert view_state.frame.kwargs["text"] == "Background"
     assert view_state.enabled_var.get() is True
     assert view_state.mode_var.get() == "radial"
     assert view_state.apply_to_fit_var.get() is True
@@ -3427,18 +3477,66 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     assert view_state.display_mode_var.get() == "subtracted"
     assert view_state.scale_var.get() == 0.8
     assert view_state.radial_bin_width_deg_var.get() == 0.2
+    assert view_state.radial_quantile_var.get() == 0.35
     assert view_state.diagnostics_var.get() is False
-    assert view_state.status_var.get() == "Diffuse subtraction is off."
-    assert {button.kwargs["text"] for button in _FakeButton.created[-4:]} == {
+    assert view_state.status_var.get() == "Settings loaded. Press Fit model to update preview."
+    assert view_state.diagnostics_summary_var.get() == "No model fit yet."
+    assert view_state.scale_slider is created_sliders[0]["slider"]
+    assert view_state.radial_smooth_sigma_deg_slider is created_sliders[1]["slider"]
+    assert view_state.peak_mask_radius_px_slider is created_sliders[2]["slider"]
+    assert view_state.direct_beam_mask_radius_px_slider is created_sliders[3]["slider"]
+    assert view_state.radial_bin_width_deg_slider is created_sliders[4]["slider"]
+    assert view_state.radial_quantile_slider is created_sliders[5]["slider"]
+    assert view_state.caked_theta_window_deg_slider is created_sliders[6]["slider"]
+    assert view_state.caked_phi_window_deg_slider is created_sliders[7]["slider"]
+    assert view_state.caked_quantile_slider is created_sliders[8]["slider"]
+    assert view_state.peak_mask_sigma_slider is created_sliders[9]["slider"]
+    assert [item["label"] for item in created_sliders] == [
+        "Removal strength",
+        "Radial smoothness",
+        "Peak protection radius",
+        "Direct-beam exclusion radius",
+        "Radial detail / bin width",
+        "Radial baseline percentile",
+        "2D residual theta smoothness",
+        "2D residual phi smoothness",
+        "2D residual percentile",
+        "Peak masking sensitivity",
+    ]
+    assert set(view_state.preset_buttons) == {
+        "conservative",
+        "balanced",
+        "aggressive",
+        "protect_peaks",
+        "direct_beam_heavy",
+        "reset_defaults",
+    }
+    assert {button.kwargs["text"] for button in _FakeButton.created} >= {
+        "Conservative",
+        "Balanced",
+        "Aggressive",
+        "Protect Peaks",
+        "Direct Beam Heavy",
         "Fit model to current background",
         "Apply / recompute",
-        "Reset defaults",
+        "Reset Defaults",
         "Export diagnostics",
     }
 
-    for button in _FakeButton.created[-4:]:
-        button.command()
+    buttons_by_text = {button.kwargs["text"]: button for button in _FakeButton.created}
+    buttons_by_text["Fit model to current background"].command()
+    buttons_by_text["Apply / recompute"].command()
+    buttons_by_text["Reset Defaults"].command()
+    buttons_by_text["Export diagnostics"].command()
     assert events == ["fit", "apply", "reset", "export"]
+
+    buttons_by_text["Balanced"].command()
+    assert view_state.enabled_var.get() is True
+    assert view_state.mode_var.get() == "radial_plus_caked_2d"
+    assert view_state.scale_var.get() == 1.0
+    assert view_state.radial_quantile_var.get() == 0.35
+    assert view_state.status_var.get() == "Preset applied. Press Fit model to current background."
+    assert events[-1] == ("preset", "balanced")
 
 
 def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(

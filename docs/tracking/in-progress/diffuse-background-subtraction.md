@@ -1,6 +1,6 @@
 # Diffuse background subtraction
 
-Status: implemented, validation-partial
+Status: implemented, UX-refined, validation-partial
 Type: feature
 Owner: -
 Issue: none
@@ -29,6 +29,10 @@ Display clipping is limited to display paths.
 - Added a GUI `Background` tab with controls for enable/mode/apply flags,
   scale, radial/caked model parameters, masking parameters, diagnostics, and
   raw/model/subtracted/residual/mask previews.
+- Refined the GUI `Background` tab into a workflow-oriented panel with presets,
+  explained sliders, collapsible advanced controls, preview guidance, dirty
+  status feedback, debounced auto-preview, and diagnostics summaries. This is
+  a UI-only refinement over the existing subtraction model.
 - Wired corrected backgrounds into GUI caking, comparison, analysis, auto-match,
   and geometry-fit payloads only when `apply_to_fit` is enabled.
 - Added subtraction-aware cache signatures and invalidation so caked background
@@ -51,7 +55,11 @@ Passed:
 - `python -m pytest tests/test_gui_state_io.py -ra`
 - `python -m pytest tests/test_cli_geometry_fit.py -ra`
 - `python -m pytest tests/test_gui_runtime_import_safe.py -ra`
+- `python -m pytest tests/test_gui_views.py tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py tests/test_cli_geometry_fit.py tests/test_diffuse_background.py -ra`
 - Combined targeted suite for the six files above: 419 passed.
+- Combined targeted UX/headless/numerical suite: 417 passed.
+- `python -m ruff check ra_sim/gui/views.py ra_sim/gui/state.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_views.py tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py`
+- `python -m ruff format --check ra_sim/gui/views.py ra_sim/gui/state.py tests/test_gui_views.py tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py`
 - Manual-geometry regression selectors and full
   `tests/test_gui_runtime_import_safe.py`: 313 passed.
 - Pure off-mode validation confirmed corrected output remains equal to raw.
@@ -62,6 +70,9 @@ Full-suite status:
 
 - Plain `python -m pytest -ra` did not complete cleanly in this worktree.
   The base worktree also failed/crashed during reporting.
+- After the UX refinement, full `python -m pytest -ra` was attempted twice and
+  timed out before completion. Per operator direction, no further full-suite
+  chase was performed for this patch.
 - Comparable `--tb=no` runs showed no candidate-only failures versus base:
   base had 290 failures, candidate had 261 failures, and candidate-only failure
   count was zero.
@@ -70,6 +81,7 @@ Not validated locally:
 
 - Real-background smoke tests for off/radial/radial-plus-caked-2d modes.
 - Manual GUI preview/orientation checks.
+- Manual hover-tooltip and preset interaction checks in a live Tk session.
 - Headless saved-state override checks using a real saved GUI state.
 - Diagnostic artifact sanity checks on real detector data.
 

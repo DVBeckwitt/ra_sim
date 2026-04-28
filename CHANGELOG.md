@@ -39,6 +39,7 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
+  - Reworked the diffuse background-subtraction controls into a workflow-oriented Background tab with presets, explained sliders, diagnostics, and dirty/auto-preview status feedback while preserving saved-state and headless configuration keys.
   - Added linked GUI sampling controls: beam phase samples now default to 75, events per beam phase tracks the same count by default, and an `Independent` toggle enables separate event-count control when needed.
   - Made simulation GUI startup default to diagnostics-off, with saved debug settings and one-run debug mode kept as explicit opt-in choices.
   - Stopped creating per-run debug bundles on default diagnostics-off launches; simulation now starts bundle capture only after the chosen normal/saved/debug startup mode is known.

@@ -2706,6 +2706,113 @@ def _set_background_subtraction_status(text: str) -> None:
             pass
 
 
+def _set_background_subtraction_diagnostics_summary(text: str) -> None:
+    var = getattr(background_subtraction_controls_view_state, "diagnostics_summary_var", None)
+    setter = getattr(var, "set", None)
+    if callable(setter):
+        try:
+            setter(str(text))
+        except Exception:
+            pass
+
+
+def _set_background_subtraction_var(key: str, value: object) -> None:
+    view_state = background_subtraction_controls_view_state
+    var = {
+        "enabled": view_state.enabled_var,
+        "mode": view_state.mode_var,
+        "apply_to_fit": view_state.apply_to_fit_var,
+        "apply_to_display": view_state.apply_to_display_var,
+        "display_mode": view_state.display_mode_var,
+        "scale": view_state.scale_var,
+        "auto_scale": view_state.auto_scale_var,
+        "radial_bin_width_deg": view_state.radial_bin_width_deg_var,
+        "radial_quantile": view_state.radial_quantile_var,
+        "radial_smooth_sigma_deg": view_state.radial_smooth_sigma_deg_var,
+        "caked_theta_window_deg": view_state.caked_theta_window_deg_var,
+        "caked_phi_window_deg": view_state.caked_phi_window_deg_var,
+        "caked_quantile": view_state.caked_quantile_var,
+        "peak_mask_sigma": view_state.peak_mask_sigma_var,
+        "peak_mask_radius_px": view_state.peak_mask_radius_px_var,
+        "direct_beam_mask_radius_px": view_state.direct_beam_mask_radius_px_var,
+        "clip_for_display": view_state.clip_for_display_var,
+        "diagnostics": view_state.diagnostics_var,
+    }.get(str(key))
+    setter = getattr(var, "set", None)
+    if callable(setter):
+        try:
+            setter(value)
+        except Exception:
+            pass
+
+
+def _background_subtraction_auto_preview_enabled() -> bool:
+    return bool(
+        _get_var_value(
+            getattr(background_subtraction_controls_view_state, "auto_preview_var", None),
+            False,
+        )
+    )
+
+
+def _cancel_background_subtraction_preview() -> None:
+    token = getattr(background_runtime_state, "background_subtraction_preview_after_id", None)
+    gui_controllers.clear_tk_after_token(globals().get("root"), token)
+    background_runtime_state.background_subtraction_preview_after_id = None
+
+
+def _schedule_background_subtraction_preview(delay_ms: int = 400) -> None:
+    _cancel_background_subtraction_preview()
+    root_obj = globals().get("root")
+    after = getattr(root_obj, "after", None)
+
+    def _run_preview() -> None:
+        background_runtime_state.background_subtraction_preview_after_id = None
+        result = _fit_current_background_subtraction_model(force=True)
+        _refresh_background_subtraction_diagnostics_summary()
+        config = _current_background_subtraction_config()
+        if (
+            result is not None
+            and config.enabled
+            and (config.apply_to_display or config.apply_to_fit)
+            and not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False))
+        ):
+            schedule_update()
+
+    if not callable(after):
+        _run_preview()
+        return
+    try:
+        background_runtime_state.background_subtraction_preview_after_id = after(
+            int(delay_ms),
+            _run_preview,
+        )
+    except Exception:
+        background_runtime_state.background_subtraction_preview_after_id = None
+        _run_preview()
+
+
+def _mark_background_subtraction_dirty(reason: str) -> None:
+    _invalidate_background_subtraction_cache()
+    _set_background_subtraction_status(reason)
+    _set_background_subtraction_diagnostics_summary("Model status: dirty\nNo model fit yet.")
+    if _background_subtraction_auto_preview_enabled():
+        _schedule_background_subtraction_preview()
+    else:
+        _cancel_background_subtraction_preview()
+
+
+def _apply_background_subtraction_preset(name: str) -> None:
+    try:
+        values = gui_views.background_subtraction_preset_values(name)
+    except KeyError:
+        _set_background_subtraction_status(f"Unknown diffuse-background preset: {name}")
+        return
+    for key, value in values.items():
+        _set_background_subtraction_var(key, value)
+    _mark_background_subtraction_dirty("Preset applied. Press Fit model to current background.")
+
+
 def _current_background_subtraction_config() -> DiffuseBackgroundConfig:
     """Return the current diffuse-background subtraction GUI config."""
 
@@ -2790,6 +2897,65 @@ def _invalidate_background_subtraction_cache() -> None:
         pass
 
 
+def _background_subtraction_fraction_text(label: str, value: object) -> str:
+    try:
+        return f"{label}: {float(value):.0%}"
+    except Exception:
+        return f"{label}: unavailable"
+
+
+def _background_subtraction_number_text(label: str, value: object) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return f"{label}: unavailable"
+    if not np.isfinite(number):
+        return f"{label}: unavailable"
+    return f"{label}: {number:.4g}"
+
+
+def _refresh_background_subtraction_diagnostics_summary() -> None:
+    result = background_runtime_state.background_subtraction_result
+    if not isinstance(result, Mapping):
+        _set_background_subtraction_diagnostics_summary("No model fit yet.")
+        return
+    diagnostics = result.get("diagnostics", {})
+    if not isinstance(diagnostics, Mapping):
+        _set_background_subtraction_diagnostics_summary("No model fit yet.")
+        return
+    try:
+        current_signature = _background_subtraction_signature()
+    except Exception:
+        current_signature = None
+    model_status = (
+        "up to date"
+        if current_signature == background_runtime_state.background_subtraction_signature
+        else "dirty"
+    )
+    lines = [
+        f"Model status: {model_status}",
+        _background_subtraction_fraction_text(
+            "Valid pixels",
+            diagnostics.get("valid_fraction"),
+        ),
+        _background_subtraction_fraction_text(
+            "Excluded pixels",
+            diagnostics.get("masked_fraction"),
+        ),
+        _background_subtraction_fraction_text(
+            "Negative residual pixels",
+            diagnostics.get("negative_fraction"),
+        ),
+        f"Radial bins: {int(diagnostics.get('radial_bin_count', 0) or 0)}",
+        _background_subtraction_number_text("Raw median", diagnostics.get("raw_median")),
+        _background_subtraction_number_text(
+            "Corrected median",
+            diagnostics.get("corrected_median"),
+        ),
+    ]
+    _set_background_subtraction_diagnostics_summary("\n".join(lines))
+
+
 def _background_subtraction_axes_for_image(
     image: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
@@ -2827,10 +2993,12 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
         background_runtime_state.background_subtraction_result = None
         background_runtime_state.background_subtraction_signature = None
         _set_background_subtraction_status("Diffuse subtraction is off.")
+        _refresh_background_subtraction_diagnostics_summary()
         return None
     raw_background = _get_current_background_backend()
     if raw_background is None:
         _set_background_subtraction_status("No background image is loaded.")
+        _refresh_background_subtraction_diagnostics_summary()
         return None
     image = np.asarray(raw_background, dtype=np.float64)
     signature = _background_subtraction_signature()
@@ -2839,11 +3007,13 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
         if isinstance(cached, dict):
             background_runtime_state.background_subtraction_result = cached
             background_runtime_state.background_subtraction_signature = signature
+            _refresh_background_subtraction_diagnostics_summary()
             return cached
 
     two_theta, phi = _background_subtraction_axes_for_image(image)
     if two_theta is None or phi is None:
         _set_background_subtraction_status("Unable to build detector angular maps.")
+        _refresh_background_subtraction_diagnostics_summary()
         return None
     radial_axis = getattr(simulation_runtime_state, "last_caked_radial_values", None)
     azimuth_axis = getattr(simulation_runtime_state, "last_caked_azimuth_values", None)
@@ -2874,6 +3044,7 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
         )
     except Exception as exc:
         _set_background_subtraction_status(f"Diffuse model fit failed: {exc}")
+        _refresh_background_subtraction_diagnostics_summary()
         return None
     background_runtime_state.background_subtraction_cache[signature] = result
     background_runtime_state.background_subtraction_result = result
@@ -2887,6 +3058,7 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
         except Exception:
             valid_text = ""
     _set_background_subtraction_status(f"Diffuse model fit for current background.{valid_text}")
+    _refresh_background_subtraction_diagnostics_summary()
     return result
 
 
@@ -4879,48 +5051,62 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
     global background_subtraction_diagnostics_var
     global background_subtraction_status_var
 
+    def _fit_model_for_preview() -> None:
+        _cancel_background_subtraction_preview()
+        result = _fit_current_background_subtraction_model(force=True)
+        _refresh_background_subtraction_diagnostics_summary()
+        config = _current_background_subtraction_config()
+        if (
+            result is not None
+            and config.enabled
+            and (config.apply_to_display or config.apply_to_fit)
+            and not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False))
+        ):
+            schedule_update()
+
     def _apply_and_recompute() -> None:
+        _cancel_background_subtraction_preview()
         _invalidate_background_subtraction_cache()
         _fit_current_background_subtraction_model(force=True)
+        _refresh_background_subtraction_diagnostics_summary()
         schedule_update()
 
     def _reset_defaults() -> None:
         defaults_mapping = _background_subtraction_defaults()
-        view_state = background_subtraction_controls_view_state
-        for key, var in (
-            ("enabled", view_state.enabled_var),
-            ("mode", view_state.mode_var),
-            ("apply_to_fit", view_state.apply_to_fit_var),
-            ("apply_to_display", view_state.apply_to_display_var),
-            ("display_mode", view_state.display_mode_var),
-            ("scale", view_state.scale_var),
-            ("auto_scale", view_state.auto_scale_var),
-            ("radial_bin_width_deg", view_state.radial_bin_width_deg_var),
-            ("radial_quantile", view_state.radial_quantile_var),
-            ("radial_smooth_sigma_deg", view_state.radial_smooth_sigma_deg_var),
-            ("caked_theta_window_deg", view_state.caked_theta_window_deg_var),
-            ("caked_phi_window_deg", view_state.caked_phi_window_deg_var),
-            ("caked_quantile", view_state.caked_quantile_var),
-            ("peak_mask_sigma", view_state.peak_mask_sigma_var),
-            ("peak_mask_radius_px", view_state.peak_mask_radius_px_var),
-            ("direct_beam_mask_radius_px", view_state.direct_beam_mask_radius_px_var),
-            ("clip_for_display", view_state.clip_for_display_var),
-            ("diagnostics", view_state.diagnostics_var),
+        for key in (
+            "enabled",
+            "mode",
+            "apply_to_fit",
+            "apply_to_display",
+            "display_mode",
+            "scale",
+            "auto_scale",
+            "radial_bin_width_deg",
+            "radial_quantile",
+            "radial_smooth_sigma_deg",
+            "caked_theta_window_deg",
+            "caked_phi_window_deg",
+            "caked_quantile",
+            "peak_mask_sigma",
+            "peak_mask_radius_px",
+            "direct_beam_mask_radius_px",
+            "clip_for_display",
+            "diagnostics",
         ):
-            setter = getattr(var, "set", None)
-            if callable(setter):
-                setter(defaults_mapping.get(key))
-        _set_background_subtraction_status("Diffuse subtraction settings reset.")
-        _apply_and_recompute()
+            _set_background_subtraction_var(key, defaults_mapping.get(key))
+        _mark_background_subtraction_dirty(
+            "Diffuse subtraction settings reset. Press Fit model to update preview."
+        )
 
     gui_views.create_background_subtraction_controls(
         parent=app_shell_view_state.background_body,
         view_state=background_subtraction_controls_view_state,
         initial_values=_background_subtraction_defaults(),
-        on_fit_model=lambda: _fit_current_background_subtraction_model(force=True),
+        on_fit_model=_fit_model_for_preview,
         on_apply=_apply_and_recompute,
         on_reset=_reset_defaults,
         on_export_diagnostics=_export_current_background_subtraction_diagnostics,
+        on_apply_preset=_apply_background_subtraction_preset,
     )
     view_state = background_subtraction_controls_view_state
     background_subtraction_enabled_var = view_state.enabled_var
@@ -4946,18 +5132,27 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
     background_subtraction_status_var = view_state.status_var
 
     def _on_control_change(*_args) -> None:
-        _invalidate_background_subtraction_cache()
-        config = _current_background_subtraction_config()
-        if config.enabled and (config.apply_to_fit or config.apply_to_display):
-            if not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
-                schedule_update()
+        _mark_background_subtraction_dirty(
+            "Settings changed. Press Fit model to update preview."
+        )
+
+    def _on_preview_control_change(*_args) -> None:
+        _mark_background_subtraction_dirty(
+            "Preview settings changed. Press Fit model to update model layers."
+        )
+        if not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
+            schedule_update()
+
+    def _on_auto_preview_change(*_args) -> None:
+        if _background_subtraction_auto_preview_enabled():
+            _schedule_background_subtraction_preview()
+        else:
+            _cancel_background_subtraction_preview()
 
     for var in (
         background_subtraction_enabled_var,
         background_subtraction_mode_var,
         background_subtraction_apply_to_fit_var,
-        background_subtraction_apply_to_display_var,
-        background_subtraction_display_mode_var,
         background_subtraction_scale_var,
         background_subtraction_auto_scale_var,
         background_subtraction_radial_bin_width_deg_var,
@@ -4969,7 +5164,6 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
         background_subtraction_peak_mask_sigma_var,
         background_subtraction_peak_mask_radius_px_var,
         background_subtraction_direct_beam_mask_radius_px_var,
-        background_subtraction_clip_for_display_var,
         background_subtraction_diagnostics_var,
     ):
         trace_add = getattr(var, "trace_add", None)
@@ -4978,6 +5172,26 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
                 trace_add("write", _on_control_change)
             except Exception:
                 pass
+
+    for var in (
+        background_subtraction_apply_to_display_var,
+        background_subtraction_display_mode_var,
+        background_subtraction_clip_for_display_var,
+    ):
+        trace_add = getattr(var, "trace_add", None)
+        if callable(trace_add):
+            try:
+                trace_add("write", _on_preview_control_change)
+            except Exception:
+                pass
+
+    auto_preview_var = getattr(view_state, "auto_preview_var", None)
+    trace_add = getattr(auto_preview_var, "trace_add", None)
+    if callable(trace_add):
+        try:
+            trace_add("write", _on_auto_preview_change)
+        except Exception:
+            pass
 
 
 def _geometry_manual_position_error_px(

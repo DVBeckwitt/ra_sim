@@ -48,12 +48,15 @@ clean.
 Diffuse background subtraction status note:
 The shared radial/caked subtraction model, GUI Background tab, headless/CLI
 overrides, diagnostics, cache invalidation, and off-mode safeguards are
-implemented. Targeted tests, manual-geometry runtime safety tests, pure
-off-mode validation, and synthetic numerical validation pass. Full-suite
-comparison found no candidate-only `--tb=no` failures versus base, but real
-detector smoke tests, manual GUI preview/orientation checks, saved-state
-headless override checks, and real diagnostic artifact inspection still need
-project input data.
+implemented. The Background tab UX is now workflow-oriented with presets,
+explained sliders, collapsible advanced sections, dirty status feedback,
+debounced auto-preview, and diagnostics summaries; no subtraction algorithm,
+CLI, headless, config, or saved-state key changes were made for the UX pass.
+Targeted GUI/state/import-safe/headless/numerical tests pass. Full-suite runs
+timed out locally after the UX pass and were not chased further by operator
+direction. Real detector smoke tests, manual GUI preview/orientation checks,
+tooltip/preset interaction checks, saved-state headless override checks, and
+real diagnostic artifact inspection still need project input data.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
