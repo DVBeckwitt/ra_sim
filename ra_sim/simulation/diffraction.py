@@ -551,6 +551,9 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "n_project_candidate_calls": 0,
     "n_valid_candidates": 0,
     "n_selected_events": 0,
+    "n_stored_projected_candidates": 0,
+    "candidate_buffer_capacity_max": 0,
+    "candidate_buffer_fallback_count": 0,
     "pass2_mass_mismatch_count": 0,
     "pass2_mass_mismatch_max_abs": 0.0,
     "tail_fill_events": 0,
@@ -565,6 +568,9 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "parallel_worker_count": 1,
 }
 _LAST_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = dict(_EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS)
+
+_WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES = 5 * 8
+_WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES = 512 * 1024 * 1024
 
 
 def _retain_diffraction_safe_cache() -> bool:
@@ -4485,6 +4491,178 @@ def _weighted_event_pass1_for_qset(
 
 
 @njit(fastmath=True, cache=True, nogil=True)
+def _weighted_event_project_store_for_qset(
+    all_q,
+    peak_idx,
+    sample_idx,
+    H,
+    K,
+    L,
+    reflection_intensity,
+    sample_weight,
+    sample_mosaic_weight,
+    sample_angular_distance,
+    sample_beam_distance,
+    sample_wavelength_distance,
+    debye_x_sq,
+    debye_y_sq,
+    center_row,
+    center_col,
+    R_sample,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
+    sample_terms,
+    sample_n2_array,
+    sample_eps2_array,
+    thickness,
+    optics_mode,
+    pixel_scale,
+    image_size,
+    exit_projection_mode,
+    fast_optics_lut_ready,
+    fast_optics_lut_row,
+    save_flag,
+    q_data,
+    q_count,
+    representative_slot_by_peak_branch,
+    representative_valid,
+    representative_neg_mosaic_weight,
+    representative_angular_distance,
+    representative_beam_distance,
+    representative_wavelength_distance,
+    representative_neg_mass,
+    representative_sample_idx,
+    representative_peak_idx,
+    representative_q_idx,
+    representative_rows,
+    candidate_mass,
+    candidate_row,
+    candidate_col,
+    candidate_phi,
+    candidate_peak_idx,
+    candidate_count,
+):
+    total_mass = 0.0
+    valid_count = 0
+    project_calls = 0
+
+    I_plane_x = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_X]
+    I_plane_y = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Y]
+    I_plane_z = sample_terms[sample_idx, _SAMPLE_COL_I_PLANE_Z]
+    k_x_scat = sample_terms[sample_idx, _SAMPLE_COL_KX_SCAT]
+    k_y_scat = sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT]
+    re_k_z = sample_terms[sample_idx, _SAMPLE_COL_RE_KZ]
+    im_k_z = sample_terms[sample_idx, _SAMPLE_COL_IM_KZ]
+    k_scat = sample_terms[sample_idx, _SAMPLE_COL_K_SCAT]
+    k0 = sample_terms[sample_idx, _SAMPLE_COL_K0]
+    Ti2 = sample_terms[sample_idx, _SAMPLE_COL_TI2]
+    L_in = sample_terms[sample_idx, _SAMPLE_COL_L_IN]
+    n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
+    n2_samp = sample_n2_array[sample_idx]
+    eps2 = sample_eps2_array[sample_idx]
+
+    for q_idx in range(all_q.shape[0]):
+        Qx = all_q[q_idx, 0]
+        Qy = all_q[q_idx, 1]
+        Qz = all_q[q_idx, 2]
+        I_Q = all_q[q_idx, 3]
+        project_calls += 1
+        candidate_valid, row_f, col_f, phi_f, mass = _project_weighted_candidate_fast(
+            Qx,
+            Qy,
+            Qz,
+            I_Q,
+            reflection_intensity,
+            sample_weight,
+            debye_x_sq,
+            debye_y_sq,
+            center_row,
+            center_col,
+            R_sample,
+            n_det_rot,
+            Detector_Pos,
+            e1_det,
+            e2_det,
+            I_plane_x,
+            I_plane_y,
+            I_plane_z,
+            k_x_scat,
+            k_y_scat,
+            re_k_z,
+            im_k_z,
+            k_scat,
+            k0,
+            Ti2,
+            L_in,
+            n2_real,
+            n2_samp,
+            eps2,
+            thickness,
+            optics_mode,
+            pixel_scale,
+            image_size,
+            exit_projection_mode,
+            fast_optics_lut_ready,
+            fast_optics_lut_row,
+        )
+        if save_flag == 1 and np.isfinite(mass) and mass > 0.0 and q_count[peak_idx] < q_data.shape[1]:
+            q_store_idx = q_count[peak_idx]
+            q_data[peak_idx, q_store_idx, 0] = Qx
+            q_data[peak_idx, q_store_idx, 1] = Qy
+            q_data[peak_idx, q_store_idx, 2] = Qz
+            q_data[peak_idx, q_store_idx, 3] = mass
+            q_data[peak_idx, q_store_idx, 4] = float(sample_idx)
+            q_count[peak_idx] += 1
+        if not candidate_valid:
+            continue
+
+        write_idx = candidate_count
+        candidate_mass[write_idx] = mass
+        candidate_row[write_idx] = row_f
+        candidate_col[write_idx] = col_f
+        candidate_phi[write_idx] = phi_f
+        candidate_peak_idx[write_idx] = peak_idx
+        candidate_count += 1
+
+        total_mass += mass
+        valid_count += 1
+        branch_id = _candidate_branch_id_fast(H, K, phi_f, Qx)
+        rep_slot = representative_slot_by_peak_branch[peak_idx, branch_id]
+        if rep_slot >= 0:
+            _weighted_event_update_representative(
+                rep_slot,
+                sample_mosaic_weight,
+                sample_angular_distance,
+                sample_beam_distance,
+                sample_wavelength_distance,
+                mass,
+                sample_idx,
+                peak_idx,
+                q_idx,
+                row_f,
+                col_f,
+                phi_f,
+                H,
+                K,
+                L,
+                representative_valid,
+                representative_neg_mosaic_weight,
+                representative_angular_distance,
+                representative_beam_distance,
+                representative_wavelength_distance,
+                representative_neg_mass,
+                representative_sample_idx,
+                representative_peak_idx,
+                representative_q_idx,
+                representative_rows,
+            )
+
+    return total_mass, valid_count, project_calls, candidate_count
+
+
+@njit(fastmath=True, cache=True, nogil=True)
 def _weighted_event_pass2_for_qset(
     all_q,
     peak_idx,
@@ -4699,6 +4877,152 @@ def _weighted_event_pass2_for_qset(
     )
 
 
+@njit(fastmath=True, cache=True, nogil=True)
+def _weighted_event_emit_from_stored_candidates(
+    candidate_count,
+    candidate_mass,
+    candidate_row,
+    candidate_col,
+    candidate_phi,
+    candidate_peak_idx,
+    peak_h,
+    peak_k,
+    peak_l,
+    sample_idx,
+    targets,
+    target_idx,
+    cumulative_mass,
+    deposit,
+    collect_tables,
+    flat_event_rows,
+    flat_event_peak_indices,
+    flat_event_count,
+    event_counts,
+    accumulate_image,
+    image,
+    image_size,
+    cache_keys,
+    cache_values,
+    cache_entry_count,
+    cache_flush_limit,
+):
+    pass2_total_mass = 0.0
+    selected_events = 0
+    have_last_valid = False
+    last_row_f = np.nan
+    last_col_f = np.nan
+    last_phi_f = np.nan
+    last_peak_idx = -1
+    last_H = np.nan
+    last_K = np.nan
+    last_L = np.nan
+
+    for cand_idx in range(int(candidate_count)):
+        mass = candidate_mass[cand_idx]
+        row_f = candidate_row[cand_idx]
+        col_f = candidate_col[cand_idx]
+        phi_f = candidate_phi[cand_idx]
+        peak_idx = int(candidate_peak_idx[cand_idx])
+        H = peak_h[peak_idx]
+        K = peak_k[peak_idx]
+        L = peak_l[peak_idx]
+
+        cumulative_mass += mass
+        pass2_total_mass += mass
+        have_last_valid = True
+        last_row_f = row_f
+        last_col_f = col_f
+        last_phi_f = phi_f
+        last_peak_idx = peak_idx
+        last_H = H
+        last_K = K
+        last_L = L
+
+        hit_count = 0
+        while target_idx < targets.shape[0] and cumulative_mass > targets[target_idx]:
+            hit_count += 1
+            target_idx += 1
+
+        if hit_count <= 0:
+            continue
+
+        selected_events += hit_count
+        event_counts[peak_idx, sample_idx] += hit_count
+
+        deposited = True
+        if accumulate_image:
+            deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                image_size,
+                row_f,
+                col_f,
+                float(hit_count) * deposit,
+                cache_keys,
+                cache_values,
+                cache_entry_count,
+                cache_flush_limit,
+            )
+            if needs_flush:
+                cache_entry_count = _flush_local_pixel_cache(
+                    image,
+                    image_size,
+                    cache_keys,
+                    cache_values,
+                )
+                deposited, needs_flush, cache_entry_count = _accumulate_bilinear_cached(
+                    image_size,
+                    row_f,
+                    col_f,
+                    float(hit_count) * deposit,
+                    cache_keys,
+                    cache_values,
+                    cache_entry_count,
+                    cache_flush_limit,
+                )
+                if needs_flush:
+                    deposited = _accumulate_bilinear_hit(
+                        image,
+                        image_size,
+                        row_f,
+                        col_f,
+                        float(hit_count) * deposit,
+                    )
+                    cache_entry_count = 0
+            if not deposited:
+                continue
+
+        if collect_tables:
+            for event_idx in range(hit_count):
+                flat_event_peak_indices[flat_event_count] = peak_idx
+                flat_event_rows[flat_event_count, 0] = deposit
+                flat_event_rows[flat_event_count, 1] = col_f
+                flat_event_rows[flat_event_count, 2] = row_f
+                flat_event_rows[flat_event_count, 3] = phi_f
+                flat_event_rows[flat_event_count, 4] = H
+                flat_event_rows[flat_event_count, 5] = K
+                flat_event_rows[flat_event_count, 6] = L
+                flat_event_rows[flat_event_count, 7] = np.nan
+                flat_event_rows[flat_event_count, 8] = np.nan
+                flat_event_rows[flat_event_count, 9] = float(sample_idx)
+                flat_event_count += 1
+
+    return (
+        target_idx,
+        cumulative_mass,
+        flat_event_count,
+        cache_entry_count,
+        pass2_total_mass,
+        selected_events,
+        have_last_valid,
+        last_row_f,
+        last_col_f,
+        last_phi_f,
+        last_peak_idx,
+        last_H,
+        last_K,
+        last_L,
+    )
+
+
 _WEIGHTED_EVENT_CHUNK_STAT_PROJECT_CALLS = 0
 _WEIGHTED_EVENT_CHUNK_STAT_VALID_CANDIDATES = 1
 _WEIGHTED_EVENT_CHUNK_STAT_SELECTED_EVENTS = 2
@@ -4707,7 +5031,10 @@ _WEIGHTED_EVENT_CHUNK_STAT_PASS2_TOTAL_MASS = 4
 _WEIGHTED_EVENT_CHUNK_STAT_MISMATCH_COUNT = 5
 _WEIGHTED_EVENT_CHUNK_STAT_MISMATCH_MAX_ABS = 6
 _WEIGHTED_EVENT_CHUNK_STAT_TAIL_FILL_EVENTS = 7
-_WEIGHTED_EVENT_CHUNK_STAT_COLS = 8
+_WEIGHTED_EVENT_CHUNK_STAT_STORED_CANDIDATES = 8
+_WEIGHTED_EVENT_CHUNK_STAT_CANDIDATE_CAPACITY_MAX = 9
+_WEIGHTED_EVENT_CHUNK_STAT_CANDIDATE_FALLBACK_COUNT = 10
+_WEIGHTED_EVENT_CHUNK_STAT_COLS = 11
 
 
 @njit(fastmath=True, nogil=True, cache=True)
@@ -4770,6 +5097,13 @@ def _weighted_event_sample_chunk_kernel(
     cache_keys_parts,
     cache_values_parts,
     cache_flush_limit,
+    reuse_projected_candidates,
+    candidate_mass_parts,
+    candidate_row_parts,
+    candidate_col_parts,
+    candidate_phi_parts,
+    candidate_peak_idx_parts,
+    candidate_capacity,
     flat_event_rows_parts,
     flat_event_peak_indices_parts,
     flat_event_count_parts,
@@ -4793,6 +5127,11 @@ def _weighted_event_sample_chunk_kernel(
     representative_peak_idx = representative_peak_idx_parts[worker_slot_i]
     representative_q_idx = representative_q_idx_parts[worker_slot_i]
     representative_rows = representative_rows_parts[worker_slot_i]
+    candidate_mass = candidate_mass_parts[worker_slot_i]
+    candidate_row = candidate_row_parts[worker_slot_i]
+    candidate_col = candidate_col_parts[worker_slot_i]
+    candidate_phi = candidate_phi_parts[worker_slot_i]
+    candidate_peak_idx = candidate_peak_idx_parts[worker_slot_i]
 
     n_project_candidate_calls = 0
     n_valid_candidates = 0
@@ -4802,6 +5141,9 @@ def _weighted_event_sample_chunk_kernel(
     pass2_mass_mismatch_count = 0
     pass2_mass_mismatch_max_abs = 0.0
     tail_fill_events = 0
+    n_stored_projected_candidates = 0
+    candidate_buffer_capacity_max = 0
+    candidate_buffer_fallback_count = 0
 
     for sample_idx in range(sample_start_i, sample_stop_i):
         if sample_terms[sample_idx, _SAMPLE_COL_VALID] <= 0.5:
@@ -4821,6 +5163,23 @@ def _weighted_event_sample_chunk_kernel(
         if accumulate_image_flag:
             _clear_local_pixel_cache(cache_keys, cache_values)
         cache_entry_count = 0
+        sample_candidate_capacity = 0
+        for peak_idx in range(num_peaks):
+            if int(peak_valid[peak_idx]) == 0:
+                continue
+            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
+            if rep_idx < 0:
+                rep_idx = sample_idx
+            sample_candidate_capacity += int(all_q_counts[peak_idx, rep_idx])
+        if sample_candidate_capacity > candidate_buffer_capacity_max:
+            candidate_buffer_capacity_max = int(sample_candidate_capacity)
+        sample_use_candidate_reuse = (
+            bool(reuse_projected_candidates)
+            and int(sample_candidate_capacity) <= int(candidate_capacity)
+        )
+        if (not sample_use_candidate_reuse) and sample_candidate_capacity > 0:
+            candidate_buffer_fallback_count += 1
+        candidate_count = 0
 
         for peak_idx in range(num_peaks):
             if int(peak_valid[peak_idx]) == 0:
@@ -4835,57 +5194,116 @@ def _weighted_event_sample_chunk_kernel(
                 rep_idx = sample_idx
             q_rows = int(all_q_counts[peak_idx, rep_idx])
             all_q = all_q_data[peak_idx, rep_idx, :q_rows, :]
-            peak_mass, valid_count, project_calls = _weighted_event_pass1_for_qset(
-                all_q,
-                peak_idx,
-                sample_idx,
-                H,
-                K,
-                L,
-                reflection_intensity,
-                sample_weight,
-                float(sample_mosaic_weights_rank[sample_idx]),
-                float(sample_angular_top_distances[sample_idx]),
-                float(sample_beam_top_distances[sample_idx]),
-                float(sample_wavelength_top_distances[sample_idx]),
-                debye_x_sq,
-                debye_y_sq,
-                center_row,
-                center_col,
-                R_sample_precomputed,
-                n_det_rot,
-                Detector_Pos,
-                e1_det,
-                e2_det,
-                sample_terms,
-                sample_n2_array,
-                sample_eps2_array,
-                thickness,
-                optics_mode,
-                pixel_scale,
-                int(image_size),
-                exit_projection_mode,
-                int(fast_optics_ready[sample_idx]),
-                fast_optics_lut[sample_idx],
-                0,
-                q_data,
-                q_count,
-                representative_slot_by_peak_branch,
-                representative_valid,
-                representative_neg_mosaic_weight,
-                representative_angular_distance,
-                representative_beam_distance,
-                representative_wavelength_distance,
-                representative_neg_mass,
-                representative_sample_idx,
-                representative_peak_idx,
-                representative_q_idx,
-                representative_rows,
-            )
+            if sample_use_candidate_reuse:
+                peak_mass, valid_count, project_calls, candidate_count = (
+                    _weighted_event_project_store_for_qset(
+                        all_q,
+                        peak_idx,
+                        sample_idx,
+                        H,
+                        K,
+                        L,
+                        reflection_intensity,
+                        sample_weight,
+                        float(sample_mosaic_weights_rank[sample_idx]),
+                        float(sample_angular_top_distances[sample_idx]),
+                        float(sample_beam_top_distances[sample_idx]),
+                        float(sample_wavelength_top_distances[sample_idx]),
+                        debye_x_sq,
+                        debye_y_sq,
+                        center_row,
+                        center_col,
+                        R_sample_precomputed,
+                        n_det_rot,
+                        Detector_Pos,
+                        e1_det,
+                        e2_det,
+                        sample_terms,
+                        sample_n2_array,
+                        sample_eps2_array,
+                        thickness,
+                        optics_mode,
+                        pixel_scale,
+                        int(image_size),
+                        exit_projection_mode,
+                        int(fast_optics_ready[sample_idx]),
+                        fast_optics_lut[sample_idx],
+                        0,
+                        q_data,
+                        q_count,
+                        representative_slot_by_peak_branch,
+                        representative_valid,
+                        representative_neg_mosaic_weight,
+                        representative_angular_distance,
+                        representative_beam_distance,
+                        representative_wavelength_distance,
+                        representative_neg_mass,
+                        representative_sample_idx,
+                        representative_peak_idx,
+                        representative_q_idx,
+                        representative_rows,
+                        candidate_mass,
+                        candidate_row,
+                        candidate_col,
+                        candidate_phi,
+                        candidate_peak_idx,
+                        int(candidate_count),
+                    )
+                )
+            else:
+                peak_mass, valid_count, project_calls = _weighted_event_pass1_for_qset(
+                    all_q,
+                    peak_idx,
+                    sample_idx,
+                    H,
+                    K,
+                    L,
+                    reflection_intensity,
+                    sample_weight,
+                    float(sample_mosaic_weights_rank[sample_idx]),
+                    float(sample_angular_top_distances[sample_idx]),
+                    float(sample_beam_top_distances[sample_idx]),
+                    float(sample_wavelength_top_distances[sample_idx]),
+                    debye_x_sq,
+                    debye_y_sq,
+                    center_row,
+                    center_col,
+                    R_sample_precomputed,
+                    n_det_rot,
+                    Detector_Pos,
+                    e1_det,
+                    e2_det,
+                    sample_terms,
+                    sample_n2_array,
+                    sample_eps2_array,
+                    thickness,
+                    optics_mode,
+                    pixel_scale,
+                    int(image_size),
+                    exit_projection_mode,
+                    int(fast_optics_ready[sample_idx]),
+                    fast_optics_lut[sample_idx],
+                    0,
+                    q_data,
+                    q_count,
+                    representative_slot_by_peak_branch,
+                    representative_valid,
+                    representative_neg_mosaic_weight,
+                    representative_angular_distance,
+                    representative_beam_distance,
+                    representative_wavelength_distance,
+                    representative_neg_mass,
+                    representative_sample_idx,
+                    representative_peak_idx,
+                    representative_q_idx,
+                    representative_rows,
+                )
             sample_total_mass += float(peak_mass)
             pass1_total_mass += float(peak_mass)
             n_valid_candidates += int(valid_count)
             n_project_candidate_calls += int(project_calls)
+        if sample_use_candidate_reuse:
+            n_stored_projected_candidates += int(candidate_count)
 
         if (not np.isfinite(sample_total_mass)) or sample_total_mass <= 0.0:
             if accumulate_image_flag and cache_entry_count > 0:
@@ -4909,63 +5327,33 @@ def _weighted_event_sample_chunk_kernel(
         phase_last_H = np.nan
         phase_last_K = np.nan
         phase_last_L = np.nan
-        for peak_idx in range(num_peaks):
-            if int(peak_valid[peak_idx]) == 0:
-                continue
-
-            H = float(peak_h[peak_idx])
-            K = float(peak_k[peak_idx])
-            L = float(peak_l[peak_idx])
-            reflection_intensity = float(peak_reflection_intensity[peak_idx])
-            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-            if rep_idx < 0:
-                rep_idx = sample_idx
-            q_rows = int(all_q_counts[peak_idx, rep_idx])
-            all_q = all_q_data[peak_idx, rep_idx, :q_rows, :]
+        if sample_use_candidate_reuse:
             (
                 target_idx,
                 cumulative_mass,
                 flat_event_count,
                 cache_entry_count,
-                project_calls,
-                peak_pass2_mass,
+                sample_pass2_mass,
                 selected_events,
-                qset_have_last_valid,
-                qset_last_row_f,
-                qset_last_col_f,
-                qset_last_phi_f,
-                qset_last_peak_idx,
-                qset_last_H,
-                qset_last_K,
-                qset_last_L,
-            ) = _weighted_event_pass2_for_qset(
-                all_q,
-                peak_idx,
+                phase_have_last_valid,
+                phase_last_row_f,
+                phase_last_col_f,
+                phase_last_phi_f,
+                phase_last_peak_idx,
+                phase_last_H,
+                phase_last_K,
+                phase_last_L,
+            ) = _weighted_event_emit_from_stored_candidates(
+                int(candidate_count),
+                candidate_mass,
+                candidate_row,
+                candidate_col,
+                candidate_phi,
+                candidate_peak_idx,
+                peak_h,
+                peak_k,
+                peak_l,
                 sample_idx,
-                H,
-                K,
-                L,
-                reflection_intensity,
-                sample_weight,
-                debye_x_sq,
-                debye_y_sq,
-                center_row,
-                center_col,
-                R_sample_precomputed,
-                n_det_rot,
-                Detector_Pos,
-                e1_det,
-                e2_det,
-                sample_terms,
-                sample_n2_array,
-                sample_eps2_array,
-                thickness,
-                optics_mode,
-                pixel_scale,
-                int(image_size),
-                exit_projection_mode,
-                int(fast_optics_ready[sample_idx]),
-                fast_optics_lut[sample_idx],
                 targets,
                 int(target_idx),
                 float(cumulative_mass),
@@ -4977,23 +5365,100 @@ def _weighted_event_sample_chunk_kernel(
                 event_counts,
                 accumulate_image_flag,
                 image_part,
+                int(image_size),
                 cache_keys,
                 cache_values,
                 int(cache_entry_count),
                 int(cache_flush_limit),
             )
-            pass2_total_mass += float(peak_pass2_mass)
-            n_project_candidate_calls += int(project_calls)
+            pass2_total_mass += float(sample_pass2_mass)
             n_selected_events += int(selected_events)
-            if bool(qset_have_last_valid):
-                phase_have_last_valid = True
-                phase_last_row_f = float(qset_last_row_f)
-                phase_last_col_f = float(qset_last_col_f)
-                phase_last_phi_f = float(qset_last_phi_f)
-                phase_last_peak_idx = int(qset_last_peak_idx)
-                phase_last_H = float(qset_last_H)
-                phase_last_K = float(qset_last_K)
-                phase_last_L = float(qset_last_L)
+        else:
+            for peak_idx in range(num_peaks):
+                if int(peak_valid[peak_idx]) == 0:
+                    continue
+
+                H = float(peak_h[peak_idx])
+                K = float(peak_k[peak_idx])
+                L = float(peak_l[peak_idx])
+                reflection_intensity = float(peak_reflection_intensity[peak_idx])
+                rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
+                if rep_idx < 0:
+                    rep_idx = sample_idx
+                q_rows = int(all_q_counts[peak_idx, rep_idx])
+                all_q = all_q_data[peak_idx, rep_idx, :q_rows, :]
+                (
+                    target_idx,
+                    cumulative_mass,
+                    flat_event_count,
+                    cache_entry_count,
+                    project_calls,
+                    peak_pass2_mass,
+                    selected_events,
+                    qset_have_last_valid,
+                    qset_last_row_f,
+                    qset_last_col_f,
+                    qset_last_phi_f,
+                    qset_last_peak_idx,
+                    qset_last_H,
+                    qset_last_K,
+                    qset_last_L,
+                ) = _weighted_event_pass2_for_qset(
+                    all_q,
+                    peak_idx,
+                    sample_idx,
+                    H,
+                    K,
+                    L,
+                    reflection_intensity,
+                    sample_weight,
+                    debye_x_sq,
+                    debye_y_sq,
+                    center_row,
+                    center_col,
+                    R_sample_precomputed,
+                    n_det_rot,
+                    Detector_Pos,
+                    e1_det,
+                    e2_det,
+                    sample_terms,
+                    sample_n2_array,
+                    sample_eps2_array,
+                    thickness,
+                    optics_mode,
+                    pixel_scale,
+                    int(image_size),
+                    exit_projection_mode,
+                    int(fast_optics_ready[sample_idx]),
+                    fast_optics_lut[sample_idx],
+                    targets,
+                    int(target_idx),
+                    float(cumulative_mass),
+                    float(deposit),
+                    collect_tables,
+                    flat_event_rows_parts[worker_slot_i],
+                    flat_event_peak_indices_parts[worker_slot_i],
+                    int(flat_event_count),
+                    event_counts,
+                    accumulate_image_flag,
+                    image_part,
+                    cache_keys,
+                    cache_values,
+                    int(cache_entry_count),
+                    int(cache_flush_limit),
+                )
+                pass2_total_mass += float(peak_pass2_mass)
+                n_project_candidate_calls += int(project_calls)
+                n_selected_events += int(selected_events)
+                if bool(qset_have_last_valid):
+                    phase_have_last_valid = True
+                    phase_last_row_f = float(qset_last_row_f)
+                    phase_last_col_f = float(qset_last_col_f)
+                    phase_last_phi_f = float(qset_last_phi_f)
+                    phase_last_peak_idx = int(qset_last_peak_idx)
+                    phase_last_H = float(qset_last_H)
+                    phase_last_K = float(qset_last_K)
+                    phase_last_L = float(qset_last_L)
 
         sample_pass2_mass_delta = abs(float(cumulative_mass) - float(sample_total_mass))
         sample_pass2_mass_tol = max(
@@ -5107,6 +5572,15 @@ def _weighted_event_sample_chunk_kernel(
     stats_parts[worker_slot_i, _WEIGHTED_EVENT_CHUNK_STAT_TAIL_FILL_EVENTS] = float(
         tail_fill_events
     )
+    stats_parts[worker_slot_i, _WEIGHTED_EVENT_CHUNK_STAT_STORED_CANDIDATES] = float(
+        n_stored_projected_candidates
+    )
+    stats_parts[worker_slot_i, _WEIGHTED_EVENT_CHUNK_STAT_CANDIDATE_CAPACITY_MAX] = float(
+        candidate_buffer_capacity_max
+    )
+    stats_parts[worker_slot_i, _WEIGHTED_EVENT_CHUNK_STAT_CANDIDATE_FALLBACK_COUNT] = float(
+        candidate_buffer_fallback_count
+    )
 
 
 _DEFAULT_WEIGHTED_EVENT_TARGETS = _weighted_event_targets
@@ -5116,6 +5590,8 @@ _DEFAULT_SOLVE_Q = solve_q
 _DEFAULT_PROJECT_WEIGHTED_CANDIDATE_FAST = _project_weighted_candidate_fast
 _DEFAULT_WEIGHTED_EVENT_PASS1_FOR_QSET = _weighted_event_pass1_for_qset
 _DEFAULT_WEIGHTED_EVENT_PASS2_FOR_QSET = _weighted_event_pass2_for_qset
+_DEFAULT_WEIGHTED_EVENT_PROJECT_STORE_FOR_QSET = _weighted_event_project_store_for_qset
+_DEFAULT_WEIGHTED_EVENT_EMIT_FROM_STORED_CANDIDATES = _weighted_event_emit_from_stored_candidates
 
 
 def _weighted_event_chunk_bounds(n_samp: int, worker_count: int):
@@ -5213,6 +5689,14 @@ def _weighted_event_parallel_eligible(
         and _project_weighted_candidate_fast is _DEFAULT_PROJECT_WEIGHTED_CANDIDATE_FAST
         and _weighted_event_pass1_for_qset is _DEFAULT_WEIGHTED_EVENT_PASS1_FOR_QSET
         and _weighted_event_pass2_for_qset is _DEFAULT_WEIGHTED_EVENT_PASS2_FOR_QSET
+        and (
+            _weighted_event_project_store_for_qset
+            is _DEFAULT_WEIGHTED_EVENT_PROJECT_STORE_FOR_QSET
+        )
+        and (
+            _weighted_event_emit_from_stored_candidates
+            is _DEFAULT_WEIGHTED_EVENT_EMIT_FROM_STORED_CANDIDATES
+        )
     )
 
 
@@ -6683,6 +7167,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     default_solve_q_sin=None,
     numba_thread_count=None,
     events_per_beam_phase=50,
+    *,
+    reuse_weighted_event_projected_candidates=True,
+    weighted_event_candidate_buffer_max_bytes=_WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES,
 ):
     del lambda_
     del sample_qr_ring_once
@@ -6851,6 +7338,27 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     pass2_mass_mismatch_count = 0
     pass2_mass_mismatch_max_abs = 0.0
     tail_fill_events = 0
+    n_stored_projected_candidates = 0
+    candidate_buffer_capacity_max = 0
+    candidate_buffer_fallback_count = 0
+    candidate_mass = np.empty(0, dtype=np.float64)
+    candidate_row = np.empty(0, dtype=np.float64)
+    candidate_col = np.empty(0, dtype=np.float64)
+    candidate_phi = np.empty(0, dtype=np.float64)
+    candidate_peak_idx = np.empty(0, dtype=np.int64)
+    try:
+        weighted_event_candidate_buffer_max_bytes = int(
+            weighted_event_candidate_buffer_max_bytes
+        )
+    except Exception:
+        weighted_event_candidate_buffer_max_bytes = (
+            _WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES
+        )
+    if weighted_event_candidate_buffer_max_bytes < 0:
+        weighted_event_candidate_buffer_max_bytes = 0
+    reuse_weighted_event_projected_candidates = bool(
+        reuse_weighted_event_projected_candidates
+    )
 
     precompute_start = time.perf_counter()
     (
@@ -7011,6 +7519,34 @@ def _process_peaks_parallel_weighted_events_fast_serial(
 
         chunks = _weighted_event_chunk_bounds(n_samp, worker_count)
         active_worker_count = max(int(worker_count), 1)
+        max_sample_candidate_capacity = 0
+        for candidate_sample_idx in range(n_samp):
+            if sample_terms[candidate_sample_idx, _SAMPLE_COL_VALID] <= 0.5:
+                continue
+            if sample_weight_array is not None:
+                candidate_sample_weight = float(sample_weight_array[candidate_sample_idx])
+                if (not np.isfinite(candidate_sample_weight)) or candidate_sample_weight <= 0.0:
+                    continue
+            sample_candidate_capacity = 0
+            for candidate_peak_idx in range(num_peaks):
+                if int(peak_valid[candidate_peak_idx]) == 0:
+                    continue
+                rep_idx = int(sample_terms[candidate_sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
+                if rep_idx < 0:
+                    rep_idx = candidate_sample_idx
+                sample_candidate_capacity += int(all_q_counts[candidate_peak_idx, rep_idx])
+            max_sample_candidate_capacity = max(
+                int(max_sample_candidate_capacity),
+                int(sample_candidate_capacity),
+            )
+        chunk_reuse_projected_candidates = (
+            bool(reuse_weighted_event_projected_candidates)
+            and int(max_sample_candidate_capacity) * _WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES
+            <= int(weighted_event_candidate_buffer_max_bytes)
+        )
+        chunk_candidate_capacity = (
+            int(max_sample_candidate_capacity) if chunk_reuse_projected_candidates else 0
+        )
         if collect_tables:
             max_worker_flat_capacity = max(
                 (stop - start) * int(events_per_beam_phase)
@@ -7104,6 +7640,27 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             cache_values_parts.fill(0.0)
             chunk_cache_flush_limit = 0
 
+        candidate_mass_parts = np.empty(
+            (active_worker_count, chunk_candidate_capacity),
+            dtype=np.float64,
+        )
+        candidate_row_parts = np.empty(
+            (active_worker_count, chunk_candidate_capacity),
+            dtype=np.float64,
+        )
+        candidate_col_parts = np.empty(
+            (active_worker_count, chunk_candidate_capacity),
+            dtype=np.float64,
+        )
+        candidate_phi_parts = np.empty(
+            (active_worker_count, chunk_candidate_capacity),
+            dtype=np.float64,
+        )
+        candidate_peak_idx_parts = np.empty(
+            (active_worker_count, chunk_candidate_capacity),
+            dtype=np.int64,
+        )
+
         stats_parts = np.zeros(
             (active_worker_count, _WEIGHTED_EVENT_CHUNK_STAT_COLS),
             dtype=np.float64,
@@ -7172,6 +7729,13 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 cache_keys_parts,
                 cache_values_parts,
                 int(chunk_cache_flush_limit),
+                bool(chunk_reuse_projected_candidates),
+                candidate_mass_parts,
+                candidate_row_parts,
+                candidate_col_parts,
+                candidate_phi_parts,
+                candidate_peak_idx_parts,
+                int(chunk_candidate_capacity),
                 flat_event_rows_parts,
                 flat_event_peak_indices_parts,
                 flat_event_count_parts,
@@ -7261,6 +7825,32 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         tail_fill_events = int(
             np.sum(stats_parts[:active_worker_count, _WEIGHTED_EVENT_CHUNK_STAT_TAIL_FILL_EVENTS])
         )
+        n_stored_projected_candidates = int(
+            np.sum(
+                stats_parts[
+                    :active_worker_count,
+                    _WEIGHTED_EVENT_CHUNK_STAT_STORED_CANDIDATES,
+                ]
+            )
+        )
+        candidate_buffer_capacity_max = int(
+            np.max(
+                stats_parts[
+                    :active_worker_count,
+                    _WEIGHTED_EVENT_CHUNK_STAT_CANDIDATE_CAPACITY_MAX,
+                ]
+            )
+            if len(chunks) > 0
+            else 0
+        )
+        candidate_buffer_fallback_count = int(
+            np.sum(
+                stats_parts[
+                    :active_worker_count,
+                    _WEIGHTED_EVENT_CHUNK_STAT_CANDIDATE_FALLBACK_COUNT,
+                ]
+            )
+        )
 
         emit_start = time.perf_counter()
         if best_sample_indices_out is not None:
@@ -7299,6 +7889,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             n_project_candidate_calls=int(n_project_candidate_calls),
             n_valid_candidates=int(n_valid_candidates),
             n_selected_events=int(n_selected_events),
+            n_stored_projected_candidates=int(n_stored_projected_candidates),
+            candidate_buffer_capacity_max=int(candidate_buffer_capacity_max),
+            candidate_buffer_fallback_count=int(candidate_buffer_fallback_count),
             pass2_mass_mismatch_count=int(pass2_mass_mismatch_count),
             pass2_mass_mismatch_max_abs=float(pass2_mass_mismatch_max_abs),
             tail_fill_events=int(tail_fill_events),
@@ -7342,6 +7935,8 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         if accumulate_image_flag:
             _clear_local_pixel_cache(cache_keys, cache_values)
         cache_entry_count = 0
+        sample_qsets = []
+        sample_candidate_capacity = 0
 
         for peak_idx in range(num_peaks):
             if int(peak_valid[peak_idx]) == 0:
@@ -7393,60 +7988,144 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             else:
                 all_q, stat = cached
             all_status[peak_idx, sample_idx] = int(stat)
+            sample_qsets.append((int(peak_idx), all_q))
+            sample_candidate_capacity += int(all_q.shape[0])
+
+        sample_use_candidate_reuse = (
+            reuse_weighted_event_projected_candidates
+            and int(sample_candidate_capacity) * _WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES
+            <= int(weighted_event_candidate_buffer_max_bytes)
+        )
+        if sample_candidate_capacity > candidate_buffer_capacity_max:
+            candidate_buffer_capacity_max = int(sample_candidate_capacity)
+        if (not sample_use_candidate_reuse) and sample_candidate_capacity > 0:
+            candidate_buffer_fallback_count += 1
+        if sample_use_candidate_reuse and sample_candidate_capacity > candidate_mass.shape[0]:
+            candidate_mass = np.empty(int(sample_candidate_capacity), dtype=np.float64)
+            candidate_row = np.empty(int(sample_candidate_capacity), dtype=np.float64)
+            candidate_col = np.empty(int(sample_candidate_capacity), dtype=np.float64)
+            candidate_phi = np.empty(int(sample_candidate_capacity), dtype=np.float64)
+            candidate_peak_idx = np.empty(int(sample_candidate_capacity), dtype=np.int64)
+
+        candidate_count = 0
+        for peak_idx, all_q in sample_qsets:
+            H = float(peak_h[peak_idx])
+            K = float(peak_k[peak_idx])
+            L = float(peak_l[peak_idx])
+            reflection_intensity = float(peak_reflection_intensity[peak_idx])
 
             project_start = time.perf_counter()
-            peak_mass, valid_count, project_calls = _weighted_event_pass1_for_qset(
-                all_q,
-                peak_idx,
-                sample_idx,
-                H,
-                K,
-                L,
-                reflection_intensity,
-                sample_weight,
-                float(sample_mosaic_weights_rank[sample_idx]),
-                float(sample_angular_top_distances[sample_idx]),
-                float(sample_beam_top_distances[sample_idx]),
-                float(sample_wavelength_top_distances[sample_idx]),
-                debye_x_sq,
-                debye_y_sq,
-                center_row,
-                center_col,
-                R_sample_precomputed,
-                n_det_rot,
-                Detector_Pos,
-                e1_det,
-                e2_det,
-                sample_terms,
-                sample_n2_array,
-                sample_eps2_array,
-                thickness,
-                optics_mode,
-                pixel_scale,
-                int(image_size),
-                exit_projection_mode,
-                int(fast_optics_ready[sample_idx]),
-                fast_optics_lut[sample_idx],
-                int(save_flag),
-                q_data,
-                q_count,
-                representative_slot_by_peak_branch,
-                representative_valid,
-                representative_neg_mosaic_weight,
-                representative_angular_distance,
-                representative_beam_distance,
-                representative_wavelength_distance,
-                representative_neg_mass,
-                representative_sample_idx,
-                representative_peak_idx,
-                representative_q_idx,
-                representative_rows,
-            )
+            if sample_use_candidate_reuse:
+                peak_mass, valid_count, project_calls, candidate_count = (
+                    _weighted_event_project_store_for_qset(
+                        all_q,
+                        peak_idx,
+                        sample_idx,
+                        H,
+                        K,
+                        L,
+                        reflection_intensity,
+                        sample_weight,
+                        float(sample_mosaic_weights_rank[sample_idx]),
+                        float(sample_angular_top_distances[sample_idx]),
+                        float(sample_beam_top_distances[sample_idx]),
+                        float(sample_wavelength_top_distances[sample_idx]),
+                        debye_x_sq,
+                        debye_y_sq,
+                        center_row,
+                        center_col,
+                        R_sample_precomputed,
+                        n_det_rot,
+                        Detector_Pos,
+                        e1_det,
+                        e2_det,
+                        sample_terms,
+                        sample_n2_array,
+                        sample_eps2_array,
+                        thickness,
+                        optics_mode,
+                        pixel_scale,
+                        int(image_size),
+                        exit_projection_mode,
+                        int(fast_optics_ready[sample_idx]),
+                        fast_optics_lut[sample_idx],
+                        int(save_flag),
+                        q_data,
+                        q_count,
+                        representative_slot_by_peak_branch,
+                        representative_valid,
+                        representative_neg_mosaic_weight,
+                        representative_angular_distance,
+                        representative_beam_distance,
+                        representative_wavelength_distance,
+                        representative_neg_mass,
+                        representative_sample_idx,
+                        representative_peak_idx,
+                        representative_q_idx,
+                        representative_rows,
+                        candidate_mass,
+                        candidate_row,
+                        candidate_col,
+                        candidate_phi,
+                        candidate_peak_idx,
+                        int(candidate_count),
+                    )
+                )
+            else:
+                peak_mass, valid_count, project_calls = _weighted_event_pass1_for_qset(
+                    all_q,
+                    peak_idx,
+                    sample_idx,
+                    H,
+                    K,
+                    L,
+                    reflection_intensity,
+                    sample_weight,
+                    float(sample_mosaic_weights_rank[sample_idx]),
+                    float(sample_angular_top_distances[sample_idx]),
+                    float(sample_beam_top_distances[sample_idx]),
+                    float(sample_wavelength_top_distances[sample_idx]),
+                    debye_x_sq,
+                    debye_y_sq,
+                    center_row,
+                    center_col,
+                    R_sample_precomputed,
+                    n_det_rot,
+                    Detector_Pos,
+                    e1_det,
+                    e2_det,
+                    sample_terms,
+                    sample_n2_array,
+                    sample_eps2_array,
+                    thickness,
+                    optics_mode,
+                    pixel_scale,
+                    int(image_size),
+                    exit_projection_mode,
+                    int(fast_optics_ready[sample_idx]),
+                    fast_optics_lut[sample_idx],
+                    int(save_flag),
+                    q_data,
+                    q_count,
+                    representative_slot_by_peak_branch,
+                    representative_valid,
+                    representative_neg_mosaic_weight,
+                    representative_angular_distance,
+                    representative_beam_distance,
+                    representative_wavelength_distance,
+                    representative_neg_mass,
+                    representative_sample_idx,
+                    representative_peak_idx,
+                    representative_q_idx,
+                    representative_rows,
+                )
             time_project += time.perf_counter() - project_start
             sample_total_mass += float(peak_mass)
             pass1_total_mass += float(peak_mass)
             n_valid_candidates += int(valid_count)
             n_project_candidate_calls += int(project_calls)
+        if sample_use_candidate_reuse:
+            n_stored_projected_candidates += int(candidate_count)
 
         if not np.isfinite(sample_total_mass) or sample_total_mass <= 0.0:
             if accumulate_image_flag and cache_entry_count > 0:
@@ -7476,64 +8155,34 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         phase_last_H = np.nan
         phase_last_K = np.nan
         phase_last_L = np.nan
-        for peak_idx in range(num_peaks):
-            if int(peak_valid[peak_idx]) == 0:
-                continue
-
-            H = float(peak_h[peak_idx])
-            K = float(peak_k[peak_idx])
-            L = float(peak_l[peak_idx])
-            reflection_intensity = float(peak_reflection_intensity[peak_idx])
-            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-            if rep_idx < 0:
-                rep_idx = sample_idx
-            all_q, _stat = all_q_cache[(int(peak_idx), int(rep_idx))]
-
-            project_start = time.perf_counter()
+        if sample_use_candidate_reuse:
+            emit_start = time.perf_counter()
             (
                 target_idx,
                 cumulative_mass,
                 flat_event_count,
                 cache_entry_count,
-                project_calls,
-                peak_pass2_mass,
+                sample_pass2_mass,
                 selected_events,
-                qset_have_last_valid,
-                qset_last_row_f,
-                qset_last_col_f,
-                qset_last_phi_f,
-                qset_last_peak_idx,
-                qset_last_H,
-                qset_last_K,
-                qset_last_L,
-            ) = _weighted_event_pass2_for_qset(
-                all_q,
-                peak_idx,
+                phase_have_last_valid,
+                phase_last_row_f,
+                phase_last_col_f,
+                phase_last_phi_f,
+                phase_last_peak_idx,
+                phase_last_H,
+                phase_last_K,
+                phase_last_L,
+            ) = _weighted_event_emit_from_stored_candidates(
+                int(candidate_count),
+                candidate_mass,
+                candidate_row,
+                candidate_col,
+                candidate_phi,
+                candidate_peak_idx,
+                peak_h,
+                peak_k,
+                peak_l,
                 sample_idx,
-                H,
-                K,
-                L,
-                reflection_intensity,
-                sample_weight,
-                debye_x_sq,
-                debye_y_sq,
-                center_row,
-                center_col,
-                R_sample_precomputed,
-                n_det_rot,
-                Detector_Pos,
-                e1_det,
-                e2_det,
-                sample_terms,
-                sample_n2_array,
-                sample_eps2_array,
-                thickness,
-                optics_mode,
-                pixel_scale,
-                int(image_size),
-                exit_projection_mode,
-                int(fast_optics_ready[sample_idx]),
-                fast_optics_lut[sample_idx],
                 targets,
                 int(target_idx),
                 float(cumulative_mass),
@@ -7545,24 +8194,96 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 event_counts,
                 accumulate_image_flag,
                 image,
+                int(image_size),
                 cache_keys,
                 cache_values,
                 int(cache_entry_count),
                 int(cache_flush_limit),
             )
-            time_project += time.perf_counter() - project_start
-            pass2_total_mass += float(peak_pass2_mass)
-            n_project_candidate_calls += int(project_calls)
+            time_emit_cache += time.perf_counter() - emit_start
+            pass2_total_mass += float(sample_pass2_mass)
             n_selected_events += int(selected_events)
-            if bool(qset_have_last_valid):
-                phase_have_last_valid = True
-                phase_last_row_f = float(qset_last_row_f)
-                phase_last_col_f = float(qset_last_col_f)
-                phase_last_phi_f = float(qset_last_phi_f)
-                phase_last_peak_idx = int(qset_last_peak_idx)
-                phase_last_H = float(qset_last_H)
-                phase_last_K = float(qset_last_K)
-                phase_last_L = float(qset_last_L)
+        else:
+            for peak_idx, all_q in sample_qsets:
+                H = float(peak_h[peak_idx])
+                K = float(peak_k[peak_idx])
+                L = float(peak_l[peak_idx])
+                reflection_intensity = float(peak_reflection_intensity[peak_idx])
+
+                project_start = time.perf_counter()
+                (
+                    target_idx,
+                    cumulative_mass,
+                    flat_event_count,
+                    cache_entry_count,
+                    project_calls,
+                    peak_pass2_mass,
+                    selected_events,
+                    qset_have_last_valid,
+                    qset_last_row_f,
+                    qset_last_col_f,
+                    qset_last_phi_f,
+                    qset_last_peak_idx,
+                    qset_last_H,
+                    qset_last_K,
+                    qset_last_L,
+                ) = _weighted_event_pass2_for_qset(
+                    all_q,
+                    peak_idx,
+                    sample_idx,
+                    H,
+                    K,
+                    L,
+                    reflection_intensity,
+                    sample_weight,
+                    debye_x_sq,
+                    debye_y_sq,
+                    center_row,
+                    center_col,
+                    R_sample_precomputed,
+                    n_det_rot,
+                    Detector_Pos,
+                    e1_det,
+                    e2_det,
+                    sample_terms,
+                    sample_n2_array,
+                    sample_eps2_array,
+                    thickness,
+                    optics_mode,
+                    pixel_scale,
+                    int(image_size),
+                    exit_projection_mode,
+                    int(fast_optics_ready[sample_idx]),
+                    fast_optics_lut[sample_idx],
+                    targets,
+                    int(target_idx),
+                    float(cumulative_mass),
+                    float(deposit),
+                    collect_tables,
+                    flat_event_rows,
+                    flat_event_peak_indices,
+                    int(flat_event_count),
+                    event_counts,
+                    accumulate_image_flag,
+                    image,
+                    cache_keys,
+                    cache_values,
+                    int(cache_entry_count),
+                    int(cache_flush_limit),
+                )
+                time_project += time.perf_counter() - project_start
+                pass2_total_mass += float(peak_pass2_mass)
+                n_project_candidate_calls += int(project_calls)
+                n_selected_events += int(selected_events)
+                if bool(qset_have_last_valid):
+                    phase_have_last_valid = True
+                    phase_last_row_f = float(qset_last_row_f)
+                    phase_last_col_f = float(qset_last_col_f)
+                    phase_last_phi_f = float(qset_last_phi_f)
+                    phase_last_peak_idx = int(qset_last_peak_idx)
+                    phase_last_H = float(qset_last_H)
+                    phase_last_K = float(qset_last_K)
+                    phase_last_L = float(qset_last_L)
 
         sample_pass2_mass_delta = abs(float(cumulative_mass) - float(sample_total_mass))
         sample_pass2_mass_tol = max(
@@ -7682,6 +8403,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         n_project_candidate_calls=int(n_project_candidate_calls),
         n_valid_candidates=int(n_valid_candidates),
         n_selected_events=int(n_selected_events),
+        n_stored_projected_candidates=int(n_stored_projected_candidates),
+        candidate_buffer_capacity_max=int(candidate_buffer_capacity_max),
+        candidate_buffer_fallback_count=int(candidate_buffer_fallback_count),
         pass2_mass_mismatch_count=int(pass2_mass_mismatch_count),
         pass2_mass_mismatch_max_abs=float(pass2_mass_mismatch_max_abs),
         tail_fill_events=int(tail_fill_events),

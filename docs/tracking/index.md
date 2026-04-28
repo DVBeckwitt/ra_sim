@@ -144,3 +144,4 @@ stale simulated refined caked reuse.
 | Manual Qr/Qz and HKL picker alignment | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-23 | [sim-peak-overlay-recovery.md](archive/sim-peak-overlay-recovery.md) |
 | Runtime cache diagnostic hardening | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [runtime-cache-diagnostic-hardening.md](archive/runtime-cache-diagnostic-hardening.md) |
 | Simulated peak overlay recovery history | investigation | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-23 | [sim-peak-overlay-recovery-history.md](archive/sim-peak-overlay-recovery-history.md) |
+| Weighted-event projected-candidate reuse | optimization | - | none | p2 | 2026-04-28 | [weighted-event-candidate-reuse.md](archive/weighted-event-candidate-reuse.md) |

@@ -87,6 +87,7 @@ payload or treated detector/display aliases as caked coordinates.
 Current status:
 
 - feature status: active normal runtime path
+- optimization status: fixed for duplicate weighted-candidate projection
 - bug status: slow Python raw-candidate enumeration fixed
 - error status: covered invariants green in weighted-event regression tests
 
@@ -108,6 +109,16 @@ What changed:
 - `get_last_process_peaks_weighted_event_stats()` exposes weighted-event debug
   counters and timers, including solve/project/select counts and pass-1/pass-2
   mass totals for test assertions
+- the fast weighted-event path stores valid projected candidates during the
+  first pass and emits selected events from those stored buffers during the
+  second phase, so `_project_weighted_candidate_fast(...)` is not called twice
+  for the same candidate in the default path
+- memory-bounded fallback keeps the old `_weighted_event_pass2_for_qset(...)`
+  projection path available for debugging and oversized samples
+- candidate-reuse stats are reported as
+  `n_stored_projected_candidates`, `candidate_buffer_capacity_max`, and
+  `candidate_buffer_fallback_count`; `n_project_candidate_calls` now counts
+  projection calls only, not stored-candidate emission
 
 Still intentionally disabled for weighted events:
 

@@ -420,6 +420,38 @@ def _install_streaming_fast_outer_backend(
         mass = mass_for(pass1_masses, peak_idx, sample_idx)
         return mass, int(mass > 0.0), 1
 
+    def fake_project_store(*args):
+        all_q = np.asarray(args[0], dtype=np.float64)
+        peak_idx = int(args[1])
+        sample_idx = int(args[2])
+        save_flag = int(args[31])
+        q_data = args[32]
+        q_count = args[33]
+        candidate_mass = args[-6]
+        candidate_row = args[-5]
+        candidate_col = args[-4]
+        candidate_phi = args[-3]
+        candidate_peak_idx = args[-2]
+        candidate_count = int(args[-1])
+        mass = mass_for(pass1_masses, peak_idx, sample_idx)
+        if mass > 0.0:
+            if save_flag == 1 and q_count[peak_idx] < q_data.shape[1]:
+                q_store_idx = int(q_count[peak_idx])
+                candidate_q = all_q[0] if all_q.shape[0] > 0 else np.zeros(4, dtype=np.float64)
+                q_data[peak_idx, q_store_idx, 0] = float(candidate_q[0])
+                q_data[peak_idx, q_store_idx, 1] = float(candidate_q[1])
+                q_data[peak_idx, q_store_idx, 2] = float(candidate_q[2])
+                q_data[peak_idx, q_store_idx, 3] = mass
+                q_data[peak_idx, q_store_idx, 4] = float(sample_idx)
+                q_count[peak_idx] += 1
+            candidate_mass[candidate_count] = mass
+            candidate_row[candidate_count] = 0.0
+            candidate_col[candidate_count] = 10.0 + peak_idx
+            candidate_phi[candidate_count] = 0.0
+            candidate_peak_idx[candidate_count] = peak_idx
+            candidate_count += 1
+        return mass, int(mass > 0.0), 1, candidate_count
+
     def fake_pass2(*args):
         peak_idx = int(args[1])
         sample_idx = int(args[2])
@@ -475,10 +507,112 @@ def _install_streaming_fast_outer_backend(
             L,
         )
 
+    def fake_emit_from_stored(
+        candidate_count,
+        candidate_mass,
+        candidate_row,
+        candidate_col,
+        candidate_phi,
+        candidate_peak_idx,
+        peak_h,
+        peak_k,
+        peak_l,
+        sample_idx,
+        targets,
+        target_idx,
+        cumulative_mass,
+        deposit,
+        collect_tables,
+        flat_event_rows,
+        flat_event_peak_indices,
+        flat_event_count,
+        event_counts,
+        accumulate_image,
+        image,
+        image_size,
+        cache_keys,
+        cache_values,
+        cache_entry_count,
+        cache_flush_limit,
+    ):
+        del candidate_mass, accumulate_image, image, image_size
+        del cache_keys, cache_values, cache_flush_limit
+        selected_events = 0
+        pass2_total_mass = 0.0
+        have_last_valid = False
+        last_row_f = np.nan
+        last_col_f = np.nan
+        last_phi_f = np.nan
+        last_peak_idx = -1
+        last_H = np.nan
+        last_K = np.nan
+        last_L = np.nan
+        for cand_idx in range(int(candidate_count)):
+            peak_idx = int(candidate_peak_idx[cand_idx])
+            mass = mass_for(pass2_masses, peak_idx, int(sample_idx))
+            row_f = float(candidate_row[cand_idx])
+            col_f = float(candidate_col[cand_idx])
+            phi_f = float(candidate_phi[cand_idx])
+            H = float(peak_h[peak_idx])
+            K = float(peak_k[peak_idx])
+            L = float(peak_l[peak_idx])
+            cumulative_mass += mass
+            pass2_total_mass += mass
+            have_last_valid = mass > 0.0
+            last_row_f = row_f
+            last_col_f = col_f
+            last_phi_f = phi_f
+            last_peak_idx = peak_idx
+            last_H = H
+            last_K = K
+            last_L = L
+            hit_count = 0
+            while target_idx < targets.shape[0] and cumulative_mass > float(targets[target_idx]):
+                hit_count += 1
+                target_idx += 1
+            event_counts[peak_idx, sample_idx] += hit_count
+            selected_events += hit_count
+            if collect_tables:
+                for _event_idx in range(hit_count):
+                    flat_event_peak_indices[flat_event_count] = peak_idx
+                    flat_event_rows[flat_event_count, 0] = deposit
+                    flat_event_rows[flat_event_count, 1] = col_f
+                    flat_event_rows[flat_event_count, 2] = row_f
+                    flat_event_rows[flat_event_count, 3] = phi_f
+                    flat_event_rows[flat_event_count, 4] = H
+                    flat_event_rows[flat_event_count, 5] = K
+                    flat_event_rows[flat_event_count, 6] = L
+                    flat_event_rows[flat_event_count, 7] = np.nan
+                    flat_event_rows[flat_event_count, 8] = np.nan
+                    flat_event_rows[flat_event_count, 9] = float(sample_idx)
+                    flat_event_count += 1
+        return (
+            target_idx,
+            cumulative_mass,
+            flat_event_count,
+            int(cache_entry_count),
+            pass2_total_mass,
+            selected_events,
+            have_last_valid,
+            last_row_f,
+            last_col_f,
+            last_phi_f,
+            last_peak_idx,
+            last_H,
+            last_K,
+            last_L,
+        )
+
     monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute)
     monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
     monkeypatch.setattr(diffraction, "_weighted_event_pass1_for_qset", fake_pass1)
     monkeypatch.setattr(diffraction, "_weighted_event_pass2_for_qset", fake_pass2)
+    monkeypatch.setattr(diffraction, "_weighted_event_project_store_for_qset", fake_project_store)
+    monkeypatch.setattr(
+        diffraction,
+        "_weighted_event_emit_from_stored_candidates",
+        fake_emit_from_stored,
+    )
 
 
 def _new_representative_slot_state(n_slots):
@@ -879,6 +1013,82 @@ def test_weighted_event_pass2_does_not_tail_fill_inside_qset(monkeypatch):
     assert np.all(flat_event_peak_indices[1:] == -1)
 
 
+def test_weighted_event_emit_from_stored_candidates_selects_in_order():
+    candidate_mass = np.array([0.1, 9.9], dtype=np.float64)
+    candidate_row = np.array([11.0, 22.0], dtype=np.float64)
+    candidate_col = np.array([33.0, 44.0], dtype=np.float64)
+    candidate_phi = np.array([0.25, 0.5], dtype=np.float64)
+    candidate_peak_idx = np.array([0, 1], dtype=np.int64)
+    peak_h = np.array([1.0, 2.0], dtype=np.float64)
+    peak_k = np.array([0.0, 3.0], dtype=np.float64)
+    peak_l = np.array([4.0, 5.0], dtype=np.float64)
+    targets = diffraction._weighted_event_targets(10.0, 10, sample_idx=0)
+    flat_event_rows = np.full(
+        (10, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH),
+        np.nan,
+        dtype=np.float64,
+    )
+    flat_event_peak_indices = np.full(10, -1, dtype=np.int64)
+    event_counts = np.zeros((2, 1), dtype=np.int64)
+
+    result = diffraction._weighted_event_emit_from_stored_candidates(
+        2,
+        candidate_mass,
+        candidate_row,
+        candidate_col,
+        candidate_phi,
+        candidate_peak_idx,
+        peak_h,
+        peak_k,
+        peak_l,
+        0,
+        targets,
+        0,
+        0.0,
+        1.0,
+        True,
+        flat_event_rows,
+        flat_event_peak_indices,
+        0,
+        event_counts,
+        False,
+        np.zeros((1, 1), dtype=np.float64),
+        1,
+        np.empty(1, dtype=np.int64),
+        np.empty(1, dtype=np.float64),
+        0,
+        0,
+    )
+
+    assert int(result[5]) == 10
+    assert int(event_counts[1, 0]) == 10
+    assert np.all(flat_event_peak_indices == 1)
+    np.testing.assert_allclose(flat_event_rows[:, 4:7], np.array([[2.0, 3.0, 5.0]] * 10))
+
+
+def test_fast_outer_loop_candidate_reuse_reduces_projection_calls(monkeypatch):
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={0: 1.0, 1: 1.0},
+    )
+    diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(
+            miller=np.array([[1.0, 0.0, 1.0], [2.0, 0.0, 1.0]], dtype=np.float64),
+            intensities=np.array([1.0, 1.0], dtype=np.float64),
+        ),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=10,
+    )
+
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["n_project_candidate_calls"] == 2
+    assert stats["n_stored_projected_candidates"] == 2
+    assert stats["candidate_buffer_capacity_max"] >= 2
+    assert stats["candidate_buffer_fallback_count"] == 0
+
+
 def test_fast_outer_loop_streams_targets_across_all_peaks_before_tail_fill(monkeypatch):
     _install_streaming_fast_outer_backend(
         monkeypatch,
@@ -902,6 +1112,7 @@ def test_fast_outer_loop_streams_targets_across_all_peaks_before_tail_fill(monke
     stats = diffraction.get_last_process_peaks_weighted_event_stats()
     assert stats["pass2_mass_mismatch_count"] == 0
     assert stats["tail_fill_events"] == 0
+    assert stats["n_project_candidate_calls"] == 2
 
 
 def test_fast_outer_loop_reports_pass2_mass_mismatch_and_skips_tail_fill(monkeypatch):
@@ -928,6 +1139,54 @@ def test_fast_outer_loop_reports_pass2_mass_mismatch_and_skips_tail_fill(monkeyp
     assert stats["pass2_mass_mismatch_count"] == 1
     assert stats["pass2_mass_mismatch_max_abs"] == pytest.approx(1.0)
     assert stats["tail_fill_events"] == 0
+
+
+def test_fast_outer_loop_candidate_reuse_memory_fallback_uses_old_pass2(monkeypatch):
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={0: 1.0, 1: 1.0},
+    )
+    result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(
+            miller=np.array([[1.0, 0.0, 1.0], [2.0, 0.0, 1.0]], dtype=np.float64),
+            intensities=np.array([1.0, 1.0], dtype=np.float64),
+        ),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=4,
+        weighted_event_candidate_buffer_max_bytes=0,
+    )
+
+    rows = _flatten_hit_tables(result[1])
+    assert rows.shape[0] == 4
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["n_project_candidate_calls"] == 4
+    assert stats["n_stored_projected_candidates"] == 0
+    assert stats["candidate_buffer_fallback_count"] > 0
+
+
+def test_fast_outer_loop_candidate_reuse_preserves_q_data_save_flag(monkeypatch):
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={0: 3.0},
+    )
+    result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(),
+        save_flag=1,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        events_per_beam_phase=1,
+    )
+
+    q_data = result[2]
+    q_count = result[3]
+    assert int(q_count[0]) == 1
+    assert float(q_data[0, 0, 3]) == pytest.approx(3.0)
+    assert float(q_data[0, 0, 4]) == pytest.approx(0.0)
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["n_stored_projected_candidates"] == 1
+    assert stats["candidate_buffer_fallback_count"] == 0
 
 
 def test_image_level_conservation_uses_constant_event_deposit(monkeypatch):
