@@ -1065,6 +1065,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.controls_notebook, _FakeNotebook)
     assert [text for _, text in view_state.controls_notebook.tabs] == [
         "Setup",
+        "Background",
         "Match",
         "Refine",
         "Simulation",
@@ -1076,6 +1077,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
         "Sample Structure",
     ]
     assert isinstance(view_state.setup_body, _FakeFrame)
+    assert isinstance(view_state.background_body, _FakeFrame)
     assert isinstance(view_state.match_body, _FakeFrame)
     assert isinstance(view_state.simulation_body, _FakeFrame)
     assert isinstance(view_state.refine_basic_body, _FakeFrame)
@@ -1085,6 +1087,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.parameter_geometry_body, _FakeFrame)
     assert isinstance(view_state.parameter_structure_body, _FakeFrame)
     assert isinstance(view_state.setup_canvas, _FakeCanvas)
+    assert isinstance(view_state.background_canvas, _FakeCanvas)
     assert isinstance(view_state.match_canvas, _FakeCanvas)
     assert isinstance(view_state.simulation_canvas, _FakeCanvas)
     assert isinstance(view_state.refine_basic_canvas, _FakeCanvas)
@@ -1147,6 +1150,8 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
 
     view_state.control_tab_var.set("match")
     assert view_state.controls_notebook.selected_tab is view_state.match_tab
+    view_state.control_tab_var.set("background")
+    assert view_state.controls_notebook.selected_tab is view_state.background_tab
     view_state.control_tab_var.set("simulation")
     assert view_state.controls_notebook.selected_tab is view_state.simulation_tab
 
@@ -3345,6 +3350,69 @@ def test_create_background_theta_controls_stores_vars_and_binds_apply(monkeypatc
     view_state.background_theta_offset_entry.bindings["<Return>"](None)
     _FakeButton.created[-1].command()
     assert applied == ["apply", "apply", "apply"]
+
+
+def test_create_background_subtraction_controls_stores_vars_and_callbacks(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeButton.created = []
+    _FakeCheckbutton.created = []
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Combobox", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
+
+    view_state = state.BackgroundSubtractionControlsViewState()
+    events: list[str] = []
+
+    views.create_background_subtraction_controls(
+        parent=object(),
+        view_state=view_state,
+        initial_values={
+            "enabled": True,
+            "mode": "radial",
+            "apply_to_fit": True,
+            "apply_to_display": True,
+            "display_mode": "subtracted",
+            "scale": 0.8,
+            "auto_scale": False,
+            "radial_bin_width_deg": 0.2,
+            "diagnostics": False,
+        },
+        on_fit_model=lambda: events.append("fit"),
+        on_apply=lambda: events.append("apply"),
+        on_reset=lambda: events.append("reset"),
+        on_export_diagnostics=lambda: events.append("export"),
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert view_state.frame.kwargs["text"] == "Diffuse Background Subtraction"
+    assert view_state.enabled_var.get() is True
+    assert view_state.mode_var.get() == "radial"
+    assert view_state.apply_to_fit_var.get() is True
+    assert view_state.apply_to_display_var.get() is True
+    assert view_state.display_mode_var.get() == "subtracted"
+    assert view_state.scale_var.get() == 0.8
+    assert view_state.radial_bin_width_deg_var.get() == 0.2
+    assert view_state.diagnostics_var.get() is False
+    assert view_state.status_var.get() == "Diffuse subtraction is off."
+    assert {button.kwargs["text"] for button in _FakeButton.created[-4:]} == {
+        "Fit model to current background",
+        "Apply / recompute",
+        "Reset defaults",
+        "Export diagnostics",
+    }
+
+    for button in _FakeButton.created[-4:]:
+        button.command()
+    assert events == ["fit", "apply", "reset", "export"]
 
 
 def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(

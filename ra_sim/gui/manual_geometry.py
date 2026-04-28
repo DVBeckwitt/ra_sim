@@ -10887,6 +10887,9 @@ def make_runtime_geometry_manual_projection_callbacks(
     def _pick_uses_caked_space() -> bool:
         if not bool(_resolve_runtime_value(caked_view_enabled)):
             return False
+        return _caked_grid_available()
+
+    def _caked_grid_available() -> bool:
         background_image = _resolve_runtime_value(last_caked_background_image_unscaled)
         return (
             isinstance(background_image, np.ndarray)
@@ -10902,6 +10905,17 @@ def make_runtime_geometry_manual_projection_callbacks(
                 dtype=float,
             ).size
             > 1
+        )
+
+    def _caked_projection_context_available() -> bool:
+        if callable(simulation_native_detector_coords_to_caked_display_coords):
+            return True
+        if isinstance(_resolve_runtime_value(caked_transform_bundle), CakeTransformBundle):
+            return True
+        ai_value = _resolve_runtime_value(ai)
+        return isinstance(
+            getattr(ai_value, "_live_caked_transform_bundle", None),
+            CakeTransformBundle,
         )
 
     def _current_background_image() -> object | None:
@@ -11286,7 +11300,14 @@ def make_runtime_geometry_manual_projection_callbacks(
             )
             detector_replay_from_caked_projection = False
             sim_detector_replay = None
-            if not use_caked:
+            can_replay_caked_projection = bool(
+                _caked_projection_context_available()
+                and (
+                    callable(native_detector_coords_to_detector_display_coords)
+                    or _caked_grid_available()
+                )
+            )
+            if not use_caked and can_replay_caked_projection:
                 replay_source_entry = _geometry_manual_caked_qr_projection_source(entry)
                 current_projected_caked_entry = (
                     _geometry_manual_current_sim_caked_projection_entry(
@@ -11812,10 +11833,11 @@ def make_runtime_geometry_manual_projection_callbacks(
                 )
             if isinstance(collapsed_result, tuple) and collapsed_result:
                 collapsed_entries = _mapping_entry_list(collapsed_result[0])
-        return _geometry_manual_collapse_q_group_representatives(
+        collapsed_representatives = _geometry_manual_collapse_q_group_representatives(
             _mapping_entry_list(collapsed_entries),
             profile_cache=_resolve_runtime_value(profile_cache),
         )
+        return collapsed_representatives or _mapping_entry_list(collapsed_entries)
 
     def _missing_required_param_keys(
         params_local: Mapping[str, object],

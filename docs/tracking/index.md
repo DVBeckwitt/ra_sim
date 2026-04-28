@@ -30,6 +30,7 @@ downstream of green mosaic fitting.
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-23 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
+| Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
 
 Replay status note: `Sim caked detector replay` remains in progress. Latest
 replay-only patch removed saved-background gating, tightened replay eligibility
@@ -43,6 +44,16 @@ geometry replay/workflow suites and full-suite status remain red in this
 worktree for adjacent replay/finalizer and unrelated fixture/doc/env failures,
 so the follow-up stays tracked as in-progress until broader tree health is
 clean.
+
+Diffuse background subtraction status note:
+The shared radial/caked subtraction model, GUI Background tab, headless/CLI
+overrides, diagnostics, cache invalidation, and off-mode safeguards are
+implemented. Targeted tests, manual-geometry runtime safety tests, pure
+off-mode validation, and synthetic numerical validation pass. Full-suite
+comparison found no candidate-only `--tb=no` failures versus base, but real
+detector smoke tests, manual GUI preview/orientation checks, saved-state
+headless override checks, and real diagnostic artifact inspection still need
+project input data.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,
