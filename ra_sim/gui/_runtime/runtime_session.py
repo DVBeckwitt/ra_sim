@@ -213,11 +213,20 @@ from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
 from ra_sim.gui import runtime_geometry_fit as gui_runtime_geometry_fit
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
+from ra_sim.gui import runtime_detector_remap_cache as gui_runtime_detector_remap_cache
 from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
 from ra_sim.gui import runtime_position_preview as gui_runtime_position_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
+from ra_sim.gui import runtime_invalidation as gui_runtime_invalidation
 from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
+from ra_sim.gui.runtime_update_dependencies import (
+    RuntimeCacheState,
+    SimulationDependencySignatures,
+    UpdateAction,
+    UpdateDecision,
+    classify_update,
+)
 from ra_sim.gui._runtime import primary_cache_helpers as _primary_cache_helpers
 from ra_sim.gui._runtime.live_cache_helpers import (
     empty_qr_cylinder_band_cache as _empty_qr_cylinder_band_cache,
@@ -2795,7 +2804,7 @@ def _schedule_background_subtraction_preview(delay_ms: int = 400) -> None:
 def _mark_background_subtraction_dirty(reason: str) -> None:
     _invalidate_background_subtraction_cache()
     _set_background_subtraction_status(reason)
-    _set_background_subtraction_diagnostics_summary("Model status: dirty\nNo model fit yet.")
+    _set_background_subtraction_diagnostics_summary("Status: dirty\nNo fit yet.")
     if _background_subtraction_auto_preview_enabled():
         _schedule_background_subtraction_preview()
     else:
@@ -2810,7 +2819,7 @@ def _apply_background_subtraction_preset(name: str) -> None:
         return
     for key, value in values.items():
         _set_background_subtraction_var(key, value)
-    _mark_background_subtraction_dirty("Preset applied. Press Fit model to current background.")
+    _mark_background_subtraction_dirty("Preset set. Press Fit.")
 
 
 def _current_background_subtraction_config() -> DiffuseBackgroundConfig:
@@ -2901,27 +2910,27 @@ def _background_subtraction_fraction_text(label: str, value: object) -> str:
     try:
         return f"{label}: {float(value):.0%}"
     except Exception:
-        return f"{label}: unavailable"
+        return f"{label}: n/a"
 
 
 def _background_subtraction_number_text(label: str, value: object) -> str:
     try:
         number = float(value)
     except Exception:
-        return f"{label}: unavailable"
+        return f"{label}: n/a"
     if not np.isfinite(number):
-        return f"{label}: unavailable"
+        return f"{label}: n/a"
     return f"{label}: {number:.4g}"
 
 
 def _refresh_background_subtraction_diagnostics_summary() -> None:
     result = background_runtime_state.background_subtraction_result
     if not isinstance(result, Mapping):
-        _set_background_subtraction_diagnostics_summary("No model fit yet.")
+        _set_background_subtraction_diagnostics_summary("No fit yet.")
         return
     diagnostics = result.get("diagnostics", {})
     if not isinstance(diagnostics, Mapping):
-        _set_background_subtraction_diagnostics_summary("No model fit yet.")
+        _set_background_subtraction_diagnostics_summary("No fit yet.")
         return
     try:
         current_signature = _background_subtraction_signature()
@@ -2933,23 +2942,23 @@ def _refresh_background_subtraction_diagnostics_summary() -> None:
         else "dirty"
     )
     lines = [
-        f"Model status: {model_status}",
+        f"Status: {model_status}",
         _background_subtraction_fraction_text(
-            "Valid pixels",
+            "Valid",
             diagnostics.get("valid_fraction"),
         ),
         _background_subtraction_fraction_text(
-            "Excluded pixels",
+            "Masked",
             diagnostics.get("masked_fraction"),
         ),
         _background_subtraction_fraction_text(
-            "Negative residual pixels",
+            "Negative",
             diagnostics.get("negative_fraction"),
         ),
-        f"Radial bins: {int(diagnostics.get('radial_bin_count', 0) or 0)}",
-        _background_subtraction_number_text("Raw median", diagnostics.get("raw_median")),
+        f"Bins: {int(diagnostics.get('radial_bin_count', 0) or 0)}",
+        _background_subtraction_number_text("Raw med.", diagnostics.get("raw_median")),
         _background_subtraction_number_text(
-            "Corrected median",
+            "Corr. med.",
             diagnostics.get("corrected_median"),
         ),
     ]
@@ -2992,12 +3001,12 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
     if not config.enabled or config.mode == "off":
         background_runtime_state.background_subtraction_result = None
         background_runtime_state.background_subtraction_signature = None
-        _set_background_subtraction_status("Diffuse subtraction is off.")
+        _set_background_subtraction_status("Off.")
         _refresh_background_subtraction_diagnostics_summary()
         return None
     raw_background = _get_current_background_backend()
     if raw_background is None:
-        _set_background_subtraction_status("No background image is loaded.")
+        _set_background_subtraction_status("No image loaded.")
         _refresh_background_subtraction_diagnostics_summary()
         return None
     image = np.asarray(raw_background, dtype=np.float64)
@@ -3012,7 +3021,7 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
 
     two_theta, phi = _background_subtraction_axes_for_image(image)
     if two_theta is None or phi is None:
-        _set_background_subtraction_status("Unable to build detector angular maps.")
+        _set_background_subtraction_status("Cannot build angle maps.")
         _refresh_background_subtraction_diagnostics_summary()
         return None
     radial_axis = getattr(simulation_runtime_state, "last_caked_radial_values", None)
@@ -3043,7 +3052,7 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
             direct_beam_center_rc=direct_center,
         )
     except Exception as exc:
-        _set_background_subtraction_status(f"Diffuse model fit failed: {exc}")
+        _set_background_subtraction_status(f"Fit failed: {exc}")
         _refresh_background_subtraction_diagnostics_summary()
         return None
     background_runtime_state.background_subtraction_cache[signature] = result
@@ -3057,7 +3066,7 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
             valid_text = f" valid={float(valid_fraction):.1%}"
         except Exception:
             valid_text = ""
-    _set_background_subtraction_status(f"Diffuse model fit for current background.{valid_text}")
+    _set_background_subtraction_status(f"Fit done.{valid_text}")
     _refresh_background_subtraction_diagnostics_summary()
     return result
 
@@ -3770,7 +3779,9 @@ def _initialize_runtime_root_block_01() -> None:
     #                                  TK SETUP
     ###############################################################################
     _timing_event("tk.root.create.start", phase="startup")
-    root = gui_views.create_root_window("RA-SIM Simulation")
+    root = gui_views.create_root_window(
+        gui_views.format_app_window_title("RA-SIM Simulation")
+    )
     _timing_event("tk.root.create.end", phase="startup")
     root.minsize(1200, 760)
     fit2d_error_sound_var = tk.BooleanVar(value=False)
@@ -5094,9 +5105,7 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
             "diagnostics",
         ):
             _set_background_subtraction_var(key, defaults_mapping.get(key))
-        _mark_background_subtraction_dirty(
-            "Diffuse subtraction settings reset. Press Fit model to update preview."
-        )
+        _mark_background_subtraction_dirty("Reset. Press Fit.")
 
     gui_views.create_background_subtraction_controls(
         parent=app_shell_view_state.background_body,
@@ -5132,14 +5141,10 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
     background_subtraction_status_var = view_state.status_var
 
     def _on_control_change(*_args) -> None:
-        _mark_background_subtraction_dirty(
-            "Settings changed. Press Fit model to update preview."
-        )
+        _mark_background_subtraction_dirty("Changed. Press Fit.")
 
     def _on_preview_control_change(*_args) -> None:
-        _mark_background_subtraction_dirty(
-            "Preview settings changed. Press Fit model to update model layers."
-        )
+        _mark_background_subtraction_dirty("Preview changed. Press Fit.")
         if not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
             schedule_update()
 
@@ -11684,6 +11689,9 @@ def _store_primary_cache_payload(
     contribution_keys: Sequence[object],
     raw_hit_tables: Sequence[np.ndarray],
     best_sample_indices: Sequence[object] | None,
+    detector_center: Sequence[object] | None = None,
+    detector_remap_cache_signature: object = None,
+    store_detector_relative_hit_tables: bool = False,
 ) -> None:
     _primary_cache_helpers.store_primary_cache_payload(
         simulation_runtime_state,
@@ -11697,6 +11705,9 @@ def _store_primary_cache_payload(
         trace_live_cache_event=_trace_live_cache_event,
         live_cache_count=_live_cache_count,
         live_cache_signature_summary=_live_cache_signature_summary,
+        detector_center=detector_center,
+        detector_remap_cache_signature=detector_remap_cache_signature,
+        store_detector_relative_hit_tables=store_detector_relative_hit_tables,
     )
 
 
@@ -11730,6 +11741,89 @@ def _apply_primary_cache_artifacts(payload: dict[str, object]) -> None:
         live_cache_shape=_live_cache_shape,
         live_cache_count=_live_cache_count,
     )
+
+
+def _invalidate_for_update_action(action: UpdateAction) -> None:
+    gui_runtime_invalidation.invalidate_for_update_action(
+        simulation_runtime_state,
+        action,
+    )
+
+
+def _store_secondary_detector_relative_cache(
+    *,
+    raw_hit_tables: object,
+    best_sample_indices: object,
+    detector_center: Sequence[object] | None,
+    detector_remap_cache_signature: object,
+) -> None:
+    if detector_center is None or detector_remap_cache_signature is None:
+        simulation_runtime_state.secondary_relative_hit_table_cache = []
+        simulation_runtime_state.secondary_relative_best_sample_index_cache = {}
+        simulation_runtime_state.secondary_relative_hit_table_cache_center = None
+        simulation_runtime_state.secondary_relative_hit_table_cache_signature = None
+        return
+    relative_tables = gui_runtime_detector_remap_cache.make_relative_hit_tables_for_center(
+        _copy_hit_tables(raw_hit_tables),
+        detector_center,
+    )
+    simulation_runtime_state.secondary_relative_hit_table_cache = [
+        np.asarray(table, dtype=np.float64).copy() for table in relative_tables
+    ]
+    try:
+        center_values = list(detector_center)[:2]
+        simulation_runtime_state.secondary_relative_hit_table_cache_center = tuple(
+            float(value) for value in center_values
+        )
+    except Exception:
+        simulation_runtime_state.secondary_relative_hit_table_cache_center = None
+    simulation_runtime_state.secondary_relative_hit_table_cache_signature = (
+        detector_remap_cache_signature
+    )
+    try:
+        best_indices = np.asarray(best_sample_indices, dtype=np.int64).reshape(-1)
+    except Exception:
+        best_indices = np.empty((0,), dtype=np.int64)
+    simulation_runtime_state.secondary_relative_best_sample_index_cache = {
+        int(idx): int(value) for idx, value in enumerate(best_indices)
+    }
+
+
+def _apply_secondary_detector_remap_artifacts(
+    payload: Mapping[str, object],
+    *,
+    hit_table_signature: object,
+) -> None:
+    simulation_runtime_state.stored_secondary_sim_image = np.asarray(
+        payload.get("image"),
+        dtype=np.float64,
+    )
+    simulation_runtime_state.stored_secondary_intersection_cache = (
+        _copy_intersection_cache_tables(payload.get("intersection_cache", []))
+    )
+    simulation_runtime_state.stored_secondary_intersection_cache_signature = hit_table_signature
+    simulation_runtime_state.stored_secondary_max_positions = _copy_hit_tables(
+        payload.get("peak_tables", [])
+    )
+    simulation_runtime_state.stored_secondary_source_reflection_indices = (
+        gui_geometry_q_group_manager.audited_full_order_source_reflection_index_groups(
+            (simulation_runtime_state.stored_secondary_max_positions or (),),
+            owner="runtime_session.apply_secondary_detector_remap_artifacts",
+        )[0]
+    )
+    peak_table_lattice = payload.get("peak_table_lattice", [])
+    simulation_runtime_state.stored_secondary_peak_table_lattice = (
+        list(peak_table_lattice) if isinstance(peak_table_lattice, (list, tuple)) else []
+    )
+
+
+def _clear_secondary_simulation_artifacts() -> None:
+    simulation_runtime_state.stored_secondary_sim_image = None
+    simulation_runtime_state.stored_secondary_max_positions = None
+    simulation_runtime_state.stored_secondary_source_reflection_indices = None
+    simulation_runtime_state.stored_secondary_peak_table_lattice = None
+    simulation_runtime_state.stored_secondary_intersection_cache = None
+    simulation_runtime_state.stored_secondary_intersection_cache_signature = None
 
 
 def _auto_caked_limits(image):
@@ -15005,6 +15099,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 "timing_update_id": timing_update_id,
                 "timing_reason": timing_reason,
                 "epoch": int(job["epoch"]),
+                "center": np.asarray(job.get("center", ()), dtype=np.float64).copy(),
                 "run_primary": bool(job.get("run_primary", False)),
                 "run_secondary": bool(job.get("run_secondary", False)),
                 "secondary_available": bool(secondary_available),
@@ -15027,6 +15122,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 "hit_table_signature": job.get("hit_table_signature"),
                 "primary_contribution_cache_signature": job.get(
                     "primary_contribution_cache_signature"
+                ),
+                "primary_detector_remap_cache_signature": job.get(
+                    "primary_detector_remap_cache_signature"
+                ),
+                "secondary_detector_remap_cache_signature": job.get(
+                    "secondary_detector_remap_cache_signature"
                 ),
                 "primary_source_mode": job.get("primary_source_mode"),
                 "primary_contribution_keys": list(job.get("primary_contribution_keys", [])),
@@ -15581,7 +15682,21 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             contribution_keys=result.get("primary_contribution_keys", []),
             raw_hit_tables=result.get("primary_hit_tables_raw", []),
             best_sample_indices=result.get("primary_best_sample_indices", []),
+            detector_center=result.get("center"),
+            detector_remap_cache_signature=result.get(
+                "primary_detector_remap_cache_signature"
+            ),
+            store_detector_relative_hit_tables=True,
         )
+        if bool(result.get("run_secondary", False)):
+            _store_secondary_detector_relative_cache(
+                raw_hit_tables=result.get("secondary_hit_tables_raw", []),
+                best_sample_indices=result.get("secondary_best_sample_indices", []),
+                detector_center=result.get("center"),
+                detector_remap_cache_signature=result.get(
+                    "secondary_detector_remap_cache_signature"
+                ),
+            )
     _reset_combined_simulation_artifacts()
     simulation_runtime_state.last_image_generation_ms = float(
         result.get("image_generation_elapsed_ms", float("nan"))
@@ -17103,6 +17218,77 @@ def do_update():
         timing_reason=timing_reason,
     )
 
+    update_decision_trace: dict[str, object] = {
+        "update_action": None,
+        "update_reason": None,
+        "requires_worker": None,
+        "missing_contribution_count": None,
+        "center_remap_used": None,
+        "primary_prune_cache_mode": None,
+        "classifier_update_action": None,
+        "classifier_update_reason": None,
+        "classifier_requires_worker": None,
+        "classifier_requires_analysis": None,
+        "classifier_missing_contribution_count": None,
+        "effective_update_action": None,
+    }
+
+    def _set_update_decision(
+        *,
+        update_action: str | None = None,
+        update_reason: object = None,
+        requires_worker: bool | None = None,
+        missing_contribution_count: int | None = None,
+        center_remap_used: bool | None = None,
+        primary_prune_cache_mode: object = None,
+    ) -> None:
+        if update_action is not None:
+            update_decision_trace["update_action"] = str(update_action)
+        if update_reason is not None:
+            update_decision_trace["update_reason"] = str(update_reason)
+        if requires_worker is not None:
+            update_decision_trace["requires_worker"] = bool(requires_worker)
+        if missing_contribution_count is not None:
+            update_decision_trace["missing_contribution_count"] = int(
+                missing_contribution_count
+            )
+        if center_remap_used is not None:
+            update_decision_trace["center_remap_used"] = bool(center_remap_used)
+        if primary_prune_cache_mode is not None:
+            update_decision_trace["primary_prune_cache_mode"] = str(
+                primary_prune_cache_mode
+            )
+
+    def _decision_action() -> str:
+        return str(update_decision_trace.get("update_action") or "")
+
+    def _ensure_update_decision_defaults(reason: str) -> None:
+        if not _decision_action():
+            _set_update_decision(
+                update_action="display_only",
+                update_reason=reason,
+                requires_worker=False,
+                missing_contribution_count=0,
+                center_remap_used=False,
+                primary_prune_cache_mode="none",
+            )
+
+    def _set_classifier_decision(
+        decision: UpdateDecision,
+        *,
+        effective_action: UpdateAction,
+    ) -> None:
+        update_decision_trace["classifier_update_action"] = decision.action.value
+        update_decision_trace["classifier_update_reason"] = str(decision.reason)
+        update_decision_trace["classifier_requires_worker"] = bool(decision.requires_worker)
+        update_decision_trace["classifier_requires_analysis"] = bool(
+            decision.requires_analysis
+        )
+        update_decision_trace["classifier_missing_contribution_count"] = int(
+            len(decision.missing_contribution_keys)
+        )
+        update_decision_trace["effective_update_action"] = effective_action.value
+
     def _set_update_trace_stage(stage: str) -> None:
         nonlocal update_trace_stage
         update_trace_stage = str(stage)
@@ -17111,13 +17297,19 @@ def do_update():
     def _trace_update(event: str, **fields: object) -> None:
         simulation_runtime_state.current_update_trace_id = int(update_trace_id)
         simulation_runtime_state.current_update_trace_stage = str(update_trace_stage)
+        decision_fields = {
+            key: value
+            for key, value in update_decision_trace.items()
+            if value is not None
+        }
+        decision_fields.update(fields)
         _append_runtime_update_trace(
             event,
             update_id=update_trace_id,
             stage=update_trace_stage,
             update_phase=getattr(simulation_runtime_state, "update_phase", None),
             update_running=getattr(simulation_runtime_state, "update_running", None),
-            **fields,
+            **decision_fields,
         )
 
     _trace_update(
@@ -17135,6 +17327,7 @@ def do_update():
             _current_update_debounce_ms(),
             do_update,
         )
+        _ensure_update_decision_defaults("busy_rescheduled")
         _trace_update(
             "do_update_busy_rescheduled",
             queued_token=simulation_runtime_state.update_pending,
@@ -17311,13 +17504,15 @@ def do_update():
         secondary_data.ndim == 2 and secondary_data.shape[0] > 0 and secondary_intensities.size > 0
     )
     try:
-        primary_weight_active = abs(float(weight1_var.get())) > 1.0e-12
+        primary_weight_value = float(weight1_var.get())
     except Exception:
-        primary_weight_active = True
+        primary_weight_value = 1.0
     try:
-        secondary_weight_active = abs(float(weight2_var.get())) > 1.0e-12
+        secondary_weight_value = float(weight2_var.get())
     except Exception:
-        secondary_weight_active = False
+        secondary_weight_value = 0.0
+    primary_weight_active = abs(float(primary_weight_value)) > 1.0e-12
+    secondary_weight_active = abs(float(secondary_weight_value)) > 1.0e-12
     primary_run_available = bool(primary_available and primary_weight_active)
     secondary_run_available = bool(secondary_available and secondary_weight_active)
     primary_requested_source_mode = str(
@@ -17465,13 +17660,15 @@ def do_update():
         secondary_available=secondary_run_available,
     )
     q_group_auto_refresh_needed = bool(initial_image_signature_changed and active_selection_sides)
-    selection_peak_cache_needed = bool(
+    explicit_selection_peak_cache_needed = bool(
         getattr(geometry_q_group_state, "refresh_requested", False)
-        or q_group_auto_refresh_needed
         or getattr(geometry_runtime_state, "manual_pick_armed", False)
         or getattr(peak_selection_state, "hkl_pick_armed", False)
         or getattr(peak_selection_state, "selected_hkl_target", None) is not None
         or manual_pick_session_active
+    )
+    selection_peak_cache_needed = bool(
+        explicit_selection_peak_cache_needed or q_group_auto_refresh_needed
     )
     current_hit_table_signature = getattr(
         simulation_runtime_state,
@@ -17498,6 +17695,403 @@ def do_update():
     new_sim_sig = new_sim_image_sig + (
         int(collect_hit_tables_for_job),
         int(build_intersection_cache_for_job),
+    )
+    classifier_prune_action = gui_runtime_primary_cache.resolve_incremental_sf_prune_action(
+        cache_signature=primary_contribution_cache_signature,
+        cached_signature=getattr(
+            simulation_runtime_state,
+            "primary_contribution_cache_signature",
+            None,
+        ),
+        source_mode=primary_requested_source_mode,
+        cached_source_mode=str(
+            getattr(simulation_runtime_state, "primary_source_mode", "")
+        ),
+        active_keys=primary_requested_contribution_keys,
+        previous_active_keys=getattr(
+            simulation_runtime_state,
+            "primary_active_contribution_keys",
+            (),
+        ),
+        primary_hit_table_cache=getattr(
+            simulation_runtime_state,
+            "primary_hit_table_cache",
+            None,
+        ),
+        active_job=simulation_runtime_state.worker_active_job,
+        queued_job=simulation_runtime_state.worker_queued_job,
+    )
+
+    def _runtime_var_value(value: object, default: object = None) -> object:
+        get_value = getattr(value, "get", None)
+        if callable(get_value):
+            try:
+                return get_value()
+            except Exception:
+                return default
+        return default
+
+    def _runtime_array_signature(value: object) -> tuple[object, ...]:
+        try:
+            array = np.asarray(value)
+        except Exception:
+            return ("unavailable",)
+        return (
+            tuple(int(dim) for dim in array.shape),
+            str(array.dtype),
+            int(array.size),
+        )
+
+    def _runtime_array_has_rows(value: object) -> bool:
+        try:
+            array = np.asarray(value)
+        except Exception:
+            return False
+        return bool(array.ndim >= 1 and int(array.shape[0]) > 0)
+
+    def _runtime_tuple_signature(value: object) -> tuple[object, ...]:
+        if value is None:
+            return tuple()
+        if isinstance(value, tuple):
+            return value
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            try:
+                return tuple(value)
+            except Exception:
+                return (str(value),)
+        return (value,)
+
+    def _safe_frozenset(values: object) -> frozenset[object]:
+        try:
+            return frozenset(values or ())
+        except TypeError:
+            try:
+                return frozenset(str(value) for value in values or ())
+            except Exception:
+                return frozenset()
+
+    classifier_missing_keys = _safe_frozenset(
+        getattr(classifier_prune_action, "missing_keys", ())
+    )
+    all_primary_source_signature = (
+        (
+            "qr",
+            id(getattr(simulation_runtime_state, "sim_primary_qr_all", {})),
+            len(getattr(simulation_runtime_state, "sim_primary_qr_all", {}) or {}),
+        )
+        if str(primary_requested_source_mode) == "qr"
+        else (
+            "miller",
+            id(getattr(simulation_runtime_state, "sim_miller1_all", None)),
+            tuple(
+                np.asarray(
+                    getattr(simulation_runtime_state, "sim_miller1_all", ())
+                ).shape
+            ),
+        )
+    )
+    all_secondary_source_signature = (
+        "miller",
+        id(getattr(simulation_runtime_state, "sim_miller2_all", None)),
+        tuple(np.asarray(getattr(simulation_runtime_state, "sim_miller2_all", ())).shape),
+    )
+    current_dependency_signatures = SimulationDependencySignatures(
+        source_sig=(
+            primary_requested_source_mode,
+            all_primary_source_signature,
+            all_secondary_source_signature,
+            _runtime_array_signature(
+                getattr(simulation_runtime_state, "sim_intens1_all", ())
+            ),
+            _runtime_array_signature(
+                getattr(simulation_runtime_state, "sim_intens2_all", ())
+            ),
+            bool(
+                len(getattr(simulation_runtime_state, "sim_primary_qr_all", {}) or {}) > 0
+                or _runtime_array_has_rows(
+                    getattr(simulation_runtime_state, "sim_miller1_all", ())
+                )
+            ),
+            bool(
+                _runtime_array_has_rows(
+                    getattr(simulation_runtime_state, "sim_miller2_all", ())
+                )
+            ),
+        ),
+        physics_sig=(
+            round(float(gamma_updated), 9),
+            round(float(Gamma_updated), 9),
+            round(float(chi_updated), 9),
+            round(float(psi), 9),
+            round(float(psi_z_updated), 9),
+            round(float(zs_updated), 9),
+            round(float(zb_updated), 9),
+            round(float(sample_width_updated), 12),
+            round(float(sample_length_updated), 12),
+            round(float(sample_depth_updated), 12),
+            round(float(cor_angle_updated), 9),
+            round(float(a_updated), 9),
+            round(float(c_updated), 9),
+            round(float(secondary_a), 9),
+            round(float(secondary_c), 9),
+            round(float(theta_init_up), 9),
+            round(float(debye_x_updated), 9),
+            round(float(debye_y_updated), 9),
+            round(float(mosaic_params.get("sigma_mosaic_deg", 0.0)), 9),
+            round(float(mosaic_params.get("gamma_mosaic_deg", 0.0)), 9),
+            round(float(mosaic_params.get("eta", 0.0)), 9),
+            int(mosaic_params.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE)),
+            int(mosaic_params.get("solve_q_steps", 0) or 0),
+            round(float(mosaic_params.get("solve_q_rel_tol", 0.0) or 0.0), 12),
+            int(mosaic_params.get("solve_q_mode", 0) or 0),
+            tuple(mosaic_params.get("_sampling_signature", ()) or ()),
+            _runtime_array_signature(mosaic_params.get("beam_x_array", ())),
+            _runtime_array_signature(mosaic_params.get("beam_y_array", ())),
+            _runtime_array_signature(mosaic_params.get("theta_array", ())),
+            _runtime_array_signature(mosaic_params.get("phi_array", ())),
+            _runtime_array_signature(mosaic_params.get("wavelength_array", ())),
+            int(optics_mode_flag),
+            bool(qr_cylinder_replace_requested),
+            round(float(ordered_structure_scale), 9),
+        ),
+        detector_projection_sig=(
+            int(image_size),
+            round(float(corto_det_up), 12),
+            round(float(pixel_size_m), 15),
+            round(float(wave_m), 15),
+            round(float(globals().get("lambda_", wave_m)), 9),
+        ),
+        detector_center_sig=(
+            round(float(center_x_up), 9),
+            round(float(center_y_up), 9),
+        ),
+        primary_filter_sig=(
+            primary_requested_source_mode,
+            primary_requested_filter_signature,
+            tuple(primary_requested_contribution_keys),
+            round(float(current_sf_prune_bias()), 6),
+            tuple(sorted((simulation_runtime_state.sf_prune_stats or {}).items())),
+        ),
+        combine_sig=(
+            round(float(primary_weight_value), 12),
+            round(float(secondary_weight_value), 12),
+        ),
+        analysis_geometry_sig=(
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
+            bool(_runtime_var_value(analysis_view_controls_view_state.show_1d_var, False)),
+            str(_current_app_shell_view_mode()),
+            int(background_runtime_state.current_background_index),
+            bool(background_runtime_state.visible),
+            int(background_runtime_state.backend_rotation_k) % 4,
+            bool(background_runtime_state.backend_flip_x),
+            bool(background_runtime_state.backend_flip_y),
+            int(DEFAULT_ANALYSIS_RADIAL_BINS),
+            int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
+        ),
+        display_sig=(
+            _runtime_var_value(display_controls_view_state.background_min_var),
+            _runtime_var_value(display_controls_view_state.background_max_var),
+            _runtime_var_value(display_controls_view_state.simulation_min_var),
+            _runtime_var_value(display_controls_view_state.simulation_max_var),
+            _runtime_var_value(display_controls_view_state.simulation_scale_factor_var),
+            bool(getattr(display_controls_state, "scale_factor_user_override", False)),
+        ),
+        hit_table_sig=(
+            bool(collect_hit_tables_requested),
+            bool(explicit_selection_peak_cache_needed),
+        ),
+        full_image_sig=_runtime_tuple_signature(new_sim_image_sig),
+    )
+    previous_dependency_signatures = getattr(
+        simulation_runtime_state,
+        "last_dependency_signatures",
+        None,
+    )
+    if not isinstance(previous_dependency_signatures, SimulationDependencySignatures):
+        previous_dependency_signatures = None
+
+    primary_detector_remap_cache_signature = (
+        "primary_detector_center_remap",
+        current_dependency_signatures.source_sig,
+        current_dependency_signatures.physics_sig,
+        current_dependency_signatures.detector_projection_sig,
+        current_dependency_signatures.primary_filter_sig,
+    )
+    secondary_detector_remap_cache_signature = (
+        "secondary_detector_center_remap",
+        current_dependency_signatures.source_sig,
+        current_dependency_signatures.physics_sig,
+        current_dependency_signatures.detector_projection_sig,
+    )
+
+    def _dependency_center_pair(
+        signatures: SimulationDependencySignatures | None,
+    ) -> tuple[float, float] | None:
+        if signatures is None:
+            return None
+        try:
+            center_sig = tuple(signatures.detector_center_sig)
+            return (float(center_sig[0]), float(center_sig[1]))
+        except Exception:
+            return None
+
+    def _detector_relative_cache_payload_present(payload: object) -> bool:
+        if payload is None:
+            return False
+        if isinstance(payload, Mapping):
+            return bool(payload)
+        if isinstance(payload, (str, bytes)):
+            return False
+        try:
+            return bool(len(payload))
+        except Exception:
+            return True
+
+    def _primary_detector_remap_cache_ready() -> bool:
+        if not bool(primary_available):
+            return True
+        relative_cache = getattr(
+            simulation_runtime_state,
+            "primary_relative_hit_table_cache",
+            None,
+        )
+        if not isinstance(relative_cache, Mapping):
+            return False
+        if (
+            getattr(
+                simulation_runtime_state,
+                "primary_relative_hit_table_cache_signature",
+                None,
+            )
+            != primary_detector_remap_cache_signature
+        ):
+            return False
+        required_keys = tuple(primary_requested_contribution_keys)
+        if not required_keys:
+            return _detector_relative_cache_payload_present(relative_cache)
+        return all(key in relative_cache for key in required_keys)
+
+    def _secondary_detector_remap_cache_ready() -> bool:
+        if not bool(secondary_available):
+            return True
+        relative_cache = getattr(
+            simulation_runtime_state,
+            "secondary_relative_hit_table_cache",
+            None,
+        )
+        if (
+            getattr(
+                simulation_runtime_state,
+                "secondary_relative_hit_table_cache_signature",
+                None,
+            )
+            != secondary_detector_remap_cache_signature
+        ):
+            return False
+        return _detector_relative_cache_payload_present(relative_cache)
+
+    previous_center_pair = _dependency_center_pair(previous_dependency_signatures)
+    current_center_pair = (float(center_x_up), float(center_y_up))
+
+    def _refresh_primary_relative_remap_cache_signature(
+        detector_remap_cache_signature: object,
+    ) -> None:
+        primary_relative_cache = getattr(
+            simulation_runtime_state,
+            "primary_relative_hit_table_cache",
+            None,
+        )
+        primary_relative_center = getattr(
+            simulation_runtime_state,
+            "primary_relative_hit_table_cache_center",
+            None,
+        )
+        try:
+            primary_relative_center_pair = tuple(
+                float(value) for value in tuple(primary_relative_center)[:2]
+            )
+        except Exception:
+            primary_relative_center_pair = None
+        required_relative_keys = tuple(primary_requested_contribution_keys)
+        if (
+            isinstance(primary_relative_cache, Mapping)
+            and primary_relative_cache
+            and required_relative_keys
+            and all(key in primary_relative_cache for key in required_relative_keys)
+            and primary_relative_center_pair == current_center_pair
+        ):
+            simulation_runtime_state.primary_relative_hit_table_cache_signature = (
+                detector_remap_cache_signature
+            )
+
+    exact_detector_center_remap_available = bool(
+        previous_center_pair is not None
+        and gui_runtime_detector_remap_cache.can_remap_detector_center_exactly(
+            gui_runtime_detector_remap_cache.DetectorCenterRemapCacheState(
+                detector_relative_hit_tables=(
+                    getattr(
+                        simulation_runtime_state,
+                        "primary_relative_hit_table_cache",
+                        None,
+                    )
+                    if bool(primary_available)
+                    else getattr(
+                        simulation_runtime_state,
+                        "secondary_relative_hit_table_cache",
+                        None,
+                    )
+                ),
+            ),
+            old_center=previous_center_pair,
+            new_center=current_center_pair,
+            image_size=int(image_size),
+        )
+        and _primary_detector_remap_cache_ready()
+        and _secondary_detector_remap_cache_ready()
+    )
+    classifier_cache_state = RuntimeCacheState(
+        can_remap_detector_center=bool(exact_detector_center_remap_available),
+        prune_cache_mode=getattr(classifier_prune_action, "mode", None),
+        missing_contribution_keys=classifier_missing_keys,
+    )
+    try:
+        classifier_decision = classify_update(
+            previous_dependency_signatures,
+            current_dependency_signatures,
+            classifier_cache_state,
+        )
+    except Exception as exc:
+        classifier_decision = UpdateDecision(
+            action=UpdateAction.FULL_SIMULATION,
+            reason=f"classifier_error:{type(exc).__name__}",
+            requires_worker=True,
+        )
+    classifier_full_simulation_required = bool(
+        classifier_decision.action is UpdateAction.FULL_SIMULATION
+        and classifier_decision.requires_worker
+        and previous_dependency_signatures is not None
+        and current_dependency_signatures != previous_dependency_signatures
+    )
+    effective_update_action = (
+        classifier_decision.action
+        if classifier_decision.action
+        in {
+            UpdateAction.DISPLAY_ONLY,
+            UpdateAction.COMBINE_ONLY,
+            UpdateAction.DETECTOR_CENTER_REMAP,
+            UpdateAction.PRIMARY_PRUNE_REUSE,
+            UpdateAction.PRIMARY_PRUNE_FILL,
+        }
+        and (
+            classifier_decision.action
+            not in {UpdateAction.DISPLAY_ONLY, UpdateAction.COMBINE_ONLY}
+            or not initial_image_signature_changed
+        )
+        else UpdateAction.FULL_SIMULATION
+    )
+    _set_classifier_decision(
+        classifier_decision,
+        effective_action=effective_update_action,
     )
     _trace_update(
         "do_update_signature",
@@ -17546,7 +18140,43 @@ def do_update():
         update_id=update_trace_id,
         timing_reason=timing_reason,
     )
-    ready_simulation_result = _consume_ready_simulation_result(new_sim_sig)
+    display_only_fast_path = bool(
+        effective_update_action is UpdateAction.DISPLAY_ONLY
+        and not initial_image_signature_changed
+        and getattr(simulation_runtime_state, "stored_sim_image", None) is not None
+    )
+    combine_only_fast_path = bool(
+        effective_update_action is UpdateAction.COMBINE_ONLY
+        and not initial_image_signature_changed
+        and (
+            getattr(simulation_runtime_state, "stored_primary_sim_image", None) is not None
+            or getattr(simulation_runtime_state, "stored_secondary_sim_image", None) is not None
+        )
+    )
+    prune_reuse_fast_path = bool(
+        effective_update_action is UpdateAction.PRIMARY_PRUNE_REUSE
+    )
+    center_remap_fast_path = bool(
+        effective_update_action is UpdateAction.DETECTOR_CENTER_REMAP
+        and exact_detector_center_remap_available
+    )
+    fast_path_will_use_cache = bool(
+        display_only_fast_path
+        or combine_only_fast_path
+        or prune_reuse_fast_path
+        or center_remap_fast_path
+    )
+    ready_candidate = getattr(simulation_runtime_state, "worker_ready_result", None)
+    if fast_path_will_use_cache and isinstance(ready_candidate, dict):
+        simulation_runtime_state.worker_ready_result = None
+        _trace_update(
+            "do_update_discard_stale_ready_fast_path_result",
+            ready_job_kind=str(ready_candidate.get("job_kind", "full")),
+            ready_timing_update_id=ready_candidate.get("timing_update_id"),
+        )
+        ready_simulation_result = None
+    else:
+        ready_simulation_result = _consume_ready_simulation_result(new_sim_sig)
     _timing_event(
         _timing_named_event(timing_prefix, "cache_lookup.end", "cache_lookup.end"),
         phase="cache_lookup",
@@ -17555,6 +18185,23 @@ def do_update():
         ready_result=ready_simulation_result is not None,
     )
     if ready_simulation_result is not None:
+        ready_job_kind = str(ready_simulation_result.get("job_kind", "full"))
+        _set_update_decision(
+            update_action=(
+                "primary_prune_fill"
+                if ready_job_kind == "primary_fill"
+                else "full_simulation"
+            ),
+            update_reason=f"ready_{ready_job_kind}_simulation_result",
+            requires_worker=False,
+            missing_contribution_count=int(
+                len(ready_simulation_result.get("primary_contribution_keys", []) or [])
+                if ready_job_kind == "primary_fill"
+                else 0
+            ),
+            center_remap_used=False,
+            primary_prune_cache_mode=("fill" if ready_job_kind == "primary_fill" else "none"),
+        )
         timing_result_update_id = ready_simulation_result.get("timing_update_id")
         if timing_result_update_id is not None:
             timing_render_update_id = timing_result_update_id
@@ -17569,12 +18216,12 @@ def do_update():
             pass
         _trace_update(
             "do_update_apply_ready_simulation",
-            job_kind=str(ready_simulation_result.get("job_kind", "full")),
+            job_kind=ready_job_kind,
             image_generation_elapsed_ms=float(
                 ready_simulation_result.get("image_generation_elapsed_ms", 0.0)
             ),
         )
-        if str(ready_simulation_result.get("job_kind", "full")) == "primary_fill":
+        if ready_job_kind == "primary_fill":
             _store_primary_cache_payload(
                 cache_signature=ready_simulation_result.get("primary_contribution_cache_signature"),
                 source_mode=str(
@@ -17599,6 +18246,11 @@ def do_update():
                     "primary_best_sample_indices",
                     [],
                 ),
+                detector_center=ready_simulation_result.get("center"),
+                detector_remap_cache_signature=ready_simulation_result.get(
+                    "primary_detector_remap_cache_signature"
+                ),
+                store_detector_relative_hit_tables=True,
             )
             rematerialized_primary = _rematerialize_primary_cache_artifacts(
                 image_size=int(image_size),
@@ -17607,6 +18259,9 @@ def do_update():
                 c_primary=float(c_updated),
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
+            _refresh_primary_relative_remap_cache_signature(
+                primary_detector_remap_cache_signature
+            )
             if _hit_table_state_present_for_run_sides(
                 run_primary=primary_run_available,
                 run_secondary=secondary_run_available,
@@ -17627,7 +18282,35 @@ def do_update():
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
 
+    display_only_fast_path = bool(display_only_fast_path and ready_simulation_result is None)
+    combine_only_fast_path = bool(combine_only_fast_path and ready_simulation_result is None)
+    center_remap_fast_path = bool(center_remap_fast_path and ready_simulation_result is None)
+    if display_only_fast_path:
+        _invalidate_for_update_action(UpdateAction.DISPLAY_ONLY)
+        _set_update_decision(
+            update_action="display_only",
+            update_reason=classifier_decision.reason,
+            requires_worker=False,
+            missing_contribution_count=0,
+            center_remap_used=False,
+            primary_prune_cache_mode="none",
+        )
+        _trace_update("do_update_display_only_fast_path")
+    elif combine_only_fast_path:
+        _invalidate_for_update_action(UpdateAction.COMBINE_ONLY)
+        _set_update_decision(
+            update_action="combine_only",
+            update_reason=classifier_decision.reason,
+            requires_worker=False,
+            missing_contribution_count=0,
+            center_remap_used=False,
+            primary_prune_cache_mode="none",
+        )
+        _trace_update("do_update_combine_only_fast_path")
+
     image_signature_changed = bool(new_sim_image_sig != simulation_runtime_state.last_sim_signature)
+    if classifier_full_simulation_required:
+        image_signature_changed = True
     need_hit_table_refresh = bool(
         collect_hit_tables_for_job
         and new_sim_sig != simulation_runtime_state.last_simulation_signature
@@ -17776,6 +18459,10 @@ def do_update():
             "active_peak_row_sides": tuple(active_peak_row_sides),
             "hit_table_signature": requested_hit_table_sig,
             "primary_contribution_cache_signature": primary_contribution_cache_signature,
+            "primary_detector_remap_cache_signature": primary_detector_remap_cache_signature,
+            "secondary_detector_remap_cache_signature": (
+                secondary_detector_remap_cache_signature
+            ),
             "primary_source_mode": primary_requested_source_mode,
             "primary_contribution_keys": list(selected_primary_keys),
             "active_primary_contribution_keys": list(primary_requested_contribution_keys),
@@ -17824,6 +18511,166 @@ def do_update():
             "primary_contribution_keys": list(subset_payload.get("primary_contribution_keys", [])),
         }
 
+    if ready_simulation_result is None and center_remap_fast_path:
+        _set_update_trace_stage("simulation_generation")
+        remap_start_time = perf_counter()
+        _set_update_decision(
+            update_action="detector_center_remap",
+            update_reason=classifier_decision.reason,
+            requires_worker=False,
+            missing_contribution_count=0,
+            center_remap_used=True,
+            primary_prune_cache_mode="none",
+        )
+        _trace_update(
+            "do_update_detector_center_remap_fast_path",
+            run_primary=bool(primary_run_available),
+            run_secondary=bool(secondary_run_available),
+            primary_available=bool(primary_available),
+            secondary_available=bool(secondary_available),
+        )
+        _invalidate_geometry_manual_pick_cache()
+        simulation_runtime_state.peak_positions.clear()
+        simulation_runtime_state.peak_millers.clear()
+        simulation_runtime_state.peak_intensities.clear()
+        simulation_runtime_state.peak_records.clear()
+        simulation_runtime_state.selected_peak_record = None
+        if bool(primary_available):
+            primary_relative_cache = getattr(
+                simulation_runtime_state,
+                "primary_relative_hit_table_cache",
+                {},
+            )
+            primary_keys = tuple(primary_requested_contribution_keys) or tuple(
+                primary_relative_cache.keys()
+                if isinstance(primary_relative_cache, Mapping)
+                else ()
+            )
+            primary_relative_tables = [
+                np.asarray(primary_relative_cache[key], dtype=np.float64).copy()
+                for key in primary_keys
+            ]
+            primary_absolute_tables = (
+                gui_runtime_detector_remap_cache.materialize_absolute_hit_tables_from_relative(
+                    primary_relative_tables,
+                    current_center_pair,
+                )
+            )
+            simulation_runtime_state.primary_hit_table_cache = {
+                key: np.asarray(table, dtype=np.float64).copy()
+                for key, table in zip(primary_keys, primary_absolute_tables)
+            }
+            simulation_runtime_state.primary_contribution_cache_signature = (
+                primary_contribution_cache_signature
+            )
+            simulation_runtime_state.primary_source_mode = primary_requested_source_mode
+            simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
+            simulation_runtime_state.primary_active_contribution_keys = list(primary_keys)
+            simulation_runtime_state.primary_relative_hit_table_cache_center = (
+                current_center_pair
+            )
+            remapped_primary = gui_runtime_primary_cache.rematerialize_primary_artifacts(
+                primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
+                primary_best_sample_index_cache=getattr(
+                    simulation_runtime_state,
+                    "primary_best_sample_index_cache",
+                    {},
+                ),
+                active_keys=list(primary_keys),
+                image_size=int(image_size),
+                a_primary=float(a_updated),
+                c_primary=float(c_updated),
+                beam_x_array=np.asarray(mosaic_params["beam_x_array"], dtype=np.float64),
+                beam_y_array=np.asarray(mosaic_params["beam_y_array"], dtype=np.float64),
+                theta_array=np.asarray(mosaic_params["theta_array"], dtype=np.float64),
+                phi_array=np.asarray(mosaic_params["phi_array"], dtype=np.float64),
+                wavelength_array=np.asarray(
+                    mosaic_params["wavelength_array"],
+                    dtype=np.float64,
+                ),
+                lattice_label="primary",
+            )
+            _apply_primary_cache_artifacts(remapped_primary)
+            simulation_runtime_state.stored_primary_intersection_cache_signature = (
+                requested_hit_table_sig
+            )
+        if bool(secondary_available):
+            secondary_relative_tables = getattr(
+                simulation_runtime_state,
+                "secondary_relative_hit_table_cache",
+                [],
+            )
+            secondary_absolute_tables = (
+                gui_runtime_detector_remap_cache.materialize_absolute_hit_tables_from_relative(
+                    secondary_relative_tables,
+                    current_center_pair,
+                )
+            )
+            secondary_cache = {
+                int(idx): np.asarray(table, dtype=np.float64).copy()
+                for idx, table in enumerate(secondary_absolute_tables)
+            }
+            remapped_secondary = gui_runtime_primary_cache.rematerialize_primary_artifacts(
+                primary_hit_table_cache=secondary_cache,
+                primary_best_sample_index_cache=getattr(
+                    simulation_runtime_state,
+                    "secondary_relative_best_sample_index_cache",
+                    {},
+                ),
+                active_keys=list(secondary_cache.keys()),
+                image_size=int(image_size),
+                a_primary=float(secondary_a),
+                c_primary=float(secondary_c),
+                beam_x_array=np.asarray(mosaic_params["beam_x_array"], dtype=np.float64),
+                beam_y_array=np.asarray(mosaic_params["beam_y_array"], dtype=np.float64),
+                theta_array=np.asarray(mosaic_params["theta_array"], dtype=np.float64),
+                phi_array=np.asarray(mosaic_params["phi_array"], dtype=np.float64),
+                wavelength_array=np.asarray(
+                    mosaic_params["wavelength_array"],
+                    dtype=np.float64,
+                ),
+                lattice_label="secondary",
+            )
+            _apply_secondary_detector_remap_artifacts(
+                remapped_secondary,
+                hit_table_signature=requested_hit_table_sig,
+            )
+            simulation_runtime_state.secondary_relative_hit_table_cache_center = (
+                current_center_pair
+            )
+        elif getattr(simulation_runtime_state, "stored_secondary_sim_image", None) is not None:
+            _clear_secondary_simulation_artifacts()
+        if _hit_table_state_present_for_run_sides(
+            run_primary=primary_run_available,
+            run_secondary=secondary_run_available,
+        ):
+            simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
+        else:
+            simulation_runtime_state.stored_hit_table_signature = None
+        simulation_runtime_state.last_sim_signature = new_sim_image_sig
+        simulation_runtime_state.last_simulation_signature = new_sim_sig
+        applied_peak_row_refresh_payload = {
+            "job_kind": "detector_center_remap",
+            "run_primary": bool(primary_run_available),
+            "run_secondary": bool(secondary_run_available),
+            "secondary_available": bool(secondary_run_available),
+            "active_peak_row_sides": tuple(active_selection_sides),
+            "primary_raw_rows_fresh": bool(primary_run_available),
+            "secondary_raw_rows_fresh": bool(secondary_run_available),
+        }
+        capture_source_snapshot_after_publish = True
+        image_generation_cached = False
+        image_generation_elapsed_ms = (perf_counter() - remap_start_time) * 1e3
+        simulation_runtime_state.last_image_generation_ms = float(image_generation_elapsed_ms)
+        simulation_runtime_state.preview_active = False
+        simulation_runtime_state.preview_sample_count = None
+        _invalidate_analysis_cache(clear_visuals=True)
+        _invalidate_for_update_action(UpdateAction.DETECTOR_CENTER_REMAP)
+        simulation_runtime_state.update_phase = "applying"
+        _refresh_run_status_bar()
+        image_signature_changed = False
+        need_hit_table_refresh = False
+
     if ready_simulation_result is None and image_signature_changed:
         _set_update_trace_stage("simulation_generation")
         _trace_update(
@@ -17839,18 +18686,39 @@ def do_update():
         simulation_runtime_state.peak_intensities.clear()
         simulation_runtime_state.peak_records.clear()
         simulation_runtime_state.selected_peak_record = None
-        incremental_sf_prune_action = gui_runtime_primary_cache.resolve_incremental_sf_prune_action(
-            cache_signature=primary_contribution_cache_signature,
-            cached_signature=simulation_runtime_state.primary_contribution_cache_signature,
-            source_mode=primary_requested_source_mode,
-            cached_source_mode=simulation_runtime_state.primary_source_mode,
-            active_keys=primary_requested_contribution_keys,
-            previous_active_keys=simulation_runtime_state.primary_active_contribution_keys,
-            primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
-            active_job=simulation_runtime_state.worker_active_job,
-            queued_job=simulation_runtime_state.worker_queued_job,
+        if classifier_decision.action in {
+            UpdateAction.PRIMARY_PRUNE_REUSE,
+            UpdateAction.PRIMARY_PRUNE_FILL,
+        }:
+            incremental_sf_prune_action = classifier_prune_action
+        else:
+            incremental_sf_prune_action = gui_runtime_primary_cache.IncrementalSfPruneAction(
+                mode="full",
+                added_keys=tuple(),
+                removed_keys=tuple(),
+                missing_keys=tuple(),
+                reason=f"classifier_{classifier_decision.action.value}",
+            )
+        _set_update_decision(
+            update_action=(
+                "primary_prune_reuse"
+                if incremental_sf_prune_action.mode == "reuse"
+                else (
+                    "primary_prune_fill"
+                    if incremental_sf_prune_action.mode == "fill"
+                    else "full_simulation"
+                )
+            ),
+            update_reason=incremental_sf_prune_action.reason,
+            requires_worker=bool(incremental_sf_prune_action.mode in {"fill", "full"}),
+            missing_contribution_count=int(
+                len(incremental_sf_prune_action.missing_keys)
+            ),
+            center_remap_used=False,
+            primary_prune_cache_mode=incremental_sf_prune_action.mode,
         )
         if incremental_sf_prune_action.mode == "reuse":
+            _invalidate_for_update_action(UpdateAction.PRIMARY_PRUNE_REUSE)
             rematerialize_start_time = perf_counter()
             simulation_runtime_state.primary_contribution_cache_signature = (
                 primary_contribution_cache_signature
@@ -17867,6 +18735,9 @@ def do_update():
                 c_primary=float(c_updated),
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
+            _refresh_primary_relative_remap_cache_signature(
+                primary_detector_remap_cache_signature
+            )
             if _hit_table_state_present_for_run_sides(
                 run_primary=primary_run_available,
                 run_secondary=secondary_run_available,
@@ -17881,6 +18752,7 @@ def do_update():
             simulation_runtime_state.update_phase = "applying"
             _refresh_run_status_bar()
         elif incremental_sf_prune_action.mode == "fill":
+            _invalidate_for_update_action(UpdateAction.PRIMARY_PRUNE_FILL)
             subset_payload = _build_scaled_primary_subset_payload(
                 incremental_sf_prune_action.missing_keys
             )
@@ -17900,8 +18772,30 @@ def do_update():
                     missing_keys=incremental_sf_prune_action.missing_keys,
                     reason="invalid_fill_subset",
                 )
+                _set_update_decision(
+                    update_action="full_simulation",
+                    update_reason=incremental_sf_prune_action.reason,
+                    requires_worker=True,
+                    missing_contribution_count=int(
+                        len(incremental_sf_prune_action.missing_keys)
+                    ),
+                    center_remap_used=False,
+                    primary_prune_cache_mode=incremental_sf_prune_action.mode,
+                )
             else:
                 request_status = _request_async_simulation_job(simulation_job)
+                _set_update_decision(
+                    update_action="primary_prune_fill",
+                    update_reason=incremental_sf_prune_action.reason,
+                    requires_worker=bool(
+                        request_status in {"submitted", "queued", "running"}
+                    ),
+                    missing_contribution_count=int(
+                        len(incremental_sf_prune_action.missing_keys)
+                    ),
+                    center_remap_used=False,
+                    primary_prune_cache_mode=incremental_sf_prune_action.mode,
+                )
                 if (
                     request_status in {"submitted", "queued", "running"}
                     and "progress_label" in globals()
@@ -17936,6 +18830,18 @@ def do_update():
             if _live_interaction_active() and LIVE_DRAG_PREVIEW_ENABLED:
                 if preview_job is not None:
                     request_status = _request_async_simulation_job(preview_job)
+                    _set_update_decision(
+                        update_action="full_simulation",
+                        update_reason="live_preview_requested",
+                        requires_worker=bool(
+                            request_status in {"submitted", "queued", "running"}
+                        ),
+                        missing_contribution_count=int(
+                            len(incremental_sf_prune_action.missing_keys)
+                        ),
+                        center_remap_used=False,
+                        primary_prune_cache_mode=incremental_sf_prune_action.mode,
+                    )
                     if (
                         request_status in {"submitted", "queued", "running"}
                         and "progress_label" in globals()
@@ -17944,6 +18850,16 @@ def do_update():
                         progress_label.config(text="Computing preview simulation in background...")
                 else:
                     request_status = "preview_unavailable"
+                    _set_update_decision(
+                        update_action="full_simulation",
+                        update_reason="live_preview_unavailable",
+                        requires_worker=False,
+                        missing_contribution_count=int(
+                            len(incremental_sf_prune_action.missing_keys)
+                        ),
+                        center_remap_used=False,
+                        primary_prune_cache_mode=incremental_sf_prune_action.mode,
+                    )
                 _trace_update(
                     "do_update_queue_live_preview",
                     request_status=str(request_status),
@@ -17973,6 +18889,16 @@ def do_update():
                         "job_id": 0,
                     }
                 )
+                _set_update_decision(
+                    update_action="full_simulation",
+                    update_reason="initial_sync_simulation",
+                    requires_worker=False,
+                    missing_contribution_count=int(
+                        len(incremental_sf_prune_action.missing_keys)
+                    ),
+                    center_remap_used=False,
+                    primary_prune_cache_mode=incremental_sf_prune_action.mode,
+                )
                 _apply_ready_simulation_result(sync_result)
                 simulation_runtime_state.last_sim_signature = new_sim_image_sig
                 simulation_runtime_state.last_simulation_signature = new_sim_sig
@@ -17989,6 +18915,18 @@ def do_update():
                 _refresh_run_status_bar()
             else:
                 request_status = _request_async_simulation_job(simulation_job)
+                _set_update_decision(
+                    update_action="full_simulation",
+                    update_reason=incremental_sf_prune_action.reason,
+                    requires_worker=bool(
+                        request_status in {"submitted", "queued", "running"}
+                    ),
+                    missing_contribution_count=int(
+                        len(incremental_sf_prune_action.missing_keys)
+                    ),
+                    center_remap_used=False,
+                    primary_prune_cache_mode=incremental_sf_prune_action.mode,
+                )
                 if (
                     request_status in {"submitted", "queued", "running"}
                     and "progress_label" in globals()
@@ -18005,10 +18943,23 @@ def do_update():
                 if request_status != "ready":
                     simulation_runtime_state.update_running = False
                     return
-    elif ready_simulation_result is None and need_hit_table_refresh:
+    elif (
+        ready_simulation_result is None
+        and need_hit_table_refresh
+        and not display_only_fast_path
+        and not combine_only_fast_path
+    ):
         _set_update_trace_stage("simulation_generation")
         request_status = _request_async_simulation_job(
             _build_simulation_job(collect_hit_tables_enabled=True)
+        )
+        _set_update_decision(
+            update_action="full_simulation",
+            update_reason="hit_table_refresh",
+            requires_worker=bool(request_status in {"submitted", "queued", "running"}),
+            missing_contribution_count=0,
+            center_remap_used=False,
+            primary_prune_cache_mode="none",
         )
         if (
             request_status in {"submitted", "queued", "running"}
@@ -18027,6 +18978,7 @@ def do_update():
         simulation_runtime_state.stored_primary_sim_image is None
         and simulation_runtime_state.stored_secondary_sim_image is None
     ):
+        _ensure_update_decision_defaults("missing_simulation_image")
         _trace_update("do_update_return_no_simulation_image")
         simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
@@ -18086,18 +19038,44 @@ def do_update():
         publish_active_peak_row_sides = (
             applied_active_peak_row_sides if all_active_raw_rows_fresh else ()
         )
-    combined_state_diagnostics = _publish_combined_simulation_state(
-        image_size_value=int(image_size),
-        primary_a_value=float(a_updated),
-        primary_c_value=float(c_updated),
-        secondary_a_value=float(secondary_a),
-        secondary_c_value=float(secondary_c),
-        active_peak_row_sides=publish_active_peak_row_sides,
-    )
-    run_primary = bool(combined_state_diagnostics.get("run_primary", False))
-    run_secondary = bool(combined_state_diagnostics.get("run_secondary", False))
-    updated_image = simulation_runtime_state.stored_sim_image
-    max_positions_local = list(simulation_runtime_state.stored_max_positions_local or [])
+    if display_only_fast_path:
+        run_primary = bool(
+            simulation_runtime_state.stored_primary_sim_image is not None
+            and abs(float(primary_weight_value)) > 1e-12
+        )
+        run_secondary = bool(
+            simulation_runtime_state.stored_secondary_sim_image is not None
+            and abs(float(secondary_weight_value)) > 1e-12
+        )
+        updated_image = simulation_runtime_state.stored_sim_image
+        max_positions_local = list(simulation_runtime_state.stored_max_positions_local or [])
+        combined_state_diagnostics = {
+            "run_primary": bool(run_primary),
+            "run_secondary": bool(run_secondary),
+            "combined_row_count": int(_table_row_count(max_positions_local)),
+        }
+    else:
+        combined_state_diagnostics = _publish_combined_simulation_state(
+            image_size_value=int(image_size),
+            primary_a_value=float(a_updated),
+            primary_c_value=float(c_updated),
+            secondary_a_value=float(secondary_a),
+            secondary_c_value=float(secondary_c),
+            active_peak_row_sides=publish_active_peak_row_sides,
+        )
+        run_primary = bool(combined_state_diagnostics.get("run_primary", False))
+        run_secondary = bool(combined_state_diagnostics.get("run_secondary", False))
+        updated_image = simulation_runtime_state.stored_sim_image
+        max_positions_local = list(simulation_runtime_state.stored_max_positions_local or [])
+    if not _decision_action():
+        _set_update_decision(
+            update_action="combine_only",
+            update_reason="simulation_components_current",
+            requires_worker=False,
+            missing_contribution_count=0,
+            center_remap_used=False,
+            primary_prune_cache_mode="none",
+        )
 
     restore_diagnostics: dict[str, object] | None = None
     if applied_peak_row_refresh_payload is not None:
@@ -18398,6 +19376,15 @@ def do_update():
             bg_cache_sig=bg_cache_sig,
         )
         if ready_analysis_result is not None:
+            if _decision_action() in {"", "display_only", "combine_only"}:
+                _set_update_decision(
+                    update_action="analysis_only",
+                    update_reason="ready_analysis_result",
+                    requires_worker=False,
+                    missing_contribution_count=0,
+                    center_remap_used=False,
+                    primary_prune_cache_mode="none",
+                )
             _apply_ready_analysis_result(ready_analysis_result)
             if one_d_analysis_requested and not bool(
                 ready_analysis_result.get("is_preview", False)
@@ -18485,7 +19472,7 @@ def do_update():
             and simulation_runtime_state.last_caked_extent is not None
         )
         _invalidate_analysis_cache(clear_visuals=not preserve_caked_visuals)
-        _request_async_analysis_job(
+        analysis_request_status = _request_async_analysis_job(
             {
                 "signature": analysis_sig,
                 "epoch": int(simulation_runtime_state.analysis_epoch),
@@ -18538,6 +19525,17 @@ def do_update():
                 "bg_caking_sig": bg_caking_sig,
             }
         )
+        if _decision_action() in {"", "display_only", "combine_only", "analysis_only"}:
+            _set_update_decision(
+                update_action="analysis_only",
+                update_reason="analysis_cache_miss",
+                requires_worker=bool(
+                    analysis_request_status in {"submitted", "queued", "running"}
+                ),
+                missing_contribution_count=0,
+                center_remap_used=False,
+                primary_prune_cache_mode="none",
+            )
         if "progress_label" in globals() and progress_label is not None:
             if desired_analysis_preview:
                 progress_label.config(text=_analysis_progress_text())
@@ -18696,7 +19694,34 @@ def do_update():
         simulation_runtime_state.update_phase = "queued"
     else:
         simulation_runtime_state.update_phase = "ready"
+    dependency_image_signature_applied = bool(
+        getattr(simulation_runtime_state, "last_sim_signature", None) == new_sim_image_sig
+    )
+    dependency_full_signature_applied = bool(
+        getattr(simulation_runtime_state, "last_simulation_signature", None) == new_sim_sig
+        or (
+            effective_update_action in {UpdateAction.DISPLAY_ONLY, UpdateAction.COMBINE_ONLY}
+            and dependency_image_signature_applied
+        )
+    )
+    dependency_signatures_applied = bool(
+        dependency_image_signature_applied
+        and dependency_full_signature_applied
+        and getattr(simulation_runtime_state, "worker_active_job", None) is None
+        and getattr(simulation_runtime_state, "worker_queued_job", None) is None
+        and getattr(simulation_runtime_state, "worker_future", None) is None
+        and getattr(simulation_runtime_state, "worker_poll_token", None) is None
+        and getattr(simulation_runtime_state, "worker_ready_result", None) is None
+        and getattr(simulation_runtime_state, "analysis_active_job", None) is None
+        and getattr(simulation_runtime_state, "analysis_queued_job", None) is None
+        and getattr(simulation_runtime_state, "analysis_future", None) is None
+        and getattr(simulation_runtime_state, "analysis_poll_token", None) is None
+        and getattr(simulation_runtime_state, "analysis_ready_result", None) is None
+    )
+    if dependency_signatures_applied:
+        simulation_runtime_state.last_dependency_signatures = current_dependency_signatures
     _set_update_trace_stage("complete")
+    _ensure_update_decision_defaults("display_refresh")
     _trace_update(
         "do_update_complete",
         image_generation_cached=bool(image_generation_cached),
@@ -18705,6 +19730,7 @@ def do_update():
         total_update_elapsed_ms=float(total_update_elapsed_ms),
         next_phase=str(simulation_runtime_state.update_phase),
         analysis_result_current=bool(analysis_result_current),
+        dependency_signatures_applied=bool(dependency_signatures_applied),
     )
     if simulation_runtime_state.stored_sim_image is not None:
         _schedule_exact_cake_numba_warmup_once()

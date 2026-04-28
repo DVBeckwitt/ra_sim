@@ -8425,6 +8425,330 @@ def test_do_update_primary_fill_keeps_hit_table_signature_stale_until_all_run_si
     assert runtime_session.simulation_runtime_state.stored_hit_table_signature is None
 
 
+def test_runtime_trace_records_classifier_display_decision(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(
+        monkeypatch,
+        runtime_session,
+        fixture,
+    )
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=[],
+        scheduled_settle_calls=[],
+        apply_scale_factor_calls=[],
+    )
+    state = runtime_session.simulation_runtime_state
+    state.last_simulation_signature = fixture["sim_signature"] + (0, 0)
+    state.stored_primary_sim_image = np.ones((2, 2), dtype=np.float64)
+    state.stored_secondary_sim_image = None
+
+    trace_events: list[dict[str, object]] = []
+    requested_jobs: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda event, **fields: trace_events.append({"event": event, **fields}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_async_simulation_job",
+        lambda job: requested_jobs.append(dict(job)) or "submitted",
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert requested_jobs == [], [
+        event for event in trace_events if event["event"] == "do_update_signature"
+    ]
+    assert state.last_dependency_signatures is not None
+    trace_events.clear()
+
+    runtime_session.do_update()
+
+    assert requested_jobs == [], [
+        event for event in trace_events if event["event"] == "do_update_signature"
+    ]
+    complete_trace = next(
+        event for event in reversed(trace_events) if event["event"] == "do_update_complete"
+    )
+    assert complete_trace["classifier_update_action"] == "display_only"
+    assert complete_trace["classifier_update_reason"] == "no_dependency_change"
+    assert complete_trace["classifier_requires_worker"] is False
+    assert complete_trace["effective_update_action"] == "display_only"
+    assert complete_trace["dependency_signatures_applied"] is True
+
+
+def _patch_do_update_prune_fast_path_state(runtime_session) -> None:
+    state = runtime_session.simulation_runtime_state
+    state.sim_miller1_all = np.asarray(
+        [[1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 0.0, 2.0]],
+        dtype=np.float64,
+    )
+    state.sim_intens1_all = np.asarray([10.0, 5.0, 2.0], dtype=np.float64)
+    state.sim_miller2_all = np.empty((0, 3), dtype=np.float64)
+    state.sim_intens2_all = np.empty((0,), dtype=np.float64)
+    state.sim_primary_qr_all = {}
+    state.sim_miller1 = state.sim_miller1_all[:2].copy()
+    state.sim_intens1 = state.sim_intens1_all[:2].copy()
+    state.sim_miller2 = np.empty((0, 3), dtype=np.float64)
+    state.sim_intens2 = np.empty((0,), dtype=np.float64)
+    state.primary_requested_source_mode = "miller"
+    state.primary_requested_filter_signature = ("stable-source-filter",)
+    state.primary_requested_contribution_keys = [0, 1]
+    state.primary_active_contribution_keys = [0, 1]
+    state.primary_contribution_cache_signature = ("primary-cache", 0.5)
+    state.primary_source_mode = "miller"
+    state.primary_hit_table_cache = {
+        0: np.asarray([[10.0, 0.5, 0.5, 0.0, 1.0, 0.0, 0.0]], dtype=np.float64),
+        1: np.asarray([[5.0, 1.5, 0.5, 0.0, 1.0, 0.0, 1.0]], dtype=np.float64),
+    }
+    state.primary_best_sample_index_cache = {0: 0, 1: 0}
+    state.stored_primary_sim_image = np.ones((2, 2), dtype=np.float64)
+    state.stored_secondary_sim_image = None
+    state.stored_sim_image = np.ones((2, 2), dtype=np.float64)
+    state.peak_positions = []
+    state.peak_millers = []
+    state.peak_intensities = []
+    state.peak_records = []
+    state.selected_peak_record = None
+    state.simulation_epoch = 0
+    runtime_session.geometry_q_group_state = SimpleNamespace(
+        refresh_requested=False,
+        disabled_qr_sets=set(),
+        disabled_qz_sections=set(),
+    )
+    runtime_session.geometry_runtime_state.manual_pick_armed = False
+    runtime_session.peak_selection_state = SimpleNamespace(
+        hkl_pick_armed=False,
+        selected_hkl_target=None,
+    )
+    runtime_session._geometry_manual_pick_session_active = lambda: False
+
+
+def _patch_prune_signature_function(monkeypatch, runtime_session) -> None:
+    def _signature(
+        _param_set,
+        *,
+        primary_source_signature,
+        sf_prune_bias,
+        **_kwargs,
+    ):
+        if (
+            isinstance(primary_source_signature, tuple)
+            and len(primary_source_signature) == 2
+            and primary_source_signature[1] == ("stable-source-filter",)
+        ):
+            return ("primary-cache",)
+        return (
+            "broad-sim",
+            primary_source_signature,
+            round(float(sf_prune_bias), 3),
+        )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_source_snapshot_signature_from_params",
+        _signature,
+        raising=False,
+    )
+
+
+def _patch_rich_mosaic_params(monkeypatch, runtime_session) -> None:
+    monkeypatch.setattr(runtime_session, "lambda_", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "n2", 1.0 + 0.0j, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "build_mosaic_params",
+        lambda: {
+            "beam_x_array": np.asarray([0.0], dtype=np.float64),
+            "beam_y_array": np.asarray([0.0], dtype=np.float64),
+            "theta_array": np.asarray([0.0], dtype=np.float64),
+            "phi_array": np.asarray([0.0], dtype=np.float64),
+            "wavelength_array": np.asarray([1.0], dtype=np.float64),
+            "sample_weights": None,
+            "n2_sample_array": None,
+            "_n2_sample_array_source": None,
+            "_n2_sample_array_wavelength_snapshot": None,
+            "sigma_mosaic_deg": 0.0,
+            "gamma_mosaic_deg": 0.0,
+            "eta": 0.0,
+            "events_per_beam_phase": 50,
+            "solve_q_steps": 7,
+            "solve_q_rel_tol": 1.0e-6,
+            "solve_q_mode": 2,
+            "_sampling_signature": (),
+        },
+        raising=False,
+    )
+
+
+def test_do_update_prune_reuse_does_not_request_full_simulation_when_active_keys_cached(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixture)
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=[],
+        scheduled_settle_calls=[],
+        apply_scale_factor_calls=[],
+    )
+    _patch_do_update_prune_fast_path_state(runtime_session)
+    _patch_rich_mosaic_params(monkeypatch, runtime_session)
+    state = runtime_session.simulation_runtime_state
+    state.last_sim_signature = fixture["sim_signature"]
+    state.last_simulation_signature = fixture["sim_signature"] + (0, 0)
+    requested_jobs: list[dict[str, object]] = []
+    rematerialize_calls: list[dict[str, object]] = []
+    trace_events: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda event, **fields: trace_events.append({"event": event, **fields}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_async_simulation_job",
+        lambda job: requested_jobs.append(dict(job)) or "submitted",
+        raising=False,
+    )
+
+    runtime_session.do_update()
+    assert state.last_dependency_signatures is not None
+    trace_events.clear()
+
+    _patch_prune_signature_function(monkeypatch, runtime_session)
+    _patch_rich_mosaic_params(monkeypatch, runtime_session)
+    state.sim_miller1 = state.sim_miller1_all[:1].copy()
+    state.sim_intens1 = state.sim_intens1_all[:1].copy()
+    state.primary_requested_contribution_keys = [0]
+    state.last_sim_signature = ("seed-sim",)
+    state.last_simulation_signature = ("seed-sim", 0, 0)
+
+    def _rematerialize(**kwargs):
+        rematerialize_calls.append(dict(kwargs))
+        return {
+            "image": np.full((2, 2), 4.0, dtype=np.float64),
+            "intersection_cache": [],
+            "peak_tables": [],
+            "peak_table_lattice": [],
+        }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_rematerialize_primary_cache_artifacts",
+        _rematerialize,
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert requested_jobs == [], [
+        event for event in trace_events if event["event"] == "do_update_signature"
+    ]
+    assert len(rematerialize_calls) == 1
+    assert state.primary_active_contribution_keys == [0]
+    complete_trace = next(
+        event for event in reversed(trace_events) if event["event"] == "do_update_complete"
+    )
+    assert complete_trace["update_action"] == "primary_prune_reuse"
+    assert complete_trace["requires_worker"] is False
+    assert complete_trace["primary_prune_cache_mode"] == "reuse"
+
+
+def test_do_update_prune_fill_requests_only_missing_contribution_keys(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    fixture = _install_matching_hidden_analysis_payload_state(
+        monkeypatch,
+        runtime_session,
+        include_do_update_state=True,
+    )
+    _patch_do_update_detector_cache_prereqs(monkeypatch, runtime_session, fixture)
+    _patch_do_update_first_visible_simulation_finish_prereqs(
+        monkeypatch,
+        runtime_session,
+        scheduled_post_idle_redraw_calls=[],
+        scheduled_settle_calls=[],
+        apply_scale_factor_calls=[],
+    )
+    _patch_do_update_prune_fast_path_state(runtime_session)
+    _patch_rich_mosaic_params(monkeypatch, runtime_session)
+    state = runtime_session.simulation_runtime_state
+    state.last_sim_signature = fixture["sim_signature"]
+    state.last_simulation_signature = fixture["sim_signature"] + (0, 0)
+    requested_jobs: list[dict[str, object]] = []
+    requested_subset_keys: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_async_simulation_job",
+        lambda job: requested_jobs.append(dict(job)) or "submitted",
+        raising=False,
+    )
+
+    runtime_session.do_update()
+    assert state.last_dependency_signatures is not None
+
+    _patch_prune_signature_function(monkeypatch, runtime_session)
+    _patch_rich_mosaic_params(monkeypatch, runtime_session)
+    state.sim_miller1 = state.sim_miller1_all.copy()
+    state.sim_intens1 = state.sim_intens1_all.copy()
+    state.primary_requested_contribution_keys = [0, 1, 2]
+    state.primary_hit_table_cache = {
+        0: state.primary_hit_table_cache[0],
+        2: np.asarray([[2.0, 1.0, 1.5, 0.0, 1.0, 0.0, 2.0]], dtype=np.float64),
+    }
+    state.primary_best_sample_index_cache = {0: 0, 2: 0}
+    state.last_sim_signature = ("seed-sim",)
+    state.last_simulation_signature = ("seed-sim", 0, 0)
+
+    def _subset_payload(**kwargs):
+        requested_subset_keys.append(tuple(kwargs["requested_keys"]))
+        return {
+            "primary_data": np.asarray([[1.0, 0.0, 1.0]], dtype=np.float64),
+            "primary_intensities": np.asarray([5.0], dtype=np.float64),
+            "primary_contribution_keys": list(kwargs["requested_keys"]),
+        }
+
+    monkeypatch.setattr(
+        runtime_session.gui_runtime_primary_cache,
+        "build_primary_subset_payload",
+        _subset_payload,
+        raising=False,
+    )
+
+    runtime_session.do_update()
+
+    assert requested_subset_keys == [(1,)]
+    assert len(requested_jobs) == 1
+    job = requested_jobs[0]
+    assert job["job_kind"] == "primary_fill"
+    assert job["primary_contribution_keys"] == [1]
+    assert job["run_primary"] is True
+    assert job["run_secondary"] is False
+
+
 def test_runtime_session_manual_rebuild_failure_preserves_runtime_cache_state(
     monkeypatch,
 ) -> None:
@@ -13960,7 +14284,16 @@ def test_runtime_impl_blocks_startup_on_initial_simulation_with_overlay() -> Non
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     block_start = source.index("has_cached_simulation = (")
-    block_end = source.index("elif ready_simulation_result is None and need_hit_table_refresh:")
+    try:
+        block_end = source.index(
+            "elif ready_simulation_result is None and need_hit_table_refresh:",
+            block_start,
+        )
+    except ValueError:
+        block_end = source.index(
+            "elif (\n        ready_simulation_result is None\n        and need_hit_table_refresh",
+            block_start,
+        )
     block = source[block_start:block_end]
     do_update_start = source.index("def do_update():")
     do_update_block = source[do_update_start:]
@@ -19104,11 +19437,13 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
     monkeypatch.setattr(
         runtime_session.gui_qr_cylinder_overlay,
         "build_selected_qr_rod_qz_caked_mask",
-        lambda **kwargs: mask_calls.append(dict(kwargs))
-        or {
-            "mask": np.asarray([[True, True], [True, False]], dtype=bool),
-            "signature": _signature(**kwargs),
-        },
+        lambda **kwargs: (
+            mask_calls.append(dict(kwargs))
+            or {
+                "mask": np.asarray([[True, True], [True, False]], dtype=bool),
+                "signature": _signature(**kwargs),
+            }
+        ),
     )
     for name in (
         "integrate_selected_qr_rod_var",

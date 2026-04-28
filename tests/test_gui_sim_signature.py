@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from ra_sim.gui import app as gui_app
 from ra_sim.gui._runtime import runtime_session
 
@@ -40,6 +42,34 @@ class _FakeVar:
 
     def set(self, value):
         self.value = value
+
+
+@pytest.fixture(autouse=True)
+def _restore_runtime_session_globals():
+    names = (
+        "DEFAULT_EVENTS_PER_BEAM_PHASE",
+        "MIN_EVENTS_PER_BEAM_PHASE",
+        "MAX_EVENTS_PER_BEAM_PHASE",
+        "DEFAULT_RANDOM_SAMPLE_COUNT",
+        "MIN_RANDOM_SAMPLE_COUNT",
+        "MAX_RANDOM_SAMPLE_COUNT",
+        "CUSTOM_SAMPLING_OPTION",
+        "defaults",
+        "sampling_optics_controls_view_state",
+        "simulation_runtime_state",
+        "resolution_var",
+    )
+    missing = object()
+    original = {name: getattr(runtime_session, name, missing) for name in names}
+    yield
+    for name, value in original.items():
+        if value is missing:
+            try:
+                delattr(runtime_session, name)
+            except AttributeError:
+                pass
+        else:
+            setattr(runtime_session, name, value)
 
 
 def test_geometry_source_signature_includes_events_per_beam_phase():

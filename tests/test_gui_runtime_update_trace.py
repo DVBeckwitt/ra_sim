@@ -35,6 +35,120 @@ def test_format_runtime_update_trace_line_formats_scalar_and_sequence_fields() -
     )
 
 
+def test_update_trace_includes_optimization_fields() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "full_simulation",
+            "update_reason": "image_signature_changed",
+            "requires_worker": True,
+            "missing_contribution_count": 0,
+            "center_remap_used": False,
+            "primary_prune_cache_mode": "none",
+        },
+    )
+
+    assert "update_action=full_simulation" in line
+    assert "update_reason=image_signature_changed" in line
+    assert "requires_worker=true" in line
+    assert "missing_contribution_count=0" in line
+    assert "center_remap_used=false" in line
+    assert "primary_prune_cache_mode=none" in line
+
+
+def test_trace_reports_primary_prune_reuse() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "primary_prune_reuse",
+            "requires_worker": False,
+            "primary_prune_cache_mode": "reuse",
+            "missing_contribution_count": 0,
+        },
+    )
+
+    assert "update_action=primary_prune_reuse" in line
+    assert "requires_worker=false" in line
+    assert "primary_prune_cache_mode=reuse" in line
+    assert "missing_contribution_count=0" in line
+
+
+def test_trace_reports_primary_prune_fill() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_extend_primary_cache_in_background",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "primary_prune_fill",
+            "requires_worker": True,
+            "primary_prune_cache_mode": "fill",
+            "missing_contribution_count": 2,
+        },
+    )
+
+    assert "update_action=primary_prune_fill" in line
+    assert "requires_worker=true" in line
+    assert "primary_prune_cache_mode=fill" in line
+    assert "missing_contribution_count=2" in line
+
+
+def test_trace_reports_display_only() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "display_only",
+            "requires_worker": False,
+            "update_reason": "display_dependency_changed",
+        },
+    )
+
+    assert "update_action=display_only" in line
+    assert "requires_worker=false" in line
+    assert "update_reason=display_dependency_changed" in line
+
+
+def test_trace_reports_combine_only() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "combine_only",
+            "requires_worker": False,
+            "update_reason": "combine_dependency_changed",
+        },
+    )
+
+    assert "update_action=combine_only" in line
+    assert "requires_worker=false" in line
+    assert "update_reason=combine_dependency_changed" in line
+
+
+def test_trace_reports_detector_center_remap() -> None:
+    line = runtime_update_trace.format_runtime_update_trace_line(
+        "do_update_complete",
+        timestamp=datetime(2026, 3, 31, 12, 15, 0, 123000),
+        pid=4242,
+        fields={
+            "update_action": "detector_center_remap",
+            "requires_worker": False,
+            "center_remap_used": True,
+            "update_reason": "detector_center_changed_exact_cache_available",
+        },
+    )
+
+    assert "update_action=detector_center_remap" in line
+    assert "requires_worker=false" in line
+    assert "center_remap_used=true" in line
+    assert "update_reason=detector_center_changed_exact_cache_available" in line
+
+
 def test_append_runtime_update_trace_line_writes_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         runtime_update_trace,

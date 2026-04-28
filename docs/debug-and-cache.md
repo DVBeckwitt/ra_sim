@@ -46,6 +46,62 @@ Retention modes:
 - `auto`: retain when the active feature benefits from reuse
 - `always`: retain whenever built
 
+## GUI Runtime Update Fast Paths
+
+The GUI runtime records a pure update decision before it executes an update.
+The trace fields are:
+
+- `update_action`
+- `update_reason`
+- `requires_worker`
+- `missing_contribution_count`
+- `center_remap_used`
+- `primary_prune_cache_mode`
+
+Current action status:
+
+- `full_simulation`: feature status implemented; still the conservative
+  fallback for source, lattice, detector distance, detector rotation, pixel
+  size, wavelength, beam sampling, mosaic sampling, solve-q, or mixed physics
+  changes
+- `primary_prune_reuse`: feature status implemented; rematerializes the
+  primary image from cached contribution hit tables and does not request a full
+  worker when all active keys are cached
+- `primary_prune_fill`: feature status implemented; requests only missing
+  primary contribution keys and preserves already cached keys
+- `detector_center_remap`: feature status implemented; runs only with exact
+  detector-relative/unclipped hit-table caches and falls back to full simulation
+  for missing, clipped-only, stale, incompatible, or secondary-missing remap
+  caches
+- `display_only`: feature status implemented; redraws existing stored image
+  state only when a valid stored image exists
+- `combine_only`: feature status implemented; recombines cached primary and
+  secondary images only when matching component images exist
+- `analysis_only`: classifier status implemented; runtime execution remains
+  conservative outside the explicit fast paths
+
+Bug/error status:
+
+- stale full-worker results are discarded before newer display, prune-reuse, or
+  detector-center-remap fast-path state can be overwritten
+- `last_dependency_signatures` is updated only after the applied state reflects
+  the current request, with display/combine paths allowed to advance dependency
+  signatures when the stored numeric image is current and no worker is pending
+- detector-center remap invalidates caking/q-space/detector-geometry analysis
+  caches while preserving reusable source/physics contribution caches
+- broad full-simulation invalidation remains the fallback for physics changes
+  and signature-incompatible cache states
+
+Validation status as of 2026-04-28:
+
+- `python -m pytest tests/test_gui_runtime_update_dependencies.py tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_primary_cache.py tests/test_gui_sim_signature.py tests/test_gui_runtime_update_trace.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_invalidation.py tests/test_gui_runtime_optimization_scenarios.py -ra`
+  passed, `92 passed`
+- broad GUI runtime slice
+  `python -m pytest tests/test_gui_runtime_*.py tests/test_gui_sim_signature.py -ra`
+  passed via explicit PowerShell file expansion, `448 passed`
+- `python -m compileall ra_sim/gui tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_update_dependencies.py -q`
+  passed
+
 ## Geometry Qr/Qz and HKL Picker State
 
 Manual Qr/Qz picking uses a structural group cache derived from the active

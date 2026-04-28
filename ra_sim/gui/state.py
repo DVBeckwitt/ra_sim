@@ -1038,6 +1038,7 @@ class SimulationRuntimeState:
     last_bg_signature: object = None
     last_sim_signature: object = None
     last_simulation_signature: object = None
+    last_dependency_signatures: object = None
     source_row_snapshots: dict[int, dict[str, object]] = field(default_factory=dict)
     stored_hit_table_signature: object = None
     stored_q_group_content_signature: object = None
@@ -1061,11 +1062,18 @@ class SimulationRuntimeState:
     primary_active_contribution_keys: list[object] = field(default_factory=list)
     primary_hit_table_cache: dict[object, np.ndarray] = field(default_factory=dict)
     primary_best_sample_index_cache: dict[object, int] = field(default_factory=dict)
+    primary_relative_hit_table_cache: dict[object, np.ndarray] = field(default_factory=dict)
+    primary_relative_hit_table_cache_center: tuple[float, float] | None = None
+    primary_relative_hit_table_cache_signature: object = None
     primary_source_mode: str = "miller"
     primary_filter_signature: object = None
     primary_requested_contribution_keys: list[object] = field(default_factory=list)
     primary_requested_source_mode: str = "miller"
     primary_requested_filter_signature: object = None
+    secondary_relative_hit_table_cache: list[np.ndarray] = field(default_factory=list)
+    secondary_relative_best_sample_index_cache: dict[object, int] = field(default_factory=dict)
+    secondary_relative_hit_table_cache_center: tuple[float, float] | None = None
+    secondary_relative_hit_table_cache_signature: object = None
     stored_intersection_cache: list[Any] | None = None
     last_unscaled_image_signature: object = None
     normalization_scale_cache: dict[str, object] = field(

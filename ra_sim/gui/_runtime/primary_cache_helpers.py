@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import numpy as np
 
+from ra_sim.gui import runtime_detector_remap_cache as gui_runtime_detector_remap_cache
 from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.simulation.diffraction import intersection_cache_to_hit_tables
@@ -87,6 +88,9 @@ def clear_primary_contribution_cache(simulation_runtime_state: object) -> None:
     simulation_runtime_state.primary_active_contribution_keys = []
     simulation_runtime_state.primary_hit_table_cache = {}
     simulation_runtime_state.primary_best_sample_index_cache = {}
+    simulation_runtime_state.primary_relative_hit_table_cache = {}
+    simulation_runtime_state.primary_relative_hit_table_cache_center = None
+    simulation_runtime_state.primary_relative_hit_table_cache_signature = None
     simulation_runtime_state.primary_filter_signature = None
 
 
@@ -127,6 +131,9 @@ def store_primary_cache_payload(
     trace_live_cache_event: Callable[..., None],
     live_cache_count: Callable[[object], int],
     live_cache_signature_summary: Callable[[object], str | None],
+    detector_center: Sequence[object] | None = None,
+    detector_remap_cache_signature: object = None,
+    store_detector_relative_hit_tables: bool = False,
 ) -> None:
     previous_signature = simulation_runtime_state.primary_contribution_cache_signature
     previous_mode = str(simulation_runtime_state.primary_source_mode or "")
@@ -155,15 +162,37 @@ def store_primary_cache_payload(
     if reset_required:
         simulation_runtime_state.primary_hit_table_cache = {}
         simulation_runtime_state.primary_best_sample_index_cache = {}
+        simulation_runtime_state.primary_relative_hit_table_cache = {}
+        simulation_runtime_state.primary_relative_hit_table_cache_center = None
+        simulation_runtime_state.primary_relative_hit_table_cache_signature = None
 
     simulation_runtime_state.primary_contribution_cache_signature = cache_signature
     simulation_runtime_state.primary_source_mode = normalized_mode
     simulation_runtime_state.primary_active_contribution_keys = list(active_keys or ())
 
     copied_tables: list[np.ndarray] = []
+    copied_relative_tables: list[np.ndarray] = []
     overwritten_count = 0
     if retain_cache:
         copied_tables = copy_hit_tables(raw_hit_tables)
+        if store_detector_relative_hit_tables and detector_center is not None:
+            copied_relative_tables = (
+                gui_runtime_detector_remap_cache.make_relative_hit_tables_for_center(
+                    copied_tables,
+                    detector_center,
+                )
+            )
+            if not hasattr(simulation_runtime_state, "primary_relative_hit_table_cache"):
+                simulation_runtime_state.primary_relative_hit_table_cache = {}
+            center_values = list(detector_center)[:2]
+            simulation_runtime_state.primary_relative_hit_table_cache_center = tuple(
+                float(value) for value in center_values
+            )
+            simulation_runtime_state.primary_relative_hit_table_cache_signature = (
+                cache_signature
+                if detector_remap_cache_signature is None
+                else detector_remap_cache_signature
+            )
         for idx, (key, table) in enumerate(zip(contribution_keys or (), copied_tables)):
             if key in simulation_runtime_state.primary_hit_table_cache:
                 overwritten_count += 1
@@ -178,9 +207,17 @@ def store_primary_cache_payload(
                     )
                 except Exception:
                     pass
+            if idx < len(copied_relative_tables):
+                simulation_runtime_state.primary_relative_hit_table_cache[key] = np.asarray(
+                    copied_relative_tables[idx],
+                    dtype=np.float64,
+                ).copy()
     else:
         simulation_runtime_state.primary_hit_table_cache = {}
         simulation_runtime_state.primary_best_sample_index_cache = {}
+        simulation_runtime_state.primary_relative_hit_table_cache = {}
+        simulation_runtime_state.primary_relative_hit_table_cache_center = None
+        simulation_runtime_state.primary_relative_hit_table_cache_signature = None
     trace_live_cache_event(
         "primary_contribution",
         "store",

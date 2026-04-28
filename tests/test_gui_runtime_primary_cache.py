@@ -171,6 +171,62 @@ def test_resolve_incremental_sf_prune_action_only_requests_missing_added_keys() 
     assert action.missing_keys == (1,)
 
 
+def test_prune_reuse_does_not_request_full_simulation_when_active_keys_cached() -> None:
+    action = runtime_primary_cache.resolve_incremental_sf_prune_action(
+        cache_signature=("physics", 1),
+        cached_signature=("physics", 1),
+        source_mode="miller",
+        cached_source_mode="miller",
+        active_keys=[0, 2],
+        previous_active_keys=[0, 1, 2],
+        primary_hit_table_cache={
+            0: np.empty((1, 7), dtype=np.float64),
+            1: np.empty((1, 7), dtype=np.float64),
+            2: np.empty((1, 7), dtype=np.float64),
+        },
+    )
+
+    assert action.mode == "reuse"
+    assert action.missing_keys == ()
+    assert action.reason == "all_keys_cached"
+
+
+def test_prune_fill_requests_only_missing_contribution_keys() -> None:
+    action = runtime_primary_cache.resolve_incremental_sf_prune_action(
+        cache_signature=("physics", 1),
+        cached_signature=("physics", 1),
+        source_mode="miller",
+        cached_source_mode="miller",
+        active_keys=[0, 1, 2, 3],
+        previous_active_keys=[0],
+        primary_hit_table_cache={
+            0: np.empty((1, 7), dtype=np.float64),
+            2: np.empty((1, 7), dtype=np.float64),
+        },
+    )
+
+    assert action.mode == "fill"
+    assert action.added_keys == (1, 2, 3)
+    assert action.missing_keys == (1, 3)
+    assert action.reason == "fill_missing_keys"
+
+
+def test_prune_cache_incompatible_physics_returns_full() -> None:
+    action = runtime_primary_cache.resolve_incremental_sf_prune_action(
+        cache_signature=("physics", 2),
+        cached_signature=("physics", 1),
+        source_mode="miller",
+        cached_source_mode="miller",
+        active_keys=[0, 1],
+        previous_active_keys=[0],
+        primary_hit_table_cache={0: np.empty((1, 7), dtype=np.float64)},
+    )
+
+    assert action.mode == "full"
+    assert action.reason == "cache_signature_changed"
+    assert action.missing_keys == ()
+
+
 def test_resolve_incremental_sf_prune_action_reuses_cache_when_bias_increases() -> None:
     action = runtime_primary_cache.resolve_incremental_sf_prune_action(
         cache_signature=("base", 1),
@@ -347,6 +403,33 @@ def test_rematerialize_primary_artifacts_matches_full_simulation_artifacts() -> 
         assert np.allclose(rebuilt, expected)
 
 
+def test_prune_reuse_image_equals_sum_of_selected_cached_contributions() -> None:
+    hit_table_cache = {
+        0: np.asarray([[4.0, 1.0, 1.0]], dtype=np.float64),
+        1: np.asarray([[99.0, 2.0, 2.0]], dtype=np.float64),
+        2: np.asarray([[6.0, 3.0, 1.0]], dtype=np.float64),
+    }
+
+    payload = runtime_primary_cache.rematerialize_primary_artifacts(
+        primary_hit_table_cache=hit_table_cache,
+        active_keys=[0, 2],
+        image_size=5,
+        a_primary=4.0,
+        c_primary=7.0,
+    )
+
+    expected = runtime_primary_cache.rasterize_hit_tables_to_image(
+        [hit_table_cache[0], hit_table_cache[2]],
+        image_size=5,
+    )
+    excluded = runtime_primary_cache.rasterize_hit_tables_to_image(
+        [hit_table_cache[1]],
+        image_size=5,
+    )
+    assert np.allclose(payload["image"], expected)
+    assert not np.any((payload["image"] > 0.0) & (excluded > 0.0))
+
+
 def test_rematerialize_primary_artifacts_treats_bad_best_sample_indices_as_missing(
     monkeypatch,
 ) -> None:
@@ -421,3 +504,61 @@ def test_store_primary_cache_payload_handles_discard_path() -> None:
     assert state.primary_active_contribution_keys == [1]
     assert events[-1]["outcome"] == "discarded"
     assert events[-1]["stored_table_count"] == 0
+
+
+def test_store_primary_cache_payload_can_store_detector_relative_hit_tables() -> None:
+    state = SimpleNamespace(
+        primary_contribution_cache_signature=None,
+        primary_source_mode=None,
+        primary_active_contribution_keys=[],
+        primary_hit_table_cache={},
+        primary_best_sample_index_cache={},
+        primary_filter_signature=None,
+    )
+    raw_hit_table = np.asarray(
+        [[3.0, 12.0, 23.0, 99.0], [5.0, 8.0, 19.0, 42.0]],
+        dtype=np.float64,
+    )
+
+    primary_cache_helpers.store_primary_cache_payload(
+        state,
+        cache_signature=("sig", 2),
+        source_mode="miller",
+        active_keys=[10],
+        contribution_keys=[10],
+        raw_hit_tables=[raw_hit_table],
+        best_sample_indices=[4],
+        retain_runtime_optional_cache=lambda *_args, **_kwargs: True,
+        trace_live_cache_event=lambda *_args, **_kwargs: None,
+        live_cache_count=lambda value: len(value) if value is not None else 0,
+        live_cache_signature_summary=lambda value: str(value),
+        detector_center=(10.0, 20.0),
+        store_detector_relative_hit_tables=True,
+    )
+
+    assert state.primary_relative_hit_table_cache_center == (10.0, 20.0)
+    assert state.primary_relative_hit_table_cache_signature == ("sig", 2)
+    assert np.allclose(
+        state.primary_relative_hit_table_cache[10],
+        np.asarray([[3.0, 2.0, 3.0, 99.0], [5.0, -2.0, -1.0, 42.0]]),
+    )
+    assert np.allclose(raw_hit_table[:, 1:3], [[12.0, 23.0], [8.0, 19.0]])
+
+
+def test_clear_primary_contribution_cache_clears_detector_relative_hit_tables() -> None:
+    state = SimpleNamespace(
+        primary_contribution_cache_signature=("sig", 1),
+        primary_active_contribution_keys=[1],
+        primary_hit_table_cache={1: np.ones((1, 4), dtype=np.float64)},
+        primary_best_sample_index_cache={1: 0},
+        primary_relative_hit_table_cache={1: np.ones((1, 4), dtype=np.float64)},
+        primary_relative_hit_table_cache_center=(10.0, 20.0),
+        primary_relative_hit_table_cache_signature=("sig", 1),
+        primary_filter_signature=("filter", 1),
+    )
+
+    primary_cache_helpers.clear_primary_contribution_cache(state)
+
+    assert state.primary_relative_hit_table_cache == {}
+    assert state.primary_relative_hit_table_cache_center is None
+    assert state.primary_relative_hit_table_cache_signature is None
