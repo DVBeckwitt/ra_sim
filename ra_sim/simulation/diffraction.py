@@ -554,6 +554,10 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "n_stored_projected_candidates": 0,
     "candidate_buffer_capacity_max": 0,
     "candidate_buffer_fallback_count": 0,
+    "n_qsets_precomputed": 0,
+    "n_qset_lookup_entries": 0,
+    "n_qset_reuse_hits": 0,
+    "time_qset_index": 0.0,
     "pass2_mass_mismatch_count": 0,
     "pass2_mass_mismatch_max_abs": 0.0,
     "tail_fill_events": 0,
@@ -5708,6 +5712,138 @@ def _weighted_event_threaded_chunks_available(worker_count, save_flag):
     )
 
 
+def _precompute_weighted_event_qsets(
+    *,
+    num_peaks,
+    n_samp,
+    sample_terms,
+    sample_weight_array,
+    peak_valid,
+    peak_h,
+    peak_k,
+    peak_l,
+    peak_gr0,
+    peak_gz0,
+    sigma_rad,
+    gamma_rad_m,
+    eta_pv,
+    solve_q_steps_i,
+    solve_q_rel_tol_i,
+    solve_q_mode_i,
+    default_solve_q_dtheta,
+    default_solve_q_cos,
+    default_solve_q_sin,
+):
+    index_start = time.perf_counter()
+    qset_key_to_id: dict[tuple[int, int], int] = {}
+    q_arrays: list[np.ndarray] = []
+    qset_status_list: list[int] = []
+    qset_id_by_sample_peak = np.full(
+        (int(n_samp), int(num_peaks)),
+        -1,
+        dtype=np.int64,
+    )
+    n_solve_q_calls = 0
+    time_solve_q = 0.0
+    has_sample_weight_array = sample_weight_array is not None
+
+    for sample_idx in range(int(n_samp)):
+        if sample_terms[sample_idx, _SAMPLE_COL_VALID] <= 0.5:
+            continue
+        if has_sample_weight_array:
+            sample_weight = float(sample_weight_array[sample_idx])
+            if not np.isfinite(sample_weight) or sample_weight <= 0.0:
+                continue
+
+        rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
+        if rep_idx < 0:
+            rep_idx = sample_idx
+        if rep_idx < 0 or rep_idx >= int(n_samp):
+            rep_idx = sample_idx
+
+        for peak_idx in range(int(num_peaks)):
+            if int(peak_valid[peak_idx]) == 0:
+                continue
+
+            key = (int(peak_idx), int(rep_idx))
+            qset_id = qset_key_to_id.get(key)
+            if qset_id is None:
+                k_in_crystal = np.array(
+                    [
+                        sample_terms[rep_idx, _SAMPLE_COL_KX_SCAT],
+                        sample_terms[rep_idx, _SAMPLE_COL_KY_SCAT],
+                        sample_terms[rep_idx, _SAMPLE_COL_RE_KZ],
+                    ],
+                    dtype=np.float64,
+                )
+                G_vec = np.array(
+                    [0.0, peak_gr0[peak_idx], peak_gz0[peak_idx]],
+                    dtype=np.float64,
+                )
+                solve_start = time.perf_counter()
+                all_q_raw, stat = solve_q(
+                    k_in_crystal,
+                    float(sample_terms[rep_idx, _SAMPLE_COL_K_SCAT]),
+                    G_vec,
+                    sigma_rad,
+                    gamma_rad_m,
+                    eta_pv,
+                    float(peak_h[peak_idx]),
+                    float(peak_k[peak_idx]),
+                    float(peak_l[peak_idx]),
+                    solve_q_steps_i,
+                    DEFAULT_SOLVE_Q_BASE_INTERVALS,
+                    solve_q_rel_tol_i,
+                    solve_q_mode_i,
+                    default_solve_q_dtheta,
+                    default_solve_q_cos,
+                    default_solve_q_sin,
+                )
+                time_solve_q += time.perf_counter() - solve_start
+                all_q = np.asarray(all_q_raw, dtype=np.float64).reshape(-1, 4)
+                qset_id = len(q_arrays)
+                qset_key_to_id[key] = int(qset_id)
+                q_arrays.append(all_q)
+                qset_status_list.append(int(stat))
+                n_solve_q_calls += 1
+
+            qset_id_by_sample_peak[sample_idx, peak_idx] = int(qset_id)
+
+    n_qsets = len(q_arrays)
+    qset_offsets = np.empty(n_qsets, dtype=np.int64)
+    qset_lengths = np.empty(n_qsets, dtype=np.int64)
+    total_q = 0
+    for qset_id, all_q in enumerate(q_arrays):
+        qset_offsets[qset_id] = int(total_q)
+        q_rows = int(all_q.shape[0])
+        qset_lengths[qset_id] = q_rows
+        total_q += q_rows
+
+    q_values = np.empty((int(total_q), 4), dtype=np.float64)
+    for qset_id, all_q in enumerate(q_arrays):
+        q_rows = int(all_q.shape[0])
+        if q_rows <= 0:
+            continue
+        offset = int(qset_offsets[qset_id])
+        q_values[offset : offset + q_rows, :] = all_q
+
+    qset_status = np.asarray(qset_status_list, dtype=np.int64)
+    time_qset_index = time.perf_counter() - index_start - float(time_solve_q)
+    if time_qset_index < 0.0:
+        time_qset_index = 0.0
+
+    return (
+        q_values,
+        qset_offsets,
+        qset_lengths,
+        qset_status,
+        qset_id_by_sample_peak,
+        int(n_solve_q_calls),
+        float(time_solve_q),
+        float(time_qset_index),
+    )
+
+
 def _precompute_weighted_event_all_q_tables(
     *,
     num_peaks,
@@ -7346,6 +7482,10 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     candidate_col = np.empty(0, dtype=np.float64)
     candidate_phi = np.empty(0, dtype=np.float64)
     candidate_peak_idx = np.empty(0, dtype=np.int64)
+    n_qsets_precomputed = 0
+    n_qset_lookup_entries = 0
+    n_qset_reuse_hits = 0
+    time_qset_index = 0.0
     try:
         weighted_event_candidate_buffer_max_bytes = int(
             weighted_event_candidate_buffer_max_bytes
@@ -7519,6 +7659,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
 
         chunks = _weighted_event_chunk_bounds(n_samp, worker_count)
         active_worker_count = max(int(worker_count), 1)
+        n_qsets_precomputed = int(n_solve_q_calls)
+        n_qset_lookup_entries = 0
+        n_qset_reuse_hits = 0
         max_sample_candidate_capacity = 0
         for candidate_sample_idx in range(n_samp):
             if sample_terms[candidate_sample_idx, _SAMPLE_COL_VALID] <= 0.5:
@@ -7531,6 +7674,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             for candidate_peak_idx in range(num_peaks):
                 if int(peak_valid[candidate_peak_idx]) == 0:
                     continue
+                n_qset_lookup_entries += 1
                 rep_idx = int(sample_terms[candidate_sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
                 if rep_idx < 0:
                     rep_idx = candidate_sample_idx
@@ -7546,6 +7690,10 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         )
         chunk_candidate_capacity = (
             int(max_sample_candidate_capacity) if chunk_reuse_projected_candidates else 0
+        )
+        n_qset_reuse_hits = max(
+            0,
+            int(n_qset_lookup_entries) - int(n_qsets_precomputed),
         )
         if collect_tables:
             max_worker_flat_capacity = max(
@@ -7892,6 +8040,10 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             n_stored_projected_candidates=int(n_stored_projected_candidates),
             candidate_buffer_capacity_max=int(candidate_buffer_capacity_max),
             candidate_buffer_fallback_count=int(candidate_buffer_fallback_count),
+            n_qsets_precomputed=int(n_qsets_precomputed),
+            n_qset_lookup_entries=int(n_qset_lookup_entries),
+            n_qset_reuse_hits=int(n_qset_reuse_hits),
+            time_qset_index=float(time_qset_index),
             pass2_mass_mismatch_count=int(pass2_mass_mismatch_count),
             pass2_mass_mismatch_max_abs=float(pass2_mass_mismatch_max_abs),
             tail_fill_events=int(tail_fill_events),
@@ -7915,9 +8067,41 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             representative_hit_tables,
         )
 
-    # Current-call cache is safe with (peak_idx, rep_idx) because all solve_q
-    # settings and geometry inputs are fixed for this function invocation.
-    all_q_cache = {}
+    (
+        q_values,
+        qset_offsets,
+        qset_lengths,
+        qset_status,
+        qset_id_by_sample_peak,
+        n_solve_q_calls,
+        qset_solve_time,
+        qset_index_time,
+    ) = _precompute_weighted_event_qsets(
+        num_peaks=num_peaks,
+        n_samp=n_samp,
+        sample_terms=sample_terms,
+        sample_weight_array=sample_weight_array,
+        peak_valid=peak_valid,
+        peak_h=peak_h,
+        peak_k=peak_k,
+        peak_l=peak_l,
+        peak_gr0=peak_gr0,
+        peak_gz0=peak_gz0,
+        sigma_rad=sigma_rad,
+        gamma_rad_m=gamma_rad_m,
+        eta_pv=eta_pv,
+        solve_q_steps_i=solve_q_steps_i,
+        solve_q_rel_tol_i=solve_q_rel_tol_i,
+        solve_q_mode_i=solve_q_mode_i,
+        default_solve_q_dtheta=default_solve_q_dtheta,
+        default_solve_q_cos=default_solve_q_cos,
+        default_solve_q_sin=default_solve_q_sin,
+    )
+    time_solve_q += float(qset_solve_time)
+    time_qset_index += float(qset_index_time)
+    n_qsets_precomputed = int(qset_offsets.shape[0])
+    n_qset_lookup_entries = int(np.count_nonzero(qset_id_by_sample_peak >= 0))
+    n_qset_reuse_hits = int(n_qset_lookup_entries - n_qsets_precomputed)
 
     for sample_idx in range(n_samp):
         if sample_terms[sample_idx, _SAMPLE_COL_VALID] <= 0.5:
@@ -7942,54 +8126,15 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             if int(peak_valid[peak_idx]) == 0:
                 continue
 
-            H = float(peak_h[peak_idx])
-            K = float(peak_k[peak_idx])
-            L = float(peak_l[peak_idx])
-            reflection_intensity = float(peak_reflection_intensity[peak_idx])
-            rep_idx = int(sample_terms[sample_idx, _SAMPLE_COL_SOLVE_Q_REP])
-            if rep_idx < 0:
-                rep_idx = sample_idx
-            cache_key = (int(peak_idx), int(rep_idx))
-            cached = all_q_cache.get(cache_key)
-            if cached is None:
-                k_in_crystal = np.array(
-                    [
-                        sample_terms[rep_idx, _SAMPLE_COL_KX_SCAT],
-                        sample_terms[rep_idx, _SAMPLE_COL_KY_SCAT],
-                        sample_terms[rep_idx, _SAMPLE_COL_RE_KZ],
-                    ],
-                    dtype=np.float64,
-                )
-                G_vec = np.array([0.0, peak_gr0[peak_idx], peak_gz0[peak_idx]], dtype=np.float64)
-                solve_start = time.perf_counter()
-                all_q_raw, stat = solve_q(
-                    k_in_crystal,
-                    float(sample_terms[rep_idx, _SAMPLE_COL_K_SCAT]),
-                    G_vec,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    H,
-                    K,
-                    L,
-                    solve_q_steps_i,
-                    DEFAULT_SOLVE_Q_BASE_INTERVALS,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    default_solve_q_dtheta,
-                    default_solve_q_cos,
-                    default_solve_q_sin,
-                )
-                time_solve_q += time.perf_counter() - solve_start
-                all_q = np.asarray(all_q_raw, dtype=np.float64).reshape(-1, 4)
-                cached = (all_q, int(stat))
-                all_q_cache[cache_key] = cached
-                n_solve_q_calls += 1
-            else:
-                all_q, stat = cached
-            all_status[peak_idx, sample_idx] = int(stat)
+            qset_id = int(qset_id_by_sample_peak[sample_idx, peak_idx])
+            if qset_id < 0:
+                continue
+            all_status[peak_idx, sample_idx] = int(qset_status[qset_id])
+            offset = int(qset_offsets[qset_id])
+            length = int(qset_lengths[qset_id])
+            all_q = q_values[offset : offset + length, :]
             sample_qsets.append((int(peak_idx), all_q))
-            sample_candidate_capacity += int(all_q.shape[0])
+            sample_candidate_capacity += int(length)
 
         sample_use_candidate_reuse = (
             reuse_weighted_event_projected_candidates
@@ -8406,6 +8551,10 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         n_stored_projected_candidates=int(n_stored_projected_candidates),
         candidate_buffer_capacity_max=int(candidate_buffer_capacity_max),
         candidate_buffer_fallback_count=int(candidate_buffer_fallback_count),
+        n_qsets_precomputed=int(n_qsets_precomputed),
+        n_qset_lookup_entries=int(n_qset_lookup_entries),
+        n_qset_reuse_hits=int(n_qset_reuse_hits),
+        time_qset_index=float(time_qset_index),
         pass2_mass_mismatch_count=int(pass2_mass_mismatch_count),
         pass2_mass_mismatch_max_abs=float(pass2_mass_mismatch_max_abs),
         tail_fill_events=int(tail_fill_events),

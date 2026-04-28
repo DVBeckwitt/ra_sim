@@ -145,3 +145,4 @@ stale simulated refined caked reuse.
 | Runtime cache diagnostic hardening | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [runtime-cache-diagnostic-hardening.md](archive/runtime-cache-diagnostic-hardening.md) |
 | Simulated peak overlay recovery history | investigation | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-23 | [sim-peak-overlay-recovery-history.md](archive/sim-peak-overlay-recovery-history.md) |
 | Weighted-event projected-candidate reuse | optimization | - | none | p2 | 2026-04-28 | [weighted-event-candidate-reuse.md](archive/weighted-event-candidate-reuse.md) |
+| Weighted-event Q-set precompute | optimization | - | none | p2 | 2026-04-28 | [weighted-event-qset-precompute.md](archive/weighted-event-qset-precompute.md) |

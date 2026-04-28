@@ -87,7 +87,8 @@ payload or treated detector/display aliases as caked coordinates.
 Current status:
 
 - feature status: active normal runtime path
-- optimization status: fixed for duplicate weighted-candidate projection
+- optimization status: fixed for duplicate weighted-candidate projection and
+  exact-preserving Q-set precompute
 - bug status: slow Python raw-candidate enumeration fixed
 - error status: covered invariants green in weighted-event regression tests
 
@@ -119,6 +120,14 @@ What changed:
   `n_stored_projected_candidates`, `candidate_buffer_capacity_max`, and
   `candidate_buffer_fallback_count`; `n_project_candidate_calls` now counts
   projection calls only, not stored-candidate emission
+- the fast serial weighted-event path precomputes unique `(peak_idx, rep_idx)`
+  Q sets into flat NumPy tables before pass 1, then both pass 1 and pass 2 use
+  integer `qset_id` lookups instead of the previous Python dict cache
+- Q-set precompute is intentionally exact-preserving: it does not group by
+  `(Gr, Gz)`, does not change `solve_q(...)` inputs, and does not alter
+  projection, event selection, image deposition, or hit-table semantics
+- Q-set precompute stats are reported as `n_qsets_precomputed`,
+  `n_qset_lookup_entries`, `n_qset_reuse_hits`, and `time_qset_index`
 
 Still intentionally disabled for weighted events:
 

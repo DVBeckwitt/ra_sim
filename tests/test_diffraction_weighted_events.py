@@ -366,6 +366,7 @@ def _install_streaming_fast_outer_backend(
     *,
     pass1_masses: dict[int | tuple[int, int], float],
     pass2_masses: dict[int | tuple[int, int], float] | None = None,
+    solve_q_rep: np.ndarray | None = None,
 ):
     pass2_masses = pass1_masses if pass2_masses is None else pass2_masses
 
@@ -397,7 +398,13 @@ def _install_streaming_fast_outer_backend(
         n_samp = int(np.asarray(beam_x_array, dtype=np.float64).shape[0])
         sample_terms = np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64)
         sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
-        sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(n_samp)
+        if solve_q_rep is None:
+            sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(n_samp)
+        else:
+            sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.asarray(
+                solve_q_rep,
+                dtype=np.float64,
+            )[:n_samp]
         sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
         sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
         sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
@@ -1415,6 +1422,206 @@ def test_fast_runtime_stats_show_solve_q_reuse_and_pass_mass_consistency():
     assert stats["n_project_candidate_calls"] > 0
     assert stats["pass1_total_mass"] == pytest.approx(stats["pass2_total_mass"])
     assert stats["time_select"] <= stats["time_solve_q"] + stats["time_project"] + 1.0
+
+
+def test_fast_serial_precomputed_qsets_reuse_representative_solve(monkeypatch):
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={0: 1.0},
+        solve_q_rep=np.zeros(4, dtype=np.float64),
+    )
+
+    diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(n_samp=4),
+        save_flag=0,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        events_per_beam_phase=1,
+        numba_thread_count=1,
+    )
+
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["n_solve_q_calls"] == 1
+    assert stats["n_qsets_precomputed"] == 1
+    assert stats["n_qset_lookup_entries"] == 4
+    assert stats["n_qset_reuse_hits"] == 3
+    assert stats["pass1_total_mass"] == pytest.approx(stats["pass2_total_mass"])
+
+
+def test_precompute_weighted_event_qsets_skips_invalid_samples_and_weights(monkeypatch):
+    def fake_solve_q(*_args, **_kwargs):
+        return np.array([[1.0, 0.0, 0.0, 2.0]], dtype=np.float64), 0
+
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+
+    sample_terms = np.zeros((4, diffraction._SAMPLE_COLS), dtype=np.float64)
+    sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(4, dtype=np.float64)
+    sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
+    sample_terms[1:, diffraction._SAMPLE_COL_VALID] = 1.0
+    sample_weights = np.array([1.0, 0.0, np.nan, 1.0], dtype=np.float64)
+
+    (
+        q_values,
+        qset_offsets,
+        qset_lengths,
+        qset_status,
+        qset_id_by_sample_peak,
+        n_solve_q_calls,
+        _time_solve_q,
+        _time_qset_index,
+    ) = diffraction._precompute_weighted_event_qsets(
+        num_peaks=1,
+        n_samp=4,
+        sample_terms=sample_terms,
+        sample_weight_array=sample_weights,
+        peak_valid=np.array([1], dtype=np.uint8),
+        peak_h=np.array([1.0], dtype=np.float64),
+        peak_k=np.array([0.0], dtype=np.float64),
+        peak_l=np.array([1.0], dtype=np.float64),
+        peak_gr0=np.array([1.0], dtype=np.float64),
+        peak_gz0=np.array([1.0], dtype=np.float64),
+        sigma_rad=0.0,
+        gamma_rad_m=0.0,
+        eta_pv=0.0,
+        solve_q_steps_i=diffraction.MIN_SOLVE_Q_STEPS,
+        solve_q_rel_tol_i=diffraction.DEFAULT_SOLVE_Q_REL_TOL,
+        solve_q_mode_i=diffraction.SOLVE_Q_MODE_UNIFORM,
+        default_solve_q_dtheta=1.0,
+        default_solve_q_cos=np.ones(1, dtype=np.float64),
+        default_solve_q_sin=np.zeros(1, dtype=np.float64),
+    )
+
+    assert n_solve_q_calls == 1
+    assert q_values.shape == (1, 4)
+    assert qset_offsets.tolist() == [0]
+    assert qset_lengths.tolist() == [1]
+    assert qset_status.tolist() == [0]
+    assert qset_id_by_sample_peak[:3, 0].tolist() == [-1, -1, -1]
+    assert int(qset_id_by_sample_peak[3, 0]) == 0
+
+
+def test_fast_serial_precomputed_qsets_preserves_invalid_statuses(monkeypatch):
+    def fake_precompute(
+        wavelength_array,
+        _n2,
+        n2_sample_array,
+        beam_x_array,
+        _beam_y_array,
+        _theta_array,
+        _phi_array,
+        _zb,
+        _thickness,
+        _sample_width_m,
+        _sample_length_m,
+        _optics_mode,
+        _theta_initial_deg,
+        _cor_angle_deg,
+        _psi_z_deg,
+        _R_z_R_y,
+        _R_ZY_n,
+        _P0,
+    ):
+        n_samp = int(np.asarray(beam_x_array, dtype=np.float64).shape[0])
+        sample_terms = np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64)
+        sample_terms[1:, diffraction._SAMPLE_COL_VALID] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(n_samp)
+        sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_L_IN] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_N2_REAL] = 1.0
+        return (
+            np.eye(3, dtype=np.float64),
+            sample_terms,
+            np.asarray(n2_sample_array, dtype=np.complex128).copy(),
+            np.ones(n_samp, dtype=np.complex128),
+            0,
+        )
+
+    def fake_solve_q(*_args, **_kwargs):
+        return np.empty((0, 4), dtype=np.float64), 0
+
+    monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute)
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+
+    result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(n_samp=4),
+        save_flag=0,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        sample_weights=np.array([1.0, 0.0, np.nan, 1.0], dtype=np.float64),
+        events_per_beam_phase=1,
+        numba_thread_count=1,
+    )
+
+    np.testing.assert_array_equal(result[4][0, :], np.array([-10, -12, -12, 0]))
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["n_qsets_precomputed"] == 1
+    assert stats["n_qset_lookup_entries"] == 1
+
+
+def test_fast_serial_precomputed_qsets_propagates_empty_q_status(monkeypatch):
+    def fake_precompute(
+        wavelength_array,
+        _n2,
+        n2_sample_array,
+        beam_x_array,
+        _beam_y_array,
+        _theta_array,
+        _phi_array,
+        _zb,
+        _thickness,
+        _sample_width_m,
+        _sample_length_m,
+        _optics_mode,
+        _theta_initial_deg,
+        _cor_angle_deg,
+        _psi_z_deg,
+        _R_z_R_y,
+        _R_ZY_n,
+        _P0,
+    ):
+        n_samp = int(np.asarray(beam_x_array, dtype=np.float64).shape[0])
+        sample_terms = np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64)
+        sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(n_samp)
+        sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_L_IN] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_N2_REAL] = 1.0
+        return (
+            np.eye(3, dtype=np.float64),
+            sample_terms,
+            np.asarray(n2_sample_array, dtype=np.complex128).copy(),
+            np.ones(n_samp, dtype=np.complex128),
+            0,
+        )
+
+    def fake_solve_q(*_args, **_kwargs):
+        return np.empty((0, 4), dtype=np.float64), -7
+
+    monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute)
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+
+    result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=3,
+        numba_thread_count=1,
+    )
+
+    assert int(result[4][0, 0]) == -7
+    assert _flatten_hit_tables(result[1]).shape[0] == 0
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["n_solve_q_calls"] == 1
+    assert stats["n_qsets_precomputed"] == 1
+    assert stats["n_qset_lookup_entries"] == 1
+    assert stats["pass1_total_mass"] == pytest.approx(0.0)
+    assert stats["pass2_total_mass"] == pytest.approx(0.0)
+    assert stats["pass2_mass_mismatch_count"] == 0
 
 
 def test_weighted_event_chunk_bounds_cover_samples_without_overlap():
