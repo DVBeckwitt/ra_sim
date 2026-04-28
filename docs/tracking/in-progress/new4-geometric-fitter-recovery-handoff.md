@@ -429,7 +429,7 @@ Expected/current summary:
 - `test_new4_refined_objective_theta_phi_decomposition_after_pipeline_fix`:
   Qr-only theta, phi, and total norms are unchanged over `nfev=7`; accepted
   parameter changes are `<none>`; classification is `refinement_bin_limited`.
-- `test_new4_full_fit_with_dynamic_refined_center_objective`: full fit includes
+- `test_new4_solver_with_dynamic_refined_center_objective`: full fit includes
   all 28 Qr components, preserves branch identity, accepts no parameter step,
   and reports no Qr improvement because `refinement bin limited`.
 - Command results: `py_compile` passed, targeted New4 refined-center tests

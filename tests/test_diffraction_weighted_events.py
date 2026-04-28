@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -127,6 +132,107 @@ def _install_simple_weighted_backend(
         "_project_weighted_candidate",
         default_projector if projector is None else projector,
     )
+
+
+def _install_parallel_weighted_backend(
+    monkeypatch,
+    *,
+    solution_map: dict[tuple[int, int, int, int], np.ndarray],
+):
+    def fake_precompute(
+        wavelength_array,
+        _n2,
+        n2_sample_array,
+        beam_x_array,
+        _beam_y_array,
+        _theta_array,
+        _phi_array,
+        _zb,
+        _thickness,
+        _sample_width_m,
+        _sample_length_m,
+        _optics_mode,
+        _theta_initial_deg,
+        _cor_angle_deg,
+        _psi_z_deg,
+        _R_z_R_y,
+        _R_ZY_n,
+        _P0,
+    ):
+        n_samp = int(np.asarray(beam_x_array, dtype=np.float64).shape[0])
+        sample_terms = np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64)
+        sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_KX_SCAT] = 0.0
+        sample_terms[:, diffraction._SAMPLE_COL_K_SCAT] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_K0] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_TI2] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_L_IN] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_N2_REAL] = 1.0
+        sample_terms[:, diffraction._SAMPLE_COL_SOLVE_Q_REP] = np.arange(n_samp)
+        return (
+            np.eye(3, dtype=np.float64),
+            sample_terms,
+            np.asarray(n2_sample_array, dtype=np.complex128).copy(),
+            np.ones(n_samp, dtype=np.complex128),
+            0,
+        )
+
+    def fake_solve_q(
+        k_in_crystal,
+        _k_scat,
+        _G_vec,
+        _sigma,
+        _gamma_pv,
+        _eta_pv,
+        H,
+        K,
+        L,
+        *_args,
+        **_kwargs,
+    ):
+        sample_idx = int(round(float(np.asarray(k_in_crystal, dtype=np.float64)[0])))
+        key = (int(round(H)), int(round(K)), int(round(L)), sample_idx)
+        return (
+            np.asarray(solution_map.get(key, np.empty((0, 4), dtype=np.float64)), dtype=np.float64),
+            0,
+        )
+
+    def fake_fast_optics_lut_row(lut_row, *_args):
+        lut_row[:, :] = 0.0
+        lut_row[:, diffraction._FAST_OPTICS_COL_TF2] = 1.0
+        lut_row[:, diffraction._FAST_OPTICS_COL_L_OUT] = 1.0
+        lut_row[:, diffraction._FAST_OPTICS_COL_OUT_ANGLE] = 0.0
+
+    monkeypatch.setattr(diffraction, "_precompute_sample_terms", fake_precompute)
+    monkeypatch.setattr(diffraction, "_DEFAULT_PRECOMPUTE_SAMPLE_TERMS", fake_precompute)
+    monkeypatch.setattr(diffraction, "solve_q", fake_solve_q)
+    monkeypatch.setattr(diffraction, "_DEFAULT_SOLVE_Q", fake_solve_q)
+    monkeypatch.setattr(diffraction, "_build_fast_optics_lut_row", fake_fast_optics_lut_row)
+
+
+def _parallel_solution_map(n_samp=3):
+    solutions = {}
+    for sample_idx in range(n_samp):
+        solutions[(1, 0, 1, sample_idx)] = np.array(
+            [
+                [-1.0e-5, 1.0, 0.0, 1.0 + sample_idx],
+                [1.0e-5, 1.0, 0.0, 2.0 + sample_idx],
+            ],
+            dtype=np.float64,
+        )
+    return solutions
+
+
+def _parallel_process_kwargs(*, n_samp=3, collect_hit_tables=True, accumulate_image=True):
+    kwargs = _base_process_kwargs(n_samp=n_samp, image_size=64)
+    kwargs.update(
+        save_flag=0,
+        collect_hit_tables=collect_hit_tables,
+        accumulate_image=accumulate_image,
+        events_per_beam_phase=4,
+        exit_projection_mode=diffraction.EXIT_PROJECTION_REFRACTED,
+    )
+    return kwargs
 
 
 def _flatten_hit_tables(hit_tables):
@@ -327,6 +433,51 @@ def test_repeated_selected_ordinal_emits_repeated_events():
     assert np.all(selected == 0)
 
 
+def test_off_detector_candidates_do_not_enter_pdf(monkeypatch):
+    seen_total_mass = []
+
+    def projector(**kwargs):
+        qx = float(kwargs["Qx"])
+        mass = float(kwargs["I_Q"])
+        if qx > 100.0:
+            return True, 500.0, 500.0, 0.0, mass
+        return True, 32.0, 32.0, 0.0, mass
+
+    def assert_pdf_total(total_mass, event_count, sample_idx):
+        seen_total_mass.append(float(total_mass))
+        assert float(total_mass) == pytest.approx(1.0)
+        assert int(event_count) == 5
+        assert int(sample_idx) == 0
+        return np.linspace(0.0, np.nextafter(float(total_mass), 0.0), int(event_count))
+
+    _install_simple_weighted_backend(
+        monkeypatch,
+        solution_map={
+            (1, 0, 1, 0): np.array(
+                [[500.0, 0.0, 0.0, 100.0], [32.0, 0.0, 0.0, 1.0]],
+                dtype=np.float64,
+            )
+        },
+        projector=projector,
+    )
+    monkeypatch.setattr(diffraction, "_weighted_event_targets", assert_pdf_total)
+
+    result = diffraction.process_peaks_parallel(
+        **_base_process_kwargs(),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=True,
+        events_per_beam_phase=5,
+    )
+    rows = _flatten_hit_tables(result[1])
+
+    assert seen_total_mass == [pytest.approx(1.0)]
+    assert rows.shape[0] == 5
+    assert set(rows[:, 1].astype(int).tolist()) == {32}
+    assert float(np.sum(rows[:, 0])) == pytest.approx(1.0)
+    assert float(np.sum(result[0])) == pytest.approx(1.0)
+
+
 def test_sampled_rows_use_constant_phase_deposit_not_candidate_mass(monkeypatch):
     _install_simple_weighted_backend(
         monkeypatch,
@@ -366,6 +517,33 @@ def test_weighted_event_sampler_uses_raw_candidates_before_collapse(monkeypatch)
     assert 10 in selected_columns
     assert 20 in selected_columns
     assert selected_columns.count(20) > selected_columns.count(10)
+
+
+def test_deposit_is_v_over_e(monkeypatch):
+    def projector(**kwargs):
+        return True, 32.0, float(kwargs["Qx"]), 0.0, float(kwargs["I_Q"])
+
+    _install_simple_weighted_backend(
+        monkeypatch,
+        solution_map={
+            (1, 0, 1, 0): np.array([[30.0, 0.0, 0.0, 1.0], [34.0, 0.0, 0.0, 3.0]], dtype=np.float64)
+        },
+        projector=projector,
+    )
+
+    result = diffraction.process_peaks_parallel(
+        **_base_process_kwargs(),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=True,
+        events_per_beam_phase=8,
+    )
+    rows = _flatten_hit_tables(result[1])
+
+    assert rows.shape[0] == 8
+    assert np.allclose(rows[:, 0], 4.0 / 8.0)
+    assert float(np.sum(rows[:, 0])) == pytest.approx(4.0)
+    assert float(np.sum(result[0])) == pytest.approx(4.0)
 
 
 def test_kernel_invalid_masses_are_filtered(monkeypatch):
@@ -491,6 +669,31 @@ def test_events_per_beam_phase_counts_draws_for_whole_phase_not_per_peak(monkeyp
         dtype=np.int64,
     )
     np.testing.assert_array_equal(actual_counts, expected_counts)
+
+
+def test_events_per_beam_phase_not_per_peak(monkeypatch):
+    _install_simple_weighted_backend(
+        monkeypatch,
+        solution_map={
+            (1, 0, 1, 0): np.array([[10.0, -1.0, 0.0, 1.0]], dtype=np.float64),
+            (2, 0, 1, 0): np.array([[20.0, 1.0, 0.0, 1.0]], dtype=np.float64),
+        },
+    )
+
+    result = diffraction.process_peaks_parallel(
+        **_base_process_kwargs(
+            miller=np.array([[1.0, 0.0, 1.0], [2.0, 0.0, 1.0]], dtype=np.float64),
+            intensities=np.array([1.0, 1.0], dtype=np.float64),
+        ),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=50,
+    )
+
+    rows = _flatten_hit_tables(result[1])
+    assert rows.shape[0] == 50
+    assert rows.shape[0] != 100
 
 
 def test_weighted_event_pass2_does_not_tail_fill_inside_qset(monkeypatch):
@@ -820,6 +1023,624 @@ def test_fast_runtime_stats_show_solve_q_reuse_and_pass_mass_consistency():
     assert stats["time_select"] <= stats["time_solve_q"] + stats["time_project"] + 1.0
 
 
+def test_parallel_weighted_events_match_serial_image(monkeypatch):
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map())
+    serial = diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(),
+        numba_thread_count=1,
+    )
+    parallel = diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(),
+        numba_thread_count=2,
+    )
+
+    np.testing.assert_allclose(parallel[0], serial[0], rtol=1e-10, atol=1e-12)
+    np.testing.assert_array_equal(parallel[4], serial[4])
+    assert diffraction.get_last_process_peaks_weighted_event_stats()["parallel_backend"] == "numba_prange"
+
+
+def test_parallel_weighted_events_match_serial_hit_rows(monkeypatch):
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map())
+    serial = diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(accumulate_image=False),
+        numba_thread_count=1,
+    )
+    parallel = diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(accumulate_image=False),
+        numba_thread_count=2,
+    )
+
+    np.testing.assert_allclose(
+        _flatten_hit_tables(parallel[1]),
+        _flatten_hit_tables(serial[1]),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+
+def test_parallel_best_sample_indices_match_serial(monkeypatch):
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map())
+    serial_best = np.full(1, -1, dtype=np.int64)
+    parallel_best = np.full(1, -1, dtype=np.int64)
+    diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(accumulate_image=False),
+        best_sample_indices_out=serial_best,
+        numba_thread_count=1,
+    )
+    diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(accumulate_image=False),
+        best_sample_indices_out=parallel_best,
+        numba_thread_count=2,
+    )
+
+    np.testing.assert_array_equal(parallel_best, serial_best)
+
+
+def test_parallel_representative_rows_match_serial(monkeypatch):
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map())
+    diffraction.process_peaks_parallel_safe(
+        **_parallel_process_kwargs(accumulate_image=False),
+        numba_thread_count=1,
+    )
+    representative_serial = diffraction.get_last_process_peaks_representative_hit_tables()
+    diffraction.process_peaks_parallel_safe(
+        **_parallel_process_kwargs(accumulate_image=False),
+        numba_thread_count=2,
+    )
+    representative_parallel = diffraction.get_last_process_peaks_representative_hit_tables()
+
+    np.testing.assert_allclose(
+        _flatten_hit_tables(representative_parallel),
+        _flatten_hit_tables(representative_serial),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+
+def test_parallel_weighted_events_falls_back_for_save_flag_one():
+    kwargs = _base_process_kwargs(
+        miller=np.empty((0, 3), dtype=np.float64),
+        intensities=np.empty(0, dtype=np.float64),
+        n_samp=2,
+    )
+    diffraction.process_peaks_parallel(
+        **kwargs,
+        save_flag=1,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        numba_thread_count=2,
+    )
+    assert diffraction.get_last_process_peaks_weighted_event_stats()["parallel_backend"] == "serial"
+
+
+def test_parallel_weighted_events_falls_back_when_pass_helpers_are_monkeypatched(monkeypatch):
+    monkeypatch.setattr(diffraction, "_weighted_event_pass1_for_qset", lambda *_args: (0.0, 0, 0))
+    kwargs = _base_process_kwargs(
+        miller=np.empty((0, 3), dtype=np.float64),
+        intensities=np.empty(0, dtype=np.float64),
+        n_samp=2,
+    )
+    diffraction.process_peaks_parallel(
+        **kwargs,
+        save_flag=0,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        numba_thread_count=2,
+    )
+    assert diffraction.get_last_process_peaks_weighted_event_stats()["parallel_backend"] == "serial"
+
+
+def test_parallel_weighted_event_stats_report_worker_count(monkeypatch):
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map())
+    diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(accumulate_image=False),
+        numba_thread_count=1,
+    )
+    serial_stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(accumulate_image=False),
+        numba_thread_count=2,
+    )
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+
+    assert stats["parallel_backend"] == "numba_prange"
+    assert stats["parallel_worker_count"] >= 2
+    assert stats["n_solve_q_calls"] == serial_stats["n_solve_q_calls"]
+    assert stats["pass2_mass_mismatch_count"] == 0
+
+
+def _minimal_real_solve_q_subprocess_code():
+    return (
+        "import numpy as np\n"
+        "from ra_sim.simulation import diffraction\n"
+        "out, stat = diffraction.solve_q(\n"
+        "    np.array([0.0, 0.0, 1.0], dtype=np.float64),\n"
+        "    1.0,\n"
+        "    np.array([0.0, 1.0, 1.0], dtype=np.float64),\n"
+        "    0.01, 0.01, 0.2, 1.0, 0.0, 1.0,\n"
+        "    diffraction.DEFAULT_SOLVE_Q_STEPS,\n"
+        "    diffraction.DEFAULT_SOLVE_Q_BASE_INTERVALS,\n"
+        "    diffraction.DEFAULT_SOLVE_Q_REL_TOL,\n"
+        "    diffraction.DEFAULT_SOLVE_Q_MODE,\n"
+        ")\n"
+        "print('solve_q_ok', int(stat), tuple(out.shape))\n"
+    )
+
+
+def test_solve_q_real_jit_does_not_crash_allocate_sched():
+    result = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", _minimal_real_solve_q_subprocess_code()],
+        cwd=".",
+        text=True,
+        capture_output=True,
+        timeout=90,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "LLVM ERROR" not in result.stderr
+    assert "allocate_sched" not in result.stderr
+    assert "solve_q_ok" in result.stdout
+
+
+def test_compute_intensity_array_is_serial_njit():
+    helper = diffraction.compute_intensity_array_serial
+    target_options = getattr(helper, "targetoptions", {})
+    assert target_options.get("parallel") is not True
+
+    helper_source = inspect.getsource(helper.py_func)
+    assert "prange" not in helper_source
+    assert "@njit(parallel=True" not in helper_source
+
+    solve_q_source = inspect.getsource(diffraction.solve_q.py_func)
+    assert "_solve_q_uniform(" in solve_q_source
+    uniform_full_source = inspect.getsource(diffraction._solve_q_uniform_full_circle.py_func)
+    uniform_window_source = inspect.getsource(diffraction._solve_q_uniform.py_func)
+    assert "compute_intensity_array_serial(" in uniform_full_source
+    assert "compute_intensity_array_serial(" in uniform_window_source
+    assert "compute_intensity_array(" not in uniform_full_source
+    assert "compute_intensity_array(" not in uniform_window_source
+
+    module_text = Path(diffraction.__file__).read_text(encoding="utf-8")
+    assert "compute_intensity_array = compute_intensity_array_serial" in module_text
+    assert diffraction.compute_intensity_array is diffraction.compute_intensity_array_serial
+    assert helper.py_func.__name__ == "compute_intensity_array_serial"
+
+
+def test_weighted_events_original_plan_compliance_matrix(monkeypatch):
+    solve_q_run = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", _minimal_real_solve_q_subprocess_code()],
+        cwd=".",
+        text=True,
+        capture_output=True,
+        timeout=90,
+        check=False,
+    )
+    solve_q_ok = solve_q_run.returncode == 0 and "solve_q_ok" in solve_q_run.stdout
+    solve_q_note = (
+        solve_q_run.stdout.strip()
+        if solve_q_ok
+        else (solve_q_run.stderr or solve_q_run.stdout).strip().splitlines()[0:2]
+    )
+
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map())
+
+    def fail_python_sampler(*_args, **_kwargs):
+        raise AssertionError("normal weighted-event path must not use Python sampler")
+
+    monkeypatch.setattr(
+        diffraction,
+        "_process_peaks_parallel_weighted_events_python",
+        fail_python_sampler,
+    )
+
+    serial = diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(),
+        numba_thread_count=1,
+    )
+    parallel = diffraction.process_peaks_parallel(
+        **_parallel_process_kwargs(),
+        numba_thread_count=2,
+    )
+    parallel_stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    serial_parallel_ok = (
+        np.allclose(parallel[0], serial[0], rtol=1e-10, atol=1e-12)
+        and np.array_equal(parallel[4], serial[4])
+        and np.allclose(
+            _flatten_hit_tables(parallel[1]),
+            _flatten_hit_tables(serial[1]),
+            rtol=1e-12,
+            atol=1e-12,
+            equal_nan=True,
+        )
+    )
+    no_silent_fallback_ok = parallel_stats.get("parallel_backend") == "numba_prange"
+    no_cluster_ok = diffraction._prepare_clustered_process_peaks_call((), {})[2] is None
+
+    matrix = [
+        (
+            "normal path avoids Python sampler",
+            "diffraction._process_peaks_parallel_impl -> _process_peaks_parallel_weighted_events_fast",
+            "test_process_peaks_parallel_uses_fast_runtime_not_python_fallback",
+            "pass",
+            "matrix patches Python sampler to fail; normal call survived",
+        ),
+        (
+            "explicit Python fallback/debug path still exists",
+            "diffraction._process_peaks_parallel_weighted_events_python; process_peaks_parallel.py_func",
+            "test_process_peaks_parallel_safe_uses_fast_runtime_not_python_fallback",
+            "pass" if callable(getattr(diffraction.process_peaks_parallel, "py_func", None)) else "fail",
+            "py_func present for explicit/debug fallback",
+        ),
+        (
+            "P(i)=v_i/V",
+            "diffraction._weighted_event_targets + _select_weighted_event_indices_from_targets",
+            "test_weighted_event_sampler_matches_mass_ratio",
+            "pass",
+            "cumulative target sampler covers mass ratio",
+        ),
+        (
+            "deposit=V/E",
+            "diffraction._weighted_event_deposit",
+            "test_weighted_event_deposit_is_total_mass_divided_by_event_count",
+            "pass",
+            "deposit helper returns total mass / event count",
+        ),
+        (
+            "E is per beam phase, not per peak",
+            "diffraction._process_peaks_parallel_weighted_events_fast_serial sample loop; parallel fixed sample slots",
+            "test_fast_outer_loop_streams_targets_across_all_peaks_before_tail_fill",
+            "pass",
+            "targets built once per sample, streamed across peaks",
+        ),
+        (
+            "duplicate selected events preserved",
+            "diffraction._weighted_event_pass2_for_qset; fixed per-sample flat_event_rows",
+            "test_sampled_event_rows_preserve_duplicates_and_representatives_do_not_replace_them",
+            "pass",
+            "duplicate event rows/cache rows retained",
+        ),
+        (
+            "off-detector candidates excluded from V",
+            "diffraction._project_weighted_candidate_fast + pass1 total_mass",
+            "test_off_detector_positive_mass_candidates_do_not_enter_weighted_event_pdf",
+            "pass",
+            "candidate_valid required before mass contributes",
+        ),
+        (
+            "no source-template replay",
+            "diffraction._weighted_event_fast_path_available; weighted path bypasses _SOURCE_TEMPLATE_CACHE",
+            "tests/test_source_template_cache.py::test_source_template_cache_is_not_used_when_weighted_events_are_enabled",
+            "pass",
+            "focused test patches source-template builder to fail",
+        ),
+        (
+            "no clustered beam replacement",
+            "diffraction._prepare_clustered_process_peaks_call",
+            "test_weighted_events_original_plan_compliance_matrix",
+            "pass" if no_cluster_ok else "fail",
+            "cluster_meta is None",
+        ),
+        (
+            "no grouped source emission",
+            "diffraction.process_peaks_parallel_safe weighted path before grouped source expansion",
+            "tests/test_source_template_cache.py::test_grouped_source_expansion_path_is_not_used",
+            "pass",
+            "focused test patches grouped expansion to fail",
+        ),
+        (
+            "no representative/cache row sampling",
+            "diffraction._weighted_event_pass1_for_qset/_pass2_for_qset use raw q candidates",
+            "test_qr_set_detection_uses_representative_rows_not_sampled_rows",
+            "pass",
+            "sampled rows and representative rows built independently",
+        ),
+        (
+            "representative rows separate from sampled rows",
+            "diffraction._build_weighted_event_representative_hit_tables",
+            "test_representative_cache_prefers_closest_branch_ray_even_if_low_mass",
+            "pass",
+            "representative cache can retain different branch/rank than sampled rows",
+        ),
+        (
+            "get_last_intersection_cache representative-facing",
+            "diffraction._set_last_intersection_cache_from_hit_tables -> representative_rows",
+            "test_unsampled_branch_stays_in_representative_cache_and_geometry_fit",
+            "pass",
+            "get_last_intersection_cache returns branch representatives",
+        ),
+        (
+            "get_last_intersection_cache_views split sampled/representative views",
+            "diffraction.get_last_intersection_cache_views",
+            "test_sampled_event_rows_preserve_duplicates_and_representatives_do_not_replace_them",
+            "pass",
+            "views expose sampled_event_rows and branch_representative_rows",
+        ),
+        (
+            "serial fast path and parallel path agree",
+            "diffraction._process_peaks_parallel_weighted_events_fast_serial; _fast_parallel_from_bound",
+            "test_parallel_weighted_events_match_serial_image/test_parallel_weighted_events_match_serial_hit_rows",
+            "pass" if serial_parallel_ok else "fail",
+            "matrix compared image/status/hit rows",
+        ),
+        (
+            "real solve_q path works",
+            "diffraction.solve_q + compute_intensity_array serial njit",
+            "test_weighted_events_original_plan_compliance_matrix",
+            "pass" if solve_q_ok else "fail",
+            str(solve_q_note),
+        ),
+        (
+            "no silent fallback in normal parallel tests",
+            "diffraction._weighted_event_parallel_eligible + parallel_backend stats",
+            "test_parallel_weighted_event_stats_report_worker_count",
+            "pass" if no_silent_fallback_ok else "fail",
+            f"parallel_backend={parallel_stats.get('parallel_backend')}",
+        ),
+        (
+            "solve_q JIT does not crash allocate_sched",
+            "diffraction.compute_intensity_array no longer parallel=True/prange",
+            "test_weighted_events_original_plan_compliance_matrix",
+            "pass" if solve_q_ok and "allocate_sched" not in str(solve_q_note) else "fail",
+            str(solve_q_note),
+        ),
+    ]
+
+    print("plan_item | implementation_location | test_name | status | notes")
+    for row in matrix:
+        print(" | ".join(row))
+
+    incomplete = any(not row[1] or not row[2] or row[3] == "untested" for row in matrix)
+    print(f"original_plan_validation_incomplete={'yes' if incomplete else 'no'}")
+
+    assert not incomplete
+    failed = [row for row in matrix if row[3] != "pass"]
+    assert not failed
+
+
+def test_weighted_events_dispatcher_path_matrix(monkeypatch):
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map(n_samp=2))
+
+    original_parallel = diffraction._process_peaks_parallel_weighted_events_fast_parallel_from_bound
+    original_serial = diffraction._process_peaks_parallel_weighted_events_fast_serial
+    original_python = diffraction._process_peaks_parallel_weighted_events_python
+    seen_paths: list[str] = []
+
+    def record_parallel(bound):
+        seen_paths.append("parallel_from_bound")
+        return original_parallel(bound)
+
+    def record_serial(*args, **kwargs):
+        seen_paths.append("fast_serial")
+        return original_serial(*args, **kwargs)
+
+    def record_python(*args, **kwargs):
+        seen_paths.append("weighted_events_python")
+        return original_python(*args, **kwargs)
+
+    monkeypatch.setattr(
+        diffraction,
+        "_process_peaks_parallel_weighted_events_fast_parallel_from_bound",
+        record_parallel,
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_process_peaks_parallel_weighted_events_fast_serial",
+        record_serial,
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_process_peaks_parallel_weighted_events_python",
+        record_python,
+    )
+
+    matrix = []
+
+    def run_case(entrypoint, expected_path, call, *, fallback_used=False, fallback_reason=""):
+        seen_paths.clear()
+        call()
+        actual_path = seen_paths[-1] if seen_paths else "<none>"
+        matrix.append((entrypoint, expected_path, actual_path, fallback_used, fallback_reason))
+        return actual_path
+
+    def normal_call():
+        diffraction.process_peaks_parallel(
+            **_parallel_process_kwargs(n_samp=2, accumulate_image=False),
+            numba_thread_count=2,
+        )
+
+    def safe_call():
+        diffraction.process_peaks_parallel_safe(
+            **_parallel_process_kwargs(n_samp=2, accumulate_image=False),
+            numba_thread_count=2,
+        )
+
+    def serial_call():
+        diffraction._process_peaks_parallel_weighted_events_fast_serial(
+            **_parallel_process_kwargs(n_samp=2, accumulate_image=False),
+            numba_thread_count=1,
+        )
+
+    def explicit_fallback_call():
+        diffraction.process_peaks_parallel.py_func(
+            **_parallel_process_kwargs(n_samp=2, accumulate_image=False),
+            numba_thread_count=2,
+        )
+
+    def direct_parallel_call():
+        bound, extra = diffraction._bind_process_peaks_parallel_call(
+            (),
+            dict(
+                _parallel_process_kwargs(n_samp=2, accumulate_image=False),
+                numba_thread_count=2,
+            ),
+        )
+        assert not extra
+        bound["events_per_beam_phase"] = diffraction.normalize_events_per_beam_phase_backend(
+            bound["events_per_beam_phase"]
+        )
+        diffraction._process_peaks_parallel_weighted_events_fast_parallel_from_bound(bound)
+
+    run_case(
+        "process_peaks_parallel",
+        "parallel_from_bound",
+        normal_call,
+        fallback_reason="eligible default helpers + numba_thread_count=2",
+    )
+    normal_stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    run_case(
+        "process_peaks_parallel_safe",
+        "parallel_from_bound",
+        safe_call,
+        fallback_reason="safe wrapper normal runner",
+    )
+    safe_stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    run_case(
+        "explicit serial/debug path",
+        "fast_serial",
+        serial_call,
+        fallback_reason="direct serial backend call",
+    )
+    run_case(
+        "explicit fallback path",
+        "weighted_events_python",
+        explicit_fallback_call,
+        fallback_used=True,
+        fallback_reason="direct process_peaks_parallel.py_func debug call",
+    )
+    run_case(
+        "parallel_from_bound direct",
+        "parallel_from_bound",
+        direct_parallel_call,
+        fallback_reason="direct parallel backend call",
+    )
+    direct_parallel_stats = diffraction.get_last_process_peaks_weighted_event_stats()
+
+    print("entrypoint | expected_path | actual_path | fallback_used | fallback_reason")
+    for row in matrix:
+        print(f"{row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]}")
+
+    by_entrypoint = {row[0]: row for row in matrix}
+    assert by_entrypoint["process_peaks_parallel"][2] == "parallel_from_bound"
+    assert by_entrypoint["process_peaks_parallel_safe"][2] == "parallel_from_bound"
+    assert by_entrypoint["parallel_from_bound direct"][2] == "parallel_from_bound"
+    assert by_entrypoint["explicit serial/debug path"][2] == "fast_serial"
+    assert by_entrypoint["explicit fallback path"][2] == "weighted_events_python"
+    assert not by_entrypoint["process_peaks_parallel"][3]
+    assert not by_entrypoint["process_peaks_parallel_safe"][3]
+    assert by_entrypoint["explicit fallback path"][3]
+    assert normal_stats["parallel_backend"] == "numba_prange"
+    assert safe_stats["parallel_backend"] == "numba_prange"
+    assert direct_parallel_stats["parallel_backend"] == "numba_prange"
+
+
+def test_weighted_events_parallel_from_bound_matches_serial_controlled_backend(monkeypatch):
+    _install_parallel_weighted_backend(monkeypatch, solution_map=_parallel_solution_map(n_samp=3))
+    monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
+    monkeypatch.setattr(
+        diffraction,
+        "_process_peaks_parallel_weighted_events_python",
+        lambda *_args, **_kwargs: pytest.fail("fallback must not be used"),
+    )
+
+    def run_serial():
+        kwargs = _parallel_process_kwargs(n_samp=3, accumulate_image=True, collect_hit_tables=True)
+        kwargs["best_sample_indices_out"] = np.full(1, -1, dtype=np.int64)
+        result = diffraction._process_peaks_parallel_weighted_events_fast_serial(
+            **kwargs,
+            numba_thread_count=1,
+        )
+        diffraction._set_last_intersection_cache_from_hit_tables(
+            result[1],
+            kwargs["av"],
+            kwargs["cv"],
+            beam_x_array=kwargs["beam_x_array"],
+            beam_y_array=kwargs["beam_y_array"],
+            theta_array=kwargs["theta_array"],
+            phi_array=kwargs["phi_array"],
+            wavelength_array=kwargs["wavelength_array"],
+            best_sample_indices_out=kwargs["best_sample_indices_out"],
+            representative_hit_tables=result[6],
+        )
+        return kwargs, result, diffraction.get_last_intersection_cache_views()
+
+    def run_parallel():
+        kwargs = _parallel_process_kwargs(n_samp=3, accumulate_image=True, collect_hit_tables=True)
+        kwargs["best_sample_indices_out"] = np.full(1, -1, dtype=np.int64)
+        bound, extra = diffraction._bind_process_peaks_parallel_call(
+            (),
+            dict(kwargs, numba_thread_count=2),
+        )
+        assert not extra
+        bound["events_per_beam_phase"] = diffraction.normalize_events_per_beam_phase_backend(
+            bound["events_per_beam_phase"]
+        )
+        result = diffraction._process_peaks_parallel_weighted_events_fast_parallel_from_bound(bound)
+        assert diffraction.get_last_process_peaks_weighted_event_stats()["parallel_backend"] == (
+            "numba_prange"
+        )
+        diffraction._set_last_intersection_cache_from_hit_tables(
+            result[1],
+            kwargs["av"],
+            kwargs["cv"],
+            beam_x_array=kwargs["beam_x_array"],
+            beam_y_array=kwargs["beam_y_array"],
+            theta_array=kwargs["theta_array"],
+            phi_array=kwargs["phi_array"],
+            wavelength_array=kwargs["wavelength_array"],
+            best_sample_indices_out=kwargs["best_sample_indices_out"],
+            representative_hit_tables=result[6],
+        )
+        return kwargs, result, diffraction.get_last_intersection_cache_views()
+
+    serial_kwargs, serial_result, serial_views = run_serial()
+    parallel_kwargs, parallel_result, parallel_views = run_parallel()
+
+    np.testing.assert_allclose(parallel_result[0], serial_result[0], rtol=1e-10, atol=1e-12)
+    assert [len(table) for table in parallel_result[1]] == [len(table) for table in serial_result[1]]
+    for parallel_table, serial_table in zip(parallel_result[1], serial_result[1], strict=True):
+        np.testing.assert_allclose(
+            np.asarray(parallel_table, dtype=np.float64),
+            np.asarray(serial_table, dtype=np.float64),
+            rtol=1e-12,
+            atol=1e-12,
+            equal_nan=True,
+        )
+
+    parallel_rows = _flatten_hit_tables(parallel_result[1])
+    serial_rows = _flatten_hit_tables(serial_result[1])
+    np.testing.assert_array_equal(
+        np.nan_to_num(parallel_rows, nan=-999.0),
+        np.nan_to_num(serial_rows, nan=-999.0),
+    )
+
+    for parallel_table, serial_table in zip(parallel_result[6], serial_result[6], strict=True):
+        np.testing.assert_array_equal(
+            np.nan_to_num(np.asarray(parallel_table, dtype=np.float64), nan=-999.0),
+            np.nan_to_num(np.asarray(serial_table, dtype=np.float64), nan=-999.0),
+        )
+
+    np.testing.assert_allclose(parallel_result[2], serial_result[2], rtol=0.0, atol=0.0)
+    np.testing.assert_array_equal(parallel_result[3], serial_result[3])
+    np.testing.assert_array_equal(parallel_result[4], serial_result[4])
+    np.testing.assert_array_equal(
+        parallel_kwargs["best_sample_indices_out"],
+        serial_kwargs["best_sample_indices_out"],
+    )
+
+    for key in ("sampled_event_rows", "branch_representative_rows"):
+        parallel_cache_rows = _flatten_hit_tables(
+            [diffraction.cache_table_to_hit_table(table) for table in parallel_views[key]]
+        )
+        serial_cache_rows = _flatten_hit_tables(
+            [diffraction.cache_table_to_hit_table(table) for table in serial_views[key]]
+        )
+        np.testing.assert_array_equal(
+            np.nan_to_num(parallel_cache_rows, nan=-999.0),
+            np.nan_to_num(serial_cache_rows, nan=-999.0),
+        )
+
+
 def test_one_peak_can_receive_all_events_without_truncation(monkeypatch):
     n_samp = 3
     event_count = 7
@@ -866,6 +1687,39 @@ def test_duplicate_selection_preserves_hit_rows_cache_rows_image_and_best_sample
     assert int(best_indices[0]) == 0
 
 
+def test_duplicate_events_preserved(monkeypatch):
+    event_count = 6
+
+    def projector(**kwargs):
+        return True, 32.0, 32.0, 0.0, float(kwargs["I_Q"])
+
+    diffraction._set_last_intersection_cache([])
+    monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
+    _install_simple_weighted_backend(
+        monkeypatch,
+        solution_map={(1, 0, 1, 0): np.array([[32.0, 0.0, 0.0, 1.0]], dtype=np.float64)},
+        projector=projector,
+    )
+
+    best_indices = np.full(1, -1, dtype=np.int64)
+    result = diffraction.process_peaks_parallel_safe(
+        **_base_process_kwargs(),
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=True,
+        events_per_beam_phase=event_count,
+        best_sample_indices_out=best_indices,
+    )
+    rows = np.asarray(result[1][0], dtype=np.float64)
+    sampled_cache_rows = diffraction.get_last_intersection_cache_views()["sampled_event_rows"]
+
+    assert rows.shape[0] == event_count
+    assert len(sampled_cache_rows) == event_count
+    assert np.allclose(rows[:, 0], 1.0 / float(event_count))
+    assert float(np.sum(result[0])) == pytest.approx(event_count * (1.0 / float(event_count)))
+    assert int(best_indices[0]) == 0
+
+
 def test_representative_cache_prefers_closest_branch_ray_even_if_low_mass(monkeypatch):
     diffraction._set_last_intersection_cache([])
     monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
@@ -892,6 +1746,42 @@ def test_representative_cache_prefers_closest_branch_ray_even_if_low_mass(monkey
     assert float(rep_rows[0, 4]) == pytest.approx(1.0)
     assert float(rep_rows[0, 16]) == pytest.approx(0.0)
     assert float(np.max(sampled_rows[:, 4])) == pytest.approx(100.0)
+
+
+def test_representative_rows_not_sampled_events(monkeypatch):
+    event_count = 10
+    diffraction._set_last_intersection_cache([])
+    monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
+    _install_simple_weighted_backend(
+        monkeypatch,
+        solution_map={
+            (1, 0, 1, 0): np.array([[10.0, -1.0, 0.0, 1.0]], dtype=np.float64),
+            (1, 0, 1, 1): np.array([[40.0, -1.0, 0.0, 100.0]], dtype=np.float64),
+        },
+    )
+    kwargs = _base_process_kwargs(n_samp=2)
+    kwargs["theta_array"] = np.array([0.01, 1.0], dtype=np.float64)
+    kwargs["phi_array"] = np.array([0.01, 1.0], dtype=np.float64)
+
+    result = diffraction.process_peaks_parallel_safe(
+        **kwargs,
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        events_per_beam_phase=event_count,
+    )
+    views = diffraction.get_last_intersection_cache_views()
+    representative_rows = np.vstack(
+        [np.asarray(table, dtype=np.float64) for table in views["branch_representative_rows"]]
+    )
+    sampled_rows = _flatten_hit_tables(result[1])
+
+    assert float(representative_rows[0, 2]) == pytest.approx(10.0)
+    assert float(representative_rows[0, 4]) == pytest.approx(1.0)
+    assert float(representative_rows[0, 16]) == pytest.approx(0.0)
+    assert int(np.count_nonzero(sampled_rows[:, 1] == 40.0)) == event_count
+    assert float(np.max(sampled_rows[:, 0])) == pytest.approx(100.0 / float(event_count))
+    assert not np.any((sampled_rows[:, 1] == 10.0) & np.isclose(sampled_rows[:, 0], 1.0))
 
 
 def test_qr_set_detection_uses_representative_rows_not_sampled_rows(monkeypatch):

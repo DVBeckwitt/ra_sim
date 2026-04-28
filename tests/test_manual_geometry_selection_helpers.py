@@ -23822,6 +23822,8 @@ def test_minus_1_0_10_solver_x0_matches_handoff_and_dry_run(tmp_path) -> None:
     assert first_bad is None
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_minus_1_0_10_qr_only_fit_after_x0_source_fix(tmp_path) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     bundle = _diag_solver_x0_bundle(context, dataset)
@@ -24494,7 +24496,9 @@ def _diag_print_multi_group_residual_table(title, before, after):
     return statuses
 
 
-def test_full_geometry_fit_qr_contribution_after_resolver_fix(tmp_path) -> None:
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_geometry_solver_qr_contribution_after_resolver_fix(tmp_path) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     bundle = _diag_full_fit_after_resolver_bundle(context, dataset)
     stats = _diag_print_full_fit_decomposition(
@@ -25583,6 +25587,8 @@ def test_new4_first_image_fitter_uses_exact_manual_branch_inventory(tmp_path) ->
     assert _diag_new4_branch_identity_stable([baseline_record], include_003=True)
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_first_image_qr_fit_finite_parameter_sweep_exact_inventory(tmp_path) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     mode_a = _diag_run_new4_finite_sweep_mode(context, dataset, include_003=False)
@@ -25652,7 +25658,9 @@ def _diag_print_new4_full_fit_decomposition(before, after, fit_run, *, include_0
     }
 
 
-def test_new4_first_image_full_fit_objective_decomposition_exact_inventory(tmp_path) -> None:
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_new4_first_image_solver_objective_decomposition_exact_inventory(tmp_path) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     include_003 = False
     before_run = _diag_run_new4_dry_run(
@@ -28217,6 +28225,8 @@ def test_new4_caked_refinement_bin_resolution_and_subpixel_status(tmp_path) -> N
     assert len(rows) == 14
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_export_representative_caked_fit_snapshots(tmp_path) -> None:
     include_003 = False
     context, dataset, baseline_run, baseline_record, x0_rows, x0_components = (
@@ -28437,6 +28447,8 @@ def test_new4_export_representative_caked_fit_snapshots(tmp_path) -> None:
     print("plotted_points_match_objective_inputs=yes")
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     include_003 = False
     context, dataset, baseline_run, _baseline_record, x0_rows, x0_components = (
@@ -28783,6 +28795,9 @@ def _diag_new4_projection_within_tol(delta, *, theta_tol=0.25, phi_tol=0.5):
     return bool(abs(float(delta[0])) <= float(theta_tol) and abs(float(delta[1])) <= float(phi_tol))
 
 
+# Safe theta_initial projection-frame selector:
+# pytest tests/test_manual_geometry_selection_helpers.py -k "fit_x0_projection_matches_saved_manual_caked or gui_saved_projection_vs_fitter_x0_projection_bundle or fit_x0_projection_theta_initial_offset_check" --collect-only -q
+# Run full-fit/export/high-density diagnostics by exact test name on Windows.
 def test_new4_fit_x0_projection_matches_saved_manual_caked(tmp_path) -> None:
     (
         _context,
@@ -28988,6 +29003,363 @@ def test_new4_fit_x0_projection_theta_initial_offset_check(tmp_path) -> None:
     assert not added_mismatches
 
 
+def _diag_new4_post_theta_baseline_bundle(tmp_path):
+    include_003 = False
+    context, dataset, baseline_run, record, rows, components = _diag_new4_pipeline_baseline(
+        tmp_path,
+        include_003=include_003,
+    )
+    anchor_rows = _diag_new4_build_anchor_rows(
+        context,
+        dataset,
+        record,
+        include_003=include_003,
+    )
+    return context, dataset, baseline_run, record, rows, components, anchor_rows
+
+
+def _diag_new4_refinement_policy_label(rows):
+    if any(bool(row.get("sim_refinement_fallback_used", False)) for row in rows.values()):
+        return "explicit_fallback"
+    if all(
+        row.get("sim_refinement_status") == "refined"
+        and "locked_mosaic_representative"
+        in str(row.get("sim_refinement_caked_image_source", ""))
+        for row in rows.values()
+    ):
+        return "locked_mosaic_high_density_refined"
+    return "mixed_or_unclassified"
+
+
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_new4_post_theta_fix_baseline_residual_table(tmp_path) -> None:
+    _context, _dataset, _run, _record, rows, components, anchor_rows = (
+        _diag_new4_post_theta_baseline_bundle(tmp_path)
+    )
+    print("post_theta_fix_baseline_residual_table")
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print("background_index=0")
+    print("mode=Mode A paired Qr branches only")
+    print(f"branch_count={len(rows)}")
+    print(f"component_count={len(components)}")
+    print(
+        "hkl | branch | saved_manual_caked | fit_observed_x0_caked | "
+        "saved_refined_sim_caked | dynamic_nominal_sim_caked_x0 | "
+        "dynamic_refined_sim_caked_x0 | residual_nominal | residual_refined | "
+        "refinement_status | branch_identity | provenance"
+    )
+    projection_failures = []
+    stale_fallbacks = []
+    max_abs_saved_to_fitspace_tth = 0.0
+    max_abs_saved_to_fitspace_phi = 0.0
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        anchor = anchor_rows[key]
+        saved_manual = anchor["saved_observed_caked_deg"]
+        observed = _diag_row_pair(row, "observed_caked_deg")
+        saved_sim = anchor["saved_refined_sim_caked_deg"]
+        nominal = _diag_row_pair(row, "predicted_nominal_caked_deg")
+        refined = _diag_row_pair(row, "predicted_refined_caked_deg")
+        saved_to_fit = _diag_caked_delta(observed, saved_manual)
+        residual_nominal = _diag_caked_delta(nominal, observed)
+        residual_refined = _diag_caked_delta(refined, observed)
+        max_abs_saved_to_fitspace_tth = max(
+            max_abs_saved_to_fitspace_tth,
+            abs(float(saved_to_fit[0])),
+        )
+        max_abs_saved_to_fitspace_phi = max(
+            max_abs_saved_to_fitspace_phi,
+            abs(float(saved_to_fit[1])),
+        )
+        if not _diag_new4_projection_within_tol(saved_to_fit):
+            projection_failures.append((key, saved_to_fit))
+        source = str(row.get("predicted_source", "") or "")
+        if "cache_current" in source or "visual" in source:
+            stale_fallbacks.append((key, source))
+        _q_group, hkl, _table, _source_row, branch, _peak = key
+        provenance = (
+            f"match={row.get('match_status')};reason={row.get('resolution_reason')};"
+            f"resolver={row.get('fit_prediction_resolver_function')};source={source}"
+        )
+        print(
+            f"{hkl} | {branch} | {_diag_fmt_pair(saved_manual)} | "
+            f"{_diag_fmt_pair(observed)} | {_diag_fmt_pair(saved_sim)} | "
+            f"{_diag_fmt_pair(nominal)} | {_diag_fmt_pair(refined)} | "
+            f"{_diag_fmt_pair(residual_nominal)} | {_diag_fmt_pair(residual_refined)} | "
+            f"{row.get('sim_refinement_status')} | {_diag_source_identity_key(row)} | "
+            f"{provenance}"
+        )
+    print(f"max_abs_saved_to_fitspace_d2theta={max_abs_saved_to_fitspace_tth:.9f}")
+    print(f"max_abs_saved_to_fitspace_dphi={max_abs_saved_to_fitspace_phi:.9f}")
+    print(f"stale_saved_visual_fallback_count={len(stale_fallbacks)}")
+    assert len(rows) == 14
+    assert len(components) == 28
+    assert not projection_failures
+    assert max_abs_saved_to_fitspace_tth < 1.0
+    assert not stale_fallbacks
+
+
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_new4_post_theta_fix_dynamic_baseline_matches_saved_sim_anchor(tmp_path) -> None:
+    _context, _dataset, _run, _record, rows, components, anchor_rows = (
+        _diag_new4_post_theta_baseline_bundle(tmp_path)
+    )
+    print("post_theta_fix_dynamic_baseline_matches_saved_sim_anchor")
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print("background_index=0")
+    print("mode=Mode A paired Qr branches only")
+    print(f"branch_count={len(rows)}")
+    print(f"component_count={len(components)}")
+    print(
+        "hkl | branch | saved_refined_sim_caked | dynamic_nominal_sim_caked_x0 | "
+        "dynamic_refined_sim_caked_x0 | nominal_minus_saved | refined_minus_saved | "
+        "refinement_status | caked_image_source | exact_reason | classification"
+    )
+    failures = []
+    for key in sorted(anchor_rows, key=repr):
+        row = anchor_rows[key]
+        dynamic_row = row.get("dynamic_row", {}) or {}
+        nominal_delta = row["dynamic_nominal_minus_saved_refined_sim_caked_delta"]
+        refined_delta = row["dynamic_refined_minus_saved_refined_sim_caked_delta"]
+        nominal_ok = _diag_new4_anchor_delta_ok(nominal_delta)
+        refined_ok = _diag_new4_anchor_delta_ok(refined_delta)
+        image_source = str(dynamic_row.get("sim_refinement_caked_image_source", ""))
+        exact_reason = "dynamic baseline matches saved refined sim anchor"
+        classification = "matches_saved_sim_anchor"
+        if not nominal_ok:
+            classification = "dynamic_baseline_prediction_mismatch"
+            exact_reason = "dynamic nominal x0 differs from saved sim anchor"
+        elif not refined_ok:
+            classification = "caked_refinement_jump"
+            exact_reason = (
+                "dynamic nominal matches saved anchor; refined center differs after "
+                f"{image_source}"
+            )
+        if classification != "matches_saved_sim_anchor":
+            failures.append((key, classification))
+        _q_group, hkl, _table, _source_row, branch, _peak = key
+        print(
+            f"{hkl} | {branch} | {_diag_fmt_pair(row['saved_refined_sim_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['dynamic_nominal_caked_deg'])} | "
+            f"{_diag_fmt_pair(row['dynamic_refined_caked_deg'])} | "
+            f"{_diag_fmt_pair(nominal_delta)} | {_diag_fmt_pair(refined_delta)} | "
+            f"{row.get('sim_refinement_status')} | {image_source} | "
+            f"{exact_reason} | {classification}"
+        )
+    if failures:
+        print(f"first_failure={failures[0][1]} key={failures[0][0]}")
+    assert len(rows) == 14
+    assert len(components) == 28
+    assert not failures
+
+
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_new4_post_theta_fix_caked_refinement_validity(tmp_path) -> None:
+    _context, _dataset, _run, _record, rows, components, _anchor_rows = (
+        _diag_new4_post_theta_baseline_bundle(tmp_path)
+    )
+    print("post_theta_fix_caked_refinement_validity")
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print("background_index=0")
+    print("mode=Mode A paired Qr branches only")
+    print("beam_phases=200")
+    print("events=500")
+    print(f"branch_count={len(rows)}")
+    print(f"component_count={len(components)}")
+    print(
+        "hkl | branch | local_max_intensity | local_sum_intensity | nonzero_count | "
+        "bin_size_2theta | bin_size_phi | subpixel | refinement_method | "
+        "subpixel_status | fallback_status | window_bounds | image_source"
+    )
+    for key in sorted(rows, key=repr):
+        row = rows[key]
+        fallback = bool(row.get("sim_refinement_fallback_used", False))
+        _q_group, hkl, _table, _source_row, branch, _peak = key
+        print(
+            f"{hkl} | {branch} | "
+            f"{float(row.get('sim_refinement_local_max_intensity', np.nan)):.9f} | "
+            f"{float(row.get('sim_refinement_local_sum_intensity', np.nan)):.9f} | "
+            f"{int(row.get('sim_refinement_local_nonzero_count', 0) or 0)} | "
+            f"{float(row.get('sim_refinement_caked_bin_size_two_theta_deg', np.nan)):.9f} | "
+            f"{float(row.get('sim_refinement_caked_bin_size_phi_deg', np.nan)):.9f} | "
+            f"{row.get('sim_refinement_subpixel')} | "
+            f"{row.get('sim_refinement_subpixel_method')} | "
+            f"{row.get('sim_refinement_subpixel_status')} | "
+            f"{'explicit_fallback' if fallback else 'none'} | "
+            f"{row.get('sim_refinement_window_bounds')} | "
+            f"{row.get('sim_refinement_caked_image_source')}"
+        )
+    print(f"refinement_policy={_diag_new4_refinement_policy_label(rows)}")
+    _diag_new4_assert_valid_locked_refinement(rows)
+    assert len(components) == 28
+
+
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_new4_post_theta_fix_qr_only_fit(tmp_path) -> None:
+    include_003 = False
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    before_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+    )
+    before = _diag_objective_trace(before_run["result"])[0]
+    before_rows, before_components = _diag_assert_new4_objective_record(
+        before,
+        include_003=include_003,
+    )
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=True,
+        optimizer_overrides={"max_nfev": 20},
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+    after_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=True,
+        params_overrides=fit_run["after_params"],
+    )
+    after = _diag_objective_trace(after_run["result"])[0]
+    after_rows, after_components = _diag_assert_new4_objective_record(
+        after,
+        include_003=include_003,
+    )
+    axis_before = _diag_new4_axis_norms(before, include_003=include_003)
+    axis_after = _diag_new4_axis_norms(after, include_003=include_003)
+    norm_before = _diag_new4_norm(before, include_003=include_003)
+    norm_after = _diag_new4_norm(after, include_003=include_003)
+    trace = _diag_objective_trace(fit_run["result"])
+    stable = _diag_new4_branch_identity_stable([before, *trace, after], include_003=include_003)
+    refined = all(row.get("sim_refinement_status") == "refined" for row in before_rows.values())
+    stale = any(
+        bool(row.get("stale_prediction_cache_used_for_trial_params", False))
+        for record in [before, *trace, after]
+        for row in _diag_new4_point_rows(record, include_003=include_003).values()
+    )
+    improved = bool(norm_after < norm_before - 1.0e-6)
+    if not refined or stale:
+        classification = "invalid_refinement"
+    elif not stable:
+        classification = "prediction_pipeline_static"
+    elif improved:
+        classification = "qr_residual_reduced"
+    elif _diag_new4_refinement_bin_limited(before_rows):
+        classification = "refined_objective_too_discrete"
+    elif float(axis_after["phi_norm"]) >= float(axis_before["phi_norm"]) - 1.0e-6:
+        classification = "parameterization_cannot_move_phi"
+    else:
+        classification = "optimizer_step_issue"
+    print("post_theta_fix_qr_only_fit")
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print("background_index=0")
+    print("mode=Mode A paired Qr branches only")
+    print(f"component_count_before={len(before_components)}")
+    print(f"component_count_after={len(after_components)}")
+    print(f"total_norm_before={norm_before:.9f}")
+    print(f"total_norm_after={norm_after:.9f}")
+    print(f"theta_norm_before={float(axis_before['theta_norm']):.9f}")
+    print(f"theta_norm_after={float(axis_after['theta_norm']):.9f}")
+    print(f"phi_norm_before={float(axis_before['phi_norm']):.9f}")
+    print(f"phi_norm_after={float(axis_after['phi_norm']):.9f}")
+    print(f"nfev={int(getattr(fit_run['result'], 'nfev', 0) or 0)}")
+    print(f"accepted_params={fit_run['after_params']}")
+    print(f"params_changed={_diag_yes_no(bool(fit_run.get('params_changed', False)))}")
+    print(f"branch_identity_stable={_diag_yes_no(stable)}")
+    print(f"refinement_policy={_diag_new4_refinement_policy_label(before_rows)}")
+    print(f"qr_only_fit_classification={classification}")
+    assert len(before_rows) == 14
+    assert len(before_components) == 28
+    assert len(after_components) == 28
+    assert refined
+    assert not stale
+    assert stable
+    assert classification in {
+        "qr_residual_reduced",
+        "optimizer_step_issue",
+        "refined_objective_too_discrete",
+        "parameterization_cannot_move_phi",
+        "prediction_pipeline_static",
+        "invalid_refinement",
+    }
+
+
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_new4_post_theta_fix_solver_objective_decomposition(tmp_path) -> None:
+    include_003 = False
+    context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
+    before_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=False,
+    )
+    before = _diag_objective_trace(before_run["result"])[0]
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        seed_multistart_enabled=False,
+        objective_trace_enabled=True,
+        qr_only_objective=False,
+        optimizer_overrides={"max_nfev": 20},
+        qr_only_dataset_filter=_diag_new4_filter_factory(include_003),
+    )
+    after_run = _diag_run_new4_dry_run(
+        context,
+        dataset,
+        include_003=include_003,
+        qr_only_objective=False,
+        params_overrides=fit_run["after_params"],
+    )
+    after = _diag_objective_trace(after_run["result"])[0]
+    before_rows, before_components = _diag_assert_new4_objective_record(
+        before,
+        include_003=include_003,
+    )
+    _after_rows, after_components = _diag_assert_new4_objective_record(
+        after,
+        include_003=include_003,
+    )
+    stats = _diag_print_new4_full_fit_decomposition(
+        before,
+        after,
+        fit_run,
+        include_003=include_003,
+    )
+    qr_worsened = bool(stats["qr_after"] > stats["qr_before"] + 1.0e-6)
+    total_improved = bool(stats["total_after"] < stats["total_before"] - 1.0e-6)
+    print("post_theta_fix_solver_objective_decomposition")
+    print(f"state_path={_QR_PICKER_DIAG_STATE_PATH}")
+    print("background_index=0")
+    print("mode=Mode A paired Qr branches only")
+    print(f"component_count_before={len(before_components)}")
+    print(f"component_count_after={len(after_components)}")
+    print(f"nfev={int(getattr(fit_run['result'], 'nfev', 0) or 0)}")
+    print(f"accepted_params={fit_run['after_params']}")
+    print(f"parameter_changes={_diag_new4_param_change_text(fit_run)}")
+    print(f"branch_identity_stable={_diag_yes_no(bool(stats['stable']))}")
+    print(f"refinement_policy={_diag_new4_refinement_policy_label(before_rows)}")
+    print(
+        "qr_residual_sacrificed_to_other_terms="
+        f"{_diag_yes_no(total_improved and qr_worsened)}"
+    )
+    assert len(before_rows) == 14
+    assert len(before_components) == 28
+    assert len(after_components) == 28
+    assert stats["component_count"] == 28
+    assert stats["stable"]
+
+
 def test_new4_saved_caked_vs_fitspace_caked_projection_delta(tmp_path) -> None:
     (
         _context,
@@ -29040,6 +29412,8 @@ def test_new4_saved_caked_vs_fitspace_caked_projection_delta(tmp_path) -> None:
     assert classification == "fixed"
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_path) -> None:
     include_003 = False
     context, dataset, baseline_run, _baseline_record, x0_rows, x0_components = (
@@ -29436,6 +29810,8 @@ def test_new4_caked_refinement_rejects_zero_intensity_argmax() -> None:
     )
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_locked_mosaic_high_density_refinement_nonzero(tmp_path) -> None:
     _context, _dataset, _run, _record, rows, _components = _diag_new4_pipeline_baseline(
         tmp_path,
@@ -29485,6 +29861,8 @@ def test_new4_objective_uses_subpixel_or_explicit_nominal_fallback(tmp_path) -> 
     _diag_assert_new4_objective_record(record, include_003=False)
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_qr_only_fit_after_valid_locked_mosaic_refinement(tmp_path) -> None:
     include_003 = False
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
@@ -29682,6 +30060,8 @@ def test_new4_sim_trial_caked_recomputed_from_detector_sim(tmp_path) -> None:
     assert not reused_refined
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_refined_objective_theta_phi_decomposition_after_pipeline_fix(tmp_path) -> None:
     include_003 = False
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
@@ -29750,7 +30130,9 @@ def test_new4_refined_objective_theta_phi_decomposition_after_pipeline_fix(tmp_p
     }
 
 
-def test_new4_full_fit_with_dynamic_refined_center_objective(tmp_path) -> None:
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_new4_solver_with_dynamic_refined_center_objective(tmp_path) -> None:
     include_003 = False
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     before_run = _diag_run_new4_dry_run(
@@ -30077,6 +30459,8 @@ def test_new4_objective_uses_refined_sim_caked_residual(tmp_path) -> None:
             assert not np.isclose(used, expected_nominal, atol=1.0e-12, rtol=0.0)
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_fit_prediction_not_static_under_finite_trial_params(tmp_path) -> None:
     context, dataset, baseline_run, baseline_record, baseline_rows, _components = (
         _diag_new4_pipeline_baseline(tmp_path, include_003=False)
@@ -30186,6 +30570,8 @@ def test_new4_fit_pipeline_no_stale_cache_under_trial_params(tmp_path) -> None:
     )
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_qr_only_fit_with_refined_dynamic_predictions(tmp_path) -> None:
     include_003 = False
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
@@ -30367,6 +30753,8 @@ def test_new4_objective_uses_refined_sim_caked_residual_all_mode_a(tmp_path) -> 
     test_new4_objective_uses_refined_sim_caked_residual(tmp_path)
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_new4_qr_only_fit_with_complete_dynamic_refined_predictions(tmp_path) -> None:
     test_new4_qr_only_fit_with_refined_dynamic_predictions(tmp_path)
 
@@ -30761,6 +31149,8 @@ def test_minus_1_0_10_fitter_trial_param_changes_prediction(tmp_path) -> None:
     assert any_sensitive, "fit_not_sensitive_to_qr_prediction"
 
 
+@pytest.mark.slow
+@pytest.mark.diagnostic
 def test_minus_1_0_10_qr_only_fit_reduces_residual_after_correspondence_fix(
     tmp_path,
 ) -> None:
@@ -30828,7 +31218,9 @@ def test_minus_1_0_10_qr_only_fit_reduces_residual_after_correspondence_fix(
         assert np.isfinite(after_norm)
 
 
-def test_minus_1_0_10_full_fit_reports_qr_contribution(tmp_path) -> None:
+@pytest.mark.slow
+@pytest.mark.diagnostic
+def test_minus_1_0_10_solver_reports_qr_contribution(tmp_path) -> None:
     context, dataset, _events = _diag_fit_handoff_dataset(tmp_path)
     fit_run = _diag_run_controlled_minus_1_0_10_fit(
         context,

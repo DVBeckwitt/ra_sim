@@ -208,8 +208,11 @@ Shared CLI equivalent:
 ra-sim gui
 ```
 
-On Windows, `run_ra_sim.bat` is a thin wrapper around `python -m ra_sim` and
-falls back to `py -m ra_sim`, so it follows the lightweight launcher path.
+On Windows, `run_ra_sim.bat` runs from the repository directory, selects a
+Python 3.11+ interpreter, and follows the lightweight launcher path. When
+started from Explorer, it keeps the console open on startup errors so the
+message is readable. Set `RA_SIM_BATCH_NO_PAUSE=1` to suppress that pause in
+automation.
 
 ## Configuration
 
@@ -330,7 +333,7 @@ Because of that split:
 | Headless geometry + mosaic-shape fit | `python -m ra_sim fit-mosaic-shape state.json` | `ra-sim fit-mosaic-shape state.json` |
 
 `run_ra_sim.bat` is only a Windows convenience wrapper for `python -m ra_sim`
-or `py -m ra_sim`; it is not the installed `ra-sim` console script.
+or `py -3 -m ra_sim`; it is not the installed `ra-sim` console script.
 
 ### Typical Workflow
 
@@ -674,6 +677,14 @@ of creating repo-root cache folders. Direct tool runs share the configured
   - `fast`: quick local-feedback tier
   - `integration`: slower workflow-heavy tests
   - `benchmark`: hardware-sensitive performance coverage
+  - `slow`: slow diagnostics that should be run individually
+  - `diagnostic`: print/export-heavy diagnostic tests
+- Safe theta-initial projection-frame selector:
+  `pytest tests/test_manual_geometry_selection_helpers.py -k "fit_x0_projection_matches_saved_manual_caked or gui_saved_projection_vs_fitter_x0_projection_bundle or fit_x0_projection_theta_initial_offset_check" --collect-only -q`
+- Do not run full-fit diagnostics together with export/high-density diagnostics
+  on Windows; run individually.
+- If dynamic/refinement diagnostics are needed, run one exact test at a time:
+  `pytest tests/test_manual_geometry_selection_helpers.py -k "exact_test_name" -s -q --tb=short`
 - current mypy frontier targets:
   - `ra_sim/config/`
   - `ra_sim/dev.py`
