@@ -42,6 +42,27 @@ physics-affecting or mixed changes.
 
 ## Validation
 
+Final pre-merge requested suite passed:
+
+```bash
+python -m pytest -ra tests/test_gui_runtime_update_dependencies.py tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_primary_cache.py tests/test_gui_sim_signature.py tests/test_gui_runtime_update_trace.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_invalidation.py tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_import_safe.py
+```
+
+Result: `408 passed`.
+
+Manual GUI-runtime trace smoke passed:
+
+| Update | Trace action | Worker |
+| --- | --- | --- |
+| Initial update | `full_simulation` | `requires_worker=True` |
+| Prune change with cached keys | `primary_prune_reuse` | `requires_worker=False` |
+| Display-only change | `display_only` | `requires_worker=False` |
+| Combine/visibility change | `combine_only` | `requires_worker=False` |
+| Detector center shift with exact cache | `detector_center_remap` | `requires_worker=False` |
+| Detector center shift without exact cache | `full_simulation` | `requires_worker=True` |
+| Detector distance change | `full_simulation` | `requires_worker=True` |
+| Detector rotation/tilt change | `full_simulation` | `requires_worker=True` |
+
 Passed:
 
 ```bash

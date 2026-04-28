@@ -94,6 +94,15 @@ Bug/error status:
 
 Validation status as of 2026-04-28:
 
+- final pre-merge requested suite
+  `python -m pytest -ra tests/test_gui_runtime_update_dependencies.py tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_primary_cache.py tests/test_gui_sim_signature.py tests/test_gui_runtime_update_trace.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_invalidation.py tests/test_gui_runtime_optimization_scenarios.py tests/test_gui_runtime_import_safe.py`
+  passed, `408 passed`
+- manual GUI-runtime trace smoke passed with these action labels:
+  `full_simulation` for initial update, detector-center without exact cache,
+  detector distance change, and detector rotation/tilt change;
+  `primary_prune_reuse` for prune with cached keys; `display_only` for a
+  display-only change; `combine_only` for the combine/visibility change; and
+  `detector_center_remap` for center shift with exact cache
 - `python -m pytest tests/test_gui_runtime_update_dependencies.py tests/test_gui_runtime_detector_remap_cache.py tests/test_gui_runtime_primary_cache.py tests/test_gui_sim_signature.py tests/test_gui_runtime_update_trace.py tests/test_gui_runtime_update_actions.py tests/test_gui_runtime_invalidation.py tests/test_gui_runtime_optimization_scenarios.py -ra`
   passed, `92 passed`
 - broad GUI runtime slice
