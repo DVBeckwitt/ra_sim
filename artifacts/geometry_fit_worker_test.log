@@ -161,3 +161,413 @@ Current orientation diagnostics:
   best_rms_px=nan
   reason=n/a
 
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: mixed detector/caked manual fit spaces are not supported for background(s) 1; rebuild manual pairs in one fit space
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: exact caked projector unavailable for background 2
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: mixed detector/caked manual fit spaces are not supported for background(s) 1; rebuild manual pairs in one fit space
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: exact caked projector unavailable for background 2
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: mixed detector/caked manual fit spaces are not supported for background(s) 1; rebuild manual pairs in one fit space
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: exact caked projector unavailable for background 2
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: mixed detector/caked manual fit spaces are not supported for background(s) 1; rebuild manual pairs in one fit space
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: exact caked projector unavailable for background 2
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: mixed detector/caked manual fit spaces are not supported for background(s) 1; rebuild manual pairs in one fit space
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit unavailable: exact caked fit-space projector could not be prepared. Rebuild the caked/source cache and rerun the fit. exact caked projector unavailable for background 1. Details: exact caked projector unavailable for background 1
+  stage=preflight
+
+Fitting variables (start values):
+  zb=nan
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
+
+================================================================================
+Geometry fit aborted before solver start: 20260420_000000
+
+Failure:
+  Geometry fit failed: exact caked projector unavailable for background 2
+  stage=preflight
+
+Fitting variables (start values):
+
+Manual geometry datasets:
+  <none>
+
+Current orientation diagnostics:
+  pairs=0
+  chosen=identity
+  identity_rms_px=nan
+  best_rms_px=nan
+  reason=n/a
+
