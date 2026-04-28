@@ -28,11 +28,36 @@ from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NEW4_STATE_LABEL = Path("artifacts/geometry_fit_gui_states/new4.json")
 NEW4_STATE_PATH = REPO_ROOT / NEW4_STATE_LABEL
+ALLOW_UNTRACKED_NEW4_ENV = "RA_SIM_ALLOW_UNTRACKED_NEW4"
+
+
+def _new4_state_is_tracked_or_allowed() -> bool:
+    if os.environ.get(ALLOW_UNTRACKED_NEW4_ENV) == "1":
+        return True
+    if not (REPO_ROOT / ".git").exists():
+        return True
+    completed = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--error-unmatch",
+            NEW4_STATE_LABEL.as_posix(),
+        ],
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return completed.returncode == 0
 
 
 def require_new4_state() -> Path:
     if not NEW4_STATE_PATH.exists():
         pytest.skip(f"optional New4 fixture is absent: {NEW4_STATE_LABEL}")
+    if not _new4_state_is_tracked_or_allowed():
+        pytest.skip(
+            f"optional New4 fixture is untracked: {NEW4_STATE_LABEL}; "
+            f"set {ALLOW_UNTRACKED_NEW4_ENV}=1 to include it"
+        )
     return NEW4_STATE_PATH
 
 

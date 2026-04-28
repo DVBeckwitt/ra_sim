@@ -2,7 +2,7 @@
 
 Date: 2026-04-28
 
-Scope: Phases 1-7 of fast-path cache verification, selective invalidation,
+Scope: Phases 1-8 of fast-path cache verification, selective invalidation,
 local validation gating, prune-specific QR selector lifecycle hardening, and
 detector-center remap plus geometry-objective cache signature and end-to-end
 handoff hardening.
@@ -18,7 +18,8 @@ handoff hardening.
   on residual-defining objective identity. Phase 7 adds a synthetic end-to-end
   QR selector to geometry fitter handoff scenario that exercises fast-path
   invalidation, point-provider parity, projection invalidation, and objective
-  cache reuse/reject decisions together.
+  cache reuse/reject decisions together. Phase 8 adds a repeatable local/strict
+  geometry-fitter cache regression gate script.
 - Bug status: fixed for overbroad fast-path invalidation of QR selector entries,
   source-row snapshots, intersection caches, and fitter handoff state; fixed
   local checkpoint failures caused by absent optional New4 artifacts; fixed
@@ -31,7 +32,7 @@ handoff hardening.
   signature changes; added workflow coverage for handoff-validity regressions
   after display/combine/analysis/prune/detector-center fast paths.
 - Error status: no known failing local Phase 7, Phase 6, Phase 5, Phase 4, or
-  Phase 3.5 gate tests.
+  Phase 3.5 gate tests. Phase 8 local gate is green.
 - Compatibility status: QR disabled/enabled masks remain explicit user/state
   data and are not cleared by cache invalidation.
 
@@ -43,6 +44,7 @@ handoff hardening.
 - `tests/test_gui_runtime_optimization_scenarios.py`: present.
 - `tests/test_geometry_objective_cache.py`: present.
 - `tests/test_gui_runtime_geometry_fitter_cache_handoff.py`: present.
+- `scripts/debug/run_geometry_fitter_cache_regression_gate.py`: present.
 
 ## Mutation Map
 
@@ -345,3 +347,48 @@ Phase 7 validation:
 - Static QR/Qz mutation audit showed only controller/state-load/test mutation
   sites, not runtime invalidation.
 - No lingering Python/pytest process remained after the gate.
+
+## Phase 8 Regression Gate Automation
+
+Phase 8 added validation automation without changing production runtime or
+fitting behavior.
+
+Feature status:
+
+- Added `scripts/debug/run_geometry_fitter_cache_regression_gate.py` as the
+  repeatable geometry-fitter cache regression gate.
+- Local mode runs compile checks, the fast runtime/cache/handoff/objective
+  pytest gate, the manual identity slice, and the workflow slice.
+- Strict mode adds the slow/manual geometry slice.
+- Optional New4 artifact scripts are skipped when `new4.json` is absent or
+  untracked. Set `RA_SIM_ALLOW_UNTRACKED_NEW4=1` to opt into a local untracked
+  fixture; use `--require-new4` to fail when the fixture is not available.
+- Added `tests/test_geometry_fitter_cache_regression_gate_script.py` to verify
+  command construction, strict slow-geometry inclusion, optional New4 skipping,
+  `--require-new4` failure, and `sys.executable` use.
+
+Bug/error status:
+
+- A stale untracked `artifacts/geometry_fit_gui_states/new4.json` no longer
+  makes the default local workflow slice fail. Tracked or explicitly opted-in
+  New4 artifacts still run.
+- The local gate does not silently skip failed subprocesses; it prints the
+  failing gate, command, and exit code and returns that code.
+- Slow geometry remains excluded from local mode and included in strict mode.
+
+Phase 8 validation:
+
+- `python -m py_compile scripts/debug/run_geometry_fitter_cache_regression_gate.py tests/test_gui_geometry_fit_workflow.py`
+  passed.
+- `python -m pytest tests/test_geometry_fitter_cache_regression_gate_script.py -q`
+  passed, `5 passed`.
+- `python -m pytest tests/test_geometry_fitter_cache_regression_gate_script.py tests/test_gui_runtime_geometry_fitter_cache_handoff.py tests/test_geometry_objective_cache.py tests/test_gui_runtime_geometry_fitter_handoff_fast.py -q`
+  passed, `37 passed`.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "point_provider or new4_saved_state_without_running_optimizer" -vv`
+  passed with `26 passed, 2 skipped`; the local untracked New4 fixture was
+  skipped by default.
+- `python scripts/debug/run_geometry_fitter_cache_regression_gate.py --mode local`
+  passed. Summary: compile passed, fast local pytest gate passed with
+  `477 passed`, manual identity gate passed with `5 passed, 423 deselected`,
+  workflow slice passed with `26 passed, 2 skipped`, slow geometry skipped for
+  local mode, and untracked New4 preflight/ladder scripts skipped by default.

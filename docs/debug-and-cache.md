@@ -172,13 +172,15 @@ Status as of 2026-04-28:
 - feature status: implemented for display-only, combine-only, analysis-only,
   primary-prune reuse, primary-prune fill, detector-center remap, and full
   simulation update actions; local Phase 3.5 validation also adds fast
-  geometry-fitter handoff tests and optional New4 fixture skips
+  geometry-fitter handoff tests and optional New4 fixture skips; Phase 8 adds
+  `scripts/debug/run_geometry_fitter_cache_regression_gate.py` as the repeatable
+  local/strict cache regression gate
 - bug status: fixed for overbroad fast-path invalidation that could clear QR
   selector entries or fitter handoff data before replacement rows were ready;
   fixed local New4 validation failures caused by absent optional artifacts
 - error status: targeted cache-policy, runtime-invalidation, and fast handoff
   tests pass; slow/manual caked-refined geometry diagnostics are excluded from
-  the local gate by instruction
+  local mode and included in strict mode
 - compatibility status: `disabled_qr_sets`, `disabled_qz_sections`, and
   `pending_legacy_disabled_qz_sections` remain explicit user/state selections
   and are not cleared by cache invalidation
@@ -208,6 +210,9 @@ Validation:
   passed, `22 passed`
 - `python -m py_compile ra_sim/gui/runtime_invalidation.py ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/runtime_qr_selector_cache_policy.py tests/test_gui_runtime_invalidation.py`
   passed
+- `python scripts/debug/run_geometry_fitter_cache_regression_gate.py --mode local`
+  passed; untracked local New4 artifacts are skipped by default unless
+  `RA_SIM_ALLOW_UNTRACKED_NEW4=1` is set
 
 ## Weighted-event diffraction status
 
