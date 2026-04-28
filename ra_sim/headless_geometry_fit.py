@@ -549,6 +549,7 @@ def _headless_background_subtraction_config(
     mode_override: object | None,
     scale_override: object | None,
     diagnostics_override: bool | None,
+    phi_block_overrides: Mapping[str, object] | None = None,
 ) -> DiffuseBackgroundConfig:
     geometry_cfg = (
         defaults.fit_config.get("geometry", {})
@@ -593,6 +594,10 @@ def _headless_background_subtraction_config(
         config_mapping["scale"] = scale_override
     if diagnostics_override is not None:
         config_mapping["diagnostics"] = bool(diagnostics_override)
+    if isinstance(phi_block_overrides, Mapping):
+        for key, value in phi_block_overrides.items():
+            if key in config_mapping and value is not None:
+                config_mapping[str(key)] = value
 
     return diffuse_background_config_from_mapping(config_mapping)
 
@@ -695,6 +700,64 @@ def _headless_background_subtraction_json_safe(value: object) -> object:
     return value
 
 
+def _write_background_subtraction_png(path: Path, value: object) -> None:
+    try:
+        arr = np.asarray(value, dtype=np.float64)
+    except Exception:
+        return
+    if arr.ndim != 2 or arr.size <= 0:
+        return
+    finite = arr[np.isfinite(arr)]
+    if finite.size <= 0:
+        return
+    try:
+        vmin, vmax = np.nanpercentile(finite, [1.0, 99.0])
+        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+            vmin = float(np.nanmin(finite))
+            vmax = float(np.nanmax(finite))
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        from matplotlib import image as mpl_image
+
+        mpl_image.imsave(path, arr, cmap="turbo", vmin=float(vmin), vmax=float(vmax))
+    except Exception:
+        return
+
+
+def _write_background_phi_block_grid_csv(result: Mapping[str, object], output_dir: Path) -> None:
+    try:
+        grid = np.asarray(result.get("phi_block_grid"), dtype=np.float64)
+        counts = np.asarray(result.get("phi_block_counts"), dtype=np.int64)
+        valid_fraction = np.asarray(
+            result.get("phi_block_valid_fraction_grid"),
+            dtype=np.float64,
+        )
+        phi_edges = np.asarray(result.get("phi_block_phi_edges_deg"), dtype=np.float64).reshape(-1)
+        theta_edges = np.asarray(result.get("phi_block_theta_edges_deg"), dtype=np.float64).reshape(-1)
+    except Exception:
+        return
+    if grid.ndim != 2 or counts.shape != grid.shape:
+        return
+    if valid_fraction.shape != grid.shape:
+        valid_fraction = np.full(grid.shape, np.nan, dtype=np.float64)
+    if phi_edges.size != grid.shape[0] + 1 or theta_edges.size != grid.shape[1] + 1:
+        return
+    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
+    with (output_dir / "background_phi_block_grid.csv").open("w", encoding="utf-8") as handle:
+        handle.write("phi_bin_center_deg,theta_bin_center_deg,block_value,count,valid_fraction\n")
+        for pi, phi_value in enumerate(phi_centers):
+            for ti, theta_value in enumerate(theta_centers):
+                handle.write(
+                    f"{float(phi_value):.12g},"
+                    f"{float(theta_value):.12g},"
+                    f"{float(grid[pi, ti]):.12g},"
+                    f"{int(counts[pi, ti])},"
+                    f"{float(valid_fraction[pi, ti]):.12g}\n"
+                )
+
+
 def _write_headless_background_subtraction_diagnostics(
     result: Mapping[str, object],
     *,
@@ -733,10 +796,27 @@ def _write_headless_background_subtraction_diagnostics(
         ("corrected", "background_subtracted_native.npy"),
         ("valid_mask", "background_valid_mask.npy"),
         ("exclusion_mask", "background_exclusion_mask.npy"),
+        ("phi_block_model_caked", "background_phi_block_model_caked.npy"),
+        ("phi_block_model_detector", "background_phi_block_model_detector.npy"),
+        ("phi_block_grid", "background_phi_block_grid.npy"),
+        ("phi_block_counts", "background_phi_block_counts.npy"),
     ):
         value = result.get(key)
         if value is not None:
             np.save(output_dir / filename, np.asarray(value))
+    for key, filename in (
+        ("phi_block_model_caked", "background_phi_block_model_caked.png"),
+        ("phi_block_model_detector", "background_phi_block_model_detector.png"),
+        (
+            "after_radial_before_phi_blocks_caked",
+            "background_after_radial_before_phi_blocks_caked.png",
+        ),
+        ("after_phi_blocks_caked", "background_after_phi_blocks_caked.png"),
+    ):
+        value = result.get(key)
+        if value is not None:
+            _write_background_subtraction_png(output_dir / filename, value)
+    _write_background_phi_block_grid_csv(result, output_dir)
 
 
 def _headless_geometry_fit_center(params: Mapping[str, object]) -> tuple[float, float] | None:
@@ -1811,6 +1891,7 @@ def run_headless_geometry_fit(
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
     background_subtraction_diagnostics: bool | None = None,
+    background_subtraction_phi_block_overrides: Mapping[str, object] | None = None,
 ) -> HeadlessGeometryFitResult:
     """Run the geometry fit described by ``saved_state`` and return the updated state."""
 
@@ -1840,6 +1921,7 @@ def run_headless_geometry_fit(
         mode_override=background_subtraction_mode,
         scale_override=background_subtraction_scale,
         diagnostics_override=background_subtraction_diagnostics,
+        phi_block_overrides=background_subtraction_phi_block_overrides,
     )
     geometry_state = (
         saved_state.get("geometry", {}) if isinstance(saved_state.get("geometry"), dict) else {}

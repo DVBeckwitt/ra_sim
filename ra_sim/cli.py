@@ -718,6 +718,7 @@ def run_headless_geometry_fit(
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
     background_subtraction_diagnostics: bool | None = None,
+    background_subtraction_phi_block_overrides: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting directly from one saved GUI-state payload."""
 
@@ -748,6 +749,10 @@ def run_headless_geometry_fit(
         if background_subtraction_diagnostics is not None:
             shared_kwargs["background_subtraction_diagnostics"] = (
                 background_subtraction_diagnostics
+            )
+        if background_subtraction_phi_block_overrides:
+            shared_kwargs["background_subtraction_phi_block_overrides"] = dict(
+                background_subtraction_phi_block_overrides
             )
         shared_result = _load_shared_headless_geometry_fit().run_headless_geometry_fit(
             copy.deepcopy(dict(state)),
@@ -839,6 +844,7 @@ def run_headless_geometry_fit(
             mode_override=background_subtraction_mode,
             scale_override=background_subtraction_scale,
             diagnostics_override=background_subtraction_diagnostics,
+            phi_block_overrides=background_subtraction_phi_block_overrides,
         )
     else:
         background_subtraction_config = SimpleNamespace(
@@ -2276,6 +2282,7 @@ def run_headless_mosaic_shape_fit(
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
     background_subtraction_diagnostics: bool | None = None,
+    background_subtraction_phi_block_overrides: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run geometry fitting followed by profile-based mosaic fitting from one saved GUI state."""
 
@@ -2291,6 +2298,10 @@ def run_headless_mosaic_shape_fit(
     if background_subtraction_diagnostics is not None:
         fit_kwargs["background_subtraction_diagnostics"] = (
             background_subtraction_diagnostics
+        )
+    if background_subtraction_phi_block_overrides:
+        fit_kwargs["background_subtraction_phi_block_overrides"] = dict(
+            background_subtraction_phi_block_overrides
         )
     return run_headless_geometry_fit(
         payload,
@@ -2840,6 +2851,24 @@ def _normalize_fit_geometry_seed_policy(seed_policy: object | None) -> str | Non
     )
 
 
+def _background_subtraction_phi_block_overrides_from_args(
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    overrides: dict[str, object] = {}
+    for attr, key in (
+        ("background_phi_block_theta_bin_width_deg", "phi_block_theta_bin_width_deg"),
+        ("background_phi_block_phi_bin_width_deg", "phi_block_phi_bin_width_deg"),
+        ("background_phi_block_quantile", "phi_block_quantile"),
+        ("background_phi_block_scale", "phi_block_scale"),
+        ("background_phi_block_interpolation", "phi_block_interpolation"),
+        ("background_phi_block_preserve_block_edges", "phi_block_preserve_block_edges"),
+    ):
+        value = getattr(args, attr, None)
+        if value is not None:
+            overrides[key] = value
+    return overrides
+
+
 def _cmd_fit_geometry(args: argparse.Namespace) -> None:
     """Run geometry fitting from a saved GUI state without launching the GUI."""
 
@@ -2876,6 +2905,9 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
                     args,
                     "background_subtraction_diagnostics",
                     None,
+                ),
+                background_subtraction_phi_block_overrides=(
+                    _background_subtraction_phi_block_overrides_from_args(args)
                 ),
             )
         )
@@ -2950,6 +2982,9 @@ def _cmd_fit_mosaic_shape(args: argparse.Namespace) -> None:
                     args,
                     "background_subtraction_diagnostics",
                     None,
+                ),
+                background_subtraction_phi_block_overrides=(
+                    _background_subtraction_phi_block_overrides_from_args(args)
                 ),
             )
         )
@@ -3068,7 +3103,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     fit_geometry_parser.add_argument(
         "--background-subtraction",
-        choices=("saved", "off", "radial", "radial-plus-caked-2d"),
+        choices=(
+            "saved",
+            "off",
+            "radial",
+            "radial-plus-caked-2d",
+            "radial-plus-phi-blocks",
+            "radial-plus-phi-blocks-plus-caked-2d",
+        ),
         default="saved",
         help="Diffuse-background subtraction override for fit input (default: saved).",
     )
@@ -3083,6 +3125,50 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Write diffuse-background subtraction diagnostics during headless fitting.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-phi-block-theta-bin-width-deg",
+        type=float,
+        default=None,
+        help="Override phi-block subtraction 2theta bin width in degrees.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-phi-block-phi-bin-width-deg",
+        type=float,
+        default=None,
+        help="Override phi-block subtraction phi bin width in degrees.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-phi-block-quantile",
+        type=float,
+        default=None,
+        help="Override phi-block subtraction quantile.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-phi-block-scale",
+        type=float,
+        default=None,
+        help="Override phi-block component scale.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-phi-block-interpolation",
+        choices=("nearest", "linear"),
+        default=None,
+        help="Override phi-block upsampling interpolation.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-phi-block-preserve-block-edges",
+        dest="background_phi_block_preserve_block_edges",
+        action="store_true",
+        default=None,
+        help="Use nearest-neighbor phi-block upsampling.",
+    )
+    fit_geometry_parser.add_argument(
+        "--background-no-phi-block-preserve-block-edges",
+        dest="background_phi_block_preserve_block_edges",
+        action="store_false",
+        default=None,
+        help="Allow linear phi-block upsampling when selected.",
     )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
 
@@ -3150,7 +3236,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-subtraction",
-        choices=("saved", "off", "radial", "radial-plus-caked-2d"),
+        choices=(
+            "saved",
+            "off",
+            "radial",
+            "radial-plus-caked-2d",
+            "radial-plus-phi-blocks",
+            "radial-plus-phi-blocks-plus-caked-2d",
+        ),
         default="saved",
         help="Diffuse-background subtraction override for fit input (default: saved).",
     )
@@ -3165,6 +3258,50 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Write diffuse-background subtraction diagnostics during headless fitting.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-phi-block-theta-bin-width-deg",
+        type=float,
+        default=None,
+        help="Override phi-block subtraction 2theta bin width in degrees.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-phi-block-phi-bin-width-deg",
+        type=float,
+        default=None,
+        help="Override phi-block subtraction phi bin width in degrees.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-phi-block-quantile",
+        type=float,
+        default=None,
+        help="Override phi-block subtraction quantile.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-phi-block-scale",
+        type=float,
+        default=None,
+        help="Override phi-block component scale.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-phi-block-interpolation",
+        choices=("nearest", "linear"),
+        default=None,
+        help="Override phi-block upsampling interpolation.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-phi-block-preserve-block-edges",
+        dest="background_phi_block_preserve_block_edges",
+        action="store_true",
+        default=None,
+        help="Use nearest-neighbor phi-block upsampling.",
+    )
+    fit_mosaic_shape_parser.add_argument(
+        "--background-no-phi-block-preserve-block-edges",
+        dest="background_phi_block_preserve_block_edges",
+        action="store_false",
+        default=None,
+        help="Allow linear phi-block upsampling when selected.",
     )
     fit_mosaic_shape_parser.set_defaults(func=_cmd_fit_mosaic_shape)
 

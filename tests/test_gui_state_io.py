@@ -174,6 +174,17 @@ def test_collect_snapshot_persists_background_subtraction_vars() -> None:
             "background_subtraction_caked_theta_window_deg_var": _FakeTkVar(2.5),
             "background_subtraction_caked_phi_window_deg_var": _FakeTkVar(25.0),
             "background_subtraction_caked_quantile_var": _FakeTkVar(0.3),
+            "background_subtraction_phi_block_theta_bin_width_deg_var": _FakeTkVar(1.25),
+            "background_subtraction_phi_block_phi_bin_width_deg_var": _FakeTkVar(18.0),
+            "background_subtraction_phi_block_quantile_var": _FakeTkVar(0.55),
+            "background_subtraction_phi_block_min_pixels_var": _FakeTkVar(30),
+            "background_subtraction_phi_block_min_coverage_var": _FakeTkVar(0.10),
+            "background_subtraction_phi_block_smooth_theta_bins_var": _FakeTkVar(0.8),
+            "background_subtraction_phi_block_smooth_phi_bins_var": _FakeTkVar(0.4),
+            "background_subtraction_phi_block_outlier_sigma_var": _FakeTkVar(7.0),
+            "background_subtraction_phi_block_interpolation_var": _FakeTkVar("linear"),
+            "background_subtraction_phi_block_scale_var": _FakeTkVar(0.75),
+            "background_subtraction_phi_block_preserve_block_edges_var": _FakeTkVar(False),
             "background_subtraction_peak_mask_sigma_var": _FakeTkVar(3.0),
             "background_subtraction_peak_mask_radius_px_var": _FakeTkVar(16.0),
             "background_subtraction_direct_beam_mask_radius_px_var": _FakeTkVar(45.0),
@@ -215,6 +226,17 @@ def test_collect_snapshot_persists_background_subtraction_vars() -> None:
     assert variables["background_subtraction_caked_theta_window_deg_var"] == 2.5
     assert variables["background_subtraction_caked_phi_window_deg_var"] == 25.0
     assert variables["background_subtraction_caked_quantile_var"] == 0.3
+    assert variables["background_subtraction_phi_block_theta_bin_width_deg_var"] == 1.25
+    assert variables["background_subtraction_phi_block_phi_bin_width_deg_var"] == 18.0
+    assert variables["background_subtraction_phi_block_quantile_var"] == 0.55
+    assert variables["background_subtraction_phi_block_min_pixels_var"] == 30
+    assert variables["background_subtraction_phi_block_min_coverage_var"] == 0.10
+    assert variables["background_subtraction_phi_block_smooth_theta_bins_var"] == 0.8
+    assert variables["background_subtraction_phi_block_smooth_phi_bins_var"] == 0.4
+    assert variables["background_subtraction_phi_block_outlier_sigma_var"] == 7.0
+    assert variables["background_subtraction_phi_block_interpolation_var"] == "linear"
+    assert variables["background_subtraction_phi_block_scale_var"] == 0.75
+    assert variables["background_subtraction_phi_block_preserve_block_edges_var"] is False
     assert variables["background_subtraction_peak_mask_sigma_var"] == 3.0
     assert variables["background_subtraction_peak_mask_radius_px_var"] == 16.0
     assert variables["background_subtraction_direct_beam_mask_radius_px_var"] == 45.0

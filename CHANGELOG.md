@@ -29,6 +29,7 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Added diffuse-background `radial_plus_phi_blocks` and `radial_plus_phi_blocks_plus_caked_2d` modes with coarse phi/theta block residual modeling, component diagnostics, GUI controls, CLI mode support, and artifact exports.
   - Expanded `hbn_fitter/fitter.py` with uncertainty-aware ellipse refinement and point-sigma handling.
   - Added projective tilt optimization path with fallback to legacy optimization.
   - Extracted hBN fitter bundle-payload assembly into a shared helper used by `save_bundle()`.

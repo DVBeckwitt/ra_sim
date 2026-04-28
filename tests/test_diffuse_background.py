@@ -7,6 +7,7 @@ from ra_sim.fitting.diffuse_background import (
     build_detector_valid_mask,
     build_peak_exclusion_mask,
     diffuse_background_config_from_mapping,
+    estimate_phi_block_residual_background,
     fit_diffuse_background_native,
     subtract_diffuse_background,
 )
@@ -72,6 +73,12 @@ def test_mode_aliases_and_mapping_round_trip() -> None:
     assert cfg.apply_to_display is True
     assert diffuse_background_config_from_mapping({"mode": "radial+caked"}).mode == (
         "radial_plus_caked_2d"
+    )
+    assert diffuse_background_config_from_mapping({"mode": "radial-plus-phi-blocks"}).mode == (
+        "radial_plus_phi_blocks"
+    )
+    assert diffuse_background_config_from_mapping({"mode": "radial+phi+caked"}).mode == (
+        "radial_plus_phi_blocks_plus_caked_2d"
     )
 
 
@@ -195,3 +202,220 @@ def test_subtract_preserves_negative_values_and_off_mode_is_raw() -> None:
     )
     np.testing.assert_allclose(result["corrected"], raw)
     np.testing.assert_allclose(result["model"], np.zeros_like(raw))
+
+
+def _synthetic_phi_block_scene(
+    *,
+    seed: int = 7,
+) -> dict[str, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    azimuth_axis = np.linspace(-179.0, 179.0, 180)
+    radial_axis = np.linspace(8.0, 52.0, 320)
+    theta = radial_axis[None, :]
+    phi = azimuth_axis[:, None]
+    radial = 850.0 * np.exp(-theta / 26.0) + 55.0 + 12.0 * np.cos(theta / 3.0)
+    sector = np.floor((azimuth_axis + 180.0) / 15.0).astype(int)
+    sector_offsets = 14.0 * np.sin(0.9 * sector) + 8.0 * np.where(sector % 3 == 0, 1.0, -0.5)
+    sector_gain = 0.9 + 0.35 * np.cos(0.7 * sector)
+    block = (
+        sector_offsets[:, None]
+        + 42.0
+        * sector_gain[:, None]
+        * np.exp(-0.5 * ((theta - 22.0) / 1.2) ** 2)
+        + 26.0
+        * (1.0 - 0.25 * sector_gain[:, None])
+        * np.exp(-0.5 * ((theta - 40.0) / 1.8) ** 2)
+    )
+    noise = rng.normal(0.0, 1.8, size=(azimuth_axis.size, radial_axis.size))
+    image = radial + block + noise
+    image[46:58, 120:148] = np.nan
+    image[:, 260:268] = np.nan
+    return {
+        "image": image,
+        "two_theta": np.broadcast_to(theta, image.shape).copy(),
+        "phi": np.broadcast_to(phi, image.shape).copy(),
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "block": block,
+    }
+
+
+def _coarse_block_median_mad(
+    values: np.ndarray,
+    radial_axis: np.ndarray,
+    azimuth_axis: np.ndarray,
+    *,
+    theta_width: float = 1.0,
+    phi_width: float = 15.0,
+) -> float:
+    theta_edges = np.arange(
+        np.floor(float(np.nanmin(radial_axis)) / theta_width) * theta_width,
+        np.ceil(float(np.nanmax(radial_axis)) / theta_width) * theta_width + theta_width,
+        theta_width,
+    )
+    phi_edges = np.arange(
+        np.floor(float(np.nanmin(azimuth_axis)) / phi_width) * phi_width,
+        np.ceil(float(np.nanmax(azimuth_axis)) / phi_width) * phi_width + phi_width,
+        phi_width,
+    )
+    medians: list[float] = []
+    for pi in range(phi_edges.size - 1):
+        phi_mask = (azimuth_axis >= phi_edges[pi]) & (azimuth_axis < phi_edges[pi + 1])
+        for ti in range(theta_edges.size - 1):
+            theta_mask = (radial_axis >= theta_edges[ti]) & (radial_axis < theta_edges[ti + 1])
+            cell = values[np.ix_(phi_mask, theta_mask)]
+            cell = cell[np.isfinite(cell)]
+            if cell.size:
+                medians.append(float(np.median(cell)))
+    arr = np.asarray(medians, dtype=np.float64)
+    center = float(np.median(arr))
+    return float(1.4826 * np.median(np.abs(arr - center)))
+
+
+def test_phi_block_mode_reduces_synthetic_block_residual_and_keeps_components() -> None:
+    scene = _synthetic_phi_block_scene()
+    cfg_common = dict(
+        enabled=True,
+        radial_bin_width_deg=0.20,
+        radial_quantile=0.50,
+        radial_smooth_sigma_deg=0.25,
+        peak_mask_sigma=999.0,
+        peak_mask_radius_px=0.0,
+        direct_beam_mask_radius_px=0.0,
+        phi_block_theta_bin_width_deg=1.0,
+        phi_block_phi_bin_width_deg=15.0,
+        phi_block_quantile=0.50,
+        phi_block_min_pixels=4,
+        phi_block_min_coverage=0.02,
+        phi_block_smooth_theta_bins=0.10,
+        phi_block_smooth_phi_bins=0.10,
+        phi_block_outlier_sigma=8.0,
+    )
+    radial = fit_diffuse_background_native(
+        scene["image"],
+        two_theta_deg=scene["two_theta"],
+        phi_deg=scene["phi"],
+        caked_radial_axis_deg=scene["radial_axis"],
+        caked_azimuth_axis_deg=scene["azimuth_axis"],
+        config=DiffuseBackgroundConfig(mode="radial", **cfg_common),
+    )
+    phi_blocks = fit_diffuse_background_native(
+        scene["image"],
+        two_theta_deg=scene["two_theta"],
+        phi_deg=scene["phi"],
+        caked_radial_axis_deg=scene["radial_axis"],
+        caked_azimuth_axis_deg=scene["azimuth_axis"],
+        config=DiffuseBackgroundConfig(mode="radial_plus_phi_blocks", **cfg_common),
+    )
+
+    radial_mad = _coarse_block_median_mad(
+        np.asarray(radial["corrected"], dtype=np.float64),
+        scene["radial_axis"],
+        scene["azimuth_axis"],
+    )
+    phi_mad = _coarse_block_median_mad(
+        np.asarray(phi_blocks["corrected"], dtype=np.float64),
+        scene["radial_axis"],
+        scene["azimuth_axis"],
+    )
+
+    assert radial_mad > 3.0
+    assert phi_mad < 0.4 * radial_mad
+    assert np.nanmin(np.asarray(phi_blocks["corrected"], dtype=np.float64)) < 0.0
+    assert np.all(np.isnan(np.asarray(phi_blocks["model"], dtype=np.float64)[:, 260:268]))
+    components = phi_blocks["background_components"]
+    assert isinstance(components, dict)
+    assert components["phi_blocks_detector"] is phi_blocks["phi_block_model_detector"]
+    assert components["phi_blocks_caked"] is phi_blocks["phi_block_model_caked"]
+    diagnostics = phi_blocks["diagnostics"]
+    assert diagnostics["phi_block_enabled"] is True
+    assert diagnostics["phi_block_reduction_fraction"] > 0.3
+
+
+def test_phi_block_plus_caked_refits_slow_residual_after_phi_blocks() -> None:
+    scene = _synthetic_phi_block_scene(seed=9)
+    cfg = DiffuseBackgroundConfig(
+        enabled=True,
+        mode="radial_plus_phi_blocks_plus_caked_2d",
+        radial_bin_width_deg=0.20,
+        radial_quantile=0.50,
+        radial_smooth_sigma_deg=0.25,
+        caked_theta_window_deg=2.0,
+        caked_phi_window_deg=20.0,
+        caked_quantile=0.50,
+        peak_mask_sigma=999.0,
+        peak_mask_radius_px=0.0,
+        direct_beam_mask_radius_px=0.0,
+        phi_block_theta_bin_width_deg=1.0,
+        phi_block_phi_bin_width_deg=15.0,
+        phi_block_min_pixels=4,
+        phi_block_min_coverage=0.02,
+    )
+    result = fit_diffuse_background_native(
+        scene["image"],
+        two_theta_deg=scene["two_theta"],
+        phi_deg=scene["phi"],
+        caked_radial_axis_deg=scene["radial_axis"],
+        caked_azimuth_axis_deg=scene["azimuth_axis"],
+        config=cfg,
+    )
+
+    assert result["phi_block_model_caked"] is not None
+    assert result["caked_residual_model"] is not None
+    assert result["slow_caked_model_detector"] is not None
+    assert result["after_radial_before_phi_blocks_caked"] is not None
+    assert result["after_phi_blocks_caked"] is not None
+
+
+def test_phi_block_interpolation_modes_preserve_or_smooth_edges() -> None:
+    radial_axis = np.linspace(0.0, 5.0, 51)
+    azimuth_axis = np.linspace(-30.0, 30.0, 121)
+    phi = azimuth_axis[:, None]
+    residual = np.where(phi < 0.0, -10.0, 10.0) * np.ones((1, radial_axis.size))
+    valid = np.ones_like(residual, dtype=bool)
+    exclusion = np.zeros_like(residual, dtype=bool)
+
+    nearest = estimate_phi_block_residual_background(
+        residual,
+        radial_axis,
+        azimuth_axis,
+        valid,
+        exclusion,
+        DiffuseBackgroundConfig(
+            enabled=True,
+            mode="radial_plus_phi_blocks",
+            phi_block_theta_bin_width_deg=1.0,
+            phi_block_phi_bin_width_deg=15.0,
+            phi_block_min_pixels=1,
+            phi_block_min_coverage=0.0,
+            phi_block_smooth_theta_bins=0.0,
+            phi_block_smooth_phi_bins=0.0,
+            phi_block_preserve_block_edges=True,
+        ),
+    )
+    linear = estimate_phi_block_residual_background(
+        residual,
+        radial_axis,
+        azimuth_axis,
+        valid,
+        exclusion,
+        DiffuseBackgroundConfig(
+            enabled=True,
+            mode="radial_plus_phi_blocks",
+            phi_block_theta_bin_width_deg=1.0,
+            phi_block_phi_bin_width_deg=15.0,
+            phi_block_min_pixels=1,
+            phi_block_min_coverage=0.0,
+            phi_block_smooth_theta_bins=0.0,
+            phi_block_smooth_phi_bins=0.0,
+            phi_block_interpolation="linear",
+            phi_block_preserve_block_edges=False,
+        ),
+    )
+
+    nearest_model = np.asarray(nearest["phi_block_model"], dtype=np.float64)
+    linear_model = np.asarray(linear["phi_block_model"], dtype=np.float64)
+    center_col = radial_axis.size // 2
+    assert set(np.round(nearest_model[:, center_col], 6)) <= {-10.0, 10.0}
+    boundary = np.argmin(np.abs(azimuth_axis))
+    assert abs(float(linear_model[boundary, center_col])) < 9.0

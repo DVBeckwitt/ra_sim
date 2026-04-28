@@ -28,6 +28,15 @@ _MODE_ALIASES = {
     "radial+caked": "radial_plus_caked_2d",
     "radial_caked": "radial_plus_caked_2d",
     "radial plus caked 2d": "radial_plus_caked_2d",
+    "radial_plus_phi_blocks": "radial_plus_phi_blocks",
+    "radial-plus-phi-blocks": "radial_plus_phi_blocks",
+    "radial+phi": "radial_plus_phi_blocks",
+    "radial_phi_blocks": "radial_plus_phi_blocks",
+    "phi_blocks": "radial_plus_phi_blocks",
+    "radial_plus_phi_blocks_plus_caked_2d": "radial_plus_phi_blocks_plus_caked_2d",
+    "radial-plus-phi-blocks-plus-caked-2d": "radial_plus_phi_blocks_plus_caked_2d",
+    "radial+phi+caked": "radial_plus_phi_blocks_plus_caked_2d",
+    "radial_phi_blocks_caked": "radial_plus_phi_blocks_plus_caked_2d",
 }
 
 
@@ -50,6 +59,18 @@ class DiffuseBackgroundConfig:
     caked_theta_window_deg: float = 1.5
     caked_phi_window_deg: float = 15.0
     caked_quantile: float = 0.35
+
+    phi_block_theta_bin_width_deg: float = 0.75
+    phi_block_phi_bin_width_deg: float = 12.0
+    phi_block_quantile: float = 0.50
+    phi_block_min_pixels: int = 20
+    phi_block_min_coverage: float = 0.05
+    phi_block_smooth_theta_bins: float = 0.75
+    phi_block_smooth_phi_bins: float = 0.50
+    phi_block_outlier_sigma: float = 6.0
+    phi_block_interpolation: str = "nearest"
+    phi_block_scale: float = 1.0
+    phi_block_preserve_block_edges: bool = True
 
     peak_mask_sigma: float = 4.0
     peak_mask_radius_px: float = 10.0
@@ -83,6 +104,52 @@ class DiffuseBackgroundConfig:
             max(float(self.caked_phi_window_deg), 1e-6),
         )
         object.__setattr__(self, "caked_quantile", _clip01(self.caked_quantile))
+        object.__setattr__(
+            self,
+            "phi_block_theta_bin_width_deg",
+            max(float(self.phi_block_theta_bin_width_deg), 1e-6),
+        )
+        object.__setattr__(
+            self,
+            "phi_block_phi_bin_width_deg",
+            max(float(self.phi_block_phi_bin_width_deg), 1e-6),
+        )
+        object.__setattr__(self, "phi_block_quantile", _clip01(self.phi_block_quantile))
+        object.__setattr__(
+            self,
+            "phi_block_min_pixels",
+            max(1, int(round(float(self.phi_block_min_pixels)))),
+        )
+        object.__setattr__(
+            self,
+            "phi_block_min_coverage",
+            _clip01(self.phi_block_min_coverage),
+        )
+        object.__setattr__(
+            self,
+            "phi_block_smooth_theta_bins",
+            max(float(self.phi_block_smooth_theta_bins), 0.0),
+        )
+        object.__setattr__(
+            self,
+            "phi_block_smooth_phi_bins",
+            max(float(self.phi_block_smooth_phi_bins), 0.0),
+        )
+        object.__setattr__(
+            self,
+            "phi_block_outlier_sigma",
+            max(float(self.phi_block_outlier_sigma), 0.0),
+        )
+        interpolation = str(self.phi_block_interpolation).strip().lower().replace("-", "_")
+        if interpolation not in {"nearest", "linear"}:
+            interpolation = "nearest"
+        object.__setattr__(self, "phi_block_interpolation", interpolation)
+        object.__setattr__(self, "phi_block_scale", float(self.phi_block_scale))
+        object.__setattr__(
+            self,
+            "phi_block_preserve_block_edges",
+            bool(self.phi_block_preserve_block_edges),
+        )
         object.__setattr__(self, "peak_mask_sigma", max(float(self.peak_mask_sigma), 0.0))
         object.__setattr__(
             self,
@@ -451,6 +518,167 @@ def estimate_caked_residual_background(
     }
 
 
+def estimate_phi_block_residual_background(
+    caked_residual: np.ndarray,
+    radial_axis_deg: np.ndarray,
+    azimuth_axis_deg: np.ndarray,
+    valid_mask: np.ndarray,
+    exclusion_mask: np.ndarray,
+    config: DiffuseBackgroundConfig,
+) -> dict[str, object]:
+    """Fit a coarse blocky phi-dependent residual model on a caked grid."""
+
+    residual = np.asarray(caked_residual, dtype=np.float64)
+    radial_axis = np.asarray(radial_axis_deg, dtype=np.float64).reshape(-1)
+    azimuth_axis = np.asarray(azimuth_axis_deg, dtype=np.float64).reshape(-1)
+    if residual.ndim != 2:
+        raise ValueError("caked_residual must be 2D")
+    if residual.shape != (azimuth_axis.size, radial_axis.size):
+        raise ValueError("caked_residual shape must match azimuth/radial axes")
+
+    valid = _as_bool_mask(valid_mask, residual.shape)
+    exclusion = _as_bool_mask(exclusion_mask, residual.shape)
+    data_mask = valid & ~exclusion & np.isfinite(residual)
+    theta_edges = _regular_edges_for_axis(
+        radial_axis,
+        max(float(config.phi_block_theta_bin_width_deg), 1e-6),
+    )
+    phi_edges = _regular_edges_for_axis(
+        azimuth_axis,
+        max(float(config.phi_block_phi_bin_width_deg), 1e-6),
+    )
+    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
+    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+    block_grid = np.full((phi_centers.size, theta_centers.size), np.nan, dtype=np.float64)
+    block_counts = np.zeros(block_grid.shape, dtype=np.int64)
+    block_valid_fraction = np.zeros(block_grid.shape, dtype=np.float64)
+
+    if theta_centers.size <= 0 or phi_centers.size <= 0:
+        model = np.zeros_like(residual, dtype=np.float64)
+        return {
+            "phi_block_model": model,
+            "phi_block_grid": block_grid,
+            "phi_block_counts": block_counts,
+            "phi_block_valid_fraction_grid": block_valid_fraction,
+            "phi_block_theta_edges_deg": theta_edges,
+            "phi_block_phi_edges_deg": phi_edges,
+            "diagnostics": _phi_block_empty_diagnostics(data_mask, block_grid),
+        }
+
+    theta_bin = _axis_bin_indices(radial_axis, theta_edges)
+    phi_bin = _axis_bin_indices(azimuth_axis, phi_edges)
+    q = _clip01(config.phi_block_quantile)
+    min_pixels = max(1, int(config.phi_block_min_pixels))
+    min_coverage = _clip01(config.phi_block_min_coverage)
+    outlier_sigma = max(float(config.phi_block_outlier_sigma), 0.0)
+
+    before_values = residual[data_mask]
+    global_fallback = (
+        float(np.nanmedian(before_values[np.isfinite(before_values)]))
+        if before_values.size
+        else 0.0
+    )
+
+    for pi in range(phi_centers.size):
+        phi_axis_mask = phi_bin == pi
+        if not np.any(phi_axis_mask):
+            continue
+        for ti in range(theta_centers.size):
+            theta_axis_mask = theta_bin == ti
+            if not np.any(theta_axis_mask):
+                continue
+            cell_shape_count = int(np.count_nonzero(phi_axis_mask) * np.count_nonzero(theta_axis_mask))
+            if cell_shape_count <= 0:
+                continue
+            local_mask = data_mask[np.ix_(phi_axis_mask, theta_axis_mask)]
+            vals = residual[np.ix_(phi_axis_mask, theta_axis_mask)][local_mask]
+            vals = vals[np.isfinite(vals)]
+            if vals.size > 0 and outlier_sigma > 0.0:
+                center = float(np.median(vals))
+                spread = _mad(vals)
+                if np.isfinite(spread) and spread > 1.0e-12:
+                    keep = np.abs(vals - center) <= outlier_sigma * spread
+                    vals = vals[keep]
+            count = int(vals.size)
+            coverage = float(count / cell_shape_count)
+            block_counts[pi, ti] = count
+            block_valid_fraction[pi, ti] = coverage
+            if count >= min_pixels and coverage >= min_coverage:
+                block_grid[pi, ti] = float(np.quantile(vals, q))
+
+    finite_blocks = np.isfinite(block_grid)
+    if not np.any(finite_blocks):
+        filled_grid = np.full_like(block_grid, global_fallback, dtype=np.float64)
+    elif np.all(finite_blocks):
+        filled_grid = block_grid.copy()
+    else:
+        filled_grid = _fill_2d_missing_by_interp(
+            block_grid,
+            phi_centers,
+            theta_centers,
+            fallback=global_fallback,
+        )
+
+    smooth_grid = filled_grid
+    sigma = (
+        max(float(config.phi_block_smooth_phi_bins), 0.0),
+        max(float(config.phi_block_smooth_theta_bins), 0.0),
+    )
+    if sigma[0] > 1.0e-9 or sigma[1] > 1.0e-9:
+        smooth_grid = _weighted_gaussian_smooth_2d(
+            filled_grid,
+            np.where(finite_blocks, np.maximum(block_counts, 1), 0.0),
+            sigma,
+            mode="nearest",
+        )
+        if not np.all(np.isfinite(smooth_grid)):
+            smooth_grid = _fill_2d_missing_by_interp(
+                smooth_grid,
+                phi_centers,
+                theta_centers,
+                fallback=global_fallback,
+            )
+
+    interpolation = (
+        "nearest"
+        if bool(config.phi_block_preserve_block_edges)
+        else str(config.phi_block_interpolation)
+    )
+    model = _upsample_phi_block_grid(
+        smooth_grid,
+        phi_centers,
+        theta_centers,
+        azimuth_axis,
+        radial_axis,
+        interpolation=interpolation,
+    )
+    after_values = (residual - model)[data_mask & np.isfinite(model)]
+    before_mad = _mad(before_values)
+    after_mad = _mad(after_values)
+    diagnostics = {
+        "phi_block_valid_fraction": (
+            float(np.count_nonzero(data_mask) / data_mask.size) if data_mask.size else 0.0
+        ),
+        "phi_block_cell_count": int(block_grid.size),
+        "phi_block_filled_cell_count": int(np.count_nonzero(np.isfinite(smooth_grid))),
+        "phi_block_empty_cell_count": int(block_grid.size - np.count_nonzero(finite_blocks)),
+        "phi_block_median_abs_before": _median_abs(before_values),
+        "phi_block_median_abs_after": _median_abs(after_values),
+        "phi_block_mad_before": before_mad,
+        "phi_block_mad_after": after_mad,
+    }
+    return {
+        "phi_block_model": np.asarray(model, dtype=np.float64),
+        "phi_block_grid": np.asarray(smooth_grid, dtype=np.float64),
+        "phi_block_raw_grid": np.asarray(block_grid, dtype=np.float64),
+        "phi_block_counts": block_counts,
+        "phi_block_valid_fraction_grid": block_valid_fraction,
+        "phi_block_theta_edges_deg": theta_edges,
+        "phi_block_phi_edges_deg": phi_edges,
+        "diagnostics": diagnostics,
+    }
+
+
 def evaluate_caked_background_on_detector(
     caked_background: np.ndarray,
     radial_axis_deg: np.ndarray,
@@ -574,10 +802,23 @@ def fit_diffuse_background_native(
         cfg,
     )
     model = np.asarray(radial_result["model"], dtype=np.float64).copy()
+    radial_detector_model = model.copy()
+    background_components: dict[str, object] = {"radial": radial_detector_model.copy()}
+    phi_block_model_caked = None
+    phi_block_model_detector = None
+    phi_block_grid = None
+    phi_block_counts = None
+    phi_block_valid_fraction_grid = None
+    phi_block_theta_edges = None
+    phi_block_phi_edges = None
+    after_radial_before_phi_blocks_caked = None
+    after_phi_blocks_caked = None
     caked_residual_model = None
+    slow_caked_detector_model = None
     caked_diagnostics: dict[str, object] = {}
+    phi_block_diagnostics: dict[str, object] = {}
 
-    if cfg.mode == "radial_plus_caked_2d" and phi_deg is not None:
+    if _mode_includes_phi_blocks(cfg.mode) and phi_deg is not None:
         caked_fit = _prepare_caked_residual_for_fit(
             img,
             model,
@@ -586,6 +827,68 @@ def fit_diffuse_background_native(
             valid_mask,
             exclusion_mask,
             caked_image=caked_image,
+            caked_radial_axis_deg=caked_radial_axis_deg,
+            caked_azimuth_axis_deg=caked_azimuth_axis_deg,
+        )
+        if caked_fit is not None:
+            caked_residual, radial_axis, azimuth_axis, caked_valid, caked_exclusion = caked_fit
+            after_radial_before_phi_blocks_caked = np.asarray(caked_residual, dtype=np.float64)
+            phi_block_result = estimate_phi_block_residual_background(
+                caked_residual,
+                radial_axis,
+                azimuth_axis,
+                caked_valid,
+                caked_exclusion,
+                cfg,
+            )
+            phi_block_model_caked = np.asarray(
+                phi_block_result.get("phi_block_model"),
+                dtype=np.float64,
+            )
+            detector_phi_block = evaluate_caked_background_on_detector(
+                phi_block_model_caked,
+                radial_axis,
+                azimuth_axis,
+                two_theta,
+                np.asarray(phi_deg, dtype=np.float64),
+            )
+            scaled_detector_phi_block = np.asarray(detector_phi_block, dtype=np.float64) * float(
+                cfg.phi_block_scale
+            )
+            scaled_caked_phi_block = phi_block_model_caked * float(cfg.phi_block_scale)
+            model = np.where(
+                np.isfinite(scaled_detector_phi_block),
+                model + scaled_detector_phi_block,
+                model,
+            )
+            phi_block_model_detector = scaled_detector_phi_block
+            phi_block_model_caked = scaled_caked_phi_block
+            after_phi_blocks_caked = np.asarray(caked_residual, dtype=np.float64) - np.asarray(
+                phi_block_model_caked,
+                dtype=np.float64,
+            )
+            phi_block_grid = phi_block_result.get("phi_block_grid")
+            phi_block_counts = phi_block_result.get("phi_block_counts")
+            phi_block_valid_fraction_grid = phi_block_result.get("phi_block_valid_fraction_grid")
+            phi_block_theta_edges = phi_block_result.get("phi_block_theta_edges_deg")
+            phi_block_phi_edges = phi_block_result.get("phi_block_phi_edges_deg")
+            background_components["phi_blocks_detector"] = phi_block_model_detector
+            background_components["phi_blocks_caked"] = phi_block_model_caked
+            phi_block_diagnostics = dict(phi_block_result.get("diagnostics", {}) or {})
+
+    if _mode_includes_caked_2d(cfg.mode) and phi_deg is not None:
+        caked_fit = _prepare_caked_residual_for_fit(
+            img,
+            model,
+            two_theta,
+            np.asarray(phi_deg, dtype=np.float64),
+            valid_mask,
+            exclusion_mask,
+            caked_image=(
+                caked_image
+                if cfg.mode == "radial_plus_caked_2d" and phi_block_model_detector is None
+                else None
+            ),
             caked_radial_axis_deg=caked_radial_axis_deg,
             caked_azimuth_axis_deg=caked_azimuth_axis_deg,
         )
@@ -610,7 +913,10 @@ def fit_diffuse_background_native(
                 two_theta,
                 np.asarray(phi_deg, dtype=np.float64),
             )
+            slow_caked_detector_model = detector_caked
             model = np.where(np.isfinite(detector_caked), model + detector_caked, model)
+            background_components["slow_caked_detector"] = slow_caked_detector_model
+            background_components["slow_caked_caked"] = caked_residual_model
             caked_diagnostics = dict(caked_result.get("diagnostics", {}) or {})
 
     corrected = subtract_diffuse_background(img, model, cfg)
@@ -623,6 +929,7 @@ def fit_diffuse_background_native(
         cfg,
         radial_result,
         caked_diagnostics,
+        phi_block_diagnostics,
     )
     return _assemble_result(
         cfg,
@@ -633,7 +940,19 @@ def fit_diffuse_background_native(
         exclusion_mask,
         radial_profile=np.asarray(radial_result["radial_profile"], dtype=np.float64),
         radial_bin_centers=np.asarray(radial_result["radial_bin_centers_deg"], dtype=np.float64),
+        radial_model=radial_detector_model,
+        phi_block_model_caked=phi_block_model_caked,
+        phi_block_model_detector=phi_block_model_detector,
+        phi_block_grid=phi_block_grid,
+        phi_block_counts=phi_block_counts,
+        phi_block_valid_fraction_grid=phi_block_valid_fraction_grid,
+        phi_block_theta_edges=phi_block_theta_edges,
+        phi_block_phi_edges=phi_block_phi_edges,
+        after_radial_before_phi_blocks_caked=after_radial_before_phi_blocks_caked,
+        after_phi_blocks_caked=after_phi_blocks_caked,
         caked_residual_model=caked_residual_model,
+        slow_caked_detector_model=slow_caked_detector_model,
+        background_components=background_components,
         diagnostics=diagnostics,
     )
 
@@ -663,9 +982,32 @@ def _assemble_result(
     *,
     radial_profile: np.ndarray,
     radial_bin_centers: np.ndarray,
-    caked_residual_model: np.ndarray | None,
+    radial_model: np.ndarray | None = None,
+    phi_block_model_caked: np.ndarray | None = None,
+    phi_block_model_detector: np.ndarray | None = None,
+    phi_block_grid: object | None = None,
+    phi_block_counts: object | None = None,
+    phi_block_valid_fraction_grid: object | None = None,
+    phi_block_theta_edges: object | None = None,
+    phi_block_phi_edges: object | None = None,
+    after_radial_before_phi_blocks_caked: np.ndarray | None = None,
+    after_phi_blocks_caked: np.ndarray | None = None,
+    caked_residual_model: np.ndarray | None = None,
+    slow_caked_detector_model: np.ndarray | None = None,
+    background_components: Mapping[str, object] | None = None,
     diagnostics: dict[str, object],
 ) -> dict[str, object]:
+    components = dict(background_components or {})
+    if radial_model is not None and "radial" not in components:
+        components["radial"] = radial_model
+    if phi_block_model_detector is not None and "phi_blocks_detector" not in components:
+        components["phi_blocks_detector"] = phi_block_model_detector
+    if phi_block_model_caked is not None and "phi_blocks_caked" not in components:
+        components["phi_blocks_caked"] = phi_block_model_caked
+    if slow_caked_detector_model is not None and "slow_caked_detector" not in components:
+        components["slow_caked_detector"] = slow_caked_detector_model
+    if caked_residual_model is not None and "slow_caked_caked" not in components:
+        components["slow_caked_caked"] = caked_residual_model
     return {
         "config": config,
         "raw": raw,
@@ -675,7 +1017,19 @@ def _assemble_result(
         "exclusion_mask": np.asarray(exclusion_mask, dtype=bool),
         "radial_profile": np.asarray(radial_profile, dtype=np.float64),
         "radial_bin_centers_deg": np.asarray(radial_bin_centers, dtype=np.float64),
+        "radial_model": radial_model,
+        "phi_block_model_caked": phi_block_model_caked,
+        "phi_block_model_detector": phi_block_model_detector,
+        "phi_block_grid": phi_block_grid,
+        "phi_block_counts": phi_block_counts,
+        "phi_block_valid_fraction_grid": phi_block_valid_fraction_grid,
+        "phi_block_theta_edges_deg": phi_block_theta_edges,
+        "phi_block_phi_edges_deg": phi_block_phi_edges,
+        "after_radial_before_phi_blocks_caked": after_radial_before_phi_blocks_caked,
+        "after_phi_blocks_caked": after_phi_blocks_caked,
         "caked_residual_model": caked_residual_model,
+        "slow_caked_model_detector": slow_caked_detector_model,
+        "background_components": components,
         "diagnostics": dict(diagnostics),
     }
 
@@ -689,6 +1043,7 @@ def _build_diagnostics(
     config: DiffuseBackgroundConfig,
     radial_result: Mapping[str, object],
     caked_diagnostics: Mapping[str, object],
+    phi_block_diagnostics: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     valid = np.asarray(valid_mask, dtype=bool)
     excluded = np.asarray(exclusion_mask, dtype=bool)
@@ -714,8 +1069,20 @@ def _build_diagnostics(
         "negative_fraction": (
             float(np.count_nonzero(corr_vals < 0.0) / corr_vals.size) if corr_vals.size else 0.0
         ),
+        "phi_block_enabled": bool(_mode_includes_phi_blocks(config.mode)),
+        "phi_block_scale": float(config.phi_block_scale),
+        "phi_block_theta_bin_width_deg": float(config.phi_block_theta_bin_width_deg),
+        "phi_block_phi_bin_width_deg": float(config.phi_block_phi_bin_width_deg),
+        "phi_block_quantile": float(config.phi_block_quantile),
     }
     diagnostics.update(dict(caked_diagnostics or {}))
+    diagnostics.update(dict(phi_block_diagnostics or {}))
+    before = float(diagnostics.get("phi_block_mad_before", 0.0) or 0.0)
+    after = float(diagnostics.get("phi_block_mad_after", 0.0) or 0.0)
+    tiny = 1.0e-12
+    diagnostics["phi_block_reduction_fraction"] = (
+        float(1.0 - after / max(before, tiny)) if before > tiny else 0.0
+    )
     return diagnostics
 
 
@@ -882,8 +1249,40 @@ def _coerce_optional_float(value: object, *, default: float | None) -> float | N
 
 def _normalize_display_mode(value: object) -> str:
     text = str(value if value is not None else "raw").strip().lower().replace("-", "_")
-    aliases = {"subtracted": "subtracted", "corrected": "subtracted", "mask": "mask"}
-    return aliases.get(text, text if text in {"raw", "model", "residual"} else "raw")
+    aliases = {
+        "subtracted": "subtracted",
+        "corrected": "subtracted",
+        "mask": "mask",
+        "phi_blocks_model": "phi_block_model",
+        "phi_blocks": "phi_block_model",
+        "radial_plus_phi_blocks_model": "radial_plus_phi_block_model",
+        "slow_caked": "slow_caked_model",
+    }
+    allowed = {
+        "raw",
+        "model",
+        "residual",
+        "radial_model",
+        "phi_block_model",
+        "radial_plus_phi_block_model",
+        "slow_caked_model",
+    }
+    normalized = aliases.get(text, text)
+    return normalized if normalized in allowed or normalized in {"subtracted", "mask"} else "raw"
+
+
+def _mode_includes_phi_blocks(mode: object) -> bool:
+    return normalize_diffuse_background_mode(mode) in {
+        "radial_plus_phi_blocks",
+        "radial_plus_phi_blocks_plus_caked_2d",
+    }
+
+
+def _mode_includes_caked_2d(mode: object) -> bool:
+    return normalize_diffuse_background_mode(mode) in {
+        "radial_plus_caked_2d",
+        "radial_plus_phi_blocks_plus_caked_2d",
+    }
 
 
 def _clip01(value: object) -> float:
@@ -985,6 +1384,138 @@ def _axis_edges(axis: np.ndarray) -> np.ndarray:
     return np.r_[first, mids, last].astype(np.float64)
 
 
+def _regular_edges_for_axis(axis: np.ndarray, width: float) -> np.ndarray:
+    values = np.asarray(axis, dtype=np.float64).reshape(-1)
+    finite = values[np.isfinite(values)]
+    bin_width = max(float(width), 1.0e-6)
+    if finite.size <= 0:
+        return np.array([0.0, bin_width], dtype=np.float64)
+    low = math_floor(float(np.nanmin(finite)), bin_width)
+    high = math_ceil(float(np.nanmax(finite)), bin_width)
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        low = float(np.nanmin(finite))
+        high = low + bin_width
+    edges = np.arange(low, high + bin_width * 1.5, bin_width, dtype=np.float64)
+    if edges.size < 2:
+        edges = np.array([low, low + bin_width], dtype=np.float64)
+    return edges
+
+
+def _axis_bin_indices(axis: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    values = np.asarray(axis, dtype=np.float64).reshape(-1)
+    edge_values = np.asarray(edges, dtype=np.float64).reshape(-1)
+    if edge_values.size < 2:
+        return np.full(values.shape, -1, dtype=np.int64)
+    indices = np.searchsorted(edge_values, values, side="right") - 1
+    indices = np.where(values == edge_values[-1], edge_values.size - 2, indices)
+    finite = np.isfinite(values)
+    ok = finite & (indices >= 0) & (indices < edge_values.size - 1)
+    return np.where(ok, indices, -1).astype(np.int64, copy=False)
+
+
+def _weighted_gaussian_smooth_2d(
+    values: np.ndarray,
+    weights: np.ndarray,
+    sigma: tuple[float, float],
+    *,
+    mode: tuple[str, str] | str = "nearest",
+) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float64)
+    weight_arr = np.asarray(weights, dtype=np.float64)
+    if arr.shape != weight_arr.shape:
+        raise ValueError("values and weights must have matching shapes")
+    sigma_tuple = (max(float(sigma[0]), 0.0), max(float(sigma[1]), 0.0))
+    finite = np.isfinite(arr) & np.isfinite(weight_arr) & (weight_arr > 0.0)
+    if not np.any(finite):
+        return np.full(arr.shape, np.nan, dtype=np.float64)
+    if sigma_tuple[0] <= 1.0e-12 and sigma_tuple[1] <= 1.0e-12:
+        return np.where(finite, arr, np.nan).astype(np.float64, copy=False)
+    numerator = gaussian_filter(
+        np.where(finite, arr * weight_arr, 0.0),
+        sigma=sigma_tuple,
+        mode=mode,
+    )
+    denominator = gaussian_filter(
+        np.where(finite, weight_arr, 0.0),
+        sigma=sigma_tuple,
+        mode=mode,
+    )
+    tiny = 1.0e-12
+    out = np.divide(
+        numerator,
+        denominator,
+        out=np.full(arr.shape, np.nan, dtype=np.float64),
+        where=denominator > tiny,
+    )
+    out[denominator <= tiny] = np.nan
+    return out
+
+
+def _upsample_phi_block_grid(
+    block_grid: np.ndarray,
+    block_phi_centers: np.ndarray,
+    block_theta_centers: np.ndarray,
+    azimuth_axis: np.ndarray,
+    radial_axis: np.ndarray,
+    *,
+    interpolation: str,
+) -> np.ndarray:
+    grid = np.asarray(block_grid, dtype=np.float64)
+    phi_centers = np.asarray(block_phi_centers, dtype=np.float64).reshape(-1)
+    theta_centers = np.asarray(block_theta_centers, dtype=np.float64).reshape(-1)
+    target_phi = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
+    target_theta = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
+    if grid.shape != (phi_centers.size, theta_centers.size):
+        raise ValueError("block_grid shape must match block center axes")
+    if grid.size <= 0:
+        return np.zeros((target_phi.size, target_theta.size), dtype=np.float64)
+
+    phi_order = np.argsort(phi_centers, kind="stable")
+    theta_order = np.argsort(theta_centers, kind="stable")
+    sorted_phi = phi_centers[phi_order]
+    sorted_theta = theta_centers[theta_order]
+    sorted_grid = grid[np.ix_(phi_order, theta_order)]
+    sorted_grid = np.where(np.isfinite(sorted_grid), sorted_grid, 0.0)
+
+    method = str(interpolation).strip().lower()
+    if method != "linear":
+        phi_idx = _nearest_axis_indices(sorted_phi, target_phi)
+        theta_idx = _nearest_axis_indices(sorted_theta, target_theta)
+        return sorted_grid[np.ix_(phi_idx, theta_idx)].astype(np.float64, copy=False)
+
+    theta_full = np.empty((sorted_phi.size, target_theta.size), dtype=np.float64)
+    for pi in range(sorted_phi.size):
+        theta_full[pi, :] = np.interp(
+            target_theta,
+            sorted_theta,
+            sorted_grid[pi, :],
+            left=float(sorted_grid[pi, 0]),
+            right=float(sorted_grid[pi, -1]),
+        )
+    out = np.empty((target_phi.size, target_theta.size), dtype=np.float64)
+    for ti in range(target_theta.size):
+        out[:, ti] = np.interp(
+            target_phi,
+            sorted_phi,
+            theta_full[:, ti],
+            left=float(theta_full[0, ti]),
+            right=float(theta_full[-1, ti]),
+        )
+    return out
+
+
+def _nearest_axis_indices(axis: np.ndarray, targets: np.ndarray) -> np.ndarray:
+    values = np.asarray(axis, dtype=np.float64).reshape(-1)
+    target_values = np.asarray(targets, dtype=np.float64).reshape(-1)
+    if values.size <= 1:
+        return np.zeros(target_values.shape, dtype=np.int64)
+    right = np.searchsorted(values, target_values, side="left")
+    right = np.clip(right, 0, values.size - 1)
+    left = np.clip(right - 1, 0, values.size - 1)
+    choose_right = np.abs(values[right] - target_values) < np.abs(target_values - values[left])
+    return np.where(choose_right, right, left).astype(np.int64, copy=False)
+
+
 def _wrap_phi_to_axis(phi: np.ndarray, axis: np.ndarray) -> np.ndarray:
     values = np.asarray(phi, dtype=np.float64)
     axis_values = np.asarray(axis, dtype=np.float64).reshape(-1)
@@ -1014,6 +1545,32 @@ def _mad(values: np.ndarray) -> float:
     return float(1.4826 * np.median(np.abs(arr - center)))
 
 
+def _median_abs(values: np.ndarray) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size <= 0:
+        return 0.0
+    return float(np.median(np.abs(arr)))
+
+
+def _phi_block_empty_diagnostics(
+    data_mask: np.ndarray,
+    block_grid: np.ndarray,
+) -> dict[str, object]:
+    return {
+        "phi_block_valid_fraction": (
+            float(np.count_nonzero(data_mask) / data_mask.size) if data_mask.size else 0.0
+        ),
+        "phi_block_cell_count": int(np.asarray(block_grid).size),
+        "phi_block_filled_cell_count": 0,
+        "phi_block_empty_cell_count": int(np.asarray(block_grid).size),
+        "phi_block_median_abs_before": 0.0,
+        "phi_block_median_abs_after": 0.0,
+        "phi_block_mad_before": 0.0,
+        "phi_block_mad_after": 0.0,
+    }
+
+
 def math_floor(value: float, width: float) -> float:
     return float(np.floor(float(value) / float(width)) * float(width))
 
@@ -1029,6 +1586,7 @@ __all__ = [
     "diffuse_background_config_from_mapping",
     "diffuse_background_config_to_mapping",
     "estimate_caked_residual_background",
+    "estimate_phi_block_residual_background",
     "estimate_radial_background_native",
     "evaluate_caked_background_on_detector",
     "fit_diffuse_background_native",

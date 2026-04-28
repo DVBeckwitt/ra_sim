@@ -355,6 +355,27 @@ def test_create_root_window_sets_title_and_configures_section_styles(monkeypatch
     assert affinity_calls == [(fake_root, launch_context, None, None)]
 
 
+def test_format_app_window_title_includes_known_version() -> None:
+    assert (
+        views.format_app_window_title(
+            "RA-SIM Simulation",
+            version_text="1.0.0.dev0",
+        )
+        == "RA-SIM Simulation v1.0.0.dev0"
+    )
+
+
+def test_format_app_window_title_omits_unknown_version() -> None:
+    assert (
+        views.format_app_window_title(
+            "RA-SIM Simulation",
+            version_text="unknown",
+        )
+        == "RA-SIM Simulation"
+    )
+    assert views.format_app_window_title("", version_text="") == "RA-SIM"
+
+
 class _FakeThemeWidget:
     def __init__(self, class_name: str, **options) -> None:
         self._class_name = class_name
@@ -1235,6 +1256,29 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
 
     assert dispatch(event) == "break"
     assert view_state.simulation_canvas.scrolled == [(-1, "units")]
+
+
+def test_create_app_shell_adds_project_version_to_help(monkeypatch) -> None:
+    _FakeScrollbar.created = []
+    _FakeCanvas.created = []
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
+    monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.ttk, "Separator", _FakeFrame)
+    monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    monkeypatch.setattr(views, "_get_app_version_text", lambda: "1.0.0.dev0")
+
+    view_state = state.AppShellViewState()
+    views.create_app_shell(root=object(), view_state=view_state)
+
+    assert any(label.text == "Version: 1.0.0.dev0" for label in _FakeLabel.created)
 
 
 def test_create_app_shell_adds_fit2d_help_preference_when_var_is_supplied(
@@ -3459,6 +3503,12 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
             "scale": 0.8,
             "auto_scale": False,
             "radial_bin_width_deg": 0.2,
+            "phi_block_theta_bin_width_deg": 1.25,
+            "phi_block_phi_bin_width_deg": 18.0,
+            "phi_block_quantile": 0.55,
+            "phi_block_scale": 0.75,
+            "phi_block_interpolation": "linear",
+            "phi_block_preserve_block_edges": False,
             "diagnostics": False,
         },
         on_fit_model=lambda: events.append("fit"),
@@ -3478,6 +3528,12 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     assert view_state.scale_var.get() == 0.8
     assert view_state.radial_bin_width_deg_var.get() == 0.2
     assert view_state.radial_quantile_var.get() == 0.35
+    assert view_state.phi_block_theta_bin_width_deg_var.get() == 1.25
+    assert view_state.phi_block_phi_bin_width_deg_var.get() == 18.0
+    assert view_state.phi_block_quantile_var.get() == 0.55
+    assert view_state.phi_block_scale_var.get() == 0.75
+    assert view_state.phi_block_interpolation_var.get() == "linear"
+    assert view_state.phi_block_preserve_block_edges_var.get() is False
     assert view_state.diagnostics_var.get() is False
     assert view_state.status_var.get() == "Ready. Press Fit."
     assert view_state.diagnostics_summary_var.get() == "No fit yet."
@@ -3490,7 +3546,16 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
     assert view_state.caked_theta_window_deg_slider is created_sliders[6]["slider"]
     assert view_state.caked_phi_window_deg_slider is created_sliders[7]["slider"]
     assert view_state.caked_quantile_slider is created_sliders[8]["slider"]
-    assert view_state.peak_mask_sigma_slider is created_sliders[9]["slider"]
+    assert view_state.phi_block_theta_bin_width_deg_slider is created_sliders[9]["slider"]
+    assert view_state.phi_block_phi_bin_width_deg_slider is created_sliders[10]["slider"]
+    assert view_state.phi_block_quantile_slider is created_sliders[11]["slider"]
+    assert view_state.phi_block_min_pixels_slider is created_sliders[12]["slider"]
+    assert view_state.phi_block_min_coverage_slider is created_sliders[13]["slider"]
+    assert view_state.phi_block_smooth_theta_bins_slider is created_sliders[14]["slider"]
+    assert view_state.phi_block_smooth_phi_bins_slider is created_sliders[15]["slider"]
+    assert view_state.phi_block_outlier_sigma_slider is created_sliders[16]["slider"]
+    assert view_state.phi_block_scale_slider is created_sliders[17]["slider"]
+    assert view_state.peak_mask_sigma_slider is created_sliders[18]["slider"]
     assert [item["label"] for item in created_sliders] == [
         "Strength",
         "Smoothness",
@@ -3501,6 +3566,15 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
         "2D 2θ window",
         "2D φ window",
         "2D baseline",
+        "Phi-block 2θ bin",
+        "Phi-block phi bin",
+        "Phi-block quantile",
+        "Phi-block min pixels",
+        "Phi-block min coverage",
+        "Phi-block 2θ smoothing",
+        "Phi-block phi smoothing",
+        "Phi-block outlier sigma",
+        "Phi-block strength",
         "Peak sensitivity",
     ]
     assert set(view_state.preset_buttons) == {
@@ -3522,6 +3596,10 @@ def test_create_background_subtraction_controls_stores_vars_and_callbacks(
         "Reset",
         "Export",
     }
+    radio_values = {button.value for button in _FakeRadiobutton.created}
+    assert "radial_plus_phi_blocks" in radio_values
+    assert "radial_plus_phi_blocks_plus_caked_2d" in radio_values
+    assert "phi_block_model" in radio_values
 
     buttons_by_text = {button.kwargs["text"]: button for button in _FakeButton.created}
     buttons_by_text["Fit"].command()

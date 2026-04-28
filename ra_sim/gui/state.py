@@ -139,6 +139,27 @@ class BackgroundSubtractionControlsViewState:
     caked_phi_window_deg_slider: Any = None
     caked_quantile_var: Any = None
     caked_quantile_slider: Any = None
+    phi_block_theta_bin_width_deg_var: Any = None
+    phi_block_theta_bin_width_deg_slider: Any = None
+    phi_block_phi_bin_width_deg_var: Any = None
+    phi_block_phi_bin_width_deg_slider: Any = None
+    phi_block_quantile_var: Any = None
+    phi_block_quantile_slider: Any = None
+    phi_block_min_pixels_var: Any = None
+    phi_block_min_pixels_slider: Any = None
+    phi_block_min_coverage_var: Any = None
+    phi_block_min_coverage_slider: Any = None
+    phi_block_smooth_theta_bins_var: Any = None
+    phi_block_smooth_theta_bins_slider: Any = None
+    phi_block_smooth_phi_bins_var: Any = None
+    phi_block_smooth_phi_bins_slider: Any = None
+    phi_block_outlier_sigma_var: Any = None
+    phi_block_outlier_sigma_slider: Any = None
+    phi_block_interpolation_var: Any = None
+    phi_block_interpolation_buttons: list[Any] = field(default_factory=list)
+    phi_block_scale_var: Any = None
+    phi_block_scale_slider: Any = None
+    phi_block_preserve_block_edges_var: Any = None
     peak_mask_sigma_var: Any = None
     peak_mask_sigma_slider: Any = None
     peak_mask_radius_px_var: Any = None

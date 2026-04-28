@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import tomllib
 import webbrowser
 from importlib.metadata import PackageNotFoundError, version as get_package_version
 from pathlib import Path
@@ -1122,26 +1123,54 @@ def _open_external_link(url: str) -> None:
             return
 
 
-def _get_app_version_text() -> str:
-    """Return the best available RA-SIM version string."""
-
-    try:
-        return str(get_package_version("ra_sim"))
-    except PackageNotFoundError:
-        pass
-    except Exception:
-        return "unknown"
+def _get_pyproject_version_text() -> str | None:
+    """Return the local source-tree project version when available."""
 
     pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
     try:
-        pyproject_text = pyproject_path.read_text(encoding="utf-8")
-    except OSError:
+        pyproject_data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+
+    project_data = pyproject_data.get("project", {})
+    if not isinstance(project_data, dict):
+        return None
+    version_text = project_data.get("version")
+    if version_text is None:
+        return None
+    normalized = str(version_text).strip()
+    return normalized or None
+
+
+def _get_app_version_text() -> str:
+    """Return the best available RA-SIM version string."""
+
+    source_tree_version = _get_pyproject_version_text()
+    if source_tree_version is not None:
+        return source_tree_version
+
+    try:
+        return str(get_package_version("ra_sim")).strip() or "unknown"
+    except PackageNotFoundError:
+        return "unknown"
+    except Exception:
         return "unknown"
 
-    version_match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
-    if version_match is None:
-        return "unknown"
-    return str(version_match.group(1)).strip() or "unknown"
+
+def format_app_window_title(
+    base_title: str = "RA-SIM Simulation",
+    *,
+    version_text: str | None = None,
+) -> str:
+    """Return a GUI window title with the resolved app version when known."""
+
+    normalized_title = str(base_title).strip() or "RA-SIM"
+    if version_text is None:
+        version_text = _get_app_version_text()
+    normalized_version = str(version_text).strip() if version_text is not None else ""
+    if not normalized_version or normalized_version.lower() == "unknown":
+        return normalized_title
+    return f"{normalized_title} v{normalized_version}"
 
 
 def create_app_shell(
@@ -2672,6 +2701,17 @@ def create_background_subtraction_controls(
             "caked_theta_window_deg": caked_theta_window_deg_var,
             "caked_phi_window_deg": caked_phi_window_deg_var,
             "caked_quantile": caked_quantile_var,
+            "phi_block_theta_bin_width_deg": phi_block_theta_bin_width_deg_var,
+            "phi_block_phi_bin_width_deg": phi_block_phi_bin_width_deg_var,
+            "phi_block_quantile": phi_block_quantile_var,
+            "phi_block_min_pixels": phi_block_min_pixels_var,
+            "phi_block_min_coverage": phi_block_min_coverage_var,
+            "phi_block_smooth_theta_bins": phi_block_smooth_theta_bins_var,
+            "phi_block_smooth_phi_bins": phi_block_smooth_phi_bins_var,
+            "phi_block_outlier_sigma": phi_block_outlier_sigma_var,
+            "phi_block_interpolation": phi_block_interpolation_var,
+            "phi_block_scale": phi_block_scale_var,
+            "phi_block_preserve_block_edges": phi_block_preserve_block_edges_var,
             "peak_mask_sigma": peak_mask_sigma_var,
             "peak_mask_radius_px": peak_mask_radius_px_var,
             "direct_beam_mask_radius_px": direct_beam_mask_radius_px_var,
@@ -2692,7 +2732,7 @@ def create_background_subtraction_controls(
             "Safe",
             "Leaves more halo; least likely to hollow peaks.",
         ),
-        ("balanced", "Balanced", "Recommended starting point."),
+        ("balanced", "Balanced", "Recommended starting point for most backgrounds."),
         (
             "aggressive",
             "Strong",
@@ -2742,8 +2782,10 @@ def create_background_subtraction_controls(
             ("off", "Off"),
             ("radial", "Radial"),
             ("radial_plus_caked_2d", "Radial + 2D"),
+            ("radial_plus_phi_blocks", "Radial + phi blocks"),
+            ("radial_plus_phi_blocks_plus_caked_2d", "Radial + phi blocks + 2D"),
         ),
-        tooltip="Radial is safest. Radial + 2D also removes slow caked residuals.",
+        tooltip="Radial removes halo. Blocks handle module trends. 2D handles slow residuals.",
     )
     _add_check(
         basic.frame,
@@ -2841,12 +2883,16 @@ def create_background_subtraction_controls(
             ("subtracted", "Subtracted"),
             ("residual", "Residual"),
             ("mask", "Mask"),
+            ("radial_model", "Radial"),
+            ("phi_block_model", "Phi blocks"),
+            ("radial_plus_phi_block_model", "Radial + phi"),
+            ("slow_caked_model", "Slow 2D"),
         ),
         tooltip="Choose what to display. This does not change fitting unless Use for fit is checked.",
     )
     _add_help_label(
         preview.frame,
-        "Raw, model, subtracted, residual, or mask.",
+        "Raw, model, subtracted, residual, mask, or components.",
     )
     _add_check(
         preview.frame,
@@ -2944,6 +2990,165 @@ def create_background_subtraction_controls(
         tooltip="Percentile used for the 2D residual model.",
     )
 
+    phi_blocks = _add_section(
+        frame,
+        "Blocks",
+        expanded=False,
+        summary="12° x 0.75° median",
+    )
+    _add_help_label(
+        phi_blocks.frame,
+        "Use for broad blocky φ residuals.",
+    )
+    phi_block_theta_bin_width_deg_var, phi_block_theta_bin_width_deg_slider = (
+        _add_explained_slider(
+            parent=phi_blocks.frame,
+            label="Phi-block 2θ bin",
+            variable_key="phi_block_theta_bin_width_deg",
+            initial=0.75,
+            min_value=0.10,
+            max_value=5.00,
+            step=0.05,
+            explanation="Higher uses broader 2θ cells.",
+            low_text="Finer blocks.",
+            high_text="Coarser, safer blocks.",
+            tooltip="Bin width along 2θ for block residuals.",
+        )
+    )
+    phi_block_phi_bin_width_deg_var, phi_block_phi_bin_width_deg_slider = (
+        _add_explained_slider(
+            parent=phi_blocks.frame,
+            label="Phi-block phi bin",
+            variable_key="phi_block_phi_bin_width_deg",
+            initial=12.0,
+            min_value=2.0,
+            max_value=60.0,
+            step=1.0,
+            explanation="Higher uses broader φ sectors.",
+            low_text="Follows narrower module bands.",
+            high_text="Uses broader phi sectors.",
+            tooltip="Bin width along φ for block residuals.",
+        )
+    )
+    phi_block_quantile_var, phi_block_quantile_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block quantile",
+        variable_key="phi_block_quantile",
+        initial=0.50,
+        min_value=0.05,
+        max_value=0.95,
+        step=0.01,
+        explanation="Lower preserves peaks; higher subtracts more.",
+        low_text="Lower preserves positive residuals.",
+        high_text="Subtracts more positive residual.",
+        tooltip="Percentile used inside each φ/2θ block.",
+    )
+    phi_block_min_pixels_var, phi_block_min_pixels_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block min pixels",
+        variable_key="phi_block_min_pixels",
+        initial=20.0,
+        min_value=1.0,
+        max_value=500.0,
+        step=1.0,
+        explanation="Higher requires more support.",
+        low_text="Fills sparse cells.",
+        high_text="Requires stronger support.",
+        tooltip="Cells below this count are filled from neighboring cells.",
+    )
+    phi_block_min_coverage_var, phi_block_min_coverage_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block min coverage",
+        variable_key="phi_block_min_coverage",
+        initial=0.05,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        explanation="Higher skips sparse cells.",
+        low_text="Uses more sparse cells.",
+        high_text="Avoids poorly supported cells.",
+        tooltip="Cells below this support fraction are filled from neighbors.",
+    )
+    phi_block_smooth_theta_bins_var, phi_block_smooth_theta_bins_slider = (
+        _add_explained_slider(
+            parent=phi_blocks.frame,
+            label="Phi-block 2θ smoothing",
+            variable_key="phi_block_smooth_theta_bins",
+            initial=0.75,
+            min_value=0.0,
+            max_value=5.0,
+            step=0.05,
+            explanation="Higher smooths blocks along 2θ.",
+            low_text="Sharper block edges.",
+            high_text="Smoother block grid.",
+            tooltip="Gaussian smoothing in coarse 2θ bins.",
+        )
+    )
+    phi_block_smooth_phi_bins_var, phi_block_smooth_phi_bins_slider = (
+        _add_explained_slider(
+            parent=phi_blocks.frame,
+            label="Phi-block phi smoothing",
+            variable_key="phi_block_smooth_phi_bins",
+            initial=0.50,
+            min_value=0.0,
+            max_value=5.0,
+            step=0.05,
+            explanation="Higher smooths blocks along φ.",
+            low_text="Sharper sector edges.",
+            high_text="Smoother sector transitions.",
+            tooltip="Gaussian smoothing in coarse φ bins.",
+        )
+    )
+    phi_block_outlier_sigma_var, phi_block_outlier_sigma_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block outlier sigma",
+        variable_key="phi_block_outlier_sigma",
+        initial=6.0,
+        min_value=0.0,
+        max_value=20.0,
+        step=0.5,
+        explanation="Lower rejects more extremes.",
+        low_text="Rejects more extremes.",
+        high_text="Keeps more residual pixels.",
+        tooltip="MAD-scaled rejection threshold inside each block cell.",
+    )
+    phi_block_scale_var, phi_block_scale_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block strength",
+        variable_key="phi_block_scale",
+        initial=1.0,
+        min_value=0.0,
+        max_value=2.0,
+        step=0.01,
+        explanation="Multiplier for block residuals.",
+        low_text="Leaves more block residual.",
+        high_text="Subtracts stronger block residual.",
+        tooltip="Multiplier for the block residual model.",
+        allow_range_expand=True,
+    )
+    phi_block_interpolation_var = tk.StringVar(
+        value=_initial_text("phi_block_interpolation", "nearest")
+    )
+    phi_block_interpolation_buttons = _add_radio_group(
+        phi_blocks.frame,
+        "Interpolation",
+        phi_block_interpolation_var,
+        (
+            ("nearest", "Nearest"),
+            ("linear", "Linear"),
+        ),
+        tooltip="Nearest preserves block edges; linear smooths transitions.",
+    )
+    phi_block_preserve_block_edges_var = tk.BooleanVar(
+        value=_initial_bool("phi_block_preserve_block_edges", True)
+    )
+    _add_check(
+        phi_blocks.frame,
+        "Block edges",
+        phi_block_preserve_block_edges_var,
+        tooltip="Use nearest-neighbor upsampling for the block model.",
+    )
+
     protection = _add_section(
         frame,
         "Masks",
@@ -3020,7 +3225,7 @@ def create_background_subtraction_controls(
     export_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
     _attach_tooltip(fit_button, "Fit the model for this image and settings.")
     _attach_tooltip(apply_button, "Refit and refresh fit/preview outputs.")
-    _attach_tooltip(export_button, "Write arrays and diagnostic summary.")
+    _attach_tooltip(export_button, "Export model, masks, profile, and metrics.")
 
     def _update_fit_usage_label(*_args: object) -> None:
         enabled = bool(getattr(enabled_var, "get", lambda: False)())
@@ -3056,6 +3261,14 @@ def create_background_subtraction_controls(
                     f"beam {_var_float(direct_beam_mask_radius_px_var, 35.0):.0f} px"
                 ),
             ),
+            (
+                phi_blocks,
+                (
+                    f"{_var_float(phi_block_phi_bin_width_deg_var, 12.0):.0f}° x "
+                    f"{_var_float(phi_block_theta_bin_width_deg_var, 0.75):.2f}° "
+                    f"q{_var_float(phi_block_quantile_var, 0.50):.2f}"
+                ),
+            ),
         ):
             set_summary = getattr(section, "set_header_summary", None)
             if callable(set_summary):
@@ -3070,6 +3283,9 @@ def create_background_subtraction_controls(
         radial_smooth_sigma_deg_var,
         peak_mask_radius_px_var,
         direct_beam_mask_radius_px_var,
+        phi_block_theta_bin_width_deg_var,
+        phi_block_phi_bin_width_deg_var,
+        phi_block_quantile_var,
     ):
         trace_add = getattr(traced_var, "trace_add", None)
         if callable(trace_add):
@@ -3105,6 +3321,27 @@ def create_background_subtraction_controls(
     view_state.caked_phi_window_deg_slider = caked_phi_window_deg_slider
     view_state.caked_quantile_var = caked_quantile_var
     view_state.caked_quantile_slider = caked_quantile_slider
+    view_state.phi_block_theta_bin_width_deg_var = phi_block_theta_bin_width_deg_var
+    view_state.phi_block_theta_bin_width_deg_slider = phi_block_theta_bin_width_deg_slider
+    view_state.phi_block_phi_bin_width_deg_var = phi_block_phi_bin_width_deg_var
+    view_state.phi_block_phi_bin_width_deg_slider = phi_block_phi_bin_width_deg_slider
+    view_state.phi_block_quantile_var = phi_block_quantile_var
+    view_state.phi_block_quantile_slider = phi_block_quantile_slider
+    view_state.phi_block_min_pixels_var = phi_block_min_pixels_var
+    view_state.phi_block_min_pixels_slider = phi_block_min_pixels_slider
+    view_state.phi_block_min_coverage_var = phi_block_min_coverage_var
+    view_state.phi_block_min_coverage_slider = phi_block_min_coverage_slider
+    view_state.phi_block_smooth_theta_bins_var = phi_block_smooth_theta_bins_var
+    view_state.phi_block_smooth_theta_bins_slider = phi_block_smooth_theta_bins_slider
+    view_state.phi_block_smooth_phi_bins_var = phi_block_smooth_phi_bins_var
+    view_state.phi_block_smooth_phi_bins_slider = phi_block_smooth_phi_bins_slider
+    view_state.phi_block_outlier_sigma_var = phi_block_outlier_sigma_var
+    view_state.phi_block_outlier_sigma_slider = phi_block_outlier_sigma_slider
+    view_state.phi_block_interpolation_var = phi_block_interpolation_var
+    view_state.phi_block_interpolation_buttons = phi_block_interpolation_buttons
+    view_state.phi_block_scale_var = phi_block_scale_var
+    view_state.phi_block_scale_slider = phi_block_scale_slider
+    view_state.phi_block_preserve_block_edges_var = phi_block_preserve_block_edges_var
     view_state.peak_mask_sigma_var = peak_mask_sigma_var
     view_state.peak_mask_sigma_slider = peak_mask_sigma_slider
     view_state.peak_mask_radius_px_var = peak_mask_radius_px_var
@@ -3907,9 +4144,7 @@ def create_sampling_optics_controls(
         anchor=tk.W,
         padx=5,
     )
-    events_per_phase_independent_var = tk.BooleanVar(
-        value=bool(events_per_phase_independent)
-    )
+    events_per_phase_independent_var = tk.BooleanVar(value=bool(events_per_phase_independent))
     events_per_phase_independent_checkbutton = ttk.Checkbutton(
         events_per_phase_header,
         text="Independent",
@@ -4019,9 +4254,7 @@ def create_sampling_optics_controls(
     view_state.events_per_phase_value_var = events_per_phase_value_var
     view_state.events_per_phase_value_label = events_per_phase_value_label
     view_state.events_per_phase_independent_var = events_per_phase_independent_var
-    view_state.events_per_phase_independent_checkbutton = (
-        events_per_phase_independent_checkbutton
-    )
+    view_state.events_per_phase_independent_checkbutton = events_per_phase_independent_checkbutton
     view_state.rod_points_per_gz_frame = rod_points_per_gz_frame
     view_state.rod_points_per_gz_var = rod_points_per_gz_var
     view_state.rod_points_per_gz_scale = rod_points_per_gz_scale

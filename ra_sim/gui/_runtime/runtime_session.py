@@ -2061,6 +2061,17 @@ background_subtraction_radial_smooth_sigma_deg_var = None
 background_subtraction_caked_theta_window_deg_var = None
 background_subtraction_caked_phi_window_deg_var = None
 background_subtraction_caked_quantile_var = None
+background_subtraction_phi_block_theta_bin_width_deg_var = None
+background_subtraction_phi_block_phi_bin_width_deg_var = None
+background_subtraction_phi_block_quantile_var = None
+background_subtraction_phi_block_min_pixels_var = None
+background_subtraction_phi_block_min_coverage_var = None
+background_subtraction_phi_block_smooth_theta_bins_var = None
+background_subtraction_phi_block_smooth_phi_bins_var = None
+background_subtraction_phi_block_outlier_sigma_var = None
+background_subtraction_phi_block_interpolation_var = None
+background_subtraction_phi_block_scale_var = None
+background_subtraction_phi_block_preserve_block_edges_var = None
 background_subtraction_peak_mask_sigma_var = None
 background_subtraction_peak_mask_radius_px_var = None
 background_subtraction_direct_beam_mask_radius_px_var = None
@@ -2684,6 +2695,41 @@ def _background_subtraction_control_mapping() -> dict[str, object]:
         "caked_theta_window_deg": _get_var_value(view_state.caked_theta_window_deg_var, 1.5),
         "caked_phi_window_deg": _get_var_value(view_state.caked_phi_window_deg_var, 15.0),
         "caked_quantile": _get_var_value(view_state.caked_quantile_var, 0.35),
+        "phi_block_theta_bin_width_deg": _get_var_value(
+            view_state.phi_block_theta_bin_width_deg_var,
+            0.75,
+        ),
+        "phi_block_phi_bin_width_deg": _get_var_value(
+            view_state.phi_block_phi_bin_width_deg_var,
+            12.0,
+        ),
+        "phi_block_quantile": _get_var_value(view_state.phi_block_quantile_var, 0.50),
+        "phi_block_min_pixels": _get_var_value(view_state.phi_block_min_pixels_var, 20),
+        "phi_block_min_coverage": _get_var_value(
+            view_state.phi_block_min_coverage_var,
+            0.05,
+        ),
+        "phi_block_smooth_theta_bins": _get_var_value(
+            view_state.phi_block_smooth_theta_bins_var,
+            0.75,
+        ),
+        "phi_block_smooth_phi_bins": _get_var_value(
+            view_state.phi_block_smooth_phi_bins_var,
+            0.50,
+        ),
+        "phi_block_outlier_sigma": _get_var_value(
+            view_state.phi_block_outlier_sigma_var,
+            6.0,
+        ),
+        "phi_block_interpolation": _get_var_value(
+            view_state.phi_block_interpolation_var,
+            "nearest",
+        ),
+        "phi_block_scale": _get_var_value(view_state.phi_block_scale_var, 1.0),
+        "phi_block_preserve_block_edges": _get_var_value(
+            view_state.phi_block_preserve_block_edges_var,
+            True,
+        ),
         "peak_mask_sigma": _get_var_value(view_state.peak_mask_sigma_var, 4.0),
         "peak_mask_radius_px": _get_var_value(view_state.peak_mask_radius_px_var, 10.0),
         "direct_beam_mask_radius_px": _get_var_value(
@@ -2741,6 +2787,17 @@ def _set_background_subtraction_var(key: str, value: object) -> None:
         "caked_theta_window_deg": view_state.caked_theta_window_deg_var,
         "caked_phi_window_deg": view_state.caked_phi_window_deg_var,
         "caked_quantile": view_state.caked_quantile_var,
+        "phi_block_theta_bin_width_deg": view_state.phi_block_theta_bin_width_deg_var,
+        "phi_block_phi_bin_width_deg": view_state.phi_block_phi_bin_width_deg_var,
+        "phi_block_quantile": view_state.phi_block_quantile_var,
+        "phi_block_min_pixels": view_state.phi_block_min_pixels_var,
+        "phi_block_min_coverage": view_state.phi_block_min_coverage_var,
+        "phi_block_smooth_theta_bins": view_state.phi_block_smooth_theta_bins_var,
+        "phi_block_smooth_phi_bins": view_state.phi_block_smooth_phi_bins_var,
+        "phi_block_outlier_sigma": view_state.phi_block_outlier_sigma_var,
+        "phi_block_interpolation": view_state.phi_block_interpolation_var,
+        "phi_block_scale": view_state.phi_block_scale_var,
+        "phi_block_preserve_block_edges": view_state.phi_block_preserve_block_edges_var,
         "peak_mask_sigma": view_state.peak_mask_sigma_var,
         "peak_mask_radius_px": view_state.peak_mask_radius_px_var,
         "direct_beam_mask_radius_px": view_state.direct_beam_mask_radius_px_var,
@@ -3126,6 +3183,34 @@ def _current_background_display_for_mode() -> np.ndarray | None:
     if display_mode == "model":
         display_array = _background_subtraction_backend_array_to_display(result.get("model"))
         return display_array if display_array is not None else raw_display
+    if display_mode == "radial_model":
+        display_array = _background_subtraction_backend_array_to_display(
+            result.get("radial_model")
+        )
+        return display_array if display_array is not None else raw_display
+    if display_mode == "phi_block_model":
+        display_array = _background_subtraction_backend_array_to_display(
+            result.get("phi_block_model_detector")
+        )
+        return display_array if display_array is not None else raw_display
+    if display_mode == "radial_plus_phi_block_model":
+        radial = result.get("radial_model")
+        phi_block = result.get("phi_block_model_detector")
+        try:
+            combined = np.asarray(radial, dtype=np.float64) + np.where(
+                np.isfinite(np.asarray(phi_block, dtype=np.float64)),
+                np.asarray(phi_block, dtype=np.float64),
+                0.0,
+            )
+        except Exception:
+            combined = radial
+        display_array = _background_subtraction_backend_array_to_display(combined)
+        return display_array if display_array is not None else raw_display
+    if display_mode == "slow_caked_model":
+        display_array = _background_subtraction_backend_array_to_display(
+            result.get("slow_caked_model_detector")
+        )
+        return display_array if display_array is not None else raw_display
     if display_mode in {"subtracted", "residual"}:
         corrected = np.asarray(result.get("corrected"), dtype=np.float64)
         if display_mode == "subtracted" and bool(config.clip_for_display):
@@ -3167,6 +3252,61 @@ def _background_subtraction_json_safe(value: object) -> object:
     return value
 
 
+def _write_background_subtraction_png(path: Path, value: object) -> None:
+    try:
+        arr = np.asarray(value, dtype=np.float64)
+    except Exception:
+        return
+    if arr.ndim != 2 or arr.size <= 0:
+        return
+    finite = arr[np.isfinite(arr)]
+    if finite.size <= 0:
+        return
+    try:
+        vmin, vmax = np.nanpercentile(finite, [1.0, 99.0])
+        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+            vmin = float(np.nanmin(finite))
+            vmax = float(np.nanmax(finite))
+        from matplotlib import image as mpl_image
+
+        mpl_image.imsave(path, arr, cmap="turbo", vmin=float(vmin), vmax=float(vmax))
+    except Exception:
+        return
+
+
+def _write_background_phi_block_grid_csv(result: Mapping[str, object], outdir: Path) -> None:
+    try:
+        grid = np.asarray(result.get("phi_block_grid"), dtype=np.float64)
+        counts = np.asarray(result.get("phi_block_counts"), dtype=np.int64)
+        valid_fraction = np.asarray(
+            result.get("phi_block_valid_fraction_grid"),
+            dtype=np.float64,
+        )
+        phi_edges = np.asarray(result.get("phi_block_phi_edges_deg"), dtype=np.float64).reshape(-1)
+        theta_edges = np.asarray(result.get("phi_block_theta_edges_deg"), dtype=np.float64).reshape(-1)
+    except Exception:
+        return
+    if grid.ndim != 2 or counts.shape != grid.shape:
+        return
+    if valid_fraction.shape != grid.shape:
+        valid_fraction = np.full(grid.shape, np.nan, dtype=np.float64)
+    if phi_edges.size != grid.shape[0] + 1 or theta_edges.size != grid.shape[1] + 1:
+        return
+    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
+    with (outdir / "background_phi_block_grid.csv").open("w", encoding="utf-8") as handle:
+        handle.write("phi_bin_center_deg,theta_bin_center_deg,block_value,count,valid_fraction\n")
+        for pi, phi_value in enumerate(phi_centers):
+            for ti, theta_value in enumerate(theta_centers):
+                handle.write(
+                    f"{float(phi_value):.12g},"
+                    f"{float(theta_value):.12g},"
+                    f"{float(grid[pi, ti]):.12g},"
+                    f"{int(counts[pi, ti])},"
+                    f"{float(valid_fraction[pi, ti]):.12g}\n"
+                )
+
+
 def _export_current_background_subtraction_diagnostics() -> None:
     result = _fit_current_background_subtraction_model(force=False)
     if not isinstance(result, Mapping):
@@ -3199,10 +3339,27 @@ def _export_current_background_subtraction_diagnostics() -> None:
         ("corrected", "background_subtracted_native.npy"),
         ("valid_mask", "background_valid_mask.npy"),
         ("exclusion_mask", "background_exclusion_mask.npy"),
+        ("phi_block_model_caked", "background_phi_block_model_caked.npy"),
+        ("phi_block_model_detector", "background_phi_block_model_detector.npy"),
+        ("phi_block_grid", "background_phi_block_grid.npy"),
+        ("phi_block_counts", "background_phi_block_counts.npy"),
     ):
         value = result.get(key)
         if value is not None:
             np.save(outdir / filename, np.asarray(value))
+    for key, filename in (
+        ("phi_block_model_caked", "background_phi_block_model_caked.png"),
+        ("phi_block_model_detector", "background_phi_block_model_detector.png"),
+        (
+            "after_radial_before_phi_blocks_caked",
+            "background_after_radial_before_phi_blocks_caked.png",
+        ),
+        ("after_phi_blocks_caked", "background_after_phi_blocks_caked.png"),
+    ):
+        value = result.get(key)
+        if value is not None:
+            _write_background_subtraction_png(outdir / filename, value)
+    _write_background_phi_block_grid_csv(result, outdir)
     _set_background_subtraction_status(f"Exported diffuse-background diagnostics to {outdir}.")
 
 
@@ -5055,6 +5212,17 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
     global background_subtraction_caked_theta_window_deg_var
     global background_subtraction_caked_phi_window_deg_var
     global background_subtraction_caked_quantile_var
+    global background_subtraction_phi_block_theta_bin_width_deg_var
+    global background_subtraction_phi_block_phi_bin_width_deg_var
+    global background_subtraction_phi_block_quantile_var
+    global background_subtraction_phi_block_min_pixels_var
+    global background_subtraction_phi_block_min_coverage_var
+    global background_subtraction_phi_block_smooth_theta_bins_var
+    global background_subtraction_phi_block_smooth_phi_bins_var
+    global background_subtraction_phi_block_outlier_sigma_var
+    global background_subtraction_phi_block_interpolation_var
+    global background_subtraction_phi_block_scale_var
+    global background_subtraction_phi_block_preserve_block_edges_var
     global background_subtraction_peak_mask_sigma_var
     global background_subtraction_peak_mask_radius_px_var
     global background_subtraction_direct_beam_mask_radius_px_var
@@ -5098,6 +5266,17 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
             "caked_theta_window_deg",
             "caked_phi_window_deg",
             "caked_quantile",
+            "phi_block_theta_bin_width_deg",
+            "phi_block_phi_bin_width_deg",
+            "phi_block_quantile",
+            "phi_block_min_pixels",
+            "phi_block_min_coverage",
+            "phi_block_smooth_theta_bins",
+            "phi_block_smooth_phi_bins",
+            "phi_block_outlier_sigma",
+            "phi_block_interpolation",
+            "phi_block_scale",
+            "phi_block_preserve_block_edges",
             "peak_mask_sigma",
             "peak_mask_radius_px",
             "direct_beam_mask_radius_px",
@@ -5131,6 +5310,27 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
     background_subtraction_caked_theta_window_deg_var = view_state.caked_theta_window_deg_var
     background_subtraction_caked_phi_window_deg_var = view_state.caked_phi_window_deg_var
     background_subtraction_caked_quantile_var = view_state.caked_quantile_var
+    background_subtraction_phi_block_theta_bin_width_deg_var = (
+        view_state.phi_block_theta_bin_width_deg_var
+    )
+    background_subtraction_phi_block_phi_bin_width_deg_var = (
+        view_state.phi_block_phi_bin_width_deg_var
+    )
+    background_subtraction_phi_block_quantile_var = view_state.phi_block_quantile_var
+    background_subtraction_phi_block_min_pixels_var = view_state.phi_block_min_pixels_var
+    background_subtraction_phi_block_min_coverage_var = view_state.phi_block_min_coverage_var
+    background_subtraction_phi_block_smooth_theta_bins_var = (
+        view_state.phi_block_smooth_theta_bins_var
+    )
+    background_subtraction_phi_block_smooth_phi_bins_var = (
+        view_state.phi_block_smooth_phi_bins_var
+    )
+    background_subtraction_phi_block_outlier_sigma_var = view_state.phi_block_outlier_sigma_var
+    background_subtraction_phi_block_interpolation_var = view_state.phi_block_interpolation_var
+    background_subtraction_phi_block_scale_var = view_state.phi_block_scale_var
+    background_subtraction_phi_block_preserve_block_edges_var = (
+        view_state.phi_block_preserve_block_edges_var
+    )
     background_subtraction_peak_mask_sigma_var = view_state.peak_mask_sigma_var
     background_subtraction_peak_mask_radius_px_var = view_state.peak_mask_radius_px_var
     background_subtraction_direct_beam_mask_radius_px_var = (
@@ -5166,6 +5366,17 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
         background_subtraction_caked_theta_window_deg_var,
         background_subtraction_caked_phi_window_deg_var,
         background_subtraction_caked_quantile_var,
+        background_subtraction_phi_block_theta_bin_width_deg_var,
+        background_subtraction_phi_block_phi_bin_width_deg_var,
+        background_subtraction_phi_block_quantile_var,
+        background_subtraction_phi_block_min_pixels_var,
+        background_subtraction_phi_block_min_coverage_var,
+        background_subtraction_phi_block_smooth_theta_bins_var,
+        background_subtraction_phi_block_smooth_phi_bins_var,
+        background_subtraction_phi_block_outlier_sigma_var,
+        background_subtraction_phi_block_interpolation_var,
+        background_subtraction_phi_block_scale_var,
+        background_subtraction_phi_block_preserve_block_edges_var,
         background_subtraction_peak_mask_sigma_var,
         background_subtraction_peak_mask_radius_px_var,
         background_subtraction_direct_beam_mask_radius_px_var,

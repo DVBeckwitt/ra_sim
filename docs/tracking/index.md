@@ -51,14 +51,18 @@ overrides, diagnostics, cache invalidation, and off-mode safeguards are
 implemented. The Background tab UX is now workflow-oriented with presets,
 explained sliders, collapsible advanced sections, dirty status feedback,
 debounced auto-preview, diagnostics summaries, and compact copy for labels,
-buttons, hints, statuses, presets, tooltips, and diagnostics. No subtraction
-algorithm, CLI, headless, config, cache, or saved-state key changes were made
-for the UX/copy passes. Targeted GUI/state/import-safe/headless/numerical tests
-pass, including the copy-focused 391-test suite and broader 426-test relevant
-suite. Full-suite runs timed out locally after the UX/copy passes. Real detector
-smoke tests, manual GUI preview/orientation checks, tooltip/preset interaction
-checks, saved-state headless override checks, and real diagnostic artifact
-inspection still need project input data.
+buttons, hints, statuses, presets, tooltips, and diagnostics. The current
+feature extension adds phi-block residual subtraction after the radial model,
+with `radial_plus_phi_blocks` and
+`radial_plus_phi_blocks_plus_caked_2d` modes, GUI controls, CLI overrides,
+component diagnostics, and phi-block artifact exports. Targeted
+GUI/state/import-safe/headless/numerical tests pass, including the phi-block
+combined relevant suite with 429 tests. Full-suite runs timed out locally after
+the UX/copy passes and again after the phi-block extension. Real detector smoke
+tests for radial/phi-block/slow-caked mode comparisons, manual GUI
+preview/orientation checks, tooltip/preset interaction checks, saved-state
+headless override checks, and real diagnostic artifact inspection still need
+project input data.
 
 Current emphasis for [#249](https://github.com/DVBeckwitt/ra_sim/issues/249):
 New4 provider handoff, fixed-source request handoff, sensitivity scan,

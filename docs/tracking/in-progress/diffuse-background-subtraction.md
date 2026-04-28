@@ -1,6 +1,6 @@
 # Diffuse background subtraction
 
-Status: implemented, copy-tightened, validation-partial
+Status: phi-block implemented, validation-partial
 Type: feature
 Owner: -
 Issue: none
@@ -14,10 +14,11 @@ experimental detector backgrounds. The feature is disabled by default. When
 enabled, the same NumPy/SciPy model is available to GUI preview, GUI fitting,
 headless geometry fitting, and CLI-driven mosaic-shape fitting.
 
-The model estimates a robust radial two-theta halo, optionally adds a slow
-caked two-dimensional residual, masks local peaks and the direct beam before
-fitting, and keeps signed corrected intensities for numerical comparison.
-Display clipping is limited to display paths.
+The model estimates a robust radial two-theta halo, can add a coarse
+phi/theta block residual model for broad detector-module artifacts, can then
+add a slow caked two-dimensional residual, masks local peaks and the direct
+beam before fitting, and keeps signed corrected intensities for numerical
+comparison. Display clipping is limited to display paths.
 
 ## Current state
 
@@ -44,6 +45,10 @@ Display clipping is limited to display paths.
   data is not reused after model/control changes.
 - Added headless and CLI support for saved/off/radial/radial-plus-caked-2d
   modes, scale overrides, and diagnostics artifact writing.
+- Added radial-plus-phi-blocks and
+  radial-plus-phi-blocks-plus-caked-2d modes, GUI controls for phi-block
+  tuning, CLI phi-block overrides, component previews, component return keys,
+  and phi-block diagnostic artifacts.
 - Preserved raw background access for debugging/export and left existing raw
   behavior unchanged when subtraction is disabled.
 - Added compatibility fixes around manual geometry/caked payload hydration that
@@ -80,6 +85,14 @@ Passed:
 - Pure off-mode validation confirmed corrected output remains equal to raw.
 - Synthetic diffuse-background validation passed with relative model error
   about 1.9 percent and peak centroid shift about 0.14 px.
+- Phi-block extension targeted validation passed:
+  `python -m compileall ra_sim tests`,
+  `python -m pytest tests/test_diffuse_background.py -ra`,
+  `python -m pytest tests/test_gui_views.py -ra`,
+  `python -m pytest tests/test_gui_state_io.py -ra`,
+  `python -m pytest tests/test_cli_geometry_fit.py -ra`,
+  `python -m pytest tests/test_gui_runtime_import_safe.py -ra`, and the combined
+  six-file targeted suite passed with 429 tests.
 
 Full-suite status:
 
@@ -90,13 +103,16 @@ Full-suite status:
   chase was performed for this patch.
 - After the copy-tightening pass, full `python -m pytest -ra` was attempted
   again and timed out after 20 minutes with no completed result.
+- After the phi-block extension, full `python -m pytest -ra` was attempted
+  again and timed out after 20 minutes with no completed result.
 - Comparable `--tb=no` runs showed no candidate-only failures versus base:
   base had 290 failures, candidate had 261 failures, and candidate-only failure
   count was zero.
 
 Not validated locally:
 
-- Real-background smoke tests for off/radial/radial-plus-caked-2d modes.
+- Real-background smoke tests for off/radial/radial-plus-caked-2d,
+  radial-plus-phi-blocks, and radial-plus-phi-blocks-plus-caked-2d modes.
 - Manual GUI preview/orientation checks.
 - Manual hover-tooltip and preset interaction checks in a live Tk session.
 - Headless saved-state override checks using a real saved GUI state.

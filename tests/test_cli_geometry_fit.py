@@ -66,26 +66,43 @@ def test_cli_build_parser_accepts_background_subtraction_options() -> None:
             "fit-geometry",
             "saved_state.json",
             "--background-subtraction",
-            "radial-plus-caked-2d",
+            "radial-plus-phi-blocks-plus-caked-2d",
             "--background-subtraction-scale",
             "0.7",
             "--background-subtraction-diagnostics",
+            "--background-phi-block-theta-bin-width-deg",
+            "1.25",
+            "--background-phi-block-phi-bin-width-deg",
+            "18",
+            "--background-phi-block-quantile",
+            "0.55",
+            "--background-phi-block-scale",
+            "0.75",
+            "--background-phi-block-interpolation",
+            "linear",
+            "--background-no-phi-block-preserve-block-edges",
         ]
     )
 
-    assert args.background_subtraction == "radial-plus-caked-2d"
+    assert args.background_subtraction == "radial-plus-phi-blocks-plus-caked-2d"
     assert args.background_subtraction_scale == 0.7
     assert args.background_subtraction_diagnostics is True
+    assert args.background_phi_block_theta_bin_width_deg == 1.25
+    assert args.background_phi_block_phi_bin_width_deg == 18.0
+    assert args.background_phi_block_quantile == 0.55
+    assert args.background_phi_block_scale == 0.75
+    assert args.background_phi_block_interpolation == "linear"
+    assert args.background_phi_block_preserve_block_edges is False
 
     mosaic_args = parser.parse_args(
         [
             "fit-mosaic-shape",
             "saved_state.json",
             "--background-subtraction",
-            "off",
+            "radial-plus-phi-blocks",
         ]
     )
-    assert mosaic_args.background_subtraction == "off"
+    assert mosaic_args.background_subtraction == "radial-plus-phi-blocks"
 
 
 def test_cli_build_parser_includes_fit_mosaic_shape_command() -> None:
@@ -295,16 +312,30 @@ def test_cmd_fit_geometry_passes_background_subtraction_overrides(
         overwrite=False,
         active_vars=None,
         seed_policy=None,
-        background_subtraction="off",
+        background_subtraction="radial-plus-phi-blocks",
         background_subtraction_scale=0.6,
         background_subtraction_diagnostics=True,
+        background_phi_block_theta_bin_width_deg=1.25,
+        background_phi_block_phi_bin_width_deg=18.0,
+        background_phi_block_quantile=0.55,
+        background_phi_block_scale=0.75,
+        background_phi_block_interpolation="linear",
+        background_phi_block_preserve_block_edges=False,
     )
 
     cmd(args)
 
-    assert captured["kwargs"]["background_subtraction_mode"] == "off"
+    assert captured["kwargs"]["background_subtraction_mode"] == "radial-plus-phi-blocks"
     assert captured["kwargs"]["background_subtraction_scale"] == 0.6
     assert captured["kwargs"]["background_subtraction_diagnostics"] is True
+    assert captured["kwargs"]["background_subtraction_phi_block_overrides"] == {
+        "phi_block_theta_bin_width_deg": 1.25,
+        "phi_block_phi_bin_width_deg": 18.0,
+        "phi_block_quantile": 0.55,
+        "phi_block_interpolation": "linear",
+        "phi_block_scale": 0.75,
+        "phi_block_preserve_block_edges": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -441,12 +472,16 @@ def test_run_headless_geometry_fit_forwards_background_subtraction_overrides(
         background_subtraction_mode="off",
         background_subtraction_scale=0.5,
         background_subtraction_diagnostics=True,
+        background_subtraction_phi_block_overrides={"phi_block_scale": 0.8},
     )
 
     assert state_result["geometry"]["fit_result"] == "shared"
     assert captured["kwargs"]["background_subtraction_mode"] == "off"
     assert captured["kwargs"]["background_subtraction_scale"] == 0.5
     assert captured["kwargs"]["background_subtraction_diagnostics"] is True
+    assert captured["kwargs"]["background_subtraction_phi_block_overrides"] == {
+        "phi_block_scale": 0.8
+    }
 
 
 def test_headless_background_subtraction_config_uses_saved_and_overrides() -> None:
@@ -457,6 +492,7 @@ def test_headless_background_subtraction_config_uses_saved_and_overrides() -> No
                     "enabled": False,
                     "mode": "radial_plus_caked_2d",
                     "scale": 1.0,
+                    "phi_block_scale": 1.0,
                     "diagnostics": True,
                 }
             }
@@ -467,6 +503,7 @@ def test_headless_background_subtraction_config_uses_saved_and_overrides() -> No
             "background_subtraction_enabled_var": True,
             "background_subtraction_mode_var": "radial",
             "background_subtraction_scale_var": 0.9,
+            "background_subtraction_phi_block_scale_var": 0.8,
             "background_subtraction_diagnostics_var": False,
         }
     }
@@ -477,6 +514,7 @@ def test_headless_background_subtraction_config_uses_saved_and_overrides() -> No
         mode_override="saved",
         scale_override=None,
         diagnostics_override=None,
+        phi_block_overrides=None,
     )
     off_cfg = headless_geometry_fit._headless_background_subtraction_config(
         saved_state,
@@ -484,15 +522,18 @@ def test_headless_background_subtraction_config_uses_saved_and_overrides() -> No
         mode_override="off",
         scale_override=0.5,
         diagnostics_override=True,
+        phi_block_overrides={"phi_block_scale": 0.7},
     )
 
     assert saved_cfg.enabled is True
     assert saved_cfg.mode == "radial"
     assert saved_cfg.scale == 0.9
+    assert saved_cfg.phi_block_scale == 0.8
     assert saved_cfg.diagnostics is False
     assert off_cfg.enabled is False
     assert off_cfg.mode == "off"
     assert off_cfg.scale == 0.5
+    assert off_cfg.phi_block_scale == 0.7
     assert off_cfg.diagnostics is True
 
 
