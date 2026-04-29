@@ -22,6 +22,10 @@ from ra_sim.simulation.intersection_analysis import (
 )
 
 
+_TRACE_RUN_MAX_BRIDGEABLE_GAP = 1
+_CAKED_MASK_PATH_RADIUS = 1.0e-12
+
+
 @dataclass(frozen=True)
 class QrCylinderOverlayRenderConfig:
     """Normalized runtime inputs needed to render analytic Qr-cylinder traces."""
@@ -84,6 +88,79 @@ def _set_status_text(
 ) -> None:
     if callable(bindings.set_status_text):
         bindings.set_status_text(str(text))
+
+
+def _paired_phi_seam_break(
+    low_phi: np.ndarray,
+    high_phi: np.ndarray,
+    idx: int,
+    previous: int,
+) -> bool:
+    """Return True when paired Qr-boundary samples cross a wrapped-phi seam."""
+
+    try:
+        low_delta = abs(float(low_phi[idx]) - float(low_phi[previous]))
+        high_delta = abs(float(high_phi[idx]) - float(high_phi[previous]))
+    except Exception:
+        return True
+    return bool(low_delta > 180.0 or high_delta > 180.0)
+
+
+def _paired_trace_run_indices(
+    selected_mask: np.ndarray,
+    low_phi: np.ndarray,
+    high_phi: np.ndarray,
+    *,
+    bridgeable_mask: np.ndarray | None = None,
+    max_bridgeable_gap: int = _TRACE_RUN_MAX_BRIDGEABLE_GAP,
+) -> list[np.ndarray]:
+    """Return finite trace runs, skipping isolated NaN bins without crossing seams.
+
+    Qr-cylinder traces can contain single NaN samples at singular caked azimuths,
+    including the +/-90 deg rows. Those bins must not make the whole Qz slice vanish.
+    This helper keeps the finite samples on both sides of a small bridgeable gap,
+    but still splits at wrapped-phi seams and at non-bridgeable selection gaps.
+    """
+
+    selected = np.asarray(selected_mask, dtype=bool).reshape(-1)
+    low_phi_values = np.asarray(low_phi, dtype=np.float64).reshape(-1)
+    high_phi_values = np.asarray(high_phi, dtype=np.float64).reshape(-1)
+    if selected.shape != low_phi_values.shape or selected.shape != high_phi_values.shape:
+        return []
+
+    if bridgeable_mask is None:
+        bridgeable = np.zeros(selected.shape, dtype=bool)
+    else:
+        bridgeable = np.asarray(bridgeable_mask, dtype=bool).reshape(-1)
+        if bridgeable.shape != selected.shape:
+            bridgeable = np.zeros(selected.shape, dtype=bool)
+
+    selected_idx = np.flatnonzero(selected)
+    if selected_idx.size <= 0:
+        return []
+
+    max_gap = max(0, int(max_bridgeable_gap))
+    runs: list[list[int]] = [[int(selected_idx[0])]]
+    previous = int(selected_idx[0])
+    for idx in (int(value) for value in selected_idx[1:]):
+        gap_size = idx - previous - 1
+        gap_break = False
+        if gap_size > 0:
+            gap_slice = slice(previous + 1, idx)
+            gap_break = gap_size > max_gap or not bool(np.all(bridgeable[gap_slice]))
+        seam_break = _paired_phi_seam_break(
+            low_phi_values,
+            high_phi_values,
+            idx,
+            previous,
+        )
+        if gap_break or seam_break:
+            runs.append([idx])
+        else:
+            runs[-1].append(idx)
+        previous = idx
+
+    return [np.asarray(run, dtype=np.int64) for run in runs if run]
 
 
 def _overlay_enabled(bindings: QrCylinderOverlayRuntimeBindings) -> bool:
@@ -1087,50 +1164,50 @@ def build_selected_qr_rod_qz_caked_mask(
         high_tth_run: np.ndarray,
         high_phi_run: np.ndarray,
     ) -> None:
+        finite_low = np.isfinite(low_tth_run) & np.isfinite(low_phi_run)
+        finite_high = np.isfinite(high_tth_run) & np.isfinite(high_phi_run)
+        low_tth_run = np.asarray(low_tth_run[finite_low], dtype=np.float64)
+        low_phi_run = np.asarray(low_phi_run[finite_low], dtype=np.float64)
+        high_tth_run = np.asarray(high_tth_run[finite_high], dtype=np.float64)
+        high_phi_run = np.asarray(high_phi_run[finite_high], dtype=np.float64)
         if low_tth_run.size < 2 or high_tth_run.size < 2:
             return
         polygon_x = np.concatenate((low_tth_run, high_tth_run[::-1]))
         polygon_y = np.concatenate((low_phi_run, high_phi_run[::-1]))
         if polygon_x.size < 4:
             return
-        finite_polygon = np.isfinite(polygon_x) & np.isfinite(polygon_y)
-        if int(np.count_nonzero(finite_polygon)) < 4:
-            return
 
-        x_min = float(np.min(polygon_x[finite_polygon]))
-        x_max = float(np.max(polygon_x[finite_polygon]))
-        y_min = float(np.min(polygon_y[finite_polygon]))
-        y_max = float(np.max(polygon_y[finite_polygon]))
+        x_min = float(np.min(polygon_x))
+        x_max = float(np.max(polygon_x))
+        y_min = float(np.min(polygon_y))
+        y_max = float(np.max(polygon_y))
         radial_idx = np.flatnonzero((radial_values >= x_min) & (radial_values <= x_max))
         azimuth_idx = np.flatnonzero((azimuth_values >= y_min) & (azimuth_values <= y_max))
         if radial_idx.size > 0 and azimuth_idx.size > 0:
             grid_x, grid_y = np.meshgrid(radial_values[radial_idx], azimuth_values[azimuth_idx])
             points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
             path = Path(np.column_stack((polygon_x, polygon_y)))
-            contained = path.contains_points(points, radius=1.0e-12).reshape(
+            contained = (
+                path.contains_points(points, radius=_CAKED_MASK_PATH_RADIUS)
+                | path.contains_points(points, radius=-_CAKED_MASK_PATH_RADIUS)
+            ).reshape(
                 azimuth_idx.size,
                 radial_idx.size,
             )
             target_mask[np.ix_(azimuth_idx, radial_idx)] |= contained
 
-    def _run_slices(selected: np.ndarray, low_phi: np.ndarray, high_phi: np.ndarray) -> list[slice]:
-        selected_idx = np.flatnonzero(selected)
-        if selected_idx.size <= 0:
-            return []
-        runs: list[slice] = []
-        start = int(selected_idx[0])
-        previous = int(selected_idx[0])
-        for idx in (int(value) for value in selected_idx[1:]):
-            seam_break = (
-                abs(float(low_phi[idx]) - float(low_phi[previous])) > 180.0
-                or abs(float(high_phi[idx]) - float(high_phi[previous])) > 180.0
-            )
-            if idx != previous + 1 or seam_break:
-                runs.append(slice(start, previous + 1))
-                start = idx
-            previous = idx
-        runs.append(slice(start, previous + 1))
-        return runs
+    def _run_indices(
+        selected: np.ndarray,
+        finite_geometry: np.ndarray,
+        low_phi: np.ndarray,
+        high_phi: np.ndarray,
+    ) -> list[np.ndarray]:
+        return _paired_trace_run_indices(
+            selected,
+            low_phi,
+            high_phi,
+            bridgeable_mask=~np.asarray(finite_geometry, dtype=bool),
+        )
 
     def _phi_in_window(phi_values: np.ndarray) -> np.ndarray:
         if phi_hi >= phi_lo:
@@ -1158,7 +1235,7 @@ def build_selected_qr_rod_qz_caked_mask(
             == center_qz.shape
         ):
             continue
-        selected = (
+        finite_geometry = (
             np.isfinite(low_tth)
             & np.isfinite(low_phi)
             & np.isfinite(high_tth)
@@ -1166,6 +1243,9 @@ def build_selected_qr_rod_qz_caked_mask(
             & np.isfinite(center_tth)
             & np.isfinite(center_phi)
             & np.isfinite(center_qz)
+        )
+        selected = (
+            finite_geometry
             & (center_qz >= qz_lo)
             & (center_qz <= qz_hi)
             & _phi_in_window(center_phi)
@@ -1175,13 +1255,13 @@ def build_selected_qr_rod_qz_caked_mask(
         _stamp_points(mask, center_tth[selected], center_phi[selected])
         _stamp_points(mask, low_tth[selected], low_phi[selected])
         _stamp_points(mask, high_tth[selected], high_phi[selected])
-        for run_slice in _run_slices(selected, low_phi, high_phi):
+        for run_idx in _run_indices(selected, finite_geometry, low_phi, high_phi):
             _rasterize_run(
                 mask,
-                low_tth[run_slice],
-                low_phi[run_slice],
-                high_tth[run_slice],
-                high_phi[run_slice],
+                low_tth[run_idx],
+                low_phi[run_idx],
+                high_tth[run_idx],
+                high_phi[run_idx],
             )
 
     return {
@@ -1257,20 +1337,23 @@ def build_qr_cylinder_caked_band_masks(
         high_tth_run: np.ndarray,
         high_phi_run: np.ndarray,
     ) -> None:
+        finite_low = np.isfinite(low_tth_run) & np.isfinite(low_phi_run)
+        finite_high = np.isfinite(high_tth_run) & np.isfinite(high_phi_run)
+        low_tth_run = np.asarray(low_tth_run[finite_low], dtype=np.float64)
+        low_phi_run = np.asarray(low_phi_run[finite_low], dtype=np.float64)
+        high_tth_run = np.asarray(high_tth_run[finite_high], dtype=np.float64)
+        high_phi_run = np.asarray(high_phi_run[finite_high], dtype=np.float64)
         if low_tth_run.size < 2 or high_tth_run.size < 2:
             return
         polygon_x = np.concatenate((low_tth_run, high_tth_run[::-1]))
         polygon_y = np.concatenate((low_phi_run, high_phi_run[::-1]))
         if polygon_x.size < 4:
             return
-        finite_polygon = np.isfinite(polygon_x) & np.isfinite(polygon_y)
-        if int(np.count_nonzero(finite_polygon)) < 4:
-            return
 
-        x_min = float(np.min(polygon_x[finite_polygon]))
-        x_max = float(np.max(polygon_x[finite_polygon]))
-        y_min = float(np.min(polygon_y[finite_polygon]))
-        y_max = float(np.max(polygon_y[finite_polygon]))
+        x_min = float(np.min(polygon_x))
+        x_max = float(np.max(polygon_x))
+        y_min = float(np.min(polygon_y))
+        y_max = float(np.max(polygon_y))
         radial_idx = np.flatnonzero((radial_values >= x_min) & (radial_values <= x_max))
         azimuth_idx = np.flatnonzero((azimuth_values >= y_min) & (azimuth_values <= y_max))
         if radial_idx.size > 0 and azimuth_idx.size > 0:
@@ -1280,7 +1363,10 @@ def build_qr_cylinder_caked_band_masks(
             )
             points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
             path = Path(np.column_stack((polygon_x, polygon_y)))
-            contained = path.contains_points(points, radius=1.0e-12).reshape(
+            contained = (
+                path.contains_points(points, radius=_CAKED_MASK_PATH_RADIUS)
+                | path.contains_points(points, radius=-_CAKED_MASK_PATH_RADIUS)
+            ).reshape(
                 azimuth_idx.size,
                 radial_idx.size,
             )
@@ -1288,35 +1374,24 @@ def build_qr_cylinder_caked_band_masks(
         _stamp_boundary_points(target_mask, low_tth_run, low_phi_run)
         _stamp_boundary_points(target_mask, high_tth_run, high_phi_run)
 
-    def _paired_run_slices(
+    def _paired_run_indices(
         low_tth: np.ndarray,
         low_phi: np.ndarray,
         high_tth: np.ndarray,
         high_phi: np.ndarray,
-    ) -> list[slice]:
+    ) -> list[np.ndarray]:
         finite = (
             np.isfinite(low_tth)
             & np.isfinite(low_phi)
             & np.isfinite(high_tth)
             & np.isfinite(high_phi)
         )
-        finite_idx = np.flatnonzero(finite)
-        if finite_idx.size <= 0:
-            return []
-        runs: list[slice] = []
-        start = int(finite_idx[0])
-        previous = int(finite_idx[0])
-        for idx in (int(value) for value in finite_idx[1:]):
-            seam_break = (
-                abs(float(low_phi[idx]) - float(low_phi[previous])) > 180.0
-                or abs(float(high_phi[idx]) - float(high_phi[previous])) > 180.0
-            )
-            if idx != previous + 1 or seam_break:
-                runs.append(slice(start, previous + 1))
-                start = idx
-            previous = idx
-        runs.append(slice(start, previous + 1))
-        return runs
+        return _paired_trace_run_indices(
+            finite,
+            low_phi,
+            high_phi,
+            bridgeable_mask=~finite,
+        )
 
     for entry in entries:
         try:
@@ -1377,13 +1452,13 @@ def build_qr_cylinder_caked_band_masks(
                 or low_tth.size <= 0
             ):
                 continue
-            for run_slice in _paired_run_slices(low_tth, low_phi, high_tth, high_phi):
+            for run_idx in _paired_run_indices(low_tth, low_phi, high_tth, high_phi):
                 _rasterize_run(
                     entry_mask,
-                    low_tth[run_slice],
-                    low_phi[run_slice],
-                    high_tth[run_slice],
-                    high_phi[run_slice],
+                    low_tth[run_idx],
+                    low_phi[run_idx],
+                    high_tth[run_idx],
+                    high_phi[run_idx],
                 )
 
         if np.any(entry_mask):
