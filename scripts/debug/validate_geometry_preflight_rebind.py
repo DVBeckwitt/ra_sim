@@ -2617,6 +2617,9 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
         "source_row_hkl_branch_inventory_after_rebinding_filter",
         "missing_required_hkl_inventory",
         "missing_required_branch_group_keys",
+        "source_coverage_materialization",
+        "provider_backed_source_coverage_row_count",
+        "coverage_source_present_point_missing_count",
     )
     for field_name in inventory_field_names:
         if field_name in simulation_diagnostics:

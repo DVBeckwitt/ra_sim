@@ -12512,7 +12512,9 @@ def test_new4_ladder_caked_evidence_prefers_projector_rich_selected_summary() ->
 
     assert report["exact_fit_space_projection_reason"] == "projector_rich_point"
     assert report["dataset_fit_space_projector_row_count"] == 7
-    assert report["point_match_summary"]["exact_fit_space_projection_reason"] == "projector_rich_point"
+    assert (
+        report["point_match_summary"]["exact_fit_space_projection_reason"] == "projector_rich_point"
+    )
     assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 7
     assert report["point_match_summary"]["manual_caked_residual_row_count"] == 7
     assert report["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
@@ -16515,9 +16517,7 @@ def _run_headless_active_var_contract_capture(
             "weight1": 1.0,
             "weight2": 1.0,
         },
-        fit_config={
-            "geometry": resolved_fit_geometry_cfg
-        },
+        fit_config={"geometry": resolved_fit_geometry_cfg},
         intensity_threshold=0.0,
         include_rods_flag=False,
         two_theta_range=(0.0, 90.0),
@@ -16712,7 +16712,9 @@ def _run_headless_active_var_contract_capture(
                     "group_count": 0,
                 },
                 dataset_infos=[{"dataset_index": 0, "summary_line": "bg[0]"}],
-                dataset_specs=[{"dataset_index": 0, "theta_initial": float(params["theta_initial"])}],
+                dataset_specs=[
+                    {"dataset_index": 0, "theta_initial": float(params["theta_initial"])}
+                ],
                 start_cmd_line="start",
                 start_log_sections=[],
                 max_display_markers=10,
@@ -22944,10 +22946,7 @@ def test_validate_live_source_rows_resolves_00l_saved_branch0_to_collapsed_branc
     assert validation["missing_required_pair_count"] == 0
     assert validation["branch_mismatch_count"] == 0
     assert validation["resolved_pairs"][0]["hkl"] == (0, 0, 3)
-    assert (
-        validation["resolved_pairs"][0]["resolution_kind"]
-        == "zero_qr_00l_branch_unconstrained"
-    )
+    assert validation["resolved_pairs"][0]["resolution_kind"] == "zero_qr_00l_branch_unconstrained"
 
 
 def test_non_00l_branch_mismatch_still_fails() -> None:
@@ -23088,6 +23087,352 @@ def test_targeted_source_filter_preserves_q_group_hkl_aliases() -> None:
     assert counts["after_branch_filter_count"] == 4
     assert counts["unrelated_count"] == 1
     assert matched_keys == required_keys
+
+
+def test_new4_live_source_coverage_materializes_collapsed_003_alias() -> None:
+    key = ("q_group", "primary", 0, 3)
+    required_pair = _targeted_required_pair(
+        pair_id="bg0:pair0",
+        hkl=(0, 0, 3),
+        branch_index=0,
+        q_group_key=key,
+        extra={
+            "source_reflection_index": 10,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 24,
+            "source_peak_index": 0,
+        },
+    )
+    collapsed_row = _targeted_source_row(
+        hkl=(0, 0, 3),
+        branch_index=1,
+        q_group_key=key,
+        sim_col=70.0,
+        sim_row=80.0,
+        source_peak_index=1,
+    )
+    collapsed_row.update(
+        {
+            "source_reflection_index": 71,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_coverage_aliases": [
+                {
+                    "hkl": (0, 0, 3),
+                    "branch_slot": "00l_collapsed",
+                    "branch_index": None,
+                    "q_group_key": key,
+                    "source_reflection_index": 10,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_row_index": 24,
+                    "source_peak_index": 0,
+                }
+            ],
+            "is_00l_collapsed": True,
+        }
+    )
+
+    filtered_rows, counts, matched_keys = (
+        geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+            [collapsed_row],
+            [geometry_fit._geometry_fit_required_branch_group_key(required_pair)],
+        )
+    )
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        filtered_rows,
+        required_pairs=[required_pair],
+    )
+
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0]["is_00l_collapsed"] is True
+    assert counts["after_branch_filter_count"] == 1
+    assert matched_keys == [((0, 0, 3), None, key)]
+    assert validation["valid"] is True
+    assert validation["resolved_pairs"][0]["resolution_kind"] in {
+        "source_coverage_alias",
+        "zero_qr_00l_branch_unconstrained",
+    }
+    assert collapsed_row["source_coverage_aliases"]
+
+
+def test_new4_live_source_coverage_preserves_q16_branch_1() -> None:
+    key = ("q_group", "primary", 1, 16)
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(-1, 0, 16),
+            branch_index=0,
+            q_group_key=key,
+        ),
+        _targeted_required_pair(
+            pair_id="bg0:pair1",
+            hkl=(-1, 0, 16),
+            branch_index=1,
+            q_group_key=key,
+        ),
+    ]
+    required_keys = geometry_fit._geometry_fit_required_branch_group_keys(
+        geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        )
+    )
+    rows = [
+        _targeted_source_row(
+            hkl=(1, 0, 16),
+            branch_index=0,
+            q_group_key=key,
+            sim_col=50.0,
+            sim_row=60.0,
+            source_peak_index=0,
+        ),
+        _targeted_source_row(
+            hkl=(-1, 0, 16),
+            branch_index=1,
+            q_group_key=key,
+            sim_col=55.0,
+            sim_row=65.0,
+            source_peak_index=1,
+        ),
+    ]
+
+    filtered_rows, _counts, matched_keys = (
+        geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+            rows,
+            required_keys,
+        )
+    )
+
+    assert [(row["q_group_key"], row["source_branch_index"]) for row in filtered_rows] == [
+        (key, 0),
+        (key, 1),
+    ]
+    assert set(matched_keys) == set(required_keys)
+
+
+def test_provider_only_and_live_source_coverage_use_same_key_normalizer() -> None:
+    provider_targets = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(0, 0, 3),
+            branch_index=0,
+            q_group_key=("q_group", "primary", 0, 3),
+        ),
+        _targeted_required_pair(
+            pair_id="bg0:pair1",
+            hkl=(-1, 0, 16),
+            branch_index=1,
+            q_group_key=("q_group", "primary", 1, 16),
+        ),
+    ]
+    live_rows = [
+        {
+            "hkl": (0, 0, 3),
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_branch_index": 1,
+            "source_coverage_aliases": [
+                {
+                    "hkl": (0, 0, 3),
+                    "q_group_key": ("q_group", "primary", 0, 3),
+                    "branch_slot": "00l_collapsed",
+                }
+            ],
+        },
+        _targeted_source_row(
+            hkl=(-1, 0, 16),
+            branch_index=1,
+            q_group_key=("q_group", "primary", 1, 16),
+            sim_col=55.0,
+            sim_row=65.0,
+            source_peak_index=1,
+        ),
+    ]
+
+    provider_keys = {
+        geometry_fit.normalize_new4_source_coverage_key(target) for target in provider_targets
+    }
+    live_keys = {
+        key
+        for row in live_rows
+        for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
+    }
+
+    assert provider_keys <= live_keys
+
+
+def test_build_geometry_manual_fit_dataset_materializes_provider_backed_source_coverage_rows() -> (
+    None
+):
+    q003_key = ("q_group", "primary", 0, 3)
+    q16_key = ("q_group", "primary", 1, 16)
+    saved_entries = [
+        {
+            "q_group_key": q003_key,
+            "source_table_index": 3,
+            "source_reflection_index": 3,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 30,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (0, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "refined_sim_x": 31.0,
+            "refined_sim_y": 41.0,
+        },
+        {
+            "q_group_key": q16_key,
+            "source_table_index": 16,
+            "source_reflection_index": 16,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 161,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 16),
+            "x": 50.0,
+            "y": 60.0,
+            "refined_sim_x": 51.0,
+            "refined_sim_y": 61.0,
+        },
+    ]
+    live_rows = [
+        {
+            "q_group_key": q16_key,
+            "source_table_index": 16,
+            "source_reflection_index": 16,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 160,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (1, 0, 16),
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+            "display_col": 10.0,
+            "display_row": 20.0,
+        }
+    ]
+
+    def _lookup(simulated_peaks):
+        lookup = {}
+        for row in simulated_peaks or ():
+            if not isinstance(row, Mapping):
+                continue
+            key = geometry_fit._geometry_fit_source_row_key(row)
+            if key is not None:
+                lookup[key] = dict(row)
+        return lookup
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [dict(entry) for entry in saved_entries],
+        load_background_by_index=lambda idx: (
+            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((8, 8), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [
+            dict(row) for row in live_rows
+        ],
+        geometry_manual_simulated_lookup=_lookup,
+        geometry_manual_entry_display_coords=lambda entry: (
+            float(entry.get("x", 0.0)),
+            float(entry.get("y", 0.0)),
+        ),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [
+            dict(entry) for entry in entries
+        ],
+        orient_image_for_fit=lambda image, **kwargs: image,
+        geometry_manual_source_rows_for_background=lambda *args, **kwargs: [
+            dict(row) for row in live_rows
+        ],
+        geometry_manual_project_peaks_for_background_view=_identity_geometry_project_rows,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+    trace_rows = [dict(row) for row in dataset["source_rows_for_trace"] if isinstance(row, Mapping)]
+    trace_keys = {
+        key
+        for row in trace_rows
+        for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
+    }
+
+    assert dataset["resolved_source_pair_count"] == 2
+    assert dataset["simulation_diagnostics"]["provider_backed_source_coverage_row_count"] == 2
+    assert any(row.get("is_00l_collapsed") is True for row in trace_rows)
+    assert (
+        (0, 0, 3),
+        geometry_fit._GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT,
+        q003_key,
+    ) in trace_keys
+    assert ((-1, 0, 16), 1, q16_key) in trace_keys
+    assert any(
+        row.get("provider_backed_live_source_row") is True and row.get("source_branch_index") == 1
+        for row in trace_rows
+    )
+
+
+def test_non_00l_source_coverage_not_one_per_q_group() -> None:
+    key = ("q_group", "primary", 1, 16)
+    rows = [
+        _targeted_source_row(
+            hkl=(-1, 0, 16),
+            branch_index=0,
+            q_group_key=key,
+            sim_col=10.0,
+            sim_row=20.0,
+            source_peak_index=0,
+        ),
+        _targeted_source_row(
+            hkl=(-1, 0, 16),
+            branch_index=1,
+            q_group_key=key,
+            sim_col=30.0,
+            sim_row=40.0,
+            source_peak_index=1,
+        ),
+    ]
+    required_keys = [
+        ((-1, 0, 16), 0, key),
+        ((-1, 0, 16), 1, key),
+    ]
+
+    filtered_rows, _counts, matched_keys = (
+        geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+            rows,
+            required_keys,
+        )
+    )
+
+    assert len(filtered_rows) == 2
+    assert {row["source_branch_index"] for row in filtered_rows} == {0, 1}
+    assert set(matched_keys) == set(required_keys)
 
 
 def test_targeted_source_coverage_gate_reports_missing_required_groups() -> None:

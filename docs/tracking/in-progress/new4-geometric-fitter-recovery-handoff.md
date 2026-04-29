@@ -25,26 +25,28 @@ Last updated: 2026-04-29
   simulation and filtering. The performance gate is green for the latest full
   preflight attempt (`targeted_performance_gate.ok == true`) without broad
   full-source fallback.
-- Bug/error still open: full source-row regeneration is blocked after the
-  targeted-preflight repair. The latest full preflight resolves 5/7 saved
-  source pairs. The targeted Miller request now keeps all required HKL/Q-group
-  families and the post-canonical filter preserves Q-group HKL aliases, so
-  `(-1,0,5)`, `(-1,0,10)`, and branch 0 of `(-1,0,16)` bind to live rows
-  without broad full-source fallback. The remaining missing live candidates are
-  the collapsed `00l` target `(0,0,3)` and branch 1 of
-  `q_group_key=("q_group","primary",1,16)`. The diagnostic classification is
-  now `targeted_source_coverage_failed`, not provider parity failure or a
-  targeted performance failure.
-- Validation status: compile, focused 00l/source-resolution tests, and
-  provider-only preflight are green. Full preflight is red at 5/7 source-row
-  resolution, so Rung 1, Rung 2, and the full ladder were not rerun after this
-  checkpoint. The latest reports are
-  `artifacts/geometry_fit_ladder/new4_full_validation/new4_point_provider_report_after_source_coverage_fix.json`
-  and
-  `artifacts/geometry_fit_ladder/new4_full_validation/new4_full_preflight_after_source_coverage_fix.json`.
-  Do not mark the geometric fitter fully validated until full preflight
-  resolves 7/7 without fallback and the ladder reaches the requested green
-  gates.
+- Bug/error fixed: full-preflight live source coverage now agrees with
+  provider-resolved targets for the restored New4 7-pair fixture. The dataset
+  materializes provider-backed live source rows when targeted source rows are
+  otherwise absent, preserves a collapsed `00l` coverage alias for `(0,0,3)`,
+  and retains non-00l branch identity for q16 branch 1. The latest full
+  preflight reports `dataset_resolved_source_pair_count == 7`,
+  `targeted_source_coverage_gate.ok == true`, `matched_required_branch_group_count == 7`,
+  `provider_backed_source_coverage_row_count == 5`, and
+  `coverage_source_present_point_missing_count == 0`.
+- Bug/error still open: after source coverage passes, full preflight now fails
+  later as `classification == "seam_failure"` with background/candidate
+  distance gates red. Provider-only parity remains green, so the remaining
+  failure is downstream of live-row coverage.
+- Validation status: focused New4 source-coverage tests, focused 00l visual
+  collapse tests, provider-only preflight, and the source-coverage portion of
+  full preflight are green. Full preflight is no longer blocked at
+  `targeted_source_coverage_failed`, but it is still not fully green because of
+  the downstream seam failure. The current local reports are
+  `temp/codex_new4_provider_only_live_coverage.json` and
+  `temp/codex_new4_full_preflight_live_coverage.json`. Do not mark the
+  geometric fitter fully validated until the seam gate and ladder reach the
+  requested green gates.
 - Point-provider parity is closed.
 - Visual/backend coordinate parity is closed for new4.
 - `GeometryFitSolverRequest.measured_peaks` coordinate parity is closed when optimizer-request capture succeeds.

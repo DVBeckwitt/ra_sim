@@ -1792,9 +1792,7 @@ def test_geometry_q_group_manager_reprojects_peak_records_into_current_view() ->
     assert cached_preview_peaks[0]["display_row"] == 205.0
 
 
-def test_geometry_q_group_manager_keeps_detector_display_when_caked_view_disabled() -> (
-    None
-):
+def test_geometry_q_group_manager_keeps_detector_display_when_caked_view_disabled() -> None:
     runtime_state = state.SimulationRuntimeState(
         peak_records=[
             {
@@ -3211,6 +3209,44 @@ def test_collapse_qr_qz_selection_peaks_00l_has_single_branch() -> None:
     assert kept["source_ray_id"] == "00l-top"
     assert kept["mosaic_weight"] == 0.9
     assert kept["selection_reason"] == "mosaic_top_per_branch"
+    assert kept["is_00l_collapsed"] is True
+    assert len(kept["source_coverage_aliases"]) == 3
+    assert {
+        (tuple(alias["hkl"]), alias["branch_slot"], alias["source_reflection_index"])
+        for alias in kept["source_coverage_aliases"]
+    } == {
+        ((0, 0, 3), "00l_collapsed", 70),
+        ((0, 0, 3), "00l_collapsed", 71),
+        ((0, 0, 3), "00l_collapsed", 72),
+    }
+
+
+def test_00l_visual_collapse_still_one_row() -> None:
+    key = ("q_group", "primary", 0, 3)
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        [
+            {
+                "q_group_key": key,
+                "hkl": (0, 0, 3),
+                "source_branch_index": 0,
+                "source_reflection_index": 70,
+                "source_row_index": 1,
+                "mosaic_weight": 0.2,
+            },
+            {
+                "q_group_key": key,
+                "hkl": (0, 0, 3),
+                "source_branch_index": 1,
+                "source_reflection_index": 71,
+                "source_row_index": 2,
+                "mosaic_weight": 0.9,
+            },
+        ],
+    )
+
+    assert len(collapsed) == 1
+    assert collapsed_count == 1
+    assert len(collapsed[0]["source_coverage_aliases"]) == 2
 
 
 def test_collapse_qr_qz_selection_peaks_leaves_ungrouped_rows_independent() -> None:

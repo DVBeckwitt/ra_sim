@@ -564,8 +564,8 @@ def _geometry_fit_hit_table_source_index_inventory(
         if arr.ndim != 2 or arr.shape[0] <= 0:
             continue
         for row in arr:
-            source_table_index, _source_row_index, _best_sample_index = (
-                extract_hit_row_provenance(row)
+            source_table_index, _source_row_index, _best_sample_index = extract_hit_row_provenance(
+                row
             )
             key = int(source_table_index) if source_table_index is not None else None
             counts[key] = counts.get(key, 0) + 1
@@ -573,7 +573,7 @@ def _geometry_fit_hit_table_source_index_inventory(
         {"source_table_index": key, "count": int(count)}
         for key, count in sorted(
             counts.items(),
-            key=lambda item: (-1 if item[0] is None else int(item[0])),
+            key=lambda item: -1 if item[0] is None else int(item[0]),
         )
     ]
 
@@ -1048,9 +1048,7 @@ def build_geometry_q_group_entries(
                 except Exception:
                     l_val = 0
                 if not np.isfinite(qr_val) and np.isfinite(av_used) and av_used > 0.0:
-                    qr_val = (2.0 * np.pi / av_used) * np.sqrt(
-                        (4.0 / 3.0) * max(0.0, float(m_val))
-                    )
+                    qr_val = (2.0 * np.pi / av_used) * np.sqrt((4.0 / 3.0) * max(0.0, float(m_val)))
                 if not np.isfinite(qz_val) and np.isfinite(cv_used) and cv_used > 0.0:
                     qz_val = (2.0 * np.pi / cv_used) * float(l_val)
 
@@ -1994,8 +1992,8 @@ def simulate_geometry_fit_hit_tables(
     if required_source_indices:
         diagnostics["targeted_required_source_index_count"] = int(len(required_source_indices))
     use_miller_prefilter = bool(required_branch_keys or required_source_indices)
-    diagnostics["targeted_miller_hkl_inventory_before_filter"] = (
-        _geometry_fit_miller_hkl_inventory(filtered_miller_array)
+    diagnostics["targeted_miller_hkl_inventory_before_filter"] = _geometry_fit_miller_hkl_inventory(
+        filtered_miller_array
     )
     required_group_identities = {
         tuple(key[2])
@@ -2019,7 +2017,11 @@ def simulate_geometry_fit_hit_tables(
         )
         return q_group_key is not None and tuple(q_group_key) in required_group_identities
 
-    if use_miller_prefilter and filtered_miller_array.ndim == 2 and filtered_miller_array.shape[1] >= 3:
+    if (
+        use_miller_prefilter
+        and filtered_miller_array.ndim == 2
+        and filtered_miller_array.shape[1] >= 3
+    ):
         required_hkls = {tuple(key[0]) for key in required_branch_keys}
         diagnostics["targeted_required_hkl_count"] = int(len(required_hkls))
         diagnostics["targeted_required_branch_group_count"] = int(len(required_branch_keys))
@@ -2053,8 +2055,8 @@ def simulate_geometry_fit_hit_tables(
             diagnostics["targeted_simulation_fallback_reason"] = "targeted_hkl_filter_empty"
         else:
             diagnostics["targeted_simulation_fallback_reason"] = "targeted_hkl_filter_unavailable"
-    diagnostics["targeted_miller_hkl_inventory_after_filter"] = (
-        _geometry_fit_miller_hkl_inventory(filtered_miller_array)
+    diagnostics["targeted_miller_hkl_inventory_after_filter"] = _geometry_fit_miller_hkl_inventory(
+        filtered_miller_array
     )
 
     mosaic = dict(params_local.get("mosaic_params", {}))
@@ -2175,9 +2177,7 @@ def simulate_geometry_fit_hit_tables(
         diagnostics["targeted_source_index_preview_after_filter"] = [
             int(value) for value in list(filtered_source_indices[:12])
         ]
-        diagnostics["targeted_source_index_count_after_filter"] = int(
-            len(filtered_source_indices)
-        )
+        diagnostics["targeted_source_index_count_after_filter"] = int(len(filtered_source_indices))
     diagnostics["fresh_hit_table_hkl_inventory_before_filter"] = (
         _geometry_fit_hit_table_hkl_inventory(hit_table_list)
     )
@@ -2194,8 +2194,8 @@ def simulate_geometry_fit_hit_tables(
             arr = np.asarray(table, dtype=np.float64)
             if arr.ndim != 2 or arr.shape[0] <= 0 or arr.shape[1] < 7:
                 continue
-            source_table_index, _source_row_index, _best_sample_index = (
-                extract_hit_row_provenance(arr[0])
+            source_table_index, _source_row_index, _best_sample_index = extract_hit_row_provenance(
+                arr[0]
             )
             if source_table_index is None:
                 source_table_index = int(table_idx)
@@ -2208,7 +2208,8 @@ def simulate_geometry_fit_hit_tables(
             except Exception:
                 continue
             source_index_required = (
-                source_table_index is not None and int(source_table_index) in required_source_indices
+                source_table_index is not None
+                and int(source_table_index) in required_source_indices
             )
             if table_hkl not in required_hkls and not source_index_required:
                 table_matches_group = _row_matches_required_hkl_family(table_hkl)
@@ -2894,8 +2895,7 @@ def make_runtime_geometry_q_group_value_callbacks(
                     "display_row",
                 )
                 is not None
-                and _runtime_peak_row_finite_point(entry, "native_col", "native_row")
-                is not None
+                and _runtime_peak_row_finite_point(entry, "native_col", "native_row") is not None
             ):
                 entry["coordinate_frame"] = "background_detector"
                 entry["detector_display_source"] = (
@@ -2905,7 +2905,11 @@ def make_runtime_geometry_q_group_value_callbacks(
             normalized_candidates,
             profile_cache=getattr(simulation_runtime_state, "profile_cache", None),
         )
-        if _caked_view_enabled() and callable(project_peaks_to_current_view) and normalized_candidates:
+        if (
+            _caked_view_enabled()
+            and callable(project_peaks_to_current_view)
+            and normalized_candidates
+        ):
             try:
                 normalized_candidates = [
                     dict(entry)
@@ -3504,6 +3508,113 @@ def _q_group_unknown_branch_slot_id(
     return str(branch_id)
 
 
+def _source_coverage_q_group_key_is_00l(value: object) -> bool:
+    key = gui_mosaic_top.normalize_q_group_key(value)
+    if not key or len(key) < 4 or key[0] != "q_group":
+        return False
+    try:
+        return int(round(float(key[2]))) == 0
+    except Exception:
+        return False
+
+
+def _source_coverage_entry_is_00l(
+    entry: Mapping[str, object] | None,
+    group_key: object,
+) -> bool:
+    hkl_key = gui_geometry_overlay.normalize_hkl_key(
+        entry.get("hkl", entry.get("label")) if isinstance(entry, Mapping) else None
+    )
+    if hkl_key is not None:
+        return int(hkl_key[0]) == 0 and int(hkl_key[1]) == 0
+    return _source_coverage_q_group_key_is_00l(group_key)
+
+
+def _source_coverage_alias_payload(
+    entry: Mapping[str, object],
+    *,
+    group_key: object,
+) -> dict[str, object] | None:
+    hkl_key = gui_geometry_overlay.normalize_hkl_key(entry.get("hkl", entry.get("label")))
+    if hkl_key is None:
+        return None
+    branch_idx, _branch_source, _branch_reason = resolve_canonical_branch(
+        entry,
+        allow_legacy_peak_fallback=False,
+    )
+    normalized_group_key = gui_mosaic_top.normalize_q_group_key(entry.get("q_group_key", group_key))
+    is_00l = _source_coverage_entry_is_00l(entry, normalized_group_key or group_key)
+    alias: dict[str, object] = {
+        "hkl": tuple(int(v) for v in hkl_key),
+        "q_group_key": normalized_group_key if normalized_group_key is not None else group_key,
+        "branch_index": int(branch_idx) if branch_idx in {0, 1} else None,
+        "branch_slot": "00l_collapsed"
+        if is_00l
+        else int(branch_idx)
+        if branch_idx in {0, 1}
+        else None,
+    }
+    for key in (
+        "source_table_index",
+        "source_reflection_index",
+        "source_reflection_namespace",
+        "source_reflection_is_full",
+        "source_row_index",
+        "source_branch_index",
+        "source_peak_index",
+        "source_label",
+    ):
+        if key in entry:
+            alias[key] = entry.get(key)
+    return alias
+
+
+def _source_coverage_plain(value: object) -> object:
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_source_coverage_plain(item) for item in value.reshape(-1).tolist()]
+    if isinstance(value, Mapping):
+        return {
+            str(key): _source_coverage_plain(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, tuple):
+        return [_source_coverage_plain(item) for item in value]
+    if isinstance(value, list):
+        return [_source_coverage_plain(item) for item in value]
+    return value
+
+
+def _source_coverage_aliases_for_cluster(
+    cluster_entries: Sequence[dict[str, object]],
+    *,
+    group_key: object,
+) -> tuple[list[dict[str, object]], list[object]]:
+    aliases: list[dict[str, object]] = []
+    seen_aliases: set[str] = set()
+    branch_slots: list[object] = []
+    seen_branch_slots: set[str] = set()
+    for entry in cluster_entries:
+        alias = _source_coverage_alias_payload(entry, group_key=group_key)
+        if alias is None:
+            continue
+        alias_key = json.dumps(_source_coverage_plain(alias), sort_keys=True, default=str)
+        if alias_key not in seen_aliases:
+            seen_aliases.add(alias_key)
+            aliases.append(alias)
+        branch_slot = alias.get("branch_slot")
+        branch_slot_key = json.dumps(
+            _source_coverage_plain(branch_slot),
+            sort_keys=True,
+            default=str,
+        )
+        if branch_slot_key not in seen_branch_slots:
+            seen_branch_slots.add(branch_slot_key)
+            branch_slots.append(branch_slot)
+    return aliases, branch_slots
+
+
 def collapse_geometry_fit_simulated_peaks(
     simulated_peaks: Sequence[dict[str, object]] | None,
     *,
@@ -3625,6 +3736,19 @@ def collapse_geometry_fit_simulated_peaks(
             merged["weight"] = float(total_weight)
             merged["degenerate_count"] = int(len(cluster_entries))
             merged["degenerate_hkls"] = list(degenerate_hkls)
+            source_coverage_aliases, source_coverage_branch_slots = (
+                _source_coverage_aliases_for_cluster(
+                    cluster_entries,
+                    group_key=group_key,
+                )
+            )
+            if source_coverage_aliases:
+                merged["source_coverage_aliases"] = list(source_coverage_aliases)
+                merged["collapsed_source_pair_keys"] = list(source_coverage_aliases)
+            if source_coverage_branch_slots:
+                merged["collapsed_branch_slots"] = list(source_coverage_branch_slots)
+            if any(_source_coverage_entry_is_00l(entry, group_key) for entry in cluster_entries):
+                merged["is_00l_collapsed"] = True
             if group_key in real_group_keys:
                 collapsed_degenerate_count += max(0, len(cluster_entries) - 1)
             collapsed.append(merged)
