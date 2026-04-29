@@ -17010,6 +17010,159 @@ def test_qr_sim_peak_caked_blank_image_is_not_refined() -> None:
     assert refined["sim_visual_deg"] == refined["sim_nominal_caked_deg"]
 
 
+def test_refined_qr_cache_rebuilds_simulated_lookup_and_redraw_uses_refined_peak() -> (
+    None
+):
+    image = np.zeros((24, 24), dtype=float)
+    image[6, 8] = 25.0
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_branch_index": 1,
+        "display_col": 5.4,
+        "display_row": 6.2,
+        "native_col": 105.4,
+        "native_row": 206.2,
+        "caked_x": 11.0,
+        "caked_y": 22.0,
+    }
+    cache_data = {
+        "simulated_peaks": [dict(candidate)],
+        "active_simulated_peaks": [dict(candidate)],
+        "fresh_source_rows": [dict(candidate)],
+        "detector_picker_source_rows": [dict(candidate)],
+        "detector_picker_rows": [dict(candidate)],
+        "grouped_candidates": {candidate["q_group_key"]: [dict(candidate)]},
+        "simulated_lookup": {_source_key(candidate): dict(candidate)},
+    }
+
+    refined_cache = mg.geometry_manual_refine_qr_sim_candidates_in_cache(
+        cache_data,
+        detector_simulation_image=image,
+        detector_display_to_native_coords=lambda col, row: (col + 100.0, row + 200.0),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            col / 10.0,
+            row / 10.0,
+        ),
+    )
+    assert refined_cache["active_simulated_peaks"][0][
+        "sim_refined_detector_display_px"
+    ] == (8.0, 6.0)
+    assert "sim_refined_detector_display_px" not in refined_cache["simulated_lookup"][
+        _source_key(candidate)
+    ]
+
+    rebuilt_cache = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        refined_cache,
+        _build_lookup,
+    )
+    lookup_entry = mg.geometry_manual_lookup_source_entry(
+        rebuilt_cache["simulated_lookup"],
+        candidate,
+    )
+    assert lookup_entry is not None
+    assert lookup_entry["sim_refined_detector_display_px"] == (8.0, 6.0)
+
+    _measured_display, saved_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [{**dict(candidate), "x": 1.0, "y": 2.0}],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: refined_cache,
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert saved_pairs[0]["sim_display"] == (8.0, 6.0)
+    assert saved_pairs[0]["simulated_lookup_stale_unrefined_rebuilt"] is True
+
+
+def test_refined_qr_cache_rebuilds_caked_projection_lookup_from_refined_rows() -> None:
+    radial = np.linspace(0.0, 9.0, 10)
+    azimuth = np.linspace(0.0, 9.0, 10)
+    image = np.zeros((10, 10), dtype=float)
+    image[4, 7] = 100.0
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_reflection_index": 42,
+        "source_branch_index": 0,
+        "source_ray_id": "ray-0",
+        "branch_id": "branch-0",
+        "native_col": 15.0,
+        "native_row": 16.0,
+        "sim_col_raw": 15.0,
+        "sim_row_raw": 16.0,
+        "display_col": 5.2,
+        "display_row": 4.1,
+        "caked_x": 5.2,
+        "caked_y": 4.1,
+    }
+    projection_key = tuple(candidate.get(field) for field in _CROSS_VIEW_ID_FIELDS)
+    cache_data = {
+        "caked_qr_projection_entries": [dict(candidate)],
+        "caked_qr_projection_grouped_candidates": {
+            candidate["q_group_key"]: [dict(candidate)]
+        },
+        "caked_qr_projection_lookup": {projection_key: dict(candidate)},
+    }
+
+    refined_cache = mg.geometry_manual_refine_qr_sim_candidates_in_cache(
+        cache_data,
+        caked_simulation_image=image,
+        radial_axis=radial,
+        azimuth_axis=azimuth,
+    )
+    assert np.allclose(
+        refined_cache["caked_qr_projection_entries"][0]["sim_refined_caked_deg"],
+        (7.0, 4.0),
+    )
+    assert "sim_refined_caked_deg" not in refined_cache["caked_qr_projection_lookup"][
+        projection_key
+    ]
+
+    rebuilt_cache = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        refined_cache,
+        _build_lookup,
+    )
+    lookup_entry = rebuilt_cache["caked_qr_projection_lookup"][projection_key]
+    assert np.allclose(lookup_entry["sim_refined_caked_deg"], (7.0, 4.0))
+
+    _measured_display, saved_pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [
+            {
+                **dict(candidate),
+                "background_two_theta_deg": 5.2,
+                "background_phi_deg": 4.1,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: refined_cache,
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (
+            float(entry["caked_x"]),
+            float(entry["caked_y"]),
+        ),
+    )
+
+    assert np.allclose(saved_pairs[0]["sim_display"], (7.0, 4.0))
+    assert (
+        saved_pairs[0]["caked_qr_projection_lookup_stale_unrefined_rebuilt"] is True
+    )
+
+
 def test_detector_picker_row_uses_refined_sim_detector_px_and_matching_native() -> None:
     entry = {
         "q_group_key": ("q_group", "primary", 1, 10),
@@ -30448,6 +30601,12 @@ def test_new4_objective_uses_refined_sim_caked_residual(tmp_path) -> None:
         components,
     )
     for component in components:
+        assert component.get("fit_prediction_resolver_function") == (
+            "_resolve_qr_fit_prediction_from_trial_params"
+        )
+        assert component.get("sim_refinement_status") == "refined"
+        assert component.get("predicted_source") != "direct_fit_space_projection"
+        assert component.get("prediction_source") != "direct_fit_space_projection"
         observed = _diag_row_pair(component, "observed_caked_deg")
         refined = _diag_row_pair(component, "predicted_refined_caked_deg")
         nominal = _diag_row_pair(component, "predicted_nominal_caked_deg")

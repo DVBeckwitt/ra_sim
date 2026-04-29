@@ -6147,7 +6147,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             )
             if (
                 not bool(fit_prediction.get("available", False))
-                and not _fixed_manual_qr_pair_requires_shared_resolver(measured_entry)
+                and not _fixed_manual_qr_pair_blocks_direct_projection(measured_entry)
                 and sim_two_theta_arr.size >= 1
                 and sim_phi_arr.size >= 1
                 and np.isfinite(sim_two_theta_arr[0])
@@ -12943,6 +12943,25 @@ def _fixed_manual_pair_requires_exact_source_row(entry: Mapping[str, object]) ->
 def _fixed_manual_qr_pair_requires_shared_resolver(entry: Mapping[str, object]) -> bool:
     if not _fixed_manual_pair_requires_exact_source_row(entry):
         return False
+    q_group_key = _normalized_q_group_key(entry.get("q_group_key"))
+    if q_group_key is not None:
+        _, source_missing, source_payload = _fit_qr_branch_key_payload(entry)
+        has_source_identity = (
+            source_payload.get("source_row_index") is not None
+            and (
+                source_payload.get("source_table_index") is not None
+                or source_payload.get("source_reflection_index") is not None
+            )
+        )
+        has_branch_identity = (
+            source_payload.get("source_branch_index") in {0, 1}
+            or source_payload.get("source_peak_index") in {0, 1}
+            or bool(source_payload.get("branch_id"))
+        )
+        if has_source_identity and has_branch_identity:
+            return True
+        if "source_row_index" not in source_missing:
+            return True
     return any(
         key in entry
         for key in (
@@ -12954,6 +12973,14 @@ def _fixed_manual_qr_pair_requires_shared_resolver(entry: Mapping[str, object]) 
             "sim_visual_caked_deg",
         )
     )
+
+
+def _fixed_manual_qr_pair_blocks_direct_projection(entry: Mapping[str, object]) -> bool:
+    if _fixed_manual_qr_pair_requires_shared_resolver(entry):
+        return True
+    if not _fixed_manual_pair_requires_exact_source_row(entry):
+        return False
+    return _normalized_q_group_key(entry.get("q_group_key")) is not None
 
 
 def _resolve_exact_fixed_manual_source_row(
@@ -16827,43 +16854,88 @@ def _fit_qr_branch_key_for_match(entry: Mapping[str, object]) -> Tuple[object, .
 def _fit_qr_detector_point_payload_from_source_row(
     row: Mapping[str, object],
 ) -> Dict[str, object]:
-    display_point: Optional[Tuple[float, float]] = None
-    for x_key, y_key in (
-        ("sim_col", "sim_row"),
-        ("display_col", "display_row"),
-        ("sim_col_raw", "sim_row_raw"),
-        ("refined_sim_x", "refined_sim_y"),
-    ):
+    def _tuple_point(key: str) -> Optional[Tuple[float, float]]:
+        raw_point = row.get(key)
+        if not isinstance(raw_point, (list, tuple, np.ndarray)) or len(raw_point) < 2:
+            return None
         try:
-            col = float(row.get(x_key, np.nan))
-            rr = float(row.get(y_key, np.nan))
+            col = float(raw_point[0])
+            rr = float(raw_point[1])
         except Exception:
-            continue
+            return None
         if np.isfinite(col) and np.isfinite(rr):
-            display_point = (float(col), float(rr))
-            break
+            return float(col), float(rr)
+        return None
 
-    for x_key, y_key in (
-        ("native_col", "native_row"),
-        ("sim_native_x", "sim_native_y"),
-        ("detector_native_col", "detector_native_row"),
-        ("refined_sim_native_x", "refined_sim_native_y"),
-    ):
+    def _field_point(x_key: str, y_key: str) -> Optional[Tuple[float, float]]:
         try:
             col = float(row.get(x_key, np.nan))
             rr = float(row.get(y_key, np.nan))
         except Exception:
-            continue
+            return None
         if np.isfinite(col) and np.isfinite(rr):
+            return float(col), float(rr)
+        return None
+
+    display_point: Optional[Tuple[float, float]] = None
+    display_point_source = "sim_detector_display_point_missing"
+    for tuple_key in ("sim_refined_detector_display_px",):
+        point = _tuple_point(tuple_key)
+        if point is not None:
+            display_point = point
+            display_point_source = tuple_key
+            break
+    if display_point is None:
+        for x_key, y_key in (
+            ("refined_sim_x", "refined_sim_y"),
+            ("sim_col", "sim_row"),
+            ("display_col", "display_row"),
+            ("sim_col_raw", "sim_row_raw"),
+        ):
+            point = _field_point(x_key, y_key)
+            if point is not None:
+                display_point = point
+                display_point_source = f"{x_key}/{y_key}"
+                break
+
+    for tuple_key in ("sim_refined_detector_native_px",):
+        point = _tuple_point(tuple_key)
+        if point is not None:
             return {
-                "point": (float(col), float(rr)),
+                "point": (float(point[0]), float(point[1])),
                 "input_frame": "native_detector",
-                "point_source": f"{x_key}/{y_key}",
-                "native_px": [float(col), float(rr)],
+                "point_source": tuple_key,
+                "native_px": [float(point[0]), float(point[1])],
                 "display_px": (
                     [float(display_point[0]), float(display_point[1])]
                     if display_point is not None
                     else None
+                ),
+                "display_point_source": (
+                    display_point_source if display_point is not None else None
+                ),
+            }
+
+    for x_key, y_key in (
+        ("refined_sim_native_x", "refined_sim_native_y"),
+        ("native_col", "native_row"),
+        ("sim_native_x", "sim_native_y"),
+        ("detector_native_col", "detector_native_row"),
+    ):
+        point = _field_point(x_key, y_key)
+        if point is not None:
+            return {
+                "point": (float(point[0]), float(point[1])),
+                "input_frame": "native_detector",
+                "point_source": f"{x_key}/{y_key}",
+                "native_px": [float(point[0]), float(point[1])],
+                "display_px": (
+                    [float(display_point[0]), float(display_point[1])]
+                    if display_point is not None
+                    else None
+                ),
+                "display_point_source": (
+                    display_point_source if display_point is not None else None
                 ),
             }
 
@@ -16871,9 +16943,10 @@ def _fit_qr_detector_point_payload_from_source_row(
         return {
             "point": (float(display_point[0]), float(display_point[1])),
             "input_frame": "fit_detector",
-            "point_source": "sim_col/sim_row",
+            "point_source": display_point_source,
             "native_px": None,
             "display_px": [float(display_point[0]), float(display_point[1])],
+            "display_point_source": display_point_source,
         }
 
     return {
@@ -16882,6 +16955,7 @@ def _fit_qr_detector_point_payload_from_source_row(
         "point_source": "sim_detector_point_missing",
         "native_px": None,
         "display_px": None,
+        "display_point_source": None,
     }
 
 
@@ -17072,8 +17146,22 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
     row = dict(candidate.get("row") or {})
     point_payload = dict(candidate.get("point_payload") or {})
     candidate_identity = dict(candidate.get("candidate_identity") or {})
-    native_col = _safe_float(row.get("native_col", row.get("sim_native_x")), float("nan"))
-    native_row = _safe_float(row.get("native_row", row.get("sim_native_y")), float("nan"))
+    resolved_native_px = point_payload.get("native_px")
+    if (
+        isinstance(resolved_native_px, (list, tuple, np.ndarray))
+        and len(resolved_native_px) >= 2
+    ):
+        native_col = _safe_float(resolved_native_px[0], float("nan"))
+        native_row = _safe_float(resolved_native_px[1], float("nan"))
+    else:
+        native_col = _safe_float(
+            row.get("native_col", row.get("sim_native_x")),
+            float("nan"),
+        )
+        native_row = _safe_float(
+            row.get("native_row", row.get("sim_native_y")),
+            float("nan"),
+        )
     caked_theta = _safe_float(row.get("caked_x", row.get("raw_caked_x")), float("nan"))
     caked_phi = _safe_float(row.get("caked_y", row.get("raw_caked_y")), float("nan"))
     row_best_sample = _nonnegative_index(

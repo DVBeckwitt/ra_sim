@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-27
+Last updated: 2026-04-29
 
 ## Current status
 
@@ -44,6 +44,21 @@ Last updated: 2026-04-27
   simulated caked centers are recomputed from trial simulation output, and
   branch identity stays stable. The simulated caked peak refinement itself is
   integer-bin only, with no subpixel method.
+- 2026-04-29 Q-set refinement propagation bug is fixed at the cache and
+  objective boundaries. Manual refinement now rebuilds `simulated_lookup` from
+  refined active rows and `caked_qr_projection_lookup` from refined caked
+  projection rows before runtime cache replacement, saved-pair redraw, and fit
+  handoff. Q-set fixed-source objective rows are classified as dynamic Qr rows
+  without requiring visual alias fields, block nominal
+  `direct_fit_space_projection` fallback, and prefer refined detector-native
+  coordinates before stale nominal native/display aliases.
+- Bug/error status for the Q-set refinement patch: focused detector/caked
+  lookup regressions, detector-picker refined-field regressions, Q-set objective
+  refined-caked residual checks, q-group branch coverage, and compile checks are
+  green. The broad `-k "refined or detector_picker"` selector timed out locally
+  because it includes heavy diagnostics. Repo-level `ra_sim.dev check` still
+  stops at pre-existing format-check drift in `optimization.py` and unrelated
+  runtime/test files, so full-tree cleanliness is not claimed by this patch.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.

@@ -6451,6 +6451,48 @@ def geometry_manual_refine_qr_sim_candidates_in_cache(
     return refined_cache
 
 
+def geometry_manual_rebuild_refined_qr_cache_lookups(
+    cache_data: Mapping[str, object] | None,
+    build_simulated_lookup: Callable[
+        [Sequence[dict[str, object]] | None],
+        GeometryManualLookupMap,
+    ],
+) -> dict[str, object]:
+    """Rebuild Qr lookup maps after simulated rows have been refined."""
+
+    if not isinstance(cache_data, Mapping):
+        return {}
+
+    def _row_dicts(rows: object) -> list[dict[str, object]]:
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+            return []
+        return [dict(entry) for entry in rows if isinstance(entry, Mapping)]
+
+    rebuilt_cache = dict(cache_data)
+    if "active_simulated_peaks" in rebuilt_cache or "simulated_peaks" in rebuilt_cache:
+        if "active_simulated_peaks" in rebuilt_cache:
+            lookup_source_rows = _row_dicts(rebuilt_cache.get("active_simulated_peaks"))
+        else:
+            lookup_source_rows = _row_dicts(rebuilt_cache.get("simulated_peaks"))
+        try:
+            rebuilt_lookup = build_simulated_lookup(lookup_source_rows)
+        except Exception:
+            rebuilt_lookup = {}
+        rebuilt_cache["simulated_lookup"] = _geometry_manual_copy_lookup(rebuilt_lookup)
+
+    if "caked_qr_projection_entries" in rebuilt_cache:
+        projection_lookup: GeometryManualLookupMap = {}
+        for entry in _row_dicts(rebuilt_cache.get("caked_qr_projection_entries")):
+            key = _geometry_manual_caked_qr_projection_key(entry)
+            if key is not None:
+                _geometry_manual_add_lookup_entry(projection_lookup, key, entry)
+        rebuilt_cache["caked_qr_projection_lookup"] = _geometry_manual_copy_lookup(
+            projection_lookup
+        )
+
+    return rebuilt_cache
+
+
 def geometry_manual_detector_picker_row(
     entry: Mapping[str, object] | None,
     *,
@@ -10052,10 +10094,10 @@ def build_geometry_manual_initial_pairs_display(
             return _geometry_manual_finite_point(
                 candidate,
                 (
+                    ("refined_sim_caked_x", "refined_sim_caked_y"),
                     ("caked_x", "caked_y"),
                     ("raw_caked_x", "raw_caked_y"),
                     ("two_theta_deg", "phi_deg"),
-                    ("refined_sim_caked_x", "refined_sim_caked_y"),
                 ),
             )
 
@@ -10313,8 +10355,27 @@ def build_geometry_manual_initial_pairs_display(
 
         return saved_overlay_detector_point
 
+    raw_simulated_lookup: GeometryManualLookupMap = {}
+    raw_caked_qr_projection_lookup: GeometryManualLookupMap = {}
     caked_qr_projection_lookup: GeometryManualLookupMap = {}
     rebuilt_caked_qr_projection_lookup: GeometryManualLookupMap | None = None
+
+    def _lookup_entry_was_stale_unrefined(
+        raw_lookup_entry: Mapping[str, object] | None,
+        resolved_entry: Mapping[str, object] | None,
+    ) -> bool:
+        if not isinstance(raw_lookup_entry, Mapping) or not isinstance(
+            resolved_entry,
+            Mapping,
+        ):
+            return False
+        raw_status = (
+            str(raw_lookup_entry.get("sim_refinement_status", "") or "").strip().lower()
+        )
+        resolved_status = (
+            str(resolved_entry.get("sim_refinement_status", "") or "").strip().lower()
+        )
+        return raw_status != "refined" and resolved_status == "refined"
 
     def _call_source_rows_for_projection_rebuild() -> list[dict[str, object]]:
         if not callable(source_rows_for_background):
@@ -10375,6 +10436,18 @@ def build_geometry_manual_initial_pairs_display(
             param_set=params_local,
             prefer_cache=True,
             background_index=background_index,
+        )
+        if not isinstance(cache_data, Mapping):
+            cache_data = {}
+        raw_simulated_lookup = _geometry_manual_copy_lookup(
+            cache_data.get("simulated_lookup", {})
+        )
+        raw_caked_qr_projection_lookup = _geometry_manual_copy_lookup(
+            cache_data.get("caked_qr_projection_lookup", {})
+        )
+        cache_data = geometry_manual_rebuild_refined_qr_cache_lookups(
+            cache_data,
+            build_simulated_lookup,
         )
         simulated_lookup = _geometry_manual_copy_lookup(cache_data.get("simulated_lookup", {}))
         caked_qr_projection_lookup = _geometry_manual_copy_lookup(
@@ -10453,6 +10526,10 @@ def build_geometry_manual_initial_pairs_display(
             bg_coords = entry_display_coords(entry)
         if bg_coords is not None:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
+        raw_caked_projection_entry = _geometry_manual_lookup_caked_qr_projection_entry(
+            raw_caked_qr_projection_lookup,
+            entry,
+        )
         caked_projection_entry = (
             _caked_qr_projection_entry_for_saved(entry)
             if bool(use_caked_display)
@@ -10461,6 +10538,7 @@ def build_geometry_manual_initial_pairs_display(
                 entry,
             )
         )
+        raw_sim_source_entry: dict[str, object] | None = None
         if bool(use_caked_display):
             sim_source_entry = (
                 dict(caked_projection_entry)
@@ -10468,6 +10546,10 @@ def build_geometry_manual_initial_pairs_display(
                 else None
             )
         else:
+            raw_sim_source_entry = geometry_manual_lookup_source_entry(
+                raw_simulated_lookup,
+                entry,
+            )
             sim_source_entry = geometry_manual_lookup_source_entry(simulated_lookup, entry)
         detector_replay_from_caked_projection = bool(
             not bool(use_caked_display)
@@ -10530,6 +10612,16 @@ def build_geometry_manual_initial_pairs_display(
         caked_projection_resolved = bool(
             use_caked_display and isinstance(caked_projection_entry, Mapping)
         )
+        if _lookup_entry_was_stale_unrefined(
+            raw_caked_projection_entry,
+            caked_projection_entry,
+        ):
+            initial_entry["caked_qr_projection_lookup_stale_unrefined_rebuilt"] = True
+        if not bool(use_caked_display) and _lookup_entry_was_stale_unrefined(
+            raw_sim_source_entry,
+            sim_source_entry,
+        ):
+            initial_entry["simulated_lookup_stale_unrefined_rebuilt"] = True
         if bool(use_caked_display) and not caked_projection_resolved:
             initial_entry["sim_display_unresolved"] = True
             _copy_q_values_from_sources(initial_entry, entry)
@@ -10780,6 +10872,10 @@ def make_runtime_geometry_manual_cache_callbacks(
             ),
             caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
         )
+        cache_data = geometry_manual_rebuild_refined_qr_cache_lookups(
+            cache_data,
+            build_simulated_lookup,
+        )
         if isinstance(next_cache_data, dict):
             next_cache_data = geometry_manual_refine_qr_sim_candidates_in_cache(
                 next_cache_data,
@@ -10792,6 +10888,10 @@ def make_runtime_geometry_manual_cache_callbacks(
                     native_detector_coords_to_caked_display_coords
                 ),
                 caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
+            )
+            next_cache_data = geometry_manual_rebuild_refined_qr_cache_lookups(
+                next_cache_data,
+                build_simulated_lookup,
             )
         replace_cache_state(
             next_signature,

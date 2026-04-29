@@ -45,6 +45,7 @@
   - Kept New4 ladder lean solve rungs fast by disabling identifiability diagnostics by default, preserving the explicit `identifiability_features` diagnostic run, and throttling running heartbeat writes while keeping full residual traces in final reports.
   - Fixed the `(-1,0,10)` Qr/Qz geometric-fitter objective handoff so provider-local fixed-source rows resolve without HKL fallback, selected caked residuals enter the optimizer vector, saved detector-point shortcuts cannot bypass ambiguous row rejection, and baseline fit-space offsets are primed from explicit baseline params instead of the first objective evaluation.
   - Fixed New4 Mode A Qr geometric-fit prediction so all 14 saved first-image branches resolve by locked dynamic identity, trial params rebuild detector-space source rows, simulated caked peaks are refined before residual calculation, and partial 8/28 residual objectives fail closed instead of silently using stale visual/caked coordinates.
+  - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
