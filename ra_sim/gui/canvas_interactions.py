@@ -890,14 +890,16 @@ def handle_runtime_canvas_press(
         return started
 
     if bool(bindings.peak_selection_state.suppress_drag_press_once):
+        bindings.peak_selection_state.suppress_drag_press_once = False
+        if not _is_left_button_event(event):
+            return False
         if (
             bool(bindings.geometry_runtime_state.manual_pick_armed)
             and bool(bindings.manual_pick_session_active())
             and not _runtime_caked_view_enabled(bindings)
         ):
             _clear_manual_pick_zoom_state(bindings)
-        bindings.peak_selection_state.suppress_drag_press_once = False
-        return _is_left_button_event(event)
+        return True
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
         bindings.manual_pick_session_active()
@@ -1015,8 +1017,8 @@ def handle_runtime_canvas_release(
     if _is_right_button_event(event) or _pan_session(bindings) is not None:
         finished = _finish_pan_session(bindings)
         if finished:
-            if not _commit_preview_view(bindings):
-                _end_live_interaction(bindings)
+            _commit_preview_view(bindings)
+            _end_live_interaction(bindings)
         return finished
 
     if not _is_left_button_event(event):
