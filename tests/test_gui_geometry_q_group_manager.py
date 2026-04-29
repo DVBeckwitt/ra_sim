@@ -173,6 +173,47 @@ def test_build_geometry_fit_simulated_peaks_recovers_mirrored_live_source_branch
     assert [peak["source_peak_index"] for peak in peaks] == [0, 1]
 
 
+def test_build_geometry_fit_simulated_peaks_restores_phi_branch_after_canonicalization(
+    monkeypatch,
+) -> None:
+    original_canonicalize = (
+        geometry_q_group_manager.gui_manual_geometry.geometry_manual_canonicalize_live_source_entry
+    )
+
+    def _strip_branch_fields(*args, **kwargs):
+        entry = original_canonicalize(*args, **kwargs)
+        if isinstance(entry, dict):
+            entry.pop("source_branch_index", None)
+            entry.pop("source_peak_index", None)
+        return entry
+
+    monkeypatch.setattr(
+        geometry_q_group_manager.gui_manual_geometry,
+        "geometry_manual_canonicalize_live_source_entry",
+        _strip_branch_fields,
+    )
+
+    hit_tables = [
+        np.asarray(
+            [
+                [10.0, 100.0, 200.0, -12.0, -1.0, 0.0, 10.0],
+                [11.0, 100.0, 200.0, 12.0, -1.0, 0.0, 10.0],
+            ],
+            dtype=float,
+        )
+    ]
+
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        hit_tables,
+        image_shape=(256, 256),
+        native_sim_to_display_coords=lambda col, row, _shape: (col, row),
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+    )
+
+    assert [peak["source_branch_index"] for peak in peaks] == [0, 1]
+    assert [peak["source_peak_index"] for peak in peaks] == [0, 1]
+
+
 def test_geometry_q_group_manager_builds_entries_from_hit_tables() -> None:
     entries = geometry_q_group_manager.build_geometry_q_group_entries(
         [
@@ -2955,6 +2996,77 @@ def test_collapse_qr_qz_selection_peaks_keeps_one_intersection_per_source_branch
     assert by_source_branch[1]["hkl"] == (-5, 0, 2)
     assert by_source_branch[1]["selection_reason"] == "mosaic_top_per_branch"
     assert by_source_branch[0]["branch_id"] != by_source_branch[1]["branch_id"]
+
+
+def test_collapse_qr_qz_selection_peaks_keeps_detector_distinct_unknown_branches() -> None:
+    key = ("q_group", "primary", 5, 2)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "hkl": (5, 0, 2),
+            "source_label": "primary",
+            "native_col": 10.0,
+            "native_row": 20.0,
+            "weight": 1.0,
+            "mosaic_weight": 0.4,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (5, 0, 2),
+            "source_label": "primary",
+            "native_col": 90.0,
+            "native_row": 20.0,
+            "weight": 1.0,
+            "mosaic_weight": 0.6,
+        },
+    ]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        raw_entries,
+        merge_radius_px=6.0,
+    )
+
+    assert collapsed_count == 0
+    assert len(collapsed) == 2
+    branch_ids = {entry["branch_id"] for entry in collapsed}
+    assert len(branch_ids) == 2
+    assert all(str(branch_id).startswith("unknown:") for branch_id in branch_ids)
+    assert {entry["native_col"] for entry in collapsed} == {10.0, 90.0}
+
+
+def test_collapse_qr_qz_selection_peaks_one_per_q_group_keeps_single_non_00l() -> None:
+    key = ("q_group", "primary", 5, 2)
+    raw_entries = [
+        {
+            "q_group_key": key,
+            "hkl": (5, 0, 2),
+            "branch_id": "+x",
+            "branch_source": "generated",
+            "mosaic_weight": 0.2,
+            "source_row_index": 10,
+            "weight": 1.0,
+        },
+        {
+            "q_group_key": key,
+            "hkl": (-5, 0, 2),
+            "branch_id": "-x",
+            "branch_source": "generated",
+            "mosaic_weight": 0.9,
+            "source_row_index": 11,
+            "weight": 1.0,
+        },
+    ]
+
+    collapsed, collapsed_count = geometry_q_group_manager.collapse_qr_qz_selection_peaks(
+        raw_entries,
+        one_per_q_group=True,
+    )
+
+    assert len(collapsed) == 1
+    assert collapsed_count == 1
+    assert collapsed[0]["branch_id"] == "-x"
+    assert collapsed[0]["source_row_index"] == 11
+    assert collapsed[0]["selection_reason"] == "mosaic_top_per_q_group"
 
 
 def test_collapse_qr_qz_selection_peaks_00l_has_single_branch() -> None:

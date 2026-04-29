@@ -59,6 +59,24 @@ Last updated: 2026-04-29
   because it includes heavy diagnostics. Repo-level `ra_sim.dev check` still
   stops at pre-existing format-check drift in `optimization.py` and unrelated
   runtime/test files, so full-tree cleanliness is not claimed by this patch.
+- 2026-04-29 Q-set branch-collapse bug is fixed in the Qr/Qz selection path.
+  Hit-row phi branch indices are stamped before live-source canonicalization and
+  restored if canonicalization strips `source_branch_index` or
+  `source_peak_index`. Mirrored-branch repair now clusters on stable detector
+  coordinates, preferring refined/native detector fields before display aliases.
+  Non-00l rows that still lack explicit branch metadata no longer collapse into
+  one `unknown:<q_group>` bucket; collapse keys use branch, source-peak,
+  source-row/reflection, then detector-native cluster identity, while 00l remains
+  one canonical branch. The Qr/Qz collapse wrapper now forwards
+  `one_per_q_group=True` for explicit whole-group collapse.
+- Bug/error status for the Q-set branch-collapse patch: compile checks and the
+  targeted Q-group branch/collapse regression slice are green. The broad
+  `tests/test_manual_geometry_selection_helpers.py -k "minus_1_0_10"` selector
+  timed out after 10 minutes locally. The isolated
+  `test_detector_mode_qr_picker_selects_minus_1_0_10_branch_clicks` subcase
+  still fails on the exact detector click/row expectation, and the same failure
+  reproduces on clean HEAD `b481ee0`, so it is tracked as pre-existing rather
+  than introduced by this branch-collapse patch.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.

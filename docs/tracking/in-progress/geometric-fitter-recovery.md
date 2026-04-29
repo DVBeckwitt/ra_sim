@@ -635,9 +635,14 @@ as bounded ladder evidence. The GUI fit button is not the validation path.
   `branch_id`, `source_branch_index`, or `source_reflection_index` collapse to
   branch representatives before initial drawing, before manual session storage,
   and after refresh. Ungrouped rows with `q_group_key is None` remain separate.
+- Non-00l Qr/Qz rows that lose explicit branch metadata are no longer forced
+  into one group-wide unknown branch. Collapse now preserves detector-distinct
+  unknown rows by branch/source-peak/source-row/reflection identity and finally
+  detector-native clustering; 00l rows still collapse to one canonical branch.
 - `collapse_geometry_fit_simulated_peaks(..., one_per_q_group=True)` remains
   available for explicit whole-Qr/Qz-group collapse, but default and Qr/Qz UI
-  wrapper behavior remain branch-aware.
+  wrapper behavior remain branch-aware, and the Qr/Qz wrapper now forwards the
+  explicit whole-group option.
 - Caked-mode manual Qr/Qz placements store detector display/native/caked fields
   that round-trip through the same LUT/rotation path as the live simulation
   marker projection. Refresh now trusts authoritative caked `2theta,phi` fields

@@ -641,6 +641,66 @@ def _simulated_peak_display_point(
     return float(sim_col), float(sim_row)
 
 
+def _finite_pair_value(value: object) -> tuple[float, float] | None:
+    if isinstance(value, (str, bytes)):
+        return None
+    try:
+        seq = np.asarray(value, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if int(seq.size) < 2:
+        return None
+    col = float(seq[0])
+    row = float(seq[1])
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _finite_field_pair(
+    entry: Mapping[str, object],
+    x_key: str,
+    y_key: str,
+) -> tuple[float, float] | None:
+    try:
+        col = float(entry.get(x_key, np.nan))
+        row = float(entry.get(y_key, np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _simulated_peak_branch_repair_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    point = _finite_pair_value(entry.get("sim_refined_detector_native_px"))
+    if point is not None:
+        return point
+    for x_key, y_key in (
+        ("refined_sim_native_x", "refined_sim_native_y"),
+        ("native_col", "native_row"),
+        ("sim_native_x", "sim_native_y"),
+    ):
+        point = _finite_field_pair(entry, x_key, y_key)
+        if point is not None:
+            return point
+    point = _finite_pair_value(entry.get("sim_refined_detector_display_px"))
+    if point is not None:
+        return point
+    for x_key, y_key in (
+        ("refined_sim_x", "refined_sim_y"),
+        ("sim_col", "sim_row"),
+    ):
+        point = _finite_field_pair(entry, x_key, y_key)
+        if point is not None:
+            return point
+    return None
+
+
 def _repair_mirrored_source_row_branches(
     simulated_peaks: Sequence[dict[str, object]] | None,
     *,
@@ -678,7 +738,7 @@ def _repair_mirrored_source_row_branches(
         clusters: list[list[dict[str, object]]] = []
         anchors: list[tuple[float, float] | None] = []
         for entry in entries:
-            point = _simulated_peak_display_point(entry)
+            point = _simulated_peak_branch_repair_point(entry)
             if point is None:
                 clusters = []
                 break
@@ -699,7 +759,7 @@ def _repair_mirrored_source_row_branches(
             cols = []
             rows = []
             for cluster_entry in clusters[chosen_idx]:
-                cluster_point = _simulated_peak_display_point(cluster_entry)
+                cluster_point = _simulated_peak_branch_repair_point(cluster_entry)
                 if cluster_point is None:
                     continue
                 cols.append(float(cluster_point[0]))
@@ -1066,6 +1126,7 @@ def build_geometry_fit_simulated_peaks(
             )
             if branch_index in {0, 1}:
                 peak_record["source_branch_index"] = int(branch_index)
+                peak_record["source_peak_index"] = int(branch_index)
             peak_record = gui_manual_geometry.geometry_manual_canonicalize_live_source_entry(
                 peak_record,
                 normalize_hkl_key=(
@@ -1080,6 +1141,20 @@ def build_geometry_fit_simulated_peaks(
             )
             if peak_record is None:
                 continue
+            if branch_index in {0, 1}:
+                restored_branch = int(branch_index)
+                try:
+                    source_branch_index = int(peak_record.get("source_branch_index"))
+                except Exception:
+                    source_branch_index = -1
+                if source_branch_index not in {0, 1}:
+                    peak_record["source_branch_index"] = int(restored_branch)
+                try:
+                    source_peak_index = int(peak_record.get("source_peak_index"))
+                except Exception:
+                    source_peak_index = -1
+                if source_peak_index not in {0, 1}:
+                    peak_record["source_peak_index"] = int(restored_branch)
             if allow_nominal_hkl_indices:
                 peak_record["q_group_nominal_hkl"] = True
             simulated_peaks.append(peak_record)
@@ -2783,6 +2858,7 @@ def make_runtime_geometry_q_group_value_callbacks(
             simulated_peaks,
             merge_radius_px=merge_radius_px,
             profile_cache=getattr(simulation_runtime_state, "profile_cache", None),
+            one_per_q_group=bool(one_per_q_group),
         )
 
     def _build_entries_snapshot() -> list[dict[str, object]]:
@@ -3044,6 +3120,117 @@ def _geometry_fit_seed_cluster_anchor(
     )
 
 
+def _compact_branch_index(value: object) -> int | None:
+    try:
+        idx = int(value)
+    except Exception:
+        return None
+    return int(idx) if idx in {0, 1} else None
+
+
+def _nonnegative_identity_index(value: object) -> int | None:
+    try:
+        idx = int(value)
+    except Exception:
+        return None
+    return int(idx) if idx >= 0 else None
+
+
+def _unknown_branch_slot_id(
+    group_key: object,
+    kind: str,
+    payload: object,
+) -> str:
+    def _stable_text(value: object) -> str:
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, tuple):
+            return "(" + ",".join(_stable_text(item) for item in value) + ")"
+        if isinstance(value, list):
+            return "(" + ",".join(_stable_text(item) for item in value) + ")"
+        return str(value)
+
+    return "unknown:" + _stable_text((group_key, str(kind), payload))
+
+
+def _detector_cluster_branch_slot(
+    entry: Mapping[str, object],
+    *,
+    group_key: object,
+    merge_radius: float,
+    anchors: list[tuple[float, float]],
+    counts: list[int],
+) -> str | None:
+    point = _simulated_peak_branch_repair_point(entry)
+    if point is None:
+        return None
+    chosen_idx = None
+    chosen_dist = float("inf")
+    for idx, anchor in enumerate(anchors):
+        dist = float(math.hypot(float(point[0]) - anchor[0], float(point[1]) - anchor[1]))
+        if dist <= merge_radius and dist < chosen_dist:
+            chosen_idx = int(idx)
+            chosen_dist = float(dist)
+    if chosen_idx is None:
+        anchors.append((float(point[0]), float(point[1])))
+        counts.append(1)
+        return _unknown_branch_slot_id(group_key, "detector_cluster", len(anchors) - 1)
+
+    count = int(counts[chosen_idx])
+    anchors[chosen_idx] = (
+        float((anchors[chosen_idx][0] * count + float(point[0])) / (count + 1)),
+        float((anchors[chosen_idx][1] * count + float(point[1])) / (count + 1)),
+    )
+    counts[chosen_idx] = count + 1
+    return _unknown_branch_slot_id(group_key, "detector_cluster", chosen_idx)
+
+
+def _q_group_unknown_branch_slot_id(
+    entry: dict[str, object],
+    *,
+    group_key: object,
+    merge_radius: float,
+    detector_anchors: list[tuple[float, float]],
+    detector_counts: list[int],
+) -> str:
+    source_branch = _compact_branch_index(entry.get("source_branch_index"))
+    if source_branch is not None:
+        return _unknown_branch_slot_id(group_key, "source_branch", source_branch)
+
+    source_peak = _compact_branch_index(entry.get("source_peak_index"))
+    if source_peak is not None:
+        return _unknown_branch_slot_id(group_key, "source_peak", source_peak)
+
+    source_row = _nonnegative_identity_index(entry.get("source_row_index"))
+    if source_row is not None:
+        source_table = _nonnegative_identity_index(entry.get("source_table_index"))
+        return _unknown_branch_slot_id(
+            group_key,
+            "source_row",
+            (source_table, source_row),
+        )
+
+    source_reflection = _nonnegative_identity_index(entry.get("source_reflection_index"))
+    if source_reflection is not None:
+        return _unknown_branch_slot_id(group_key, "source_reflection", source_reflection)
+
+    detector_slot = _detector_cluster_branch_slot(
+        entry,
+        group_key=group_key,
+        merge_radius=merge_radius,
+        anchors=detector_anchors,
+        counts=detector_counts,
+    )
+    if detector_slot is not None:
+        return detector_slot
+
+    branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+        entry,
+        target_key=group_key,
+    )
+    return str(branch_id)
+
+
 def collapse_geometry_fit_simulated_peaks(
     simulated_peaks: Sequence[dict[str, object]] | None,
     *,
@@ -3076,28 +3263,11 @@ def collapse_geometry_fit_simulated_peaks(
             group_key = real_group_key
             entry["q_group_key"] = group_key
             real_group_keys.add(group_key)
-        has_branch_hint = any(
-            key in entry
-            for key in (
-                "branch_id",
-                "source_branch_index",
-                "signed_x_branch",
-                "branch_x_sign",
-                "x_branch_id",
-            )
-        )
         entry = gui_mosaic_top.annotate_selection_metadata(
             entry,
             target_key=group_key,
             profile_cache=profile_cache,
         )
-        if not has_branch_hint and entry.get("branch_source") == "unknown":
-            branch_id, branch_source = gui_mosaic_top.normalize_branch_id(
-                {},
-                target_key=group_key,
-            )
-            entry["branch_id"] = branch_id
-            entry["branch_source"] = branch_source
         entry.pop("mosaic_top_rank_key", None)
         if group_key not in grouped_entries:
             grouped_entries[group_key] = []
@@ -3117,11 +3287,24 @@ def collapse_geometry_fit_simulated_peaks(
         else:
             branch_buckets: dict[str, list[dict[str, object]]] = {}
             branch_order: list[str] = []
+            detector_anchors: list[tuple[float, float]] = []
+            detector_counts: list[int] = []
             for entry in entries:
-                branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+                branch_id, branch_source = gui_mosaic_top.normalize_branch_id(
                     entry,
                     target_key=group_key,
+                    profile_cache=profile_cache,
                 )
+                if branch_source == "unknown":
+                    branch_id = _q_group_unknown_branch_slot_id(
+                        entry,
+                        group_key=group_key,
+                        merge_radius=merge_radius,
+                        detector_anchors=detector_anchors,
+                        detector_counts=detector_counts,
+                    )
+                    entry["branch_id"] = str(branch_id)
+                    entry["branch_source"] = "unknown"
                 if branch_id not in branch_buckets:
                     branch_buckets[branch_id] = []
                     branch_order.append(branch_id)
@@ -3189,7 +3372,7 @@ def collapse_qr_qz_selection_peaks(
         simulated_peaks,
         merge_radius_px=merge_radius_px,
         profile_cache=profile_cache,
-        one_per_q_group=False,
+        one_per_q_group=bool(one_per_q_group),
     )
 
 
