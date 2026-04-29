@@ -122,6 +122,25 @@ Last updated: 2026-04-29
   requested `detector_mode_qr_picker` slice is 6/7 passing; the remaining
   `test_detector_mode_qr_picker_selects_minus_1_0_10_branch_clicks` exact-click
   failure is the same clean-HEAD `b481ee0` pre-existing diagnostic noted above.
+- 2026-04-29 remaining detector-view Qr picker cache-population bug is fixed.
+  `build_geometry_manual_pick_cache()` no longer reuses a matching detector
+  manual-pick cache unless that cache can actually produce detector picker
+  source rows/candidates. Empty matching detector caches record stale reason
+  `cached manual-pick detector source rows were empty; rebuilding.` and rebuild
+  from source snapshots or fresh simulated rows. Runtime
+  `_geometry_manual_source_rows_for_background(..., consumer="manual_pick_cache")`
+  may now rebuild source-row snapshots for the current background when stored
+  simulation artifacts exist, and detector manual-pick rebuilds force detector
+  projection mode unless the manual picker is explicitly in caked space.
+- Bug/error status for the remaining detector-view Qr picker cache-population
+  patch: fixed and locally validated. Focused detector manual-pick cache
+  regressions, startup/clean-start/no-caked-cache detector picker regressions,
+  the user-log-shaped empty-prior-cache regression, manual-pick source snapshot
+  rebuild gating, q-group manager detector/listing slices, adjacent cache reuse
+  tests, and compileall are green. This closes the reported symptom where
+  `Updated listed Qr/Qz peaks: N groups` could coexist with an armed detector
+  manual picker that still reported no Qr/Qz source rows because it reused an
+  empty manual-pick cache or refused to rebuild the missing source snapshot.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.

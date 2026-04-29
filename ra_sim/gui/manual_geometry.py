@@ -6814,6 +6814,31 @@ def _geometry_manual_detector_picker_cache_source_groups(
     return groups
 
 
+def geometry_manual_pick_cache_has_detector_picker_sources(
+    cache_data: Mapping[str, object] | None,
+    *,
+    display_background: object | None = None,
+    native_background: object | None = None,
+    profile_cache: Mapping[str, object] | None = None,
+) -> bool:
+    """Return true when a manual-pick cache has detector-space Qr picker rows."""
+
+    if not isinstance(cache_data, Mapping):
+        return False
+    for _source_name, rows in _geometry_manual_detector_picker_cache_source_groups(
+        cache_data
+    ):
+        candidate_rows, _grouped = geometry_manual_detector_picker_candidates_from_rows(
+            rows,
+            display_background=display_background,
+            native_background=native_background,
+            profile_cache=profile_cache,
+        )
+        if candidate_rows:
+            return True
+    return False
+
+
 def _geometry_manual_detector_picker_rows_build_candidates(
     rows: Sequence[dict[str, object]] | None,
 ) -> bool:
@@ -6966,6 +6991,11 @@ def geometry_manual_format_detector_picker_diagnostic_block(
         "fresh_source_row_count",
         "detector_picker_candidate_count",
         "detector_picker_candidate_count_by_source",
+        "manual_pick_cache_source",
+        "manual_pick_cache_stale_reason",
+        "source_snapshot_status",
+        "source_snapshot_rebuild_attempted",
+        "source_snapshot_rebuild_returned_row_count",
         "reason_candidates_are_empty",
     )
     lines = ["[geometry] detector Qr picker diagnostics"]
@@ -6986,6 +7016,18 @@ def geometry_manual_detector_picker_input_trace(
     profile_cache: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     source_rows = geometry_manual_detector_picker_source_rows_from_cache(cache_data)
+    cache_metadata = (
+        cache_data.get("cache_metadata")
+        if isinstance(cache_data, Mapping)
+        and isinstance(cache_data.get("cache_metadata"), Mapping)
+        else {}
+    )
+    source_snapshot_diagnostics = (
+        cache_data.get("source_snapshot_diagnostics")
+        if isinstance(cache_data, Mapping)
+        and isinstance(cache_data.get("source_snapshot_diagnostics"), Mapping)
+        else {}
+    )
     display_height, display_width = _geometry_manual_detector_shape(display_background)
     native_height, native_width = _geometry_manual_detector_shape(native_background)
     picker_rows, resolved_grouped = geometry_manual_detector_picker_candidates_from_rows(
@@ -7074,6 +7116,20 @@ def geometry_manual_detector_picker_input_trace(
         "detector_picker_candidate_count": int(len(flattened_active_grouped)),
         "detector_picker_candidate_count_by_source": active_picker_breakdown,
         "detector_picker_source_row_count_by_source": source_breakdown,
+        "manual_pick_cache_source": cache_metadata.get("cache_source"),
+        "manual_pick_cache_stale_reason": cache_metadata.get("stale_reason"),
+        "source_snapshot_status": cache_metadata.get(
+            "source_snapshot_status",
+            source_snapshot_diagnostics.get("status"),
+        ),
+        "source_snapshot_rebuild_attempted": cache_metadata.get(
+            "source_snapshot_rebuild_attempted",
+            source_snapshot_diagnostics.get("rebuild_attempted"),
+        ),
+        "source_snapshot_rebuild_returned_row_count": cache_metadata.get(
+            "source_snapshot_rebuild_returned_row_count",
+            source_snapshot_diagnostics.get("rebuild_returned_row_count"),
+        ),
         "overlay_drawn_count": int(
             len(
                 _geometry_manual_flatten_grouped_candidates(
@@ -7327,17 +7383,33 @@ def build_geometry_manual_pick_cache(
         background_image=background_image,
     )
     reuse_requires_caked_projection = _geometry_manual_cache_signature_uses_caked(cache_sig)
+    profile_cache_for_picker = (
+        param_set.get("mosaic_params")
+        if isinstance(param_set, Mapping)
+        and isinstance(param_set.get("mosaic_params"), Mapping)
+        else None
+    )
+    matching_empty_detector_cache_stale_reason: str | None = None
     if (
         prefer_cache
         and bg_index == current_bg_index
         and existing_cache_signature == cache_sig
         and isinstance(existing_cache_data, dict)
-        and (
-            not reuse_requires_caked_projection
-            or bool(existing_cache_data.get("caked_qr_projection_grouped_candidates"))
-        )
     ):
-        return existing_cache_data, existing_cache_signature, existing_cache_data
+        if reuse_requires_caked_projection:
+            if existing_cache_data.get("caked_qr_projection_grouped_candidates"):
+                return existing_cache_data, existing_cache_signature, existing_cache_data
+        elif geometry_manual_pick_cache_has_detector_picker_sources(
+            existing_cache_data,
+            display_background=background_image,
+            profile_cache=profile_cache_for_picker,
+        ):
+            return existing_cache_data, existing_cache_signature, existing_cache_data
+        else:
+            matching_empty_detector_cache_stale_reason = (
+                "cached manual-pick detector source rows were empty; rebuilding."
+            )
+            stale_reason = matching_empty_detector_cache_stale_reason
 
     resolved_existing_signature = existing_cache_signature
     if not isinstance(resolved_existing_signature, tuple) and isinstance(existing_cache_data, dict):
@@ -7428,7 +7500,13 @@ def build_geometry_manual_pick_cache(
             cache_action = str(action)
             cache_source = str(source)
             cache_provenance = [str(step) for step in provenance]
-            stale_reason = stale_reason_override
+            if (
+                stale_reason_override is None
+                and stale_reason == matching_empty_detector_cache_stale_reason
+            ):
+                stale_reason = matching_empty_detector_cache_stale_reason
+            else:
+                stale_reason = stale_reason_override
             return True
         for entry in normalized_rows:
             entry.setdefault("detector_picker_source", str(source))
@@ -7476,7 +7554,13 @@ def build_geometry_manual_pick_cache(
         cache_action = str(action)
         cache_source = str(source)
         cache_provenance = [str(step) for step in provenance]
-        stale_reason = stale_reason_override
+        if (
+            stale_reason_override is None
+            and stale_reason == matching_empty_detector_cache_stale_reason
+        ):
+            stale_reason = matching_empty_detector_cache_stale_reason
+        else:
+            stale_reason = stale_reason_override
         return True
 
     def _filter_reprojected_cache_rows(
@@ -10786,6 +10870,7 @@ def make_runtime_geometry_manual_cache_callbacks(
     source_snapshot_signature_for_background: (
         Callable[[int, dict[str, object] | None], object] | None
     ) = None,
+    source_snapshot_diagnostics: Callable[[], Mapping[str, object] | None] | None = None,
     detector_simulation_image: Callable[[], object] | object | None = None,
     caked_simulation_image: Callable[[], object] | object | None = None,
     radial_axis: Callable[[], object] | object | None = None,
@@ -10881,6 +10966,79 @@ def make_runtime_geometry_manual_cache_callbacks(
             disabled_qz_sections=_resolve_runtime_value(disabled_qz_sections),
         )
 
+    def _attach_source_snapshot_diagnostics(
+        cache_data: dict[str, object],
+    ) -> dict[str, object]:
+        if not callable(source_snapshot_diagnostics) or not isinstance(cache_data, dict):
+            return cache_data
+        try:
+            diagnostics = source_snapshot_diagnostics()
+        except Exception:
+            diagnostics = None
+        if not isinstance(diagnostics, Mapping):
+            return cache_data
+        diagnostic_payload = dict(diagnostics)
+        metadata = (
+            dict(cache_data.get("cache_metadata"))
+            if isinstance(cache_data.get("cache_metadata"), Mapping)
+            else {}
+        )
+        if metadata.get("cache_source") != "geometry_manual_source_rows_for_background":
+            return cache_data
+        status = diagnostic_payload.get("status")
+        metadata.update(
+            {
+                "source_snapshot_cache_family": diagnostic_payload.get("cache_family"),
+                "source_snapshot_action": diagnostic_payload.get("action"),
+                "source_snapshot_status": status,
+                "source_snapshot_consumer": diagnostic_payload.get("consumer"),
+                "source_snapshot_created_from": diagnostic_payload.get("created_from"),
+                "source_snapshot_signature_match": diagnostic_payload.get("signature_match"),
+                "source_snapshot_row_count": diagnostic_payload.get(
+                    "final_returned_row_count",
+                    diagnostic_payload.get(
+                        "projected_peak_count",
+                        diagnostic_payload.get("raw_peak_count", 0),
+                    ),
+                ),
+                "source_snapshot_raw_peak_count": diagnostic_payload.get("raw_peak_count"),
+                "source_snapshot_projected_peak_count": diagnostic_payload.get(
+                    "projected_peak_count"
+                ),
+                "source_snapshot_requested_signature_summary": diagnostic_payload.get(
+                    "requested_signature_summary"
+                ),
+                "source_snapshot_stored_signature_summary": diagnostic_payload.get(
+                    "stored_signature_summary"
+                ),
+                "source_snapshot_rebuild_attempted": diagnostic_payload.get(
+                    "rebuild_attempted"
+                ),
+                "source_snapshot_rebuild_returned_row_count": diagnostic_payload.get(
+                    "rebuild_returned_row_count"
+                ),
+            }
+        )
+        cache_data["cache_metadata"] = metadata
+        cache_data["source_snapshot_diagnostics"] = diagnostic_payload
+        if isinstance(cache_data.get("detector_picker_trace"), Mapping):
+            trace = dict(cache_data["detector_picker_trace"])
+            trace.update(
+                {
+                    "manual_pick_cache_source": metadata.get("cache_source"),
+                    "manual_pick_cache_stale_reason": metadata.get("stale_reason"),
+                    "source_snapshot_status": status,
+                    "source_snapshot_rebuild_attempted": metadata.get(
+                        "source_snapshot_rebuild_attempted"
+                    ),
+                    "source_snapshot_rebuild_returned_row_count": metadata.get(
+                        "source_snapshot_rebuild_returned_row_count"
+                    ),
+                }
+            )
+            cache_data["detector_picker_trace"] = trace
+        return cache_data
+
     def _get_pick_cache(
         *,
         param_set: dict[str, object] | None = None,
@@ -10927,6 +11085,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             cache_data,
             build_simulated_lookup,
         )
+        cache_data = _attach_source_snapshot_diagnostics(cache_data)
         if isinstance(next_cache_data, dict):
             next_cache_data = geometry_manual_refine_qr_sim_candidates_in_cache(
                 next_cache_data,
@@ -10944,6 +11103,7 @@ def make_runtime_geometry_manual_cache_callbacks(
                 next_cache_data,
                 build_simulated_lookup,
             )
+            next_cache_data = _attach_source_snapshot_diagnostics(next_cache_data)
         replace_cache_state(
             next_signature,
             dict(next_cache_data) if isinstance(next_cache_data, dict) else {},

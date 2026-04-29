@@ -6505,13 +6505,15 @@ def test_build_geometry_manual_pick_cache_reuses_existing_current_background_sta
     existing_cache = {
         "signature": ("cached",),
         "value": 9,
-        "grouped_candidates": {("q_group", "primary", 1, 0): [{"sim_col": 1.0}]},
+        "grouped_candidates": {
+            ("q_group", "primary", 1, 0): [{"sim_col": 1.0, "sim_row": 2.0}]
+        },
     }
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
         background_index=0,
         current_background_index=0,
-        background_image=np.zeros((3, 3), dtype=float),
+        background_image=np.zeros((8, 8), dtype=float),
         existing_cache_signature=("cached",),
         existing_cache_data=existing_cache,
         cache_signature_fn=lambda **_kwargs: ("cached",),
@@ -6528,7 +6530,7 @@ def test_build_geometry_manual_pick_cache_reuses_existing_current_background_sta
     assert next_state is existing_cache
 
 
-def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty() -> None:
+def test_build_geometry_manual_pick_cache_rebuilds_matching_empty_detector_cache() -> None:
     simulation_calls: list[bool] = []
     existing_cache_data = {
         "grouped_candidates": {},
@@ -6538,7 +6540,7 @@ def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty(
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
         background_index=0,
         current_background_index=0,
-        background_image=np.zeros((3, 3), dtype=float),
+        background_image=np.zeros((8, 8), dtype=float),
         existing_cache_signature=("cached",),
         existing_cache_data=existing_cache_data,
         cache_signature_fn=lambda **_kwargs: ("cached",),
@@ -6551,6 +6553,8 @@ def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty(
                     "source_row_index": 2,
                     "sim_col": 3.0,
                     "sim_row": 4.0,
+                    "native_col": 3.0,
+                    "native_row": 4.0,
                 }
             ]
         ),
@@ -6569,11 +6573,70 @@ def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty(
         current_match_config=lambda: {"search_radius_px": 24.0},
     )
 
-    assert simulation_calls == []
-    assert cache_data is existing_cache_data
-    assert cache_data["grouped_candidates"] == {}
+    assert simulation_calls
+    assert cache_data is not existing_cache_data
+    assert cache_data["detector_picker_source_rows"]
+    assert cache_data["detector_picker_rows"]
+    assert cache_data["detector_picker_trace"]["detector_picker_candidate_count"] > 0
+    assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "cached manual-pick detector source rows were empty; rebuilding."
+    )
     assert next_sig == ("cached",)
-    assert next_state is existing_cache_data
+    assert next_state is not existing_cache_data
+
+
+def test_build_geometry_manual_pick_cache_does_not_reuse_empty_detector_cache_when_source_snapshot_has_rows() -> (
+    None
+):
+    source_row_calls: list[int] = []
+    existing_cache_data = {
+        "grouped_candidates": {},
+        "simulated_lookup": {},
+    }
+    source_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "native_col": 3.0,
+            "native_row": 4.0,
+        }
+    ]
+
+    cache_data, _next_sig, _next_state = mg.build_geometry_manual_pick_cache(
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((8, 8), dtype=float),
+        existing_cache_signature=("cached",),
+        existing_cache_data=existing_cache_data,
+        cache_signature_fn=lambda **_kwargs: ("cached",),
+        source_rows_for_background=lambda *_args, **_kwargs: (
+            source_row_calls.append(1) or [dict(entry) for entry in source_rows]
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert source_row_calls == [1]
+    assert cache_data is not existing_cache_data
+    assert cache_data["fresh_source_rows"]
+    assert cache_data["detector_picker_rows"]
+    assert cache_data["detector_picker_trace"]["detector_picker_candidate_count"] > 0
+    assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
 
 
 def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cache_is_preferred() -> (
@@ -21378,6 +21441,94 @@ def test_detector_mode_qr_picker_clean_start_without_saved_pairs(tmp_path) -> No
     assert live_traces[-1]["detector_picker_candidate_count"] > 0
     assert live_traces[-1]["manual_saved_pair_count"] == 0
     assert live_traces[-1]["caked_ready"] is False
+
+
+def test_detector_mode_qr_picker_has_candidates_after_q_group_refresh_with_empty_prior_cache() -> (
+    None
+):
+    background = np.zeros((32, 32), dtype=float)
+    source_rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "hkl": (-1, 0, 10),
+            "source_table_index": 3,
+            "source_row_index": 4,
+            "source_branch_index": 0,
+            "sim_col": 12.0,
+            "sim_row": 14.0,
+            "native_col": 12.0,
+            "native_row": 14.0,
+            "qr": 1.5,
+            "qz": 2.5,
+        }
+    ]
+    cache_state: dict[str, object] = {"signature": None, "data": {}}
+    source_row_calls: list[int] = []
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background,
+        use_caked_space=lambda: False,
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {"a": 4.143, "c": 28.64},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: (
+            source_row_calls.append(1) or [dict(entry) for entry in source_rows]
+        ),
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        entry_display_coords=lambda entry: (
+            (float(entry["sim_col"]), float(entry["sim_row"])) if entry else None
+        ),
+        source_snapshot_diagnostics=lambda: {
+            "status": "snapshot_rebuilt",
+            "rebuild_attempted": True,
+            "rebuild_returned_row_count": len(source_rows),
+        },
+    )
+    cache_state["signature"] = callbacks.pick_cache_signature(
+        param_set={"a": 4.143, "c": 28.64},
+        background_index=0,
+        background_image=background,
+    )
+    cache_state["data"] = {
+        "signature": cache_state["signature"],
+        "grouped_candidates": {},
+        "simulated_lookup": {},
+    }
+
+    cache_data = callbacks.get_pick_cache(
+        param_set={"a": 4.143, "c": 28.64},
+        prefer_cache=True,
+    )
+    trace = mg.geometry_manual_detector_picker_input_trace(
+        cache_data,
+        view_mode="detector",
+        background_index=0,
+        display_background=background,
+    )
+
+    assert source_row_calls == [1]
+    assert trace["simulation_ready"] is True
+    assert trace["fresh_source_row_count"] > 0
+    assert trace["detector_picker_candidate_count"] > 0
+    assert trace["reason_candidates_are_empty"] == ""
+    assert trace["source_snapshot_status"] == "snapshot_rebuilt"
 
 
 def test_detector_mode_qr_picker_selects_minus_1_0_10_branch_clicks(tmp_path) -> None:

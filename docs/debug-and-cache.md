@@ -136,6 +136,30 @@ Resolved picker behavior depends on keeping structural simulation truth
 separate from current-view projection. Group membership comes from structural
 state; detector or caked coordinates are derived later for the active view.
 
+Detector-view manual Qr/Qz picking must not reuse a manual-pick cache that
+matches the current signature but contains no detector source rows or detector
+picker candidates. A matching empty detector cache is stale and must rebuild
+from the current source snapshot, live peak records, or fresh simulation rows.
+Only caked mode may accept `caked_qr_projection_grouped_candidates` as the
+cache-reuse gate.
+
+`manual_pick_cache` source-row lookup may rebuild a missing, stale, or empty
+source snapshot only for the current background and only when stored simulation
+artifacts exist (`stored_max_positions_local`, `stored_intersection_cache`, or
+`peak_records`). Detector manual-pick rebuilds use detector projection mode
+unless the manual picker is explicitly in caked space. This keeps detector
+picking independent of caked integration while preserving the existing
+geometry-fit dataset rebuild path for non-current backgrounds and targeted
+preflight.
+
+Detector picker diagnostics should distinguish these cases:
+
+- matching empty manual-pick cache rebuilt instead of reused
+- source snapshot missing, stale, empty, or rebuilt
+- source rows present but missing `q_group_key`
+- source rows present but missing detector display pixels
+- detector candidates present by source row family
+
 Caked manual picking uses two different coordinate responsibilities:
 
 - simulated Qr/Qz and HKL seed positions start from simulation-native detector

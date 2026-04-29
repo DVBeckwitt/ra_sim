@@ -8645,6 +8645,9 @@ def _initialize_runtime_controls_block_04() -> None:
                     param_set,
                 )
             ),
+            source_snapshot_diagnostics=(
+                lambda: globals()["_geometry_manual_last_source_snapshot_diagnostics"]()
+            ),
             build_grouped_candidates=_geometry_manual_pick_candidates,
             build_simulated_lookup=_geometry_manual_simulated_lookup,
             project_peaks_to_current_view=_project_geometry_manual_peaks_to_current_view,
@@ -23234,6 +23237,21 @@ def _geometry_fit_targeted_projection_view_mode() -> str:
     return normalized_mode
 
 
+def _geometry_manual_projection_mode_override_for_consumer(
+    lookup_context: str | None,
+) -> str | None:
+    if str(lookup_context or "").strip() != "manual_pick_cache":
+        return None
+    pick_uses_caked = False
+    pick_uses_caked_factory = globals().get("_geometry_manual_pick_uses_caked_space")
+    if callable(pick_uses_caked_factory):
+        try:
+            pick_uses_caked = bool(pick_uses_caked_factory())
+        except Exception:
+            pick_uses_caked = False
+    return None if pick_uses_caked else "detector"
+
+
 def _geometry_fit_projection_signature_public(
     signature: Mapping[str, object],
 ) -> dict[str, object]:
@@ -23821,8 +23839,14 @@ def _geometry_manual_rebuild_source_rows_for_background(
     )
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
+    projection_mode_override = _geometry_manual_projection_mode_override_for_consumer(
+        lookup_context
+    )
     projection_view_signature = _normalize_geometry_fit_projection_view_signature(
-        _geometry_fit_targeted_projection_view_signature(background_idx),
+        _geometry_fit_targeted_projection_view_signature(
+            background_idx,
+            mode_override=projection_mode_override,
+        ),
         background_idx,
     )
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
@@ -23995,8 +24019,25 @@ def _geometry_manual_source_rows_for_background(
     background_idx = int(background_index)
     lookup_context = str(consumer or "unspecified")
     # Import/manual-overlay refreshes should reuse restored peak records and
-    # avoid forcing a rebuild until geometry-fit preflight explicitly needs one.
-    allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")
+    # avoid forcing a rebuild until geometry-fit preflight or the current
+    # detector manual-pick cache explicitly needs source rows.
+    try:
+        current_background_idx = int(background_runtime_state.current_background_index)
+    except Exception:
+        current_background_idx = int(background_idx)
+    has_manual_pick_rebuild_artifacts = bool(
+        getattr(simulation_runtime_state, "stored_max_positions_local", None) is not None
+        or getattr(simulation_runtime_state, "stored_intersection_cache", None) is not None
+        or bool(getattr(simulation_runtime_state, "peak_records", None))
+    )
+    allow_manual_pick_rebuild = bool(
+        lookup_context == "manual_pick_cache"
+        and int(background_idx) == int(current_background_idx)
+        and has_manual_pick_rebuild_artifacts
+    )
+    allow_source_snapshot_rebuild = bool(
+        lookup_context == "geometry_fit_dataset" or allow_manual_pick_rebuild
+    )
     requested_signature = _geometry_source_snapshot_signature_for_background(
         background_idx,
         param_set,
@@ -24021,8 +24062,14 @@ def _geometry_manual_source_rows_for_background(
     )
     preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
     targeted_preflight_enabled = preflight_mode == "manual_geometry_targeted"
+    projection_mode_override = _geometry_manual_projection_mode_override_for_consumer(
+        lookup_context
+    )
     projection_view_signature = _normalize_geometry_fit_projection_view_signature(
-        _geometry_fit_targeted_projection_view_signature(background_idx),
+        _geometry_fit_targeted_projection_view_signature(
+            background_idx,
+            mode_override=projection_mode_override,
+        ),
         background_idx,
     )
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
@@ -24075,6 +24122,8 @@ def _geometry_manual_source_rows_for_background(
         "rebuild_attempted": False,
         "rebuild_returned_row_count": 0,
         "final_returned_row_count": 0,
+        "manual_pick_rebuild_allowed": bool(allow_manual_pick_rebuild),
+        "manual_pick_rebuild_artifacts_available": bool(has_manual_pick_rebuild_artifacts),
     }
 
     def _print_geometry_fit_dataset_source_snapshot_diagnostics() -> None:
@@ -24101,6 +24150,32 @@ def _geometry_manual_source_rows_for_background(
         if status is not None:
             dataset_debug["snapshot_status"] = str(status)
         dataset_debug["final_returned_row_count"] = int(len(returned))
+        if status is not None:
+            diagnostics = dict(_geometry_manual_last_source_snapshot_diagnostics())
+            diagnostics.update(
+                {
+                    "status": str(status),
+                    "source_snapshot_status": str(status),
+                    "rebuild_attempted": bool(dataset_debug["rebuild_attempted"]),
+                    "source_snapshot_rebuild_attempted": bool(
+                        dataset_debug["rebuild_attempted"]
+                    ),
+                    "rebuild_returned_row_count": int(
+                        dataset_debug["rebuild_returned_row_count"]
+                    ),
+                    "source_snapshot_rebuild_returned_row_count": int(
+                        dataset_debug["rebuild_returned_row_count"]
+                    ),
+                    "final_returned_row_count": int(len(returned)),
+                    "manual_pick_rebuild_allowed": bool(
+                        dataset_debug["manual_pick_rebuild_allowed"]
+                    ),
+                    "manual_pick_rebuild_artifacts_available": bool(
+                        dataset_debug["manual_pick_rebuild_artifacts_available"]
+                    ),
+                }
+            )
+            _set_geometry_manual_source_snapshot_diagnostics(**diagnostics)
         _print_geometry_fit_dataset_source_snapshot_diagnostics()
         return returned
 
