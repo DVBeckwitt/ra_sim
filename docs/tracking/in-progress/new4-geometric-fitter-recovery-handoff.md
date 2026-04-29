@@ -39,7 +39,8 @@ Last updated: 2026-04-29
   distance gates red. Provider-only parity remains green, so the remaining
   failure is downstream of live-row coverage.
 - Validation status: focused New4 source-coverage tests, focused 00l visual
-  collapse tests, provider-only preflight, and the source-coverage portion of
+  collapse tests, focused caked physical-branch collapse tests, Qr/Qz signature
+  hardening tests, provider-only preflight, and the source-coverage portion of
   full preflight are green. Full preflight is no longer blocked at
   `targeted_source_coverage_failed`, but it is still not fully green because of
   the downstream seam failure. The current local reports are
@@ -115,6 +116,25 @@ Last updated: 2026-04-29
   still fails on the exact detector click/row expectation, and the same failure
   reproduces on clean HEAD `b481ee0`, so it is tracked as pre-existing rather
   than introduced by this branch-collapse patch.
+- 2026-04-29 caked Qr manual physical-branch collapse is fixed for signed and
+  unknown provenance rows. Caked Qr projection grouping now collapses `+x` with
+  source branch `0`, `-x` with source branch `1`, and `00l` rows to one
+  physical slot, so non-`00l` groups ask for two background targets instead of
+  four while zero-Qr/`00l` groups still ask for one.
+- Bug/error status for the caked physical-branch collapse patch: focused
+  caked-branch selection, caked projection grouping, pending replacement, and
+  `00l` collapse regressions are green locally. This closes the specific
+  caked-picker symptom where duplicate signed/unknown provenance rows for the
+  same physical branch inflated the manual-pick target count.
+- 2026-04-29 Qr/Qz group cache signature hardening is fixed. Signature
+  generation now handles recursive containers, mapping/sequence checks that
+  raise, and iterators/indexers that fail by encoding the failure in the
+  signature payload instead of crashing cache comparison.
+- 2026-04-29 caked manual preflight probing is fixed to stay in caked display
+  space. Finite `two_theta_deg`/`phi_deg` rows report `caked_display`, caked
+  probes prefer `caked_qr_projection_grouped_candidates`, and live source-row
+  fallback projects to the current caked view before building grouped
+  candidates.
 - 2026-04-29 detector-view Qr-set recognition bug is fixed at the picker cache
   boundary. Detector picker source selection now validates each cache source
   before returning it, prefers detector picker rows, and falls through when a

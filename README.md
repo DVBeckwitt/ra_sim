@@ -37,6 +37,7 @@
 ## Table of Contents
 
 - [What RA-SIM Does](#what-ra-sim-does)
+- [Project Status](#project-status)
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
@@ -80,6 +81,16 @@ The repository is shaped around three core workflows:
   overrides kept out of git.
 - Extensive regression coverage across CLI, config loading, simulation, fitting,
   and GUI helper paths.
+
+## Project Status
+
+RA-SIM is alpha research software. The package version source of truth is
+`pyproject.toml`; the current version is `1.0.0.dev0`, which marks active
+development toward the first stable release.
+
+Version naming, release sequencing, and tag rules live in
+[docs/release-versioning.md](docs/release-versioning.md). Do not infer release
+state from generated artifacts or dates in filenames.
 
 ## Tech Stack
 
@@ -161,6 +172,12 @@ Check the toolchain and local path status without loading experiment data:
 python -m ra_sim.dev doctor
 ```
 
+Use strict mode before sharing a config bundle or validating a machine setup:
+
+```bash
+python -m ra_sim.dev doctor --strict
+```
+
 ### 4. Point Config at Your Data
 
 At minimum, update the local config with paths to your experiment files:
@@ -213,6 +230,15 @@ Python 3.11+ interpreter, and follows the lightweight launcher path. When
 started from Explorer, it keeps the console open on startup errors so the
 message is readable. Set `RA_SIM_BATCH_NO_PAUSE=1` to suppress that pause in
 automation.
+
+### Deployment Model
+
+RA-SIM is packaged as local desktop/headless Python research software. The
+repository does not include a Dockerfile, cloud deployment manifest, web
+service process file, database schema, or production server target. Deployment
+usually means installing the package into a reproducible Python environment,
+pinning `pylock.toml` for dependency changes, and keeping local experiment
+paths outside git.
 
 ## Configuration
 
@@ -326,11 +352,14 @@ Because of that split:
 | Startup chooser | `python -m ra_sim` | `run_ra_sim.bat` (Windows wrapper) |
 | Main GUI | `python -m ra_sim gui` | `ra-sim gui` |
 | Calibrant GUI | `python -m ra_sim calibrant --bundle bundle.npz` | `ra-sim calibrant --bundle bundle.npz` |
+| Calibrant GUI alias | `python -m ra_sim calibrant-fit --bundle bundle.npz` | `ra-sim calibrant-fit --bundle bundle.npz` |
 | Mosaic visualizer | `python -m ra_sim mosaic` | `ra-sim mosaic` |
 | Headless image render | `python -m ra_sim simulate --out output.png` | `ra-sim simulate --out output.png` |
 | Headless hBN fit | `python -m ra_sim hbn-fit --load-bundle` | `ra-sim hbn-fit --load-bundle` |
 | Headless geometry fit from saved GUI state | `python -m ra_sim fit-geometry state.json` | `ra-sim fit-geometry state.json` |
+| Headless geometry correlation probe | `python -m ra_sim fit-geometry-correlations state.json` | `ra-sim fit-geometry-correlations state.json` |
 | Headless geometry + mosaic-shape fit | `python -m ra_sim fit-mosaic-shape state.json` | `ra-sim fit-mosaic-shape state.json` |
+| Mosaic-shape fit alias | `python -m ra_sim fit-mosaic state.json` | `ra-sim fit-mosaic state.json` |
 
 `run_ra_sim.bat` is only a Windows convenience wrapper for `python -m ra_sim`
 or `py -3 -m ra_sim`; it is not the installed `ra-sim` console script.
@@ -341,8 +370,10 @@ or `py -3 -m ra_sim`; it is not the installed `ra-sim` console script.
 2. Launch the main GUI and load the experimental background.
 3. Match detector-space features first.
 4. Use radial, azimuthal, and caked views to validate the alignment.
-5. Fit mosaic shapes from the accepted geometry cache. The planned production path uses selected Qr/background pairs, local detector ROIs, additive Lorentzian plus Gaussian profile centering, and centered profile residuals with geometry locked.
-6. Fit structure-factor terms last. The planned global path fits detector-space, background-subtracted peak ROI areas across many images with one shared structure-factor parameter vector and one nuisance scale per image.
+5. Fit mosaic shapes from the accepted geometry cache when the selected-pair
+   workflow has enough measured Qr/background evidence.
+6. Fit or audit structure-factor terms last, using the current tracking notes
+   for any still-planned global multi-image workflow.
 7. Save parameter snapshots or GUI state files so the run can be reproduced headlessly.
 
 ### CLI Examples
@@ -366,9 +397,27 @@ python -m ra_sim hbn-fit --load-bundle artifacts/hbn_ellipse_bundle.npz --highre
 # Fit detector geometry from a saved GUI state
 python -m ra_sim fit-geometry saved_state.json
 
+# Fit detector geometry using corrected background input
+python -m ra_sim fit-geometry saved_state.json --background-subtraction radial-plus-phi-blocks
+
+# Export geometry-fit parameter correlation artifacts
+python -m ra_sim fit-geometry-correlations saved_state.json --params active
+
 # Fit geometry and then mosaic shape from a saved GUI state
 python -m ra_sim fit-mosaic-shape saved_state.json
+
+# Same command through the shorter alias
+python -m ra_sim fit-mosaic saved_state.json
 ```
+
+Headless geometry and mosaic-shape fitting accept diffuse-background overrides:
+
+- `saved`
+- `off`
+- `radial`
+- `radial-plus-caked-2d`
+- `radial-plus-phi-blocks`
+- `radial-plus-phi-blocks-plus-caked-2d`
 
 <details>
 <summary>Optics transport modes</summary>
@@ -620,6 +669,7 @@ Use these entry points depending on the question:
 - [docs/gui-workflow.md](docs/gui-workflow.md): operator workflow and headless equivalents
 - [docs/architecture.md](docs/architecture.md): package layout and edit routing
 - [docs/adr/index.md](docs/adr/index.md): accepted architecture decision records
+- [docs/release-versioning.md](docs/release-versioning.md): package version and release sequence policy
 - [docs/debug-and-cache.md](docs/debug-and-cache.md): logging, output locations, and cache policy
 - [docs/troubleshooting.md](docs/troubleshooting.md): setup and config failures
 - [docs/simulation_and_fitting.md](docs/simulation_and_fitting.md): canonical implementation reference
@@ -671,6 +721,31 @@ RA-SIM dev commands now default their caches to `~/.cache/ra_sim/dev/` instead
 of creating repo-root cache folders. Direct tool runs share the configured
 `mypy`/`pytest`/`ruff` cache dirs there.
 
+### Testing and Validation
+
+The canonical test index is
+[docs/testing-and-validation.md](docs/testing-and-validation.md). It lists every
+tracked pytest file, fixture/reference file, validation script, benchmark, user
+tool, developer module, and automation gate with a short purpose statement.
+
+Use the smallest useful check first:
+
+| Change type | First check | Broader check |
+| --- | --- | --- |
+| Config or local setup | `python -m ra_sim.dev doctor` | `python -m ra_sim.dev test-fast` |
+| CLI or launcher | targeted `tests/test_cli_*.py` / launcher tests | `python -m ra_sim.dev test-all` |
+| GUI helper/runtime | targeted GUI/runtime tests | `python -m ra_sim.dev test-all` |
+| Fitting, geometry, projection, or simulation | nearest targeted tests | `python -m ra_sim.dev test-integration` plus relevant debug script |
+| Docs-only | path/link sanity such as `git diff --check` | no full code run required |
+
+Main validation commands:
+
+- `python -m ra_sim.dev test-fast`: fast manifest from `ra_sim/test_tiers.py`
+- `python -m ra_sim.dev test-integration`: slower workflow-heavy manifest
+- `python -m ra_sim.dev test-all`: full pytest suite
+- `python -m ra_sim.dev test-coverage-fast`: optional coverage report, writes `coverage.xml`
+- `python -m pytest tests/benchmarks/test_benchmark_mosaic_profiles.py -m benchmark`: benchmark-gated mosaic profile check
+
 ### Validation Notes
 
 - `pytest` markers:
@@ -685,11 +760,9 @@ of creating repo-root cache folders. Direct tool runs share the configured
   on Windows; run individually.
 - If dynamic/refinement diagnostics are needed, run one exact test at a time:
   `pytest tests/test_manual_geometry_selection_helpers.py -k "exact_test_name" -s -q --tb=short`
-- current mypy frontier targets:
-  - `ra_sim/config/`
-  - `ra_sim/dev.py`
-  - `ra_sim/fitting/optimization_runtime.py`
-  - `ra_sim/gui/_runtime/live_cache_helpers.py`
+- current mypy frontier source of truth is `ra_sim/dev.py`; it currently covers
+  config/dev/timing/test-tier modules plus selected fitting and GUI runtime
+  cache helpers.
 - `python -m ra_sim.dev test-coverage-fast` writes an optional coverage report
   for the fast tier; coverage is not a required quality gate.
 - `python -m ra_sim.dev build` is optional package validation before release or

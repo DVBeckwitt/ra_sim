@@ -13179,6 +13179,261 @@ def _toggle_cross_view_selection(
     return next_session
 
 
+def _manual_qr_caked_branch_row(
+    group_key,
+    *,
+    label,
+    hkl,
+    branch_id,
+    caked_x,
+    caked_y,
+    source_row_index,
+    source_branch_index=None,
+    native_col=None,
+    native_row=None,
+):
+    native_col = float(source_row_index + 10) if native_col is None else float(native_col)
+    native_row = float(source_row_index + 20) if native_row is None else float(native_row)
+    row = {
+        "label": str(label),
+        "hkl": tuple(hkl),
+        "q_group_key": group_key,
+        "branch_id": str(branch_id),
+        "source_table_index": 159,
+        "source_row_index": int(source_row_index),
+        "source_reflection_index": int(source_row_index) + 1000,
+        "native_col": native_col,
+        "native_row": native_row,
+        "sim_col_raw": native_col,
+        "sim_row_raw": native_row,
+        "display_col": float(caked_x),
+        "display_row": float(caked_y),
+        "caked_x": float(caked_x),
+        "caked_y": float(caked_y),
+        "two_theta_deg": float(caked_x),
+        "phi_deg": float(caked_y),
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+        "current_view_frame": "caked_display",
+    }
+    if source_branch_index is not None:
+        row["source_branch_index"] = int(source_branch_index)
+    return row
+
+
+def test_caked_qr_selection_collapses_signed_and_unknown_same_branch_to_two() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    rows = [
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="-1,0,10 +x",
+            hkl=(-1, 0, 10),
+            branch_id="+x",
+            caked_x=39.89,
+            caked_y=35.52,
+            source_row_index=52,
+        ),
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="-1,0,10 unknown 0",
+            hkl=(-1, 0, 10),
+            branch_id="unknown:((q_group,primary,1,10),source_branch,0)",
+            source_branch_index=0,
+            caked_x=39.92,
+            caked_y=36.73,
+            source_row_index=53,
+        ),
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="-1,0,10 -x",
+            hkl=(-1, 0, 10),
+            branch_id="-x",
+            caked_x=41.51,
+            caked_y=-38.60,
+            source_row_index=54,
+        ),
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="-1,0,10 unknown 1",
+            hkl=(-1, 0, 10),
+            branch_id="unknown:((q_group,primary,1,10),source_branch,1)",
+            source_branch_index=1,
+            caked_x=41.52,
+            caked_y=-37.20,
+            source_row_index=55,
+        ),
+    ]
+    status_messages: list[str] = []
+    sessions: list[dict[str, object]] = []
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        39.90,
+        35.60,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {},
+            "caked_qr_projection_grouped_candidates": {group_key: [dict(row) for row in rows]},
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["target_count"] == 2
+    assert len(next_session["group_entries"]) == 2
+    assert sessions[-1]["target_count"] == 2
+    assert "Click background peak 1 of 2" in status_messages[-1]
+
+
+def test_caked_qr_selection_collapses_00l_to_one() -> None:
+    group_key = ("q_group", "primary", 0, 3)
+    rows = [
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="0,0,3 a",
+            hkl=(0, 0, 3),
+            branch_id="unknown:00l:a",
+            source_branch_index=0,
+            caked_x=20.0,
+            caked_y=0.0,
+            source_row_index=1,
+        ),
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="0,0,3 b",
+            hkl=(0, 0, 3),
+            branch_id="unknown:00l:b",
+            source_branch_index=1,
+            caked_x=20.1,
+            caked_y=0.2,
+            source_row_index=2,
+        ),
+    ]
+
+    session = _toggle_cross_view_selection(
+        {group_key: rows},
+        20.0,
+        0.0,
+        use_caked_space=True,
+        group_key=group_key,
+        cache_data={
+            "signature": ("cache",),
+            "grouped_candidates": {},
+            "caked_qr_projection_grouped_candidates": {group_key: [dict(row) for row in rows]},
+        },
+    )
+
+    assert session["target_count"] == 1
+    assert len(session["group_entries"]) == 1
+
+
+def test_caked_qr_projection_grouped_candidates_never_publish_four_physical_branches() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    rows = [
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="signed plus",
+            hkl=(-1, 0, 10),
+            branch_id="+x",
+            caked_x=10.0,
+            caked_y=20.0,
+            source_row_index=1,
+        ),
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="unknown zero",
+            hkl=(-1, 0, 10),
+            branch_id="unknown:((q_group,primary,1,10),source_branch,0)",
+            source_branch_index=0,
+            caked_x=10.2,
+            caked_y=20.2,
+            source_row_index=2,
+        ),
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="signed minus",
+            hkl=(-1, 0, 10),
+            branch_id="-x",
+            caked_x=30.0,
+            caked_y=-20.0,
+            source_row_index=3,
+        ),
+        _manual_qr_caked_branch_row(
+            group_key,
+            label="unknown one",
+            hkl=(-1, 0, 10),
+            branch_id="unknown:((q_group,primary,1,10),source_branch,1)",
+            source_branch_index=1,
+            caked_x=30.2,
+            caked_y=-20.2,
+            source_row_index=4,
+        ),
+    ]
+    projection_by_row = {row["source_row_index"]: dict(row) for row in rows}
+
+    entries, grouped, _lookup = mg._geometry_manual_build_caked_qr_projection_cache(
+        rows,
+        project_peaks_to_current_view=lambda source_rows: [
+            dict(projection_by_row[row["source_row_index"]])
+            for row in source_rows or []
+            if row.get("source_row_index") in projection_by_row
+        ],
+        build_grouped_candidates=_group_by_q_group,
+        build_simulated_lookup=_build_lookup,
+        filter_active_rows=None,
+    )
+
+    assert len(entries) == 4
+    assert len(grouped[group_key]) == 2
+    slots = {
+        mg._geometry_manual_q_group_physical_branch_slot(row, group_key=group_key)
+        for row in grouped[group_key]
+    }
+    assert slots == {("branch", 0), ("branch", 1)}
+
+
+def test_caked_pending_replace_uses_physical_branch_slot() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    old_entry = _manual_qr_caked_branch_row(
+        group_key,
+        label="signed plus",
+        hkl=(-1, 0, 10),
+        branch_id="+x",
+        caked_x=10.0,
+        caked_y=20.0,
+        source_row_index=1,
+    )
+    new_entry = _manual_qr_caked_branch_row(
+        group_key,
+        label="unknown zero",
+        hkl=(-1, 0, 10),
+        branch_id="unknown:((q_group,primary,1,10),source_branch,0)",
+        source_branch_index=0,
+        caked_x=10.5,
+        caked_y=20.5,
+        source_row_index=2,
+    )
+
+    replaced = mg._geometry_manual_replace_same_branch_entry([old_entry], new_entry)
+
+    assert len(replaced) == 1
+    assert replaced[0]["label"] == "unknown zero"
+
+
 _CROSS_VIEW_ID_FIELDS = (
     "source_table_index",
     "source_row_index",

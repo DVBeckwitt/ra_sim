@@ -34,6 +34,8 @@ PATH_TOKEN_RE = re.compile(
     r"|\.pre-commit-config\.yaml|pyproject\.toml|coverage\.xml)"
 )
 CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
+TEST_INDEX_HEADER = "| Category | Path | Run with | What it validates | Notes |"
+PLACEHOLDER_DESCRIPTION_RE = re.compile(r"\bRegression coverage for\b", re.IGNORECASE)
 
 
 def _tracked_files() -> list[str]:
@@ -131,6 +133,27 @@ def _candidate_path_tokens(doc: str) -> set[str]:
     return candidates
 
 
+def _test_file_index_rows(doc: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    in_index = False
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped == TEST_INDEX_HEADER:
+            in_index = True
+            continue
+        if not in_index:
+            continue
+        if not stripped.startswith("|"):
+            break
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) != 5 or set(cells[0]) <= {"-"}:
+            continue
+        path_cell = cells[1]
+        if path_cell.startswith("`tests/") and path_cell.endswith(".py`"):
+            rows.append(cells)
+    return rows
+
+
 def _is_placeholder_or_glob(path: str) -> bool:
     return any(marker in path for marker in ("<", ">", "{", "}", "*", "?"))
 
@@ -164,3 +187,15 @@ def test_testing_validation_index_path_references_are_tracked_or_allowed() -> No
         bad_paths.append(path)
 
     assert bad_paths == []
+
+
+def test_testing_validation_index_test_rows_use_specific_descriptions() -> None:
+    doc = DOC_PATH.read_text(encoding="utf-8")
+
+    vague_rows = [
+        cells[1].strip("`")
+        for cells in _test_file_index_rows(doc)
+        if PLACEHOLDER_DESCRIPTION_RE.search(cells[3])
+    ]
+
+    assert vague_rows == []

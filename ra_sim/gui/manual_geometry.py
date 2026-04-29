@@ -2810,8 +2810,12 @@ def _geometry_manual_build_caked_qr_projection_cache(
     if not active_entries:
         return [], {}, {}
 
+    grouped_entries = _geometry_manual_collapse_q_group_representatives(active_entries)
+    if not grouped_entries:
+        return [], {}, {}
+
     try:
-        grouped_candidates = build_grouped_candidates(active_entries)
+        grouped_candidates = build_grouped_candidates(grouped_entries)
     except Exception:
         grouped_candidates = {}
     grouped_candidates = {
@@ -3385,6 +3389,8 @@ def _geometry_manual_entry_detector_display_point(
     }:
         return detector_point
     if _geometry_manual_entry_has_stale_caked_fields(entry):
+        return None
+    if _geometry_manual_entry_matching_current_view_point(entry) is not None:
         return None
     return detector_point
 
@@ -4622,12 +4628,86 @@ def _geometry_manual_real_q_group_key(value: object) -> tuple[object, ...] | Non
     return gui_mosaic_top.normalize_q_group_key(value)
 
 
+def _geometry_manual_q_group_entry_is_00l(
+    entry: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = (
+        _default_normalize_hkl_key
+    ),
+) -> bool:
+    hkl_key = normalize_hkl_key(entry) if isinstance(entry, Mapping) else None
+    if hkl_key is not None:
+        return int(hkl_key[0]) == 0 and int(hkl_key[1]) == 0
+    normalized_key = _geometry_manual_real_q_group_key(group_key)
+    if normalized_key is None and isinstance(entry, Mapping):
+        normalized_key = _geometry_manual_real_q_group_key(entry)
+    if isinstance(normalized_key, tuple) and len(normalized_key) >= 4:
+        try:
+            return int(normalized_key[2]) == 0
+        except Exception:
+            return False
+    return False
+
+
+def _geometry_manual_branch_index_from_value(value: object) -> int | None:
+    try:
+        branch = int(value)
+    except Exception:
+        return None
+    return int(branch) if branch in {0, 1} else None
+
+
+def _geometry_manual_q_group_physical_branch_slot(
+    entry: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+    profile_cache: Mapping[str, object] | None = None,
+) -> tuple[object, ...] | None:
+    """Return the physical manual-pick branch slot for one Qr/Qz row."""
+
+    if _geometry_manual_q_group_entry_is_00l(entry, group_key=group_key):
+        return ("00l",)
+    if not isinstance(entry, Mapping):
+        return None
+
+    for key in ("source_branch_index", "source_peak_index", "branch_index"):
+        branch = _geometry_manual_branch_index_from_value(entry.get(key))
+        if branch in {0, 1}:
+            return ("branch", int(branch))
+
+    branch_text = str(entry.get("branch_id", "") or "").strip()
+    if branch_text == "+x":
+        return ("branch", 0)
+    if branch_text == "-x":
+        return ("branch", 1)
+
+    normalized_key = _geometry_manual_real_q_group_key(group_key)
+    if normalized_key is None:
+        normalized_key = _geometry_manual_real_q_group_key(entry)
+    branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+        entry,
+        target_key=normalized_key,
+        profile_cache=profile_cache,
+    )
+    if branch_id == gui_mosaic_top.ZERO_QR_BRANCH_ID:
+        return ("00l",)
+    if branch_id == "+x":
+        return ("branch", 0)
+    if branch_id == "-x":
+        return ("branch", 1)
+    if branch_id:
+        return ("branch_id", str(branch_id))
+    return None
+
+
 def _geometry_manual_select_q_group_representative(
     entries: Sequence[dict[str, object]] | None,
     *,
     group_key: object = None,
     seed_candidate: Mapping[str, object] | None = None,
     branch_id: str | None = None,
+    branch_slot: tuple[object, ...] | None = None,
     profile_cache: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     normalized_key = _geometry_manual_real_q_group_key(group_key)
@@ -4642,6 +4722,34 @@ def _geometry_manual_select_q_group_representative(
         if isinstance(entry, dict)
     ]
     selected_branch_id = branch_id
+    selected_branch_slot = branch_slot
+    if selected_branch_slot is None and isinstance(seed_candidate, Mapping):
+        selected_branch_slot = _geometry_manual_q_group_physical_branch_slot(
+            seed_candidate,
+            group_key=normalized_key,
+            profile_cache=profile_cache,
+        )
+    if selected_branch_slot is not None:
+        slot_entries = [
+            entry
+            for entry in normalized_entries
+            if _geometry_manual_q_group_physical_branch_slot(
+                entry,
+                group_key=normalized_key,
+                profile_cache=profile_cache,
+            )
+            == selected_branch_slot
+        ]
+        selected = gui_mosaic_top.select_mosaic_top_representative(
+            slot_entries,
+            branch_id=None,
+            target_key=normalized_key,
+            profile_cache=profile_cache,
+        )
+        if isinstance(selected, dict):
+            selected["selection_reason"] = gui_mosaic_top.SELECTION_REASON
+            selected["manual_qr_physical_branch_slot"] = tuple(selected_branch_slot)
+            return dict(selected)
     if selected_branch_id is None and isinstance(seed_candidate, Mapping):
         selected_branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
             seed_candidate,
@@ -4662,8 +4770,8 @@ def _geometry_manual_collapse_q_group_representatives(
     *,
     profile_cache: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
-    grouped: dict[tuple[tuple[object, ...], str], list[dict[str, object]]] = {}
-    ordered_keys: list[tuple[tuple[object, ...], str]] = []
+    grouped: dict[tuple[tuple[object, ...], tuple[object, ...]], list[dict[str, object]]] = {}
+    ordered_keys: list[tuple[tuple[object, ...], tuple[object, ...]]] = []
     output: list[dict[str, object]] = []
     for raw_entry in entries or ():
         if not isinstance(raw_entry, dict):
@@ -4674,21 +4782,28 @@ def _geometry_manual_collapse_q_group_representatives(
             output.append(entry)
             continue
         entry["q_group_key"] = group_key
-        branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+        branch_slot = _geometry_manual_q_group_physical_branch_slot(
             entry,
-            target_key=group_key,
+            group_key=group_key,
             profile_cache=profile_cache,
         )
-        bucket_key = (group_key, str(branch_id))
+        if branch_slot is None:
+            branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
+                entry,
+                target_key=group_key,
+                profile_cache=profile_cache,
+            )
+            branch_slot = ("branch_id", str(branch_id))
+        bucket_key = (group_key, tuple(branch_slot))
         if bucket_key not in grouped:
             grouped[bucket_key] = []
             ordered_keys.append(bucket_key)
         grouped[bucket_key].append(entry)
-    for group_key, branch_id in ordered_keys:
+    for group_key, branch_slot in ordered_keys:
         selected = _geometry_manual_select_q_group_representative(
-            grouped.get((group_key, branch_id), []),
+            grouped.get((group_key, branch_slot), []),
             group_key=group_key,
-            branch_id=branch_id,
+            branch_slot=branch_slot,
             profile_cache=profile_cache,
         )
         if isinstance(selected, dict):
@@ -8458,10 +8573,24 @@ def geometry_manual_group_target_count(
         except Exception:
             pass
 
+    branch_slots: set[tuple[object, ...]] = set()
+    for entry in entries:
+        branch_slot = _geometry_manual_q_group_physical_branch_slot(
+            entry,
+            group_key=group_key,
+        )
+        if branch_slot is not None:
+            branch_slots.add(tuple(branch_slot))
+    non_00l_slots = {slot for slot in branch_slots if slot != ("00l",)}
+    if non_00l_slots:
+        return int(min(2, len(non_00l_slots)))
+    if branch_slots == {("00l",)}:
+        return 1
+
     for entry in entries:
         hkl = normalize_hkl_key(entry.get("hkl", entry.get("label")))
         if hkl is None or int(hkl[0]) != 0 or int(hkl[1]) != 0:
-            return int(len(entries))
+            return int(min(2, len(entries)))
     return 1
 
 
@@ -8540,6 +8669,13 @@ def _geometry_manual_background_branch_key(
     entry_dict = dict(entry)
     group_key = _geometry_manual_real_q_group_key(entry_dict)
     if group_key is not None:
+        branch_slot = _geometry_manual_q_group_physical_branch_slot(
+            entry_dict,
+            group_key=group_key,
+            profile_cache=profile_cache,
+        )
+        if branch_slot is not None:
+            return ("q_group_physical_branch", group_key, tuple(branch_slot))
         branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
             entry_dict,
             target_key=group_key,

@@ -159,11 +159,13 @@ stale simulated refined caked reuse. 2026-04-29 strict validation update:
 historical 7-pair New4 fixture restoration and provider-only/Rung 0 parity are
 green; zero-Qr `00l` branch rebinding is now collapsed only for 00l targets;
 headless targeted preflight reaches the performance gate without full-source
-fallback. Full preflight remains blocked at 5/7 source-row regeneration:
-Q-group HKL aliases now bind for `(-1,0,10)` and branch 0 of `(-1,0,16)`,
-but the targeted simulator emits no live row for collapsed `(0,0,3)` and no
-branch-1 live row for `q_group_key=("q_group","primary",1,16)`. Full fitter
-validation remains red.
+fallback. Follow-up fixes now collapse caked signed/unknown provenance rows by
+physical branch, harden Qr/Qz group cache signatures against recursive or
+failing mapping/sequence payloads, and keep caked manual preflight probes on
+caked projection candidates. Full-preflight live source coverage now reaches
+7/7 for the restored fixture, but full validation remains red downstream as
+`classification == "seam_failure"` with background/candidate distance gates
+still failing. Full fitter validation is not claimed.
 
 ## Known bugs
 

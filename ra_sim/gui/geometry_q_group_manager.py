@@ -221,27 +221,101 @@ def _geometry_q_group_cache_scalar(value: object) -> object:
     return round(float(numeric), 9)
 
 
-def _geometry_q_group_signature_value(value: object) -> object:
+def _geometry_q_group_safe_repr(value: object, *, limit: int = 160) -> str:
+    try:
+        text = repr(value)
+    except Exception:
+        text = f"<unrepresentable {type(value).__name__}>"
+    if len(text) > int(limit):
+        return text[: int(limit)] + "..."
+    return text
+
+
+def _geometry_q_group_signature_value(
+    value: object,
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> object:
+    if _seen is None:
+        _seen = set()
+    if int(_depth) > 64:
+        return ("max_depth", type(value).__name__, _geometry_q_group_safe_repr(value))
     if isinstance(value, np.ndarray):
         array_value = np.asarray(value)
         try:
             payload = hash(np.ascontiguousarray(array_value).tobytes())
         except Exception:
-            payload = repr(array_value)
+            payload = _geometry_q_group_safe_repr(array_value)
         return (
             "ndarray",
             tuple(int(size) for size in array_value.shape),
             str(array_value.dtype),
             payload,
         )
-    if isinstance(value, Mapping):
-        return tuple(
-            sorted(
-                (repr(key), _geometry_q_group_signature_value(item)) for key, item in value.items()
-            )
+
+    try:
+        is_mapping = isinstance(value, Mapping)
+    except Exception as exc:
+        return (
+            "mapping_check_error",
+            type(value).__name__,
+            _geometry_q_group_safe_repr(exc),
+            _geometry_q_group_cache_scalar(value),
         )
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return tuple(_geometry_q_group_signature_value(item) for item in value)
+    if is_mapping:
+        value_id = id(value)
+        if value_id in _seen:
+            return ("cycle", type(value).__name__)
+        _seen.add(value_id)
+        try:
+            try:
+                items = list(value.items())
+            except Exception as exc:
+                return (
+                    "mapping_items_error",
+                    type(value).__name__,
+                    _geometry_q_group_safe_repr(exc),
+                )
+            return tuple(
+                sorted(
+                    (
+                        _geometry_q_group_safe_repr(key),
+                        _geometry_q_group_signature_value(item, _seen, int(_depth) + 1),
+                    )
+                    for key, item in items
+                )
+            )
+        finally:
+            _seen.discard(value_id)
+
+    try:
+        is_sequence = isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+    except Exception as exc:
+        return (
+            "sequence_check_error",
+            type(value).__name__,
+            _geometry_q_group_safe_repr(exc),
+            _geometry_q_group_cache_scalar(value),
+        )
+    if is_sequence:
+        value_id = id(value)
+        if value_id in _seen:
+            return ("cycle", type(value).__name__)
+        _seen.add(value_id)
+        try:
+            try:
+                return tuple(
+                    _geometry_q_group_signature_value(item, _seen, int(_depth) + 1)
+                    for item in value
+                )
+            except Exception as exc:
+                return (
+                    "sequence_iter_error",
+                    type(value).__name__,
+                    _geometry_q_group_safe_repr(exc),
+                )
+        finally:
+            _seen.discard(value_id)
     return _geometry_q_group_cache_scalar(value)
 
 

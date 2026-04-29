@@ -513,7 +513,7 @@ def _candidate_current_view_point_frame(
     if caked_point is None:
         caked_point = _finite_point(entry, "two_theta_deg", "phi_deg")
     if caked_point is not None:
-        return None, None
+        return caked_point, "caked_display"
 
     sim_point = _finite_point(entry, "sim_col", "sim_row")
     if sim_point is not None:
@@ -3357,14 +3357,35 @@ def _prepare_fresh_slot_runtime(
         context=context,
         consumer="manual_pick_group_probe",
     )
-    grouped_candidates = dict(group_cache.get("grouped_candidates", {}) or {})
+    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
+    grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
     grouped_candidate_source = "pick_cache"
-    if not grouped_candidates and current_source_rows:
-        try:
-            grouped_candidates = projection_callbacks.pick_candidates(current_source_rows)
-        except Exception:
-            grouped_candidates = {}
-        grouped_candidate_source = "current_live_source_rows"
+    if use_caked_space:
+        grouped_candidates = dict(
+            group_cache.get("caked_qr_projection_grouped_candidates", {}) or {}
+        )
+        grouped_candidate_source = "caked_qr_projection_grouped_candidates"
+        if not grouped_candidates and current_source_rows:
+            try:
+                projected_rows = projection_callbacks.project_peaks_to_current_view(
+                    current_source_rows
+                )
+            except Exception:
+                projected_rows = []
+            try:
+                grouped_candidates = projection_callbacks.pick_candidates(projected_rows)
+            except Exception:
+                grouped_candidates = {}
+            grouped_candidate_source = "current_live_source_rows_caked_projection"
+    else:
+        grouped_candidates = dict(group_cache.get("grouped_candidates", {}) or {})
+        grouped_candidate_source = "pick_cache"
+        if not grouped_candidates and current_source_rows:
+            try:
+                grouped_candidates = projection_callbacks.pick_candidates(current_source_rows)
+            except Exception:
+                grouped_candidates = {}
+            grouped_candidate_source = "current_live_source_rows"
     return {
         "projection_callbacks": projection_callbacks,
         "group_cache": group_cache,

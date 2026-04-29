@@ -29,6 +29,27 @@ def _entry(group_key, *, peak_count, total_intensity, source="primary"):
     }
 
 
+def test_q_group_signature_value_handles_recursive_or_bad_sequence_values() -> None:
+    from collections.abc import Sequence as AbstractSequence
+
+    recursive = []
+    recursive.append(recursive)
+
+    class BadSequence(AbstractSequence):
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            raise RuntimeError(f"bad sequence index {index}")
+
+    recursive_signature = geometry_q_group_manager._geometry_q_group_signature_value(recursive)
+    bad_signature = geometry_q_group_manager._geometry_q_group_signature_value(BadSequence())
+
+    assert recursive_signature == (("cycle", "list"),)
+    assert bad_signature[0] == "sequence_iter_error"
+    assert bad_signature[1] == "BadSequence"
+
+
 def _make_runtime_q_group_bundle(
     runtime_state,
     *,
