@@ -6639,6 +6639,69 @@ def test_build_geometry_manual_pick_cache_does_not_reuse_empty_detector_cache_wh
     assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
 
 
+def test_build_geometry_manual_pick_cache_skips_caked_only_preview_for_detector_rows() -> (
+    None
+):
+    source_row_calls: list[int] = []
+    caked_preview_row = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "display_col": 2.5,
+        "display_row": -17.0,
+        "caked_x": 2.5,
+        "caked_y": -17.0,
+        "display_frame": "caked_display",
+    }
+    detector_source_row = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "sim_col": 3.0,
+        "sim_row": 4.0,
+        "native_col": 3.0,
+        "native_row": 4.0,
+    }
+
+    cache_data, _next_sig, _next_state = mg.build_geometry_manual_pick_cache(
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((8, 8), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("cached",),
+        simulated_peaks_for_params=lambda *_args, prefer_cache=False, **_kwargs: (
+            [dict(caked_preview_row)] if prefer_cache else []
+        ),
+        source_rows_for_background=lambda *_args, **_kwargs: (
+            source_row_calls.append(1) or [dict(detector_source_row)]
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert source_row_calls == [1]
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "geometry_manual_source_rows_for_background"
+    )
+    assert cache_data["fresh_source_rows"]
+    assert cache_data["detector_picker_rows"]
+    assert cache_data["detector_picker_trace"]["detector_picker_candidate_count"] > 0
+    assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
+
+
 def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cache_is_preferred() -> (
     None
 ):

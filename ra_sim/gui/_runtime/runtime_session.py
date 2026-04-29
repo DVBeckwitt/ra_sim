@@ -23668,8 +23668,16 @@ def _commit_geometry_manual_source_row_rebuild_result(
 
     if stored_rows:
         if targeted_preflight_enabled and targeted_cache_key_digest:
+            targeted_projection_mode = str(
+                diagnostics.get("projection_view_mode")
+                or _geometry_fit_targeted_projection_view_mode()
+            )
             targeted_projection_signature = _normalize_geometry_fit_projection_view_signature(
-                _geometry_fit_targeted_projection_view_signature(background_idx),
+                diagnostics.get("projection_view_signature")
+                or _geometry_fit_targeted_projection_view_signature(
+                    background_idx,
+                    mode_override=targeted_projection_mode,
+                ),
                 background_idx,
             )
             _geometry_fit_store_targeted_projected_cache_entry(
@@ -23691,7 +23699,7 @@ def _commit_geometry_manual_source_row_rebuild_result(
                     "diagnostics": copy.deepcopy(diagnostics),
                     "cache_source": str(rebuild_result.rebuild_source or "unknown"),
                     "consumer": str(lookup_context),
-                    "projection_view_mode": str(_geometry_fit_targeted_projection_view_mode()),
+                    "projection_view_mode": str(targeted_projection_mode),
                     "projection_view_signature": targeted_projection_signature,
                 },
             )
@@ -24896,6 +24904,18 @@ def _geometry_manual_source_rows_for_background(
             **projection_diagnostics,
             **targeted_flags,
         )
+        if allow_source_snapshot_rebuild:
+            dataset_debug["rebuild_attempted"] = True
+            rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
+            if rebuilt_rows:
+                return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt")
         return _finish_source_rows([], status=status)
     live_cache_inventory = _live_cache_inventory_snapshot()
     targeted_flags = (

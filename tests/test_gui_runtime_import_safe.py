@@ -18586,6 +18586,120 @@ def test_manual_pick_cache_source_rows_rebuild_allowed_for_manual_pick_cache(
     assert returned_rows[0]["q_group_key"] == ("q_group", "primary", 1, 10)
 
 
+def test_manual_pick_cache_source_rows_rebuilds_when_snapshot_projection_empty(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    runtime_session.background_runtime_state.current_background_index = 0
+    simulation_state.stored_max_positions_local = [np.zeros((1, 7), dtype=np.float64)]
+    requested_signature = runtime_session._geometry_source_snapshot_signature_for_background(
+        0,
+        {"a": 4.143},
+    )
+    caked_row = {
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_table_index": 3,
+        "source_row_index": 4,
+        "display_col": 2.5,
+        "display_row": -17.0,
+        "caked_x": 2.5,
+        "caked_y": -17.0,
+        "display_frame": "caked_display",
+        "background_index": 0,
+    }
+    rebuilt_row = {
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_table_index": 3,
+        "source_row_index": 4,
+        "source_branch_index": 0,
+        "sim_col": 12.0,
+        "sim_row": 14.0,
+        "native_col": 12.0,
+        "native_row": 14.0,
+        "background_index": 0,
+    }
+    simulation_state.source_row_snapshots = {
+        0: {
+            "background_index": 0,
+            "simulation_signature": requested_signature,
+            "stored_rows": [dict(caked_row)],
+            "rows": [dict(caked_row)],
+            "projected_rows": [],
+            "valid_for_picker": True,
+            "valid_for_geometry_fit_dataset": True,
+            "row_content_signature": None,
+            "projection_view_signature": {"mode": "caked", "available": True},
+            "created_from": "caked_preview",
+        }
+    }
+    rebuild_calls: list[dict[str, object]] = []
+    projection_mode_overrides: list[object] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda _idx, **kwargs: (
+            projection_mode_overrides.append(kwargs.get("mode_override"))
+            or {
+                "mode": str(kwargs.get("mode_override") or "detector"),
+                "detector_shape": [64, 64],
+                "available": True,
+            }
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_project_peaks_for_background",
+        lambda *_args, **_kwargs: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_rebuild_source_rows_for_background",
+        lambda background_idx, param_set=None, **kwargs: (
+            rebuild_calls.append(
+                {
+                    "background_idx": int(background_idx),
+                    "consumer": kwargs.get("consumer"),
+                    "param_set": dict(param_set or {}),
+                }
+            )
+            or [dict(rebuilt_row)]
+        ),
+        raising=False,
+    )
+
+    returned_rows = runtime_session._geometry_manual_source_rows_for_background(
+        0,
+        {"a": 4.143},
+        consumer="manual_pick_cache",
+    )
+    diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert returned_rows == [dict(rebuilt_row)]
+    assert rebuild_calls == [
+        {
+            "background_idx": 0,
+            "consumer": "manual_pick_cache",
+            "param_set": {"a": 4.143},
+        }
+    ]
+    assert projection_mode_overrides == ["detector"]
+    assert diagnostics["status"] == "snapshot_rebuilt"
+    assert diagnostics["rebuild_attempted"] is True
+    assert diagnostics["rebuild_returned_row_count"] == 1
+
+
 def test_source_snapshot_signature_survives_manual_pick_arming(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     manual_geometry = importlib.import_module("ra_sim.gui.manual_geometry")

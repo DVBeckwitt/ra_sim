@@ -6694,6 +6694,97 @@ def _geometry_manual_detector_picker_source_breakdown(
     return dict(sorted(breakdown.items(), key=lambda item: item[0]))
 
 
+def _geometry_manual_detector_picker_row_diagnostics(
+    rows: Sequence[Mapping[str, object]] | None,
+    *,
+    display_width: int = 0,
+    display_height: int = 0,
+    native_width: int = 0,
+    native_height: int = 0,
+) -> dict[str, int]:
+    q_group_count = 0
+    detector_display_count = 0
+    caked_display_count = 0
+    missing_detector_display_count = 0
+    outside_display_count = 0
+    native_count = 0
+    outside_native_count = 0
+    detector_candidate_count = 0
+    for raw_entry in rows or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        if _geometry_manual_real_q_group_key(raw_entry) is None:
+            continue
+        q_group_count += 1
+        display_point = _geometry_manual_tuple_point(
+            raw_entry,
+            "sim_refined_detector_display_px",
+        )
+        if display_point is None:
+            display_point = _geometry_manual_finite_point(
+                raw_entry,
+                (
+                    ("display_col", "display_row"),
+                    ("sim_col_raw", "sim_row_raw"),
+                    ("x", "y"),
+                    ("simulated_x", "simulated_y"),
+                    ("sim_col", "sim_row"),
+                ),
+            )
+        if display_point is None:
+            missing_detector_display_count += 1
+        elif _geometry_manual_detector_point_is_caked(raw_entry, display_point):
+            caked_display_count += 1
+        else:
+            detector_display_count += 1
+            if (
+                int(display_width) > 0
+                and int(display_height) > 0
+                and not _geometry_manual_point_inside_bounds(
+                    display_point,
+                    width=int(display_width),
+                    height=int(display_height),
+                )
+            ):
+                outside_display_count += 1
+        native_point = _geometry_manual_entry_native_point(raw_entry)
+        if native_point is not None:
+            native_count += 1
+            if (
+                int(native_width) > 0
+                and int(native_height) > 0
+                and not _geometry_manual_point_inside_bounds(
+                    native_point,
+                    width=int(native_width),
+                    height=int(native_height),
+                )
+            ):
+                outside_native_count += 1
+        if (
+            geometry_manual_detector_picker_row(
+                raw_entry,
+                display_width=display_width,
+                display_height=display_height,
+                native_width=native_width,
+                native_height=native_height,
+            )
+            is not None
+        ):
+            detector_candidate_count += 1
+    return {
+        "q_group_source_row_count": int(q_group_count),
+        "detector_display_source_row_count": int(detector_display_count),
+        "caked_display_source_row_count": int(caked_display_count),
+        "missing_detector_display_source_row_count": int(
+            missing_detector_display_count
+        ),
+        "outside_display_source_row_count": int(outside_display_count),
+        "native_source_row_count": int(native_count),
+        "outside_native_source_row_count": int(outside_native_count),
+        "detector_candidate_source_row_count": int(detector_candidate_count),
+    }
+
+
 def _geometry_manual_detector_picker_identity(
     entry: Mapping[str, object],
 ) -> tuple[object, ...]:
@@ -6996,6 +7087,9 @@ def geometry_manual_format_detector_picker_diagnostic_block(
         "source_snapshot_status",
         "source_snapshot_rebuild_attempted",
         "source_snapshot_rebuild_returned_row_count",
+        "detector_picker_source_rows_with_caked_coords",
+        "detector_picker_source_rows_with_detector_display_px",
+        "detector_picker_source_rows_missing_detector_display_px",
         "reason_candidates_are_empty",
     )
     lines = ["[geometry] detector Qr picker diagnostics"]
@@ -7050,6 +7144,13 @@ def geometry_manual_detector_picker_input_trace(
         flattened_active_grouped
     )
     source_breakdown = _geometry_manual_detector_picker_source_breakdown(source_rows)
+    source_row_diagnostics = _geometry_manual_detector_picker_row_diagnostics(
+        source_rows,
+        display_width=display_width,
+        display_height=display_height,
+        native_width=native_width,
+        native_height=native_height,
+    )
     manual_saved_pair_count = sum(
         1
         for entry in source_rows
@@ -7116,6 +7217,16 @@ def geometry_manual_detector_picker_input_trace(
         "detector_picker_candidate_count": int(len(flattened_active_grouped)),
         "detector_picker_candidate_count_by_source": active_picker_breakdown,
         "detector_picker_source_row_count_by_source": source_breakdown,
+        "detector_picker_source_row_diagnostics": source_row_diagnostics,
+        "detector_picker_source_rows_with_caked_coords": int(
+            source_row_diagnostics.get("caked_display_source_row_count", 0)
+        ),
+        "detector_picker_source_rows_with_detector_display_px": int(
+            source_row_diagnostics.get("detector_display_source_row_count", 0)
+        ),
+        "detector_picker_source_rows_missing_detector_display_px": int(
+            source_row_diagnostics.get("missing_detector_display_source_row_count", 0)
+        ),
         "manual_pick_cache_source": cache_metadata.get("cache_source"),
         "manual_pick_cache_stale_reason": cache_metadata.get("stale_reason"),
         "source_snapshot_status": cache_metadata.get(
@@ -7517,38 +7628,74 @@ def build_geometry_manual_pick_cache(
             filtered_active_rows = []
         candidate_groups = build_grouped_candidates(filtered_active_rows)
 
-        simulated_peaks = normalized_rows
-        active_simulated_peaks = [
+        local_active_simulated_peaks = [
             dict(entry) for entry in filtered_active_rows if isinstance(entry, Mapping)
         ]
         if raw_detector_picker_rows:
             detector_source_candidates = raw_source_rows
-            detector_picker_rows = [dict(entry) for entry in raw_detector_picker_rows]
-            detector_picker_grouped_candidates = {
+            local_detector_picker_rows = [dict(entry) for entry in raw_detector_picker_rows]
+            local_detector_picker_grouped_candidates = {
                 key: [dict(entry) for entry in entries]
                 for key, entries in raw_detector_picker_grouped_candidates.items()
             }
         else:
-            detector_source_candidates = active_simulated_peaks or raw_source_rows
-            detector_picker_rows, detector_picker_grouped_candidates = (
+            detector_source_candidates = local_active_simulated_peaks or raw_source_rows
+            local_detector_picker_rows, local_detector_picker_grouped_candidates = (
                 geometry_manual_detector_picker_candidates_from_rows(
                     detector_source_candidates,
                     display_background=background_image,
                     profile_cache=profile_cache_local,
                 )
             )
-        if not detector_picker_rows and detector_source_candidates is not raw_source_rows:
+        if (
+            not local_detector_picker_rows
+            and detector_source_candidates is not raw_source_rows
+        ):
             detector_source_candidates = raw_source_rows
-            detector_picker_rows, detector_picker_grouped_candidates = (
+            local_detector_picker_rows, local_detector_picker_grouped_candidates = (
                 geometry_manual_detector_picker_candidates_from_rows(
                     detector_source_candidates,
                     display_background=background_image,
                     profile_cache=profile_cache_local,
                 )
             )
-        detector_picker_source_rows = [
+        local_detector_picker_source_rows = [
             dict(entry) for entry in detector_source_candidates if isinstance(entry, Mapping)
         ]
+        if not reuse_requires_caked_projection and not local_detector_picker_rows:
+            display_height, display_width = _geometry_manual_detector_shape(background_image)
+            detector_diag = _geometry_manual_detector_picker_row_diagnostics(
+                local_detector_picker_source_rows,
+                display_width=display_width,
+                display_height=display_height,
+            )
+            if int(detector_diag.get("q_group_source_row_count", 0)) <= 0:
+                stale_reason = f"{source} rows had no detector Qr/Qz group keys."
+            elif (
+                int(detector_diag.get("caked_display_source_row_count", 0)) > 0
+                and int(detector_diag.get("detector_display_source_row_count", 0)) <= 0
+            ):
+                stale_reason = (
+                    f"{source} rows were caked-only; rebuilding detector picker rows."
+                )
+            elif int(detector_diag.get("missing_detector_display_source_row_count", 0)) > 0:
+                stale_reason = (
+                    f"{source} rows lacked detector display coordinates; rebuilding."
+                )
+            else:
+                stale_reason = (
+                    f"{source} rows did not produce detector picker candidates; rebuilding."
+                )
+            return False
+
+        simulated_peaks = normalized_rows
+        active_simulated_peaks = local_active_simulated_peaks
+        detector_picker_source_rows = local_detector_picker_source_rows
+        detector_picker_rows = [dict(entry) for entry in local_detector_picker_rows]
+        detector_picker_grouped_candidates = {
+            key: [dict(entry) for entry in entries]
+            for key, entries in local_detector_picker_grouped_candidates.items()
+        }
         grouped_candidates = candidate_groups
         simulated_lookup = build_simulated_lookup(active_simulated_peaks)
         cache_action = str(action)
@@ -7637,8 +7784,6 @@ def build_geometry_manual_pick_cache(
         ]
         if not normalized_rows:
             return []
-        if not reuse_requires_caked_projection:
-            return normalized_rows
         if callable(project_peaks_for_background_view):
             order_key = "__ra_sim_manual_cache_projection_order__"
             grouped_rows: dict[int, list[dict[str, object]]] = {}
