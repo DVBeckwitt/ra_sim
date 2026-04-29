@@ -657,6 +657,12 @@ as bounded ladder evidence. The GUI fit button is not the validation path.
   valid detector marker. Peak-selection hit testing now shares the manual
   detector-coordinate resolver, so legacy `x/y` and `simulated_x/y` caked
   aliases cannot be matched as detector pixels.
+- Detector-mode Qr/Qz recognition is isolated from caked/current-view
+  projection. Detector picker source selection validates each cache source and
+  falls through from caked-like or detector-incomplete rows to detector-stable
+  rows; detector-mode cache reprojection keeps detector display/native fields;
+  and caked projection cache availability is not required to start detector
+  Q-set placement.
 - Simulation-native Qr/Qz detector rows now keep the simulated detector image
   frame through manual projection, peak overlay restoration, and geometry
   fallback normalization. With divergent detector/simulation rotations on a

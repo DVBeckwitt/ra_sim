@@ -6744,6 +6744,83 @@ def _geometry_manual_detector_picker_rows_from_value(
     return rows
 
 
+def _geometry_manual_detector_picker_grouped_rows_from_value(
+    value: object,
+    *,
+    source: str,
+) -> list[dict[str, object]]:
+    rows = _geometry_manual_flatten_grouped_candidates(
+        value if isinstance(value, Mapping) else None
+    )
+    for entry in rows:
+        entry.setdefault("detector_picker_source", source)
+    return rows
+
+
+def _geometry_manual_detector_picker_cache_source_groups(
+    cache_data: Mapping[str, object] | None,
+) -> list[tuple[str, list[dict[str, object]]]]:
+    if not isinstance(cache_data, Mapping):
+        return []
+    groups: list[tuple[str, list[dict[str, object]]]] = []
+
+    def _append_rows(key: str, *, source: str | None = None) -> None:
+        rows = _geometry_manual_detector_picker_rows_from_value(
+            cache_data.get(key),
+            source=source or key,
+        )
+        if rows:
+            groups.append((source or key, rows))
+
+    def _append_grouped(key: str, *, source: str | None = None) -> None:
+        rows = _geometry_manual_detector_picker_grouped_rows_from_value(
+            cache_data.get(key),
+            source=source or key,
+        )
+        if rows:
+            groups.append((source or key, rows))
+
+    _append_rows("detector_picker_rows")
+    _append_rows("detector_picker_source_rows")
+    _append_grouped("detector_picker_grouped_candidates")
+
+    manual_rows: list[dict[str, object]] = []
+    for key in (
+        "manual_saved_pair_rows",
+        "manual_pair_rows",
+        "manual_picker_truth_pairs",
+        "manual_picker_truth_rows",
+    ):
+        manual_rows.extend(
+            _geometry_manual_detector_picker_rows_from_value(
+                cache_data.get(key),
+                source="manual_saved_pair",
+            )
+        )
+    if manual_rows:
+        groups.append(("manual_saved_pair", manual_rows))
+
+    for key in (
+        "fresh_source_rows",
+        "detector_picker_fresh_source_rows",
+        "raw_source_rows",
+        "source_rows",
+    ):
+        _append_rows(key)
+
+    _append_rows("active_simulated_peaks")
+    _append_rows("simulated_peaks")
+    _append_grouped("grouped_candidates")
+    return groups
+
+
+def _geometry_manual_detector_picker_rows_build_candidates(
+    rows: Sequence[dict[str, object]] | None,
+) -> bool:
+    candidate_rows, _grouped = geometry_manual_detector_picker_candidates_from_rows(rows)
+    return bool(candidate_rows)
+
+
 def _geometry_manual_detector_picker_dedupe_rows(
     rows: Sequence[dict[str, object]] | None,
 ) -> list[dict[str, object]]:
@@ -6766,60 +6843,16 @@ def geometry_manual_detector_picker_source_rows_from_cache(
 ) -> list[dict[str, object]]:
     if not isinstance(cache_data, Mapping):
         return []
-    rows = _geometry_manual_detector_picker_rows_from_value(
-        cache_data.get("detector_picker_source_rows"),
-        source="detector_picker_source_rows",
-    )
-    if rows:
-        return _geometry_manual_detector_picker_dedupe_rows(rows)
-
-    manual_rows: list[dict[str, object]] = []
-    for key in (
-        "manual_saved_pair_rows",
-        "manual_pair_rows",
-        "manual_picker_truth_pairs",
-        "manual_picker_truth_rows",
-    ):
-        manual_rows.extend(
-            _geometry_manual_detector_picker_rows_from_value(
-                cache_data.get(key),
-                source="manual_saved_pair",
-            )
-        )
-
-    fresh_rows: list[dict[str, object]] = []
-    for key in (
-        "fresh_source_rows",
-        "detector_picker_fresh_source_rows",
-        "raw_source_rows",
-        "source_rows",
-    ):
-        fresh_rows.extend(
-            _geometry_manual_detector_picker_rows_from_value(
-                cache_data.get(key),
-                source=key,
-            )
-        )
-    if manual_rows or fresh_rows:
-        return _geometry_manual_detector_picker_dedupe_rows([*manual_rows, *fresh_rows])
-
-    for key in ("active_simulated_peaks", "simulated_peaks", "detector_picker_rows"):
-        rows = _geometry_manual_detector_picker_rows_from_value(
-            cache_data.get(key),
-            source=key,
-        )
-        if rows:
-            return _geometry_manual_detector_picker_dedupe_rows(rows)
-    grouped = cache_data.get("detector_picker_grouped_candidates")
-    rows = _geometry_manual_flatten_grouped_candidates(
-        grouped if isinstance(grouped, Mapping) else None
-    )
-    if rows:
-        return rows
-    grouped = cache_data.get("grouped_candidates")
-    return _geometry_manual_flatten_grouped_candidates(
-        grouped if isinstance(grouped, Mapping) else None
-    )
+    first_non_empty_rows: list[dict[str, object]] = []
+    for _source_name, rows in _geometry_manual_detector_picker_cache_source_groups(cache_data):
+        deduped_rows = _geometry_manual_detector_picker_dedupe_rows(rows)
+        if not deduped_rows:
+            continue
+        if not first_non_empty_rows:
+            first_non_empty_rows = [dict(entry) for entry in deduped_rows]
+        if _geometry_manual_detector_picker_rows_build_candidates(deduped_rows):
+            return deduped_rows
+    return _geometry_manual_detector_picker_dedupe_rows(first_non_empty_rows)
 
 
 def geometry_manual_detector_picker_grouped_candidates_from_cache(
@@ -6855,6 +6888,11 @@ def _geometry_manual_detector_picker_empty_reason(
         return "cache_data_unavailable"
     if not source_rows:
         return "no_detector_picker_source_rows"
+    for _source_name, cache_rows in _geometry_manual_detector_picker_cache_source_groups(
+        cache_data
+    ):
+        if _geometry_manual_detector_picker_rows_build_candidates(cache_rows):
+            return "valid_detector_rows_available_but_not_selected"
     qr_rows = [
         entry for entry in source_rows if _geometry_manual_real_q_group_key(entry) is not None
     ]
@@ -7340,6 +7378,20 @@ def build_geometry_manual_pick_cache(
         ]
         for entry in raw_source_rows:
             entry.setdefault("detector_picker_source", str(source))
+        profile_cache_local = (
+            param_set.get("mosaic_params")
+            if isinstance(param_set, Mapping)
+            and isinstance(param_set.get("mosaic_params"), Mapping)
+            else None
+        )
+        (
+            raw_detector_picker_rows,
+            raw_detector_picker_grouped_candidates,
+        ) = geometry_manual_detector_picker_candidates_from_rows(
+            raw_source_rows,
+            display_background=background_image,
+            profile_cache=profile_cache_local,
+        )
         normalized_rows = [dict(entry) for entry in raw_source_rows]
         if reproject and (
             callable(project_peaks_for_background_view) or callable(project_peaks_to_current_view)
@@ -7359,12 +7411,7 @@ def build_geometry_manual_pick_cache(
             ) = geometry_manual_detector_picker_candidates_from_rows(
                 raw_source_rows,
                 display_background=background_image,
-                profile_cache=(
-                    param_set.get("mosaic_params")
-                    if isinstance(param_set, Mapping)
-                    and isinstance(param_set.get("mosaic_params"), Mapping)
-                    else None
-                ),
+                profile_cache=profile_cache_local,
             )
             if not fallback_detector_rows:
                 return False
@@ -7396,20 +7443,22 @@ def build_geometry_manual_pick_cache(
         active_simulated_peaks = [
             dict(entry) for entry in filtered_active_rows if isinstance(entry, Mapping)
         ]
-        profile_cache_local = (
-            param_set.get("mosaic_params")
-            if isinstance(param_set, Mapping)
-            and isinstance(param_set.get("mosaic_params"), Mapping)
-            else None
-        )
-        detector_source_candidates = active_simulated_peaks or raw_source_rows
-        detector_picker_rows, detector_picker_grouped_candidates = (
-            geometry_manual_detector_picker_candidates_from_rows(
-                detector_source_candidates,
-                display_background=background_image,
-                profile_cache=profile_cache_local,
+        if raw_detector_picker_rows:
+            detector_source_candidates = raw_source_rows
+            detector_picker_rows = [dict(entry) for entry in raw_detector_picker_rows]
+            detector_picker_grouped_candidates = {
+                key: [dict(entry) for entry in entries]
+                for key, entries in raw_detector_picker_grouped_candidates.items()
+            }
+        else:
+            detector_source_candidates = active_simulated_peaks or raw_source_rows
+            detector_picker_rows, detector_picker_grouped_candidates = (
+                geometry_manual_detector_picker_candidates_from_rows(
+                    detector_source_candidates,
+                    display_background=background_image,
+                    profile_cache=profile_cache_local,
+                )
             )
-        )
         if not detector_picker_rows and detector_source_candidates is not raw_source_rows:
             detector_source_candidates = raw_source_rows
             detector_picker_rows, detector_picker_grouped_candidates = (
@@ -7504,6 +7553,8 @@ def build_geometry_manual_pick_cache(
         ]
         if not normalized_rows:
             return []
+        if not reuse_requires_caked_projection:
+            return normalized_rows
         if callable(project_peaks_for_background_view):
             order_key = "__ra_sim_manual_cache_projection_order__"
             grouped_rows: dict[int, list[dict[str, object]]] = {}

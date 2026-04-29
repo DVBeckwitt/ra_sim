@@ -17250,6 +17250,104 @@ def test_detector_picker_dedupe_uses_refined_sim_detector_px() -> None:
     assert deduped[1]["detector_picker_source"] == "fresh_source_rows"
 
 
+def test_detector_mode_qr_picker_falls_through_invalid_source_rows() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    caked_like_source = {
+        "q_group_key": group_key,
+        "display_frame": "caked",
+        "display_col": 40.0,
+        "display_row": -36.0,
+        "caked_x": 40.0,
+        "caked_y": -36.0,
+    }
+    detector_row = {
+        "q_group_key": group_key,
+        "hkl": (-1, 0, 10),
+        "source_table_index": 160,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "display_col": 120.0,
+        "display_row": 130.0,
+        "native_col": 220.0,
+        "native_row": 230.0,
+    }
+    cache_data = {
+        "detector_picker_source_rows": [dict(caked_like_source)],
+        "detector_picker_rows": [dict(detector_row)],
+        "detector_picker_grouped_candidates": {},
+    }
+
+    source_rows = mg.geometry_manual_detector_picker_source_rows_from_cache(cache_data)
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        display_background=np.zeros((300, 300), dtype=float),
+    )
+    trace = mg.geometry_manual_detector_picker_input_trace(
+        cache_data,
+        view_mode="detector",
+        display_background=np.zeros((300, 300), dtype=float),
+        grouped_candidates={},
+    )
+
+    assert source_rows
+    assert source_rows[0]["detector_picker_source"] == "detector_picker_rows"
+    assert set(grouped) == {group_key}
+    assert grouped[group_key][0]["detector_display_px"] == (120.0, 130.0)
+    assert trace["reason_candidates_are_empty"] == "valid_detector_rows_available_but_not_selected"
+
+
+def test_detector_mode_qr_picker_starts_without_caked_projection_cache() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    detector_row = {
+        "q_group_key": group_key,
+        "hkl": (-1, 0, 10),
+        "source_table_index": 160,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "display_col": 120.0,
+        "display_row": 130.0,
+        "native_col": 220.0,
+        "native_row": 230.0,
+    }
+    cache_data = {
+        "detector_picker_rows": [dict(detector_row)],
+        "detector_picker_source_rows": [],
+        "detector_picker_grouped_candidates": {},
+        "caked_qr_projection_entries": [],
+        "caked_qr_projection_grouped_candidates": {},
+        "caked_qr_projection_lookup": {},
+    }
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        120.0,
+        130.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((300, 300), dtype=float),
+        get_cache_data=lambda **_kwargs: cache_data,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=20.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert sessions[-1]["group_key"] == group_key
+    assert not any("No simulated Qr/Qz groups are available" in text for text in status_messages)
+
+
 def test_minus_1_0_10_sim_visual_uses_refined_peak_for_both_branches(tmp_path) -> None:
     context, rows = _diag_startup_context_and_rows(tmp_path)
     cache_data = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})

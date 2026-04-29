@@ -77,6 +77,24 @@ Last updated: 2026-04-29
   still fails on the exact detector click/row expectation, and the same failure
   reproduces on clean HEAD `b481ee0`, so it is tracked as pre-existing rather
   than introduced by this branch-collapse patch.
+- 2026-04-29 detector-view Qr-set recognition bug is fixed at the picker cache
+  boundary. Detector picker source selection now validates each cache source
+  before returning it, prefers detector picker rows, and falls through when a
+  non-empty source contains only caked/current-view rows or rows without usable
+  detector display pixels. Manual pick cache construction preserves detector
+  picker source rows before any caked/current-view projection, detector-mode
+  cache reprojection leaves detector display/native fields intact, and projected
+  geometry-fit rows only call current-view projection when caked view is active.
+  Q-group entry construction now accepts explicit `q_group_key` rows even when
+  HKL normalization is unavailable, using row/key Qr/Qz metadata instead of
+  dropping the detector selector entry.
+- Bug/error status for the detector-view Qr-set recognition patch: compile,
+  ruff, diff-check, focused detector fallback/no-caked-cache tests, explicit
+  q-group-without-HKL listing, and detector-display projection-gating tests are
+  green. Requested `q_group_entries` and `detector_display` slices pass. The
+  requested `detector_mode_qr_picker` slice is 6/7 passing; the remaining
+  `test_detector_mode_qr_picker_selects_minus_1_0_10_branch_clicks` exact-click
+  failure is the same clean-HEAD `b481ee0` pre-existing diagnostic noted above.
 - Latest post-hardening verification run `20260422_codex_final_rungs_1_4_v5`
   passed Rungs 1->4 again after the lazy best-sample and Qr/Qz selection
   fixes; caked reprojection reported `failures: []`.

@@ -854,8 +854,6 @@ def build_geometry_q_group_entries(
             )
             hkl_raw = raw_record.get("hkl_raw", raw_record.get("hkl"))
             hkl_key = gui_geometry_overlay.normalize_hkl_key(hkl_raw)
-            if hkl_key is None:
-                continue
             use_nominal_hkl_indices = bool(
                 raw_record.get("q_group_nominal_hkl", allow_nominal_hkl_indices)
             )
@@ -878,6 +876,23 @@ def build_geometry_q_group_entries(
                 group_key = resolved_group_key
             if group_key is None:
                 continue
+            if hkl_key is None:
+                qr_val = _coerce_float(raw_record.get("qr", qr_val), float("nan"))
+                qz_val = _coerce_float(raw_record.get("qz", qz_val), float("nan"))
+                try:
+                    m_val = float(group_key[2])
+                except Exception:
+                    m_val = float("nan")
+                try:
+                    l_val = int(group_key[3])
+                except Exception:
+                    l_val = 0
+                if not np.isfinite(qr_val) and np.isfinite(av_used) and av_used > 0.0:
+                    qr_val = (2.0 * np.pi / av_used) * np.sqrt(
+                        (4.0 / 3.0) * max(0.0, float(m_val))
+                    )
+                if not np.isfinite(qz_val) and np.isfinite(cv_used) and cv_used > 0.0:
+                    qz_val = (2.0 * np.pi / cv_used) * float(l_val)
 
             entry = entries_by_key.get(group_key)
             if entry is None:
@@ -903,7 +918,11 @@ def build_geometry_q_group_entries(
 
             entry["total_intensity"] = float(entry["total_intensity"]) + float(abs(intensity))
             entry["peak_count"] = int(entry["peak_count"]) + 1
-            if len(entry["hkl_preview"]) < 4 and hkl_key not in entry["hkl_preview"]:
+            if (
+                hkl_key is not None
+                and len(entry["hkl_preview"]) < 4
+                and hkl_key not in entry["hkl_preview"]
+            ):
                 entry["hkl_preview"].append(hkl_key)
     elif max_positions_local is not None:
         peak_table_lattice_local = list(peak_table_lattice or [])
@@ -1437,7 +1456,7 @@ def build_projected_geometry_fit_simulated_peaks(
         ),
         profile_cache=profile_cache,
     )
-    if callable(project_peaks_to_current_view) and records:
+    if bool(caked_view_enabled) and callable(project_peaks_to_current_view) and records:
         try:
             records = [
                 dict(entry)
@@ -2632,7 +2651,7 @@ def make_runtime_geometry_q_group_value_callbacks(
             normalized_candidates,
             profile_cache=getattr(simulation_runtime_state, "profile_cache", None),
         )
-        if callable(project_peaks_to_current_view) and normalized_candidates:
+        if _caked_view_enabled() and callable(project_peaks_to_current_view) and normalized_candidates:
             try:
                 normalized_candidates = [
                     dict(entry)
