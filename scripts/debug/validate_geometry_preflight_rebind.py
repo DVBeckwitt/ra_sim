@@ -137,6 +137,11 @@ def _normalize_q_group_key(value: object) -> tuple[object, ...] | None:
     return None
 
 
+def _probe_q_group_key_can_alias_hkl(value: object) -> bool:
+    q_group_key = _normalize_q_group_key(value)
+    return isinstance(q_group_key, tuple) and len(q_group_key) >= 4 and str(q_group_key[0]) == "q_group"
+
+
 def _normalize_key_tuple(value: object) -> tuple[int, int] | None:
     if isinstance(value, (tuple, list)) and len(value) >= 2:
         try:
@@ -576,11 +581,14 @@ def _candidate_selection_distance(
     use_current_view_distance: bool,
 ) -> float:
     if bool(use_current_view_distance):
-        return _candidate_background_distance(
+        current_view_distance = _candidate_background_distance(
             background_point,
             background_frame=background_frame,
             candidate=candidate,
         )
+        if np.isfinite(float(current_view_distance)):
+            return float(current_view_distance)
+        return _candidate_detector_native_distance(detector_hint, candidate)
     return _candidate_detector_native_distance(detector_hint, candidate)
 
 
@@ -934,6 +942,7 @@ def _select_live_candidate_for_saved_entry(
     detector_hint = _saved_simulated_detector_hint(saved_entry)
     measured_detector_point = _saved_measured_detector_point(saved_entry)
     target_hkl = _normalize_hkl(saved_entry.get("hkl"))
+    target_q_group_key = _normalize_q_group_key(saved_entry.get("q_group_key"))
     target_branch = (
         None
         if _probe_entry_is_zero_qr_00l(saved_entry)
@@ -968,7 +977,16 @@ def _select_live_candidate_for_saved_entry(
                         }
                     )
                     continue
-                if target_hkl is not None and candidate_hkl != target_hkl:
+                candidate_group_key = _normalize_q_group_key(
+                    entry.get("q_group_key", normalized_group_key)
+                )
+                group_matches = (
+                    _probe_q_group_key_can_alias_hkl(target_q_group_key)
+                    and target_q_group_key is not None
+                    and candidate_group_key is not None
+                    and tuple(candidate_group_key) == tuple(target_q_group_key)
+                )
+                if target_hkl is not None and candidate_hkl != target_hkl and not group_matches:
                     continue
                 if target_branch is not None and _normalized_branch_index(entry) != target_branch:
                     continue
@@ -2490,6 +2508,35 @@ def _build_single_background_dataset(
     )
 
 
+def _targeted_source_coverage_gate_payload(
+    *,
+    required_pair_count: int,
+    resolved_source_pair_count: int,
+    required_branch_group_keys: Sequence[object] | None,
+    missing_required_branch_group_keys: Sequence[object] | None,
+) -> dict[str, object]:
+    missing_keys = [
+        copy.deepcopy(item)
+        for item in (missing_required_branch_group_keys or ())
+        if item is not None
+    ]
+    required_group_count = int(len(list(required_branch_group_keys or ())))
+    return {
+        "ok": bool(
+            int(required_pair_count) == int(resolved_source_pair_count)
+            and int(required_pair_count) > 0
+            and not missing_keys
+        ),
+        "required_pair_count": int(required_pair_count),
+        "resolved_source_pair_count": int(resolved_source_pair_count),
+        "required_branch_group_count": int(required_group_count),
+        "matched_required_branch_group_count": int(
+            max(0, int(required_group_count) - len(missing_keys))
+        ),
+        "missing_required_branch_group_keys": missing_keys,
+    }
+
+
 def _prepare_validation_context(state_path: Path, background_index: int) -> dict[str, object]:
     payload = load_gui_state_file(state_path)
     saved_state = dict(payload["state"])
@@ -2553,6 +2600,50 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
     required_branch_group_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
         required_manual_fit_targets
     )
+    inventory_field_names = (
+        "required_branch_group_keys",
+        "required_hkl_inventory",
+        "targeted_miller_hkl_inventory_before_filter",
+        "targeted_miller_hkl_inventory_after_filter",
+        "fresh_hit_table_hkl_inventory",
+        "fresh_hit_table_hkl_branch_inventory",
+        "fresh_hit_table_source_index_inventory",
+        "fresh_hit_table_hkl_inventory_before_filter",
+        "fresh_hit_table_hkl_branch_inventory_before_filter",
+        "fresh_hit_table_source_index_inventory_before_filter",
+        "source_row_hkl_inventory_before_rebinding_filter",
+        "source_row_hkl_branch_inventory_before_rebinding_filter",
+        "source_row_hkl_inventory_after_rebinding_filter",
+        "source_row_hkl_branch_inventory_after_rebinding_filter",
+        "missing_required_hkl_inventory",
+        "missing_required_branch_group_keys",
+    )
+    for field_name in inventory_field_names:
+        if field_name in simulation_diagnostics:
+            result[field_name] = copy.deepcopy(simulation_diagnostics.get(field_name))
+    result.setdefault(
+        "required_branch_group_keys",
+        gui_geometry_fit._geometry_fit_required_branch_group_key_payloads(
+            required_branch_group_keys
+        ),
+    )
+    result.setdefault(
+        "required_hkl_inventory",
+        gui_geometry_fit._geometry_fit_required_hkl_inventory(required_branch_group_keys),
+    )
+    missing_required_branch_group_keys = (
+        list(result.get("missing_required_branch_group_keys") or [])
+        if isinstance(result.get("missing_required_branch_group_keys"), Sequence)
+        and not isinstance(result.get("missing_required_branch_group_keys"), (str, bytes))
+        else []
+    )
+    targeted_source_coverage_gate = _targeted_source_coverage_gate_payload(
+        required_pair_count=int(result["dataset_pair_count"]),
+        resolved_source_pair_count=int(result["dataset_resolved_source_pair_count"]),
+        required_branch_group_keys=required_branch_group_keys,
+        missing_required_branch_group_keys=missing_required_branch_group_keys,
+    )
+    result["targeted_source_coverage_gate"] = targeted_source_coverage_gate
     result["targeted_performance_gate_required"] = bool(required_branch_group_keys)
     targeted_gate_defaults = {
         "preflight_mode": "full",
@@ -3120,6 +3211,32 @@ def _classify_saved_to_selected_identity_delta(
     if not delta:
         return delta, "saved_identity_already_canonical"
     if "hkl" in delta:
+        if (
+            _probe_q_group_key_can_alias_hkl(saved_entry.get("q_group_key"))
+            and _normalize_q_group_key(saved_entry.get("q_group_key"))
+            == _normalize_q_group_key(selected_entry.get("q_group_key"))
+            and _normalize_q_group_key(saved_entry.get("q_group_key")) is not None
+        ):
+            reduced_delta = {
+                key: value for key, value in delta.items() if key != "hkl"
+            }
+            if not reduced_delta:
+                return delta, "legacy_q_group_hkl_canonicalized"
+            if set(reduced_delta.keys()).issubset(
+                {
+                    "source_reflection_index",
+                    "source_reflection_namespace",
+                    "source_reflection_is_full",
+                }
+            ) and (
+                _legacy_untrusted_reflection_identity_payload(saved_identity)
+                or _legacy_reflection_identity_alias_payload(
+                    saved_entry,
+                    saved_identity,
+                    selected_entry,
+                )
+            ):
+                return delta, "legacy_q_group_hkl_canonicalized"
         return delta, "hkl_drift"
     if "source_branch_index" in delta or "source_peak_index" in delta:
         if (
@@ -3366,6 +3483,7 @@ def _run_fresh_slot_validation(
         "saved_identity_already_canonical",
         "legacy_saved_identity_canonicalized",
         "legacy_zero_qr_00l_branch_canonicalized",
+        "legacy_q_group_hkl_canonicalized",
     }:
         result["ok"] = False
         result["classification"] = "seam_failure"
@@ -3913,6 +4031,16 @@ def _run_fresh_all_contract_validation(
         if (targeted_performance_gate_required or targeted_performance_gate)
         else True
     )
+    targeted_source_coverage_gate = (
+        dict(context.get("targeted_source_coverage_gate", {}))
+        if isinstance(context.get("targeted_source_coverage_gate"), Mapping)
+        else {}
+    )
+    targeted_source_coverage_gate_ok = bool(
+        targeted_source_coverage_gate.get("ok", False)
+        if targeted_source_coverage_gate
+        else True
+    )
     isolated_rebind_ok = bool(
         processed_manual_entry_count > 0
         and bound_manual_entry_count == processed_manual_entry_count
@@ -3932,6 +4060,8 @@ def _run_fresh_all_contract_validation(
     result["background_distance_gate_ok"] = background_distance_gate_ok
     if targeted_performance_gate:
         result["targeted_performance_gate"] = targeted_performance_gate
+    if targeted_source_coverage_gate:
+        result["targeted_source_coverage_gate"] = targeted_source_coverage_gate
     result["targeted_performance_gate_required"] = targeted_performance_gate_required
     result["deprecated_aliases_present"] = True
     result["candidate_distance_px"] = list(result["background_distance_px"])
@@ -4002,6 +4132,7 @@ def _run_fresh_all_contract_validation(
         and compatibility_ok
         and background_distance_gate_ok
         and targeted_performance_gate_ok
+        and targeted_source_coverage_gate_ok
     )
     if provisional_ok and export_fresh_state_path is not None and fresh_state is not None:
         export_path = export_fresh_state_path.expanduser().resolve()
@@ -4036,6 +4167,8 @@ def _run_fresh_all_contract_validation(
         result["classification"] = "runtime_prepare_failed_but_isolated_rebind_ok"
     elif targeted_performance_gate and not targeted_performance_gate_ok:
         result["classification"] = "targeted_performance_gate_failed"
+    elif targeted_source_coverage_gate and not targeted_source_coverage_gate_ok:
+        result["classification"] = "targeted_source_coverage_failed"
     else:
         result["classification"] = "pass" if result["ok"] else "seam_failure"
     if not result["ok"] and not isinstance(result.get("failed_pair"), Mapping):
@@ -4052,6 +4185,7 @@ def _run_fresh_all_contract_validation(
                 "compatibility_ok": compatibility_ok,
                 "detector_distance_gate_ok": detector_distance_gate_ok,
                 "targeted_performance_gate_ok": targeted_performance_gate_ok,
+                "targeted_source_coverage_gate_ok": targeted_source_coverage_gate_ok,
                 "processed_manual_entry_count": processed_manual_entry_count,
                 "bound_manual_entry_count": bound_manual_entry_count,
                 "missing_manual_entry_count": missing_manual_entry_count,

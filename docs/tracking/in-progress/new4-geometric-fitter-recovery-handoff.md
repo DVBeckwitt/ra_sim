@@ -26,16 +26,25 @@ Last updated: 2026-04-29
   preflight attempt (`targeted_performance_gate.ok == true`) without broad
   full-source fallback.
 - Bug/error still open: full source-row regeneration is blocked after the
-  targeted-preflight repair. The latest full preflight resolves only 2/7 saved
-  source pairs; the current source snapshot emits only `(-1,0,5)` candidates,
-  so `(0,0,3)`, `(-1,0,10)`, and `(-1,0,16)` have no live candidate rows.
-  Classification is `seam_failure`, not provider parity failure.
+  targeted-preflight repair. The latest full preflight resolves 5/7 saved
+  source pairs. The targeted Miller request now keeps all required HKL/Q-group
+  families and the post-canonical filter preserves Q-group HKL aliases, so
+  `(-1,0,5)`, `(-1,0,10)`, and branch 0 of `(-1,0,16)` bind to live rows
+  without broad full-source fallback. The remaining missing live candidates are
+  the collapsed `00l` target `(0,0,3)` and branch 1 of
+  `q_group_key=("q_group","primary",1,16)`. The diagnostic classification is
+  now `targeted_source_coverage_failed`, not provider parity failure or a
+  targeted performance failure.
 - Validation status: compile, focused 00l/source-resolution tests, and
-  provider-only preflight are green. Full preflight is red at 2/7 source-row
+  provider-only preflight are green. Full preflight is red at 5/7 source-row
   resolution, so Rung 1, Rung 2, and the full ladder were not rerun after this
-  checkpoint. Do not mark the geometric fitter fully validated until full
-  preflight resolves 7/7 without fallback and the ladder reaches the requested
-  green gates.
+  checkpoint. The latest reports are
+  `artifacts/geometry_fit_ladder/new4_full_validation/new4_point_provider_report_after_source_coverage_fix.json`
+  and
+  `artifacts/geometry_fit_ladder/new4_full_validation/new4_full_preflight_after_source_coverage_fix.json`.
+  Do not mark the geometric fitter fully validated until full preflight
+  resolves 7/7 without fallback and the ladder reaches the requested green
+  gates.
 - Point-provider parity is closed.
 - Visual/backend coordinate parity is closed for new4.
 - `GeometryFitSolverRequest.measured_peaks` coordinate parity is closed when optimizer-request capture succeeds.

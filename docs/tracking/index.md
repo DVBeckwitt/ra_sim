@@ -159,9 +159,11 @@ stale simulated refined caked reuse. 2026-04-29 strict validation update:
 historical 7-pair New4 fixture restoration and provider-only/Rung 0 parity are
 green; zero-Qr `00l` branch rebinding is now collapsed only for 00l targets;
 headless targeted preflight reaches the performance gate without full-source
-fallback. Full preflight remains blocked at 2/7 source-row regeneration because
-the current source snapshot emits only `(-1,0,5)` live rows, leaving `(0,0,3)`,
-`(-1,0,10)`, and `(-1,0,16)` unresolved. Full fitter validation remains red.
+fallback. Full preflight remains blocked at 5/7 source-row regeneration:
+Q-group HKL aliases now bind for `(-1,0,10)` and branch 0 of `(-1,0,16)`,
+but the targeted simulator emits no live row for collapsed `(0,0,3)` and no
+branch-1 live row for `q_group_key=("q_group","primary",1,16)`. Full fitter
+validation remains red.
 
 ## Known bugs
 

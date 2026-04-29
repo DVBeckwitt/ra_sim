@@ -2937,17 +2937,7 @@ def run_headless_geometry_fit(
             if isinstance(entry, Mapping)
         ]
         required_source_indices: set[int] = set()
-        required_branches_by_source_index: dict[int, set[int]] = {}
         for target in required_targets:
-            target_branch: int | None = None
-            raw_key = target.get("required_branch_group_key")
-            if isinstance(raw_key, (list, tuple)) and len(raw_key) >= 2:
-                try:
-                    raw_branch = raw_key[1]
-                    if raw_branch is not None and int(raw_branch) in {0, 1}:
-                        target_branch = int(raw_branch)
-                except Exception:
-                    target_branch = None
             for index_key in ("source_reflection_index", "source_table_index"):
                 try:
                     source_idx = int(target.get(index_key))
@@ -2956,19 +2946,10 @@ def run_headless_geometry_fit(
                 if source_idx < 0:
                     continue
                 required_source_indices.add(int(source_idx))
-                if target_branch in {0, 1}:
-                    required_branches_by_source_index.setdefault(int(source_idx), set()).add(
-                        int(target_branch)
-                    )
         if not table_list or not (required_keys or required_source_indices):
             return table_list
 
         required_hkls = {tuple(key[0]) for key in required_keys}
-        required_branches_by_hkl: dict[tuple[int, int, int], set[int]] = {}
-        for key in required_keys:
-            if key[1] is None:
-                continue
-            required_branches_by_hkl.setdefault(tuple(key[0]), set()).add(int(key[1]))
         filtered_tables: list[object] = []
         for table_idx, table in enumerate(table_list):
             arr = np.asarray(table, dtype=np.float64)
@@ -2992,26 +2973,23 @@ def run_headless_geometry_fit(
             )
             if table_hkl not in required_hkls and not source_index_required:
                 continue
-            allowed_branches = set(required_branches_by_hkl.get(table_hkl, set()))
-            if source_index_required:
-                allowed_branches.update(
-                    required_branches_by_source_index.get(int(source_table_index), set())
+            if required_hkls:
+                row_mask = np.asarray(
+                    [
+                        (
+                            int(np.rint(float(row[4]))),
+                            int(np.rint(float(row[5]))),
+                            int(np.rint(float(row[6]))),
+                        )
+                        in required_hkls
+                        for row in arr
+                    ],
+                    dtype=bool,
                 )
-            if not allowed_branches:
+                if np.any(row_mask):
+                    filtered_tables.append(np.asarray(arr[row_mask], dtype=np.float64).copy())
+            else:
                 filtered_tables.append(np.asarray(arr, dtype=np.float64).copy())
-                continue
-            branch_mask = np.zeros(arr.shape[0], dtype=bool)
-            for row_idx in range(arr.shape[0]):
-                try:
-                    branch_idx = gui_geometry_fit.source_branch_index_from_phi_deg(
-                        float(arr[row_idx, 3])
-                    )
-                except Exception:
-                    branch_idx = None
-                if branch_idx in allowed_branches:
-                    branch_mask[row_idx] = True
-            if np.any(branch_mask):
-                filtered_tables.append(np.asarray(arr[branch_mask], dtype=np.float64).copy())
         return filtered_tables
 
     def _simulate_hit_tables_for_fit(
@@ -3208,6 +3186,7 @@ def run_headless_geometry_fit(
                     **kwargs,
                 )
             ),
+            last_runtime_simulation_diagnostics=simulation_callbacks.last_simulation_diagnostics,
             required_pairs=required_pairs,
             live_cache_inventory=_live_cache_inventory_snapshot(),
         )

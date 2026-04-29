@@ -1674,9 +1674,21 @@ def _geometry_fit_source_entry_hkl_matches(
     )
     if candidate_hkl is None:
         return False
-    return entry_hkl is None or tuple(int(v) for v in candidate_hkl) == tuple(
-        int(v) for v in entry_hkl
+    if entry_hkl is None:
+        return True
+    if tuple(int(v) for v in candidate_hkl) == tuple(int(v) for v in entry_hkl):
+        return True
+    entry_group = _geometry_fit_group_identity(entry)
+    candidate_group = _geometry_fit_group_identity(candidate)
+    return (
+        _geometry_fit_group_identity_is_q_group(entry_group)
+        and entry_group == candidate_group
     )
+
+
+def _geometry_fit_group_identity_is_q_group(value: object) -> bool:
+    stable = _geometry_fit_stable_group_identity(value)
+    return isinstance(stable, tuple) and len(stable) >= 4 and str(stable[0]) == "q_group"
 
 
 def _geometry_fit_q_group_key_is_zero_qr(value: object) -> bool:
@@ -4629,9 +4641,17 @@ def _geometry_fit_entry_matches_required_branch_group_key(
     if not isinstance(entry, Mapping):
         return False
     entry_hkl = _geometry_fit_normalized_hkl(entry.get("hkl"))
-    if entry_hkl is None or tuple(entry_hkl) != tuple(required_key[0]):
+    if entry_hkl is None:
         return False
     required_group_identity = _geometry_fit_stable_group_identity(required_key[2])
+    hkl_matches = tuple(entry_hkl) == tuple(required_key[0])
+    group_matches = (
+        _geometry_fit_group_identity_is_q_group(required_group_identity)
+        and required_group_identity is not None
+        and _geometry_fit_group_identity(entry) == required_group_identity
+    )
+    if not hkl_matches and not group_matches:
+        return False
     if required_group_identity is not None:
         if _geometry_fit_group_identity(entry) != required_group_identity:
             return False
@@ -4673,10 +4693,16 @@ def _geometry_fit_filter_entries_for_required_branch_groups(
         )
 
     required_hkls = {tuple(key[0]) for key in required_keys}
+    required_group_identities = {
+        _geometry_fit_stable_group_identity(key[2])
+        for key in required_keys
+        if _geometry_fit_group_identity_is_q_group(key[2])
+    }
     after_hkl_filter = [
         dict(entry)
         for entry in copied_entries
         if _geometry_fit_normalized_hkl(entry.get("hkl")) in required_hkls
+        or _geometry_fit_group_identity(entry) in required_group_identities
     ]
     after_branch_filter = [
         dict(entry)
@@ -4686,11 +4712,11 @@ def _geometry_fit_filter_entries_for_required_branch_groups(
             for required_key in required_keys
         )
     ]
-    matched_keys = [
-        key
-        for key in (_geometry_fit_required_branch_group_key(entry) for entry in after_branch_filter)
-        if key is not None
-    ]
+    matched_keys: list[tuple[tuple[int, int, int], int | None, object | None]] = []
+    for entry in after_branch_filter:
+        for required_key in required_keys:
+            if _geometry_fit_entry_matches_required_branch_group_key(entry, required_key):
+                matched_keys.append(required_key)
     return (
         after_branch_filter,
         {
@@ -4701,6 +4727,106 @@ def _geometry_fit_filter_entries_for_required_branch_groups(
         },
         matched_keys,
     )
+
+
+def _geometry_fit_hkl_inventory_from_entries(
+    entries: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    counts: dict[tuple[int, int, int], int] = {}
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        hkl = _geometry_fit_normalized_hkl(entry.get("hkl"))
+        if hkl is None:
+            continue
+        counts[tuple(hkl)] = counts.get(tuple(hkl), 0) + 1
+    return [
+        {"hkl": tuple(hkl), "count": int(count)}
+        for hkl, count in sorted(counts.items(), key=lambda item: item[0])
+    ]
+
+
+def _geometry_fit_hkl_branch_inventory_from_entries(
+    entries: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    counts: dict[tuple[tuple[int, int, int], int | None, object | None], int] = {}
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        hkl = _geometry_fit_normalized_hkl(entry.get("hkl"))
+        if hkl is None:
+            continue
+        branch_idx = _geometry_fit_source_branch_index(entry)
+        branch = int(branch_idx) if branch_idx in {0, 1} else None
+        q_group_key = _geometry_fit_stable_group_identity(entry.get("q_group_key"))
+        counts[(tuple(hkl), branch, q_group_key)] = (
+            counts.get((tuple(hkl), branch, q_group_key), 0) + 1
+        )
+    return [
+        {
+            "hkl": tuple(hkl),
+            "branch_index": branch,
+            "q_group_key": q_group_key,
+            "count": int(count),
+        }
+        for (hkl, branch, q_group_key), count in sorted(
+            counts.items(),
+            key=lambda item: (
+                item[0][0],
+                -1 if item[0][1] is None else int(item[0][1]),
+                repr(item[0][2]),
+            ),
+        )
+    ]
+
+
+def _geometry_fit_required_hkl_inventory(
+    required_branch_group_keys: Sequence[
+        tuple[tuple[int, int, int], int | None, object | None]
+    ]
+    | None,
+) -> list[dict[str, object]]:
+    counts: dict[tuple[int, int, int], int] = {}
+    for key in required_branch_group_keys or ():
+        if not isinstance(key, (tuple, list)) or len(key) < 1:
+            continue
+        hkl = _geometry_fit_normalized_hkl(key[0])
+        if hkl is None:
+            continue
+        counts[tuple(hkl)] = counts.get(tuple(hkl), 0) + 1
+    return [
+        {"hkl": tuple(hkl), "count": int(count)}
+        for hkl, count in sorted(counts.items(), key=lambda item: item[0])
+    ]
+
+
+def _geometry_fit_required_branch_group_key_payloads(
+    required_branch_group_keys: Sequence[
+        tuple[tuple[int, int, int], int | None, object | None]
+    ]
+    | None,
+) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    for key in required_branch_group_keys or ():
+        if not isinstance(key, (tuple, list)) or len(key) < 3:
+            continue
+        hkl = _geometry_fit_normalized_hkl(key[0])
+        if hkl is None:
+            continue
+        branch = None
+        try:
+            if key[1] is not None and int(key[1]) in {0, 1}:
+                branch = int(key[1])
+        except Exception:
+            branch = None
+        payloads.append(
+            {
+                "hkl": tuple(hkl),
+                "branch_index": branch,
+                "q_group_key": _geometry_fit_stable_group_identity(key[2]),
+            }
+        )
+    return payloads
 
 
 def _geometry_fit_targeted_performance_gate_payload(
@@ -4998,7 +5124,7 @@ def validate_geometry_fit_live_source_rows(
         peak_key = _geometry_fit_source_peak_key(entry)
         if peak_key is not None:
             canonical_by_peak[peak_key] = dict(entry)
-        q_group_key = entry.get("q_group_key")
+        q_group_key = _geometry_fit_group_identity(entry)
         if q_group_key is not None:
             canonical_by_q_group[q_group_key].append(dict(entry))
         hkl_key = _geometry_fit_normalized_hkl(entry.get("hkl"))
@@ -5078,7 +5204,7 @@ def validate_geometry_fit_live_source_rows(
 
         if candidate is None:
             candidate_pool: list[dict[str, object]] = []
-            q_group_key = entry.get("q_group_key")
+            q_group_key = _geometry_fit_group_identity(entry)
             if q_group_key is not None:
                 candidate_pool = [
                     dict(item)
@@ -5343,12 +5469,21 @@ def rebuild_geometry_fit_source_rows(
         "candidate_rows_after_hkl_filter": 0,
         "candidate_rows_after_branch_filter": 0,
         "candidate_rows_scored_for_background_distance": 0,
+        "unrelated_available_row_count_for_rebinding": 0,
         "unrelated_projected_row_count_for_rebinding": 0,
         "unrelated_scored_row_count_for_rebinding": 0,
         "full_source_rows_built_for_rebinding": False,
         "full_source_rows_projected_for_rebinding": False,
         "full_fresh_simulation_fallback_used": False,
         "required_manual_fit_targets": copy.deepcopy(collected_required_manual_fit_targets),
+        "required_branch_group_keys": copy.deepcopy(
+            _geometry_fit_required_branch_group_key_payloads(
+                collected_required_branch_group_keys
+            )
+        ),
+        "required_hkl_inventory": _geometry_fit_required_hkl_inventory(
+            collected_required_branch_group_keys
+        ),
     }
 
     def _emit_rebuild_stage(
@@ -5490,6 +5625,24 @@ def rebuild_geometry_fit_source_rows(
                 ],
             )
         )
+        required_payloads = _geometry_fit_required_branch_group_key_payloads(
+            collected_required_branch_group_keys
+        )
+        matched_payloads = _geometry_fit_required_branch_group_key_payloads(matched_keys)
+        matched_payload_keys = {
+            (tuple(item.get("hkl") or ()), item.get("branch_index"), item.get("q_group_key"))
+            for item in matched_payloads
+        }
+        missing_required_payloads = [
+            item
+            for item in required_payloads
+            if (
+                tuple(item.get("hkl") or ()),
+                item.get("branch_index"),
+                item.get("q_group_key"),
+            )
+            not in matched_payload_keys
+        ]
         diagnostics_local = {
             "total_source_rows_available": int(counts.get("total_count", 0) or 0),
             "source_rows_considered_for_rebinding": int(counts.get("total_count", 0) or 0),
@@ -5500,8 +5653,35 @@ def rebuild_geometry_fit_source_rows(
             "candidate_rows_scored_for_background_distance": int(
                 counts.get("after_branch_filter_count", 0) or 0
             ),
-            "unrelated_scored_row_count_for_rebinding": int(counts.get("unrelated_count", 0) or 0),
+            "unrelated_available_row_count_for_rebinding": int(
+                counts.get("unrelated_count", 0) or 0
+            ),
+            "unrelated_scored_row_count_for_rebinding": 0,
+            "unrelated_projected_row_count_for_rebinding": 0,
             "required_branch_group_keys_seen": copy.deepcopy(list(matched_keys)),
+            "missing_required_branch_group_keys": missing_required_payloads,
+            "missing_required_hkl_inventory": _geometry_fit_required_hkl_inventory(
+                [
+                    (
+                        tuple(item.get("hkl") or ()),
+                        item.get("branch_index"),
+                        item.get("q_group_key"),
+                    )
+                    for item in missing_required_payloads
+                ]
+            ),
+            "source_row_hkl_inventory_before_rebinding_filter": (
+                _geometry_fit_hkl_inventory_from_entries(copied_rows)
+            ),
+            "source_row_hkl_branch_inventory_before_rebinding_filter": (
+                _geometry_fit_hkl_branch_inventory_from_entries(copied_rows)
+            ),
+            "source_row_hkl_inventory_after_rebinding_filter": (
+                _geometry_fit_hkl_inventory_from_entries(filtered_rows)
+            ),
+            "source_row_hkl_branch_inventory_after_rebinding_filter": (
+                _geometry_fit_hkl_branch_inventory_from_entries(filtered_rows)
+            ),
         }
         return filtered_rows, diagnostics_local
 
@@ -5687,12 +5867,6 @@ def rebuild_geometry_fit_source_rows(
     ]:
         build_kwargs: dict[str, object] = {}
         build_used_targeted_filter = False
-        if targeted_preflight_enabled and collected_required_branch_group_keys:
-            build_kwargs["required_branch_group_keys"] = list(collected_required_branch_group_keys)
-            build_kwargs["required_manual_fit_targets"] = copy.deepcopy(
-                collected_required_manual_fit_targets
-            )
-            build_kwargs["preflight_mode"] = normalized_preflight_mode
         build_started_at = perf_counter()
         _emit_rebuild_stage(
             (
@@ -5711,11 +5885,18 @@ def rebuild_geometry_fit_source_rows(
         )
         build_used_targeted_filter = "required_branch_group_keys" in accepted_build_keywords
         if targeted_preflight_enabled:
+            source_rows_built_from_targeted_hit_tables = bool(
+                str(cache_source) == "fresh_simulation"
+                and targeted_simulation_used
+                and not targeted_simulation_fallback_reason
+            )
             _update_targeted_runtime_flags(
                 total_hit_tables_available=int(len(hit_tables_local or ())),
                 hit_tables_considered_for_rebinding=int(len(hit_tables_local or ())),
                 hit_tables_expanded_for_rebinding=int(len(hit_tables_local or ())),
-                full_source_rows_built_for_rebinding=not bool(build_used_targeted_filter),
+                full_source_rows_built_for_rebinding=not bool(
+                    build_used_targeted_filter or source_rows_built_from_targeted_hit_tables
+                ),
             )
         rows_for_count: Sequence[object] | None = raw_result
         if isinstance(raw_result, tuple):
@@ -5788,7 +5969,16 @@ def rebuild_geometry_fit_source_rows(
                     "candidate_rows_after_hkl_filter",
                     "candidate_rows_after_branch_filter",
                     "candidate_rows_scored_for_background_distance",
+                    "unrelated_available_row_count_for_rebinding",
                     "unrelated_scored_row_count_for_rebinding",
+                    "unrelated_projected_row_count_for_rebinding",
+                    "required_branch_group_keys_seen",
+                    "missing_required_branch_group_keys",
+                    "missing_required_hkl_inventory",
+                    "source_row_hkl_inventory_before_rebinding_filter",
+                    "source_row_hkl_branch_inventory_before_rebinding_filter",
+                    "source_row_hkl_inventory_after_rebinding_filter",
+                    "source_row_hkl_branch_inventory_after_rebinding_filter",
                 }
             }
         )
@@ -6468,6 +6658,21 @@ def rebuild_geometry_fit_source_rows(
             fresh_simulation_exception = exc
             fresh_hit_tables = []
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
+    if targeted_preflight_enabled and isinstance(runtime_simulation_diagnostics, Mapping):
+        _update_targeted_runtime_flags(
+            **{
+                key: runtime_simulation_diagnostics.get(key)
+                for key in (
+                    "targeted_miller_hkl_inventory_before_filter",
+                    "targeted_miller_hkl_inventory_after_filter",
+                    "fresh_hit_table_hkl_inventory_before_filter",
+                    "fresh_hit_table_hkl_branch_inventory_before_filter",
+                    "fresh_hit_table_hkl_inventory",
+                    "fresh_hit_table_hkl_branch_inventory",
+                )
+                if key in runtime_simulation_diagnostics
+            }
+        )
     _emit_rebuild_stage(
         (
             "source_cache_targeted_fresh_simulation_failed"
@@ -9688,7 +9893,11 @@ def build_geometry_manual_fit_dataset(
             if candidate_hkl is None:
                 excluded_missing_hkl.append(candidate)
                 continue
-            if target_hkl is not None and tuple(candidate_hkl) != tuple(target_hkl):
+            if (
+                target_hkl is not None
+                and tuple(candidate_hkl) != tuple(target_hkl)
+                and not _geometry_fit_source_entry_hkl_matches(entry, candidate)
+            ):
                 excluded_mismatched_hkl.append(candidate)
                 continue
             filtered.append(candidate)

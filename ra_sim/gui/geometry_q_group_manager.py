@@ -12,7 +12,11 @@ from typing import Any
 
 import numpy as np
 
-from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenance
+from ra_sim.simulation.intersection_cache_schema import (
+    HIT_ROW_COL_SOURCE_TABLE_INDEX,
+    HIT_ROW_WITH_PROVENANCE_WIDTH,
+    extract_hit_row_provenance,
+)
 from ra_sim.simulation.diffraction import (
     get_process_peaks_runtime_kwargs,
     intersection_cache_to_hit_tables,
@@ -452,6 +456,162 @@ def _geometry_fit_row_count_preview(
     """Return one short row-count preview for per-table hit diagnostics."""
 
     return [int(count) for count in list(hit_row_counts)[: max(0, int(limit))]]
+
+
+def _geometry_fit_miller_hkl_inventory(miller_array: object) -> list[dict[str, object]]:
+    """Return compact HKL counts for one Miller array diagnostic."""
+
+    try:
+        arr = np.asarray(miller_array, dtype=np.float64)
+    except Exception:
+        return []
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        return []
+    counts: dict[tuple[int, int, int], int] = {}
+    for row in arr:
+        try:
+            hkl = (
+                int(np.rint(float(row[0]))),
+                int(np.rint(float(row[1]))),
+                int(np.rint(float(row[2]))),
+            )
+        except Exception:
+            continue
+        counts[hkl] = counts.get(hkl, 0) + 1
+    return [
+        {"hkl": tuple(hkl), "count": int(count)}
+        for hkl, count in sorted(counts.items(), key=lambda item: item[0])
+    ]
+
+
+def _geometry_fit_hit_table_hkl_inventory(
+    hit_tables: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    """Return compact HKL counts for hit-table rows."""
+
+    counts: dict[tuple[int, int, int], int] = {}
+    for table in hit_tables or ():
+        try:
+            arr = np.asarray(table, dtype=np.float64)
+        except Exception:
+            continue
+        if arr.ndim != 2 or arr.shape[1] < 7:
+            continue
+        for row in arr:
+            try:
+                hkl = (
+                    int(np.rint(float(row[4]))),
+                    int(np.rint(float(row[5]))),
+                    int(np.rint(float(row[6]))),
+                )
+            except Exception:
+                continue
+            counts[hkl] = counts.get(hkl, 0) + 1
+    return [
+        {"hkl": tuple(hkl), "count": int(count)}
+        for hkl, count in sorted(counts.items(), key=lambda item: item[0])
+    ]
+
+
+def _geometry_fit_hit_table_hkl_branch_inventory(
+    hit_tables: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    """Return compact HKL/branch counts for hit-table rows."""
+
+    counts: dict[tuple[tuple[int, int, int], int | None], int] = {}
+    for table in hit_tables or ():
+        try:
+            arr = np.asarray(table, dtype=np.float64)
+        except Exception:
+            continue
+        if arr.ndim != 2 or arr.shape[1] < 7:
+            continue
+        for row in arr:
+            try:
+                hkl = (
+                    int(np.rint(float(row[4]))),
+                    int(np.rint(float(row[5]))),
+                    int(np.rint(float(row[6]))),
+                )
+            except Exception:
+                continue
+            try:
+                branch_idx = source_branch_index_from_phi_deg(float(row[3]))
+            except Exception:
+                branch_idx = None
+            branch = int(branch_idx) if branch_idx in {0, 1} else None
+            counts[(hkl, branch)] = counts.get((hkl, branch), 0) + 1
+    return [
+        {"hkl": tuple(hkl), "branch_index": branch, "count": int(count)}
+        for (hkl, branch), count in sorted(
+            counts.items(),
+            key=lambda item: (item[0][0], -1 if item[0][1] is None else int(item[0][1])),
+        )
+    ]
+
+
+def _geometry_fit_hit_table_source_index_inventory(
+    hit_tables: Sequence[object] | None,
+) -> list[dict[str, object]]:
+    """Return compact source-table provenance counts for hit-table rows."""
+
+    counts: dict[int | None, int] = {}
+    for table in hit_tables or ():
+        try:
+            arr = np.asarray(table, dtype=np.float64)
+        except Exception:
+            continue
+        if arr.ndim != 2 or arr.shape[0] <= 0:
+            continue
+        for row in arr:
+            source_table_index, _source_row_index, _best_sample_index = (
+                extract_hit_row_provenance(row)
+            )
+            key = int(source_table_index) if source_table_index is not None else None
+            counts[key] = counts.get(key, 0) + 1
+    return [
+        {"source_table_index": key, "count": int(count)}
+        for key, count in sorted(
+            counts.items(),
+            key=lambda item: (-1 if item[0] is None else int(item[0])),
+        )
+    ]
+
+
+def _geometry_fit_attach_targeted_hit_table_provenance(
+    hit_tables: Sequence[object] | None,
+    source_indices: Sequence[object] | None,
+) -> list[object]:
+    """Attach original Miller/source indices after targeted Miller filtering."""
+
+    source_index_list = list(source_indices if source_indices is not None else ())
+    rebuilt: list[object] = []
+    for table_idx, table in enumerate(hit_tables or ()):
+        try:
+            arr = np.asarray(table, dtype=np.float64)
+        except Exception:
+            rebuilt.append(table)
+            continue
+        if arr.ndim != 2 or arr.shape[0] <= 0:
+            rebuilt.append(np.asarray(arr, dtype=np.float64).copy())
+            continue
+        try:
+            source_index = int(source_index_list[table_idx])
+        except Exception:
+            source_index = int(table_idx)
+        if arr.shape[1] >= HIT_ROW_WITH_PROVENANCE_WIDTH:
+            with_provenance = np.asarray(arr, dtype=np.float64).copy()
+            with_provenance[:, HIT_ROW_COL_SOURCE_TABLE_INDEX] = float(source_index)
+        else:
+            provenance = np.full(
+                (arr.shape[0], HIT_ROW_WITH_PROVENANCE_WIDTH - arr.shape[1]),
+                np.nan,
+                dtype=np.float64,
+            )
+            provenance[:, 0] = float(source_index)
+            with_provenance = np.hstack([np.asarray(arr, dtype=np.float64), provenance])
+        rebuilt.append(with_provenance)
+    return rebuilt
 
 
 def _set_function_last_diagnostics(
@@ -1112,6 +1272,8 @@ def build_geometry_fit_simulated_peaks(
                 )
             except Exception:
                 trusted_reflection_index = None
+            if trusted_reflection_index is None and source_reflection_indices_local:
+                trusted_reflection_index = int(source_table_index)
             peak_record = {
                 "hkl": hkl,
                 "native_col": float(native_col),
@@ -1800,22 +1962,17 @@ def simulate_geometry_fit_hit_tables(
     params_local = dict(param_set)
     filtered_miller_array = np.asarray(miller_array, dtype=np.float64)
     filtered_intensity_array = np.asarray(intensity_array, dtype=np.float64)
+    filtered_source_indices = (
+        np.arange(int(filtered_miller_array.shape[0]), dtype=np.int64)
+        if filtered_miller_array.ndim >= 1
+        else np.empty((0,), dtype=np.int64)
+    )
     required_branch_keys = list(required_branch_group_keys or ())
     required_targets = [
         dict(entry) for entry in (required_manual_fit_targets or ()) if isinstance(entry, Mapping)
     ]
     required_source_indices: set[int] = set()
-    required_branches_by_source_index: dict[int, set[int]] = {}
     for target in required_targets:
-        target_branch: int | None = None
-        raw_key = target.get("required_branch_group_key")
-        if isinstance(raw_key, (list, tuple)) and len(raw_key) >= 2:
-            try:
-                raw_branch = raw_key[1]
-                if raw_branch is not None and int(raw_branch) in {0, 1}:
-                    target_branch = int(raw_branch)
-            except Exception:
-                target_branch = None
         for index_key in ("source_reflection_index", "source_table_index"):
             try:
                 source_idx = int(target.get(index_key))
@@ -1824,10 +1981,6 @@ def simulate_geometry_fit_hit_tables(
             if source_idx < 0:
                 continue
             required_source_indices.add(int(source_idx))
-            if target_branch in {0, 1}:
-                required_branches_by_source_index.setdefault(int(source_idx), set()).add(
-                    int(target_branch)
-                )
     diagnostics: dict[str, object] = {
         "stage": "simulate_hit_tables",
         "miller_shape": _array_shape_list(filtered_miller_array),
@@ -1840,15 +1993,44 @@ def simulate_geometry_fit_hit_tables(
     }
     if required_source_indices:
         diagnostics["targeted_required_source_index_count"] = int(len(required_source_indices))
-    use_miller_prefilter = bool(required_branch_keys and not required_source_indices)
+    use_miller_prefilter = bool(required_branch_keys or required_source_indices)
+    diagnostics["targeted_miller_hkl_inventory_before_filter"] = (
+        _geometry_fit_miller_hkl_inventory(filtered_miller_array)
+    )
+    required_group_identities = {
+        tuple(key[2])
+        for key in required_branch_keys
+        if isinstance(key, (tuple, list)) and len(key) >= 3 and key[2] is not None
+    }
+
+    def _row_matches_required_hkl_family(row_hkl: Sequence[object]) -> bool:
+        try:
+            hkl = tuple(int(np.rint(float(v))) for v in row_hkl[:3])
+        except Exception:
+            return False
+        if hkl in required_hkls:
+            return True
+        q_group_key, _qr_val, _qz_val = reflection_q_group_metadata(
+            hkl,
+            source_label="primary",
+            a_value=params_local.get("a"),
+            c_value=params_local.get("c"),
+            allow_nominal_hkl_indices=True,
+        )
+        return q_group_key is not None and tuple(q_group_key) in required_group_identities
+
     if use_miller_prefilter and filtered_miller_array.ndim == 2 and filtered_miller_array.shape[1] >= 3:
         required_hkls = {tuple(key[0]) for key in required_branch_keys}
         diagnostics["targeted_required_hkl_count"] = int(len(required_hkls))
         diagnostics["targeted_required_branch_group_count"] = int(len(required_branch_keys))
+        diagnostics["targeted_miller_filter_policy"] = (
+            "hkl_or_q_group_family_or_required_source_index_before_simulation"
+        )
         keep_mask = np.asarray(
             [
-                tuple(int(np.rint(float(v))) for v in row[:3]) in required_hkls
-                for row in filtered_miller_array
+                int(row_index) in required_source_indices
+                or _row_matches_required_hkl_family(row[:3])
+                for row_index, row in enumerate(filtered_miller_array)
             ],
             dtype=bool,
         )
@@ -1861,12 +2043,19 @@ def simulate_geometry_fit_hit_tables(
                 filtered_intensity_array[keep_mask],
                 dtype=np.float64,
             )
+            filtered_source_indices = np.asarray(
+                filtered_source_indices[keep_mask],
+                dtype=np.int64,
+            )
             diagnostics["targeted_simulation_used"] = True
             diagnostics["targeted_miller_count_after_filter"] = int(filtered_miller_array.shape[0])
         elif keep_mask.shape[0] == filtered_miller_array.shape[0]:
             diagnostics["targeted_simulation_fallback_reason"] = "targeted_hkl_filter_empty"
         else:
             diagnostics["targeted_simulation_fallback_reason"] = "targeted_hkl_filter_unavailable"
+    diagnostics["targeted_miller_hkl_inventory_after_filter"] = (
+        _geometry_fit_miller_hkl_inventory(filtered_miller_array)
+    )
 
     mosaic = dict(params_local.get("mosaic_params", {}))
     if not mosaic and callable(build_geometry_fit_central_mosaic_params):
@@ -1978,13 +2167,28 @@ def simulate_geometry_fit_hit_tables(
         raise
 
     hit_table_list = list(hit_tables)
+    if use_miller_prefilter:
+        hit_table_list = _geometry_fit_attach_targeted_hit_table_provenance(
+            hit_table_list,
+            filtered_source_indices,
+        )
+        diagnostics["targeted_source_index_preview_after_filter"] = [
+            int(value) for value in list(filtered_source_indices[:12])
+        ]
+        diagnostics["targeted_source_index_count_after_filter"] = int(
+            len(filtered_source_indices)
+        )
+    diagnostics["fresh_hit_table_hkl_inventory_before_filter"] = (
+        _geometry_fit_hit_table_hkl_inventory(hit_table_list)
+    )
+    diagnostics["fresh_hit_table_hkl_branch_inventory_before_filter"] = (
+        _geometry_fit_hit_table_hkl_branch_inventory(hit_table_list)
+    )
+    diagnostics["fresh_hit_table_source_index_inventory_before_filter"] = (
+        _geometry_fit_hit_table_source_index_inventory(hit_table_list)
+    )
     if required_branch_keys or required_source_indices:
         required_hkls = {tuple(key[0]) for key in required_branch_keys}
-        required_branches_by_hkl: dict[tuple[int, int, int], set[int]] = {}
-        for key in required_branch_keys:
-            if key[1] is None:
-                continue
-            required_branches_by_hkl.setdefault(tuple(key[0]), set()).add(int(key[1]))
         filtered_hit_tables: list[object] = []
         for table_idx, table in enumerate(hit_table_list):
             arr = np.asarray(table, dtype=np.float64)
@@ -2007,23 +2211,32 @@ def simulate_geometry_fit_hit_tables(
                 source_table_index is not None and int(source_table_index) in required_source_indices
             )
             if table_hkl not in required_hkls and not source_index_required:
-                continue
-            allowed_branches = set(required_branches_by_hkl.get(table_hkl, set()))
-            if source_index_required:
-                allowed_branches.update(
-                    required_branches_by_source_index.get(int(source_table_index), set())
+                table_matches_group = _row_matches_required_hkl_family(table_hkl)
+                if not table_matches_group:
+                    continue
+            if required_hkls:
+                row_mask = np.asarray(
+                    [_row_matches_required_hkl_family(row[4:7]) for row in arr],
+                    dtype=bool,
                 )
-            if not allowed_branches:
+                if np.any(row_mask):
+                    filtered_hit_tables.append(np.asarray(arr[row_mask], dtype=np.float64).copy())
+            else:
                 filtered_hit_tables.append(np.asarray(arr, dtype=np.float64).copy())
-                continue
-            branch_mask = np.zeros(arr.shape[0], dtype=bool)
-            for row_idx in range(arr.shape[0]):
-                branch_idx = source_branch_index_from_phi_deg(float(arr[row_idx, 3]))
-                if branch_idx in allowed_branches:
-                    branch_mask[row_idx] = True
-            if np.any(branch_mask):
-                filtered_hit_tables.append(np.asarray(arr[branch_mask], dtype=np.float64).copy())
         hit_table_list = filtered_hit_tables
+        diagnostics["targeted_hit_table_branch_filter_deferred"] = True
+        diagnostics["targeted_hit_table_filter_policy"] = (
+            "hkl_or_q_group_family_before_canonical_source_rows"
+        )
+    diagnostics["fresh_hit_table_hkl_inventory"] = _geometry_fit_hit_table_hkl_inventory(
+        hit_table_list
+    )
+    diagnostics["fresh_hit_table_hkl_branch_inventory"] = (
+        _geometry_fit_hit_table_hkl_branch_inventory(hit_table_list)
+    )
+    diagnostics["fresh_hit_table_source_index_inventory"] = (
+        _geometry_fit_hit_table_source_index_inventory(hit_table_list)
+    )
     hit_row_counts = [int(len(geometry_reference_hit_rows(table))) for table in hit_table_list]
     row_count_preview = _geometry_fit_row_count_preview(hit_row_counts)
     diagnostics.update(

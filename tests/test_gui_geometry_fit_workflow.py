@@ -23023,6 +23023,113 @@ def test_preflight_probe_selects_00l_branch1_for_saved_branch0() -> None:
     assert classification == "legacy_zero_qr_00l_branch_canonicalized"
 
 
+def test_targeted_source_filter_preserves_q_group_hkl_aliases() -> None:
+    required_keys = [
+        ((-1, 0, 5), 0, ("q_group", "primary", 1, 5)),
+        ((-1, 0, 10), 1, ("q_group", "primary", 1, 10)),
+        ((-1, 0, 16), 0, ("q_group", "primary", 1, 16)),
+        ((0, 0, 3), None, ("q_group", "primary", 0, 3)),
+    ]
+    rows = [
+        _targeted_source_row(
+            hkl=(-1, 0, 5),
+            branch_index=0,
+            q_group_key=("q_group", "primary", 1, 5),
+            sim_col=10.0,
+            sim_row=20.0,
+        ),
+        _targeted_source_row(
+            hkl=(1, 0, 10),
+            branch_index=1,
+            q_group_key=("q_group", "primary", 1, 10),
+            sim_col=30.0,
+            sim_row=40.0,
+            source_peak_index=1,
+        ),
+        _targeted_source_row(
+            hkl=(-1, 1, 16),
+            branch_index=0,
+            q_group_key=("q_group", "primary", 1, 16),
+            sim_col=50.0,
+            sim_row=60.0,
+            source_peak_index=2,
+        ),
+        _targeted_source_row(
+            hkl=(0, 0, 3),
+            branch_index=1,
+            q_group_key=("q_group", "primary", 0, 3),
+            sim_col=70.0,
+            sim_row=80.0,
+            source_peak_index=3,
+        ),
+        _targeted_source_row(
+            hkl=(9, 9, 9),
+            branch_index=0,
+            q_group_key=("q_group", "primary", 9, 9),
+            sim_col=90.0,
+            sim_row=100.0,
+            source_peak_index=4,
+        ),
+    ]
+
+    filtered_rows, counts, matched_keys = (
+        geometry_fit._geometry_fit_filter_entries_for_required_branch_groups(
+            rows,
+            required_keys,
+        )
+    )
+
+    assert [(row["q_group_key"], row.get("source_branch_index")) for row in filtered_rows] == [
+        (("q_group", "primary", 1, 5), 0),
+        (("q_group", "primary", 1, 10), 1),
+        (("q_group", "primary", 1, 16), 0),
+        (("q_group", "primary", 0, 3), 1),
+    ]
+    assert counts["after_branch_filter_count"] == 4
+    assert counts["unrelated_count"] == 1
+    assert matched_keys == required_keys
+
+
+def test_targeted_source_coverage_gate_reports_missing_required_groups() -> None:
+    preflight = _load_geometry_preflight_probe_module()
+    gate = preflight._targeted_source_coverage_gate_payload(
+        required_pair_count=7,
+        resolved_source_pair_count=5,
+        required_branch_group_keys=[
+            ((0, 0, 3), None, ("q_group", "primary", 0, 3)),
+            ((-1, 0, 5), 0, ("q_group", "primary", 1, 5)),
+            ((-1, 0, 5), 1, ("q_group", "primary", 1, 5)),
+            ((-1, 0, 10), 0, ("q_group", "primary", 1, 10)),
+            ((-1, 0, 10), 1, ("q_group", "primary", 1, 10)),
+            ((-1, 0, 16), 0, ("q_group", "primary", 1, 16)),
+            ((-1, 0, 16), 1, ("q_group", "primary", 1, 16)),
+        ],
+        missing_required_branch_group_keys=[
+            {"hkl": (0, 0, 3), "branch_index": None},
+            {"hkl": (-1, 0, 16), "branch_index": 1},
+        ],
+    )
+
+    assert gate["ok"] is False
+    assert gate["required_pair_count"] == 7
+    assert gate["resolved_source_pair_count"] == 5
+    assert gate["matched_required_branch_group_count"] == 5
+    assert len(gate["missing_required_branch_group_keys"]) == 2
+
+
+def test_targeted_source_coverage_gate_passes_when_all_pairs_resolve() -> None:
+    preflight = _load_geometry_preflight_probe_module()
+    gate = preflight._targeted_source_coverage_gate_payload(
+        required_pair_count=7,
+        resolved_source_pair_count=7,
+        required_branch_group_keys=[object() for _ in range(7)],
+        missing_required_branch_group_keys=[],
+    )
+
+    assert gate["ok"] is True
+    assert gate["matched_required_branch_group_count"] == 7
+
+
 def test_caked_required_targets_use_source_rebinding_display_anchor() -> None:
     targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
         [
