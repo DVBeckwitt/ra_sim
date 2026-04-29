@@ -628,6 +628,61 @@ def _finish_pan_session(bindings: CanvasInteractionBindings) -> bool:
     return True
 
 
+_LEFT_BUTTON_TOKENS = {"1", "left", "button1", "button-1"}
+_RIGHT_BUTTON_TOKENS = {"3", "right", "button3", "button-3", "secondary"}
+_SCROLL_UP_BUTTON_TOKENS = {
+    "up",
+    "scrollup",
+    "scroll-up",
+    "wheelup",
+    "wheel-up",
+    "4",
+    "button4",
+    "button-4",
+}
+_SCROLL_DOWN_BUTTON_TOKENS = {
+    "down",
+    "scrolldown",
+    "scroll-down",
+    "wheeldown",
+    "wheel-down",
+    "5",
+    "button5",
+    "button-5",
+}
+
+
+def _button_token(value: object) -> str:
+    if value is None:
+        return ""
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip().lower().replace("_", "-")
+    if not isinstance(value, bool):
+        try:
+            numeric = int(value)  # Matplotlib MouseButton is int-compatible.
+        except Exception:
+            numeric = None
+        else:
+            return str(numeric)
+    text = str(value or "").strip().lower()
+    if text.startswith("mousebutton."):
+        text = text.removeprefix("mousebutton.")
+    return text.replace("_", "-").replace(" ", "-")
+
+
+def _event_button_token(event: Any) -> str:
+    return _button_token(getattr(event, "button", None))
+
+
+def _is_left_button_event(event: Any) -> bool:
+    return _event_button_token(event) in _LEFT_BUTTON_TOKENS
+
+
+def _is_right_button_event(event: Any) -> bool:
+    return _event_button_token(event) in _RIGHT_BUTTON_TOKENS
+
+
 def _scroll_step(event: Any) -> float:
     try:
         step = float(getattr(event, "step", 0.0))
@@ -636,10 +691,10 @@ def _scroll_step(event: Any) -> float:
     if np.isfinite(step) and abs(step) > 0.0:
         return step
 
-    button = str(getattr(event, "button", "") or "").strip().lower()
-    if button == "up":
+    button = _event_button_token(event)
+    if button in _SCROLL_UP_BUTTON_TOKENS:
         return 1.0
-    if button == "down":
+    if button in _SCROLL_DOWN_BUTTON_TOKENS:
         return -1.0
     return 0.0
 
@@ -715,7 +770,7 @@ def handle_runtime_canvas_click(
 ) -> bool:
     """Handle one runtime canvas click across manual-pick, preview, and HKL modes."""
 
-    if getattr(event, "button", None) == 3:
+    if _is_right_button_event(event):
         if bool(bindings.peak_selection_state.hkl_pick_armed):
             setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
             setter = getattr(bindings.peak_selection_callbacks, "set_hkl_pick_mode", None)
@@ -749,7 +804,7 @@ def handle_runtime_canvas_click(
                 return True
         return False
 
-    if getattr(event, "button", None) != 1:
+    if not _is_left_button_event(event):
         return False
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
@@ -823,8 +878,16 @@ def handle_runtime_canvas_press(
 
     if bool(getattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", False)):
         setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", False)
-        if getattr(event, "button", None) == 3:
+        if _is_right_button_event(event):
             return True
+
+    if _is_right_button_event(event):
+        bindings.peak_selection_state.suppress_drag_press_once = False
+        _commit_preview_view(bindings)
+        started = _start_pan_session(bindings, event)
+        if started:
+            _begin_live_interaction(bindings)
+        return started
 
     if bool(bindings.peak_selection_state.suppress_drag_press_once):
         if (
@@ -834,19 +897,12 @@ def handle_runtime_canvas_press(
         ):
             _clear_manual_pick_zoom_state(bindings)
         bindings.peak_selection_state.suppress_drag_press_once = False
-        return True
-
-    if getattr(event, "button", None) == 3:
-        _commit_preview_view(bindings)
-        started = _start_pan_session(bindings, event)
-        if started:
-            _begin_live_interaction(bindings)
-        return started
+        return _is_left_button_event(event)
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
         bindings.manual_pick_session_active()
     ):
-        if getattr(event, "button", None) != 1:
+        if not _is_left_button_event(event):
             return False
         if not _runtime_caked_view_enabled(bindings):
             _clear_manual_pick_zoom_state(bindings)
@@ -872,7 +928,7 @@ def handle_runtime_canvas_press(
         return True
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
-        if getattr(event, "button", None) != 1:
+        if not _is_left_button_event(event):
             return False
         if (
             getattr(event, "inaxes", None) is not bindings.axis
@@ -886,7 +942,7 @@ def handle_runtime_canvas_press(
         return True
 
     if bool(bindings.peak_selection_state.hkl_pick_armed):
-        if getattr(event, "button", None) != 1:
+        if not _is_left_button_event(event):
             return False
         if (
             getattr(event, "inaxes", None) is not bindings.axis
@@ -901,7 +957,7 @@ def handle_runtime_canvas_press(
 
     analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
     if bool(getattr(analysis_peak_state, "pick_armed", False)):
-        if getattr(event, "button", None) != 1:
+        if not _is_left_button_event(event):
             return False
         if (
             getattr(event, "inaxes", None) is not bindings.axis
@@ -926,7 +982,7 @@ def handle_runtime_canvas_motion(
     if _pan_session(bindings) is not None:
         _touch_live_interaction(bindings)
         return _update_pan_session(bindings, event)
-    if getattr(event, "button", None) == 3:
+    if _is_right_button_event(event):
         return False
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
@@ -956,14 +1012,14 @@ def handle_runtime_canvas_release(
 ) -> bool:
     """Handle one runtime canvas button-release."""
 
-    if getattr(event, "button", None) == 3 or _pan_session(bindings) is not None:
+    if _is_right_button_event(event) or _pan_session(bindings) is not None:
         finished = _finish_pan_session(bindings)
         if finished:
             if not _commit_preview_view(bindings):
                 _end_live_interaction(bindings)
         return finished
 
-    if getattr(event, "button", None) != 1:
+    if not _is_left_button_event(event):
         return False
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):

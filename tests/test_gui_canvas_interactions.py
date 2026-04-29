@@ -1003,6 +1003,128 @@ def test_canvas_right_drag_pans_detector_view() -> None:
     assert drag_callbacks.calls == []
 
 
+def test_canvas_right_drag_pans_when_left_drag_suppression_is_stale() -> None:
+    axis = _FakeAxis(xlim=(0.0, 10.0), ylim=(20.0, 0.0))
+    drag_callbacks = _DragCallbacks()
+    peak_state = state.PeakSelectionState(suppress_drag_press_once=True)
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=peak_state,
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=drag_callbacks,
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: False,
+        draw_idle=lambda: None,
+    )
+
+    press_event = _FakeEvent(
+        button=3,
+        inaxes=axis,
+        xdata=4.0,
+        ydata=5.0,
+        x=90.0,
+        y=95.0,
+    )
+    motion_event = _FakeEvent(
+        button=3,
+        inaxes=axis,
+        xdata=6.0,
+        ydata=9.0,
+        x=130.0,
+        y=75.0,
+    )
+    release_event = _FakeEvent(
+        button=3,
+        inaxes=axis,
+        xdata=6.0,
+        ydata=9.0,
+        x=130.0,
+        y=75.0,
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, press_event) is True
+    assert peak_state.suppress_drag_press_once is False
+    assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion_event) is True
+    assert axis.get_xlim() == pytest.approx((-2.0, 8.0))
+    assert axis.get_ylim() == pytest.approx((16.0, -4.0))
+    assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert drag_callbacks.calls == []
+
+
+def test_canvas_right_drag_pans_caked_view_with_string_button_value() -> None:
+    axis = _FakeAxis(xlim=(0.0, 100.0), ylim=(-180.0, 180.0))
+    drag_callbacks = _DragCallbacks()
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=drag_callbacks,
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: True,
+        draw_idle=lambda: None,
+    )
+
+    press_event = _FakeEvent(
+        button="MouseButton.RIGHT",
+        inaxes=axis,
+        xdata=25.0,
+        ydata=-30.0,
+        x=60.0,
+        y=60.0,
+    )
+    motion_event = _FakeEvent(
+        button="MouseButton.RIGHT",
+        inaxes=axis,
+        xdata=25.0,
+        ydata=-30.0,
+        x=100.0,
+        y=40.0,
+    )
+    release_event = _FakeEvent(
+        button="MouseButton.RIGHT",
+        inaxes=axis,
+        xdata=25.0,
+        ydata=-30.0,
+        x=100.0,
+        y=40.0,
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, press_event) is True
+    assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion_event) is True
+    assert axis.get_xlim() == pytest.approx((-20.0, 80.0))
+    assert axis.get_ylim() == pytest.approx((-108.0, 252.0))
+    assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert drag_callbacks.calls == []
+
+
 def test_canvas_right_drag_pan_uses_pointer_pixels_across_multiple_motion_events() -> None:
     axis = _FakeAxis(xlim=(0.0, 10.0), ylim=(20.0, 0.0))
     bindings = canvas_interactions.CanvasInteractionBindings(
