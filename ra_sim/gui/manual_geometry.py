@@ -7110,6 +7110,7 @@ def geometry_manual_format_detector_picker_diagnostic_block(
         "detector_picker_candidate_count_by_source",
         "manual_pick_cache_source",
         "manual_pick_cache_stale_reason",
+        "source_rows_provider_attempted",
         "detector_picker_reused_after_background_refresh",
         "source_snapshot_status",
         "source_snapshot_rebuild_attempted",
@@ -7256,6 +7257,9 @@ def geometry_manual_detector_picker_input_trace(
         ),
         "manual_pick_cache_source": cache_metadata.get("cache_source"),
         "manual_pick_cache_stale_reason": cache_metadata.get("stale_reason"),
+        "source_rows_provider_attempted": bool(
+            cache_metadata.get("source_rows_provider_attempted", False)
+        ),
         "detector_picker_reused_after_background_refresh": bool(
             cache_metadata.get("detector_picker_reused_after_background_refresh", False)
         ),
@@ -7760,28 +7764,25 @@ def build_geometry_manual_pick_cache(
     ) -> list[dict[str, object]]:
         if not isinstance(cache_data, Mapping):
             return []
-        for key in (
-            "detector_picker_source_rows",
-            "fresh_source_rows",
-            "detector_picker_rows",
-        ):
-            rows = [
-                dict(entry)
-                for entry in (cache_data.get(key, ()) or ())
-                if isinstance(entry, Mapping)
-            ]
-            if not rows:
-                continue
-            candidate_rows, _grouped = geometry_manual_detector_picker_candidates_from_rows(
-                rows,
-                display_background=background_image,
-                profile_cache=profile_cache_for_picker,
+        rows = geometry_manual_detector_picker_source_rows_from_cache(cache_data)
+        if not rows:
+            return []
+        candidate_rows, _grouped = geometry_manual_detector_picker_candidates_from_rows(
+            rows,
+            display_background=background_image,
+            profile_cache=profile_cache_for_picker,
+        )
+        if not candidate_rows:
+            return []
+        refreshed_rows: list[dict[str, object]] = []
+        for raw_entry in rows:
+            entry = dict(raw_entry)
+            entry.setdefault(
+                "detector_picker_background_refresh_source",
+                str(entry.get("detector_picker_source", "existing_cache_detector_sources")),
             )
-            if candidate_rows:
-                for entry in rows:
-                    entry.setdefault("detector_picker_background_refresh_source", key)
-                return rows
-        return []
+            refreshed_rows.append(entry)
+        return refreshed_rows
 
     def _filter_reprojected_cache_rows(
         candidate_rows: Sequence[dict[str, object]] | None,
@@ -8200,10 +8201,93 @@ def build_geometry_manual_pick_cache(
             prefer_cache=prefer_cache,
         ),
     }
+    source_rows_provider_attempted = bool(source_rows_provider_calls > 0)
+    cache_metadata = dict(cache_result.get("cache_metadata") or {})
+    cache_metadata["source_rows_provider_attempted"] = source_rows_provider_attempted
     if detector_picker_reused_after_background_refresh:
-        cache_metadata = dict(cache_result.get("cache_metadata") or {})
         cache_metadata["detector_picker_reused_after_background_refresh"] = True
-        cache_result["cache_metadata"] = cache_metadata
+    cache_result["cache_metadata"] = cache_metadata
+
+    if (
+        prefer_cache
+        and bg_index == current_bg_index
+        and not reuse_requires_caked_projection
+        and not detector_picker_rows
+        and isinstance(existing_cache_data, dict)
+    ):
+        retained_source_rows = _existing_detector_picker_rows_for_background_refresh(
+            existing_cache_data
+        )
+        if retained_source_rows:
+            (
+                retained_picker_rows,
+                retained_grouped_candidates,
+            ) = geometry_manual_detector_picker_candidates_from_rows(
+                retained_source_rows,
+                display_background=background_image,
+                profile_cache=profile_cache_for_picker,
+            )
+            retained_cache = dict(existing_cache_data)
+            retained_cache["signature"] = cache_sig
+            retained_cache["placed_signature"] = placed_cache_sig
+            retained_cache["detector_picker_source_rows"] = [
+                dict(entry) for entry in retained_source_rows
+            ]
+            retained_cache["fresh_source_rows"] = [
+                dict(entry)
+                for entry in retained_source_rows
+                if not _geometry_manual_detector_picker_is_manual_saved_pair(entry)
+            ]
+            retained_cache["detector_picker_rows"] = [
+                dict(entry) for entry in retained_picker_rows
+            ]
+            retained_cache["detector_picker_grouped_candidates"] = {
+                key: [dict(entry) for entry in entries]
+                for key, entries in retained_grouped_candidates.items()
+            }
+            retained_metadata = (
+                dict(retained_cache.get("cache_metadata"))
+                if isinstance(retained_cache.get("cache_metadata"), Mapping)
+                else {}
+            )
+            retained_metadata.update(
+                {
+                    "cache_action": "reused",
+                    "reused": True,
+                    "rebuilt": False,
+                    "stale_reason": (
+                        "detector cache rebuild empty; retained previous detector picker rows."
+                    ),
+                    "cache_source": (
+                        "existing_cache_data.detector_picker_rows(retained_after_empty_rebuild)"
+                    ),
+                    "cache_provenance": [
+                        "existing_cache_data.detector_picker_rows",
+                        "empty_detector_rebuild_guard",
+                    ],
+                    "prefer_cache": bool(prefer_cache),
+                    "background_index": int(bg_index),
+                    "current_background_index": int(current_bg_index),
+                    "source_rows_provider_attempted": source_rows_provider_attempted,
+                    "detector_picker_reused_after_background_refresh": True,
+                    "empty_rebuild_cache_source": str(cache_source),
+                    "empty_rebuild_stale_reason": (
+                        None if stale_reason is None else str(stale_reason)
+                    ),
+                }
+            )
+            retained_cache["cache_metadata"] = retained_metadata
+            retained_cache["detector_picker_trace"] = (
+                geometry_manual_detector_picker_input_trace(
+                    retained_cache,
+                    background_index=bg_index,
+                    display_background=background_image,
+                    grouped_candidates=retained_grouped_candidates,
+                    profile_cache=profile_cache_for_picker,
+                )
+            )
+            return retained_cache, cache_sig, retained_cache
+
     cache_result["detector_picker_trace"] = geometry_manual_detector_picker_input_trace(
         cache_result,
         background_index=bg_index,
@@ -11245,7 +11329,10 @@ def make_runtime_geometry_manual_cache_callbacks(
             if isinstance(cache_data.get("cache_metadata"), Mapping)
             else {}
         )
-        if metadata.get("cache_source") != "geometry_manual_source_rows_for_background":
+        if (
+            metadata.get("cache_source") != "geometry_manual_source_rows_for_background"
+            and not bool(metadata.get("source_rows_provider_attempted", False))
+        ):
             return cache_data
         status = diagnostic_payload.get("status")
         metadata.update(
