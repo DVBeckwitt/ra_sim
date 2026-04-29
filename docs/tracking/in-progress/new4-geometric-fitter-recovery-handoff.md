@@ -9,6 +9,33 @@ Last updated: 2026-04-29
 
 ## Current status
 
+- 2026-04-29 strict full-validation checkpoint: Rung 0/provider parity remains
+  green on the restored historical 7-pair fixture. The active state is
+  `artifacts/geometry_fit_gui_states/new4.json`, preserved hash
+  `4B59F99CA88F7DFC8BE91EB9325DFF61DAC282782AFA15C5EB4E718A671DE129`.
+  The accidental local 15-pair state was preserved separately and is not New4
+  ladder-compatible.
+- Bug/error fixed: zero-Qr / `00l` manual source rebinding now treats branch
+  identity as collapsed only for `hkl=(0,0,L)` or
+  `q_group_key=("q_group","primary",0,L)`. A saved legacy branch `0` can bind
+  to the live collapsed branch `1` without counting as identity drift, while
+  non-00l branch mismatches still fail.
+- Feature/status: headless targeted preflight now carries required manual-fit
+  targets, branch-group keys, and source locators into targeted hit-table
+  simulation and filtering. The performance gate is green for the latest full
+  preflight attempt (`targeted_performance_gate.ok == true`) without broad
+  full-source fallback.
+- Bug/error still open: full source-row regeneration is blocked after the
+  targeted-preflight repair. The latest full preflight resolves only 2/7 saved
+  source pairs; the current source snapshot emits only `(-1,0,5)` candidates,
+  so `(0,0,3)`, `(-1,0,10)`, and `(-1,0,16)` have no live candidate rows.
+  Classification is `seam_failure`, not provider parity failure.
+- Validation status: compile, focused 00l/source-resolution tests, and
+  provider-only preflight are green. Full preflight is red at 2/7 source-row
+  resolution, so Rung 1, Rung 2, and the full ladder were not rerun after this
+  checkpoint. Do not mark the geometric fitter fully validated until full
+  preflight resolves 7/7 without fallback and the ladder reaches the requested
+  green gates.
 - Point-provider parity is closed.
 - Visual/backend coordinate parity is closed for new4.
 - `GeometryFitSolverRequest.measured_peaks` coordinate parity is closed when optimizer-request capture succeeds.

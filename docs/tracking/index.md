@@ -155,7 +155,13 @@ caked-bin argmax only (`2theta` bin `0.071355959 deg`, `phi` bin `0.5 deg`).
 Qr-only and full dynamic/refined fits accepted no parameter step over `nfev=7`;
 theta, phi, Qr, and full objective norms stayed unchanged. Current reason:
 `refinement_bin_limited`, not branch identity, stale observed caked values, or
-stale simulated refined caked reuse.
+stale simulated refined caked reuse. 2026-04-29 strict validation update:
+historical 7-pair New4 fixture restoration and provider-only/Rung 0 parity are
+green; zero-Qr `00l` branch rebinding is now collapsed only for 00l targets;
+headless targeted preflight reaches the performance gate without full-source
+fallback. Full preflight remains blocked at 2/7 source-row regeneration because
+the current source snapshot emits only `(-1,0,5)` live rows, leaving `(0,0,3)`,
+`(-1,0,10)`, and `(-1,0,16)` unresolved. Full fitter validation remains red.
 
 ## Known bugs
 

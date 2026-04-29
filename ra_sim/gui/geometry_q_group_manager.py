@@ -1793,6 +1793,7 @@ def simulate_geometry_fit_hit_tables(
     default_solve_q_mode: int,
     required_branch_group_keys: Sequence[tuple[tuple[int, int, int], int | None, object | None]]
     | None = None,
+    required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
 ) -> list[object]:
     """Simulate once and return raw hit tables for geometry-fit helpers."""
 
@@ -1800,6 +1801,33 @@ def simulate_geometry_fit_hit_tables(
     filtered_miller_array = np.asarray(miller_array, dtype=np.float64)
     filtered_intensity_array = np.asarray(intensity_array, dtype=np.float64)
     required_branch_keys = list(required_branch_group_keys or ())
+    required_targets = [
+        dict(entry) for entry in (required_manual_fit_targets or ()) if isinstance(entry, Mapping)
+    ]
+    required_source_indices: set[int] = set()
+    required_branches_by_source_index: dict[int, set[int]] = {}
+    for target in required_targets:
+        target_branch: int | None = None
+        raw_key = target.get("required_branch_group_key")
+        if isinstance(raw_key, (list, tuple)) and len(raw_key) >= 2:
+            try:
+                raw_branch = raw_key[1]
+                if raw_branch is not None and int(raw_branch) in {0, 1}:
+                    target_branch = int(raw_branch)
+            except Exception:
+                target_branch = None
+        for index_key in ("source_reflection_index", "source_table_index"):
+            try:
+                source_idx = int(target.get(index_key))
+            except Exception:
+                continue
+            if source_idx < 0:
+                continue
+            required_source_indices.add(int(source_idx))
+            if target_branch in {0, 1}:
+                required_branches_by_source_index.setdefault(int(source_idx), set()).add(
+                    int(target_branch)
+                )
     diagnostics: dict[str, object] = {
         "stage": "simulate_hit_tables",
         "miller_shape": _array_shape_list(filtered_miller_array),
@@ -1807,14 +1835,13 @@ def simulate_geometry_fit_hit_tables(
         "intensity_shape": _array_shape_list(filtered_intensity_array),
         "intensity_count": _array_row_count(filtered_intensity_array),
         "image_size": int(image_size),
-        "targeted_simulation_supported": bool(required_branch_keys),
+        "targeted_simulation_supported": bool(required_branch_keys or required_source_indices),
         "targeted_simulation_used": False,
     }
-    if (
-        required_branch_keys
-        and filtered_miller_array.ndim == 2
-        and filtered_miller_array.shape[1] >= 3
-    ):
+    if required_source_indices:
+        diagnostics["targeted_required_source_index_count"] = int(len(required_source_indices))
+    use_miller_prefilter = bool(required_branch_keys and not required_source_indices)
+    if use_miller_prefilter and filtered_miller_array.ndim == 2 and filtered_miller_array.shape[1] >= 3:
         required_hkls = {tuple(key[0]) for key in required_branch_keys}
         diagnostics["targeted_required_hkl_count"] = int(len(required_hkls))
         diagnostics["targeted_required_branch_group_count"] = int(len(required_branch_keys))
@@ -1951,7 +1978,7 @@ def simulate_geometry_fit_hit_tables(
         raise
 
     hit_table_list = list(hit_tables)
-    if required_branch_keys:
+    if required_branch_keys or required_source_indices:
         required_hkls = {tuple(key[0]) for key in required_branch_keys}
         required_branches_by_hkl: dict[tuple[int, int, int], set[int]] = {}
         for key in required_branch_keys:
@@ -1959,10 +1986,15 @@ def simulate_geometry_fit_hit_tables(
                 continue
             required_branches_by_hkl.setdefault(tuple(key[0]), set()).add(int(key[1]))
         filtered_hit_tables: list[object] = []
-        for table in hit_table_list:
+        for table_idx, table in enumerate(hit_table_list):
             arr = np.asarray(table, dtype=np.float64)
             if arr.ndim != 2 or arr.shape[0] <= 0 or arr.shape[1] < 7:
                 continue
+            source_table_index, _source_row_index, _best_sample_index = (
+                extract_hit_row_provenance(arr[0])
+            )
+            if source_table_index is None:
+                source_table_index = int(table_idx)
             try:
                 table_hkl = (
                     int(np.rint(float(arr[0, 4]))),
@@ -1971,9 +2003,16 @@ def simulate_geometry_fit_hit_tables(
                 )
             except Exception:
                 continue
-            if table_hkl not in required_hkls:
+            source_index_required = (
+                source_table_index is not None and int(source_table_index) in required_source_indices
+            )
+            if table_hkl not in required_hkls and not source_index_required:
                 continue
-            allowed_branches = required_branches_by_hkl.get(table_hkl, set())
+            allowed_branches = set(required_branches_by_hkl.get(table_hkl, set()))
+            if source_index_required:
+                allowed_branches.update(
+                    required_branches_by_source_index.get(int(source_table_index), set())
+                )
             if not allowed_branches:
                 filtered_hit_tables.append(np.asarray(arr, dtype=np.float64).copy())
                 continue
@@ -2245,6 +2284,8 @@ def make_runtime_geometry_fit_simulation_callbacks(
             }
             if required_branch_group_keys is not None:
                 simulate_kwargs["required_branch_group_keys"] = required_branch_group_keys
+            if required_manual_fit_targets is not None:
+                simulate_kwargs["required_manual_fit_targets"] = required_manual_fit_targets
             result = simulate_geometry_fit_hit_tables(
                 miller_array,
                 intensity_array,

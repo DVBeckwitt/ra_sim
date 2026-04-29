@@ -228,6 +228,28 @@ def _normalized_branch_index(entry: Mapping[str, object] | None) -> int | None:
     return None
 
 
+def _probe_q_group_key_is_zero_qr(value: object) -> bool:
+    q_group_key = _normalize_q_group_key(value)
+    if not isinstance(q_group_key, tuple) or len(q_group_key) < 4:
+        return False
+    try:
+        return str(q_group_key[0]) == "q_group" and int(q_group_key[2]) == 0
+    except Exception:
+        return False
+
+
+def _probe_entry_is_zero_qr_00l(entry: Mapping[str, object] | None) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    hkl = _normalize_hkl(entry.get("hkl"))
+    if hkl is not None and int(hkl[0]) == 0 and int(hkl[1]) == 0:
+        return True
+    for key in ("q_group_key", "source_q_group_key", "branch_group_key"):
+        if _probe_q_group_key_is_zero_qr(entry.get(key)):
+            return True
+    return False
+
+
 def _entry_dataset_index(
     entry: Mapping[str, object] | None,
     *,
@@ -912,7 +934,11 @@ def _select_live_candidate_for_saved_entry(
     detector_hint = _saved_simulated_detector_hint(saved_entry)
     measured_detector_point = _saved_measured_detector_point(saved_entry)
     target_hkl = _normalize_hkl(saved_entry.get("hkl"))
-    target_branch = _normalized_branch_index(saved_entry)
+    target_branch = (
+        None
+        if _probe_entry_is_zero_qr_00l(saved_entry)
+        else _normalized_branch_index(saved_entry)
+    )
     inventory = _group_inventory(grouped_candidates)
     matching_candidates: list[dict[str, object]] = []
     excluded_missing_hkl_inventory: list[dict[str, object]] = []
@@ -3096,6 +3122,15 @@ def _classify_saved_to_selected_identity_delta(
     if "hkl" in delta:
         return delta, "hkl_drift"
     if "source_branch_index" in delta or "source_peak_index" in delta:
+        if (
+            _probe_entry_is_zero_qr_00l(saved_entry)
+            and _probe_entry_is_zero_qr_00l(selected_entry)
+            and _normalize_hkl(saved_entry.get("hkl"))
+            == _normalize_hkl(selected_entry.get("hkl"))
+            and _normalize_q_group_key(saved_entry.get("q_group_key"))
+            == _normalize_q_group_key(selected_entry.get("q_group_key"))
+        ):
+            return delta, "legacy_zero_qr_00l_branch_canonicalized"
         return delta, "branch_drift"
     if set(delta.keys()).issubset(
         {"source_reflection_index", "source_reflection_namespace", "source_reflection_is_full"}
@@ -3330,6 +3365,7 @@ def _run_fresh_slot_validation(
     if delta_classification not in {
         "saved_identity_already_canonical",
         "legacy_saved_identity_canonicalized",
+        "legacy_zero_qr_00l_branch_canonicalized",
     }:
         result["ok"] = False
         result["classification"] = "seam_failure"
@@ -3846,6 +3882,10 @@ def _run_fresh_all_contract_validation(
             saved_branch_index is not None
             and selected_branch_index is not None
             and int(saved_branch_index) != int(selected_branch_index)
+            and not (
+                _probe_entry_is_zero_qr_00l(saved_entry)
+                and _probe_entry_is_zero_qr_00l(selected_candidate)
+            )
         ):
             branch_mismatch_count += 1
     runtime_prepare_ok = bool(context.get("runtime_prepare_ok", False))

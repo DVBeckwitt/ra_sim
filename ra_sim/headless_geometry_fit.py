@@ -24,6 +24,7 @@ from ra_sim.fitting.diffuse_background import (
 )
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.osc_reader import read_osc
+from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenance
 
 if TYPE_CHECKING:
     from ra_sim.gui.state import (
@@ -2920,17 +2921,118 @@ def run_headless_geometry_fit(
             },
         }
 
+    def _filter_hit_tables_for_required_branch_groups(
+        hit_tables: Sequence[object] | None,
+        *,
+        required_branch_group_keys: (
+            Sequence[tuple[tuple[int, int, int], int | None, object | None]] | None
+        ),
+        required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
+    ) -> list[object]:
+        table_list = _copy_hit_tables(hit_tables)
+        required_keys = list(required_branch_group_keys or ())
+        required_targets = [
+            dict(entry)
+            for entry in (required_manual_fit_targets or ())
+            if isinstance(entry, Mapping)
+        ]
+        required_source_indices: set[int] = set()
+        required_branches_by_source_index: dict[int, set[int]] = {}
+        for target in required_targets:
+            target_branch: int | None = None
+            raw_key = target.get("required_branch_group_key")
+            if isinstance(raw_key, (list, tuple)) and len(raw_key) >= 2:
+                try:
+                    raw_branch = raw_key[1]
+                    if raw_branch is not None and int(raw_branch) in {0, 1}:
+                        target_branch = int(raw_branch)
+                except Exception:
+                    target_branch = None
+            for index_key in ("source_reflection_index", "source_table_index"):
+                try:
+                    source_idx = int(target.get(index_key))
+                except Exception:
+                    continue
+                if source_idx < 0:
+                    continue
+                required_source_indices.add(int(source_idx))
+                if target_branch in {0, 1}:
+                    required_branches_by_source_index.setdefault(int(source_idx), set()).add(
+                        int(target_branch)
+                    )
+        if not table_list or not (required_keys or required_source_indices):
+            return table_list
+
+        required_hkls = {tuple(key[0]) for key in required_keys}
+        required_branches_by_hkl: dict[tuple[int, int, int], set[int]] = {}
+        for key in required_keys:
+            if key[1] is None:
+                continue
+            required_branches_by_hkl.setdefault(tuple(key[0]), set()).add(int(key[1]))
+        filtered_tables: list[object] = []
+        for table_idx, table in enumerate(table_list):
+            arr = np.asarray(table, dtype=np.float64)
+            if arr.ndim != 2 or arr.shape[0] <= 0 or arr.shape[1] < 7:
+                continue
+            source_table_index, _source_row_index, _best_sample_index = (
+                extract_hit_row_provenance(arr[0])
+            )
+            if source_table_index is None:
+                source_table_index = int(table_idx)
+            try:
+                table_hkl = (
+                    int(np.rint(float(arr[0, 4]))),
+                    int(np.rint(float(arr[0, 5]))),
+                    int(np.rint(float(arr[0, 6]))),
+                )
+            except Exception:
+                continue
+            source_index_required = (
+                source_table_index is not None and int(source_table_index) in required_source_indices
+            )
+            if table_hkl not in required_hkls and not source_index_required:
+                continue
+            allowed_branches = set(required_branches_by_hkl.get(table_hkl, set()))
+            if source_index_required:
+                allowed_branches.update(
+                    required_branches_by_source_index.get(int(source_table_index), set())
+                )
+            if not allowed_branches:
+                filtered_tables.append(np.asarray(arr, dtype=np.float64).copy())
+                continue
+            branch_mask = np.zeros(arr.shape[0], dtype=bool)
+            for row_idx in range(arr.shape[0]):
+                try:
+                    branch_idx = gui_geometry_fit.source_branch_index_from_phi_deg(
+                        float(arr[row_idx, 3])
+                    )
+                except Exception:
+                    branch_idx = None
+                if branch_idx in allowed_branches:
+                    branch_mask[row_idx] = True
+            if np.any(branch_mask):
+                filtered_tables.append(np.asarray(arr[branch_mask], dtype=np.float64).copy())
+        return filtered_tables
+
     def _simulate_hit_tables_for_fit(
         miller_array: np.ndarray,
         intensity_array: np.ndarray,
         image_size_value: int,
         params_local: Mapping[str, object],
+        *,
+        required_branch_group_keys: (
+            Sequence[tuple[tuple[int, int, int], int | None, object | None]] | None
+        ) = None,
+        required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
+        preflight_mode: str = "full",
     ) -> list[object]:
         return simulation_callbacks.simulate_hit_tables(
             np.asarray(miller_array, dtype=np.float64),
             np.asarray(intensity_array, dtype=np.float64),
             int(image_size_value),
             dict(params_local),
+            required_branch_group_keys=required_branch_group_keys,
+            required_manual_fit_targets=required_manual_fit_targets,
         )
 
     def _background_label_for_index(background_index: int) -> str:
@@ -3045,6 +3147,12 @@ def run_headless_geometry_fit(
 
         def _build_source_rows_for_rebuild(
             source_tables: Sequence[object] | None,
+            *,
+            required_branch_group_keys: (
+                Sequence[tuple[tuple[int, int, int], int | None, object | None]] | None
+            ) = None,
+            required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
+            preflight_mode: str = "full",
         ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
             schema = _load_intersection_cache_schema()
             table_list = list(source_tables or ())
@@ -3054,6 +3162,12 @@ def run_headless_geometry_fit(
                 hit_tables_local = diffraction.intersection_cache_to_hit_tables(table_list)
             else:
                 hit_tables_local = _copy_hit_tables(table_list)
+            if str(preflight_mode or "full") == "manual_geometry_targeted":
+                hit_tables_local = _filter_hit_tables_for_required_branch_groups(
+                    hit_tables_local,
+                    required_branch_group_keys=required_branch_group_keys,
+                    required_manual_fit_targets=required_manual_fit_targets,
+                )
             return _build_source_rows_from_hit_tables(
                 hit_tables_local,
                 image_size_value=int(defaults.image_size),
@@ -3086,11 +3200,12 @@ def run_headless_geometry_fit(
             logged_cache_matches_params=_logged_cache_matches_params,
             build_source_rows_from_hit_tables=_build_source_rows_for_rebuild,
             simulate_hit_tables=(
-                lambda normalized_params: _simulate_hit_tables_for_fit(
+                lambda normalized_params, **kwargs: _simulate_hit_tables_for_fit(
                     structure_state.miller,
                     structure_state.intensities,
                     int(defaults.image_size),
                     normalized_params,
+                    **kwargs,
                 )
             ),
             required_pairs=required_pairs,

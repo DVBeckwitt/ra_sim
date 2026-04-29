@@ -1679,10 +1679,36 @@ def _geometry_fit_source_entry_hkl_matches(
     )
 
 
+def _geometry_fit_q_group_key_is_zero_qr(value: object) -> bool:
+    stable = _geometry_fit_stable_group_identity(value)
+    if not isinstance(stable, tuple) or len(stable) < 4:
+        return False
+    try:
+        return str(stable[0]) == "q_group" and int(stable[2]) == 0
+    except Exception:
+        return False
+
+
+def _geometry_fit_is_zero_qr_00l(
+    entry: Mapping[str, object] | None,
+    group_key: object = None,
+) -> bool:
+    if isinstance(entry, Mapping):
+        hkl = _geometry_fit_normalized_hkl(entry.get("hkl"))
+        if hkl is not None and int(hkl[0]) == 0 and int(hkl[1]) == 0:
+            return True
+        for key in ("q_group_key", "source_q_group_key", "branch_group_key"):
+            if _geometry_fit_q_group_key_is_zero_qr(entry.get(key)):
+                return True
+    return _geometry_fit_q_group_key_is_zero_qr(group_key)
+
+
 def _geometry_fit_source_entry_branch_matches(
     entry: Mapping[str, object] | None,
     candidate: Mapping[str, object] | None,
 ) -> bool:
+    if _geometry_fit_is_zero_qr_00l(entry) and _geometry_fit_is_zero_qr_00l(candidate):
+        return True
     entry_branch = _geometry_fit_source_branch_index(entry)
     candidate_branch = _geometry_fit_source_branch_index(candidate)
     if entry_branch is None:
@@ -1699,6 +1725,8 @@ def _geometry_fit_filter_branch_candidates(
     ]
     if not candidate_pool:
         return []
+    if _geometry_fit_is_zero_qr_00l(entry):
+        return candidate_pool
     entry_branch = _geometry_fit_source_branch_index(entry)
     if entry_branch in {0, 1}:
         matched = [
@@ -1760,6 +1788,8 @@ def _geometry_fit_branch_constraint_status(
 ) -> str:
     if not isinstance(entry, Mapping):
         return "missing_required_branch_identity"
+    if _geometry_fit_is_zero_qr_00l(entry):
+        return "zero_qr_00l_branch_unconstrained"
     branch_idx = _geometry_fit_source_branch_index(entry)
     group_identity = _geometry_fit_group_identity(entry)
     if branch_idx in {0, 1}:
@@ -1788,7 +1818,13 @@ def _geometry_fit_required_branch_group_key(
     if normalized_hkl is None:
         return None
     branch_idx = _geometry_fit_source_branch_index(entry)
-    normalized_branch = int(branch_idx) if branch_idx in {0, 1} else None
+    normalized_branch = (
+        None
+        if _geometry_fit_is_zero_qr_00l(entry)
+        else int(branch_idx)
+        if branch_idx in {0, 1}
+        else None
+    )
     return (
         normalized_hkl,
         normalized_branch,
@@ -4546,6 +4582,7 @@ def collect_geometry_fit_required_manual_fit_targets(
         entry = dict(raw_entry)
         required_branch_group_key = _geometry_fit_required_branch_group_key(entry)
         background_point, background_frame = _source_rebinding_background_point_and_frame(entry)
+        branch_constraint_status = _geometry_fit_branch_constraint_status(entry)
         target = {
             "background_index": int(background_index),
             "pair_id": str(
@@ -4560,9 +4597,25 @@ def collect_geometry_fit_required_manual_fit_targets(
             "saved_background_current_view_point": background_point,
             "saved_background_current_view_frame": background_frame,
             "required_branch_group_key": required_branch_group_key,
-            "branch_constraint_status": _geometry_fit_branch_constraint_status(entry),
-            "branch_unconstrained": (
-                _geometry_fit_branch_constraint_status(entry) == "unconstrained_missing_branch"
+            "branch_constraint_status": branch_constraint_status,
+            "branch_unconstrained": branch_constraint_status
+            in {
+                "unconstrained_missing_branch",
+                "zero_qr_00l_branch_unconstrained",
+            },
+            "source_reflection_index": _geometry_fit_coerce_nonnegative_index(
+                entry.get("source_reflection_index")
+            ),
+            "source_reflection_namespace": entry.get("source_reflection_namespace"),
+            "source_reflection_is_full": bool(entry.get("source_reflection_is_full", False)),
+            "source_table_index": _geometry_fit_coerce_nonnegative_index(
+                entry.get("source_table_index")
+            ),
+            "source_row_index": _geometry_fit_coerce_nonnegative_index(
+                entry.get("source_row_index")
+            ),
+            "source_peak_index": _geometry_fit_coerce_nonnegative_index(
+                entry.get("source_peak_index")
             ),
         }
         targets.append(target)
@@ -4584,6 +4637,8 @@ def _geometry_fit_entry_matches_required_branch_group_key(
             return False
     required_branch = required_key[1]
     if required_branch is None:
+        return True
+    if _geometry_fit_is_zero_qr_00l(entry, required_key[2]):
         return True
     entry_branch = _geometry_fit_source_branch_index(entry)
     return entry_branch is not None and int(entry_branch) == int(required_branch)
@@ -4978,14 +5033,22 @@ def validate_geometry_fit_live_source_rows(
         reflection_row_key = _geometry_fit_source_reflection_row_key(entry)
         if candidate is None and failure_reason is None and reflection_row_key is not None:
             candidate = canonical_by_reflection_row.get(reflection_row_key)
-            if not (
+            hkl_matches = (
                 isinstance(candidate, Mapping)
                 and _geometry_fit_source_entry_hkl_matches(entry, candidate)
+            )
+            branch_matches = (
+                isinstance(candidate, Mapping)
                 and _geometry_fit_source_entry_branch_matches(entry, candidate)
-            ):
+            )
+            if not (hkl_matches and branch_matches):
                 candidate = None
                 if trusted_identity:
-                    failure_reason = "missing_trusted_reflection_row"
+                    failure_reason = (
+                        "branch_mismatch"
+                        if hkl_matches and not branch_matches
+                        else "missing_trusted_reflection_row"
+                    )
             elif isinstance(candidate, Mapping):
                 resolution_kind = "trusted_reflection_row"
 
@@ -5068,6 +5131,16 @@ def validate_geometry_fit_live_source_rows(
             )
             continue
 
+        entry_branch_idx = _geometry_fit_source_branch_index(entry)
+        candidate_branch_idx = _geometry_fit_source_branch_index(candidate)
+        if (
+            _geometry_fit_is_zero_qr_00l(entry)
+            and _geometry_fit_is_zero_qr_00l(candidate)
+            and entry_branch_idx is not None
+            and candidate_branch_idx is not None
+            and int(entry_branch_idx) != int(candidate_branch_idx)
+        ):
+            resolution_kind = "zero_qr_00l_branch_unconstrained"
         resolved_pairs.append(
             _geometry_fit_resolved_pair_trace_entry(
                 pair_id=pair_id,
@@ -5085,7 +5158,11 @@ def validate_geometry_fit_live_source_rows(
     hkl_missing_candidate_count = 0
     branch_mismatch_count = 0
     for failure in pair_failures:
-        if str(failure.get("reason", "") or "") != "missing_canonical_candidate":
+        reason = str(failure.get("reason", "") or "")
+        if reason == "branch_mismatch":
+            branch_mismatch_count += 1
+            continue
+        if reason != "missing_canonical_candidate":
             continue
         candidate_count_total = int(failure.get("candidate_count_total", 0) or 0)
         candidate_count_after_hkl_filter = int(
@@ -9678,6 +9755,8 @@ def build_geometry_manual_fit_dataset(
         ]
         if not candidate_pool:
             return []
+        if _geometry_fit_is_zero_qr_00l(entry):
+            return candidate_pool
         branch_idx = (
             int(required_branch_index)
             if required_branch_index in {0, 1}

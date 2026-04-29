@@ -22895,6 +22895,134 @@ def test_targeted_preflight_collects_required_hkl_branch_keys() -> None:
     ]
 
 
+def test_required_branch_group_key_treats_00l_branch_as_unconstrained() -> None:
+    entry = {
+        "hkl": (0, 0, 3),
+        "q_group_key": ("q_group", "primary", 0, 3),
+        "source_branch_index": 0,
+    }
+
+    assert geometry_fit._geometry_fit_required_branch_group_key(entry) == (
+        (0, 0, 3),
+        None,
+        ("q_group", "primary", 0, 3),
+    )
+
+
+def test_validate_live_source_rows_resolves_00l_saved_branch0_to_collapsed_branch1() -> None:
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [
+            {
+                "hkl": (0, 0, 3),
+                "q_group_key": ("q_group", "primary", 0, 3),
+                "source_reflection_index": 71,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 2,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+                "sim_col": 10.0,
+                "sim_row": 20.0,
+            }
+        ],
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "hkl": (0, 0, 3),
+                "q_group_key": ("q_group", "primary", 0, 3),
+                "source_reflection_index": 71,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 2,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+    )
+
+    assert validation["valid"] is True
+    assert validation["missing_required_pair_count"] == 0
+    assert validation["branch_mismatch_count"] == 0
+    assert validation["resolved_pairs"][0]["hkl"] == (0, 0, 3)
+    assert (
+        validation["resolved_pairs"][0]["resolution_kind"]
+        == "zero_qr_00l_branch_unconstrained"
+    )
+
+
+def test_non_00l_branch_mismatch_still_fails() -> None:
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [
+            {
+                "hkl": (-1, 0, 5),
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "source_reflection_index": 111,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 172,
+                "source_branch_index": 1,
+                "source_peak_index": 1,
+            }
+        ],
+        required_pairs=[
+            {
+                "pair_id": "bg0:pair0",
+                "hkl": (-1, 0, 5),
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "source_reflection_index": 111,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": 172,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+    )
+
+    assert validation["valid"] is False
+    assert validation["branch_mismatch_count"] == 1
+
+
+def test_preflight_probe_selects_00l_branch1_for_saved_branch0() -> None:
+    preflight = _load_geometry_preflight_probe_module()
+    saved_entry = {
+        "hkl": (0, 0, 3),
+        "q_group_key": ("q_group", "primary", 0, 3),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "detector_x": 10.0,
+        "detector_y": 20.0,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    live_entry = {
+        "hkl": (0, 0, 3),
+        "q_group_key": ("q_group", "primary", 0, 3),
+        "source_reflection_index": 71,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+
+    selected = preflight._select_live_candidate_for_saved_entry(
+        saved_entry=saved_entry,
+        grouped_candidates={("q_group", "primary", 0, 3): [live_entry]},
+    )
+
+    assert selected["ok"] is True
+    assert selected["selected_candidate"]["source_branch_index"] == 1
+    delta, classification = preflight._classify_saved_to_selected_identity_delta(
+        saved_entry,
+        selected["selected_candidate"],
+    )
+    assert "source_branch_index" in delta
+    assert classification == "legacy_zero_qr_00l_branch_canonicalized"
+
+
 def test_caked_required_targets_use_source_rebinding_display_anchor() -> None:
     targets = geometry_fit.collect_geometry_fit_required_manual_fit_targets(
         [
