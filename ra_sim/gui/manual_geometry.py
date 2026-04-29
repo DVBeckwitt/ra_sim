@@ -5275,6 +5275,32 @@ def _manual_pick_cache_groups_reusable(
     return bool(existing_signature[:3] == current_signature[:3])
 
 
+def _manual_pick_cache_background_token_compatible(
+    existing_signature: object,
+    current_signature: object,
+) -> bool:
+    """Return true when only the background array identity changed."""
+
+    if not _manual_pick_cache_groups_reusable(existing_signature, current_signature):
+        return False
+    if not isinstance(existing_signature, tuple) or not isinstance(current_signature, tuple):
+        return False
+    if len(existing_signature) < 4 or len(current_signature) < 4:
+        return False
+    existing_bg_token = existing_signature[3]
+    current_bg_token = current_signature[3]
+    if existing_bg_token == current_bg_token:
+        return True
+    if not isinstance(existing_bg_token, (list, tuple)) or not isinstance(
+        current_bg_token,
+        (list, tuple),
+    ):
+        return False
+    if len(existing_bg_token) < 4 or len(current_bg_token) < 4:
+        return False
+    return bool(tuple(existing_bg_token[1:4]) == tuple(current_bg_token[1:4]))
+
+
 def _geometry_manual_cache_signature_uses_caked(signature: object) -> bool:
     if not isinstance(signature, tuple):
         return False
@@ -7084,6 +7110,7 @@ def geometry_manual_format_detector_picker_diagnostic_block(
         "detector_picker_candidate_count_by_source",
         "manual_pick_cache_source",
         "manual_pick_cache_stale_reason",
+        "detector_picker_reused_after_background_refresh",
         "source_snapshot_status",
         "source_snapshot_rebuild_attempted",
         "source_snapshot_rebuild_returned_row_count",
@@ -7229,6 +7256,9 @@ def geometry_manual_detector_picker_input_trace(
         ),
         "manual_pick_cache_source": cache_metadata.get("cache_source"),
         "manual_pick_cache_stale_reason": cache_metadata.get("stale_reason"),
+        "detector_picker_reused_after_background_refresh": bool(
+            cache_metadata.get("detector_picker_reused_after_background_refresh", False)
+        ),
         "source_snapshot_status": cache_metadata.get(
             "source_snapshot_status",
             source_snapshot_diagnostics.get("status"),
@@ -7542,6 +7572,9 @@ def build_geometry_manual_pick_cache(
     detector_picker_source_rows: list[dict[str, object]] = []
     detector_picker_rows: list[dict[str, object]] = []
     detector_picker_grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    detector_picker_reused_after_background_refresh = False
+    source_rows_provider_calls = 0
+    existing_cache_reproject_failed = False
 
     def _apply_candidate_source(
         candidate_rows: Sequence[dict[str, object]] | None,
@@ -7710,6 +7743,46 @@ def build_geometry_manual_pick_cache(
             stale_reason = stale_reason_override
         return True
 
+    def _source_rows_from_background_provider() -> list[dict[str, object]]:
+        nonlocal source_rows_provider_calls
+        if not callable(source_rows_for_background):
+            return []
+        source_rows_provider_calls += 1
+        raw_rows = source_rows_for_background(
+            bg_index,
+            param_set,
+            consumer="manual_pick_cache",
+        )
+        return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
+
+    def _existing_detector_picker_rows_for_background_refresh(
+        cache_data: Mapping[str, object] | None,
+    ) -> list[dict[str, object]]:
+        if not isinstance(cache_data, Mapping):
+            return []
+        for key in (
+            "detector_picker_source_rows",
+            "fresh_source_rows",
+            "detector_picker_rows",
+        ):
+            rows = [
+                dict(entry)
+                for entry in (cache_data.get(key, ()) or ())
+                if isinstance(entry, Mapping)
+            ]
+            if not rows:
+                continue
+            candidate_rows, _grouped = geometry_manual_detector_picker_candidates_from_rows(
+                rows,
+                display_background=background_image,
+                profile_cache=profile_cache_for_picker,
+            )
+            if candidate_rows:
+                for entry in rows:
+                    entry.setdefault("detector_picker_background_refresh_source", key)
+                return rows
+        return []
+
     def _filter_reprojected_cache_rows(
         candidate_rows: Sequence[dict[str, object]] | None,
     ) -> list[dict[str, object]]:
@@ -7872,19 +7945,7 @@ def build_geometry_manual_pick_cache(
         elif stale_reason is None:
             stale_reason = "live peak records were empty."
     if prefer_cache and not simulated_peaks:
-        cached_simulated_peaks = (
-            [
-                dict(entry)
-                for entry in source_rows_for_background(
-                    bg_index,
-                    param_set,
-                    consumer="manual_pick_cache",
-                )
-                if isinstance(entry, Mapping)
-            ]
-            if callable(source_rows_for_background)
-            else []
-        )
+        cached_simulated_peaks = _source_rows_from_background_provider()
         if _apply_candidate_source(
             cached_simulated_peaks,
             action="reused",
@@ -7944,6 +8005,34 @@ def build_geometry_manual_pick_cache(
     if (
         prefer_cache
         and not simulated_peaks
+        and not reuse_requires_caked_projection
+        and isinstance(existing_cache_data, dict)
+        and _manual_pick_cache_background_token_compatible(
+            resolved_existing_placed_signature,
+            placed_cache_sig,
+        )
+    ):
+        cached_detector_picker_rows = _existing_detector_picker_rows_for_background_refresh(
+            existing_cache_data
+        )
+        if _apply_candidate_source(
+            cached_detector_picker_rows,
+            action="reused",
+            source="existing_cache_data.detector_picker_rows(background_refresh)",
+            provenance=[
+                "existing_cache_data.detector_picker_rows",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ],
+            reproject=False,
+            stale_reason_override=(
+                "background-only cache signature change; reused detector picker rows."
+            ),
+        ):
+            detector_picker_reused_after_background_refresh = True
+    if (
+        prefer_cache
+        and not simulated_peaks
         and isinstance(existing_cache_data, dict)
         and _manual_pick_cache_groups_reusable(
             resolved_existing_placed_signature,
@@ -7987,11 +8076,35 @@ def build_geometry_manual_pick_cache(
                     "background-only cache signature change; "
                     "cached simulated peaks could not be reprojected."
                 )
+                existing_cache_reproject_failed = True
         else:
             stale_reason = (
                 "background-only cache signature change; "
                 "cached simulated peaks could not be reprojected."
             )
+            existing_cache_reproject_failed = True
+    if (
+        prefer_cache
+        and not simulated_peaks
+        and not reuse_requires_caked_projection
+        and existing_cache_reproject_failed
+        and callable(source_rows_for_background)
+        and source_rows_provider_calls > 0
+    ):
+        retried_source_rows = _source_rows_from_background_provider()
+        if _apply_candidate_source(
+            retried_source_rows,
+            action="reused",
+            source="geometry_manual_source_rows_for_background",
+            provenance=[
+                "geometry_manual_source_rows_for_background",
+                "detector_retry_after_stale_existing_cache",
+                "build_grouped_candidates",
+                "build_simulated_lookup",
+            ],
+            stale_reason_override=stale_reason,
+        ):
+            pass
     if not prefer_cache and not simulated_peaks and bg_index == current_bg_index:
         rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
@@ -8087,6 +8200,10 @@ def build_geometry_manual_pick_cache(
             prefer_cache=prefer_cache,
         ),
     }
+    if detector_picker_reused_after_background_refresh:
+        cache_metadata = dict(cache_result.get("cache_metadata") or {})
+        cache_metadata["detector_picker_reused_after_background_refresh"] = True
+        cache_result["cache_metadata"] = cache_metadata
     cache_result["detector_picker_trace"] = geometry_manual_detector_picker_input_trace(
         cache_result,
         background_index=bg_index,

@@ -7075,6 +7075,224 @@ def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_raw_co
     )
 
 
+def test_build_geometry_manual_pick_cache_reuses_detector_rows_after_background_pointer_churn() -> (
+    None
+):
+    old_background = np.zeros((8, 8), dtype=float)
+    new_background = np.ones((8, 8), dtype=float)
+    old_placed_signature = mg.geometry_manual_pick_placed_cache_signature(
+        source_snapshot_signature=("sim", 7),
+        background_index=0,
+        background_image=old_background,
+        use_caked_space=False,
+    )
+    old_signature = mg.geometry_manual_pick_cache_signature(
+        placed_cache_signature=old_placed_signature,
+        disabled_qr_sets=[],
+        disabled_qz_sections=[],
+    )
+    source_calls: list[int] = []
+    forwarded_prefer_cache: list[bool] = []
+    detector_row = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "hkl": (1, 0, 2),
+        "sim_col": 3.0,
+        "sim_row": 4.0,
+        "native_col": 3.0,
+        "native_row": 4.0,
+    }
+
+    def _placed_signature(**kwargs):
+        return mg.geometry_manual_pick_placed_cache_signature(
+            source_snapshot_signature=("sim", 7),
+            background_index=int(kwargs["background_index"]),
+            background_image=kwargs["background_image"],
+            use_caked_space=False,
+        )
+
+    def _cache_signature(**kwargs):
+        return mg.geometry_manual_pick_cache_signature(
+            placed_cache_signature=_placed_signature(**kwargs),
+            disabled_qr_sets=[],
+            disabled_qz_sections=[],
+        )
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=new_background,
+        existing_cache_signature=old_signature,
+        existing_cache_data={
+            "signature": old_signature,
+            "placed_signature": old_placed_signature,
+            "detector_picker_source_rows": [dict(detector_row)],
+            "detector_picker_rows": [dict(detector_row)],
+            "simulated_peaks": [{"q_group_key": detector_row["q_group_key"]}],
+        },
+        placed_cache_signature_fn=_placed_signature,
+        cache_signature_fn=_cache_signature,
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache)) or []
+        ),
+        source_rows_for_background=lambda *_args, **_kwargs: (
+            source_calls.append(1) or []
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert source_calls == [1]
+    assert forwarded_prefer_cache == [True, False]
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "existing_cache_data.detector_picker_rows(background_refresh)"
+    )
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "background-only cache signature change; reused detector picker rows."
+    )
+    assert cache_data["cache_metadata"]["detector_picker_reused_after_background_refresh"] is True
+    assert cache_data["detector_picker_trace"][
+        "detector_picker_reused_after_background_refresh"
+    ] is True
+    assert cache_data["detector_picker_rows"]
+    assert cache_data["detector_picker_trace"]["detector_picker_candidate_count"] > 0
+    assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
+    assert next_sig != old_signature
+    assert next_state["detector_picker_rows"]
+
+
+def test_build_geometry_manual_pick_cache_retries_source_rows_after_stale_existing_reproject_fails() -> (
+    None
+):
+    old_background = np.zeros((8, 8), dtype=float)
+    new_background = np.ones((8, 8), dtype=float)
+    old_placed_signature = mg.geometry_manual_pick_placed_cache_signature(
+        source_snapshot_signature=("sim", 7),
+        background_index=0,
+        background_image=old_background,
+        use_caked_space=False,
+    )
+    old_signature = mg.geometry_manual_pick_cache_signature(
+        placed_cache_signature=old_placed_signature,
+        disabled_qr_sets=[],
+        disabled_qz_sections=[],
+    )
+    source_calls: list[int] = []
+    detector_source_row = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "hkl": (1, 0, 2),
+        "sim_col": 3.0,
+        "sim_row": 4.0,
+        "native_col": 3.0,
+        "native_row": 4.0,
+    }
+
+    def _placed_signature(**kwargs):
+        return mg.geometry_manual_pick_placed_cache_signature(
+            source_snapshot_signature=("sim", 7),
+            background_index=int(kwargs["background_index"]),
+            background_image=kwargs["background_image"],
+            use_caked_space=False,
+        )
+
+    def _cache_signature(**kwargs):
+        return mg.geometry_manual_pick_cache_signature(
+            placed_cache_signature=_placed_signature(**kwargs),
+            disabled_qr_sets=[],
+            disabled_qz_sections=[],
+        )
+
+    def _source_rows_for_background(*_args, **_kwargs):
+        source_calls.append(1)
+        if len(source_calls) == 1:
+            return []
+        return [dict(detector_source_row)]
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=new_background,
+        existing_cache_signature=old_signature,
+        existing_cache_data={
+            "signature": old_signature,
+            "placed_signature": old_placed_signature,
+            "simulated_peaks": [
+                {
+                    "q_group_key": ("q_group", "primary", 1, 0),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            "grouped_candidates": {
+                ("q_group", "primary", 1, 0): [
+                    {
+                        "q_group_key": ("q_group", "primary", 1, 0),
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    }
+                ],
+            },
+        },
+        placed_cache_signature_fn=_placed_signature,
+        cache_signature_fn=_cache_signature,
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        source_rows_for_background=_source_rows_for_background,
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert len(source_calls) == 2
+    assert cache_data["cache_metadata"]["cache_source"] == (
+        "geometry_manual_source_rows_for_background"
+    )
+    assert cache_data["cache_metadata"]["cache_provenance"] == [
+        "geometry_manual_source_rows_for_background",
+        "detector_retry_after_stale_existing_cache",
+        "build_grouped_candidates",
+        "build_simulated_lookup",
+    ]
+    assert cache_data["cache_metadata"]["stale_reason"] == (
+        "background-only cache signature change; cached simulated peaks could not be reprojected."
+    )
+    assert cache_data["fresh_source_rows"]
+    assert cache_data["detector_picker_rows"]
+    assert cache_data["detector_picker_trace"]["detector_picker_candidate_count"] > 0
+    assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
+    assert next_sig != old_signature
+    assert next_state["detector_picker_rows"]
+
+
 def test_build_geometry_manual_pick_cache_background_churn_reuse_requires_valid_caked_projection() -> (
     None
 ):
