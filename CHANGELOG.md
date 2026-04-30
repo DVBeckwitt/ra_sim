@@ -52,7 +52,7 @@
   - Fixed a manual Qr diagnostic/fit-contract bug where saved caked `(2theta, phi)` targets could move under exact reprojection; cached manual targets now remain fixed while trial simulated sources are recomputed dynamically.
   - Limited `all_background_peak_fits.ipynb` Qr-rod Qz profiles and caked overlays to caked support at or below `60°` 2theta.
   - Fixed diagnostic Qz rod profiles to plot acceptance-normalized intensity density instead of raw integrated sums, removing false high-2θ support ramps.
-  - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with tail-conservative rotated 2D Gaussian-plus-plane fits for Qr-rod profiles.
+  - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with rotated 2D Gaussian-plus-plane fits, then fit each Qr-rod Qz profile jointly as a simultaneous sum of all projected branch-point Gaussian peaks to avoid overlap overestimation between close peaks.
   - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
   - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.
   - Fixed Qr/Qz Q-set branch collapse so detector-distinct non-00l rows without explicit branch metadata keep separate branch representatives, hit-row phi branches survive source-row canonicalization, branch repair uses stable detector-native/refined coordinates before display aliases, and the Qr/Qz collapse wrapper honors explicit whole-group collapse.
