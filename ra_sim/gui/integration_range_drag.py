@@ -2297,6 +2297,9 @@ def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
     ):
         _set_widget_enabled(getattr(view_state, widget_name, None), rod_mode_enabled)
 
+    for widget in (getattr(view_state, "rod_profile_intensity_mode_buttons", {}) or {}).values():
+        _set_widget_enabled(widget, rod_mode_enabled)
+
 
 def _refresh_runtime_region_visuals(
     refresh_region_visuals: Callable[[], object] | None,
@@ -2447,6 +2450,42 @@ def _select_runtime_selected_qr_rod(
     _refresh_runtime_region_visuals(refresh_region_visuals)
 
 
+def _normalize_runtime_rod_profile_intensity_mode(value: object) -> str:
+    return "raw_sum" if str(value) == "raw_sum" else "density"
+
+
+def _normalize_runtime_caked_intensity_mode(value: object) -> str:
+    return "raw_sum" if str(value) == "raw_sum" else "density"
+
+
+def _select_runtime_caked_intensity_mode(
+    *,
+    view_state: object,
+    value: object,
+    show_1d_var: object,
+    schedule_range_update: Callable[..., object] | None,
+) -> None:
+    mode = _normalize_runtime_caked_intensity_mode(value)
+    _set_runtime_string_value(view_state, "caked_intensity_mode", mode)
+    _activate_runtime_1d_analysis(show_1d_var)
+    if callable(schedule_range_update):
+        schedule_range_update()
+
+
+def _select_runtime_rod_profile_intensity_mode(
+    *,
+    view_state: object,
+    value: object,
+    show_1d_var: object,
+    schedule_range_update: Callable[..., object] | None,
+) -> None:
+    mode = _normalize_runtime_rod_profile_intensity_mode(value)
+    _set_runtime_string_value(view_state, "rod_profile_intensity_mode", mode)
+    _activate_runtime_1d_analysis(show_1d_var)
+    if callable(schedule_range_update):
+        schedule_range_update()
+
+
 def create_runtime_integration_range_controls(
     *,
     parent: Any,
@@ -2459,6 +2498,8 @@ def create_runtime_integration_range_controls(
     phi_max: float,
     integrate_selected_qr_rod: bool = False,
     mirror_selected_qr_phi: bool = False,
+    caked_intensity_mode: str = "density",
+    rod_profile_intensity_mode: str = "density",
     selected_qr_rod_key: str = "",
     selected_qr_rod_options: list[tuple[str, str]] | None = None,
     qz_min: float = _DEFAULT_QZ_MIN,
@@ -2485,6 +2526,16 @@ def create_runtime_integration_range_controls(
         bool(mirror_selected_qr_phi),
     )
     _set_runtime_string_value(view_state, "selected_qr_rod_key", str(selected_qr_rod_key))
+    _set_runtime_string_value(
+        view_state,
+        "caked_intensity_mode",
+        _normalize_runtime_caked_intensity_mode(caked_intensity_mode),
+    )
+    _set_runtime_string_value(
+        view_state,
+        "rod_profile_intensity_mode",
+        _normalize_runtime_rod_profile_intensity_mode(rod_profile_intensity_mode),
+    )
     _set_runtime_range_value(view_state, "qz_min", float(qz_min))
     _set_runtime_range_value(view_state, "qz_max", float(qz_max))
     _set_runtime_range_value(view_state, "delta_qr", float(delta_qr))
@@ -2548,6 +2599,10 @@ def create_runtime_integration_range_controls(
         ),
         integrate_selected_qr_rod=bool(integrate_selected_qr_rod),
         mirror_selected_qr_phi=bool(mirror_selected_qr_phi),
+        caked_intensity_mode=_normalize_runtime_caked_intensity_mode(caked_intensity_mode),
+        rod_profile_intensity_mode=_normalize_runtime_rod_profile_intensity_mode(
+            rod_profile_intensity_mode
+        ),
         selected_qr_rod_key=str(selected_qr_rod_key),
         selected_qr_rod_options=list(selected_qr_rod_options or ()),
         on_toggle_integrate_selected_qr_rod=lambda: _toggle_runtime_integrate_selected_qr_rod(
@@ -2569,6 +2624,20 @@ def create_runtime_integration_range_controls(
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
             refresh_region_visuals=refresh_region_visuals,
+        ),
+        on_caked_intensity_mode_changed=lambda value: _select_runtime_caked_intensity_mode(
+            view_state=view_state,
+            value=value,
+            show_1d_var=show_1d_var,
+            schedule_range_update=schedule_range_update,
+        ),
+        on_rod_profile_intensity_mode_changed=lambda value: (
+            _select_runtime_rod_profile_intensity_mode(
+                view_state=view_state,
+                value=value,
+                show_1d_var=show_1d_var,
+                schedule_range_update=schedule_range_update,
+            )
         ),
         on_apply_entry=lambda entry_var, value_var, slider: _apply_runtime_range_entry(
             view_state=view_state,
@@ -2599,6 +2668,8 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "phi_max_var", None),
         getattr(view_state, "integrate_selected_qr_rod_var", None),
         getattr(view_state, "mirror_selected_qr_phi_var", None),
+        getattr(view_state, "caked_intensity_mode_var", None),
+        getattr(view_state, "rod_profile_intensity_mode_var", None),
         getattr(view_state, "selected_qr_rod_key_var", None),
         getattr(view_state, "selected_qr_rod_display_var", None),
         getattr(view_state, "qz_min_var", None),

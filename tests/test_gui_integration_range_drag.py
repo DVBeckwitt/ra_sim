@@ -484,6 +484,20 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].mirror_selected_qr_phi_var = _FakeVar(
             kwargs["mirror_selected_qr_phi"]
         )
+        kwargs["view_state"].caked_intensity_mode_var = _FakeVar(
+            kwargs["caked_intensity_mode"]
+        )
+        kwargs["view_state"].caked_intensity_mode_buttons = {
+            "density": _FakeEntry(state="normal"),
+            "raw_sum": _FakeEntry(state="normal"),
+        }
+        kwargs["view_state"].rod_profile_intensity_mode_var = _FakeVar(
+            kwargs["rod_profile_intensity_mode"]
+        )
+        kwargs["view_state"].rod_profile_intensity_mode_buttons = {
+            "density": _FakeEntry(state="disabled"),
+            "raw_sum": _FakeEntry(state="disabled"),
+        }
         kwargs["view_state"].selected_qr_rod_key_var = _FakeVar(kwargs["selected_qr_rod_key"])
         kwargs["view_state"].selected_qr_rod_display_var = _FakeVar("")
         kwargs["view_state"].selected_qr_rod_option_labels = {
@@ -540,6 +554,10 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.selected_qr_rod_combobox.state == "disabled"
     assert view_state.mirror_selected_qr_phi_var.get() is False
     assert view_state.mirror_selected_qr_phi_checkbutton.state == "disabled"
+    assert view_state.caked_intensity_mode_var.get() == "density"
+    assert view_state.caked_intensity_mode_buttons["density"].state == "normal"
+    assert view_state.rod_profile_intensity_mode_var.get() == "density"
+    assert view_state.rod_profile_intensity_mode_buttons["density"].state == "disabled"
     assert view_state.qz_min_slider.state == "disabled"
     assert view_state.qz_max_entry.state == "disabled"
     assert view_state.delta_qr_slider.state == "disabled"
@@ -571,6 +589,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert show_1d_var.get() is True
     assert view_state.selected_qr_rod_combobox.state == "normal"
     assert view_state.mirror_selected_qr_phi_checkbutton.state == "normal"
+    assert view_state.rod_profile_intensity_mode_buttons["density"].state == "normal"
     assert view_state.qz_min_slider.state == "normal"
     assert view_state.qz_max_entry.state == "normal"
     assert view_state.delta_qr_slider.state == "normal"
@@ -585,6 +604,16 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     callback_refs["on_toggle_mirror_selected_qr_phi"]()
     assert show_1d_var.get() is True
     assert refresh_calls == ["refresh", "refresh", "refresh"]
+
+    show_1d_var.set(False)
+    callback_refs["on_rod_profile_intensity_mode_changed"]("raw_sum")
+    assert view_state.rod_profile_intensity_mode_var.get() == "raw_sum"
+    assert show_1d_var.get() is True
+
+    show_1d_var.set(False)
+    callback_refs["on_caked_intensity_mode_changed"]("raw_sum")
+    assert view_state.caked_intensity_mode_var.get() == "raw_sum"
+    assert show_1d_var.get() is True
 
     show_1d_var.set(False)
     view_state.integrate_selected_qr_rod_var.set(False)
@@ -620,6 +649,8 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.selected_qr_rod_key_var.get() == "phase-a|1"
     assert show_1d_var.get() is True
     assert schedule_calls == [
+        "range",
+        "range",
         "range",
         "range",
         "range",

@@ -314,6 +314,30 @@ def build_geometry_fit_caked_view_payload_from_result(
         return None
 
     radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
+    sum_signal = None
+    sum_normalization = None
+    count = None
+    for attr_name, local_name in (
+        ("sum_signal", "sum_signal"),
+        ("sum_normalization", "sum_normalization"),
+        ("count", "count"),
+    ):
+        try:
+            value = np.asarray(getattr(res2, attr_name), dtype=float)
+        except Exception:
+            value = None
+        if value is not None and value.shape == np.asarray(res2.intensity).shape:
+            value = value[raw_to_gui_row_permutation, :]
+            if np.any(radial_mask):
+                value = value[:, radial_mask]
+        else:
+            value = None
+        if local_name == "sum_signal":
+            sum_signal = value
+        elif local_name == "sum_normalization":
+            sum_normalization = value
+        else:
+            count = value
     if np.any(radial_mask):
         radial_vals = radial_vals[radial_mask]
         caked_img = caked_img[:, radial_mask]
@@ -348,6 +372,9 @@ def build_geometry_fit_caked_view_payload_from_result(
     return {
         "image": np.asarray(normalized_payload.get("background"), dtype=float),
         "background": np.asarray(normalized_payload.get("background"), dtype=float),
+        "sum_signal": sum_signal,
+        "sum_normalization": sum_normalization,
+        "count": count,
         "radial": np.asarray(normalized_payload.get("radial_axis"), dtype=float),
         "radial_axis": np.asarray(
             normalized_payload.get("radial_axis"),

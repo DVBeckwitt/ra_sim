@@ -637,6 +637,11 @@ class IntegrationRangeControlsViewState:
     mirror_selected_qr_phi_value: bool = False
     mirror_selected_qr_phi_var: Any = None
     mirror_selected_qr_phi_checkbutton: Any = None
+    caked_intensity_mode_value: str = "density"
+    caked_intensity_mode_var: Any = None
+    caked_intensity_mode_label: Any = None
+    caked_intensity_mode_frame: Any = None
+    caked_intensity_mode_buttons: dict[str, Any] = field(default_factory=dict)
     rod_profile_intensity_mode_value: str = "density"
     rod_profile_intensity_mode_var: Any = None
     rod_profile_intensity_mode_label: Any = None

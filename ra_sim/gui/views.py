@@ -5650,10 +5650,14 @@ def create_integration_range_controls(
     on_apply_entry: Callable[[object, object, object], None],
     integrate_selected_qr_rod: bool = False,
     mirror_selected_qr_phi: bool = False,
+    caked_intensity_mode: str = "density",
+    rod_profile_intensity_mode: str = "density",
     selected_qr_rod_key: str = "",
     selected_qr_rod_options: Sequence[tuple[str, str]] | None = None,
     on_toggle_integrate_selected_qr_rod: Callable[[], None] | None = None,
     on_toggle_mirror_selected_qr_phi: Callable[[], None] | None = None,
+    on_caked_intensity_mode_changed: Callable[[object], None] | None = None,
+    on_rod_profile_intensity_mode_changed: Callable[[object], None] | None = None,
     on_selected_qr_rod_changed: Callable[[object], None] | None = None,
 ) -> None:
     """Create the 1D integration-range controls and store their widget refs."""
@@ -5685,6 +5689,41 @@ def create_integration_range_controls(
         padx=5,
         pady=(2, 4),
     )
+
+    def _create_intensity_mode_group(
+        *,
+        parent_frame: tk.Misc,
+        label_text: str,
+        mode_value: str,
+        on_changed: Callable[[object], None] | None,
+        widget_state: str = tk.NORMAL,
+    ) -> tuple[object, object, object, dict[str, object]]:
+        normalized_mode = "raw_sum" if str(mode_value) == "raw_sum" else "density"
+        label = ttk.Label(parent_frame, text=label_text)
+        label.pack(side=tk.TOP, anchor=tk.W, padx=5)
+        mode_var = tk.StringVar(value=normalized_mode)
+        frame = ttk.Frame(parent_frame)
+        frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 4))
+        buttons = {}
+        for radio_value, radio_label in (
+            ("density", "Intensity density (support-normalized)"),
+            ("raw_sum", "Raw accumulated intensity"),
+        ):
+            radio = ttk.Radiobutton(
+                frame,
+                text=radio_label,
+                value=radio_value,
+                variable=mode_var,
+                command=(
+                    lambda var=mode_var, callback=on_changed: (
+                        callback(var.get()) if callable(callback) else None
+                    )
+                ),
+                state=widget_state,
+            )
+            radio.pack(side=tk.TOP, anchor=tk.W)
+            buttons[radio_value] = radio
+        return label, mode_var, frame, buttons
 
     def _create_range_row(
         *,
@@ -5843,6 +5882,29 @@ def create_integration_range_controls(
         upper_bound=180.0,
         slider_command=on_phi_max_changed,
     )
+    (
+        caked_intensity_mode_label,
+        caked_intensity_mode_var,
+        caked_intensity_mode_frame,
+        caked_intensity_mode_buttons,
+    ) = _create_intensity_mode_group(
+        parent_frame=rectangle_section_frame,
+        label_text="Caked image intensity",
+        mode_value=caked_intensity_mode,
+        on_changed=on_caked_intensity_mode_changed,
+    )
+    (
+        rod_profile_intensity_mode_label,
+        rod_profile_intensity_mode_var,
+        rod_profile_intensity_mode_frame,
+        rod_profile_intensity_mode_buttons,
+    ) = _create_intensity_mode_group(
+        parent_frame=rod_section_frame,
+        label_text="Rod profile intensity",
+        mode_value=rod_profile_intensity_mode,
+        on_changed=on_rod_profile_intensity_mode_changed,
+        widget_state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
+    )
     _create_range_row(
         parent_frame=rod_section_frame,
         prefix="qz_min",
@@ -5888,6 +5950,16 @@ def create_integration_range_controls(
     view_state.integrate_selected_qr_rod_checkbutton = integrate_selected_qr_rod_checkbutton
     view_state.mirror_selected_qr_phi_var = mirror_selected_qr_phi_var
     view_state.mirror_selected_qr_phi_checkbutton = mirror_selected_qr_phi_checkbutton
+    view_state.caked_intensity_mode_value = caked_intensity_mode_var.get()
+    view_state.caked_intensity_mode_var = caked_intensity_mode_var
+    view_state.caked_intensity_mode_label = caked_intensity_mode_label
+    view_state.caked_intensity_mode_frame = caked_intensity_mode_frame
+    view_state.caked_intensity_mode_buttons = dict(caked_intensity_mode_buttons)
+    view_state.rod_profile_intensity_mode_value = rod_profile_intensity_mode_var.get()
+    view_state.rod_profile_intensity_mode_var = rod_profile_intensity_mode_var
+    view_state.rod_profile_intensity_mode_label = rod_profile_intensity_mode_label
+    view_state.rod_profile_intensity_mode_frame = rod_profile_intensity_mode_frame
+    view_state.rod_profile_intensity_mode_buttons = dict(rod_profile_intensity_mode_buttons)
     view_state.selected_qr_rod_container = selected_qr_rod_container
     view_state.selected_qr_rod_key_var = selected_qr_rod_key_var
     view_state.selected_qr_rod_display_var = selected_qr_rod_display_var

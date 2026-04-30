@@ -1531,10 +1531,12 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "phi_max": 15.0,
                 "integrate_selected_qr_rod": False,
                 "mirror_selected_qr_phi": False,
+                "caked_intensity_mode": "density",
+                "rod_profile_intensity_mode": "density",
                 "selected_qr_rod_key": "",
                 "qz_min": 0.0,
                 "qz_max": 5.0,
-                "delta_qr": 0.25,
+                "delta_qr": 0.1,
             },
         ),
         (

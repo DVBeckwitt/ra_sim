@@ -10297,6 +10297,9 @@ def _sync_selected_qr_rod_controls_state() -> None:
     rod_widgets = (
         getattr(range_view_state, "selected_qr_rod_combobox", None),
         getattr(range_view_state, "mirror_selected_qr_phi_checkbutton", None),
+        *(
+            (getattr(range_view_state, "rod_profile_intensity_mode_buttons", {}) or {}).values()
+        ),
         getattr(range_view_state, "qz_min_slider", None),
         getattr(range_view_state, "qz_min_entry", None),
         getattr(range_view_state, "qz_max_slider", None),
@@ -11929,7 +11932,15 @@ def _analysis_view_payload_signature(view_mode: str) -> object | None:
     if str(view_mode) == "q_space":
         return getattr(simulation_runtime_state, "last_q_space_payload_signature", None)
     if str(view_mode) == "caked":
-        return getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
+        cache_signature = getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
+        if cache_signature is None:
+            return None
+        return (
+            cache_signature,
+            _normalize_caked_intensity_mode(
+                getattr(simulation_runtime_state, "last_caked_intensity_mode", "density")
+            ),
+        )
     return None
 
 
@@ -12406,26 +12417,69 @@ def _auto_match_scale_factor_to_radial_peak():
     bg_curve = simulation_runtime_state.last_1d_integration_data.get("intensities_2theta_bg")
 
     if sim_curve is None or bg_curve is None:
-        ai = simulation_runtime_state.ai_cache.get("ai")
-        sim_img = simulation_runtime_state.last_1d_integration_data.get("simulated_2d_image")
+        sim_img = simulation_runtime_state.last_1d_integration_data.get(
+            "simulated_2d_image",
+        )
+        if sim_img is None:
+            sim_img = getattr(simulation_runtime_state, "unscaled_image", None)
         bg_img = _current_background_backend_for_comparison()
-        if ai is not None and sim_img is not None and bg_img is not None:
+        if sim_img is not None and bg_img is not None:
             try:
-                tth_min, tth_max = sorted((float(tth_min_var.get()), float(tth_max_var.get())))
-                phi_min = float(phi_min_var.get())
-                phi_max = float(phi_max_var.get())
-                sim_res2 = caking(sim_img, ai)
-                bg_res2 = caking(bg_img, ai)
-                rod_roi_payload = _current_selected_qr_rod_caked_mask_payload()
-                if rod_roi_payload is not None:
+                rod_context = _current_selected_qr_rod_detector_integration_context()
+                if rod_context is not None:
+                    rod_profile_intensity_mode = _current_rod_profile_intensity_mode()
+                    sim_profile = _detector_qr_rod_profile_for_image(
+                        sim_img,
+                        rod_context,
+                    )
+                    bg_profile = _detector_qr_rod_profile_for_image(
+                        bg_img,
+                        rod_context,
+                    )
+                    i2t_sim = _selected_qr_rod_profile_curve(
+                        sim_profile,
+                        rod_profile_intensity_mode,
+                    )
+                    i2t_bg = _selected_qr_rod_profile_curve(
+                        bg_profile,
+                        rod_profile_intensity_mode,
+                    )
+                    if i2t_sim is None or i2t_bg is None:
+                        raise ValueError("Selected-Qr rod detector profiles unavailable.")
+                    simulation_runtime_state.last_1d_integration_data.update(
+                        {
+                            "radials_sim": sim_profile["qz_center"],
+                            "radials_bg": bg_profile["qz_center"],
+                            "selected_qr_rod_profile_sim": sim_profile,
+                            "selected_qr_rod_profile_bg": bg_profile,
+                            "selected_qr_rod_profile_signature": rod_context.get("signature"),
+                            "x_axis_kind": "qz",
+                            "x_axis_label": "Qz (A^-1)",
+                        }
+                    )
+                elif _selected_qr_rod_detector_mode_requested():
+                    i2t_sim = None
+                    i2t_bg = None
+                else:
+                    ai_cache = getattr(simulation_runtime_state, "ai_cache", {}) or {}
+                    ai = ai_cache.get("ai") if isinstance(ai_cache, Mapping) else None
+                    if ai is None:
+                        raise ValueError("Caking integrator unavailable.")
+                    tth_min, tth_max = sorted(
+                        (float(tth_min_var.get()), float(tth_max_var.get()))
+                    )
+                    phi_min = float(phi_min_var.get())
+                    phi_max = float(phi_max_var.get())
+                    sim_res2 = caking(sim_img, ai)
+                    bg_res2 = caking(bg_img, ai)
+                    caked_intensity_mode = _current_caked_intensity_mode()
                     i2t_sim, _, _, _ = _caked_profiles_from_sum_fields(
                         sim_res2,
                         tth_min=tth_min,
                         tth_max=tth_max,
                         phi_min=phi_min,
                         phi_max=phi_max,
-                        roi_mask=rod_roi_payload.get("mask"),
-                        use_rectangular_roi=False,
+                        intensity_mode=caked_intensity_mode,
                     )
                     i2t_bg, _, _, _ = _caked_profiles_from_sum_fields(
                         bg_res2,
@@ -12433,23 +12487,7 @@ def _auto_match_scale_factor_to_radial_peak():
                         tth_max=tth_max,
                         phi_min=phi_min,
                         phi_max=phi_max,
-                        roi_mask=rod_roi_payload.get("mask"),
-                        use_rectangular_roi=False,
-                    )
-                else:
-                    i2t_sim, _, _, _ = caked_up(
-                        sim_res2,
-                        tth_min,
-                        tth_max,
-                        phi_min,
-                        phi_max,
-                    )
-                    i2t_bg, _, _, _ = caked_up(
-                        bg_res2,
-                        tth_min,
-                        tth_max,
-                        phi_min,
-                        phi_max,
+                        intensity_mode=caked_intensity_mode,
                     )
                 sim_curve = i2t_sim
                 bg_curve = i2t_bg
@@ -13042,6 +13080,8 @@ def _initialize_runtime_controls_block_23() -> None:
         phi_min_var, \
         phi_max_var, \
         mirror_selected_qr_phi_var, \
+        caked_intensity_mode_var, \
+        rod_profile_intensity_mode_var, \
         tth_min_slider, \
         tth_max_slider, \
         phi_min_slider, \
@@ -13054,6 +13094,8 @@ def _initialize_runtime_controls_block_23() -> None:
     phi_min_var = None
     phi_max_var = None
     mirror_selected_qr_phi_var = None
+    caked_intensity_mode_var = None
+    rod_profile_intensity_mode_var = None
     tth_min_slider = None
     tth_max_slider = None
     phi_min_slider = None
@@ -13390,17 +13432,30 @@ def _caked_profiles_from_sum_fields(
     phi_max,
     roi_mask=None,
     use_rectangular_roi=True,
+    intensity_mode="density",
 ):
     raw_intensity = np.asarray(getattr(res2, "intensity"), dtype=float)
-    raw_sum_signal = np.asarray(getattr(res2, "sum_signal"), dtype=float)
-    raw_sum_normalization = np.asarray(getattr(res2, "sum_normalization"), dtype=float)
+    raw_sum_signal_value = getattr(res2, "sum_signal", None)
+    raw_sum_normalization_value = getattr(res2, "sum_normalization", None)
+    if (raw_sum_signal_value is None) != (raw_sum_normalization_value is None):
+        raise ValueError("Caked sum_signal and sum_normalization fields must be paired.")
+    raw_sum_signal = (
+        None if raw_sum_signal_value is None else np.asarray(raw_sum_signal_value, dtype=float)
+    )
+    raw_sum_normalization = (
+        None
+        if raw_sum_normalization_value is None
+        else np.asarray(raw_sum_normalization_value, dtype=float)
+    )
     radial_axis = np.asarray(getattr(res2, "radial"), dtype=float).reshape(-1)
     raw_azimuth_axis = np.asarray(getattr(res2, "azimuthal"), dtype=float).reshape(-1)
 
     if (
         raw_intensity.ndim != 2
-        or raw_sum_signal.shape != raw_intensity.shape
-        or raw_sum_normalization.shape != raw_intensity.shape
+        or (raw_sum_signal is not None and raw_sum_signal.shape != raw_intensity.shape)
+        or (
+            raw_sum_normalization is not None and raw_sum_normalization.shape != raw_intensity.shape
+        )
         or raw_intensity.shape[0] != raw_azimuth_axis.size
         or raw_intensity.shape[1] != radial_axis.size
     ):
@@ -13408,13 +13463,19 @@ def _caked_profiles_from_sum_fields(
 
     order = np.argsort(raw_phi_to_gui_phi(raw_azimuth_axis), kind="stable")
     gui_azimuth = np.asarray(raw_phi_to_gui_phi(raw_azimuth_axis), dtype=float)[order]
-    gui_sum_signal = raw_sum_signal[order, :]
-    gui_sum_normalization = raw_sum_normalization[order, :]
+    gui_intensity = raw_intensity[order, :]
+    gui_sum_signal = None if raw_sum_signal is None else raw_sum_signal[order, :]
+    gui_sum_normalization = (
+        None if raw_sum_normalization is None else raw_sum_normalization[order, :]
+    )
 
     radial_mask = (radial_axis >= 0.0) & (radial_axis <= 90.0)
     radial_axis_used = np.asarray(radial_axis[radial_mask], dtype=float)
-    gui_sum_signal = gui_sum_signal[:, radial_mask]
-    gui_sum_normalization = gui_sum_normalization[:, radial_mask]
+    gui_intensity = gui_intensity[:, radial_mask]
+    if gui_sum_signal is not None:
+        gui_sum_signal = gui_sum_signal[:, radial_mask]
+    if gui_sum_normalization is not None:
+        gui_sum_normalization = gui_sum_normalization[:, radial_mask]
 
     tth_min, tth_max = sorted((float(tth_min), float(tth_max)))
     phi_min = float(phi_min)
@@ -13425,7 +13486,7 @@ def _caked_profiles_from_sum_fields(
         mask_az = gui_integration_range_drag.detector_phi_mask(gui_azimuth, phi_min, phi_max)
         final_mask = np.asarray(np.outer(mask_az, mask_rad), dtype=bool)
     else:
-        final_mask = np.ones_like(gui_sum_signal, dtype=bool)
+        final_mask = np.ones_like(gui_intensity, dtype=bool)
 
     if roi_mask is not None:
         candidate_mask = np.asarray(roi_mask, dtype=bool)
@@ -13434,25 +13495,59 @@ def _caked_profiles_from_sum_fields(
                 candidate_mask if not use_rectangular_roi else (final_mask & candidate_mask)
             )
 
-    sig = gui_sum_signal * final_mask
-    nor = gui_sum_normalization * final_mask
-    sig_2theta = np.sum(sig, axis=0)
-    nor_2theta = np.sum(nor, axis=0)
-    intensity_vs_2theta = np.divide(
-        sig_2theta,
-        nor_2theta,
-        out=np.zeros_like(sig_2theta, dtype=float),
-        where=nor_2theta > 0.0,
-    )
-
-    sig_phi = np.sum(sig, axis=1)
-    nor_phi = np.sum(nor, axis=1)
-    intensity_vs_phi = np.divide(
-        sig_phi,
-        nor_phi,
-        out=np.zeros_like(sig_phi, dtype=float),
-        where=nor_phi > 0.0,
-    )
+    mode = "raw_sum" if str(intensity_mode) == "raw_sum" else "density"
+    if gui_sum_signal is not None and gui_sum_normalization is not None:
+        if mode == "raw_sum":
+            sig = np.where(final_mask & np.isfinite(gui_sum_signal), gui_sum_signal, 0.0)
+            intensity_vs_2theta = np.sum(sig, axis=0)
+            intensity_vs_phi = np.sum(sig, axis=1)
+        else:
+            valid = (
+                final_mask
+                & np.isfinite(gui_sum_signal)
+                & np.isfinite(gui_sum_normalization)
+                & (gui_sum_normalization > 0.0)
+            )
+            sig = np.where(valid, gui_sum_signal, 0.0)
+            nor = np.where(valid, gui_sum_normalization, 0.0)
+            sig_2theta = np.sum(sig, axis=0)
+            sig_phi = np.sum(sig, axis=1)
+            nor_2theta = np.sum(nor, axis=0)
+            nor_phi = np.sum(nor, axis=1)
+            intensity_vs_2theta = np.divide(
+                sig_2theta,
+                nor_2theta,
+                out=np.zeros_like(sig_2theta, dtype=float),
+                where=nor_2theta > 0.0,
+            )
+            intensity_vs_phi = np.divide(
+                sig_phi,
+                nor_phi,
+                out=np.zeros_like(sig_phi, dtype=float),
+                where=nor_phi > 0.0,
+            )
+    else:
+        raw = np.where(final_mask & np.isfinite(gui_intensity), gui_intensity, 0.0)
+        raw_2theta = np.sum(raw, axis=0)
+        raw_phi = np.sum(raw, axis=1)
+        if mode == "raw_sum":
+            intensity_vs_2theta = raw_2theta
+            intensity_vs_phi = raw_phi
+        else:
+            support = np.sum(final_mask, axis=0).astype(float)
+            support_phi = np.sum(final_mask, axis=1).astype(float)
+            intensity_vs_2theta = np.divide(
+                raw_2theta,
+                support,
+                out=np.zeros_like(raw_2theta, dtype=float),
+                where=support > 0.0,
+            )
+            intensity_vs_phi = np.divide(
+                raw_phi,
+                support_phi,
+                out=np.zeros_like(raw_phi, dtype=float),
+                where=support_phi > 0.0,
+            )
 
     azimuth_axis_used = np.asarray(gui_azimuth, dtype=float)
     if phi_max < phi_min and azimuth_axis_used.size:
@@ -13466,6 +13561,66 @@ def _caked_profiles_from_sum_fields(
         intensity_vs_phi = intensity_vs_phi[azimuth_order]
 
     return intensity_vs_2theta, intensity_vs_phi, azimuth_axis_used, radial_axis_used
+
+
+def _normalize_rod_profile_intensity_mode(value) -> str:
+    return "raw_sum" if str(value) == "raw_sum" else "density"
+
+
+def _normalize_caked_intensity_mode(value) -> str:
+    return "raw_sum" if str(value) == "raw_sum" else "density"
+
+
+def _current_rod_profile_intensity_mode() -> str:
+    try:
+        values = _current_analysis_roi_values()
+    except Exception:
+        values = {}
+    return _normalize_rod_profile_intensity_mode(
+        values.get("rod_profile_intensity_mode", "density")
+    )
+
+
+def _current_caked_intensity_mode() -> str:
+    try:
+        values = _current_analysis_roi_values()
+    except Exception:
+        values = {}
+    return _normalize_caked_intensity_mode(values.get("caked_intensity_mode", "density"))
+
+
+def _selected_qr_rod_profile_curve(profile: Mapping[str, object] | None, mode: object):
+    if not isinstance(profile, Mapping):
+        return None
+    key = "intensity_sum" if _normalize_rod_profile_intensity_mode(mode) == "raw_sum" else "intensity_mean"
+    curve = profile.get(key)
+    if curve is None:
+        return None
+    try:
+        return np.asarray(curve, dtype=float)
+    except Exception:
+        return None
+
+
+def _detector_qr_rod_profile_for_image(
+    detector_image: object,
+    context: Mapping[str, object] | None,
+) -> dict[str, np.ndarray] | None:
+    if not isinstance(context, Mapping):
+        return None
+    return gui_qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        detector_image=detector_image,
+        qr_map=context.get("qr_map"),
+        qz_map=context.get("qz_map"),
+        qz_edges=context.get("qz_edges"),
+        qr_center=context.get("qr_center"),
+        delta_qr=context.get("delta_qr"),
+        valid_q=context.get("valid_q"),
+        detector_phi_deg=context.get("detector_phi_deg"),
+        phi_min=context.get("phi_min", -180.0),
+        phi_max=context.get("phi_max", 180.0),
+        phi_windows=context.get("phi_windows"),
+    )
 
 
 def _detector_angular_maps_for_shape(ai, detector_shape):
@@ -13723,6 +13878,7 @@ def _initialize_runtime_controls_block_24() -> None:
 
     simulation_runtime_state.last_res2_background = None
     simulation_runtime_state.last_res2_sim = None
+    simulation_runtime_state.last_caked_intensity_mode = None
     simulation_runtime_state.ai_cache = {}
     simulation_runtime_state.geometry_fit_caking_ai_cache = {}
 
@@ -13748,58 +13904,184 @@ def _clear_1d_plot_cache_and_lines():
     simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = None
     simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = None
     simulation_runtime_state.last_1d_integration_data["intensities_azimuth_bg"] = None
+    simulation_runtime_state.last_1d_integration_data["x_axis_kind"] = "2theta"
+    simulation_runtime_state.last_1d_integration_data["x_axis_label"] = "2θ (degrees)"
+
+
+def _set_1d_axes_for_standard_caked_profiles(y_label: str = "Intensity") -> None:
+    ax_1d_radial.set_xlabel("2θ (degrees)")
+    ax_1d_radial.set_title("Radial Integration (2θ)")
+    ax_1d_radial.set_ylabel(y_label)
+    ax_1d_azim.set_xlabel("Azimuth (degrees)")
+    ax_1d_azim.set_title("Azimuthal Integration (φ)")
+    ax_1d_azim.set_ylabel(y_label)
+
+
+def _set_1d_axes_for_selected_qr_rod_profile(y_label: str) -> None:
+    ax_1d_radial.set_xlabel("Qz (A^-1)")
+    ax_1d_radial.set_title("Selected Qr Rod Integration (Qz)")
+    ax_1d_radial.set_ylabel(y_label)
+    ax_1d_azim.set_xlabel("Azimuth (degrees)")
+    ax_1d_azim.set_title("Azimuthal Integration (φ)")
+    ax_1d_azim.set_ylabel(y_label)
+
+
+def _clear_selected_qr_rod_detector_1d_plot() -> None:
+    if line_1d_rad is not None:
+        line_1d_rad.set_data([], [])
+    if line_1d_rad_bg is not None:
+        line_1d_rad_bg.set_data([], [])
+    if line_1d_az is not None:
+        line_1d_az.set_data([], [])
+    if line_1d_az_bg is not None:
+        line_1d_az_bg.set_data([], [])
+    simulation_runtime_state.last_1d_integration_data.update(
+        {
+            "radials_sim": None,
+            "intensities_2theta_sim": None,
+            "azimuths_sim": None,
+            "intensities_azimuth_sim": None,
+            "radials_bg": None,
+            "intensities_2theta_bg": None,
+            "azimuths_bg": None,
+            "intensities_azimuth_bg": None,
+            "x_axis_kind": "qz",
+            "x_axis_label": "Qz (A^-1)",
+        }
+    )
+    _set_1d_axes_for_selected_qr_rod_profile("Intensity")
+    ax_1d_radial.relim()
+    ax_1d_radial.autoscale_view()
+    ax_1d_azim.relim()
+    ax_1d_azim.autoscale_view()
+    if canvas_1d is not None:
+        canvas_1d.draw_idle()
+
+
+def _update_1d_plots_from_detector_qr_rod(
+    rod_context: Mapping[str, object],
+    bg_res2,
+) -> bool:
+    rod_profile_intensity_mode = _current_rod_profile_intensity_mode()
+    sim_profile = _detector_qr_rod_profile_for_image(
+        getattr(simulation_runtime_state, "unscaled_image", None),
+        rod_context,
+    )
+    sim_curve = _selected_qr_rod_profile_curve(sim_profile, rod_profile_intensity_mode)
+    if sim_profile is None or sim_curve is None:
+        return False
+
+    qz_center = np.asarray(sim_profile["qz_center"], dtype=float)
+    simulation_runtime_state.last_1d_integration_data.update(
+        {
+            "radials_sim": qz_center,
+            "intensities_2theta_sim": sim_curve,
+            "azimuths_sim": None,
+            "intensities_azimuth_sim": None,
+            "selected_qr_rod_profile_sim": sim_profile,
+            "selected_qr_rod_profile_signature": rod_context.get("signature"),
+            "x_axis_kind": "qz",
+            "x_axis_label": "Qz (A^-1)",
+        }
+    )
+
+    scale = _get_scale_factor_value(default=1.0)
+    line_1d_rad.set_data(qz_center, sim_curve * scale)
+    line_1d_az.set_data([], [])
+
+    if bg_res2 is not None:
+        bg_profile = _detector_qr_rod_profile_for_image(
+            _current_background_backend_for_comparison(),
+            rod_context,
+        )
+        bg_curve = _selected_qr_rod_profile_curve(bg_profile, rod_profile_intensity_mode)
+    else:
+        bg_profile = None
+        bg_curve = None
+
+    if bg_profile is not None and bg_curve is not None:
+        bg_qz_center = np.asarray(bg_profile["qz_center"], dtype=float)
+        simulation_runtime_state.last_1d_integration_data.update(
+            {
+                "radials_bg": bg_qz_center,
+                "intensities_2theta_bg": bg_curve,
+                "azimuths_bg": None,
+                "intensities_azimuth_bg": None,
+                "selected_qr_rod_profile_bg": bg_profile,
+            }
+        )
+        line_1d_rad_bg.set_data(bg_qz_center, bg_curve)
+    else:
+        simulation_runtime_state.last_1d_integration_data.update(
+            {
+                "radials_bg": None,
+                "intensities_2theta_bg": None,
+                "azimuths_bg": None,
+                "intensities_azimuth_bg": None,
+                "selected_qr_rod_profile_bg": None,
+            }
+        )
+        line_1d_rad_bg.set_data([], [])
+    line_1d_az_bg.set_data([], [])
+
+    ax_1d_radial.set_yscale("linear")
+    ax_1d_azim.set_yscale("linear")
+    y_label = (
+        "Raw accumulated intensity"
+        if rod_profile_intensity_mode == "raw_sum"
+        else "Intensity density (support-normalized)"
+    )
+    _set_1d_axes_for_selected_qr_rod_profile(y_label)
+    ax_1d_radial.relim()
+    ax_1d_radial.autoscale_view()
+    ax_1d_azim.relim()
+    ax_1d_azim.autoscale_view()
+    _render_analysis_peak_overlays(redraw=False)
+    if canvas_1d is not None:
+        canvas_1d.draw_idle()
+    return True
 
 
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
     _ensure_analysis_figure()
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
-    rod_roi_payload = _current_selected_qr_rod_caked_mask_payload()
-    if rod_roi_payload is not None:
-        i2t_sim, i_phi_sim, az_sim, rad_sim = _caked_profiles_from_sum_fields(
-            sim_res2,
-            tth_min=tth_min_var.get(),
-            tth_max=tth_max_var.get(),
-            phi_min=phi_min_var.get(),
-            phi_max=phi_max_var.get(),
-            roi_mask=rod_roi_payload.get("mask"),
-            use_rectangular_roi=False,
-        )
-    else:
-        i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
-            sim_res2,
-            tth_min_var.get(),
-            tth_max_var.get(),
-            phi_min_var.get(),
-            phi_max_var.get(),
-        )
+    rod_context = _current_selected_qr_rod_detector_integration_context()
+    if rod_context is not None:
+        if _update_1d_plots_from_detector_qr_rod(rod_context, bg_res2):
+            return
+    if _selected_qr_rod_detector_mode_requested():
+        _clear_selected_qr_rod_detector_1d_plot()
+        return
+
+    caked_intensity_mode = _current_caked_intensity_mode()
+    i2t_sim, i_phi_sim, az_sim, rad_sim = _caked_profiles_from_sum_fields(
+        sim_res2,
+        tth_min=tth_min_var.get(),
+        tth_max=tth_max_var.get(),
+        phi_min=phi_min_var.get(),
+        phi_max=phi_max_var.get(),
+        intensity_mode=caked_intensity_mode,
+    )
     simulation_runtime_state.last_1d_integration_data["radials_sim"] = rad_sim
     simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
     simulation_runtime_state.last_1d_integration_data["azimuths_sim"] = az_sim
     simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
+    simulation_runtime_state.last_1d_integration_data["x_axis_kind"] = "2theta"
+    simulation_runtime_state.last_1d_integration_data["x_axis_label"] = "2θ (degrees)"
 
     scale = _get_scale_factor_value(default=1.0)
     line_1d_rad.set_data(rad_sim, i2t_sim * scale)
     line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
     if bg_res2 is not None:
-        if rod_roi_payload is not None:
-            i2t_bg, i_phi_bg, az_bg, rad_bg = _caked_profiles_from_sum_fields(
-                bg_res2,
-                tth_min=tth_min_var.get(),
-                tth_max=tth_max_var.get(),
-                phi_min=phi_min_var.get(),
-                phi_max=phi_max_var.get(),
-                roi_mask=rod_roi_payload.get("mask"),
-                use_rectangular_roi=False,
-            )
-        else:
-            i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
-                bg_res2,
-                tth_min_var.get(),
-                tth_max_var.get(),
-                phi_min_var.get(),
-                phi_max_var.get(),
-            )
+        i2t_bg, i_phi_bg, az_bg, rad_bg = _caked_profiles_from_sum_fields(
+            bg_res2,
+            tth_min=tth_min_var.get(),
+            tth_max=tth_max_var.get(),
+            phi_min=phi_min_var.get(),
+            phi_max=phi_max_var.get(),
+            intensity_mode=caked_intensity_mode,
+        )
         simulation_runtime_state.last_1d_integration_data["radials_bg"] = rad_bg
         simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
         simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = az_bg
@@ -13816,6 +14098,12 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
 
     ax_1d_radial.set_yscale("linear")
     ax_1d_azim.set_yscale("linear")
+    y_label = (
+        "Raw accumulated intensity"
+        if caked_intensity_mode == "raw_sum"
+        else "Intensity density (support-normalized)"
+    )
+    _set_1d_axes_for_standard_caked_profiles(y_label)
     ax_1d_radial.relim()
     ax_1d_radial.autoscale_view()
     ax_1d_azim.relim()
@@ -13825,15 +14113,74 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
         canvas_1d.draw_idle()
 
 
+def _refresh_primary_caked_raster_from_cached_state() -> bool:
+    if _resolved_primary_analysis_display_mode() != "caked":
+        return False
+    if simulation_runtime_state.last_caked_image_unscaled is None:
+        return False
+
+    try:
+        preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)
+    except Exception:
+        preserved_primary_limits = None
+
+    apply_display = globals().get("_apply_primary_figure_display_from_cached_results")
+    if not callable(apply_display):
+        return False
+    try:
+        target_mode = apply_display("caked", preserved_primary_limits)
+    except Exception:
+        return False
+    if target_mode != "caked":
+        return False
+
+    apply_projection = globals().get("_apply_current_primary_raster_projection")
+    if callable(apply_projection):
+        apply_projection()
+    request_redraw = globals().get("_request_main_canvas_redraw")
+    if callable(request_redraw):
+        request_redraw(force_matplotlib=True)
+    return True
+
+
+def _refresh_visible_caked_display_from_cached_results() -> bool:
+    show_caked_requested = bool(
+        _resolved_primary_analysis_display_mode() == "caked"
+        or _current_app_shell_view_mode() == "caked"
+        or (
+            getattr(analysis_view_controls_view_state, "show_caked_2d_var", None) is not None
+            and analysis_view_controls_view_state.show_caked_2d_var.get()
+        )
+    )
+    if not show_caked_requested:
+        return False
+    if simulation_runtime_state.last_res2_sim is None:
+        return False
+    refreshed = _restore_caked_display_payload_from_cached_results(
+        background_visible=bool(background_runtime_state.visible),
+        q_space_requested=bool(_current_app_shell_view_mode() == "q_space"),
+    )
+    if refreshed:
+        refreshed_primary = _refresh_primary_caked_raster_from_cached_state()
+        refresh_display = globals().get("_refresh_display_from_controls")
+        if callable(refresh_display) and not refreshed_primary:
+            refresh_display()
+    return bool(refreshed)
+
+
 def _refresh_integration_from_cached_results():
 
     ai = simulation_runtime_state.ai_cache.get("ai")
+    caked_display_refreshed = _refresh_visible_caked_display_from_cached_results()
     if not analysis_view_controls_view_state.show_1d_var.get():
         _clear_1d_plot_cache_and_lines()
         refresh_integration_region_visuals()
         _request_overlay_canvas_redraw()
         return True
     if not _analysis_integration_outputs_visible():
+        if caked_display_refreshed:
+            refresh_integration_region_visuals()
+            _request_overlay_canvas_redraw()
         return True
 
     if simulation_runtime_state.unscaled_image is None:
@@ -13867,6 +14214,8 @@ def _refresh_integration_from_cached_results():
         simulation_runtime_state.last_res2_background = None
 
     _update_1d_plots_from_caked(simulation_runtime_state.last_res2_sim, bg_res2)
+    if not caked_display_refreshed:
+        _refresh_visible_caked_display_from_cached_results()
     refresh_integration_region_visuals()
     _request_overlay_canvas_redraw()
     return True
@@ -17527,12 +17876,58 @@ def _prepare_caked_display_payload(
     *,
     ai: FastAzimuthalIntegrator | None = None,
     detector_shape: tuple[int, ...] | list[int] | None = None,
+    intensity_mode: str = "density",
 ) -> dict[str, object] | None:
-    return gui_geometry_fit.build_geometry_fit_caked_view_payload_from_result(
+    payload = gui_geometry_fit.build_geometry_fit_caked_view_payload_from_result(
         res2,
         ai=ai,
         detector_shape=detector_shape,
     )
+    if not isinstance(payload, dict):
+        return payload
+    mode = _normalize_caked_intensity_mode(intensity_mode)
+    display_image = _caked_payload_image_for_intensity_mode(payload, mode)
+    if display_image is not None:
+        payload["image"] = display_image
+        payload["background"] = display_image
+    payload["caked_intensity_mode"] = mode
+    return payload
+
+
+def _caked_payload_image_for_intensity_mode(
+    payload: Mapping[str, object],
+    intensity_mode: str,
+) -> np.ndarray | None:
+    mode = _normalize_caked_intensity_mode(intensity_mode)
+    image = np.asarray(payload.get("image"), dtype=float)
+    if image.ndim != 2:
+        return None
+    sum_signal = payload.get("sum_signal")
+    sum_normalization = payload.get("sum_normalization")
+    count = payload.get("count")
+    signal = None if sum_signal is None else np.asarray(sum_signal, dtype=float)
+    normalization = (
+        None if sum_normalization is None else np.asarray(sum_normalization, dtype=float)
+    )
+    if mode == "raw_sum":
+        if signal is not None and signal.shape == image.shape:
+            return signal.copy()
+        if count is not None:
+            count_array = np.asarray(count, dtype=float)
+            if count_array.shape == image.shape:
+                return image * count_array
+        return image.copy()
+    if (
+        signal is None
+        or normalization is None
+        or signal.shape != image.shape
+        or normalization.shape != image.shape
+    ):
+        return image.copy()
+    density = np.full(image.shape, np.nan, dtype=float)
+    valid = np.isfinite(signal) & np.isfinite(normalization) & (normalization > 0.0)
+    density[valid] = signal[valid] / normalization[valid]
+    return density
 
 
 _Q_SPACE_DISPLAY_LUT_MAX_DETECTOR_PIXELS = 512 * 512
@@ -17690,6 +18085,7 @@ def _invalidate_cached_analysis_space_payloads(
         simulation_runtime_state.last_caked_background_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
+        simulation_runtime_state.last_caked_intensity_mode = None
         _set_live_caked_transform_bundle(None)
         _clear_caked_intersection_cache()
     if clear_q_space:
@@ -17835,11 +18231,13 @@ def _restore_caked_display_payload_from_cached_results(
     """Rebuild caked display arrays from the current cached analysis results."""
     live_q_space_requested = bool(_current_app_shell_view_mode() == "q_space")
     analysis_cache_sig = getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
+    caked_intensity_mode = _current_caked_intensity_mode()
 
     sim_caked = _prepare_caked_display_payload(
         simulation_runtime_state.last_res2_sim,
         ai=simulation_runtime_state.ai_cache.get("ai"),
         detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+        intensity_mode=caked_intensity_mode,
     )
     if isinstance(sim_caked, dict):
         resolved_bundle = sim_caked.get("transform_bundle")
@@ -17869,6 +18267,9 @@ def _restore_caked_display_payload_from_cached_results(
             sim_caked.get("azimuth"),
             dtype=float,
         )
+        simulation_runtime_state.last_caked_intensity_mode = _normalize_caked_intensity_mode(
+            sim_caked.get("caked_intensity_mode", caked_intensity_mode)
+        )
         _set_live_caked_transform_bundle(resolved_bundle)
         simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
         caked_intersection_cache = _prepare_caked_intersection_cache(
@@ -17894,6 +18295,7 @@ def _restore_caked_display_payload_from_cached_results(
             simulation_runtime_state.last_res2_background,
             ai=simulation_runtime_state.ai_cache.get("ai"),
             detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+            intensity_mode=caked_intensity_mode,
         )
     if isinstance(bg_caked, dict):
         simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(
@@ -17933,22 +18335,7 @@ def _restore_caked_display_payload_from_cached_results(
                 ),
                 npt_rad=int(analysis_bins[0]),
                 npt_azim=int(analysis_bins[1]),
-                distance_m=float(corto_detector_var.get()),
-                center=np.asarray(
-                    [float(center_x_var.get()), float(center_y_var.get())],
-                    dtype=np.float64,
-                ),
-                pixel_size_m=float(pixel_size_m),
-                wavelength_m=lambda_ * 1.0e-10,
-                gamma_deg=float(gamma_var.get()),
-                Gamma_deg=float(Gamma_var.get()),
-                chi_deg=float(chi_var.get()),
-                psi_deg=float(psi),
-                psi_z_deg=float(psi_z_var.get()),
-                theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
-                cor_angle_deg=float(cor_angle_var.get()),
-                zs=float(zs_var.get()),
-                zb=float(zb_var.get()),
+                geometry=q_space_geometry,
             )
         except Exception as exc:
             _store_q_space_display_payload(sim_payload=None, bg_payload=None)
@@ -17992,6 +18379,9 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     is_preview = bool(job.get("is_preview", False))
     q_space_requested = bool(job.get("q_space_requested", False))
     caked_outputs_requested = bool(job.get("caked_outputs_requested", True))
+    caked_intensity_mode = _normalize_caked_intensity_mode(
+        job.get("caked_intensity_mode", "density")
+    )
     cached_bg_res2 = job.get("cached_bg_res2")
     cached_bg_caked = job.get("cached_bg_caked")
     intersection_cache = _copy_intersection_cache_tables(
@@ -18045,6 +18435,7 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
                     sim_res2,
                     ai=ai,
                     detector_shape=sim_image.shape,
+                    intensity_mode=caked_intensity_mode,
                 )
                 if isinstance(sim_caked, dict):
                     resolved_bundle = sim_caked.get("transform_bundle")
@@ -18072,13 +18463,17 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
                         sim_caked["transform_bundle"] = resolved_bundle
                     else:
                         resolved_bundle = None
-                if isinstance(cached_bg_caked, dict):
+                if (
+                    isinstance(cached_bg_caked, dict)
+                    and cached_bg_caked.get("caked_intensity_mode") == caked_intensity_mode
+                ):
                     bg_caked = dict(cached_bg_caked)
                 else:
                     bg_caked = _prepare_caked_display_payload(
                         bg_res2,
                         ai=ai,
                         detector_shape=bg_array.shape if bg_array is not None else sim_image.shape,
+                        intensity_mode=caked_intensity_mode,
                     )
                 sim_caked_intersection_cache = _prepare_caked_intersection_cache(
                     intersection_cache,
@@ -18401,6 +18796,9 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         simulation_runtime_state.last_caked_azimuth_values = np.asarray(
             sim_caked.get("azimuth"),
             dtype=float,
+        )
+        simulation_runtime_state.last_caked_intensity_mode = _normalize_caked_intensity_mode(
+            sim_caked.get("caked_intensity_mode", "density")
         )
         _set_live_caked_transform_bundle(resolved_bundle)
         simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
@@ -21287,6 +21685,7 @@ def do_update():
         )
     q_space_payload_geometry_sig = _q_space_geometry_cache_signature_from_geometry(q_space_geometry)
     q_space_geometry_sig = q_space_payload_geometry_sig if q_space_requested else None
+    caked_intensity_mode = _current_caked_intensity_mode()
     analysis_requested = bool(
         simulation_runtime_state.unscaled_image is not None
         and (caked_outputs_requested or q_space_requested)
@@ -21298,6 +21697,7 @@ def do_update():
             q_space_geometry_sig,
             bool(caked_outputs_requested),
             bool(q_space_requested),
+            caked_intensity_mode,
         )
         if analysis_requested
         else None
@@ -21502,6 +21902,7 @@ def do_update():
                 "q_space_geometry": _copy_q_space_geometry(q_space_geometry),
                 "q_space_requested": q_space_requested,
                 "caked_outputs_requested": caked_outputs_requested,
+                "caked_intensity_mode": caked_intensity_mode,
                 "requested_view_mode": requested_view_mode,
                 "sim_caking_sig": sim_caking_sig,
                 "bg_caking_sig": bg_caking_sig,
@@ -22074,18 +22475,22 @@ def reset_to_defaults():
     phi_max_var.set(15.0)
     integrate_selected_qr_rod_var.set(False)
     mirror_selected_qr_phi_var.set(False)
+    caked_intensity_mode_var.set("density")
+    rod_profile_intensity_mode_var.set("density")
     selected_qr_rod_key_var.set("")
     qz_extent = _current_caked_qz_extent()
     qz_lo, qz_hi = _default_qz_values_for_extent(qz_extent)
     qz_min_var.set(qz_lo)
     qz_max_var.set(qz_hi)
-    delta_qr_var.set(0.25)
+    delta_qr_var.set(0.1)
     integration_range_controls_view_state.integrate_selected_qr_rod_value = False
     integration_range_controls_view_state.mirror_selected_qr_phi_value = False
+    integration_range_controls_view_state.caked_intensity_mode_value = "density"
+    integration_range_controls_view_state.rod_profile_intensity_mode_value = "density"
     integration_range_controls_view_state.selected_qr_rod_key_value = ""
     integration_range_controls_view_state.qz_min_value = float(qz_lo)
     integration_range_controls_view_state.qz_max_value = float(qz_hi)
-    integration_range_controls_view_state.delta_qr_value = 0.25
+    integration_range_controls_view_state.delta_qr_value = 0.1
     analysis_view_controls_view_state.show_1d_var.set(False)
     analysis_view_controls_view_state.show_caked_2d_var.set(False)
     vmin_caked_var.set(0.0)
@@ -31199,6 +31604,28 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
             getattr(view_state, "mirror_selected_qr_phi_var", None),
             mirror_value,
         )
+    if "caked_intensity_mode" in snapshot:
+        caked_intensity_mode = _normalize_caked_intensity_mode(
+            snapshot.get("caked_intensity_mode", "density")
+        )
+        setattr(view_state, "caked_intensity_mode_value", caked_intensity_mode)
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, "caked_intensity_mode_var", None),
+            caked_intensity_mode,
+        )
+    if "rod_profile_intensity_mode" in snapshot:
+        rod_profile_intensity_mode = _normalize_rod_profile_intensity_mode(
+            snapshot.get("rod_profile_intensity_mode", "density")
+        )
+        setattr(
+            view_state,
+            "rod_profile_intensity_mode_value",
+            rod_profile_intensity_mode,
+        )
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, "rod_profile_intensity_mode_var", None),
+            rod_profile_intensity_mode,
+        )
     if "selected_qr_rod_key" in snapshot:
         selected_key = str(snapshot.get("selected_qr_rod_key", ""))
         setattr(view_state, "selected_qr_rod_key_value", selected_key)
@@ -31247,6 +31674,21 @@ def _current_analysis_roi_values() -> dict[str, object]:
             "mirror_selected_qr_phi": _read_analysis_bool_value(
                 globals().get("mirror_selected_qr_phi_var"),
                 _read_analysis_cached_bool_value("mirror_selected_qr_phi_value", False),
+            ),
+            "caked_intensity_mode": _normalize_caked_intensity_mode(
+                _read_analysis_string_value(
+                    globals().get("caked_intensity_mode_var"),
+                    _read_analysis_cached_string_value("caked_intensity_mode_value", "density"),
+                )
+            ),
+            "rod_profile_intensity_mode": _normalize_rod_profile_intensity_mode(
+                _read_analysis_string_value(
+                    globals().get("rod_profile_intensity_mode_var"),
+                    _read_analysis_cached_string_value(
+                        "rod_profile_intensity_mode_value",
+                        "density",
+                    ),
+                )
             ),
             "selected_qr_rod_key": str(
                 gui_integration_range_drag._safe_var_get(  # noqa: SLF001
@@ -32611,6 +33053,7 @@ def _render_analysis_integration_range_controls(
 ) -> None:
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
     global integrate_selected_qr_rod_var, mirror_selected_qr_phi_var, selected_qr_rod_key_var
+    global caked_intensity_mode_var, rod_profile_intensity_mode_var
     global qz_min_var, qz_max_var, delta_qr_var
     global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
 
@@ -32631,11 +33074,17 @@ def _render_analysis_integration_range_controls(
         phi_max=float(values.get("phi_max", 15.0)),
         integrate_selected_qr_rod=bool(values.get("integrate_selected_qr_rod", False)),
         mirror_selected_qr_phi=bool(values.get("mirror_selected_qr_phi", False)),
+        caked_intensity_mode=_normalize_caked_intensity_mode(
+            values.get("caked_intensity_mode", "density")
+        ),
+        rod_profile_intensity_mode=_normalize_rod_profile_intensity_mode(
+            values.get("rod_profile_intensity_mode", "density")
+        ),
         selected_qr_rod_key=str(values.get("selected_qr_rod_key", "")),
         selected_qr_rod_options=_selected_qr_rod_option_pairs(_analysis_selected_qr_rod_entries()),
         qz_min=float(values.get("qz_min", 0.0)),
         qz_max=float(values.get("qz_max", 5.0)),
-        delta_qr=float(values.get("delta_qr", 0.25)),
+        delta_qr=float(values.get("delta_qr", 0.1)),
         schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
         disable_peak_pick=lambda: _set_analysis_peak_pick_mode(False),
         refresh_region_visuals=refresh_region_visuals_callback,
@@ -32649,6 +33098,10 @@ def _render_analysis_integration_range_controls(
         integration_range_controls_view_state.integrate_selected_qr_rod_var
     )
     mirror_selected_qr_phi_var = integration_range_controls_view_state.mirror_selected_qr_phi_var
+    caked_intensity_mode_var = integration_range_controls_view_state.caked_intensity_mode_var
+    rod_profile_intensity_mode_var = (
+        integration_range_controls_view_state.rod_profile_intensity_mode_var
+    )
     selected_qr_rod_key_var = integration_range_controls_view_state.selected_qr_rod_key_var
     qz_min_var = integration_range_controls_view_state.qz_min_var
     qz_max_var = integration_range_controls_view_state.qz_max_var
