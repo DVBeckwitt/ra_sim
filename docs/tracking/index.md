@@ -209,6 +209,7 @@ still failing. Full fitter validation is not claimed.
 | --- | --- | --- | --- | --- | --- | --- |
 | Analyze dual-source box peak fit | feature | - | none | p1 | 2026-04-20 | [analyze-dual-source-box-peak-fit.md](archive/analyze-dual-source-box-peak-fit.md) |
 | Analyze overlay hardening | bug | - | none | p2 | 2026-04-20 | [analyze-overlay-hardening.md](archive/analyze-overlay-hardening.md) |
+| Background peak-fit diagnostics | bug/feature | - | none | p2 | 2026-04-30 | [background-peak-fit-diagnostics.md](archive/background-peak-fit-diagnostics.md) |
 | Detector-oracle caked Qr/background picks | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-23 | [detector-oracle-caked-background-picks.md](archive/detector-oracle-caked-background-picks.md) |
 | Fast primary rasterizer | refactor | - | none | p2 | 2026-04-22 | [fast-primary-rasterizer.md](archive/fast-primary-rasterizer.md) |
 | GUI runtime selective update fast paths | optimization | - | none | p2 | 2026-04-28 | [gui-runtime-selective-update-fast-paths.md](archive/gui-runtime-selective-update-fast-paths.md) |
