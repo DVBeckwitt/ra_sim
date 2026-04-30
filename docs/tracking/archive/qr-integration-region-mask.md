@@ -41,14 +41,26 @@ The selected-Qr rod Qz controls now default to `0..5`. Runtime slider bounds use
 `0` as the lower Qz limit and the largest positive Qz candidate from the
 current caked 2theta extent as the upper limit.
 
+Selected-Qr rod mode now hides the standard azimuthal 1D subplot and expands the
+Qz rod profile to occupy the analysis figure. Normal caked radial/azimuthal
+integration restores the two-panel layout when selected-Qr rod mode is disabled.
+
+The GUI startup TypeError from passing `listed_q_group_keys_for_picker` into the
+manual-geometry cache bootstrap is fixed by adding the matching callback
+parameter to the manual-geometry cache callback factory.
+
 ## Bug/error/feature status
 
 - Bug: fixed. Selected-Qr rod numeric 1D profiles no longer integrate caked bins
   through the display mask; they classify detector pixels by Qr/Qz/phi first.
 - Error: no known selected-Qr rod detector-integration errors remain after the
   focused GUI/runtime validation below.
+- Error: fixed. GUI startup no longer fails with
+  `make_runtime_geometry_manual_cache_callbacks() got an unexpected keyword
+  argument 'listed_q_group_keys_for_picker'`.
 - Feature: complete for this workflow. Existing rod intensity mode, mirrored phi
-  controls, caked overlay, and caked Qz drag behavior are preserved.
+  controls, caked overlay, caked Qz drag behavior, and standard caked
+  radial/azimuthal integration behavior are preserved.
 
 ## Next actions
 
@@ -74,6 +86,16 @@ current caked 2theta extent as the upper limit.
   passed.
 - 2026-04-30: `python -m py_compile ra_sim/gui/qr_cylinder_overlay.py ra_sim/gui/_runtime/runtime_session.py`
   passed.
+- 2026-04-30: `python -c "import importlib; m=importlib.import_module('ra_sim.gui._runtime.runtime_session'); m.ensure_runtime_controls_initialized(); print('runtime controls ok')"`
+  passed.
+- 2026-04-30: `python -m pytest tests/test_gui_runtime_import_safe.py -k "selected_qr_rod_1d or caked_profiles_from_sum_fields or refresh_integration" -ra`
+  passed, `6 passed, 332 deselected`.
+- 2026-04-30: `python -m compileall ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/manual_geometry.py tests/test_gui_runtime_import_safe.py`
+  passed.
+- 2026-04-30: `python -m pytest tests/test_gui_runtime_import_safe.py -q -x`
+  currently stops outside this selected-Qr/caked startup patch at
+  `test_geometry_source_snapshot_signature_tracks_sf_picker_inventory`, where
+  that test expects a runtime `current_sf_prune_bias` monkeypatch target.
 
 ## Links
 

@@ -20109,6 +20109,7 @@ def test_runtime_session_selected_qr_rod_1d_uses_detector_qz_profile(
             self.xlabel = None
             self.ylabel = None
             self.title = None
+            self.visible = True
 
         def set_xlabel(self, value) -> None:
             self.xlabel = value
@@ -20121,6 +20122,12 @@ def test_runtime_session_selected_qr_rod_1d_uses_detector_qz_profile(
 
         def set_yscale(self, _value) -> None:
             pass
+
+        def set_visible(self, value) -> None:
+            self.visible = bool(value)
+
+        def get_visible(self) -> bool:
+            return self.visible
 
         def relim(self) -> None:
             pass
@@ -20193,6 +20200,288 @@ def test_runtime_session_selected_qr_rod_1d_uses_detector_qz_profile(
         == "Qz (A^-1)"
     )
     assert runtime_session.ax_1d_radial.xlabel == "Qz (A^-1)"
+    assert runtime_session.ax_1d_azim.get_visible() is False
+
+
+def test_runtime_session_selected_qr_rod_1d_prefers_caked_mask_profile(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    sim_res2 = object()
+    bg_res2 = object()
+    mask_payload = {
+        "mask": np.ones((2, 2), dtype=bool),
+        "qz_min": 0.0,
+        "qz_max": 2.0,
+        "signature": ("rod", "caked"),
+    }
+
+    class _Line:
+        def __init__(self) -> None:
+            self.data = None
+
+        def set_data(self, x, y) -> None:
+            self.data = (np.asarray(x), np.asarray(y))
+
+    class _Axis:
+        def __init__(self) -> None:
+            self.xlabel = None
+            self.ylabel = None
+            self.title = None
+            self.visible = True
+
+        def set_xlabel(self, value) -> None:
+            self.xlabel = value
+
+        def set_ylabel(self, value) -> None:
+            self.ylabel = value
+
+        def set_title(self, value) -> None:
+            self.title = value
+
+        def set_yscale(self, _value) -> None:
+            pass
+
+        def set_visible(self, value) -> None:
+            self.visible = bool(value)
+
+        def get_visible(self) -> bool:
+            return self.visible
+
+        def relim(self) -> None:
+            pass
+
+        def autoscale_view(self, *args, **kwargs) -> None:
+            pass
+
+    def _payload(res2):
+        image = (
+            np.asarray([[2.0, 4.0], [6.0, 8.0]], dtype=float)
+            if res2 is sim_res2
+            else np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=float)
+        )
+        return {
+            "image": image,
+            "radial": np.asarray([10.0, 20.0], dtype=float),
+            "azimuth": np.asarray([-90.0, 90.0], dtype=float),
+        }
+
+    monkeypatch.setattr(runtime_session, "_ensure_analysis_figure", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_analysis_peak_fit_results",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_detector_mode_requested", lambda: True)
+    monkeypatch.setattr(runtime_session, "_current_selected_qr_rod_caked_mask_payload", lambda: mask_payload)
+    monkeypatch.setattr(runtime_session, "_current_selected_qr_rod_detector_integration_context", lambda: (_ for _ in ()).throw(AssertionError("detector fallback should not run")))
+    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "density")
+    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.5)
+    monkeypatch.setattr(runtime_session, "_caked_profile_payload_for_result", _payload)
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_qz_map_for_profile_payload",
+        lambda _payload: np.asarray([[0.25, 1.25], [0.25, 1.25]], dtype=float),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(unscaled_image=np.ones((2, 2)), last_1d_integration_data={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "line_1d_rad", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_rad_bg", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az_bg", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_radial", _Axis(), raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_azim", _Axis(), raising=False)
+    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
+
+    runtime_session._update_1d_plots_from_caked(sim_res2, bg_res2)
+
+    np.testing.assert_allclose(runtime_session.line_1d_rad.data[0], [0.5, 1.5])
+    np.testing.assert_allclose(runtime_session.line_1d_rad.data[1], [6.0, 9.0])
+    np.testing.assert_allclose(runtime_session.line_1d_rad_bg.data[1], [20.0, 30.0])
+    assert runtime_session.line_1d_az.data[0].size == 0
+    assert runtime_session.line_1d_az_bg.data[0].size == 0
+    assert runtime_session.simulation_runtime_state.last_1d_integration_data["x_axis_kind"] == "qz"
+    assert runtime_session.ax_1d_radial.xlabel == "Qz (A^-1)"
+    assert runtime_session.ax_1d_azim.get_visible() is False
+
+
+def test_runtime_session_caked_profiles_fall_back_when_sum_normalization_empty() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    res2 = SimpleNamespace(
+        intensity=np.asarray([[2.0, 4.0], [6.0, 8.0]], dtype=float),
+        sum_signal=np.zeros((2, 2), dtype=float),
+        sum_normalization=np.zeros((2, 2), dtype=float),
+        radial=np.asarray([10.0, 20.0], dtype=float),
+        azimuthal=np.asarray([90.0, 270.0], dtype=float),
+    )
+
+    i2t, i_phi, _az, _rad = runtime_session._caked_profiles_from_sum_fields(
+        res2,
+        tth_min=0.0,
+        tth_max=90.0,
+        phi_min=-180.0,
+        phi_max=180.0,
+        intensity_mode="density",
+    )
+
+    np.testing.assert_allclose(i2t, [4.0, 6.0])
+    np.testing.assert_allclose(i_phi, [3.0, 7.0])
+
+
+def test_runtime_session_selected_qr_rod_1d_clear_hides_azimuth_plot(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Line:
+        def __init__(self) -> None:
+            self.data = None
+
+        def set_data(self, x, y) -> None:
+            self.data = (np.asarray(x), np.asarray(y))
+
+    class _Axis:
+        def __init__(self) -> None:
+            self.visible = True
+
+        def set_xlabel(self, _value) -> None:
+            pass
+
+        def set_ylabel(self, _value) -> None:
+            pass
+
+        def set_title(self, _value) -> None:
+            pass
+
+        def set_visible(self, value) -> None:
+            self.visible = bool(value)
+
+        def get_visible(self) -> bool:
+            return self.visible
+
+        def relim(self) -> None:
+            pass
+
+        def autoscale_view(self, *args, **kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(last_1d_integration_data={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "line_1d_rad", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_rad_bg", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az_bg", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_radial", _Axis(), raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_azim", _Axis(), raising=False)
+    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
+
+    runtime_session._clear_selected_qr_rod_detector_1d_plot()
+
+    assert runtime_session.ax_1d_azim.get_visible() is False
+    assert runtime_session.line_1d_az.data[0].size == 0
+    assert runtime_session.line_1d_az_bg.data[0].size == 0
+
+
+def test_runtime_session_caked_profiles_from_sum_fields_standard_update_restores_azimuth_plot(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def get(self) -> float:
+            return 0.0
+
+    class _Line:
+        def __init__(self) -> None:
+            self.data = None
+
+        def set_data(self, x, y) -> None:
+            self.data = (np.asarray(x), np.asarray(y))
+
+    class _Axis:
+        def __init__(self, *, visible: bool = True) -> None:
+            self.visible = bool(visible)
+            self.xlabel = None
+            self.ylabel = None
+            self.title = None
+
+        def set_xlabel(self, value) -> None:
+            self.xlabel = value
+
+        def set_ylabel(self, value) -> None:
+            self.ylabel = value
+
+        def set_title(self, value) -> None:
+            self.title = value
+
+        def set_yscale(self, _value) -> None:
+            pass
+
+        def set_visible(self, value) -> None:
+            self.visible = bool(value)
+
+        def get_visible(self) -> bool:
+            return self.visible
+
+        def relim(self) -> None:
+            pass
+
+        def autoscale_view(self, *args, **kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(runtime_session, "_ensure_analysis_figure", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_analysis_peak_fit_results",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_detector_mode_requested", lambda: False)
+    monkeypatch.setattr(runtime_session, "_current_caked_intensity_mode", lambda: "density")
+    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.0)
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_profiles_from_sum_fields",
+        lambda *args, **kwargs: (
+            np.asarray([10.0, 20.0], dtype=float),
+            np.asarray([3.0, 4.0], dtype=float),
+            np.asarray([-5.0, 5.0], dtype=float),
+            np.asarray([1.0, 2.0], dtype=float),
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(last_1d_integration_data={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "tth_min_var", _Var(), raising=False)
+    monkeypatch.setattr(runtime_session, "tth_max_var", _Var(), raising=False)
+    monkeypatch.setattr(runtime_session, "phi_min_var", _Var(), raising=False)
+    monkeypatch.setattr(runtime_session, "phi_max_var", _Var(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_rad", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_rad_bg", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az_bg", _Line(), raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_radial", _Axis(), raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_azim", _Axis(visible=False), raising=False)
+    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
+
+    runtime_session._update_1d_plots_from_caked(object(), None)
+
+    assert runtime_session.ax_1d_azim.get_visible() is True
+    np.testing.assert_allclose(runtime_session.line_1d_az.data[0], [-5.0, 5.0])
+    np.testing.assert_allclose(runtime_session.line_1d_az.data[1], [3.0, 4.0])
+    assert runtime_session.ax_1d_azim.title == "Azimuthal Integration (φ)"
 
 
 def test_runtime_session_auto_match_selected_qr_rod_uses_detector_qz_profiles(

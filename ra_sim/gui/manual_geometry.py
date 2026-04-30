@@ -8408,6 +8408,7 @@ def build_geometry_manual_pick_cache(
         Sequence[dict[str, object]],
     ]
     | None = None,
+    listed_q_group_keys_for_picker: Callable[[], object] | object = (),
     simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]] | None = None,
     peak_records: Sequence[object] | None = None,
     build_grouped_candidates: Callable[
@@ -11646,6 +11647,7 @@ def build_geometry_manual_initial_pairs_display(
         Sequence[dict[str, object]],
     ]
     | None = None,
+    listed_q_group_keys_for_picker: Callable[[], object] | object = (),
     simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]] | None = None,
     build_simulated_lookup: Callable[
         [Sequence[dict[str, object]] | None],
@@ -12304,6 +12306,7 @@ def make_runtime_geometry_manual_cache_callbacks(
         Sequence[dict[str, object]],
     ]
     | None = None,
+    listed_q_group_keys_for_picker: Callable[[], object] | object = (),
     simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]] | None = None,
     build_grouped_candidates: Callable[
         [Sequence[dict[str, object]] | None],
@@ -12590,6 +12593,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             placed_cache_signature_fn=_placed_pick_cache_signature_for_request,
             cache_signature_fn=_pick_cache_signature_for_request,
             source_rows_for_background=source_rows_for_background,
+            listed_q_group_keys_for_picker=listed_q_group_keys_for_picker,
             simulated_peaks_for_params=simulated_peaks_for_params,
             peak_records=_resolve_runtime_value(peak_records),
             build_grouped_candidates=build_grouped_candidates,

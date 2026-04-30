@@ -49,6 +49,7 @@ import matplotlib
 from matplotlib.colors import ListedColormap, LogNorm, Normalize
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+from matplotlib.transforms import Bbox
 
 from ra_sim.io.osc_reader import read_osc
 
@@ -178,6 +179,8 @@ from ra_sim.simulation.exact_cake_portable import (
     detector_points_to_angles,
     detector_pixel_to_caked_bin,
     gui_phi_to_raw_phi,
+    integrate_detector_to_cake_lut,
+    prepare_gui_phi_display,
     raw_phi_to_gui_phi,
     resolve_cake_transform_bundle,
     start_exact_cake_geometry_warmup_in_background,
@@ -198,6 +201,7 @@ from ra_sim.fitting.diffuse_background import (
     fit_diffuse_background_native,
     subtract_diffuse_background,
 )
+from ra_sim.fitting.rod_profiles import qz_profile_from_caked_mask
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
@@ -9868,6 +9872,12 @@ def _initialize_runtime_controls_block_04() -> None:
                     consumer=consumer,
                 )
             ),
+            listed_q_group_keys_for_picker=(
+                lambda: gui_controllers.listed_geometry_q_group_keys(
+                    geometry_q_group_state,
+                    _listed_geometry_q_group_entries(),
+                )
+            ),
             simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
             source_snapshot_signature_for_background=(
                 lambda background_index, param_set=None: globals()[
@@ -12602,6 +12612,12 @@ def _auto_match_scale_factor_to_radial_peak():
                 elif _selected_qr_rod_detector_mode_requested():
                     i2t_sim = None
                     i2t_bg = None
+                    simulation_runtime_state.last_1d_integration_data.update(
+                        {
+                            "x_axis_kind": "qz",
+                            "x_axis_label": "Qz (A^-1)",
+                        }
+                    )
                 else:
                     ai_cache = getattr(simulation_runtime_state, "ai_cache", {}) or {}
                     ai = ai_cache.get("ai") if isinstance(ai_cache, Mapping) else None
@@ -12653,20 +12669,24 @@ def _auto_match_scale_factor_to_radial_peak():
     bg_vals = np.asarray(bg_curve, dtype=float)
     sim_vals = sim_vals[np.isfinite(sim_vals)]
     bg_vals = bg_vals[np.isfinite(bg_vals)]
+    x_axis_kind = simulation_runtime_state.last_1d_integration_data.get("x_axis_kind")
+    profile_axis_name = "Qz" if x_axis_kind == "qz" else "radial"
     if sim_vals.size == 0 or bg_vals.size == 0:
-        progress_label_positions.config(text="Auto-match failed: radial curves are empty.")
+        progress_label_positions.config(
+            text=f"Auto-match failed: {profile_axis_name} curves are empty."
+        )
         return
 
     sim_peak = float(np.max(sim_vals))
     bg_peak = float(np.max(bg_vals))
     if not np.isfinite(sim_peak) or sim_peak <= 0.0:
         progress_label_positions.config(
-            text="Auto-match failed: simulated radial peak is non-positive."
+            text=f"Auto-match failed: simulated {profile_axis_name} peak is non-positive."
         )
         return
     if not np.isfinite(bg_peak) or bg_peak < 0.0:
         progress_label_positions.config(
-            text="Auto-match failed: background radial peak is invalid."
+            text=f"Auto-match failed: background {profile_axis_name} peak is invalid."
         )
         return
 
@@ -12675,7 +12695,7 @@ def _auto_match_scale_factor_to_radial_peak():
     apply_scale_factor_to_existing_results(update_limits=False)
     progress_label_positions.config(
         text=(
-            f"Auto-matched scale factor to radial peak: {target_scale:.6g} "
+            f"Auto-matched scale factor to {profile_axis_name} peak: {target_scale:.6g} "
             f"(sim max={sim_peak:.6g}, bg max={bg_peak:.6g})."
         )
     )
@@ -13124,6 +13144,10 @@ def _initialize_runtime_controls_block_21() -> None:
 def _reset_analysis_figure_view() -> None:
     if ax_1d_radial is None or ax_1d_azim is None:
         return
+    if _selected_qr_rod_detector_mode_requested():
+        _set_1d_layout_for_selected_qr_rod()
+    else:
+        _set_1d_layout_for_standard_profiles()
     if not gui_analysis_figure_controls.reset_analysis_axes_view(
         ax_1d_radial,
         ax_1d_azim,
@@ -13213,6 +13237,114 @@ def _ensure_analysis_figure() -> None:
     ax_1d_azim.set_xlabel("Azimuth (degrees)")
     ax_1d_azim.set_ylabel("Intensity")
     ax_1d_azim.set_title("Azimuthal Integration (φ)")
+
+
+def _analysis_1d_layout_cache() -> dict[str, object]:
+    cache = getattr(simulation_runtime_state, "analysis_1d_layout_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(simulation_runtime_state, "analysis_1d_layout_cache", cache)
+    return cache
+
+
+def _axis_position(axis: object) -> object | None:
+    get_position = getattr(axis, "get_position", None)
+    if not callable(get_position):
+        return None
+    try:
+        position = get_position()
+    except Exception:
+        return None
+    frozen = getattr(position, "frozen", None)
+    if callable(frozen):
+        try:
+            return frozen()
+        except Exception:
+            return position
+    return position
+
+
+def _set_axis_position(axis: object, position: object | None) -> None:
+    if position is None:
+        return
+    set_position = getattr(axis, "set_position", None)
+    if not callable(set_position):
+        return
+    try:
+        set_position(position)
+    except Exception:
+        pass
+
+
+def _set_axis_visible(axis: object, visible: bool) -> None:
+    set_visible = getattr(axis, "set_visible", None)
+    if not callable(set_visible):
+        return
+    try:
+        set_visible(bool(visible))
+    except Exception:
+        pass
+
+
+def _remember_standard_1d_layout() -> dict[str, object]:
+    cache = _analysis_1d_layout_cache()
+    if ax_1d_radial is None or ax_1d_azim is None:
+        return cache
+    radial_axis_id = id(ax_1d_radial)
+    azimuth_axis_id = id(ax_1d_azim)
+    if (
+        cache.get("radial_axis_id") == radial_axis_id
+        and cache.get("azimuth_axis_id") == azimuth_axis_id
+    ):
+        return cache
+
+    radial_position = _axis_position(ax_1d_radial)
+    azimuth_position = _axis_position(ax_1d_azim)
+    selected_position = None
+    if radial_position is not None and azimuth_position is not None:
+        try:
+            selected_position = Bbox.from_extents(
+                min(float(radial_position.x0), float(azimuth_position.x0)),
+                min(float(radial_position.y0), float(azimuth_position.y0)),
+                max(float(radial_position.x1), float(azimuth_position.x1)),
+                max(float(radial_position.y1), float(azimuth_position.y1)),
+            )
+        except Exception:
+            selected_position = None
+    cache.clear()
+    cache.update(
+        {
+            "radial_axis_id": radial_axis_id,
+            "azimuth_axis_id": azimuth_axis_id,
+            "radial_position": radial_position,
+            "azimuth_position": azimuth_position,
+            "selected_radial_position": selected_position,
+        }
+    )
+    return cache
+
+
+def _set_1d_layout_for_selected_qr_rod() -> None:
+    if ax_1d_radial is None or ax_1d_azim is None:
+        return
+    cache = _remember_standard_1d_layout()
+    _set_axis_visible(ax_1d_radial, True)
+    _set_axis_visible(ax_1d_azim, False)
+    _set_axis_position(ax_1d_radial, cache.get("selected_radial_position"))
+    if line_1d_az is not None:
+        line_1d_az.set_data([], [])
+    if line_1d_az_bg is not None:
+        line_1d_az_bg.set_data([], [])
+
+
+def _set_1d_layout_for_standard_profiles() -> None:
+    if ax_1d_radial is None or ax_1d_azim is None:
+        return
+    cache = _remember_standard_1d_layout()
+    _set_axis_visible(ax_1d_radial, True)
+    _set_axis_visible(ax_1d_azim, True)
+    _set_axis_position(ax_1d_radial, cache.get("radial_position"))
+    _set_axis_position(ax_1d_azim, cache.get("azimuth_position"))
 
 
 def _initialize_runtime_controls_block_23() -> None:
@@ -13589,6 +13721,8 @@ def _caked_profiles_from_sum_fields(
         if raw_sum_normalization_value is None
         else np.asarray(raw_sum_normalization_value, dtype=float)
     )
+    raw_count_value = getattr(res2, "count", None)
+    raw_count = None if raw_count_value is None else np.asarray(raw_count_value, dtype=float)
     radial_axis = np.asarray(getattr(res2, "radial"), dtype=float).reshape(-1)
     raw_azimuth_axis = np.asarray(getattr(res2, "azimuthal"), dtype=float).reshape(-1)
 
@@ -13598,6 +13732,7 @@ def _caked_profiles_from_sum_fields(
         or (
             raw_sum_normalization is not None and raw_sum_normalization.shape != raw_intensity.shape
         )
+        or (raw_count is not None and raw_count.shape != raw_intensity.shape)
         or raw_intensity.shape[0] != raw_azimuth_axis.size
         or raw_intensity.shape[1] != radial_axis.size
     ):
@@ -13610,6 +13745,7 @@ def _caked_profiles_from_sum_fields(
     gui_sum_normalization = (
         None if raw_sum_normalization is None else raw_sum_normalization[order, :]
     )
+    gui_count = None if raw_count is None else raw_count[order, :]
 
     radial_mask = (radial_axis >= 0.0) & (radial_axis <= 90.0)
     radial_axis_used = np.asarray(radial_axis[radial_mask], dtype=float)
@@ -13618,6 +13754,8 @@ def _caked_profiles_from_sum_fields(
         gui_sum_signal = gui_sum_signal[:, radial_mask]
     if gui_sum_normalization is not None:
         gui_sum_normalization = gui_sum_normalization[:, radial_mask]
+    if gui_count is not None:
+        gui_count = gui_count[:, radial_mask]
 
     tth_min, tth_max = sorted((float(tth_min), float(tth_max)))
     phi_min = float(phi_min)
@@ -13638,11 +13776,43 @@ def _caked_profiles_from_sum_fields(
             )
 
     mode = "raw_sum" if str(intensity_mode) == "raw_sum" else "density"
+
+    def _fallback_profiles() -> tuple[np.ndarray, np.ndarray]:
+        raw_source = gui_intensity
+        if mode == "raw_sum" and gui_count is not None:
+            raw_source = gui_intensity * np.where(np.isfinite(gui_count), gui_count, 0.0)
+        raw = np.where(final_mask & np.isfinite(raw_source), raw_source, 0.0)
+        raw_2theta = np.sum(raw, axis=0)
+        raw_phi = np.sum(raw, axis=1)
+        if mode == "raw_sum":
+            return raw_2theta, raw_phi
+        support = np.sum(final_mask, axis=0).astype(float)
+        support_phi = np.sum(final_mask, axis=1).astype(float)
+        return (
+            np.divide(
+                raw_2theta,
+                support,
+                out=np.zeros_like(raw_2theta, dtype=float),
+                where=support > 0.0,
+            ),
+            np.divide(
+                raw_phi,
+                support_phi,
+                out=np.zeros_like(raw_phi, dtype=float),
+                where=support_phi > 0.0,
+            ),
+        )
+
     if gui_sum_signal is not None and gui_sum_normalization is not None:
         if mode == "raw_sum":
             sig = np.where(final_mask & np.isfinite(gui_sum_signal), gui_sum_signal, 0.0)
             intensity_vs_2theta = np.sum(sig, axis=0)
             intensity_vs_phi = np.sum(sig, axis=1)
+            if not (
+                np.any(np.isfinite(intensity_vs_2theta))
+                and np.any(np.abs(intensity_vs_2theta) > 0.0)
+            ):
+                intensity_vs_2theta, intensity_vs_phi = _fallback_profiles()
         else:
             valid = (
                 final_mask
@@ -13656,40 +13826,23 @@ def _caked_profiles_from_sum_fields(
             sig_phi = np.sum(sig, axis=1)
             nor_2theta = np.sum(nor, axis=0)
             nor_phi = np.sum(nor, axis=1)
-            intensity_vs_2theta = np.divide(
-                sig_2theta,
-                nor_2theta,
-                out=np.zeros_like(sig_2theta, dtype=float),
-                where=nor_2theta > 0.0,
-            )
-            intensity_vs_phi = np.divide(
-                sig_phi,
-                nor_phi,
-                out=np.zeros_like(sig_phi, dtype=float),
-                where=nor_phi > 0.0,
-            )
+            if not (np.any(nor_2theta > 0.0) or np.any(nor_phi > 0.0)):
+                intensity_vs_2theta, intensity_vs_phi = _fallback_profiles()
+            else:
+                intensity_vs_2theta = np.divide(
+                    sig_2theta,
+                    nor_2theta,
+                    out=np.zeros_like(sig_2theta, dtype=float),
+                    where=nor_2theta > 0.0,
+                )
+                intensity_vs_phi = np.divide(
+                    sig_phi,
+                    nor_phi,
+                    out=np.zeros_like(sig_phi, dtype=float),
+                    where=nor_phi > 0.0,
+                )
     else:
-        raw = np.where(final_mask & np.isfinite(gui_intensity), gui_intensity, 0.0)
-        raw_2theta = np.sum(raw, axis=0)
-        raw_phi = np.sum(raw, axis=1)
-        if mode == "raw_sum":
-            intensity_vs_2theta = raw_2theta
-            intensity_vs_phi = raw_phi
-        else:
-            support = np.sum(final_mask, axis=0).astype(float)
-            support_phi = np.sum(final_mask, axis=1).astype(float)
-            intensity_vs_2theta = np.divide(
-                raw_2theta,
-                support,
-                out=np.zeros_like(raw_2theta, dtype=float),
-                where=support > 0.0,
-            )
-            intensity_vs_phi = np.divide(
-                raw_phi,
-                support_phi,
-                out=np.zeros_like(raw_phi, dtype=float),
-                where=support_phi > 0.0,
-            )
+        intensity_vs_2theta, intensity_vs_phi = _fallback_profiles()
 
     azimuth_axis_used = np.asarray(gui_azimuth, dtype=float)
     if phi_max < phi_min and azimuth_axis_used.size:
@@ -13736,12 +13889,168 @@ def _selected_qr_rod_profile_curve(profile: Mapping[str, object] | None, mode: o
         return None
     key = "intensity_sum" if _normalize_rod_profile_intensity_mode(mode) == "raw_sum" else "intensity_mean"
     curve = profile.get(key)
-    if curve is None:
-        return None
+    return _finite_profile_curve(curve)
+
+
+def _finite_profile_curve(values: object) -> np.ndarray | None:
     try:
-        return np.asarray(curve, dtype=float)
+        curve = np.asarray(values, dtype=float)
     except Exception:
         return None
+    if curve.ndim != 1 or curve.size <= 0 or not np.any(np.isfinite(curve)):
+        return None
+    return curve
+
+
+def _caked_profile_payload_for_result(res2) -> dict[str, object] | None:
+    try:
+        payload = gui_geometry_fit.build_geometry_fit_caked_view_payload_from_result(
+            res2,
+            ai=simulation_runtime_state.ai_cache.get("ai"),
+            detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+        )
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _caked_qz_map_for_profile_payload(payload: Mapping[str, object]) -> np.ndarray | None:
+    try:
+        image = np.asarray(payload.get("image"), dtype=float)
+        radial_axis = np.asarray(payload.get("radial"), dtype=float).reshape(-1)
+        azimuth_axis = np.asarray(payload.get("azimuth"), dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if (
+        image.ndim != 2
+        or image.shape != (int(azimuth_axis.size), int(radial_axis.size))
+        or image.size <= 0
+    ):
+        return None
+
+    config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
+    config = None
+    if callable(config_factory):
+        try:
+            candidate = config_factory()
+        except Exception:
+            candidate = None
+        if isinstance(candidate, gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig):
+            config = candidate
+
+    detector_shape = payload.get("detector_shape")
+    try:
+        detector_shape_tuple = tuple(int(v) for v in detector_shape[:2])
+    except Exception:
+        detector_shape_tuple = None
+
+    resolved_bundle = payload.get("transform_bundle")
+    if not isinstance(resolved_bundle, CakeTransformBundle):
+        resolved_bundle = getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
+    if (
+        config is not None
+        and detector_shape_tuple is not None
+        and isinstance(resolved_bundle, CakeTransformBundle)
+    ):
+        try:
+            q_maps = gui_qr_cylinder_overlay.detector_qr_qz_maps_for_projection(
+                config=config,
+                detector_shape=detector_shape_tuple,
+            )
+        except Exception:
+            q_maps = None
+        if q_maps is not None:
+            try:
+                _qr_detector, qz_detector, valid_q = q_maps
+                qz_detector = np.asarray(qz_detector, dtype=np.float64).copy()
+                qz_detector[~np.asarray(valid_q, dtype=bool)] = np.nan
+                qz_cake_raw = integrate_detector_to_cake_lut(
+                    qz_detector.astype(np.float32, copy=False),
+                    np.asarray(resolved_bundle.radial_deg, dtype=np.float64),
+                    np.asarray(resolved_bundle.raw_azimuth_deg, dtype=np.float64),
+                    resolved_bundle.lut,
+                )
+                qz_caked, qz_radial, qz_azimuth = prepare_gui_phi_display(qz_cake_raw)
+                if (
+                    np.asarray(qz_caked).shape == image.shape
+                    and np.allclose(np.asarray(qz_radial, dtype=float), radial_axis)
+                    and np.allclose(np.asarray(qz_azimuth, dtype=float), azimuth_axis)
+                ):
+                    return np.asarray(qz_caked, dtype=np.float64)
+            except Exception:
+                pass
+
+    try:
+        _qr_map, qz_map = gui_controllers.caked_axes_to_qr_qz_maps(
+            radial_axis,
+            azimuth_axis,
+            wavelength_m=float(globals().get("lambda_", 0.0)) * 1.0e-10,
+        )
+    except Exception:
+        return None
+    if np.asarray(qz_map).shape != image.shape:
+        return None
+    return np.asarray(qz_map, dtype=np.float64)
+
+
+def _selected_qr_rod_caked_profile_for_result(
+    res2,
+    mask_payload: Mapping[str, object],
+    mode: object,
+) -> dict[str, np.ndarray] | None:
+    payload = _caked_profile_payload_for_result(res2)
+    if payload is None:
+        return None
+    try:
+        image = np.asarray(payload.get("image"), dtype=np.float64)
+        mask = np.asarray(mask_payload.get("mask"), dtype=bool)
+        qz_min = float(mask_payload.get("qz_min"))
+        qz_max = float(mask_payload.get("qz_max"))
+    except Exception:
+        return None
+    if image.ndim != 2 or mask.shape != image.shape:
+        return None
+    qz_lo, qz_hi = sorted((qz_min, qz_max))
+    if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
+        return None
+    qz_map = _caked_qz_map_for_profile_payload(payload)
+    if qz_map is None or qz_map.shape != image.shape:
+        return None
+    qz_edges = np.linspace(qz_lo, qz_hi, int(image.shape[1]) + 1, dtype=np.float64)
+    signal_sum = payload.get("sum_signal")
+    normalization_sum = payload.get("sum_normalization")
+    if (signal_sum is None) != (normalization_sum is None):
+        signal_sum = None
+        normalization_sum = None
+    try:
+        profile = qz_profile_from_caked_mask(
+            image=image,
+            qz_map=qz_map,
+            qz_edges=qz_edges,
+            mask=mask,
+            signal_sum=signal_sum,
+            normalization_sum=normalization_sum,
+            acceptance=payload.get("count"),
+        )
+    except Exception:
+        return None
+    curve_key = (
+        "background_weighted_sum"
+        if _normalize_rod_profile_intensity_mode(mode) == "raw_sum"
+        else "background_density"
+    )
+    curve = _finite_profile_curve(profile.get(curve_key))
+    if curve is None and curve_key == "background_weighted_sum":
+        curve = _finite_profile_curve(profile.get("background_sum"))
+    if curve is None:
+        return None
+    return {
+        "qz_center": np.asarray(profile["qz_center"], dtype=np.float64),
+        "pixel_count": np.asarray(profile["pixel_count"], dtype=np.int64),
+        "intensity_sum": np.asarray(profile["background_weighted_sum"], dtype=np.float64),
+        "intensity_mean": np.asarray(profile["background_density"], dtype=np.float64),
+        "acceptance_sum": np.asarray(profile["acceptance_sum"], dtype=np.float64),
+    }
 
 
 def _detector_qr_rod_profile_for_image(
@@ -14051,6 +14360,7 @@ def _clear_1d_plot_cache_and_lines():
 
 
 def _set_1d_axes_for_standard_caked_profiles(y_label: str = "Intensity") -> None:
+    _set_1d_layout_for_standard_profiles()
     ax_1d_radial.set_xlabel("2θ (degrees)")
     ax_1d_radial.set_title("Radial Integration (2θ)")
     ax_1d_radial.set_ylabel(y_label)
@@ -14060,6 +14370,7 @@ def _set_1d_axes_for_standard_caked_profiles(y_label: str = "Intensity") -> None
 
 
 def _set_1d_axes_for_selected_qr_rod_profile(y_label: str) -> None:
+    _set_1d_layout_for_selected_qr_rod()
     ax_1d_radial.set_xlabel("Qz (A^-1)")
     ax_1d_radial.set_title("Selected Qr Rod Integration (Qz)")
     ax_1d_radial.set_ylabel(y_label)
@@ -14187,11 +14498,97 @@ def _update_1d_plots_from_detector_qr_rod(
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
     _ensure_analysis_figure()
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
-    rod_context = _current_selected_qr_rod_detector_integration_context()
-    if rod_context is not None:
-        if _update_1d_plots_from_detector_qr_rod(rod_context, bg_res2):
-            return
     if _selected_qr_rod_detector_mode_requested():
+        rod_profile_intensity_mode = _current_rod_profile_intensity_mode()
+        mask_payload = _current_selected_qr_rod_caked_mask_payload()
+        if isinstance(mask_payload, Mapping):
+            sim_profile = _selected_qr_rod_caked_profile_for_result(
+                sim_res2,
+                mask_payload,
+                rod_profile_intensity_mode,
+            )
+            sim_curve = _selected_qr_rod_profile_curve(
+                sim_profile,
+                rod_profile_intensity_mode,
+            )
+            if sim_profile is not None and sim_curve is not None:
+                qz_center = np.asarray(sim_profile["qz_center"], dtype=float)
+                simulation_runtime_state.last_1d_integration_data.update(
+                    {
+                        "radials_sim": qz_center,
+                        "intensities_2theta_sim": sim_curve,
+                        "azimuths_sim": None,
+                        "intensities_azimuth_sim": None,
+                        "selected_qr_rod_profile_sim": sim_profile,
+                        "selected_qr_rod_profile_signature": mask_payload.get("signature"),
+                        "x_axis_kind": "qz",
+                        "x_axis_label": "Qz (A^-1)",
+                    }
+                )
+                scale = _get_scale_factor_value(default=1.0)
+                line_1d_rad.set_data(qz_center, sim_curve * scale)
+                line_1d_az.set_data([], [])
+
+                bg_profile = None
+                bg_curve = None
+                if bg_res2 is not None:
+                    bg_profile = _selected_qr_rod_caked_profile_for_result(
+                        bg_res2,
+                        mask_payload,
+                        rod_profile_intensity_mode,
+                    )
+                    bg_curve = _selected_qr_rod_profile_curve(
+                        bg_profile,
+                        rod_profile_intensity_mode,
+                    )
+                if bg_profile is not None and bg_curve is not None:
+                    bg_qz_center = np.asarray(bg_profile["qz_center"], dtype=float)
+                    simulation_runtime_state.last_1d_integration_data.update(
+                        {
+                            "radials_bg": bg_qz_center,
+                            "intensities_2theta_bg": bg_curve,
+                            "azimuths_bg": None,
+                            "intensities_azimuth_bg": None,
+                            "selected_qr_rod_profile_bg": bg_profile,
+                        }
+                    )
+                    line_1d_rad_bg.set_data(bg_qz_center, bg_curve)
+                else:
+                    simulation_runtime_state.last_1d_integration_data.update(
+                        {
+                            "radials_bg": None,
+                            "intensities_2theta_bg": None,
+                            "azimuths_bg": None,
+                            "intensities_azimuth_bg": None,
+                            "selected_qr_rod_profile_bg": None,
+                        }
+                    )
+                    line_1d_rad_bg.set_data([], [])
+                line_1d_az_bg.set_data([], [])
+
+                ax_1d_radial.set_yscale("linear")
+                ax_1d_azim.set_yscale("linear")
+                y_label = (
+                    "Raw accumulated intensity"
+                    if rod_profile_intensity_mode == "raw_sum"
+                    else "Intensity density (support-normalized)"
+                )
+                _set_1d_axes_for_selected_qr_rod_profile(y_label)
+                ax_1d_radial.relim()
+                ax_1d_radial.autoscale_view()
+                ax_1d_azim.relim()
+                ax_1d_azim.autoscale_view()
+                _render_analysis_peak_overlays(redraw=False)
+                if canvas_1d is not None:
+                    canvas_1d.draw_idle()
+                return
+
+        rod_context = _current_selected_qr_rod_detector_integration_context()
+        if rod_context is not None and _update_1d_plots_from_detector_qr_rod(
+            rod_context,
+            bg_res2,
+        ):
+            return
         _clear_selected_qr_rod_detector_1d_plot()
         return
 
@@ -15870,6 +16267,8 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
             "intensities_2theta_bg": None,
             "azimuths_bg": None,
             "intensities_azimuth_bg": None,
+            "x_axis_kind": "2theta",
+            "x_axis_label": "2θ (degrees)",
         }
     )
     if clear_1d_lines:

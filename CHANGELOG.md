@@ -49,21 +49,27 @@
   - Kept New4 ladder lean solve rungs fast by disabling identifiability diagnostics by default, preserving the explicit `identifiability_features` diagnostic run, and throttling running heartbeat writes while keeping full residual traces in final reports.
   - Fixed the `(-1,0,10)` Qr/Qz geometric-fitter objective handoff so provider-local fixed-source rows resolve without HKL fallback, selected caked residuals enter the optimizer vector, saved detector-point shortcuts cannot bypass ambiguous row rejection, and baseline fit-space offsets are primed from explicit baseline params instead of the first objective evaluation.
   - Fixed New4 Mode A Qr geometric-fit prediction so all 14 saved first-image branches resolve by locked dynamic identity, trial params rebuild detector-space source rows, simulated caked peaks are refined before residual calculation, and partial 8/28 residual objectives fail closed instead of silently using stale visual/caked coordinates.
-  - Fixed diagnostic Qz rod profiles to plot acceptance-normalized intensity density instead of raw integrated sums, removing false high-2theta support ramps.
+  - Fixed a manual Qr diagnostic/fit-contract bug where saved caked `(2theta, phi)` targets could move under exact reprojection; cached manual targets now remain fixed while trial simulated sources are recomputed dynamically.
+  - Limited `all_background_peak_fits.ipynb` Qr-rod Qz profiles and caked overlays to caked support at or below `60°` 2theta.
+  - Fixed diagnostic Qz rod profiles to plot acceptance-normalized intensity density instead of raw integrated sums, removing false high-2θ support ramps.
+  - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with tail-conservative rotated 2D Gaussian-plus-plane fits for Qr-rod profiles.
+  - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
   - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.
   - Fixed Qr/Qz Q-set branch collapse so detector-distinct non-00l rows without explicit branch metadata keep separate branch representatives, hit-row phi branches survive source-row canonicalization, branch repair uses stable detector-native/refined coordinates before display aliases, and the Qr/Qz collapse wrapper honors explicit whole-group collapse.
   - Hardened New4 targeted source-row preflight diagnostics with drop-stage HKL/branch inventories, a separate source-coverage gate, Q-group HKL alias matching after canonical source-row construction, and deferred raw hit-table branch filtering. Provider-only parity remains green; full preflight is still red at 5/7 source pairs pending missing live rows for collapsed `00l` and q16 branch 1.
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
+  - Added a Setup `Pick Beam Center` control that uses the current detector/background image, local peak refinement, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.
   - Fixed full GUI-state import so legacy manual placements with detector pixels but missing caked `2theta,phi` anchors rebuild those anchors from the exact caked projection before geometry figures or fits consume them.
   - Warmed caked Qr/Qz projection cache data immediately after detector-mode Qr/Qz selector changes, so manual picking can use caked sim/background coordinates without first switching to caked view.
-  - Added a Setup `Pick Beam Center` control that uses the current detector/background image, local peak refinement, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
   - Added a GUI control and saved-state flag for hiding or showing the simulation overlay independently from the background image.
   - Added an Analyze `Caked image intensity` control so full caked images and standard radial/azimuthal integrations can switch between support-normalized density and raw accumulated caked-bin signal, saved as `analysis_range.caked_intensity_mode`.
   - Fixed the Analyze caked intensity toggle so switching density/raw modes repaints the main caked figure raster instead of reusing stale projected pixels.
   - Added an Analyze selected-Qr rod `Rod profile intensity` control with density-first default and raw accumulated intensity opt-in, saved as `analysis_range.rod_profile_intensity_mode`.
+  - Hid the standard azimuthal integration subplot while selected-Qr rod ROI profiles are active, leaving the Qz rod profile as the only 1D plot for that mode.
+  - Fixed GUI startup after selected-Qr rod picker wiring by threading `listed_q_group_keys_for_picker` through the manual-geometry cache callbacks.
   - Changed selected-Qr rod Qz controls to default to `0..5` and clamp slider bounds to the positive caked-Qz candidate range.
   - Changed the selected-Qr rod half-width default to `0.1 A^-1`.
   - Reorganized Match-tab peak tools so `Drag Move Placed Peaks` stays visible beside the manual pick control, removed the auto-search radius slider from the peak tool row, and renamed the point-removal toggle to `Click Remove Placed Peaks`.
