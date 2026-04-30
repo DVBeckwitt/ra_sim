@@ -20194,6 +20194,7 @@ def test_runtime_session_refresh_integration_repaints_caked_view_when_1d_hidden(
             ai_cache={},
             last_res2_sim=object(),
             last_caked_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_caked_intensity_mode="raw_sum",
         ),
         raising=False,
     )
@@ -20218,6 +20219,11 @@ def test_runtime_session_refresh_integration_repaints_caked_view_when_1d_hidden(
         lambda: "caked",
     )
     monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "caked")
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_caked_intensity_mode",
+        lambda: "density",
+    )
     monkeypatch.setattr(
         runtime_session,
         "_restore_caked_display_payload_from_cached_results",
@@ -20275,6 +20281,103 @@ def test_runtime_session_refresh_integration_repaints_caked_view_when_1d_hidden(
     assert projection_calls == [True]
     assert main_redraw_calls == [{"force_matplotlib": True}]
     assert clear_calls == [True]
+    assert visuals_calls == [True]
+    assert redraw_calls == [True]
+
+
+def test_runtime_session_refresh_integration_keeps_current_caked_display_scale(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    display_refresh_calls: list[bool] = []
+    update_1d_calls: list[tuple[object, object]] = []
+    visuals_calls: list[bool] = []
+    redraw_calls: list[bool] = []
+    sim_res2 = object()
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            ai_cache={"ai": object()},
+            unscaled_image=np.ones((2, 2), dtype=np.float64),
+            last_res2_sim=sim_res2,
+            last_res2_background=None,
+            last_caked_image_unscaled=np.ones((2, 2), dtype=np.float64),
+            last_caked_background_image_unscaled=None,
+            last_caked_intensity_mode="density",
+            last_q_space_image_unscaled=None,
+            analysis_active_job=None,
+            analysis_queued_job=None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(
+            show_1d_var=_Var(True),
+            show_caked_2d_var=_Var(True),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(visible=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "caked",
+    )
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "caked")
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_caked_intensity_mode",
+        lambda: "density",
+    )
+    monkeypatch.setattr(runtime_session, "_analysis_integration_outputs_visible", lambda: True)
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_visible_caked_display_from_cached_results",
+        lambda: display_refresh_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_background_backend_for_comparison",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_1d_plots_from_caked",
+        lambda sim, bg: update_1d_calls.append((sim, bg)),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "refresh_integration_region_visuals",
+        lambda: visuals_calls.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_overlay_canvas_redraw",
+        lambda: redraw_calls.append(True),
+        raising=False,
+    )
+
+    assert runtime_session._refresh_integration_from_cached_results() is True
+    assert display_refresh_calls == []
+    assert update_1d_calls == [(sim_res2, None)]
     assert visuals_calls == [True]
     assert redraw_calls == [True]
 

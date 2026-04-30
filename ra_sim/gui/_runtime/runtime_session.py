@@ -14716,10 +14716,52 @@ def _refresh_visible_caked_display_from_cached_results() -> bool:
     return bool(refreshed)
 
 
+def _cached_analysis_display_refresh_needed_for_range_update() -> bool:
+    show_caked_requested = bool(
+        _resolved_primary_analysis_display_mode() == "caked"
+        or _current_app_shell_view_mode() == "caked"
+        or (
+            getattr(analysis_view_controls_view_state, "show_caked_2d_var", None) is not None
+            and analysis_view_controls_view_state.show_caked_2d_var.get()
+        )
+    )
+    if not show_caked_requested:
+        return False
+    if getattr(simulation_runtime_state, "last_res2_sim", None) is None:
+        return False
+
+    if _current_app_shell_view_mode() == "q_space":
+        return (
+            getattr(simulation_runtime_state, "last_q_space_image_unscaled", None)
+            is None
+        )
+
+    if getattr(simulation_runtime_state, "last_caked_image_unscaled", None) is None:
+        return True
+    if _normalize_caked_intensity_mode(
+        getattr(simulation_runtime_state, "last_caked_intensity_mode", "density")
+    ) != _current_caked_intensity_mode():
+        return True
+    if (
+        getattr(background_runtime_state, "visible", False)
+        and getattr(simulation_runtime_state, "last_res2_background", None) is not None
+        and (
+            getattr(simulation_runtime_state, "last_caked_background_image_unscaled", None)
+            is None
+        )
+    ):
+        return True
+    return False
+
+
 def _refresh_integration_from_cached_results():
 
     ai = simulation_runtime_state.ai_cache.get("ai")
-    caked_display_refreshed = _refresh_visible_caked_display_from_cached_results()
+    refresh_caked_display = _cached_analysis_display_refresh_needed_for_range_update()
+    if refresh_caked_display:
+        caked_display_refreshed = _refresh_visible_caked_display_from_cached_results()
+    else:
+        caked_display_refreshed = False
     if not analysis_view_controls_view_state.show_1d_var.get():
         _clear_1d_plot_cache_and_lines()
         refresh_integration_region_visuals()
@@ -14762,7 +14804,7 @@ def _refresh_integration_from_cached_results():
         simulation_runtime_state.last_res2_background = None
 
     _update_1d_plots_from_caked(simulation_runtime_state.last_res2_sim, bg_res2)
-    if not caked_display_refreshed:
+    if refresh_caked_display and not caked_display_refreshed:
         _refresh_visible_caked_display_from_cached_results()
     refresh_integration_region_visuals()
     _request_overlay_canvas_redraw()
@@ -32460,14 +32502,19 @@ def _analysis_peak_fit_results_text() -> str:
         return empty_text
 
     analysis_peak_tools = _get_analysis_peak_tools_module()
+    formatter = getattr(
+        analysis_peak_tools,
+        "format_peak_fit_axis_table",
+        analysis_peak_tools.format_peak_fit_axis_summary,
+    )
     lines = [
         line
         for line in (
-            analysis_peak_tools.format_peak_fit_axis_summary(
+            formatter(
                 "Radial",
                 getattr(analysis_peak_selection_state, "radial_fit_results", ()),
             ),
-            analysis_peak_tools.format_peak_fit_axis_summary(
+            formatter(
                 "Azimuth",
                 getattr(analysis_peak_selection_state, "azimuth_fit_results", ()),
             ),
@@ -32476,7 +32523,7 @@ def _analysis_peak_fit_results_text() -> str:
     ]
     if not lines:
         return empty_text
-    return "\n".join(lines)
+    return "\n\n".join(lines)
 
 
 def _analysis_peak_state_list(field_name: str) -> list[object]:

@@ -172,6 +172,62 @@ def test_format_peak_fit_axis_summary_reports_last_failure_when_none_succeed() -
     )
 
 
+def test_format_peak_fit_axis_table_reports_widths_and_mixture_percent() -> None:
+    table = analysis_peak_tools.format_peak_fit_axis_table(
+        "Radial",
+        [
+            {
+                "success": True,
+                "peak_index": 1,
+                "model": analysis_peak_tools.PROFILE_GAUSSIAN,
+                "selected_axis_value": 18.25,
+                "center": 18.2,
+                "fwhm": 0.34,
+                "rmse": 0.02,
+            },
+            {
+                "success": True,
+                "peak_index": 2,
+                "model": analysis_peak_tools.PROFILE_LORENTZIAN,
+                "selected_axis_value": 18.75,
+                "center": 18.7,
+                "fwhm": 0.42,
+                "rmse": 0.05,
+            },
+            {
+                "success": True,
+                "peak_index": 3,
+                "model": analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
+                "selected_axis_value": 19.0,
+                "center": 18.95,
+                "fwhm": 0.38,
+                "eta": 0.65,
+                "rmse": 0.03,
+            },
+            {
+                "success": False,
+                "peak_index": 4,
+                "label": "Gaussian",
+                "selected_axis_value": 19.5,
+                "error": "window too small",
+            },
+        ],
+    )
+
+    assert table.splitlines()[0] == "Radial: 3/4 fits; best P1 Gaussian, RMSE 0.02"
+    assert "G-FWHM" in table
+    assert "L-FWHM" in table
+    assert "G/L%" in table
+    assert "P1   Gaussian" in table
+    assert "P2   Lorentz" in table
+    assert "P3   P-Voigt" in table
+    assert "100.0/ 0.0" in table
+    assert " 0.0/100.0" in table
+    assert "35.0/65.0" in table
+    assert "Failures:" in table
+    assert "P4 Gaussian @ 19.5000 deg: window too small" in table
+
+
 def test_fit_peak_profile_recovers_gaussian_center_and_fwhm() -> None:
     x_values = np.linspace(10.0, 20.0, 400)
     y_values = analysis_peak_tools.gaussian_profile(

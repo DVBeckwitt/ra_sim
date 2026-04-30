@@ -3034,6 +3034,8 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
     assert view_state.fit_azimuth_var.get() is False
     assert view_state.selection_status_var.get() == "Selected peaks: 2"
     assert view_state.fit_results_var.get() == "Radial fits ready."
+    assert view_state.fit_results_label.kwargs["font"] == "TkFixedFont"
+    assert view_state.fit_results_label.kwargs["wraplength"] == 0
 
     view_state.find_button.command()
     view_state.pick_button.command()

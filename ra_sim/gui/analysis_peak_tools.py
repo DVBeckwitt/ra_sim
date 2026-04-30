@@ -163,6 +163,48 @@ def format_peak_fit_axis_summary(
     return prefix
 
 
+def format_peak_fit_axis_table(
+    axis_label: str,
+    entries: Sequence[Mapping[str, object]] | None,
+) -> str:
+    """Return a monospaced table of peak-fit widths and mixture percentages."""
+
+    normalized_entries = [entry for entry in (entries or ()) if isinstance(entry, Mapping)]
+    if not normalized_entries:
+        return ""
+
+    successful_entries = [
+        entry for entry in normalized_entries if bool(entry.get("success", False))
+    ]
+    prefix = f"{str(axis_label)}: {len(successful_entries)}/{len(normalized_entries)} fits"
+    best_text = ""
+    if successful_entries:
+        best_entry = min(
+            successful_entries,
+            key=lambda entry: _fit_entry_rmse_sort_key(entry),
+        )
+        best_text = _format_peak_fit_best_table_note(best_entry)
+    if best_text:
+        prefix = f"{prefix}; best {best_text}"
+
+    lines = [
+        prefix,
+        "ID   Model    At deg   Center   G-FWHM  L-FWHM  G/L%       RMSE",
+    ]
+    failure_lines: list[str] = []
+    for entry in sorted(normalized_entries, key=_fit_entry_table_sort_key):
+        lines.append(_format_peak_fit_table_row(entry))
+        if not bool(entry.get("success", False)):
+            failure_text = _format_peak_fit_entry_failure(entry)
+            if failure_text:
+                failure_lines.append(failure_text)
+
+    if failure_lines:
+        lines.append("Failures:")
+        lines.extend(failure_lines)
+    return "\n".join(lines)
+
+
 def recommended_peak_window_half_width(
     peak_centers: Sequence[float] | None,
     peak_index: int,
@@ -995,6 +1037,195 @@ def _fit_entry_axis_position_text(entry: Mapping[str, object]) -> str:
     if np.isfinite(axis_value):
         return f"@ {axis_value:.4f} deg"
     return ""
+
+
+def _fit_entry_id_text(entry: Mapping[str, object]) -> str:
+    source_name = str(entry.get("source", "") or "").strip().lower()
+    try:
+        source_peak_index = int(entry.get("source_peak_index", 0))
+    except Exception:
+        source_peak_index = 0
+    if source_peak_index > 0:
+        if source_name == "background":
+            return f"B{source_peak_index}"
+        if source_name == "simulated":
+            return f"S{source_peak_index}"
+        if source_name == "unknown":
+            return f"U{source_peak_index}"
+
+    try:
+        peak_index = int(entry.get("peak_index", 0))
+    except Exception:
+        peak_index = 0
+    if peak_index > 0:
+        return f"P{peak_index}"
+    if source_name == "unknown":
+        return "U"
+    return "-"
+
+
+def _fit_entry_model(entry: Mapping[str, object]) -> str:
+    model = str(entry.get("model", "") or "").strip().lower()
+    if model in SUPPORTED_PROFILE_MODELS:
+        return model
+    label = str(entry.get("label", "") or "").strip().lower()
+    if "pseudo" in label or "voigt" in label:
+        return PROFILE_PSEUDO_VOIGT
+    if "lorentz" in label:
+        return PROFILE_LORENTZIAN
+    if "gauss" in label:
+        return PROFILE_GAUSSIAN
+    return model
+
+
+def _fit_entry_short_model_label(entry: Mapping[str, object]) -> str:
+    model = _fit_entry_model(entry)
+    if model == PROFILE_GAUSSIAN:
+        return "Gaussian"
+    if model == PROFILE_LORENTZIAN:
+        return "Lorentz"
+    if model == PROFILE_PSEUDO_VOIGT:
+        return "P-Voigt"
+    label = str(entry.get("label", "") or profile_model_label(model)).strip()
+    return label[:8] if label else "-"
+
+
+def _fit_entry_table_sort_key(entry: Mapping[str, object]) -> tuple[object, ...]:
+    source_name = str(entry.get("source", "") or "").strip().lower()
+    source_order = {
+        "background": 0,
+        "simulated": 1,
+        "unknown": 2,
+    }.get(source_name, 3)
+    model_order = {
+        PROFILE_GAUSSIAN: 0,
+        PROFILE_LORENTZIAN: 1,
+        PROFILE_PSEUDO_VOIGT: 2,
+    }.get(_fit_entry_model(entry), 9)
+    try:
+        source_peak_index = int(entry.get("source_peak_index", 0))
+    except Exception:
+        source_peak_index = 0
+    try:
+        peak_index = int(entry.get("peak_index", 0))
+    except Exception:
+        peak_index = 0
+    try:
+        axis_value = float(entry.get("selected_axis_value", np.nan))
+    except Exception:
+        axis_value = float("nan")
+    if not np.isfinite(axis_value):
+        axis_value = float("inf")
+    return (
+        int(source_order),
+        int(source_peak_index) if source_peak_index > 0 else int(peak_index),
+        float(axis_value),
+        int(peak_index),
+        int(model_order),
+    )
+
+
+def _format_peak_fit_numeric_cell(
+    value: object,
+    *,
+    precision: str = ".4f",
+    width: int = 7,
+) -> str:
+    try:
+        numeric_value = float(value)
+    except Exception:
+        numeric_value = float("nan")
+    if not np.isfinite(numeric_value):
+        return "-".rjust(width)
+    return f"{numeric_value:{width}{precision}}"
+
+
+def _format_peak_fit_percent_pair(
+    gaussian_percent: float,
+    lorentzian_percent: float,
+) -> str:
+    if not (np.isfinite(gaussian_percent) and np.isfinite(lorentzian_percent)):
+        return "-".rjust(10)
+    return f"{gaussian_percent:4.1f}/{lorentzian_percent:4.1f}"
+
+
+def _fit_entry_width_mix_cells(entry: Mapping[str, object]) -> tuple[str, str, str]:
+    if not bool(entry.get("success", False)):
+        return "-".rjust(7), "-".rjust(7), "-".rjust(10)
+
+    model = _fit_entry_model(entry)
+    try:
+        fwhm = float(entry.get("fwhm", np.nan))
+    except Exception:
+        fwhm = float("nan")
+    if not np.isfinite(fwhm):
+        return "-".rjust(7), "-".rjust(7), "-".rjust(10)
+
+    if model == PROFILE_GAUSSIAN:
+        return (
+            _format_peak_fit_numeric_cell(fwhm),
+            "-".rjust(7),
+            _format_peak_fit_percent_pair(100.0, 0.0),
+        )
+    if model == PROFILE_LORENTZIAN:
+        return (
+            "-".rjust(7),
+            _format_peak_fit_numeric_cell(fwhm),
+            _format_peak_fit_percent_pair(0.0, 100.0),
+        )
+    if model == PROFILE_PSEUDO_VOIGT:
+        try:
+            eta = float(entry.get("eta", np.nan))
+        except Exception:
+            eta = float("nan")
+        if np.isfinite(eta):
+            eta = float(np.clip(eta, 0.0, 1.0))
+            mix_text = _format_peak_fit_percent_pair((1.0 - eta) * 100.0, eta * 100.0)
+        else:
+            mix_text = "-".rjust(10)
+        fwhm_text = _format_peak_fit_numeric_cell(fwhm)
+        return fwhm_text, fwhm_text, mix_text
+
+    return _format_peak_fit_numeric_cell(fwhm), "-".rjust(7), "-".rjust(10)
+
+
+def _format_peak_fit_best_table_note(entry: Mapping[str, object]) -> str:
+    entry_id = _fit_entry_id_text(entry)
+    model_label = _fit_entry_short_model_label(entry)
+    try:
+        rmse = float(entry.get("rmse", np.nan))
+    except Exception:
+        rmse = float("nan")
+    rmse_text = f", RMSE {rmse:.4g}" if np.isfinite(rmse) else ""
+    return " ".join(part for part in (entry_id, model_label) if part and part != "-") + rmse_text
+
+
+def _format_peak_fit_table_row(entry: Mapping[str, object]) -> str:
+    entry_id = _fit_entry_id_text(entry)[:4]
+    model_text = _fit_entry_short_model_label(entry)[:8]
+    try:
+        axis_value = float(entry.get("selected_axis_value", np.nan))
+    except Exception:
+        axis_value = float("nan")
+    try:
+        center_value = float(entry.get("center", np.nan))
+    except Exception:
+        center_value = float("nan")
+
+    gaussian_fwhm, lorentzian_fwhm, mix_text = _fit_entry_width_mix_cells(entry)
+    rmse_text = _format_peak_fit_numeric_cell(entry.get("rmse", np.nan), precision=".4g")
+    if not bool(entry.get("success", False)):
+        rmse_text = "fail".rjust(7)
+    return (
+        f"{entry_id:<4} "
+        f"{model_text:<8} "
+        f"{_format_peak_fit_numeric_cell(axis_value)} "
+        f"{_format_peak_fit_numeric_cell(center_value)} "
+        f"{gaussian_fwhm} "
+        f"{lorentzian_fwhm} "
+        f"{mix_text} "
+        f"{rmse_text}"
+    ).rstrip()
 
 
 def _format_peak_fit_entry_detail(entry: Mapping[str, object]) -> str:

@@ -67,6 +67,8 @@
   - Added a GUI control and saved-state flag for hiding or showing the simulation overlay independently from the background image.
   - Added an Analyze `Caked image intensity` control so full caked images and standard radial/azimuthal integrations can switch between support-normalized density and raw accumulated caked-bin signal, saved as `analysis_range.caked_intensity_mode`.
   - Fixed the Analyze caked intensity toggle so switching density/raw modes repaints the main caked figure raster instead of reusing stale projected pixels.
+  - Changed Analyze peak-fit results from compact summary lines to a monospaced table showing Gaussian FWHM, Lorentzian FWHM, Gaussian/Lorentzian mix percent, center, and RMSE for radial and azimuthal fits.
+  - Kept the Analyze main caked figure intensity scale fixed during integration-region changes while radial and azimuthal 1D plots still rescale to the selected region.
   - Added an Analyze selected-Qr rod `Rod profile intensity` control with density-first default and raw accumulated intensity opt-in, saved as `analysis_range.rod_profile_intensity_mode`.
   - Hid the standard azimuthal integration subplot while selected-Qr rod ROI profiles are active, leaving the Qz rod profile as the only 1D plot for that mode.
   - Fixed GUI startup after selected-Qr rod picker wiring by threading `listed_q_group_keys_for_picker` through the manual-geometry cache callbacks.

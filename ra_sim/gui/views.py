@@ -6129,7 +6129,8 @@ def create_analysis_peak_tools_controls(
         textvariable=fit_results_var,
         justify=tk.LEFT,
         anchor=tk.W,
-        wraplength=260,
+        font="TkFixedFont",
+        wraplength=0,
     )
     fit_results_label.pack(fill=tk.X)
 
