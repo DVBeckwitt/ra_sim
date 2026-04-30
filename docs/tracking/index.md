@@ -27,11 +27,21 @@ downstream of green mosaic fitting.
 | Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-23 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 | New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-29 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
+| Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
 | Fast-path cache audit and QR selector policy | bug | - | none | p2 | 2026-04-28 | [fast-path-cache-audit-phase1.md](in-progress/fast-path-cache-audit-phase1.md) |
+
+Q-space viewer fix status note:
+Implemented runtime geometry ownership for Q-space display without backend
+algorithm changes. Detector distance now invalidates simulation caches, Q-space
+conversion uses submitted simulation geometry, Q-space-only skips caking and can
+stay current without `last_res2_sim`, and displayed Qr centers are finite and
+positive. Focused runtime/import-safe/update tests pass. Full dev check remains
+blocked by pre-existing formatting drift in dirty
+`ra_sim/fitting/optimization.py`.
 
 Replay status note: `Sim caked detector replay` remains in progress. Latest
 patch warms detector-mode Qr/Qz caked projection sidecars immediately after

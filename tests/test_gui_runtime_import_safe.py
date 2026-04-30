@@ -12235,10 +12235,8 @@ def test_runtime_impl_run_analysis_job_builds_q_space_from_detector_images() -> 
 
     assert 'q_space_requested = bool(job.get("q_space_requested", False))' in helper_source
     assert "if q_space_requested:" in helper_source
-    assert (
-        "sim_q_space = _prepare_q_space_display_payload(\n            sim_image," in helper_source
-    )
-    assert "bg_q_space = _prepare_q_space_display_payload(\n            bg_array," in helper_source
+    assert "sim_q_space = _prepare_q_space_display_payload_with_geometry(" in helper_source
+    assert "bg_q_space = _prepare_q_space_display_payload_with_geometry(" in helper_source
     assert (
         "sim_q_space = _prepare_q_space_display_payload(\n        sim_caked," not in helper_source
     )

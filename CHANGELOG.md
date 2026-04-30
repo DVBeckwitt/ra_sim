@@ -55,6 +55,7 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
+  - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.
   - Fixed full GUI-state import so legacy manual placements with detector pixels but missing caked `2theta,phi` anchors rebuild those anchors from the exact caked projection before geometry figures or fits consume them.
   - Warmed caked Qr/Qz projection cache data immediately after detector-mode Qr/Qz selector changes, so manual picking can use caked sim/background coordinates without first switching to caked view.
   - Added a GUI control and saved-state flag for hiding or showing the simulation overlay independently from the background image.

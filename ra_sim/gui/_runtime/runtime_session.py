@@ -4354,6 +4354,7 @@ def _initialize_runtime_plot_block_01() -> None:
     # Seed imshow with a tiny placeholder; expand to detector size on first result.
     global_image_buffer = np.zeros((1, 1), dtype=np.float32)
     simulation_runtime_state.unscaled_image = None
+    simulation_runtime_state.stored_simulation_q_space_geometry = None
 
     # ── replace the original imshow call ────────────────────────────
     image_display = ax.imshow(
@@ -12573,6 +12574,7 @@ def _initialize_runtime_controls_block_23() -> None:
         phi_min_slider, \
         phi_max_slider
     global PHI_ZERO_OFFSET_DEGREES, DEFAULT_ANALYSIS_RADIAL_BINS, DEFAULT_ANALYSIS_AZIMUTH_BINS
+    global DEFAULT_Q_SPACE_DISPLAY_QR_BINS, DEFAULT_Q_SPACE_DISPLAY_QZ_BINS
 
     tth_min_var = None
     tth_max_var = None
@@ -12587,10 +12589,14 @@ def _initialize_runtime_controls_block_23() -> None:
     PHI_ZERO_OFFSET_DEGREES = -90.0
     DEFAULT_ANALYSIS_RADIAL_BINS = 1000
     DEFAULT_ANALYSIS_AZIMUTH_BINS = 720
+    DEFAULT_Q_SPACE_DISPLAY_QR_BINS = 512
+    DEFAULT_Q_SPACE_DISPLAY_QZ_BINS = 512
 
 
 DEFAULT_ANALYSIS_RADIAL_BINS = 1000
 DEFAULT_ANALYSIS_AZIMUTH_BINS = 720
+DEFAULT_Q_SPACE_DISPLAY_QR_BINS = 512
+DEFAULT_Q_SPACE_DISPLAY_QZ_BINS = 512
 
 
 def _current_live_caked_transform_bundle() -> CakeTransformBundle | None:
@@ -12673,6 +12679,7 @@ def _reset_combined_simulation_artifacts() -> None:
         trace_live_cache_event=_trace_live_cache_event,
         live_cache_count=_live_cache_count,
     )
+    simulation_runtime_state.stored_simulation_q_space_geometry = None
 
 
 def _store_primary_cache_payload(
@@ -14013,6 +14020,8 @@ def _publish_combined_simulation_state(
     simulation_runtime_state.stored_intersection_cache = list(intersection_cache_local)
     _clear_caked_intersection_cache()
     simulation_runtime_state.stored_sim_image = updated_image
+    if updated_image is None:
+        simulation_runtime_state.stored_simulation_q_space_geometry = None
     return {
         "run_primary": bool(run_primary),
         "run_secondary": bool(run_secondary),
@@ -15588,6 +15597,78 @@ def _build_preview_simulation_job(
     return preview_job
 
 
+def _copy_q_space_geometry(geometry: Mapping[str, object] | None) -> dict[str, object] | None:
+    if not isinstance(geometry, Mapping):
+        return None
+    copied: dict[str, object] = {}
+    for key, value in geometry.items():
+        if key == "center":
+            center = np.asarray(value, dtype=np.float64).reshape(-1)
+            if center.size < 2:
+                return None
+            copied[key] = center[:2].copy()
+        else:
+            try:
+                copied[key] = float(value)
+            except (TypeError, ValueError):
+                copied[key] = value
+    return copied
+
+
+def _q_space_geometry_from_values(
+    *,
+    distance_m: object,
+    center: object,
+    pixel_size_m: object,
+    wavelength_m: object,
+    gamma_deg: object,
+    Gamma_deg: object,
+    chi_deg: object,
+    psi_deg: object,
+    psi_z_deg: object,
+    theta_initial_deg: object,
+    cor_angle_deg: object,
+    zs: object,
+    zb: object,
+) -> dict[str, object]:
+    center_array = np.asarray(center, dtype=np.float64).reshape(-1)
+    if center_array.size < 2:
+        raise ValueError("Q-space geometry center must contain row and column values.")
+    return {
+        "distance_m": float(distance_m),
+        "center": center_array[:2].copy(),
+        "pixel_size_m": float(pixel_size_m),
+        "wavelength_m": float(wavelength_m),
+        "gamma_deg": float(gamma_deg),
+        "Gamma_deg": float(Gamma_deg),
+        "chi_deg": float(chi_deg),
+        "psi_deg": float(psi_deg),
+        "psi_z_deg": float(psi_z_deg),
+        "theta_initial_deg": float(theta_initial_deg),
+        "cor_angle_deg": float(cor_angle_deg),
+        "zs": float(zs),
+        "zb": float(zb),
+    }
+
+
+def _q_space_geometry_from_simulation_job(job: Mapping[str, object]) -> dict[str, object]:
+    return _q_space_geometry_from_values(
+        distance_m=job["distance_m"],
+        center=job.get("center", ()),
+        pixel_size_m=job["pixel_size_m"],
+        wavelength_m=float(job["lambda_value"]) * 1.0e-10,
+        gamma_deg=job["gamma_deg"],
+        Gamma_deg=job["Gamma_deg"],
+        chi_deg=job["chi_deg"],
+        psi_deg=job["psi_deg"],
+        psi_z_deg=job["psi_z_deg"],
+        theta_initial_deg=job["theta_initial_deg"],
+        cor_angle_deg=job["cor_angle_deg"],
+        zs=job["zs"],
+        zb=job["zb"],
+    )
+
+
 def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     from ra_sim.simulation.projection_debug import finalize_projection_debug_session
     from ra_sim.simulation.projection_debug import start_projection_debug_session
@@ -15716,6 +15797,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             ),
             "primary_image": blank.copy(),
             "secondary_image": blank.copy(),
+            "q_space_geometry": _q_space_geometry_from_simulation_job(job),
             "primary_hit_table_state_refreshed": False,
             "secondary_hit_table_state_refreshed": False,
             "primary_raw_rows_fresh": False,
@@ -16123,6 +16205,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 ),
                 "primary_image": img1,
                 "secondary_image": img2,
+                "q_space_geometry": _q_space_geometry_from_simulation_job(job),
                 "collected_hit_tables": bool(job["collect_hit_tables"]),
                 "primary_hit_table_state_refreshed": bool(primary_hit_table_state_refreshed),
                 "secondary_hit_table_state_refreshed": bool(secondary_hit_table_state_refreshed),
@@ -16707,6 +16790,9 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
                 ),
             )
     _reset_combined_simulation_artifacts()
+    simulation_runtime_state.stored_simulation_q_space_geometry = _copy_q_space_geometry(
+        result.get("q_space_geometry")
+    )
     simulation_runtime_state.last_image_generation_ms = float(
         result.get("image_generation_elapsed_ms", float("nan"))
     )
@@ -16848,6 +16934,118 @@ def _q_space_geometry_cache_signature(
     return tuple(rounded_values)
 
 
+def _q_space_geometry_cache_signature_from_geometry(
+    geometry: Mapping[str, object] | None,
+) -> tuple[float | None, ...] | None:
+    qgeom = _copy_q_space_geometry(geometry)
+    if qgeom is None:
+        return None
+    center = np.asarray(qgeom.get("center", ()), dtype=np.float64).reshape(-1)
+    if center.size < 2:
+        return None
+    return _q_space_geometry_cache_signature(
+        distance_m=qgeom.get("distance_m"),
+        center_x=center[0],
+        center_y=center[1],
+        pixel_size_m=qgeom.get("pixel_size_m"),
+        wavelength_m=qgeom.get("wavelength_m"),
+        gamma_deg=qgeom.get("gamma_deg"),
+        Gamma_deg=qgeom.get("Gamma_deg"),
+        chi_deg=qgeom.get("chi_deg"),
+        psi_deg=qgeom.get("psi_deg"),
+        psi_z_deg=qgeom.get("psi_z_deg"),
+        theta_initial_deg=qgeom.get("theta_initial_deg"),
+        cor_angle_deg=qgeom.get("cor_angle_deg"),
+        zs=qgeom.get("zs"),
+        zb=qgeom.get("zb"),
+    )
+
+
+def _current_q_space_geometry_for_stored_simulation() -> dict[str, object] | None:
+    return _copy_q_space_geometry(
+        getattr(simulation_runtime_state, "stored_simulation_q_space_geometry", None)
+    )
+
+
+def _current_q_space_geometry_from_live_controls(
+    *,
+    distance_m: object | None = None,
+    center: object | None = None,
+    pixel_size_m_value: object | None = None,
+    wavelength_m_value: object | None = None,
+    gamma_deg: object | None = None,
+    Gamma_deg: object | None = None,
+    chi_deg: object | None = None,
+    psi_deg: object | None = None,
+    psi_z_deg: object | None = None,
+    theta_initial_deg: object | None = None,
+    cor_angle_deg: object | None = None,
+    zs: object | None = None,
+    zb: object | None = None,
+) -> dict[str, object]:
+    resolved_wavelength_m = wavelength_m_value
+    if resolved_wavelength_m is None:
+        resolved_wavelength_m = globals().get("wave_m", None)
+    if resolved_wavelength_m is None:
+        resolved_wavelength_m = float(globals().get("lambda_", 0.0)) * 1.0e-10
+    return _q_space_geometry_from_values(
+        distance_m=(float(corto_detector_var.get()) if distance_m is None else distance_m),
+        center=(
+            np.asarray(
+                [float(center_x_var.get()), float(center_y_var.get())],
+                dtype=np.float64,
+            )
+            if center is None
+            else center
+        ),
+        pixel_size_m=(float(pixel_size_m) if pixel_size_m_value is None else pixel_size_m_value),
+        wavelength_m=resolved_wavelength_m,
+        gamma_deg=(float(gamma_var.get()) if gamma_deg is None else gamma_deg),
+        Gamma_deg=(float(Gamma_var.get()) if Gamma_deg is None else Gamma_deg),
+        chi_deg=(float(chi_var.get()) if chi_deg is None else chi_deg),
+        psi_deg=(float(psi) if psi_deg is None else psi_deg),
+        psi_z_deg=(float(psi_z_var.get()) if psi_z_deg is None else psi_z_deg),
+        theta_initial_deg=(
+            float(_current_effective_theta_initial(strict_count=False))
+            if theta_initial_deg is None
+            else theta_initial_deg
+        ),
+        cor_angle_deg=(float(cor_angle_var.get()) if cor_angle_deg is None else cor_angle_deg),
+        zs=(float(zs_var.get()) if zs is None else zs),
+        zb=(float(zb_var.get()) if zb is None else zb),
+    )
+
+
+def _prepare_q_space_display_payload_with_geometry(
+    detector_image: np.ndarray | None,
+    *,
+    npt_rad: object,
+    npt_azim: object,
+    geometry: Mapping[str, object],
+) -> dict[str, object] | None:
+    qgeom = _copy_q_space_geometry(geometry)
+    if qgeom is None:
+        return None
+    return _prepare_q_space_display_payload(
+        detector_image,
+        npt_rad=npt_rad,
+        npt_azim=npt_azim,
+        distance_m=qgeom.get("distance_m"),
+        center=qgeom.get("center"),
+        pixel_size_m=qgeom.get("pixel_size_m"),
+        wavelength_m=qgeom.get("wavelength_m"),
+        gamma_deg=qgeom.get("gamma_deg"),
+        Gamma_deg=qgeom.get("Gamma_deg"),
+        chi_deg=qgeom.get("chi_deg"),
+        psi_deg=qgeom.get("psi_deg"),
+        psi_z_deg=qgeom.get("psi_z_deg"),
+        theta_initial_deg=qgeom.get("theta_initial_deg"),
+        cor_angle_deg=qgeom.get("cor_angle_deg"),
+        zs=qgeom.get("zs"),
+        zb=qgeom.get("zb"),
+    )
+
+
 def _prepare_caked_display_payload(
     res2,
     *,
@@ -16922,19 +17120,46 @@ def _prepare_q_space_display_payload(
         correct_solid_angle=True,
         method=_q_space_display_conversion_method(detector_shape),
     )
-    qr_axis = np.asarray(result.qr, dtype=np.float64)
+    qr_axis = np.asarray(getattr(result, "qr", ()), dtype=np.float64)
     qz_axis = np.asarray(result.qz, dtype=np.float64)
-    if qr_axis.size < 2 or qz_axis.size < 2:
+    if qr_axis.ndim != 1 or qz_axis.ndim != 1 or qr_axis.size < 1 or qz_axis.size < 2:
         return None
-    qr_step = float(qr_axis[1] - qr_axis[0])
-    qz_step = float(qz_axis[1] - qz_axis[0])
+    original_qr_size = int(qr_axis.size)
+    positive_qr = np.isfinite(qr_axis) & (qr_axis > 0.0)
+    if not np.any(positive_qr):
+        return None
+    if not np.all(positive_qr):
+        qr_axis = qr_axis[positive_qr]
+
+    def _qr_filtered_array(name: str) -> np.ndarray | None:
+        value = getattr(result, name, None)
+        if value is None:
+            return None
+        array = np.asarray(value, dtype=np.float64)
+        if (
+            array.ndim >= 1
+            and array.shape[-1] == original_qr_size
+            and positive_qr.size == original_qr_size
+            and not np.all(positive_qr)
+        ):
+            array = array[..., positive_qr]
+        return array
+
+    intensity = _qr_filtered_array("intensity")
+    if intensity is None:
+        return None
+    sum_signal = _qr_filtered_array("sum_signal")
+    sum_normalization = _qr_filtered_array("sum_normalization")
+    count = _qr_filtered_array("count")
+    qr_step = float(np.nanmedian(np.diff(qr_axis))) if qr_axis.size > 1 else 1.0
+    qz_step = float(np.nanmedian(np.diff(qz_axis))) if qz_axis.size > 1 else 1.0
     return {
-        "image": np.asarray(result.intensity, dtype=np.float64),
+        "image": intensity,
         "qr": qr_axis,
         "qz": qz_axis,
-        "sum_signal": np.asarray(result.sum_signal, dtype=np.float64),
-        "sum_normalization": np.asarray(result.sum_normalization, dtype=np.float64),
-        "count": np.asarray(result.count, dtype=np.float64),
+        "sum_signal": sum_signal,
+        "sum_normalization": sum_normalization,
+        "count": count,
         "extent": [
             max(0.0, float(qr_axis[0] - 0.5 * qr_step)),
             float(qr_axis[-1] + 0.5 * qr_step),
@@ -17213,29 +17438,17 @@ def _restore_caked_display_payload_from_cached_results(
                 int(DEFAULT_ANALYSIS_RADIAL_BINS),
                 int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
             )
+        q_space_geometry = _current_q_space_geometry_for_stored_simulation()
+        if q_space_geometry is None:
+            q_space_geometry = _current_q_space_geometry_from_live_controls()
         try:
-            sim_q_space_payload = _prepare_q_space_display_payload(
+            sim_q_space_payload = _prepare_q_space_display_payload_with_geometry(
                 simulation_runtime_state.unscaled_image,
                 npt_rad=int(analysis_bins[0]),
                 npt_azim=int(analysis_bins[1]),
-                distance_m=float(corto_detector_var.get()),
-                center=np.asarray(
-                    [float(center_x_var.get()), float(center_y_var.get())],
-                    dtype=np.float64,
-                ),
-                pixel_size_m=float(pixel_size_m),
-                wavelength_m=lambda_ * 1.0e-10,
-                gamma_deg=float(gamma_var.get()),
-                Gamma_deg=float(Gamma_var.get()),
-                chi_deg=float(chi_var.get()),
-                psi_deg=float(psi),
-                psi_z_deg=float(psi_z_var.get()),
-                theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
-                cor_angle_deg=float(cor_angle_var.get()),
-                zs=float(zs_var.get()),
-                zb=float(zb_var.get()),
+                geometry=q_space_geometry,
             )
-            bg_q_space_payload = _prepare_q_space_display_payload(
+            bg_q_space_payload = _prepare_q_space_display_payload_with_geometry(
                 (
                     _current_background_for_q_space_restore()
                     if background_visible
@@ -17274,22 +17487,7 @@ def _restore_caked_display_payload_from_cached_results(
             )
             simulation_runtime_state.last_q_space_payload_signature = (
                 analysis_cache_sig,
-                _q_space_geometry_cache_signature(
-                    distance_m=float(corto_detector_var.get()),
-                    center_x=float(center_x_var.get()),
-                    center_y=float(center_y_var.get()),
-                    pixel_size_m=float(pixel_size_m),
-                    wavelength_m=lambda_ * 1.0e-10,
-                    gamma_deg=float(gamma_var.get()),
-                    Gamma_deg=float(Gamma_var.get()),
-                    chi_deg=float(chi_var.get()),
-                    psi_deg=float(psi),
-                    psi_z_deg=float(psi_z_var.get()),
-                    theta_initial_deg=float(_current_effective_theta_initial(strict_count=False)),
-                    cor_angle_deg=float(cor_angle_var.get()),
-                    zs=float(zs_var.get()),
-                    zb=float(zb_var.get()),
-                ),
+                _q_space_geometry_cache_signature_from_geometry(q_space_geometry),
             )
     else:
         _store_q_space_display_payload(
@@ -17310,7 +17508,6 @@ def _restore_caked_display_payload_from_cached_results(
 
 
 def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
-    ai = _build_analysis_integrator(job)
     sim_image = np.asarray(job["image"], dtype=np.float64)
     bg_image = job.get("background_image")
     bg_array = None if bg_image is None else np.asarray(bg_image, dtype=np.float64)
@@ -17318,6 +17515,7 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     npt_azim = int(job.get("npt_azim", 720))
     is_preview = bool(job.get("is_preview", False))
     q_space_requested = bool(job.get("q_space_requested", False))
+    caked_outputs_requested = bool(job.get("caked_outputs_requested", True))
     cached_bg_res2 = job.get("cached_bg_res2")
     cached_bg_caked = job.get("cached_bg_caked")
     intersection_cache = _copy_intersection_cache_tables(
@@ -17328,94 +17526,128 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     job_center_row_px = float(job_center[0]) if job_center.size >= 2 else None
     job_center_col_px = float(job_center[1]) if job_center.size >= 2 else None
 
+    @contextlib.contextmanager
+    def _analysis_timing_span(name: str, **fields: object):
+        if not timing_enabled():
+            yield
+            return
+        payload = {
+            "phase": "analysis",
+            "requested_view_mode": str(job.get("requested_view_mode", "")),
+            "q_space_requested": bool(q_space_requested),
+            "caked_outputs_requested": bool(caked_outputs_requested),
+            "npt_rad": int(npt_rad),
+            "npt_azim": int(npt_azim),
+            "detector_shape": tuple(int(v) for v in sim_image.shape[:2]),
+        }
+        payload.update(fields)
+        with timing_span(f"analysis_job.{name}", **payload):
+            yield
+
     analysis_start_time = perf_counter()
-    with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
-        sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
-        if cached_bg_res2 is not None:
-            bg_res2 = cached_bg_res2
-        elif bg_array is not None:
-            bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
-        else:
-            bg_res2 = None
-    sim_caked = _prepare_caked_display_payload(
-        sim_res2,
-        ai=ai,
-        detector_shape=sim_image.shape,
-    )
-    resolved_bundle = None
-    if isinstance(sim_caked, dict):
-        resolved_bundle = sim_caked.get("transform_bundle")
-        detector_shape = sim_caked.get("detector_shape")
-        if not isinstance(resolved_bundle, CakeTransformBundle) and detector_shape is not None:
-            resolved_bundle = resolve_cake_transform_bundle(
-                ai,
-                detector_shape,
-                sim_caked.get("radial_axis", sim_caked.get("radial")),
-                gui_azimuth_deg=sim_caked.get("azimuth_axis", sim_caked.get("azimuth")),
-                raw_azimuth_deg=sim_caked.get("raw_azimuth_axis", sim_caked.get("raw_azimuth")),
-                transform_bundle=sim_caked.get("transform_bundle"),
-                require_gui_display_match=True,
-            )
-        if isinstance(resolved_bundle, CakeTransformBundle):
-            sim_caked["transform_bundle"] = resolved_bundle
-        else:
-            resolved_bundle = None
-    if isinstance(cached_bg_caked, dict):
-        bg_caked = dict(cached_bg_caked)
-    else:
-        bg_caked = _prepare_caked_display_payload(
-            bg_res2,
-            ai=ai,
-            detector_shape=bg_array.shape if bg_array is not None else sim_image.shape,
-        )
-    sim_q_space = None
-    bg_q_space = None
-    if q_space_requested:
-        sim_q_space = _prepare_q_space_display_payload(
-            sim_image,
-            npt_rad=npt_rad,
-            npt_azim=npt_azim,
-            distance_m=job.get("distance_m"),
-            center=job.get("center"),
-            pixel_size_m=job.get("pixel_size_m"),
-            wavelength_m=job.get("wavelength_m"),
-            gamma_deg=job.get("gamma_deg"),
-            Gamma_deg=job.get("Gamma_deg"),
-            chi_deg=job.get("chi_deg"),
-            psi_deg=job.get("psi_deg"),
-            psi_z_deg=job.get("psi_z_deg"),
-            theta_initial_deg=job.get("theta_initial_deg"),
-            cor_angle_deg=job.get("cor_angle_deg"),
-            zs=job.get("zs"),
-            zb=job.get("zb"),
-        )
-        bg_q_space = _prepare_q_space_display_payload(
-            bg_array,
-            npt_rad=npt_rad,
-            npt_azim=npt_azim,
-            distance_m=job.get("distance_m"),
-            center=job.get("center"),
-            pixel_size_m=job.get("pixel_size_m"),
-            wavelength_m=job.get("wavelength_m"),
-            gamma_deg=job.get("gamma_deg"),
-            Gamma_deg=job.get("Gamma_deg"),
-            chi_deg=job.get("chi_deg"),
-            psi_deg=job.get("psi_deg"),
-            psi_z_deg=job.get("psi_z_deg"),
-            theta_initial_deg=job.get("theta_initial_deg"),
-            cor_angle_deg=job.get("cor_angle_deg"),
-            zs=job.get("zs"),
-            zb=job.get("zb"),
-        )
-    sim_caked_intersection_cache = _prepare_caked_intersection_cache(
-        intersection_cache,
-        transform_bundle=resolved_bundle,
-        pixel_size_m=job.get("pixel_size_m"),
-        distance_m=job.get("distance_m"),
-        center_row_px=job_center_row_px,
-        center_col_px=job_center_col_px,
-        native_detector_coords_to_bundle_detector_coords=None,
-    )
+    with _analysis_timing_span("total"):
+        ai = _build_analysis_integrator(job) if caked_outputs_requested else None
+        sim_res2 = None
+        bg_res2 = None
+        sim_caked = None
+        bg_caked = None
+        sim_caked_intersection_cache: list[object] = []
+        resolved_bundle = None
+        if caked_outputs_requested:
+            with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
+                with _analysis_timing_span("caking"):
+                    sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+                if cached_bg_res2 is not None:
+                    bg_res2 = cached_bg_res2
+                elif bg_array is not None:
+                    with _analysis_timing_span("background_caking"):
+                        bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+                else:
+                    bg_res2 = None
+            with _analysis_timing_span("display_prepare", product="caked"):
+                sim_caked = _prepare_caked_display_payload(
+                    sim_res2,
+                    ai=ai,
+                    detector_shape=sim_image.shape,
+                )
+                if isinstance(sim_caked, dict):
+                    resolved_bundle = sim_caked.get("transform_bundle")
+                    detector_shape = sim_caked.get("detector_shape")
+                    if (
+                        not isinstance(resolved_bundle, CakeTransformBundle)
+                        and detector_shape is not None
+                    ):
+                        resolved_bundle = resolve_cake_transform_bundle(
+                            ai,
+                            detector_shape,
+                            sim_caked.get("radial_axis", sim_caked.get("radial")),
+                            gui_azimuth_deg=sim_caked.get(
+                                "azimuth_axis",
+                                sim_caked.get("azimuth"),
+                            ),
+                            raw_azimuth_deg=sim_caked.get(
+                                "raw_azimuth_axis",
+                                sim_caked.get("raw_azimuth"),
+                            ),
+                            transform_bundle=sim_caked.get("transform_bundle"),
+                            require_gui_display_match=True,
+                        )
+                    if isinstance(resolved_bundle, CakeTransformBundle):
+                        sim_caked["transform_bundle"] = resolved_bundle
+                    else:
+                        resolved_bundle = None
+                if isinstance(cached_bg_caked, dict):
+                    bg_caked = dict(cached_bg_caked)
+                else:
+                    bg_caked = _prepare_caked_display_payload(
+                        bg_res2,
+                        ai=ai,
+                        detector_shape=bg_array.shape if bg_array is not None else sim_image.shape,
+                    )
+                sim_caked_intersection_cache = _prepare_caked_intersection_cache(
+                    intersection_cache,
+                    transform_bundle=resolved_bundle,
+                    pixel_size_m=job.get("pixel_size_m"),
+                    distance_m=job.get("distance_m"),
+                    center_row_px=job_center_row_px,
+                    center_col_px=job_center_col_px,
+                    native_detector_coords_to_bundle_detector_coords=None,
+                )
+
+        sim_q_space = None
+        bg_q_space = None
+        if q_space_requested:
+            q_space_geometry = _copy_q_space_geometry(job.get("q_space_geometry"))
+            if q_space_geometry is None:
+                q_space_geometry = _q_space_geometry_from_values(
+                    distance_m=job.get("distance_m"),
+                    center=job.get("center"),
+                    pixel_size_m=job.get("pixel_size_m"),
+                    wavelength_m=job.get("wavelength_m"),
+                    gamma_deg=job.get("gamma_deg"),
+                    Gamma_deg=job.get("Gamma_deg"),
+                    chi_deg=job.get("chi_deg"),
+                    psi_deg=job.get("psi_deg"),
+                    psi_z_deg=job.get("psi_z_deg"),
+                    theta_initial_deg=job.get("theta_initial_deg"),
+                    cor_angle_deg=job.get("cor_angle_deg"),
+                    zs=job.get("zs"),
+                    zb=job.get("zb"),
+                )
+            with _analysis_timing_span("q_space_conversion", product="simulation"):
+                sim_q_space = _prepare_q_space_display_payload_with_geometry(
+                    sim_image,
+                    npt_rad=npt_rad,
+                    npt_azim=npt_azim,
+                    geometry=q_space_geometry,
+                )
+            with _analysis_timing_span("q_space_conversion", product="background"):
+                bg_q_space = _prepare_q_space_display_payload_with_geometry(
+                    bg_array,
+                    npt_rad=npt_rad,
+                    npt_azim=npt_azim,
+                    geometry=q_space_geometry,
+                )
 
     return {
         "job_id": int(job["job_id"]),
@@ -17883,6 +18115,7 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.stored_q_group_content_signature = None
     simulation_runtime_state.stored_source_reflection_indices_local = None
     simulation_runtime_state.stored_sim_image = None
+    simulation_runtime_state.stored_simulation_q_space_geometry = None
     simulation_runtime_state.stored_peak_table_lattice = None
     simulation_runtime_state.stored_primary_sim_image = None
     simulation_runtime_state.stored_secondary_sim_image = None
@@ -18663,6 +18896,7 @@ def do_update():
                 "cor": cor_angle_updated,
                 "center_x": center_x_up,
                 "center_y": center_y_up,
+                "distance_m": corto_det_up,
                 "sigma_mosaic_deg": mosaic_params.get("sigma_mosaic_deg", 0.0),
                 "gamma_mosaic_deg": mosaic_params.get("gamma_mosaic_deg", 0.0),
                 "eta": mosaic_params.get("eta", 0.0),
@@ -19370,6 +19604,9 @@ def do_update():
                 c_primary=float(c_updated),
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
+            simulation_runtime_state.stored_simulation_q_space_geometry = _copy_q_space_geometry(
+                ready_simulation_result.get("q_space_geometry")
+            )
             _refresh_primary_relative_remap_cache_signature(primary_detector_remap_cache_signature)
             if _hit_table_state_present_for_run_sides(
                 run_primary=primary_run_available,
@@ -19759,6 +19996,23 @@ def do_update():
             simulation_runtime_state.stored_hit_table_signature = None
         simulation_runtime_state.last_sim_signature = new_sim_image_sig
         simulation_runtime_state.last_simulation_signature = new_sim_sig
+        simulation_runtime_state.stored_simulation_q_space_geometry = (
+            _current_q_space_geometry_from_live_controls(
+                distance_m=corto_det_up,
+                center=np.asarray([center_x_up, center_y_up], dtype=np.float64),
+                pixel_size_m_value=pixel_size_m,
+                wavelength_m_value=wave_m,
+                gamma_deg=gamma_updated,
+                Gamma_deg=Gamma_updated,
+                chi_deg=chi_updated,
+                psi_deg=psi,
+                psi_z_deg=psi_z_updated,
+                theta_initial_deg=theta_init_up,
+                cor_angle_deg=cor_angle_updated,
+                zs=zs_updated,
+                zb=zb_updated,
+            )
+        )
         applied_peak_row_refresh_payload = {
             "job_kind": "detector_center_remap",
             "run_primary": bool(primary_run_available),
@@ -20438,6 +20692,8 @@ def do_update():
             ]
             for rec in simulation_runtime_state.peak_records:
                 rec["intensity"] = float(rec.get("intensity", 0.0)) * normalization_scale
+    else:
+        simulation_runtime_state.stored_simulation_q_space_geometry = None
 
     simulation_runtime_state.last_1d_integration_data["simulated_2d_image"] = (
         simulation_runtime_state.unscaled_image
@@ -20535,29 +20791,40 @@ def do_update():
     caked_analysis_requested = bool(
         show_caked_2d and simulation_runtime_state.unscaled_image is not None
     )
-    q_space_payload_geometry_sig = _q_space_geometry_cache_signature(
-        distance_m=corto_det_up,
-        center_x=center_x_up,
-        center_y=center_y_up,
-        pixel_size_m=pixel_size_m,
-        wavelength_m=wave_m,
-        gamma_deg=gamma_updated,
-        Gamma_deg=Gamma_updated,
-        chi_deg=chi_updated,
-        psi_deg=psi,
-        psi_z_deg=psi_z_updated,
-        theta_initial_deg=theta_init_up,
-        cor_angle_deg=cor_angle_updated,
-        zs=zs_updated,
-        zb=zb_updated,
-    )
+    caked_outputs_requested = bool(caked_analysis_requested or one_d_analysis_requested)
+    q_space_geometry = _current_q_space_geometry_for_stored_simulation()
+    if q_space_geometry is None:
+        q_space_geometry = _current_q_space_geometry_from_live_controls(
+            distance_m=corto_det_up,
+            center=np.asarray([center_x_up, center_y_up], dtype=np.float64),
+            pixel_size_m_value=pixel_size_m,
+            wavelength_m_value=wave_m,
+            gamma_deg=gamma_updated,
+            Gamma_deg=Gamma_updated,
+            chi_deg=chi_updated,
+            psi_deg=psi,
+            psi_z_deg=psi_z_updated,
+            theta_initial_deg=theta_init_up,
+            cor_angle_deg=cor_angle_updated,
+            zs=zs_updated,
+            zb=zb_updated,
+        )
+    q_space_payload_geometry_sig = _q_space_geometry_cache_signature_from_geometry(q_space_geometry)
     q_space_geometry_sig = q_space_payload_geometry_sig if q_space_requested else None
     analysis_requested = bool(
         simulation_runtime_state.unscaled_image is not None
-        and (caked_analysis_requested or one_d_analysis_requested or q_space_requested)
+        and (caked_outputs_requested or q_space_requested)
     )
     analysis_sig = (
-        (sim_caking_sig, bg_caking_sig, q_space_geometry_sig) if analysis_requested else None
+        (
+            sim_caking_sig,
+            bg_caking_sig,
+            q_space_geometry_sig,
+            bool(caked_outputs_requested),
+            bool(q_space_requested),
+        )
+        if analysis_requested
+        else None
     )
     if analysis_sig is not None:
         _schedule_exact_cake_numba_warmup_once()
@@ -20569,11 +20836,17 @@ def do_update():
         and analysis_requested
         and (simulation_runtime_state.preview_active or _live_interaction_active())
     )
-    analysis_bins = (
-        (LIVE_DRAG_ANALYSIS_RADIAL_BINS, LIVE_DRAG_ANALYSIS_AZIMUTH_BINS)
-        if desired_analysis_preview
-        else (DEFAULT_ANALYSIS_RADIAL_BINS, DEFAULT_ANALYSIS_AZIMUTH_BINS)
-    )
+    if q_space_requested and not caked_outputs_requested:
+        analysis_bins = (
+            DEFAULT_Q_SPACE_DISPLAY_QR_BINS,
+            DEFAULT_Q_SPACE_DISPLAY_QZ_BINS,
+        )
+    else:
+        analysis_bins = (
+            (LIVE_DRAG_ANALYSIS_RADIAL_BINS, LIVE_DRAG_ANALYSIS_AZIMUTH_BINS)
+            if desired_analysis_preview
+            else (DEFAULT_ANALYSIS_RADIAL_BINS, DEFAULT_ANALYSIS_AZIMUTH_BINS)
+        )
     sim_cache_sig = (sim_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
     bg_cache_sig = (
         (bg_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
@@ -20613,12 +20886,25 @@ def do_update():
             simulation_runtime_state.update_phase = "applying"
             _refresh_run_status_bar()
 
+    has_current_caked_product = bool(
+        (not caked_outputs_requested) or simulation_runtime_state.last_res2_sim is not None
+    )
+    has_current_q_space_product = bool(
+        (not q_space_requested)
+        or (
+            simulation_runtime_state.last_q_space_image_unscaled is not None
+            and simulation_runtime_state.last_q_space_extent is not None
+            and getattr(simulation_runtime_state, "last_q_space_payload_signature", None)
+            == (current_analysis_cache_sig, q_space_geometry_sig)
+        )
+    )
     analysis_result_current = bool(
         analysis_sig is not None
         and simulation_runtime_state.last_analysis_signature == analysis_sig
         and getattr(simulation_runtime_state, "last_analysis_cache_sig", None)
         == current_analysis_cache_sig
-        and simulation_runtime_state.last_res2_sim is not None
+        and has_current_caked_product
+        and has_current_q_space_product
     )
     analysis_payload_ready = _analysis_display_payload_ready(
         show_caked_2d=show_caked_2d,
@@ -20724,23 +21010,23 @@ def do_update():
                 "intersection_cache_source_signature": (
                     _current_combined_detector_intersection_cache_signature()
                 ),
-                "distance_m": float(corto_det_up),
-                "center": np.asarray(
-                    [center_x_up, center_y_up],
-                    dtype=np.float64,
-                ).copy(),
-                "pixel_size_m": float(pixel_size_m),
-                "wavelength_m": float(wave_m),
-                "gamma_deg": float(gamma_updated),
-                "Gamma_deg": float(Gamma_updated),
-                "chi_deg": float(chi_updated),
-                "psi_deg": float(psi),
-                "psi_z_deg": float(psi_z_updated),
-                "theta_initial_deg": float(theta_init_up),
-                "cor_angle_deg": float(cor_angle_updated),
-                "zs": float(zs_updated),
-                "zb": float(zb_updated),
+                "distance_m": float(q_space_geometry["distance_m"]),
+                "center": np.asarray(q_space_geometry["center"], dtype=np.float64).copy(),
+                "pixel_size_m": float(q_space_geometry["pixel_size_m"]),
+                "wavelength_m": float(q_space_geometry["wavelength_m"]),
+                "gamma_deg": float(q_space_geometry["gamma_deg"]),
+                "Gamma_deg": float(q_space_geometry["Gamma_deg"]),
+                "chi_deg": float(q_space_geometry["chi_deg"]),
+                "psi_deg": float(q_space_geometry["psi_deg"]),
+                "psi_z_deg": float(q_space_geometry["psi_z_deg"]),
+                "theta_initial_deg": float(q_space_geometry["theta_initial_deg"]),
+                "cor_angle_deg": float(q_space_geometry["cor_angle_deg"]),
+                "zs": float(q_space_geometry["zs"]),
+                "zb": float(q_space_geometry["zb"]),
+                "q_space_geometry": _copy_q_space_geometry(q_space_geometry),
                 "q_space_requested": q_space_requested,
+                "caked_outputs_requested": caked_outputs_requested,
+                "requested_view_mode": requested_view_mode,
                 "sim_caking_sig": sim_caking_sig,
                 "bg_caking_sig": bg_caking_sig,
             }
@@ -23352,6 +23638,10 @@ def _geometry_source_snapshot_signature_from_params(
         round(_geometry_source_signature_numeric(_param_value("cor", "cor_angle")), 6),
         round(_geometry_source_signature_numeric(_param_value("center_x")), 3),
         round(_geometry_source_signature_numeric(_param_value("center_y")), 3),
+        round(
+            _geometry_source_signature_numeric(_param_value("distance_m", "d", "corto_detector")),
+            9,
+        ),
         int(mosaic_params["solve_q_steps"]),
         round(float(mosaic_params["solve_q_rel_tol"]), 8),
         int(mosaic_params["solve_q_mode"]),

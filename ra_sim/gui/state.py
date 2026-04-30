@@ -635,6 +635,11 @@ class IntegrationRangeControlsViewState:
     mirror_selected_qr_phi_value: bool = False
     mirror_selected_qr_phi_var: Any = None
     mirror_selected_qr_phi_checkbutton: Any = None
+    rod_profile_intensity_mode_value: str = "density"
+    rod_profile_intensity_mode_var: Any = None
+    rod_profile_intensity_mode_label: Any = None
+    rod_profile_intensity_mode_frame: Any = None
+    rod_profile_intensity_mode_buttons: dict[str, Any] = field(default_factory=dict)
     selected_qr_rod_container: Any = None
     selected_qr_rod_key_value: str = ""
     selected_qr_rod_key_var: Any = None
@@ -1040,6 +1045,7 @@ class SimulationRuntimeState:
     main_matplotlib_preview_background_valid: bool = False
     main_display_raster_limit: int | None = None
     unscaled_image: np.ndarray | None = None
+    stored_simulation_q_space_geometry: dict[str, object] | None = None
     last_1d_integration_data: dict[str, object] = field(
         default_factory=lambda: {
             "radials_sim": None,
