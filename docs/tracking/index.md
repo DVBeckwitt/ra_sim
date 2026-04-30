@@ -192,6 +192,7 @@ still failing. Full fitter validation is not claimed.
 | GUI sampling events link | feature | - | none | p2 | 2026-04-28 | [gui-sampling-events-link.md](archive/gui-sampling-events-link.md) |
 | Lazy best-sample and Qr selection hardening | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [lazy-best-sample-and-qr-selection-hardening.md](archive/lazy-best-sample-and-qr-selection-hardening.md) |
 | Main figure right-drag pan regression | bug | - | none | p2 | 2026-04-29 | [main-figure-right-drag-pan.md](archive/main-figure-right-drag-pan.md) |
+| Match peak tools layout | bug | - | none | p2 | 2026-04-30 | [match-peak-tools-layout.md](archive/match-peak-tools-layout.md) |
 | Mosaic mass conservation validation | feature | - | none | p1 | 2026-04-22 | [mosaic-mass-conservation-validation.md](archive/mosaic-mass-conservation-validation.md) |
 | Qr integration region mask | bug | - | none | p2 | 2026-04-29 | [qr-integration-region-mask.md](archive/qr-integration-region-mask.md) |
 | Skip discarded fit hit tables | refactor | - | none | p2 | 2026-04-22 | [skip-discarded-fit-hit-tables.md](archive/skip-discarded-fit-hit-tables.md) |
