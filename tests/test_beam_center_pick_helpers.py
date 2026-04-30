@@ -149,3 +149,62 @@ def test_beam_center_visual_pick_maps_to_default_center_frame() -> None:
 
     assert center_row == pytest.approx(1596.0)
     assert center_col == pytest.approx(1453.0)
+
+
+def test_beam_center_poni_defaults_keep_native_row_col() -> None:
+    pixel_size_m = 1.0e-4
+
+    row, col = geometry_overlay.beam_center_row_col_from_poni(
+        1596.0 * pixel_size_m,
+        1453.0 * pixel_size_m,
+        pixel_size_m,
+    )
+
+    assert row == pytest.approx(1596.0)
+    assert col == pytest.approx(1453.0)
+
+
+def test_beam_center_poni_defaults_do_not_use_rotated_display_formula() -> None:
+    pixel_size_m = 1.0e-4
+    image_size = 3000.0
+    poni1_m = 1596.0 * pixel_size_m
+    poni2_m = 1453.0 * pixel_size_m
+
+    row, col = geometry_overlay.beam_center_row_col_from_poni(
+        poni1_m,
+        poni2_m,
+        pixel_size_m,
+    )
+
+    assert (row, col) == pytest.approx((1596.0, 1453.0))
+    assert (row, col) != pytest.approx(
+        (poni2_m / pixel_size_m, image_size - poni1_m / pixel_size_m)
+    )
+
+
+def test_runtime_beam_center_refiner_bypasses_center_dependent_caked_wrapper() -> None:
+    from pathlib import Path
+
+    runtime_path = Path(geometry_overlay.__file__).with_name("_runtime") / "runtime_session.py"
+    source = runtime_path.read_text(encoding="utf-8")
+    start = source.index("def _refine_beam_center_pick_display_point(")
+    end = source.index("def _update_beam_center_pick_preview(", start)
+    body_source = source[start:end]
+
+    assert "gui_manual_geometry.geometry_manual_refine_preview_point" in body_source
+    assert "_geometry_manual_refine_preview_point" not in body_source
+    assert "use_caked_space=False" in body_source
+
+
+def test_headless_defaults_use_same_poni_row_col_frame() -> None:
+    from pathlib import Path
+
+    headless_path = Path(geometry_overlay.__file__).parents[1] / "headless_geometry_fit.py"
+    source = headless_path.read_text(encoding="utf-8")
+    start = source.index("def _build_runtime_defaults(")
+    end = source.index("def _build_var_store(", start)
+    body_source = source[start:end]
+
+    assert "beam_center_row_col_from_poni" in body_source
+    assert "float(poni2 / pixel_size_m)" not in body_source
+    assert "image_size - (poni1 / pixel_size_m)" not in body_source

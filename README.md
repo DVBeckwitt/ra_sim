@@ -560,6 +560,10 @@ When PONI values are given, the beam center is reconstructed as:
 \mathrm{center\_col\_px} = \frac{\mathrm{poni2\_m}}{p}.
 ```
 
+This is a detector-native row/column conversion. GUI and headless geometry-fit
+defaults do not rotate, flip, or invert the PONI-derived center through display
+image extents.
+
 ### Point Conversion Math
 
 For manual picks and geometry-fit correspondences, detector coordinates

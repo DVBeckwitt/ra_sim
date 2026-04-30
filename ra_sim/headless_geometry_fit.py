@@ -1035,6 +1035,7 @@ def _default_fit_toggle_values() -> dict[str, bool]:
 def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
     diffraction = _load_simulation_diffraction()
     pixel_tools = _load_diffraction_tools()
+    gui_geometry_overlay = _load_gui_geometry_overlay_module()
     stack = _load_stacking_fault_runtime()
     instrument = get_instrument_config().get("instrument", {})
     detector_cfg = instrument.get("detector", {})
@@ -1083,10 +1084,13 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
     lambda_override = beam_cfg.get("wavelength_angstrom")
     lambda_angstrom = float(lambda_override if lambda_override is not None else lambda_from_poni)
 
-    center_default = [
-        float(poni2 / pixel_size_m),
-        float(image_size - (poni1 / pixel_size_m)),
-    ]
+    center_default = list(
+        gui_geometry_overlay.beam_center_row_col_from_poni(
+            float(poni1),
+            float(poni2),
+            float(pixel_size_m),
+        )
+    )
     two_theta_max = pixel_tools.detector_two_theta_max(
         image_size,
         center_default,

@@ -97,6 +97,27 @@ def rotate_point_for_display_extent(
     return float(col_new), float(row_new)
 
 
+def beam_center_row_col_from_poni(
+    poni1_m: float,
+    poni2_m: float,
+    pixel_size_m: float,
+) -> tuple[float, float]:
+    """Return beam-center slider coordinates from pyFAI PONI values.
+
+    ``poni1`` is the detector row-axis distance and ``poni2`` is the detector
+    column-axis distance. GUI center sliders are labelled and consumed as
+    ``(row, col)``, so no display rotation or image-size inversion belongs in
+    this conversion.
+    """
+
+    pixel = float(pixel_size_m)
+    if not math.isfinite(pixel) or pixel == 0.0:
+        raise ValueError("pixel_size_m must be finite and non-zero")
+    center_row = float(poni1_m) / pixel
+    center_col = float(poni2_m) / pixel
+    return float(center_row), float(center_col)
+
+
 def detector_native_to_display_coords(
     col: float,
     row: float,
@@ -129,7 +150,9 @@ def beam_center_row_col_from_detector_display(
     """Return slider-order ``(row, col)`` for a picked detector-display point.
 
     Beam-center sliders use detector geometry coordinates, not raw pixel-index
-    coordinates. The inverse rotation therefore uses image extents.
+    coordinates. The inverse rotation therefore uses image extents. For the
+    default clockwise background display, ``row = detector_height - display_col``
+    and ``col = display_row``.
     """
 
     display_shape = rotated_image_shape(native_shape, int(k))

@@ -1,7 +1,7 @@
 # Beam Center Background Pick
 
 Type: feature / bug fix
-Status: implemented, coordinate bug fixed, targeted validation green
+Status: implemented, second coordinate bug fixed, targeted validation green
 Last updated: 2026-04-30
 
 ## Problem
@@ -22,6 +22,18 @@ invert the default display rotation with `3000 - display_col`, not
 `2999 - display_col`. That maps `display_col=1404`, `display_row=1453` to
 `row=1596`, `col=1453`.
 
+The second bug was in the default center seed itself. GUI startup and headless
+geometry-fit defaults rebuilt PONI centers with a rotated-display formula:
+`row = poni2 / pixel_size`, `col = image_size - poni1 / pixel_size`. That made
+the initial beam center disagree with pyFAI/native detector semantics before
+the user picked anything. PONI defaults now stay in native slider order:
+`row = poni1 / pixel_size`, `col = poni2 / pixel_size`.
+
+Beam-center preview also no longer uses the center-dependent caked manual-pick
+wrapper. It now calls the detector-image refiner directly with
+`use_caked_space=False`, so preview refinement is independent of the current
+center that the pick is trying to replace.
+
 ## Change
 
 - Added `Setup > Beam Controls > Pick Beam Center`.
@@ -40,6 +52,12 @@ invert the default display rotation with `3000 - display_col`, not
 - The picker reuses the manual Qr/Qz local refiner with detector-space forcing,
   plus the same preview markers, throttle constants, and zoom window size.
 - Runtime state is transient only; saved-state schema is unchanged.
+- Added `beam_center_row_col_from_poni(...)` and used it from GUI runtime and
+  headless geometry-fit defaults so both paths share the same native row/col
+  PONI convention.
+- Beam-center preview now bypasses `_geometry_manual_refine_preview_point(...)`
+  and calls `geometry_manual_refine_preview_point(...)` directly in detector
+  space, avoiding the center-dependent caked projection path.
 
 ## Validation
 
@@ -72,19 +90,27 @@ invert the default display rotation with `3000 - display_col`, not
     `tests/test_gui_views.py::test_stacking_parameter_panels_and_slider_refs_are_stored`
     with Tk's `RuntimeError: Too early to create variable: no default root window`;
     this is in the stacking-panel test path, not the beam-center picker path.
+- `python -m pytest tests/test_beam_center_pick_helpers.py -ra`
+  - 11 passed, including PONI row/col defaults, headless default source checks,
+    and detector-space beam-center preview checks.
+- `python -m compileall ra_sim/gui/geometry_overlay.py ra_sim/gui/_runtime/runtime_session.py ra_sim/headless_geometry_fit.py tests/test_beam_center_pick_helpers.py`
+  - passed.
+- `git diff --check -- CHANGELOG.md ra_sim/gui/geometry_overlay.py ra_sim/gui/_runtime/runtime_session.py ra_sim/headless_geometry_fit.py tests/test_beam_center_pick_helpers.py`
+  - passed.
+- `python -m ra_sim.dev check`
+  - blocked by pre-existing formatting drift in
+    `ra_sim/fitting/optimization.py`; touched files pass the formatter gate.
 
 ## Current Status
 
-Feature path is implemented, the extent-based beam-center conversion fixes the
-known default repro (`1404,1453 -> row=1596,col=1453`), and targeted
-beam-center/canvas tests are green. The broader requested view suite is still
-blocked by an existing Tk default-root failure in the stacking-panel test. Full
-`python -m ra_sim.dev check` is not green in this dirty worktree because the
-formatter gate reports pre-existing formatting drift in
-`ra_sim/fitting/optimization.py` plus current local formatting drift in
-`ra_sim/gui/_runtime/runtime_session.py`. A broader
-`tests/test_gui_geometry_fit_workflow.py` run also sees existing geometry-fit
-expectation drift around newly present dataset-spec fields, unrelated to this
-button path.
+Feature path is implemented. First coordinate bug is fixed by the
+detector-extent display-to-center transform
+(`1404,1453 -> row=1596,col=1453`). Second default-center bug is fixed by
+keeping PONI-derived centers in native row/col order for both GUI and headless
+geometry fit. Preview refinement is detector-space only and no longer depends
+on the stale current center through the caked wrapper.
 
-No package version bump.
+Targeted beam-center tests, targeted compile, and touched-file diff checks are
+green. Full `python -m ra_sim.dev check` remains blocked by pre-existing
+formatting drift in `ra_sim/fitting/optimization.py`. No saved-state, CLI, or
+artifact schema change. No package version bump.

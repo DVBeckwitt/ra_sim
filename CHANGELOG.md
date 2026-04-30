@@ -32,6 +32,7 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI and headless geometry-fit paths, and made beam-center picking refine in detector-display space without the center-dependent caked wrapper.
   - Backfilled legacy manual Qr/Qz pairs that have detector/background pixels but no saved caked `(2theta, phi)` anchors before headless geometry-fit preparation, and carried the repaired `manual_pairs` into the returned saved-state snapshot.
   - Added trial caked axes-only payload support so refined geometry probes can recompute dynamic Qr/Qz source rows without rasterizing a full caked image.
   - Added New4 ladder worker phase/partial-report telemetry, residual-evaluation timing, cache-rebuild counters, and timeout diagnostics; singleton solve rungs can skip the duplicate initial dry-run objective and use the first solver evaluation instead.

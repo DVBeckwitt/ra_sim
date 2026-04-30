@@ -1349,8 +1349,16 @@ def _initialize_runtime_state_block_01() -> None:
     vmax_default = detector_config.get("vmax", 1000)
     vmax_slider_max = detector_config.get("vmax_slider_max", 3000)
 
-    # Approximate beam center
-    center_default = [(poni2 / pixel_size_m), image_size - (poni1 / pixel_size_m)]
+    # Approximate beam center. PONI1 is the detector row-axis distance and
+    # PONI2 is the detector column-axis distance. Keep this in the same native
+    # row/col frame consumed by simulation, pyFAI, and the center sliders.
+    center_default = list(
+        gui_geometry_overlay.beam_center_row_col_from_poni(
+            float(poni1),
+            float(poni2),
+            float(pixel_size_m),
+        )
+    )
     if hinted_center_row is not None and hinted_center_col is not None:
         center_default = [hinted_center_row, hinted_center_col]
 
@@ -7538,6 +7546,46 @@ def _apply_beam_center_pick_zoom(
     return True
 
 
+def _refine_beam_center_pick_display_point(
+    raw_col: float,
+    raw_row: float,
+) -> tuple[float, float]:
+    """Refine beam-center pick in detector-display space only."""
+
+    background = _current_beam_center_pick_background_image()
+    if background is None:
+        return float(raw_col), float(raw_row)
+    try:
+        auto_refine_radius = float(
+            getattr(geometry_runtime_state, "manual_auto_refine_search_radius_px", np.nan)
+        )
+    except Exception:
+        auto_refine_radius = float("nan")
+    cache_data: dict[str, object] = {}
+    if np.isfinite(auto_refine_radius):
+        cache_data["manual_auto_refine_search_radius_px"] = float(auto_refine_radius)
+    try:
+        refined_col, refined_row = gui_manual_geometry.geometry_manual_refine_preview_point(
+            None,
+            float(raw_col),
+            float(raw_row),
+            display_background=background,
+            cache_data=cache_data,
+            build_cache_data=None,
+            use_caked_space=False,
+            radial_axis=None,
+            azimuth_axis=None,
+            match_simulated_peaks_to_peak_context=None,
+            peak_maximum_near_in_image_fn=_peak_maximum_near_in_image,
+            caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+            caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+            refine_caked_peak_center_fn=_geometry_manual_caked_peak_center_fn_for_cache(None),
+        )
+    except Exception:
+        return float(raw_col), float(raw_row)
+    return float(refined_col), float(refined_row)
+
+
 def _update_beam_center_pick_preview(
     col: float,
     row: float,
@@ -7552,25 +7600,7 @@ def _update_beam_center_pick_preview(
     display_background = _current_beam_center_pick_background_image()
     if display_background is None:
         return False
-    try:
-        cache_data = _get_geometry_manual_pick_cache(
-            param_set=_current_geometry_fit_params(),
-            prefer_cache=True,
-            background_index=int(background_runtime_state.current_background_index),
-            background_image=display_background,
-        )
-    except Exception:
-        cache_data = {}
-    if not isinstance(cache_data, dict):
-        cache_data = {}
-    refined_col, refined_row = _geometry_manual_refine_preview_point(
-        None,
-        float(col),
-        float(row),
-        display_background=display_background,
-        cache_data=cache_data,
-        force_detector_space=True,
-    )
+    refined_col, refined_row = _refine_beam_center_pick_display_point(float(col), float(row))
     delta_px = _geometry_manual_position_error_px(
         float(col),
         float(row),
