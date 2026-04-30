@@ -5661,12 +5661,14 @@ def create_integration_range_controls(
     on_apply_entry: Callable[[object, object, object], None],
     integrate_selected_qr_rod: bool = False,
     mirror_selected_qr_phi: bool = False,
+    include_selected_qr_rod_shape: bool = False,
     caked_intensity_mode: str = "density",
     rod_profile_intensity_mode: str = "density",
     selected_qr_rod_key: str = "",
     selected_qr_rod_options: Sequence[tuple[str, str]] | None = None,
     on_toggle_integrate_selected_qr_rod: Callable[[], None] | None = None,
     on_toggle_mirror_selected_qr_phi: Callable[[], None] | None = None,
+    on_toggle_include_selected_qr_rod_shape: Callable[[], None] | None = None,
     on_caked_intensity_mode_changed: Callable[[object], None] | None = None,
     on_rod_profile_intensity_mode_changed: Callable[[object], None] | None = None,
     on_selected_qr_rod_changed: Callable[[object], None] | None = None,
@@ -5857,6 +5859,27 @@ def create_integration_range_controls(
         pady=(0, 4),
     )
 
+    include_selected_qr_rod_shape_var = tk.BooleanVar(
+        value=bool(include_selected_qr_rod_shape)
+    )
+    include_selected_qr_rod_shape_checkbutton = ttk.Checkbutton(
+        rod_section_frame,
+        text="Include rod shape",
+        variable=include_selected_qr_rod_shape_var,
+        command=(
+            on_toggle_include_selected_qr_rod_shape
+            if callable(on_toggle_include_selected_qr_rod_shape)
+            else None
+        ),
+        state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
+    )
+    include_selected_qr_rod_shape_checkbutton.pack(
+        side=tk.TOP,
+        anchor=tk.W,
+        padx=5,
+        pady=(0, 4),
+    )
+
     _create_range_row(
         parent_frame=rectangle_section_frame,
         prefix="tth_min",
@@ -5961,6 +5984,11 @@ def create_integration_range_controls(
     view_state.integrate_selected_qr_rod_checkbutton = integrate_selected_qr_rod_checkbutton
     view_state.mirror_selected_qr_phi_var = mirror_selected_qr_phi_var
     view_state.mirror_selected_qr_phi_checkbutton = mirror_selected_qr_phi_checkbutton
+    view_state.include_selected_qr_rod_shape_value = include_selected_qr_rod_shape_var.get()
+    view_state.include_selected_qr_rod_shape_var = include_selected_qr_rod_shape_var
+    view_state.include_selected_qr_rod_shape_checkbutton = (
+        include_selected_qr_rod_shape_checkbutton
+    )
     view_state.caked_intensity_mode_value = caked_intensity_mode_var.get()
     view_state.caked_intensity_mode_var = caked_intensity_mode_var
     view_state.caked_intensity_mode_label = caked_intensity_mode_label

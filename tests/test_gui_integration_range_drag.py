@@ -484,6 +484,9 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].mirror_selected_qr_phi_var = _FakeVar(
             kwargs["mirror_selected_qr_phi"]
         )
+        kwargs["view_state"].include_selected_qr_rod_shape_var = _FakeVar(
+            kwargs["include_selected_qr_rod_shape"]
+        )
         kwargs["view_state"].caked_intensity_mode_var = _FakeVar(
             kwargs["caked_intensity_mode"]
         )
@@ -519,6 +522,9 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].phi_max_slider = _FakeSlider(-15.0, 15.0)
         kwargs["view_state"].selected_qr_rod_combobox = _FakeEntry(state="disabled")
         kwargs["view_state"].mirror_selected_qr_phi_checkbutton = _FakeEntry(state="disabled")
+        kwargs["view_state"].include_selected_qr_rod_shape_checkbutton = _FakeEntry(
+            state="disabled"
+        )
         kwargs["view_state"].qz_min_slider = _FakeSlider(-2.0, 2.0)
         kwargs["view_state"].qz_max_slider = _FakeSlider(-2.0, 2.0)
         kwargs["view_state"].delta_qr_slider = _FakeSlider(0.0, 1.0)
@@ -1118,6 +1124,101 @@ def test_update_runtime_integration_region_visuals_updates_raw_overlay() -> None
     assert overlay.visible is True
     assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
     assert int(np.sum(overlay.data)) == 6
+
+
+def test_update_runtime_integration_region_visuals_uses_detector_qr_rod_mask(
+    monkeypatch,
+) -> None:
+    view_state = _range_view_state()
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    overlay = _FakeOverlay()
+    overlay_rect = _FakeRect()
+    detector_mask = np.asarray(
+        [
+            [True, False, False],
+            [False, True, False],
+            [False, False, True],
+        ],
+        dtype=bool,
+    )
+    angular_calls = []
+
+    monkeypatch.setattr(
+        integration_range_drag,
+        "_update_detector_integration_overlay",
+        lambda *args, **kwargs: angular_calls.append((args, kwargs)) or True,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (_ for _ in ()).throw(AssertionError()),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+        detector_qr_rod_mask_factory=lambda: detector_mask,
+        detector_qr_rod_mask_signature_factory=lambda: ("detector-mask", 1),
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=object(),
+        sim_res2=None,
+    )
+
+    assert angular_calls == []
+    assert overlay.visible is True
+    assert overlay_rect.visible is False
+    np.testing.assert_allclose(overlay.data, detector_mask.astype(float))
+
+
+def test_update_runtime_integration_region_visuals_hides_invalid_detector_qr_rod_mask(
+    monkeypatch,
+) -> None:
+    view_state = _range_view_state()
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    overlay = _FakeOverlay()
+    overlay.visible = True
+    overlay_rect = _FakeRect()
+    overlay_rect.visible = True
+    angular_calls = []
+    monkeypatch.setattr(
+        integration_range_drag,
+        "_update_detector_integration_overlay",
+        lambda *args, **kwargs: angular_calls.append((args, kwargs)) or True,
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(extent=(0.0, 2.0, 2.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (_ for _ in ()).throw(AssertionError()),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+        detector_qr_rod_mask_factory=lambda: np.zeros((3, 3), dtype=bool),
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=object(),
+        sim_res2=None,
+    )
+
+    assert angular_calls == []
+    assert overlay.visible is False
+    assert overlay_rect.visible is False
 
 
 def test_update_runtime_integration_region_visuals_keeps_detector_fallback_for_active_rod_mask() -> (
@@ -2692,6 +2793,93 @@ def test_raw_drag_release_preserves_wrapped_short_arc_interval() -> None:
     assert overlay.visible is True
     assert int(np.sum(overlay.data)) == 3
     assert len(draw_calls) >= 3
+
+
+def test_detector_qr_rod_drag_sets_qz_bounds_without_detector_angles(
+    monkeypatch,
+) -> None:
+    axis = _FakeAxis(xlim=(0.0, 3.0), ylim=(3.0, 0.0))
+    drag_state = state.IntegrationRangeDragState()
+    view_state = _range_view_state()
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    view_state.qz_min_var = _FakeVar(0.0)
+    view_state.qz_max_var = _FakeVar(0.0)
+    view_state.delta_qr_var = _FakeVar(0.05)
+    show_1d_var = _FakeVar(False)
+    schedule_calls = []
+    status_messages = []
+    draw_calls = []
+    qz_map = np.asarray(
+        [
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+        ],
+        dtype=float,
+    )
+    context = {
+        "detector_shape": (3, 3),
+        "qr_map": np.ones((3, 3), dtype=float),
+        "qz_map": qz_map,
+        "valid_q": np.ones((3, 3), dtype=bool),
+        "detector_phi_deg": None,
+        "qr_center": 1.0,
+        "delta_qr": 0.05,
+        "phi_windows": ((-180.0, 180.0),),
+        "shape_mask": None,
+        "signature": ("drag-context", 1),
+    }
+
+    angle_calls = []
+    monkeypatch.setattr(
+        integration_range_drag,
+        "display_to_detector_angles",
+        lambda *args, **kwargs: angle_calls.append((args, kwargs)) or (_ for _ in ()).throw(
+            AssertionError("raw detector angle path used")
+        ),
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=axis,
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(extent=(0.0, 3.0, 3.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (_ for _ in ()).throw(AssertionError()),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(True),
+        draw_idle=lambda: draw_calls.append(True),
+        set_status_text=status_messages.append,
+        detector_qr_rod_drag_context_factory=lambda: context,
+    )
+
+    assert integration_range_drag.handle_runtime_integration_drag_press(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=0.2, ydata=2.8),
+    )
+    assert drag_state.mode == "detector_qr_rod"
+    assert integration_range_drag.handle_runtime_integration_drag_motion(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=1.1),
+    )
+    assert integration_range_drag.handle_runtime_integration_drag_release(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=1.1),
+    )
+
+    assert angle_calls == []
+    assert view_state.qz_min_var.get() == 0.0
+    assert view_state.qz_max_var.get() == 8.0
+    assert show_1d_var.get() is True
+    assert schedule_calls == [True]
+    assert status_messages[-1] == "Selected Qr rod detector Qz range set: Qz=[0.0000, 8.0000] A^-1"
+    assert draw_calls
 
 
 def test_set_runtime_integration_range_from_drag_without_controls_uses_cached_state() -> None:

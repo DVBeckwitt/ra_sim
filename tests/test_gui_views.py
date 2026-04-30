@@ -3103,6 +3103,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
         selected_qr_rod_options=[("phase-a|1", "phase-a m=1 | Qr=1.2500 A^-1")],
         on_toggle_integrate_selected_qr_rod=lambda: toggle_calls.append("toggle"),
         on_toggle_mirror_selected_qr_phi=lambda: toggle_calls.append("mirror"),
+        on_toggle_include_selected_qr_rod_shape=lambda: toggle_calls.append("shape"),
         on_caked_intensity_mode_changed=lambda value: mode_calls.append(("caked", value)),
         on_rod_profile_intensity_mode_changed=lambda value: mode_calls.append(value),
         on_selected_qr_rod_changed=lambda value: slider_calls.append(("rod-select", value)),
@@ -3164,6 +3165,11 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.mirror_selected_qr_phi_checkbutton.kwargs["text"] == "Mirror ±φ band"
     assert view_state.mirror_selected_qr_phi_var.get() is False
     assert view_state.mirror_selected_qr_phi_checkbutton.state == views.tk.DISABLED
+    assert view_state.include_selected_qr_rod_shape_checkbutton.kwargs["text"] == (
+        "Include rod shape"
+    )
+    assert view_state.include_selected_qr_rod_shape_var.get() is False
+    assert view_state.include_selected_qr_rod_shape_checkbutton.state == views.tk.DISABLED
     assert any(label.text == "Caked image intensity" for label in _FakeLabel.created)
     assert any(label.text == "Rod profile intensity" for label in _FakeLabel.created)
     assert list(view_state.caked_intensity_mode_buttons) == ["density", "raw_sum"]
@@ -3222,7 +3228,8 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
 
     view_state.integrate_selected_qr_rod_checkbutton.command()
     view_state.mirror_selected_qr_phi_checkbutton.command()
-    assert toggle_calls == ["toggle", "mirror"]
+    view_state.include_selected_qr_rod_shape_checkbutton.command()
+    assert toggle_calls == ["toggle", "mirror", "shape"]
     view_state.caked_intensity_mode_var.set("raw_sum")
     view_state.caked_intensity_mode_buttons["raw_sum"].command()
     view_state.rod_profile_intensity_mode_var.set("raw_sum")

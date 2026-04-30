@@ -380,6 +380,133 @@ def _phi_windows_cover_full_range(
     return False
 
 
+def _bool_mask_digest(
+    value: object | None,
+    *,
+    expected_shape: tuple[int, int] | None = None,
+) -> tuple[object, ...] | None:
+    if value is None:
+        return ("bool_mask", None)
+    try:
+        mask = np.asarray(value, dtype=bool)
+    except Exception:
+        return None
+    if mask.ndim != 2:
+        return None
+    shape = tuple(int(v) for v in mask.shape)
+    if expected_shape is not None and shape != tuple(int(v) for v in expected_shape):
+        return None
+    contiguous = np.ascontiguousarray(mask, dtype=np.bool_)
+    return (
+        "bool_mask",
+        shape,
+        int(np.count_nonzero(contiguous)),
+        hashlib.blake2b(contiguous.view(np.uint8), digest_size=16).hexdigest(),
+    )
+
+
+def build_detector_qr_rod_support_mask(
+    *,
+    qr_map: object,
+    qz_map: object,
+    valid_q: object,
+    qr_center: object,
+    delta_qr: object,
+    qz_min: object | None = None,
+    qz_max: object | None = None,
+    detector_phi_deg: object = None,
+    phi_min: object = -180.0,
+    phi_max: object = 180.0,
+    phi_windows: Sequence[tuple[object, object]] | None = None,
+    shape_mask: object = None,
+) -> dict[str, object] | None:
+    """Build detector-native selected-Qr rod support without image filtering."""
+
+    try:
+        qr_values = np.asarray(qr_map, dtype=np.float64)
+        qz_values = np.asarray(qz_map, dtype=np.float64)
+        qr0 = float(qr_center)
+        delta = float(delta_qr)
+    except Exception:
+        return None
+    if (
+        qr_values.ndim != 2
+        or qz_values.shape != qr_values.shape
+        or not np.isfinite(qr0)
+        or not np.isfinite(delta)
+        or delta <= 0.0
+    ):
+        return None
+
+    detector_shape = tuple(int(v) for v in qr_values.shape)
+    if valid_q is None:
+        valid = np.ones(detector_shape, dtype=bool)
+    else:
+        try:
+            valid = np.asarray(valid_q, dtype=bool)
+        except Exception:
+            return None
+        if valid.shape != detector_shape:
+            return None
+
+    if shape_mask is None:
+        shape_support = np.zeros(detector_shape, dtype=bool)
+    else:
+        try:
+            shape_support = np.asarray(shape_mask, dtype=bool)
+        except Exception:
+            return None
+        if shape_support.shape != detector_shape:
+            return None
+
+    normalized_phi_windows = normalize_caked_phi_windows(
+        phi_min=phi_min,
+        phi_max=phi_max,
+        phi_windows=phi_windows,
+    )
+    if normalized_phi_windows is None:
+        return None
+    if detector_phi_deg is None:
+        if _phi_windows_cover_full_range(normalized_phi_windows):
+            phi_mask = np.ones(detector_shape, dtype=bool)
+        else:
+            return None
+    else:
+        try:
+            detector_phi = np.asarray(detector_phi_deg, dtype=np.float64)
+        except Exception:
+            return None
+        if detector_phi.shape != detector_shape:
+            return None
+        phi_mask = caked_phi_window_mask(detector_phi, normalized_phi_windows)
+        if phi_mask.shape != detector_shape:
+            return None
+
+    finite_q = np.isfinite(qr_values) & np.isfinite(qz_values)
+    common = valid & finite_q & phi_mask
+    if qz_min is not None or qz_max is not None:
+        if qz_min is None or qz_max is None:
+            return None
+        try:
+            qz_lo, qz_hi = sorted((float(qz_min), float(qz_max)))
+        except Exception:
+            return None
+        if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)):
+            return None
+        common &= (qz_values >= qz_lo) & (qz_values <= qz_hi)
+
+    qr_band = (qr_values >= qr0 - delta) & (qr_values <= qr0 + delta)
+    selected = common & (qr_band | shape_support)
+    selected_shape = common & shape_support
+    return {
+        "mask": np.asarray(selected, dtype=bool),
+        "qr_band_mask": np.asarray(common & qr_band, dtype=bool),
+        "shape_available": bool(np.any(shape_support)),
+        "shape_pixel_count": int(np.count_nonzero(selected_shape)),
+        "support_pixel_count": int(np.count_nonzero(selected)),
+    }
+
+
 def integrate_detector_qr_rod_qz_profile(
     *,
     detector_image: object,
@@ -393,6 +520,7 @@ def integrate_detector_qr_rod_qz_profile(
     phi_min: object = -180.0,
     phi_max: object = 180.0,
     phi_windows: Sequence[tuple[object, object]] | None = None,
+    shape_mask: object = None,
 ) -> dict[str, np.ndarray] | None:
     """Integrate selected-Qr rod intensity directly from detector pixels."""
 
@@ -418,50 +546,24 @@ def integrate_detector_qr_rod_qz_profile(
     ):
         return None
 
-    if valid_q is None:
-        valid = np.ones(image.shape, dtype=bool)
-    else:
-        try:
-            valid = np.asarray(valid_q, dtype=bool)
-        except Exception:
-            return None
-        if valid.shape != image.shape:
-            return None
-
-    normalized_phi_windows = normalize_caked_phi_windows(
+    support = build_detector_qr_rod_support_mask(
+        qr_map=qr_values,
+        qz_map=qz_values,
+        valid_q=valid_q,
+        qr_center=qr0,
+        delta_qr=delta,
+        qz_min=float(edges[0]),
+        qz_max=float(edges[-1]),
+        detector_phi_deg=detector_phi_deg,
         phi_min=phi_min,
         phi_max=phi_max,
         phi_windows=phi_windows,
+        shape_mask=shape_mask,
     )
-    if normalized_phi_windows is None:
+    if support is None:
         return None
-    if detector_phi_deg is None:
-        if _phi_windows_cover_full_range(normalized_phi_windows):
-            phi_mask = np.ones(image.shape, dtype=bool)
-        else:
-            return None
-    else:
-        try:
-            detector_phi = np.asarray(detector_phi_deg, dtype=np.float64)
-        except Exception:
-            return None
-        if detector_phi.shape != image.shape:
-            return None
-        phi_mask = caked_phi_window_mask(detector_phi, normalized_phi_windows)
-        if phi_mask.shape != image.shape:
-            return None
 
-    selected = (
-        valid
-        & phi_mask
-        & np.isfinite(image)
-        & np.isfinite(qr_values)
-        & np.isfinite(qz_values)
-        & (qr_values >= qr0 - delta)
-        & (qr_values <= qr0 + delta)
-        & (qz_values >= edges[0])
-        & (qz_values <= edges[-1])
-    )
+    selected = np.asarray(support["mask"], dtype=bool) & np.isfinite(image)
     selected_qz = qz_values[selected]
     selected_intensity = image[selected]
 
@@ -485,6 +587,21 @@ def integrate_detector_qr_rod_qz_profile(
         "pixel_count": pixel_count,
         "intensity_sum": intensity_sum,
         "intensity_mean": intensity_mean,
+        "shape_available": np.full(
+            pixel_count.shape,
+            bool(support.get("shape_available", False)),
+            dtype=bool,
+        ),
+        "shape_pixel_count": np.full(
+            pixel_count.shape,
+            int(support.get("shape_pixel_count", 0) or 0),
+            dtype=np.int64,
+        ),
+        "support_pixel_count": np.full(
+            pixel_count.shape,
+            int(support.get("support_pixel_count", 0) or 0),
+            dtype=np.int64,
+        ),
     }
 
 
@@ -1526,6 +1643,176 @@ def project_selected_qr_rod_caked_samples(
     }
 
 
+def build_selected_qr_rod_qz_detector_mask_signature(
+    *,
+    selected_entry: Mapping[str, object],
+    config: QrCylinderOverlayRenderConfig,
+    detector_shape: tuple[int, int],
+    delta_qr: float,
+    qz_min: float | None,
+    qz_max: float | None,
+    phi_min: float = -180.0,
+    phi_max: float = 180.0,
+    phi_windows: Sequence[tuple[object, object]] | None = None,
+    shape_mask: object = None,
+    selected_qr_rod_key: object = None,
+    include_shape: bool = False,
+    shape_source_signature: object = None,
+) -> tuple[object, ...] | None:
+    """Return the geometry-aware cache signature for a detector-native rod mask."""
+
+    try:
+        qr0 = float(selected_entry["qr"])
+        delta_qr_value = float(delta_qr)
+        shape = tuple(int(v) for v in detector_shape[:2])
+    except Exception:
+        return None
+    if (
+        len(shape) != 2
+        or shape[0] <= 0
+        or shape[1] <= 0
+        or not np.isfinite(qr0)
+        or qr0 < 0.0
+        or not np.isfinite(delta_qr_value)
+        or delta_qr_value <= 0.0
+    ):
+        return None
+
+    qz_signature: tuple[object, object] | None
+    if qz_min is None and qz_max is None:
+        qz_signature = None
+    else:
+        try:
+            qz_lo, qz_hi = sorted((float(qz_min), float(qz_max)))
+        except Exception:
+            return None
+        if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)):
+            return None
+        qz_signature = (round(float(qz_lo), 10), round(float(qz_hi), 10))
+
+    normalized_phi_windows = normalize_caked_phi_windows(
+        phi_min=phi_min,
+        phi_max=phi_max,
+        phi_windows=phi_windows,
+    )
+    if normalized_phi_windows is None:
+        return None
+
+    shape_signature = _bool_mask_digest(shape_mask, expected_shape=shape)
+    if shape_signature is None:
+        return None
+
+    effective_config = _selected_qr_mask_projection_config(config)
+    return (
+        "selected_qr_rod_detector_mask",
+        str(selected_qr_rod_key if selected_qr_rod_key is not None else selected_entry.get("key")),
+        _selected_qr_entry_signature(selected_entry, qr0),
+        shape,
+        _detector_q_map_signature(effective_config, shape),
+        round(float(delta_qr_value), 10),
+        qz_signature,
+        tuple(
+            (round(float(lo), 10), round(float(hi), 10))
+            for lo, hi in normalized_phi_windows
+        ),
+        bool(include_shape),
+        shape_signature,
+        _timing_digestable_signature(shape_source_signature),
+    )
+
+
+def _timing_digestable_signature(value: object) -> object:
+    try:
+        hash(value)
+    except Exception:
+        if isinstance(value, Mapping):
+            return tuple(sorted((str(k), _timing_digestable_signature(v)) for k, v in value.items()))
+        if isinstance(value, (list, tuple)):
+            return tuple(_timing_digestable_signature(v) for v in value)
+        return repr(value)
+    return value
+
+
+def build_selected_qr_rod_qz_detector_mask(
+    *,
+    selected_entry: Mapping[str, object],
+    config: QrCylinderOverlayRenderConfig,
+    detector_shape: tuple[int, int],
+    delta_qr: float,
+    qz_min: float,
+    qz_max: float,
+    detector_phi_deg: object = None,
+    phi_min: float = -180.0,
+    phi_max: float = 180.0,
+    phi_windows: Sequence[tuple[object, object]] | None = None,
+    shape_mask: object = None,
+    selected_qr_rod_key: object = None,
+    include_shape: bool = False,
+    shape_source_signature: object = None,
+) -> dict[str, object] | None:
+    """Build a detector-native selected-Qr rod ROI mask from detector Q maps."""
+
+    try:
+        qr0 = float(selected_entry["qr"])
+        shape = tuple(int(v) for v in detector_shape[:2])
+    except Exception:
+        return None
+    if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0 or not np.isfinite(qr0):
+        return None
+
+    effective_config = _selected_qr_mask_projection_config(config)
+    signature = build_selected_qr_rod_qz_detector_mask_signature(
+        selected_entry=selected_entry,
+        config=effective_config,
+        detector_shape=shape,
+        delta_qr=delta_qr,
+        qz_min=qz_min,
+        qz_max=qz_max,
+        phi_min=phi_min,
+        phi_max=phi_max,
+        phi_windows=phi_windows,
+        shape_mask=shape_mask,
+        selected_qr_rod_key=selected_qr_rod_key,
+        include_shape=include_shape,
+        shape_source_signature=shape_source_signature,
+    )
+    if signature is None:
+        return None
+
+    q_maps = detector_qr_qz_maps_for_projection(
+        config=effective_config,
+        detector_shape=shape,
+    )
+    if q_maps is None:
+        return None
+    qr_map, qz_map, valid_q = q_maps
+    support = build_detector_qr_rod_support_mask(
+        qr_map=qr_map,
+        qz_map=qz_map,
+        valid_q=valid_q,
+        qr_center=qr0,
+        delta_qr=delta_qr,
+        qz_min=qz_min,
+        qz_max=qz_max,
+        detector_phi_deg=detector_phi_deg,
+        phi_min=phi_min,
+        phi_max=phi_max,
+        phi_windows=phi_windows,
+        shape_mask=shape_mask,
+    )
+    if support is None:
+        return None
+
+    return {
+        "mask": np.asarray(support["mask"], dtype=bool),
+        "signature": signature,
+        "shape_available": bool(support.get("shape_available", False)),
+        "shape_pixel_count": int(support.get("shape_pixel_count", 0) or 0),
+        "support_pixel_count": int(support.get("support_pixel_count", 0) or 0),
+        "qr_band_mask": np.asarray(support["qr_band_mask"], dtype=bool),
+    }
+
+
 def build_selected_qr_rod_qz_caked_mask_signature(
     *,
     selected_entry: Mapping[str, object],
@@ -1539,6 +1826,7 @@ def build_selected_qr_rod_qz_caked_mask_signature(
     phi_min: float = -180.0,
     phi_max: float = 180.0,
     phi_windows: Sequence[tuple[object, object]] | None = None,
+    shape_mask: object = None,
 ) -> tuple[object, ...] | None:
     """Return the geometry-aware cache signature for a selected-Qr rod ROI mask."""
 
@@ -1586,6 +1874,12 @@ def build_selected_qr_rod_qz_caked_mask_signature(
     azimuth_signature = _float64_axis_digest(azimuth_values)
     if projection_signature is None or radial_signature is None or azimuth_signature is None:
         return None
+    shape_signature = _bool_mask_digest(
+        shape_mask,
+        expected_shape=tuple(int(v) for v in resolved_projection["detector_shape"]),
+    )
+    if shape_signature is None:
+        return None
 
     effective_config = _selected_qr_mask_projection_config(config)
     signature_entry = _overlay_signature_entry(selected_entry, qr0)
@@ -1610,6 +1904,7 @@ def build_selected_qr_rod_qz_caked_mask_signature(
         ),
         radial_signature,
         azimuth_signature,
+        shape_signature,
     )
 
 
@@ -1624,6 +1919,7 @@ def _build_selected_qr_rod_qz_caked_mask_from_detector_lut(
     qz_min: float,
     qz_max: float,
     phi_windows: Sequence[tuple[object, object]],
+    shape_mask: object = None,
 ) -> np.ndarray | None:
     try:
         qr0 = float(selected_entry["qr"])
@@ -1673,15 +1969,24 @@ def _build_selected_qr_rod_qz_caked_mask_from_detector_lut(
         or valid_q.shape != detector_shape
     ):
         return None
+    if shape_mask is None:
+        shape_support = np.zeros(detector_shape, dtype=bool)
+    else:
+        try:
+            shape_support = np.asarray(shape_mask, dtype=bool)
+        except Exception:
+            return None
+        if shape_support.shape != detector_shape:
+            return None
 
     qr_lo = max(0.0, qr0 - delta_qr_value)
     qr_hi = qr0 + delta_qr_value
+    finite_q = np.isfinite(qr_map) & np.isfinite(qz_map)
+    qr_band = (qr_map >= qr_lo) & (qr_map <= qr_hi)
     selected_detector = (
         np.asarray(valid_q, dtype=bool)
-        & np.isfinite(qr_map)
-        & np.isfinite(qz_map)
-        & (qr_map >= qr_lo)
-        & (qr_map <= qr_hi)
+        & finite_q
+        & (qr_band | shape_support)
         & (qz_map >= qz_lo)
         & (qz_map <= qz_hi)
     )
@@ -1735,6 +2040,7 @@ def build_selected_qr_rod_qz_caked_mask(
     phi_min: float = -180.0,
     phi_max: float = 180.0,
     phi_windows: Sequence[tuple[object, object]] | None = None,
+    shape_mask: object = None,
     project_traces: Callable[..., Sequence[Any]] = project_qr_cylinder_to_detector,
 ) -> dict[str, object] | None:
     """Build one selected-Qr ROI mask from geometry-projected Qr-cylinder traces."""
@@ -1781,6 +2087,7 @@ def build_selected_qr_rod_qz_caked_mask(
         phi_min=phi_min,
         phi_max=phi_max,
         phi_windows=normalized_phi_windows,
+        shape_mask=shape_mask,
     )
     if signature is None:
         return None
@@ -1795,6 +2102,7 @@ def build_selected_qr_rod_qz_caked_mask(
         qz_min=qz_lo,
         qz_max=qz_hi,
         phi_windows=normalized_phi_windows,
+        shape_mask=shape_mask,
     )
     if detector_mask is not None:
         return {

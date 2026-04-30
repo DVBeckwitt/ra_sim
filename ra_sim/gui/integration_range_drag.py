@@ -70,8 +70,11 @@ class IntegrationRangeDragBindings:
     set_integration_overlay_image: Callable[..., None] | None = None
     caked_custom_mask_factory: object = None
     caked_custom_mask_signature_factory: object = None
+    detector_qr_rod_mask_factory: object = None
+    detector_qr_rod_mask_signature_factory: object = None
     detector_geometry_signature_factory: object = None
     caked_qr_rod_drag_context_factory: object = None
+    detector_qr_rod_drag_context_factory: object = None
 
 
 @dataclass(frozen=True)
@@ -398,6 +401,25 @@ def _runtime_caked_custom_mask_signature(
     bindings: IntegrationRangeDragBindings,
 ) -> object | None:
     return _resolve_runtime_value(getattr(bindings, "caked_custom_mask_signature_factory", None))
+
+
+def _runtime_detector_qr_rod_mask(bindings: IntegrationRangeDragBindings):
+    resolved = _resolve_runtime_value(getattr(bindings, "detector_qr_rod_mask_factory", None))
+    if resolved is None:
+        return None
+    try:
+        mask = np.asarray(resolved, dtype=bool)
+    except Exception:
+        return None
+    return mask if mask.ndim == 2 else None
+
+
+def _runtime_detector_qr_rod_mask_signature(
+    bindings: IntegrationRangeDragBindings,
+) -> object | None:
+    return _resolve_runtime_value(
+        getattr(bindings, "detector_qr_rod_mask_signature_factory", None)
+    )
 
 
 def _runtime_detector_geometry_signature(
@@ -1312,6 +1334,108 @@ def _runtime_qr_rod_drag_context(
     return context if isinstance(context, Mapping) else None
 
 
+def _runtime_detector_qr_rod_drag_context(
+    bindings: IntegrationRangeDragBindings,
+) -> Mapping[str, object] | None:
+    context = _resolve_runtime_value(
+        getattr(bindings, "detector_qr_rod_drag_context_factory", None)
+    )
+    return context if isinstance(context, Mapping) else None
+
+
+def _detector_drag_rectangle_mask(
+    bindings: IntegrationRangeDragBindings,
+    *,
+    detector_shape: tuple[int, int],
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> np.ndarray | None:
+    try:
+        shape = tuple(int(v) for v in detector_shape[:2])
+        col_idx, row_idx = _display_coords_to_detector_indices(
+            bindings,
+            x_values=np.asarray([x0, x1], dtype=float),
+            y_values=np.asarray([y0, y1], dtype=float),
+            detector_shape=shape,
+        )
+    except Exception:
+        return None
+    if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0:
+        return None
+    if col_idx.size < 2 or row_idx.size < 2:
+        return None
+    col_lo = int(np.floor(np.nanmin(col_idx)))
+    col_hi = int(np.ceil(np.nanmax(col_idx)))
+    row_lo = int(np.floor(np.nanmin(row_idx)))
+    row_hi = int(np.ceil(np.nanmax(row_idx)))
+    col_lo = min(max(col_lo, 0), shape[1] - 1)
+    col_hi = min(max(col_hi, 0), shape[1] - 1)
+    row_lo = min(max(row_lo, 0), shape[0] - 1)
+    row_hi = min(max(row_hi, 0), shape[0] - 1)
+    if col_hi < col_lo or row_hi < row_lo:
+        return None
+    mask = np.zeros(shape, dtype=bool)
+    mask[row_lo : row_hi + 1, col_lo : col_hi + 1] = True
+    return mask
+
+
+def _detector_qr_rod_base_support_from_context(
+    context: Mapping[str, object],
+) -> dict[str, object] | None:
+    return gui_qr_cylinder_overlay.build_detector_qr_rod_support_mask(
+        qr_map=context.get("qr_map"),
+        qz_map=context.get("qz_map"),
+        valid_q=context.get("valid_q"),
+        qr_center=context.get("qr_center"),
+        delta_qr=context.get("delta_qr"),
+        detector_phi_deg=context.get("detector_phi_deg"),
+        phi_min=context.get("phi_min", -180.0),
+        phi_max=context.get("phi_max", 180.0),
+        phi_windows=context.get("phi_windows"),
+        shape_mask=context.get("shape_mask"),
+    )
+
+
+def qz_bounds_from_detector_drag_for_qr_rod(
+    context: Mapping[str, object],
+    *,
+    bindings: IntegrationRangeDragBindings,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> tuple[float, float] | None:
+    """Return Qz bounds from detector pixels intersecting the selected rod support."""
+
+    try:
+        detector_shape = tuple(int(v) for v in context["detector_shape"][:2])
+        qz_map = np.asarray(context["qz_map"], dtype=float)
+    except Exception:
+        return None
+    if qz_map.shape != detector_shape:
+        return None
+    rect_mask = _detector_drag_rectangle_mask(
+        bindings,
+        detector_shape=detector_shape,
+        x0=x0,
+        y0=y0,
+        x1=x1,
+        y1=y1,
+    )
+    if rect_mask is None:
+        return None
+    support = _detector_qr_rod_base_support_from_context(context)
+    if support is None:
+        return None
+    selected = rect_mask & np.asarray(support["mask"], dtype=bool) & np.isfinite(qz_map)
+    if not np.any(selected):
+        return None
+    selected_qz = qz_map[selected]
+    return float(np.min(selected_qz)), float(np.max(selected_qz))
+
+
 def _projected_qr_rod_samples_from_context(
     context: Mapping[str, object],
 ) -> Mapping[str, object] | None:
@@ -1456,6 +1580,76 @@ def update_runtime_qr_rod_drag_preview(bindings: IntegrationRangeDragBindings) -
         source_signature=(
             "caked_selected_qr_rod_drag_preview",
             mask_payload.get("signature"),
+        ),
+    )
+    bindings.integration_region_overlay.set_visible(True)
+    bindings.integration_region_rect.set_visible(False)
+    bindings.drag_select_rect.set_visible(False)
+    _draw_idle(bindings)
+    return True
+
+
+def update_runtime_detector_qr_rod_drag_preview(bindings: IntegrationRangeDragBindings) -> bool:
+    """Refresh detector selected-Qr rod drag preview as detector-native support."""
+
+    drag_state = bindings.drag_state
+    if None in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1):
+        return False
+    context = _runtime_detector_qr_rod_drag_context(bindings)
+    if context is None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        bindings.drag_select_rect.set_visible(False)
+        _draw_idle(bindings)
+        return False
+
+    qz_bounds = qz_bounds_from_detector_drag_for_qr_rod(
+        context,
+        bindings=bindings,
+        x0=drag_state.x0,
+        y0=drag_state.y0,
+        x1=drag_state.x1,
+        y1=drag_state.y1,
+    )
+    if qz_bounds is None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        bindings.drag_select_rect.set_visible(False)
+        _draw_idle(bindings)
+        return False
+
+    support = gui_qr_cylinder_overlay.build_detector_qr_rod_support_mask(
+        qr_map=context.get("qr_map"),
+        qz_map=context.get("qz_map"),
+        valid_q=context.get("valid_q"),
+        qr_center=context.get("qr_center"),
+        delta_qr=context.get("delta_qr"),
+        qz_min=qz_bounds[0],
+        qz_max=qz_bounds[1],
+        detector_phi_deg=context.get("detector_phi_deg"),
+        phi_min=context.get("phi_min", -180.0),
+        phi_max=context.get("phi_max", 180.0),
+        phi_windows=context.get("phi_windows"),
+        shape_mask=context.get("shape_mask"),
+    )
+    if support is None:
+        return False
+    mask = np.asarray(support["mask"], dtype=bool)
+    if not np.any(mask):
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        bindings.drag_select_rect.set_visible(False)
+        _draw_idle(bindings)
+        return False
+
+    _set_integration_overlay_image(
+        bindings,
+        mask.astype(float),
+        source_signature=(
+            "detector_selected_qr_rod_drag_preview",
+            tuple(int(value) for value in mask.shape),
+            context.get("signature"),
+            tuple(round(float(value), 10) for value in qz_bounds),
         ),
     )
     bindings.integration_region_overlay.set_visible(True)
@@ -1654,6 +1848,25 @@ def update_runtime_integration_region_visuals(
                 bindings.integration_region_rect.set_visible(False)
         return
 
+    if rod_mode_enabled:
+        custom_mask = _runtime_detector_qr_rod_mask(bindings)
+        if custom_mask is not None and np.any(custom_mask):
+            _set_integration_overlay_image(
+                bindings,
+                custom_mask.astype(float),
+                source_signature=(
+                    "detector_selected_qr_rod_overlay",
+                    tuple(int(value) for value in custom_mask.shape),
+                    _runtime_detector_qr_rod_mask_signature(bindings),
+                ),
+            )
+            bindings.integration_region_overlay.set_visible(True)
+            bindings.integration_region_rect.set_visible(False)
+        else:
+            bindings.integration_region_overlay.set_visible(False)
+            bindings.integration_region_rect.set_visible(False)
+        return
+
     _update_detector_integration_overlay(
         bindings,
         ai=ai,
@@ -1753,6 +1966,24 @@ def handle_runtime_integration_drag_press(
     if bool(bindings.peak_selection_state.hkl_pick_armed):
         return False
 
+    if _runtime_range_boolean(
+        bindings.range_view_state,
+        "integrate_selected_qr_rod",
+        False,
+    ):
+        drag_state.active = True
+        drag_state.mode = "detector_qr_rod"
+        drag_state.x0 = x0
+        drag_state.y0 = y0
+        drag_state.x1 = x0
+        drag_state.y1 = y0
+        drag_state.tth0 = None
+        drag_state.phi0 = None
+        drag_state.tth1 = None
+        drag_state.phi1 = None
+        update_runtime_detector_qr_rod_drag_preview(bindings)
+        return True
+
     ai = _runtime_ai(bindings)
     if ai is None:
         return False
@@ -1826,6 +2057,24 @@ def handle_runtime_integration_drag_motion(
             return False
 
         update_runtime_qr_rod_drag_preview(bindings)
+        return True
+
+    if mode == "detector_qr_rod":
+        if _runtime_caked_view_enabled(bindings):
+            return False
+
+        if (
+            getattr(event, "inaxes", None) is bindings.ax
+            and getattr(event, "xdata", None) is not None
+            and getattr(event, "ydata", None) is not None
+        ):
+            x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+            drag_state.x1 = x1
+            drag_state.y1 = y1
+        elif drag_state.x1 is None or drag_state.y1 is None:
+            return False
+
+        update_runtime_detector_qr_rod_drag_preview(bindings)
         return True
 
     if mode != "raw" or _runtime_caked_view_enabled(bindings):
@@ -1991,6 +2240,65 @@ def handle_runtime_integration_drag_release(
         _draw_idle(bindings)
         return True
 
+    if mode == "detector_qr_rod":
+        if (
+            not _runtime_caked_view_enabled(bindings)
+            and getattr(event, "inaxes", None) is bindings.ax
+            and getattr(event, "xdata", None) is not None
+            and getattr(event, "ydata", None) is not None
+        ):
+            x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+            drag_state.x1 = x1
+            drag_state.y1 = y1
+
+        context = _runtime_detector_qr_rod_drag_context(bindings)
+        qz_bounds = None
+        if (
+            context is not None
+            and None not in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1)
+        ):
+            qz_bounds = qz_bounds_from_detector_drag_for_qr_rod(
+                context,
+                bindings=bindings,
+                x0=drag_state.x0,
+                y0=drag_state.y0,
+                x1=drag_state.x1,
+                y1=drag_state.y1,
+            )
+
+        reset_runtime_integration_drag(bindings, redraw=False)
+        if qz_bounds is None or bindings.range_view_state is None:
+            update_runtime_integration_region_visuals(
+                bindings,
+                _runtime_ai(bindings),
+                _runtime_last_sim_res2(bindings),
+            )
+            _set_status_text(
+                bindings,
+                "Drag across the selected Qr rod detector support to set a Qz range.",
+            )
+            _draw_idle(bindings)
+            return True
+
+        qz_lo, qz_hi = sorted((float(qz_bounds[0]), float(qz_bounds[1])))
+        _set_runtime_range_value(bindings.range_view_state, "qz_min", qz_lo)
+        _set_runtime_range_value(bindings.range_view_state, "qz_max", qz_hi)
+        _activate_runtime_1d_analysis(bindings.show_1d_var)
+        _sync_runtime_range_text_vars(bindings.range_view_state)
+        if callable(bindings.schedule_range_update):
+            bindings.schedule_range_update()
+        _set_status_text(
+            bindings,
+            f"Selected Qr rod detector Qz range set: Qz=[{qz_lo:.4f}, {qz_hi:.4f}] A^-1",
+        )
+        update_runtime_integration_region_visuals(
+            bindings,
+            _runtime_ai(bindings),
+            _runtime_last_sim_res2(bindings),
+        )
+        _draw_idle(bindings)
+        return True
+
     if mode == "raw":
         ai = _runtime_ai(bindings)
         applied = False
@@ -2057,8 +2365,11 @@ def make_runtime_integration_range_drag_bindings_factory(
     set_integration_overlay_image_factory: object = None,
     caked_custom_mask_factory: object = None,
     caked_custom_mask_signature_factory: object = None,
+    detector_qr_rod_mask_factory: object = None,
+    detector_qr_rod_mask_signature_factory: object = None,
     detector_geometry_signature_factory: object = None,
     caked_qr_rod_drag_context_factory: object = None,
+    detector_qr_rod_drag_context_factory: object = None,
 ):
     """Build a factory that resolves the live integration-range drag bindings."""
 
@@ -2088,8 +2399,11 @@ def make_runtime_integration_range_drag_bindings_factory(
             ),
             caked_custom_mask_factory=caked_custom_mask_factory,
             caked_custom_mask_signature_factory=caked_custom_mask_signature_factory,
+            detector_qr_rod_mask_factory=detector_qr_rod_mask_factory,
+            detector_qr_rod_mask_signature_factory=detector_qr_rod_mask_signature_factory,
             detector_geometry_signature_factory=detector_geometry_signature_factory,
             caked_qr_rod_drag_context_factory=caked_qr_rod_drag_context_factory,
+            detector_qr_rod_drag_context_factory=detector_qr_rod_drag_context_factory,
         )
 
     return _build
@@ -2288,6 +2602,7 @@ def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
     for widget_name in (
         "selected_qr_rod_combobox",
         "mirror_selected_qr_phi_checkbutton",
+        "include_selected_qr_rod_shape_checkbutton",
         "qz_min_slider",
         "qz_min_entry",
         "qz_max_slider",
@@ -2432,6 +2747,20 @@ def _toggle_runtime_mirror_selected_qr_phi(
     _refresh_runtime_region_visuals(refresh_region_visuals)
 
 
+def _toggle_runtime_include_selected_qr_rod_shape(
+    *,
+    view_state: object,
+    show_1d_var: object,
+    schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None = None,
+) -> None:
+    _activate_runtime_1d_analysis(show_1d_var)
+    _sync_runtime_selected_qr_rod_mode_state(view_state)
+    if callable(schedule_range_update):
+        schedule_range_update()
+    _refresh_runtime_region_visuals(refresh_region_visuals)
+
+
 def _select_runtime_selected_qr_rod(
     *,
     view_state: object,
@@ -2498,6 +2827,7 @@ def create_runtime_integration_range_controls(
     phi_max: float,
     integrate_selected_qr_rod: bool = False,
     mirror_selected_qr_phi: bool = False,
+    include_selected_qr_rod_shape: bool = False,
     caked_intensity_mode: str = "density",
     rod_profile_intensity_mode: str = "density",
     selected_qr_rod_key: str = "",
@@ -2524,6 +2854,15 @@ def create_runtime_integration_range_controls(
     _safe_var_set(
         getattr(view_state, "mirror_selected_qr_phi_var", None),
         bool(mirror_selected_qr_phi),
+    )
+    setattr(
+        view_state,
+        "include_selected_qr_rod_shape_value",
+        bool(include_selected_qr_rod_shape),
+    )
+    _safe_var_set(
+        getattr(view_state, "include_selected_qr_rod_shape_var", None),
+        bool(include_selected_qr_rod_shape),
     )
     _set_runtime_string_value(view_state, "selected_qr_rod_key", str(selected_qr_rod_key))
     _set_runtime_string_value(
@@ -2599,6 +2938,7 @@ def create_runtime_integration_range_controls(
         ),
         integrate_selected_qr_rod=bool(integrate_selected_qr_rod),
         mirror_selected_qr_phi=bool(mirror_selected_qr_phi),
+        include_selected_qr_rod_shape=bool(include_selected_qr_rod_shape),
         caked_intensity_mode=_normalize_runtime_caked_intensity_mode(caked_intensity_mode),
         rod_profile_intensity_mode=_normalize_runtime_rod_profile_intensity_mode(
             rod_profile_intensity_mode
@@ -2617,6 +2957,14 @@ def create_runtime_integration_range_controls(
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
             refresh_region_visuals=refresh_region_visuals,
+        ),
+        on_toggle_include_selected_qr_rod_shape=lambda: (
+            _toggle_runtime_include_selected_qr_rod_shape(
+                view_state=view_state,
+                show_1d_var=show_1d_var,
+                schedule_range_update=schedule_range_update,
+                refresh_region_visuals=refresh_region_visuals,
+            )
         ),
         on_selected_qr_rod_changed=lambda value: _select_runtime_selected_qr_rod(
             view_state=view_state,
@@ -2668,6 +3016,7 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "phi_max_var", None),
         getattr(view_state, "integrate_selected_qr_rod_var", None),
         getattr(view_state, "mirror_selected_qr_phi_var", None),
+        getattr(view_state, "include_selected_qr_rod_shape_var", None),
         getattr(view_state, "caked_intensity_mode_var", None),
         getattr(view_state, "rod_profile_intensity_mode_var", None),
         getattr(view_state, "selected_qr_rod_key_var", None),
@@ -2681,6 +3030,7 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "phi_max_slider", None),
         getattr(view_state, "selected_qr_rod_combobox", None),
         getattr(view_state, "mirror_selected_qr_phi_checkbutton", None),
+        getattr(view_state, "include_selected_qr_rod_shape_checkbutton", None),
         getattr(view_state, "qz_min_slider", None),
         getattr(view_state, "qz_max_slider", None),
         getattr(view_state, "delta_qr_slider", None),

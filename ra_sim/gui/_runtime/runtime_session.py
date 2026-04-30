@@ -18,6 +18,7 @@ DEFAULT_EVENTS_PER_BEAM_PHASE = 75
 DEFAULT_LINKED_EVENTS_PER_SAMPLE = 2
 MIN_EVENTS_PER_BEAM_PHASE = 1
 MAX_EVENTS_PER_BEAM_PHASE = 1000
+_SELECTED_QR_ROD_DETECTOR_PROFILE_BINS = 512
 
 
 gui_bootstrap.early_main_bootstrap(__name__)
@@ -9215,6 +9216,69 @@ def _current_caked_qz_extent() -> tuple[float, float] | None:
     return float(np.min(valid_qz)), float(np.max(valid_qz))
 
 
+def _current_detector_shape() -> tuple[int, int] | None:
+    detector_image = getattr(simulation_runtime_state, "unscaled_image", None)
+    try:
+        detector_array = np.asarray(detector_image, dtype=float)
+    except Exception:
+        return None
+    if detector_array.ndim != 2:
+        return None
+    detector_shape = tuple(int(v) for v in detector_array.shape[:2])
+    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return None
+    return detector_shape
+
+
+def _current_detector_qz_extent() -> tuple[float, float] | None:
+    detector_shape = _current_detector_shape()
+    if detector_shape is None:
+        return None
+    config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
+    if not callable(config_factory):
+        return None
+    try:
+        config = config_factory()
+    except Exception:
+        return None
+    if not isinstance(config, gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig):
+        return None
+    q_maps = gui_qr_cylinder_overlay.detector_qr_qz_maps_for_projection(
+        config=config,
+        detector_shape=detector_shape,
+    )
+    if q_maps is None:
+        return None
+    _qr_map, qz_map, valid_q = q_maps
+    qz_values = np.asarray(qz_map, dtype=float)
+    valid = np.asarray(valid_q, dtype=bool)
+    if qz_values.shape != detector_shape or valid.shape != detector_shape:
+        return None
+    finite = valid & np.isfinite(qz_values)
+    if not np.any(finite):
+        return None
+    selected_qz = qz_values[finite]
+    return float(np.min(selected_qz)), float(np.max(selected_qz))
+
+
+def _selected_qr_rod_qz_profile_bin_count(
+    detector_shape: tuple[int, int] | None,
+) -> int:
+    radial_axis = np.asarray(
+        getattr(simulation_runtime_state, "last_caked_radial_values", ()),
+        dtype=float,
+    ).reshape(-1)
+    radial_axis = radial_axis[(radial_axis >= 0.0) & (radial_axis <= 90.0)]
+    if radial_axis.size > 0:
+        return int(min(max(int(radial_axis.size), 128), 2048))
+    if detector_shape is not None:
+        try:
+            return int(min(max(max(int(detector_shape[0]), int(detector_shape[1])), 128), 2048))
+        except Exception:
+            pass
+    return int(_SELECTED_QR_ROD_DETECTOR_PROFILE_BINS)
+
+
 def _qz_slider_bounds_from_extent(
     qz_extent: tuple[float, float] | None,
 ) -> tuple[float, float]:
@@ -9238,13 +9302,179 @@ def _default_qz_values_for_extent(
 
 
 def _selected_qr_rod_detector_mode_requested() -> bool:
-    if not _active_caked_primary_view():
+    if _current_app_shell_view_mode() != "detector":
         return False
     try:
         roi_values = _current_analysis_roi_values()
     except Exception:
         return False
     return bool(roi_values.get("integrate_selected_qr_rod", False))
+
+
+def _selected_qr_rod_mode_requested() -> bool:
+    if _current_app_shell_view_mode() == "q_space":
+        return False
+    try:
+        roi_values = _current_analysis_roi_values()
+    except Exception:
+        return False
+    return bool(roi_values.get("integrate_selected_qr_rod", False))
+
+
+def _selected_qr_rod_shape_source_signature() -> tuple[object, ...]:
+    hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
+    try:
+        hit_table_identity = _detector_intersection_cache_signature(hit_tables)
+    except Exception:
+        hit_table_identity = (0, 0)
+    return (
+        "selected_qr_rod_shape_source",
+        _timing_signature_digest(
+            getattr(simulation_runtime_state, "stored_hit_table_signature", None)
+        ),
+        hit_table_identity,
+        _timing_signature_digest(
+            getattr(simulation_runtime_state, "stored_peak_table_lattice", None)
+        ),
+    )
+
+
+def _selected_qr_rod_shape_mask_signature(
+    mask: object | None,
+    detector_shape: tuple[int, int],
+) -> tuple[object, ...] | None:
+    if mask is None:
+        return ("selected_qr_rod_shape_mask", None)
+    try:
+        mask_array = np.asarray(mask, dtype=bool)
+    except Exception:
+        return None
+    if mask_array.shape != tuple(int(v) for v in detector_shape):
+        return None
+    contiguous = np.ascontiguousarray(mask_array, dtype=np.bool_)
+    return (
+        "selected_qr_rod_shape_mask",
+        tuple(int(v) for v in contiguous.shape),
+        int(np.count_nonzero(contiguous)),
+        hashlib.blake2b(contiguous.view(np.uint8), digest_size=16).hexdigest(),
+    )
+
+
+def _selected_qr_rod_lattice_defaults() -> tuple[float, float]:
+    try:
+        default_a = float(a_var.get())
+    except Exception:
+        default_a = float("nan")
+    try:
+        default_c = float(c_var.get())
+    except Exception:
+        default_c = float("nan")
+    return default_a, default_c
+
+
+def _selected_qr_rod_shape_mask_from_stored_hit_tables(
+    selected_entry: Mapping[str, object],
+    detector_shape: tuple[int, int],
+) -> dict[str, object]:
+    shape = tuple(int(v) for v in detector_shape)
+    result: dict[str, object] = {
+        "mask": None,
+        "available": False,
+        "pixel_count": 0,
+        "signature": ("selected_qr_rod_shape", False, _selected_qr_rod_shape_source_signature()),
+    }
+    if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0:
+        return result
+
+    selected_parent_key = gui_controllers.qr_set_mask_key(selected_entry.get("key"))
+    if selected_parent_key is None:
+        return result
+
+    hit_tables_raw = getattr(simulation_runtime_state, "stored_max_positions_local", None)
+    if not isinstance(hit_tables_raw, (list, tuple)):
+        return result
+    hit_tables = list(hit_tables_raw)
+    if not hit_tables:
+        return result
+
+    peak_table_lattice_raw = getattr(simulation_runtime_state, "stored_peak_table_lattice", None)
+    peak_table_lattice = (
+        list(peak_table_lattice_raw) if isinstance(peak_table_lattice_raw, (list, tuple)) else []
+    )
+    default_a, default_c = _selected_qr_rod_lattice_defaults()
+    if len(peak_table_lattice) != len(hit_tables):
+        peak_table_lattice = [(default_a, default_c, "primary") for _table in hit_tables]
+
+    mask = np.zeros(shape, dtype=bool)
+    for table_idx, table in enumerate(hit_tables):
+        rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(table)
+        if not rows:
+            continue
+
+        av_used = default_a
+        cv_used = default_c
+        source_label = "primary"
+        if table_idx < len(peak_table_lattice):
+            try:
+                lattice_entry = peak_table_lattice[table_idx]
+                av_used = float(lattice_entry[0])
+                cv_used = float(lattice_entry[1])
+                source_label = str(lattice_entry[2])
+            except Exception:
+                av_used = default_a
+                cv_used = default_c
+                source_label = "primary"
+
+        for hit_row in rows:
+            try:
+                col_value = float(hit_row[1])
+                row_value = float(hit_row[2])
+                hkl_raw = (
+                    float(hit_row[HIT_ROW_COL_H]),
+                    float(hit_row[HIT_ROW_COL_K]),
+                    float(hit_row[HIT_ROW_COL_L]),
+                )
+            except Exception:
+                continue
+            if not (np.isfinite(col_value) and np.isfinite(row_value)):
+                continue
+
+            row_entry = {
+                "hkl_raw": hkl_raw,
+                "source_label": source_label,
+                "av": av_used,
+                "cv": cv_used,
+            }
+            row_parent_key = gui_controllers.qr_set_mask_key(
+                gui_geometry_q_group_manager.geometry_q_group_key_from_entry(row_entry)
+            )
+            if row_parent_key != selected_parent_key:
+                continue
+
+            center_col = int(np.rint(col_value))
+            center_row = int(np.rint(row_value))
+            for row_offset, col_offset in ((0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)):
+                rr = center_row + row_offset
+                cc = center_col + col_offset
+                if 0 <= rr < shape[0] and 0 <= cc < shape[1]:
+                    mask[rr, cc] = True
+
+    pixel_count = int(np.count_nonzero(mask))
+    mask_signature = _selected_qr_rod_shape_mask_signature(mask, shape)
+    result.update(
+        {
+            "mask": mask if pixel_count > 0 else None,
+            "available": bool(pixel_count > 0),
+            "pixel_count": pixel_count,
+            "signature": (
+                "selected_qr_rod_shape",
+                bool(pixel_count > 0),
+                _selected_qr_rod_shape_source_signature(),
+                mask_signature,
+            ),
+        }
+    )
+    return result
 
 
 def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
@@ -9306,7 +9536,25 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     if projection_context is None:
         return None
 
-    signature = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask_signature(
+    include_shape = bool(roi_values.get("include_selected_qr_rod_shape", False))
+    shape_payload = {
+        "mask": None,
+        "available": False,
+        "pixel_count": 0,
+        "signature": ("selected_qr_rod_shape", False, None),
+    }
+    if include_shape:
+        resolved_projection = gui_qr_cylinder_overlay._resolve_caked_projection_context(
+            projection_context
+        )
+        if resolved_projection is not None:
+            shape_payload = _selected_qr_rod_shape_mask_from_stored_hit_tables(
+                selected_entry,
+                tuple(int(v) for v in resolved_projection["detector_shape"]),
+            )
+    shape_mask = shape_payload.get("mask") if include_shape else None
+
+    base_signature = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask_signature(
         selected_entry=selected_entry,
         config=config,
         projection_context=projection_context,
@@ -9318,10 +9566,19 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
         phi_min=phi_min,
         phi_max=phi_max,
         phi_windows=phi_windows,
+        shape_mask=shape_mask,
     )
     encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
-    if signature is None:
+    if base_signature is None:
         return None
+    signature = (
+        base_signature,
+        (
+            "include_selected_qr_rod_shape",
+            bool(include_shape),
+            shape_payload.get("signature") if include_shape else None,
+        ),
+    )
     cache = geometry_runtime_state.qr_cylinder_band_cache
     if cache.get("signature") != signature:
         mask_result = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
@@ -9336,6 +9593,7 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
             phi_min=phi_min,
             phi_max=phi_max,
             phi_windows=phi_windows,
+            shape_mask=shape_mask,
         )
         if not isinstance(mask_result, Mapping):
             return None
@@ -9350,35 +9608,56 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
             "signature": signature,
             "qz_min": qz_lo,
             "qz_max": qz_hi,
+            "include_selected_qr_rod_shape": bool(include_shape),
+            "shape_available": bool(shape_payload.get("available", False)),
+            "shape_pixel_count": int(shape_payload.get("pixel_count", 0) or 0),
+            "shape_signature": shape_payload.get("signature") if include_shape else None,
         }
     return cache.get("result")
 
 
-def _current_selected_qr_rod_detector_integration_context() -> dict[str, object] | None:
+def _selected_qr_rod_phi_windows_from_roi(
+    roi_values: Mapping[str, object],
+) -> tuple[tuple[float, float], ...] | None:
+    try:
+        phi_min = float(roi_values.get("phi_min", -180.0))
+        phi_max = float(roi_values.get("phi_max", 180.0))
+    except Exception:
+        return None
+    if bool(roi_values.get("mirror_selected_qr_phi", False)):
+        return gui_qr_cylinder_overlay.mirrored_abs_phi_windows(phi_min, phi_max)
+    return gui_qr_cylinder_overlay.normalize_caked_phi_windows(
+        phi_min=phi_min,
+        phi_max=phi_max,
+    )
+
+
+def _current_selected_qr_rod_detector_support_inputs(
+    *,
+    require_qz_range: bool,
+) -> dict[str, object] | None:
     if not _selected_qr_rod_detector_mode_requested():
         return None
-
     roi_values = _current_analysis_roi_values()
     try:
         delta_qr = float(roi_values.get("delta_qr", 0.0))
-        qz_min = float(roi_values.get("qz_min", 0.0))
-        qz_max = float(roi_values.get("qz_max", 0.0))
         phi_min = float(roi_values.get("phi_min", -180.0))
         phi_max = float(roi_values.get("phi_max", 180.0))
     except Exception:
         return None
     if not np.isfinite(delta_qr) or delta_qr <= 0.0:
         return None
-    qz_lo, qz_hi = sorted((qz_min, qz_max))
-    if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
-        return None
-    if bool(roi_values.get("mirror_selected_qr_phi", False)):
-        phi_windows = gui_qr_cylinder_overlay.mirrored_abs_phi_windows(phi_min, phi_max)
-    else:
-        phi_windows = gui_qr_cylinder_overlay.normalize_caked_phi_windows(
-            phi_min=phi_min,
-            phi_max=phi_max,
-        )
+    qz_lo = qz_hi = None
+    if require_qz_range:
+        try:
+            qz_min = float(roi_values.get("qz_min", 0.0))
+            qz_max = float(roi_values.get("qz_max", 0.0))
+        except Exception:
+            return None
+        qz_lo, qz_hi = sorted((qz_min, qz_max))
+        if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
+            return None
+    phi_windows = _selected_qr_rod_phi_windows_from_roi(roi_values)
     if phi_windows is None:
         return None
 
@@ -9393,24 +9672,8 @@ def _current_selected_qr_rod_detector_integration_context() -> dict[str, object]
     if not np.isfinite(qr_center):
         return None
 
-    radial_axis = np.asarray(
-        simulation_runtime_state.last_caked_radial_values,
-        dtype=float,
-    ).reshape(-1)
-    radial_axis = radial_axis[(radial_axis >= 0.0) & (radial_axis <= 90.0)]
-    if radial_axis.size <= 0:
-        return None
-    qz_edges = np.linspace(qz_lo, qz_hi, int(radial_axis.size) + 1, dtype=np.float64)
-
-    detector_image = getattr(simulation_runtime_state, "unscaled_image", None)
-    try:
-        detector_array = np.asarray(detector_image, dtype=float)
-    except Exception:
-        return None
-    if detector_array.ndim != 2:
-        return None
-    detector_shape = tuple(int(v) for v in detector_array.shape[:2])
-    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
+    detector_shape = _current_detector_shape()
+    if detector_shape is None:
         return None
 
     config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
@@ -9454,12 +9717,47 @@ def _current_selected_qr_rod_detector_integration_context() -> dict[str, object]
         return None
 
     encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+    include_shape = bool(roi_values.get("include_selected_qr_rod_shape", False))
+    shape_payload = {
+        "mask": None,
+        "available": False,
+        "pixel_count": 0,
+        "signature": ("selected_qr_rod_shape", False, None),
+    }
+    if include_shape:
+        shape_payload = _selected_qr_rod_shape_mask_from_stored_hit_tables(
+            selected_entry,
+            detector_shape,
+        )
+    shape_mask = shape_payload.get("mask") if include_shape else None
+    shape_source_signature = (
+        shape_payload.get("signature")
+        if include_shape
+        else _selected_qr_rod_shape_source_signature()
+    )
+    support_signature = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
+        selected_entry=selected_entry,
+        config=config,
+        detector_shape=detector_shape,
+        delta_qr=delta_qr,
+        qz_min=qz_lo,
+        qz_max=qz_hi,
+        phi_min=phi_min,
+        phi_max=phi_max,
+        phi_windows=phi_windows,
+        shape_mask=shape_mask,
+        selected_qr_rod_key=encoded_key,
+        include_shape=bool(include_shape),
+        shape_source_signature=shape_source_signature,
+    )
+    if support_signature is None:
+        return None
     return {
         "selected_entry": dict(selected_entry),
         "selected_qr_rod_key": encoded_key,
+        "config": config,
         "qr_center": qr_center,
         "delta_qr": delta_qr,
-        "qz_edges": qz_edges,
         "qz_min": qz_lo,
         "qz_max": qz_hi,
         "phi_min": phi_min,
@@ -9470,17 +9768,104 @@ def _current_selected_qr_rod_detector_integration_context() -> dict[str, object]
         "valid_q": valid_q,
         "detector_phi_deg": detector_phi_deg,
         "detector_shape": detector_shape,
-        "signature": (
-            "selected_qr_rod_detector_qz_profile",
-            encoded_key,
-            round(float(qr_center), 10),
-            round(float(delta_qr), 10),
-            round(float(qz_lo), 10),
-            round(float(qz_hi), 10),
-            tuple((round(float(lo), 10), round(float(hi), 10)) for lo, hi in phi_windows),
-            detector_shape,
-            int(radial_axis.size),
-        ),
+        "shape_mask": shape_mask,
+        "include_selected_qr_rod_shape": bool(include_shape),
+        "shape_available": bool(shape_payload.get("available", False)),
+        "shape_pixel_count": int(shape_payload.get("pixel_count", 0) or 0),
+        "shape_signature": shape_payload.get("signature") if include_shape else None,
+        "shape_source_signature": shape_source_signature,
+        "mask_signature": support_signature,
+    }
+
+
+def _current_selected_qr_rod_detector_mask_payload() -> dict[str, object] | None:
+    inputs = _current_selected_qr_rod_detector_support_inputs(require_qz_range=True)
+    if inputs is None:
+        return None
+    signature = inputs.get("mask_signature")
+    if signature is None:
+        return None
+
+    cache = geometry_runtime_state.qr_cylinder_band_cache
+    if cache.get("signature") != signature:
+        mask_result = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask(
+            selected_entry=inputs["selected_entry"],
+            config=inputs["config"],
+            detector_shape=inputs["detector_shape"],
+            delta_qr=inputs["delta_qr"],
+            qz_min=inputs["qz_min"],
+            qz_max=inputs["qz_max"],
+            detector_phi_deg=inputs.get("detector_phi_deg"),
+            phi_min=inputs.get("phi_min", -180.0),
+            phi_max=inputs.get("phi_max", 180.0),
+            phi_windows=inputs.get("phi_windows"),
+            shape_mask=inputs.get("shape_mask"),
+            selected_qr_rod_key=inputs.get("selected_qr_rod_key"),
+            include_shape=bool(inputs.get("include_selected_qr_rod_shape", False)),
+            shape_source_signature=inputs.get("shape_source_signature"),
+        )
+        if not isinstance(mask_result, Mapping):
+            return None
+        mask = np.asarray(mask_result.get("mask"), dtype=bool)
+        if tuple(mask.shape) != tuple(int(v) for v in inputs["detector_shape"]):
+            return None
+        cache["signature"] = signature
+        cache["result"] = {
+            "selected_entry": dict(inputs["selected_entry"]),
+            "selected_qr_rod_key": inputs.get("selected_qr_rod_key"),
+            "mask": mask,
+            "signature": signature,
+            "qz_min": inputs.get("qz_min"),
+            "qz_max": inputs.get("qz_max"),
+            "include_selected_qr_rod_shape": bool(
+                inputs.get("include_selected_qr_rod_shape", False)
+            ),
+            "shape_available": bool(mask_result.get("shape_available", False)),
+            "shape_pixel_count": int(mask_result.get("shape_pixel_count", 0) or 0),
+            "shape_signature": inputs.get("shape_signature"),
+        }
+    return cache.get("result")
+
+
+def _current_selected_qr_rod_detector_integration_context() -> dict[str, object] | None:
+    inputs = _current_selected_qr_rod_detector_support_inputs(require_qz_range=True)
+    if inputs is None:
+        return None
+    qz_lo = inputs.get("qz_min")
+    qz_hi = inputs.get("qz_max")
+    if qz_lo is None or qz_hi is None:
+        return None
+    bin_count = _selected_qr_rod_qz_profile_bin_count(inputs.get("detector_shape"))
+    qz_edges = np.linspace(float(qz_lo), float(qz_hi), int(bin_count) + 1, dtype=np.float64)
+    context = dict(inputs)
+    context["qz_edges"] = qz_edges
+    context["signature"] = (
+        "selected_qr_rod_detector_qz_profile",
+        inputs.get("mask_signature"),
+        int(bin_count),
+    )
+    return context
+
+
+def _current_selected_qr_rod_detector_drag_context() -> dict[str, object] | None:
+    inputs = _current_selected_qr_rod_detector_support_inputs(require_qz_range=False)
+    if inputs is None:
+        return None
+    return {
+        "selected_entry": dict(inputs["selected_entry"]),
+        "config": inputs["config"],
+        "detector_shape": inputs["detector_shape"],
+        "qr_map": inputs["qr_map"],
+        "qz_map": inputs["qz_map"],
+        "valid_q": inputs["valid_q"],
+        "detector_phi_deg": inputs.get("detector_phi_deg"),
+        "qr_center": inputs["qr_center"],
+        "delta_qr": inputs["delta_qr"],
+        "phi_min": inputs.get("phi_min", -180.0),
+        "phi_max": inputs.get("phi_max", 180.0),
+        "phi_windows": inputs.get("phi_windows"),
+        "shape_mask": inputs.get("shape_mask"),
+        "signature": inputs.get("mask_signature"),
     }
 
 
@@ -10450,12 +10835,12 @@ def _sync_selected_qr_rod_controls_state() -> None:
         option_pairs,
     )
 
-    caked_active = bool(_active_caked_primary_view())
+    selected_qr_rod_view_active = _current_app_shell_view_mode() != "q_space"
     has_options = bool(option_pairs)
     toggle_widget = getattr(range_view_state, "integrate_selected_qr_rod_checkbutton", None)
     toggle_var = getattr(range_view_state, "integrate_selected_qr_rod_var", None)
 
-    if caked_active and not has_options:
+    if selected_qr_rod_view_active and not has_options:
         setattr(range_view_state, "integrate_selected_qr_rod_value", False)
         gui_integration_range_drag._safe_var_set(toggle_var, False)  # noqa: SLF001
 
@@ -10472,7 +10857,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
             "selected_qr_rod_key",
             selected_key,
         )
-    elif not option_keys and caked_active:
+    elif not option_keys and selected_qr_rod_view_active:
         gui_integration_range_drag._set_runtime_string_value(  # noqa: SLF001
             range_view_state,
             "selected_qr_rod_key",
@@ -10487,7 +10872,12 @@ def _sync_selected_qr_rod_controls_state() -> None:
         display_label,
     )
 
-    qz_extent = _current_caked_qz_extent()
+    current_view_mode = _current_app_shell_view_mode()
+    qz_extent = (
+        _current_caked_qz_extent()
+        if current_view_mode == "caked"
+        else (_current_detector_qz_extent() if current_view_mode == "detector" else None)
+    )
     if qz_extent is not None:
         qz_lo, qz_hi = _qz_slider_bounds_from_extent(qz_extent)
         gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
@@ -10545,9 +10935,8 @@ def _sync_selected_qr_rod_controls_state() -> None:
     rod_widgets = (
         getattr(range_view_state, "selected_qr_rod_combobox", None),
         getattr(range_view_state, "mirror_selected_qr_phi_checkbutton", None),
-        *(
-            (getattr(range_view_state, "rod_profile_intensity_mode_buttons", {}) or {}).values()
-        ),
+        getattr(range_view_state, "include_selected_qr_rod_shape_checkbutton", None),
+        *((getattr(range_view_state, "rod_profile_intensity_mode_buttons", {}) or {}).values()),
         getattr(range_view_state, "qz_min_slider", None),
         getattr(range_view_state, "qz_min_entry", None),
         getattr(range_view_state, "qz_max_slider", None),
@@ -10556,7 +10945,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
         getattr(range_view_state, "delta_qr_entry", None),
     )
 
-    if not caked_active:
+    if not selected_qr_rod_view_active:
         _set_runtime_widget_enabled(toggle_widget, False)
         for widget in rectangle_widgets:
             _set_runtime_widget_enabled(widget, True)
@@ -11649,10 +12038,23 @@ def _initialize_runtime_controls_block_15() -> None:
                 if getattr(geometry_runtime_state, "qr_cylinder_band_cache", None) is not None
                 else None
             ),
+            detector_qr_rod_mask_factory=lambda: (
+                (_current_selected_qr_rod_detector_mask_payload() or {}).get("mask")
+                if callable(globals().get("_current_selected_qr_rod_detector_mask_payload", None))
+                else None
+            ),
+            detector_qr_rod_mask_signature_factory=lambda: (
+                (_current_selected_qr_rod_detector_mask_payload() or {}).get("signature")
+                if callable(globals().get("_current_selected_qr_rod_detector_mask_payload", None))
+                else None
+            ),
             detector_geometry_signature_factory=lambda: simulation_runtime_state.ai_cache.get(
                 "sig"
             ),
             caked_qr_rod_drag_context_factory=lambda: _current_selected_qr_rod_drag_context(),
+            detector_qr_rod_drag_context_factory=lambda: (
+                _current_selected_qr_rod_detector_drag_context()
+            ),
             set_status_text_factory=lambda: (
                 (lambda text: progress_label_positions.config(text=text))
                 if "progress_label_positions" in globals()
@@ -13450,6 +13852,7 @@ def _initialize_runtime_controls_block_23() -> None:
         phi_min_var, \
         phi_max_var, \
         mirror_selected_qr_phi_var, \
+        include_selected_qr_rod_shape_var, \
         caked_intensity_mode_var, \
         rod_profile_intensity_mode_var, \
         tth_min_slider, \
@@ -13464,6 +13867,7 @@ def _initialize_runtime_controls_block_23() -> None:
     phi_min_var = None
     phi_max_var = None
     mirror_selected_qr_phi_var = None
+    include_selected_qr_rod_shape_var = None
     caked_intensity_mode_var = None
     rod_profile_intensity_mode_var = None
     tth_min_slider = None
@@ -14167,6 +14571,7 @@ def _detector_qr_rod_profile_for_image(
         phi_min=context.get("phi_min", -180.0),
         phi_max=context.get("phi_max", 180.0),
         phi_windows=context.get("phi_windows"),
+        shape_mask=context.get("shape_mask"),
     )
 
 
@@ -14529,6 +14934,11 @@ def _update_1d_plots_from_detector_qr_rod(
             "intensities_azimuth_sim": None,
             "selected_qr_rod_profile_sim": sim_profile,
             "selected_qr_rod_profile_signature": rod_context.get("signature"),
+            "include_selected_qr_rod_shape": bool(
+                rod_context.get("include_selected_qr_rod_shape", False)
+            ),
+            "selected_qr_rod_shape_available": bool(rod_context.get("shape_available", False)),
+            "selected_qr_rod_shape_pixel_count": int(rod_context.get("shape_pixel_count", 0) or 0),
             "x_axis_kind": "qz",
             "x_axis_label": "Qz (A^-1)",
         }
@@ -14594,7 +15004,15 @@ def _update_1d_plots_from_detector_qr_rod(
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
     _ensure_analysis_figure()
     _clear_analysis_peak_fit_results(redraw=False, update_text=True)
-    if _selected_qr_rod_detector_mode_requested():
+    if _selected_qr_rod_mode_requested() or _selected_qr_rod_detector_mode_requested():
+        if _selected_qr_rod_detector_mode_requested():
+            rod_context = _current_selected_qr_rod_detector_integration_context()
+            if rod_context is not None and _update_1d_plots_from_detector_qr_rod(
+                rod_context,
+                bg_res2,
+            ):
+                return
+
         rod_profile_intensity_mode = _current_rod_profile_intensity_mode()
         mask_payload = _current_selected_qr_rod_caked_mask_payload()
         if isinstance(mask_payload, Mapping):
@@ -14617,6 +15035,15 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
                         "intensities_azimuth_sim": None,
                         "selected_qr_rod_profile_sim": sim_profile,
                         "selected_qr_rod_profile_signature": mask_payload.get("signature"),
+                        "include_selected_qr_rod_shape": bool(
+                            mask_payload.get("include_selected_qr_rod_shape", False)
+                        ),
+                        "selected_qr_rod_shape_available": bool(
+                            mask_payload.get("shape_available", False)
+                        ),
+                        "selected_qr_rod_shape_pixel_count": int(
+                            mask_payload.get("shape_pixel_count", 0) or 0
+                        ),
                         "x_axis_kind": "qz",
                         "x_axis_label": "Qz (A^-1)",
                     }
@@ -14679,12 +15106,6 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
                     canvas_1d.draw_idle()
                 return
 
-        rod_context = _current_selected_qr_rod_detector_integration_context()
-        if rod_context is not None and _update_1d_plots_from_detector_qr_rod(
-            rod_context,
-            bg_res2,
-        ):
-            return
         _clear_selected_qr_rod_detector_1d_plot()
         return
 
@@ -23160,6 +23581,7 @@ def reset_to_defaults():
     phi_max_var.set(15.0)
     integrate_selected_qr_rod_var.set(False)
     mirror_selected_qr_phi_var.set(False)
+    include_selected_qr_rod_shape_var.set(False)
     caked_intensity_mode_var.set("density")
     rod_profile_intensity_mode_var.set("density")
     selected_qr_rod_key_var.set("")
@@ -23170,6 +23592,7 @@ def reset_to_defaults():
     delta_qr_var.set(0.1)
     integration_range_controls_view_state.integrate_selected_qr_rod_value = False
     integration_range_controls_view_state.mirror_selected_qr_phi_value = False
+    integration_range_controls_view_state.include_selected_qr_rod_shape_value = False
     integration_range_controls_view_state.caked_intensity_mode_value = "density"
     integration_range_controls_view_state.rod_profile_intensity_mode_value = "density"
     integration_range_controls_view_state.selected_qr_rod_key_value = ""
@@ -23710,6 +24133,9 @@ def _gui_state_variable_items() -> dict[str, object]:
             ),
             "mirror_selected_qr_phi_var": (
                 integration_range_controls_view_state.mirror_selected_qr_phi_var
+            ),
+            "include_selected_qr_rod_shape_var": (
+                integration_range_controls_view_state.include_selected_qr_rod_shape_var
             ),
             "selected_qr_rod_key_var": (
                 integration_range_controls_view_state.selected_qr_rod_key_var
@@ -32367,6 +32793,26 @@ def _read_analysis_cached_bool_value(attr_name: str, fallback: bool) -> bool:
         return bool(fallback)
 
 
+def _read_analysis_string_value(var, fallback: str) -> str:
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return str(fallback)
+    try:
+        return str(getter())
+    except Exception:
+        return str(fallback)
+
+
+def _read_analysis_cached_string_value(attr_name: str, fallback: str) -> str:
+    view_state = globals().get("integration_range_controls_view_state")
+    if view_state is None:
+        return str(fallback)
+    try:
+        return str(getattr(view_state, attr_name))
+    except Exception:
+        return str(fallback)
+
+
 def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> None:
     if not isinstance(snapshot, Mapping):
         return
@@ -32382,7 +32828,7 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         ("phi_max", 15.0),
         ("qz_min", 0.0),
         ("qz_max", 5.0),
-        ("delta_qr", 0.25),
+        ("delta_qr", 0.1),
     )
     for key, fallback in numeric_specs:
         if key not in snapshot:
@@ -32410,6 +32856,13 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         gui_integration_range_drag._safe_var_set(  # noqa: SLF001
             getattr(view_state, "mirror_selected_qr_phi_var", None),
             mirror_value,
+        )
+    if "include_selected_qr_rod_shape" in snapshot:
+        include_shape_value = bool(snapshot.get("include_selected_qr_rod_shape"))
+        setattr(view_state, "include_selected_qr_rod_shape_value", include_shape_value)
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, "include_selected_qr_rod_shape_var", None),
+            include_shape_value,
         )
     if "caked_intensity_mode" in snapshot:
         caked_intensity_mode = _normalize_caked_intensity_mode(
@@ -32482,6 +32935,13 @@ def _current_analysis_roi_values() -> dict[str, object]:
                 globals().get("mirror_selected_qr_phi_var"),
                 _read_analysis_cached_bool_value("mirror_selected_qr_phi_value", False),
             ),
+            "include_selected_qr_rod_shape": _read_analysis_bool_value(
+                globals().get("include_selected_qr_rod_shape_var"),
+                _read_analysis_cached_bool_value(
+                    "include_selected_qr_rod_shape_value",
+                    False,
+                ),
+            ),
             "caked_intensity_mode": _normalize_caked_intensity_mode(
                 _read_analysis_string_value(
                     globals().get("caked_intensity_mode_var"),
@@ -32517,7 +32977,7 @@ def _current_analysis_roi_values() -> dict[str, object]:
             ),
             "delta_qr": _read_analysis_range_value(
                 globals().get("delta_qr_var"),
-                _read_analysis_cached_range_value("delta_qr_value", 0.25),
+                _read_analysis_cached_range_value("delta_qr_value", 0.1),
             ),
         }
     )
@@ -33864,7 +34324,8 @@ def _render_analysis_integration_range_controls(
     range_values: Mapping[str, object] | None = None,
 ) -> None:
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
-    global integrate_selected_qr_rod_var, mirror_selected_qr_phi_var, selected_qr_rod_key_var
+    global integrate_selected_qr_rod_var, mirror_selected_qr_phi_var
+    global include_selected_qr_rod_shape_var, selected_qr_rod_key_var
     global caked_intensity_mode_var, rod_profile_intensity_mode_var
     global qz_min_var, qz_max_var, delta_qr_var
     global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
@@ -33886,6 +34347,7 @@ def _render_analysis_integration_range_controls(
         phi_max=float(values.get("phi_max", 15.0)),
         integrate_selected_qr_rod=bool(values.get("integrate_selected_qr_rod", False)),
         mirror_selected_qr_phi=bool(values.get("mirror_selected_qr_phi", False)),
+        include_selected_qr_rod_shape=bool(values.get("include_selected_qr_rod_shape", False)),
         caked_intensity_mode=_normalize_caked_intensity_mode(
             values.get("caked_intensity_mode", "density")
         ),
@@ -33910,6 +34372,9 @@ def _render_analysis_integration_range_controls(
         integration_range_controls_view_state.integrate_selected_qr_rod_var
     )
     mirror_selected_qr_phi_var = integration_range_controls_view_state.mirror_selected_qr_phi_var
+    include_selected_qr_rod_shape_var = (
+        integration_range_controls_view_state.include_selected_qr_rod_shape_var
+    )
     caked_intensity_mode_var = integration_range_controls_view_state.caked_intensity_mode_var
     rod_profile_intensity_mode_var = (
         integration_range_controls_view_state.rod_profile_intensity_mode_var

@@ -638,6 +638,9 @@ class IntegrationRangeControlsViewState:
     mirror_selected_qr_phi_value: bool = False
     mirror_selected_qr_phi_var: Any = None
     mirror_selected_qr_phi_checkbutton: Any = None
+    include_selected_qr_rod_shape_value: bool = False
+    include_selected_qr_rod_shape_var: Any = None
+    include_selected_qr_rod_shape_checkbutton: Any = None
     caked_intensity_mode_value: str = "density"
     caked_intensity_mode_var: Any = None
     caked_intensity_mode_label: Any = None

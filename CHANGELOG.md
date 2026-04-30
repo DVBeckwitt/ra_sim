@@ -67,6 +67,7 @@
 
 - **GUI and UX updates**
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
+  - Fixed detector-view Selected-Qr rod ROI mode so it displays a detector-native Qr/Qz support mask, suppresses the legacy detector `2theta/phi` angular ROI while enabled, and sets Qz bounds from detector pixels during rod drags.
   - Added a Match-tab `Place Background Qr Set` control for saving background-only Qr reference peaks with local peak-top refinement and `2theta,phi` labels instead of HKL values.
   - Fixed `Pick Beam Center` conversion to use detector-extent beam-center coordinates instead of raw pixel-index inversion, avoiding a one-pixel frame error in the default rotated detector view.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.
@@ -82,6 +83,8 @@
   - Fixed GUI startup after selected-Qr rod picker wiring by threading `listed_q_group_keys_for_picker` through the manual-geometry cache callbacks.
   - Changed selected-Qr rod Qz controls to default to `0..5` and clamp slider bounds to the positive caked-Qz candidate range.
   - Changed the selected-Qr rod half-width default to `0.1 A^-1`.
+  - Added an Analyze selected-Qr rod `Include rod shape` option, saved as `analysis_range.include_selected_qr_rod_shape`, so detector-space Qz profiles can include the selected rod hit-cloud footprint outside the numeric Qr band.
+  - Fixed the selected-Qr rod ROI toggle so it remains selectable in detector view; only Q-space view disables it.
   - Reorganized Match-tab peak tools so `Drag Move Placed Peaks` stays visible beside the manual pick control, removed the auto-search radius slider from the peak tool row, and renamed the point-removal toggle to `Click Remove Placed Peaks`.
   - Made the Setup tab expose an expanded primary-CIF import control, with replacement CIF loads routed through full simulation, optics, picker, and analysis cache invalidation.
   - Added Match-tab `Add All Qr Set Peaks` and `Remove Qr Set Peaks` controls so enabled Qr/Qz selector groups can be auto-saved through the manual-pick refinement path or removed from the current background.

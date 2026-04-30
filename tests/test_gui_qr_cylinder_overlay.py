@@ -682,6 +682,83 @@ def test_integrate_detector_qr_rod_qz_profile_bins_detector_pixels_by_qz() -> No
     np.testing.assert_allclose(profile["intensity_mean"], np.asarray([10.0, 35.0, 60.0]))
 
 
+def test_build_detector_qr_rod_support_mask_selects_qr_qz_phi_pixels() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+
+    support = qr_cylinder_overlay.build_detector_qr_rod_support_mask(
+        qr_map=inputs["qr_map"],
+        qz_map=inputs["qz_map"],
+        valid_q=inputs["valid_q"],
+        qr_center=1.0,
+        delta_qr=0.05,
+        qz_min=0.0,
+        qz_max=3.0,
+        detector_phi_deg=inputs["detector_phi_deg"],
+        phi_windows=((-90.0, 0.0),),
+    )
+
+    assert support is not None
+    expected = np.asarray(
+        [
+            [True, True, False],
+            [False, True, True],
+        ],
+        dtype=bool,
+    )
+    np.testing.assert_array_equal(support["mask"], expected)
+    assert support["support_pixel_count"] == 4
+
+
+def test_build_detector_qr_rod_support_mask_clips_shape_by_valid_qz_phi() -> None:
+    qr_map = np.full((2, 4), 2.0, dtype=float)
+    qz_map = np.asarray(
+        [
+            [1.0, 1.0, 3.0, np.nan],
+            [1.0, 1.0, 1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    detector_phi = np.asarray(
+        [
+            [0.0, 90.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    valid_q = np.asarray(
+        [
+            [True, True, True, True],
+            [False, True, True, True],
+        ],
+        dtype=bool,
+    )
+    shape_mask = np.ones((2, 4), dtype=bool)
+
+    support = qr_cylinder_overlay.build_detector_qr_rod_support_mask(
+        qr_map=qr_map,
+        qz_map=qz_map,
+        valid_q=valid_q,
+        qr_center=1.0,
+        delta_qr=0.05,
+        qz_min=0.0,
+        qz_max=2.0,
+        detector_phi_deg=detector_phi,
+        phi_windows=((-10.0, 10.0),),
+        shape_mask=shape_mask,
+    )
+
+    assert support is not None
+    expected = np.asarray(
+        [
+            [True, False, False, False],
+            [False, True, True, True],
+        ],
+        dtype=bool,
+    )
+    np.testing.assert_array_equal(support["mask"], expected)
+    assert support["shape_pixel_count"] == 4
+
+
 def test_integrate_detector_qr_rod_qz_profile_respects_signed_phi_windows() -> None:
     inputs = _synthetic_detector_qr_rod_inputs()
 
@@ -768,6 +845,41 @@ def test_integrate_detector_qr_rod_qz_profile_ignores_pixels_outside_qr_band() -
     assert np.all(np.isnan(profile["intensity_mean"]))
 
 
+def test_integrate_detector_qr_rod_qz_profile_includes_shape_mask_pixels() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+    shape_mask = np.zeros((2, 3), dtype=bool)
+    shape_mask[0, 2] = True
+
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.3,
+        delta_qr=0.05,
+        phi_windows=((-180.0, 180.0),),
+        shape_mask=shape_mask,
+    )
+
+    assert profile is not None
+    np.testing.assert_array_equal(profile["pixel_count"], np.asarray([0, 1, 0]))
+    np.testing.assert_allclose(profile["intensity_sum"], np.asarray([0.0, 30.0, 0.0]))
+    assert bool(profile["shape_available"][0]) is True
+    assert int(profile["shape_pixel_count"][0]) == 1
+
+
+def test_integrate_detector_qr_rod_qz_profile_rejects_wrong_shape_mask() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+
+    assert (
+        qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+            **inputs,
+            qr_center=1.3,
+            delta_qr=0.05,
+            phi_windows=((-180.0, 180.0),),
+            shape_mask=np.ones((3, 3), dtype=bool),
+        )
+        is None
+    )
+
+
 def test_integrate_detector_qr_rod_qz_profile_ignores_invalid_q_pixels() -> None:
     inputs = _synthetic_detector_qr_rod_inputs()
     inputs["valid_q"] = np.asarray(
@@ -790,6 +902,83 @@ def test_integrate_detector_qr_rod_qz_profile_ignores_invalid_q_pixels() -> None
     np.testing.assert_allclose(profile["intensity_sum"], np.asarray([10.0, 70.0, 0.0]))
     np.testing.assert_allclose(profile["intensity_mean"][:2], np.asarray([10.0, 35.0]))
     assert np.isnan(profile["intensity_mean"][2])
+
+
+def test_integrate_detector_qr_rod_qz_profile_uses_same_support_before_image_finite() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+    inputs["detector_image"] = inputs["detector_image"].copy()
+    inputs["detector_image"][0, 1] = np.nan
+
+    support = qr_cylinder_overlay.build_detector_qr_rod_support_mask(
+        qr_map=inputs["qr_map"],
+        qz_map=inputs["qz_map"],
+        valid_q=inputs["valid_q"],
+        qr_center=1.0,
+        delta_qr=0.05,
+        qz_min=0.0,
+        qz_max=3.0,
+        detector_phi_deg=inputs["detector_phi_deg"],
+        phi_windows=((-90.0, 0.0),),
+    )
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.0,
+        delta_qr=0.05,
+        phi_windows=((-90.0, 0.0),),
+    )
+
+    assert support is not None
+    assert profile is not None
+    assert int(np.count_nonzero(support["mask"])) == 4
+    assert int(profile["support_pixel_count"][0]) == 4
+    assert int(np.sum(profile["pixel_count"])) == 3
+
+
+def test_build_selected_qr_rod_qz_detector_mask_signature_tracks_inputs() -> None:
+    config = _overlay_config(render_in_caked_space=False)
+    selected_entry = {"key": "rod-1", "source": "primary", "m": 1, "qr": 1.0}
+    base_kwargs = dict(
+        selected_entry=selected_entry,
+        config=config,
+        detector_shape=(2, 3),
+        delta_qr=0.05,
+        qz_min=0.0,
+        qz_max=2.0,
+        phi_windows=((-90.0, 0.0),),
+        selected_qr_rod_key="rod-1",
+        include_shape=False,
+        shape_source_signature=("hits", 1),
+    )
+
+    base = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
+        **base_kwargs
+    )
+    delta_changed = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
+        **{**base_kwargs, "delta_qr": 0.06}
+    )
+    qz_changed = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
+        **{**base_kwargs, "qz_max": 2.5}
+    )
+    phi_changed = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
+        **{**base_kwargs, "phi_windows": ((0.0, 90.0),)}
+    )
+    shape_mask = np.zeros((2, 3), dtype=bool)
+    shape_mask[0, 1] = True
+    shape_changed = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
+        **{
+            **base_kwargs,
+            "include_shape": True,
+            "shape_mask": shape_mask,
+            "shape_source_signature": ("hits", 2),
+        }
+    )
+
+    assert base is not None
+    assert base[0] == "selected_qr_rod_detector_mask"
+    assert delta_changed != base
+    assert qz_changed != base
+    assert phi_changed != base
+    assert shape_changed != base
 
 
 def test_build_selected_qr_rod_qz_caked_mask_signature_tracks_phi_windows() -> None:
