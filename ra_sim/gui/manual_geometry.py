@@ -22,6 +22,9 @@ from ra_sim.fitting.background_peak_matching import (
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import mosaic_top_selection as gui_mosaic_top
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
+from ra_sim.gui.geometry_overlay import (
+    display_point_to_native_for_rotation as _default_display_point_to_native_for_rotation,
+)
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
@@ -12895,11 +12898,12 @@ def make_runtime_geometry_manual_projection_callbacks(
             return None
         try:
             shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
-            native_col, native_row = rotate_point_for_display(
+            native_col, native_row = _default_display_point_to_native_for_rotation(
                 float(col),
                 float(row),
                 shape,
-                -int(display_rotate_k),
+                int(display_rotate_k),
+                rotate_point_for_display_fn=rotate_point_for_display,
             )
         except Exception:
             return None

@@ -3698,11 +3698,12 @@ def _background_display_to_native_detector_coords_for_background(
 
     def _to_native(col: float, row: float) -> tuple[float | None, float | None]:
         try:
-            native_col, native_row = _rotate_point_for_display(
+            native_col, native_row = gui_geometry_overlay.display_point_to_native_for_rotation(
                 float(col),
                 float(row),
                 shape,
-                -int(DISPLAY_ROTATE_K),
+                int(DISPLAY_ROTATE_K),
+                rotate_point_for_display_fn=_rotate_point_for_display,
             )
         except Exception:
             return None, None
@@ -7549,6 +7550,35 @@ def _ensure_slider_includes_value(slider_widget: object, value: float, pad: floa
     return True
 
 
+def _beam_center_display_to_center_coords(
+    col: float,
+    row: float,
+) -> tuple[float, float] | None:
+    """Map detector-view display pixels into beam-center row/col coordinates."""
+
+    display_background = _current_beam_center_pick_background_image()
+    if display_background is None:
+        return None
+    try:
+        shape = tuple(int(v) for v in np.asarray(display_background).shape[:2])
+    except Exception:
+        return None
+    if len(shape) < 2 or min(shape) <= 0:
+        return None
+    try:
+        center_col, center_row = _rotate_point_for_display(
+            float(col),
+            float(row),
+            shape,
+            int(SIMULATION_GEOMETRY_ROTATE_K),
+        )
+    except Exception:
+        return None
+    if not (np.isfinite(center_col) and np.isfinite(center_row)):
+        return None
+    return float(center_col), float(center_row)
+
+
 def _commit_beam_center_pick_at(col: float, row: float) -> bool:
     """Commit refined display coords as native detector row/col beam center."""
     if not _beam_center_pick_session_active():
@@ -7558,13 +7588,10 @@ def _commit_beam_center_pick_at(col: float, row: float) -> bool:
     session = geometry_runtime_state.beam_center_pick_session
     refined_col = float(session.get("refined_col", col))
     refined_row = float(session.get("refined_row", row))
-    try:
-        native_point = _background_display_to_native_detector_coords(
-            float(refined_col),
-            float(refined_row),
-        )
-    except Exception:
-        native_point = None
+    native_point = _beam_center_display_to_center_coords(
+        float(refined_col),
+        float(refined_row),
+    )
     if not (
         isinstance(native_point, tuple)
         and len(native_point) >= 2

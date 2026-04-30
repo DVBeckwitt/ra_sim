@@ -31,6 +31,38 @@ def rotate_point_for_display(
     return float(col_new), float(row_new)
 
 
+def rotated_shape_for_display(shape: tuple[int, ...], k: int) -> tuple[int, ...]:
+    """Return the image shape after applying the same ``np.rot90`` rotation."""
+
+    if len(shape) < 2:
+        return tuple(int(v) for v in shape)
+    normalized_shape = tuple(int(v) for v in shape)
+    if int(k) % 2:
+        return (normalized_shape[1], normalized_shape[0], *normalized_shape[2:])
+    return normalized_shape
+
+
+def display_point_to_native_for_rotation(
+    col: float,
+    row: float,
+    native_shape: tuple[int, ...],
+    k: int,
+    *,
+    rotate_point_for_display_fn: Callable[
+        [float, float, tuple[int, ...], int], tuple[float, float]
+    ] = rotate_point_for_display,
+) -> tuple[float, float]:
+    """Map a point from a ``np.rot90(..., k)`` display back to native pixels."""
+
+    display_shape = rotated_shape_for_display(native_shape, int(k))
+    return rotate_point_for_display_fn(
+        float(col),
+        float(row),
+        display_shape,
+        -int(k),
+    )
+
+
 def transform_points_orientation(
     points: Sequence[tuple[float, float]],
     shape: tuple[int, int],
@@ -533,7 +565,12 @@ def display_to_native_sim_coords(
 ) -> tuple[float, float]:
     """Map displayed simulation coordinates back into native simulation frame."""
 
-    return rotate_point_for_display(col, row, image_shape, -sim_display_rotate_k)
+    return display_point_to_native_for_rotation(
+        col,
+        row,
+        image_shape,
+        sim_display_rotate_k,
+    )
 
 
 def best_orientation_alignment(
