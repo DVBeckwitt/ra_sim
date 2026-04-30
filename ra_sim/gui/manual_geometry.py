@@ -32,6 +32,10 @@ from ra_sim.utils.calculations import (
     resolve_canonical_branch,
     source_branch_index_from_phi_deg,
 )
+from ra_sim.utils.parallel import (
+    default_reserved_cpu_worker_count,
+    make_detached_thread_pool_executor,
+)
 
 
 DEFAULT_POSITION_SIGMA_FLOOR_PX = 0.75
@@ -39,6 +43,10 @@ DEFAULT_PREVIEW_GOOD_SIGMA_PX = 1.5
 DEFAULT_PREVIEW_BAD_SIGMA_PX = 12.0
 DEFAULT_CAKED_SEARCH_TTH_DEG = 1.5
 DEFAULT_CAKED_SEARCH_PHI_DEG = 10.0
+DEFAULT_AUTO_REFINE_SEARCH_RADIUS_PX = 24.0
+MIN_AUTO_REFINE_SEARCH_RADIUS_PX = 4.0
+MAX_AUTO_REFINE_SEARCH_RADIUS_PX = 128.0
+MAX_AUTO_FINAL_REFINE_WORKERS = 8
 DEFAULT_PREVIEW_MIN_INTERVAL_S = 0.03
 DEFAULT_PREVIEW_MIN_MOVE_PX = 0.8
 DEFAULT_GUI_ENTRYPOINT = "python -m ra_sim gui"
@@ -56,6 +64,131 @@ _GEOMETRY_MANUAL_CAKED_QR_ID_FIELDS = (
     "source_ray_id",
     "branch_id",
 )
+
+
+def geometry_manual_normalize_auto_refine_search_radius_px(
+    value: object,
+    *,
+    default: float = DEFAULT_AUTO_REFINE_SEARCH_RADIUS_PX,
+    min_px: float = MIN_AUTO_REFINE_SEARCH_RADIUS_PX,
+    max_px: float = MAX_AUTO_REFINE_SEARCH_RADIUS_PX,
+) -> float:
+    """Return a finite auto-refinement search radius in display pixels."""
+
+    try:
+        radius = float(value)
+    except Exception:
+        radius = float(default)
+    if not np.isfinite(radius):
+        radius = float(default)
+    lower = float(min_px)
+    upper = float(max_px)
+    if not np.isfinite(lower):
+        lower = float(MIN_AUTO_REFINE_SEARCH_RADIUS_PX)
+    if not np.isfinite(upper) or upper < lower:
+        upper = float(MAX_AUTO_REFINE_SEARCH_RADIUS_PX)
+    return float(np.clip(radius, lower, upper))
+
+
+def geometry_manual_caked_search_windows_for_radius(
+    search_radius_px: object,
+    *,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    default_tth_window_deg: float = DEFAULT_CAKED_SEARCH_TTH_DEG,
+    default_phi_window_deg: float = DEFAULT_CAKED_SEARCH_PHI_DEG,
+) -> tuple[float, float]:
+    """Convert a pixel search radius into caked two-theta/phi windows."""
+
+    radius = geometry_manual_normalize_auto_refine_search_radius_px(search_radius_px)
+
+    def _axis_step(axis_values: Sequence[float] | None) -> float:
+        try:
+            axis = np.asarray(axis_values, dtype=float)
+        except Exception:
+            return float("nan")
+        if axis.size < 2:
+            return float("nan")
+        diffs = np.abs(np.diff(axis[np.isfinite(axis)]))
+        diffs = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+        if diffs.size <= 0:
+            return float("nan")
+        return float(np.median(diffs))
+
+    radial_step = _axis_step(radial_axis)
+    azimuth_step = _axis_step(azimuth_axis)
+    tth_window = float(default_tth_window_deg)
+    phi_window = float(default_phi_window_deg)
+    if np.isfinite(radial_step) and radial_step > 0.0:
+        tth_window = max(tth_window, float(radius) * float(radial_step))
+    if np.isfinite(azimuth_step) and azimuth_step > 0.0:
+        phi_window = max(phi_window, float(radius) * float(azimuth_step))
+    return float(tth_window), float(phi_window)
+
+
+def geometry_manual_cache_with_auto_refine_search_radius(
+    cache_data: Mapping[str, object] | None,
+    *,
+    search_radius_px: object | None,
+) -> dict[str, object]:
+    """Return cache data with an auto-placement-only refinement radius override."""
+
+    output = dict(cache_data) if isinstance(cache_data, Mapping) else {}
+    if search_radius_px is None:
+        return output
+    radius = geometry_manual_normalize_auto_refine_search_radius_px(search_radius_px)
+    match_cfg = (
+        dict(output.get("match_config"))
+        if isinstance(output.get("match_config"), Mapping)
+        else {}
+    )
+    match_cfg["search_radius_px"] = float(radius)
+    min_margin = max(96.0, 6.0 * float(radius))
+    try:
+        current_margin = float(match_cfg.get("context_margin_px", float("nan")))
+    except Exception:
+        current_margin = float("nan")
+    if not np.isfinite(current_margin) or current_margin < min_margin:
+        match_cfg["context_margin_px"] = float(min_margin)
+    output["match_config"] = match_cfg
+    output["manual_auto_refine_search_radius_px"] = float(radius)
+    return output
+
+
+def geometry_manual_remove_q_group_peak_entries(
+    entries: Sequence[Mapping[str, object]] | None,
+    *,
+    selected_q_group_entries: Sequence[Mapping[str, object]] | None = None,
+    selected_q_group_keys: Sequence[object] | None = None,
+) -> tuple[list[dict[str, object]], int, set[tuple[object, ...]]]:
+    """Remove saved manual placements whose Qr/Qz group key is selected."""
+
+    remove_keys: set[tuple[object, ...]] = set()
+
+    def _append_key(value: object) -> None:
+        group_key = gui_controllers.normalize_geometry_q_group_key(value)
+        if group_key is not None:
+            remove_keys.add(group_key)
+
+    for selected_entry in selected_q_group_entries or ():
+        if not isinstance(selected_entry, Mapping):
+            continue
+        _append_key(selected_entry.get("key", selected_entry.get("q_group_key")))
+    for raw_key in selected_q_group_keys or ():
+        _append_key(raw_key)
+
+    kept_entries: list[dict[str, object]] = []
+    removed_count = 0
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        entry_key = gui_controllers.normalize_geometry_q_group_key(entry.get("q_group_key"))
+        if entry_key in remove_keys:
+            removed_count += 1
+            continue
+        kept_entries.append(entry)
+    return kept_entries, int(removed_count), set(remove_keys)
 
 
 def _geometry_manual_git_commit() -> str:
@@ -1715,6 +1848,96 @@ def set_geometry_manual_pairs_for_index(
     else:
         pairs_by_background.pop(key, None)
     return list(normalized_entries)
+
+
+def geometry_manual_backfill_missing_caked_coordinates(
+    entries: Sequence[Mapping[str, object]] | None,
+    *,
+    background_display_to_native_detector_coords: Callable[[float, float], object] | None,
+    native_detector_coords_to_caked_display_coords: Callable[[float, float], object] | None,
+) -> tuple[list[dict[str, object]], int]:
+    """Fill legacy detector-origin manual pairs with caked 2theta/phi anchors."""
+
+    output: list[dict[str, object]] = []
+    changed_count = 0
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        before_caked = _geometry_manual_finite_point(
+            entry,
+            (
+                ("background_two_theta_deg", "background_phi_deg"),
+                ("caked_x", "caked_y"),
+            ),
+        )
+        if before_caked is None:
+            entry.setdefault("manual_background_input_origin", "detector")
+        if _geometry_manual_tuple_point(entry, "geometry_detector_display_px") is None:
+            display_point = _geometry_manual_finite_point(
+                entry,
+                (
+                    ("refined_detector_display_col", "refined_detector_display_row"),
+                    ("x", "y"),
+                ),
+            )
+            if display_point is not None:
+                entry["geometry_detector_display_px"] = (
+                    float(display_point[0]),
+                    float(display_point[1]),
+                )
+        if _geometry_manual_tuple_point(entry, "raw_detector_display_px") is None:
+            raw_display_point = _geometry_manual_finite_point(
+                entry,
+                (
+                    ("detector_seed_col", "detector_seed_row"),
+                    ("raw_x", "raw_y"),
+                ),
+            )
+            if raw_display_point is None:
+                raw_display_point = _geometry_manual_tuple_point(
+                    entry,
+                    "geometry_detector_display_px",
+                )
+            if raw_display_point is not None:
+                entry["raw_detector_display_px"] = (
+                    float(raw_display_point[0]),
+                    float(raw_display_point[1]),
+                )
+        if _geometry_manual_tuple_point(entry, "geometry_detector_native_px") is None:
+            native_point = _geometry_manual_finite_point(
+                entry,
+                (
+                    ("refined_detector_native_col", "refined_detector_native_row"),
+                    ("background_detector_x", "background_detector_y"),
+                    ("detector_x", "detector_y"),
+                ),
+            )
+            if native_point is not None:
+                entry["geometry_detector_native_px"] = (
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+        _geometry_manual_apply_detector_origin_conversion_ledger(
+            entry,
+            background_display_to_native_detector_coords=(
+                background_display_to_native_detector_coords
+            ),
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        after_caked = _geometry_manual_finite_point(
+            entry,
+            (
+                ("background_two_theta_deg", "background_phi_deg"),
+                ("caked_x", "caked_y"),
+            ),
+        )
+        if before_caked is None and after_caked is not None:
+            changed_count += 1
+        output.append(entry)
+    return output, int(changed_count)
 
 
 def geometry_manual_pair_group_count(
@@ -3576,7 +3799,7 @@ def canonical_geometry_source_identity(
     return identity
 
 
-def _geometry_manual_saved_background_point(
+def _geometry_manual_saved_background_point_with_frame(
     entry: Mapping[str, object] | None,
 ) -> tuple[tuple[float, float] | None, str, str]:
     if not isinstance(entry, Mapping):
@@ -3679,7 +3902,7 @@ def build_geometry_manual_picker_truth_pairs(
             continue
         saved_entry = dict(raw_entry)
         background_point, background_frame, background_source = (
-            _geometry_manual_saved_background_point(saved_entry)
+            _geometry_manual_saved_background_point_with_frame(saved_entry)
         )
         simulated_point, simulated_frame, simulated_source = _geometry_manual_saved_simulated_point(
             saved_entry
@@ -3699,7 +3922,7 @@ def build_geometry_manual_picker_truth_pairs(
         post_simulated_source = simulated_source
         if refreshed_entry is not None:
             post_background_point, _post_bg_frame, post_background_source = (
-                _geometry_manual_saved_background_point(refreshed_entry)
+                _geometry_manual_saved_background_point_with_frame(refreshed_entry)
             )
             post_simulated_point, _post_sim_frame, post_simulated_source = (
                 _geometry_manual_saved_simulated_point(refreshed_entry)
@@ -4622,6 +4845,48 @@ def geometry_manual_prioritize_candidate_entries(
     ]
 
 
+def _geometry_manual_include_tagged_q_group_candidate(
+    entries: Sequence[dict[str, object]] | None,
+    tagged_candidate: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+    profile_cache: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    output = [dict(entry) for entry in entries or () if isinstance(entry, dict)]
+    if not isinstance(tagged_candidate, Mapping):
+        return output
+    tagged = dict(tagged_candidate)
+    if _geometry_manual_resolve_identity_candidate_index(tagged, output) is not None:
+        return output
+    normalized_key = _geometry_manual_real_q_group_key(group_key)
+    if normalized_key is not None:
+        tagged["q_group_key"] = normalized_key
+    tagged_slot = _geometry_manual_q_group_physical_branch_slot(
+        tagged,
+        group_key=normalized_key,
+        profile_cache=profile_cache,
+    )
+    if tagged_slot is None:
+        return [tagged, *output]
+    replaced = False
+    next_entries: list[dict[str, object]] = []
+    for raw_entry in output:
+        entry = dict(raw_entry)
+        entry_slot = _geometry_manual_q_group_physical_branch_slot(
+            entry,
+            group_key=normalized_key,
+            profile_cache=profile_cache,
+        )
+        if not replaced and entry_slot == tagged_slot:
+            next_entries.append(dict(tagged))
+            replaced = True
+            continue
+        next_entries.append(entry)
+    if not replaced:
+        next_entries.insert(0, dict(tagged))
+    return next_entries
+
+
 def _geometry_manual_real_q_group_key(value: object) -> tuple[object, ...] | None:
     if isinstance(value, Mapping):
         value = value.get("q_group_key")
@@ -4636,15 +4901,71 @@ def _geometry_manual_q_group_entry_is_00l(
         _default_normalize_hkl_key
     ),
 ) -> bool:
-    hkl_key = normalize_hkl_key(entry) if isinstance(entry, Mapping) else None
+    hkl_key = (
+        normalize_hkl_key(entry.get("hkl", entry.get("label")))
+        if isinstance(entry, Mapping)
+        else None
+    )
     if hkl_key is not None:
-        return int(hkl_key[0]) == 0 and int(hkl_key[1]) == 0
+        return int(hkl_key[0]) == 0 and int(hkl_key[1]) == 0 and int(hkl_key[2]) != 0
+    normalized_group_key = gui_controllers.normalize_geometry_q_group_key(
+        group_key if group_key is not None else entry
+    )
+    if isinstance(normalized_group_key, tuple) and len(normalized_group_key) >= 3:
+        try:
+            return int(normalized_group_key[1]) == 0 and int(normalized_group_key[2]) != 0
+        except Exception:
+            return False
     normalized_key = _geometry_manual_real_q_group_key(group_key)
     if normalized_key is None and isinstance(entry, Mapping):
         normalized_key = _geometry_manual_real_q_group_key(entry)
     if isinstance(normalized_key, tuple) and len(normalized_key) >= 4:
         try:
-            return int(normalized_key[2]) == 0
+            return int(normalized_key[2]) == 0 and int(normalized_key[3]) != 0
+        except Exception:
+            return False
+    if isinstance(normalized_key, tuple) and len(normalized_key) >= 3:
+        try:
+            return int(normalized_key[1]) == 0 and int(normalized_key[2]) != 0
+        except Exception:
+            return False
+    return False
+
+
+def _geometry_manual_q_group_entry_is_000(
+    entry: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] = (
+        _default_normalize_hkl_key
+    ),
+) -> bool:
+    hkl_key = (
+        normalize_hkl_key(entry.get("hkl", entry.get("label")))
+        if isinstance(entry, Mapping)
+        else None
+    )
+    if hkl_key is not None:
+        return int(hkl_key[0]) == 0 and int(hkl_key[1]) == 0 and int(hkl_key[2]) == 0
+    normalized_group_key = gui_controllers.normalize_geometry_q_group_key(
+        group_key if group_key is not None else entry
+    )
+    if isinstance(normalized_group_key, tuple) and len(normalized_group_key) >= 3:
+        try:
+            return int(normalized_group_key[1]) == 0 and int(normalized_group_key[2]) == 0
+        except Exception:
+            return False
+    normalized_key = _geometry_manual_real_q_group_key(group_key)
+    if normalized_key is None and isinstance(entry, Mapping):
+        normalized_key = _geometry_manual_real_q_group_key(entry)
+    if isinstance(normalized_key, tuple) and len(normalized_key) >= 4:
+        try:
+            return int(normalized_key[2]) == 0 and int(normalized_key[3]) == 0
+        except Exception:
+            return False
+    if isinstance(normalized_key, tuple) and len(normalized_key) >= 3:
+        try:
+            return int(normalized_key[1]) == 0 and int(normalized_key[2]) == 0
         except Exception:
             return False
     return False
@@ -4699,6 +5020,368 @@ def _geometry_manual_q_group_physical_branch_slot(
     if branch_id:
         return ("branch_id", str(branch_id))
     return None
+
+
+def _huber_loss(r: float, delta: float = 1.0) -> float:
+    try:
+        residual = float(r)
+        threshold = abs(float(delta))
+    except Exception:
+        return float("inf")
+    if not np.isfinite(residual):
+        return float("inf")
+    if not np.isfinite(threshold) or threshold <= 0.0:
+        threshold = 1.0
+    abs_residual = abs(residual)
+    if abs_residual <= threshold:
+        return float(0.5 * residual * residual)
+    return float(threshold * (abs_residual - 0.5 * threshold))
+
+
+def _geometry_manual_auto_branch_pair_tolerances(
+    *,
+    auto_refine_search_radius_px: float | None = None,
+    branch_pair_abs_tol_px: float | None = None,
+    branch_pair_rel_tol: float | None = None,
+    branch_pair_sigma_px: float | None = None,
+    predicted_length_px: float = 0.0,
+) -> dict[str, float]:
+    try:
+        radius = float(auto_refine_search_radius_px)
+    except Exception:
+        radius = 24.0
+    if not np.isfinite(radius) or radius <= 0.0:
+        radius = 24.0
+    scale = min(5.0 / 3.0, max(2.0 / 3.0, radius / 24.0))
+
+    try:
+        abs_tol = float(branch_pair_abs_tol_px)
+    except Exception:
+        abs_tol = float("nan")
+    if not np.isfinite(abs_tol) or abs_tol <= 0.0:
+        abs_tol = 12.0 * scale
+
+    try:
+        rel_tol = float(branch_pair_rel_tol)
+    except Exception:
+        rel_tol = float("nan")
+    if not np.isfinite(rel_tol) or rel_tol < 0.0:
+        rel_tol = 0.25 * scale
+
+    try:
+        predicted_length = float(predicted_length_px)
+    except Exception:
+        predicted_length = 0.0
+    if not np.isfinite(predicted_length):
+        predicted_length = 0.0
+    gate_px = max(float(abs_tol), float(rel_tol) * max(float(predicted_length), 1.0))
+
+    try:
+        sigma_px = float(branch_pair_sigma_px)
+    except Exception:
+        sigma_px = float("nan")
+    if not np.isfinite(sigma_px) or sigma_px <= 0.0:
+        sigma_px = max(3.0, 0.25 * float(gate_px))
+
+    return {
+        "abs_tol_px": float(abs_tol),
+        "rel_tol": float(rel_tol),
+        "gate_px": float(gate_px),
+        "sigma_px": float(sigma_px),
+        "scale": float(scale),
+    }
+
+
+def _geometry_manual_observed_native_detector_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    tuple_point = _geometry_manual_tuple_point(entry, "geometry_detector_native_px")
+    if tuple_point is not None:
+        return tuple_point
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_detector_native_col", "refined_detector_native_row"),
+            ("background_detector_x", "background_detector_y"),
+            ("detector_x", "detector_y"),
+        ),
+    )
+
+
+def _geometry_manual_predicted_native_detector_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_candidate_native_sim_point(entry)
+
+
+def _geometry_manual_observed_caked_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_background_two_theta_deg", "refined_background_phi_deg"),
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("caked_x", "caked_y"),
+        ),
+    )
+
+
+def _geometry_manual_predicted_caked_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    for key in (
+        "sim_refined_caked_deg",
+        "sim_visual_caked_deg",
+        "sim_visual_deg",
+        "sim_caked",
+    ):
+        point = _geometry_manual_tuple_point(entry, key)
+        if point is not None:
+            return point
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+        ),
+    )
+
+
+def _geometry_manual_observed_current_view_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    tuple_point = _geometry_manual_tuple_point(entry, "geometry_detector_display_px")
+    if tuple_point is not None:
+        return tuple_point
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_detector_display_col", "refined_detector_display_row"),
+            ("x", "y"),
+        ),
+    )
+
+
+def _geometry_manual_predicted_current_view_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    for key in ("sim_refined_detector_display_px", "sim_visual_detector_display_px"):
+        point = _geometry_manual_tuple_point(entry, key)
+        if point is not None and not _geometry_manual_detector_point_is_caked(entry, point):
+            return point
+    point = _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_sim_x", "refined_sim_y"),
+            ("sim_col_raw", "sim_row_raw"),
+            ("sim_col", "sim_row"),
+        ),
+    )
+    if point is not None and not _geometry_manual_detector_point_is_caked(entry, point):
+        return point
+    return None
+
+
+def _geometry_manual_branch_pair_same_frame_points(
+    branch0_entry: Mapping[str, object] | None,
+    branch1_entry: Mapping[str, object] | None,
+    *,
+    use_caked_space: bool,
+) -> dict[str, object] | None:
+    frame_getters: list[
+        tuple[
+            str,
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+            Callable[[Mapping[str, object] | None], tuple[float, float] | None],
+        ]
+    ] = [
+        (
+            "native_detector",
+            _geometry_manual_observed_native_detector_point,
+            _geometry_manual_predicted_native_detector_point,
+        )
+    ]
+    if bool(use_caked_space):
+        frame_getters.append(
+            (
+                "caked_display",
+                _geometry_manual_observed_caked_display_point,
+                _geometry_manual_predicted_caked_display_point,
+            )
+        )
+    frame_getters.append(
+        (
+            "current_view_display",
+            _geometry_manual_observed_current_view_display_point,
+            _geometry_manual_predicted_current_view_display_point,
+        )
+    )
+
+    for frame_name, observed_getter, predicted_getter in frame_getters:
+        obs0 = observed_getter(branch0_entry)
+        obs1 = observed_getter(branch1_entry)
+        pred0 = predicted_getter(branch0_entry)
+        pred1 = predicted_getter(branch1_entry)
+        if obs0 is not None and obs1 is not None and pred0 is not None and pred1 is not None:
+            return {
+                "coordinate_frame": frame_name,
+                "obs0": (float(obs0[0]), float(obs0[1])),
+                "obs1": (float(obs1[0]), float(obs1[1])),
+                "pred0": (float(pred0[0]), float(pred0[1])),
+                "pred1": (float(pred1[0]), float(pred1[1])),
+            }
+    return None
+
+
+def _score_qr_branch_pair_length_restraint(
+    branch0_entry: Mapping[str, object] | None,
+    branch1_entry: Mapping[str, object] | None = None,
+    *,
+    group_key: object = None,
+    use_caked_space: bool,
+    auto_refine_search_radius_px: float | None = None,
+    branch_pair_abs_tol_px: float | None = None,
+    branch_pair_rel_tol: float | None = None,
+    branch_pair_sigma_px: float | None = None,
+    profile_cache: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    normalized_group_key = _geometry_manual_real_q_group_key(group_key)
+    if _geometry_manual_q_group_entry_is_00l(branch0_entry, group_key=normalized_group_key):
+        return {
+            "applied": False,
+            "accepted": True,
+            "reason": "00l_branch_collapsed",
+            "branch_pair_coordinate_frame": None,
+        }
+
+    if not isinstance(branch0_entry, Mapping) or not isinstance(branch1_entry, Mapping):
+        return {
+            "applied": True,
+            "accepted": False,
+            "reason": "missing_required_branch_pair",
+            "branch_pair_coordinate_frame": None,
+        }
+
+    key0 = _geometry_manual_real_q_group_key(branch0_entry)
+    key1 = _geometry_manual_real_q_group_key(branch1_entry)
+    if normalized_group_key is None:
+        normalized_group_key = key0
+    if (
+        normalized_group_key is None
+        or key0 != normalized_group_key
+        or key1 != normalized_group_key
+    ):
+        return {
+            "applied": True,
+            "accepted": False,
+            "reason": "q_group_key_mismatch",
+            "branch_pair_coordinate_frame": None,
+        }
+
+    slot0 = _geometry_manual_q_group_physical_branch_slot(
+        branch0_entry,
+        group_key=normalized_group_key,
+        profile_cache=profile_cache,
+    )
+    slot1 = _geometry_manual_q_group_physical_branch_slot(
+        branch1_entry,
+        group_key=normalized_group_key,
+        profile_cache=profile_cache,
+    )
+    if {tuple(slot0 or ()), tuple(slot1 or ())} != {("branch", 0), ("branch", 1)}:
+        return {
+            "applied": True,
+            "accepted": False,
+            "reason": "missing_required_branch_pair",
+            "branch_pair_coordinate_frame": None,
+        }
+
+    points = _geometry_manual_branch_pair_same_frame_points(
+        branch0_entry,
+        branch1_entry,
+        use_caked_space=bool(use_caked_space),
+    )
+    if points is None:
+        return {
+            "applied": True,
+            "accepted": False,
+            "reason": "branch_pair_points_unavailable",
+            "branch_pair_coordinate_frame": None,
+        }
+
+    obs0 = points["obs0"]
+    obs1 = points["obs1"]
+    pred0 = points["pred0"]
+    pred1 = points["pred1"]
+    d_obs = float(np.hypot(float(obs1[0]) - float(obs0[0]), float(obs1[1]) - float(obs0[1])))
+    d_pred = float(
+        np.hypot(float(pred1[0]) - float(pred0[0]), float(pred1[1]) - float(pred0[1]))
+    )
+    length_error = float(d_obs - d_pred)
+    tolerances = _geometry_manual_auto_branch_pair_tolerances(
+        auto_refine_search_radius_px=auto_refine_search_radius_px,
+        branch_pair_abs_tol_px=branch_pair_abs_tol_px,
+        branch_pair_rel_tol=branch_pair_rel_tol,
+        branch_pair_sigma_px=branch_pair_sigma_px,
+        predicted_length_px=d_pred,
+    )
+    accepted = bool(abs(length_error) <= float(tolerances["gate_px"]))
+    return {
+        "applied": True,
+        "accepted": accepted,
+        "reason": "within_tolerance" if accepted else "branch_pair_length_out_of_tolerance",
+        "branch_pair_coordinate_frame": str(points["coordinate_frame"]),
+        "d_obs": float(d_obs),
+        "d_pred": float(d_pred),
+        "length_error": float(length_error),
+        "abs_tol_px": float(tolerances["abs_tol_px"]),
+        "rel_tol": float(tolerances["rel_tol"]),
+        "gate_px": float(tolerances["gate_px"]),
+        "sigma_px": float(tolerances["sigma_px"]),
+        "score": float(_huber_loss(length_error / max(float(tolerances["sigma_px"]), 1.0e-6))),
+    }
+
+
+def _geometry_manual_q_group_required_branch_entries(
+    entries: Sequence[Mapping[str, object]] | None,
+    *,
+    group_key: object,
+    profile_cache: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    normalized_group_key = _geometry_manual_real_q_group_key(group_key)
+    branch_entries: dict[int, dict[str, object]] = {}
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        if _geometry_manual_real_q_group_key(raw_entry) != normalized_group_key:
+            continue
+        slot = _geometry_manual_q_group_physical_branch_slot(
+            raw_entry,
+            group_key=normalized_group_key,
+            profile_cache=profile_cache,
+        )
+        if slot in {("branch", 0), ("branch", 1)} and int(slot[1]) not in branch_entries:
+            branch_entries[int(slot[1])] = dict(raw_entry)
+    return branch_entries.get(0), branch_entries.get(1)
+
+
+def _geometry_manual_branch_pair_result_payload(
+    group_key: object,
+    result: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "q_group_key": _geometry_manual_json_value(_geometry_manual_real_q_group_key(group_key)),
+        "branch_pair_coordinate_frame": result.get("branch_pair_coordinate_frame"),
+        "branch_pair_restraint_applied": bool(result.get("applied", False)),
+        "branch_pair_restraint_accepted": bool(result.get("accepted", False)),
+        "branch_pair_length_observed_px": result.get("d_obs"),
+        "branch_pair_length_predicted_px": result.get("d_pred"),
+        "branch_pair_length_error_px": result.get("length_error"),
+        "branch_pair_length_gate_px": result.get("gate_px"),
+        "branch_pair_length_score": result.get("score"),
+        "branch_pair_reject_reason": str(result.get("reason", "")),
+    }
 
 
 def _geometry_manual_select_q_group_representative(
@@ -5975,12 +6658,16 @@ def _geometry_manual_apply_detector_origin_conversion_ledger(
         ) is None:
             entry["raw_caked_x"] = float(raw_caked[0])
             entry["raw_caked_y"] = float(raw_caked[1])
+            entry["raw_caked_two_theta_deg"] = float(raw_caked[0])
+            entry["raw_caked_phi_deg"] = float(raw_caked[1])
     if geometry_caked is not None:
         entry["geometry_caked_deg"] = (
             float(geometry_caked[0]),
             float(geometry_caked[1]),
         )
         if detector_origin:
+            entry["refined_background_two_theta_deg"] = float(geometry_caked[0])
+            entry["refined_background_phi_deg"] = float(geometry_caked[1])
             entry["background_two_theta_deg"] = float(geometry_caked[0])
             entry["background_phi_deg"] = float(geometry_caked[1])
             entry["caked_x"] = float(geometry_caked[0])
@@ -6470,6 +7157,10 @@ def geometry_manual_refine_qr_sim_peak_for_view(
         tuple[float | None, float | None] | None,
     ]
     | None = None,
+    refine_caked_peak_center_fn: Callable[
+        [np.ndarray | None, Sequence[float] | None, Sequence[float] | None, float, float],
+        tuple[float, float],
+    ] = refine_caked_peak_center,
     search_radius_px: int = 5,
 ) -> dict[str, object] | None:
     if str(view_mode).strip().lower() == "caked":
@@ -6480,6 +7171,7 @@ def geometry_manual_refine_qr_sim_peak_for_view(
             azimuth_axis=azimuth_axis,
             caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
             detector_display_to_native_coords=detector_display_to_native_coords,
+            refine_caked_peak_center_fn=refine_caked_peak_center_fn,
         )
     return geometry_manual_refine_qr_sim_peak_detector(
         candidate,
@@ -6512,6 +7204,10 @@ def geometry_manual_refine_qr_sim_candidates_in_cache(
         tuple[float | None, float | None] | None,
     ]
     | None = None,
+    refine_caked_peak_center_fn: Callable[
+        [np.ndarray | None, Sequence[float] | None, Sequence[float] | None, float, float],
+        tuple[float, float],
+    ] = refine_caked_peak_center,
     search_radius_px: int = 5,
 ) -> dict[str, object]:
     if not isinstance(cache_data, Mapping):
@@ -6536,6 +7232,7 @@ def geometry_manual_refine_qr_sim_candidates_in_cache(
                     native_detector_coords_to_caked_display_coords
                 ),
                 caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
+                refine_caked_peak_center_fn=refine_caked_peak_center_fn,
                 search_radius_px=search_radius_px,
             )
             output.append(
@@ -7126,6 +7823,18 @@ def geometry_manual_detector_picker_grouped_candidates_from_cache(
         native_background=native_background,
         profile_cache=profile_cache,
     )
+    if not grouped and isinstance(cache_data, Mapping):
+        raw_grouped = cache_data.get("grouped_candidates")
+        if isinstance(raw_grouped, Mapping):
+            grouped = {
+                group_key: [
+                    {**dict(entry), "q_group_key": group_key}
+                    for entry in (entries or ())
+                    if isinstance(entry, Mapping)
+                ]
+                for raw_key, entries in raw_grouped.items()
+                if (group_key := _geometry_manual_real_q_group_key(raw_key)) is not None
+            }
     return grouped
 
 
@@ -7815,6 +8524,38 @@ def build_geometry_manual_pick_cache(
             dict(entry) for entry in detector_source_candidates if isinstance(entry, Mapping)
         ]
         if not reuse_requires_caked_projection and not local_detector_picker_rows:
+            legacy_detector_grouped = {
+                key: [
+                    dict(entry)
+                    for entry in entries
+                    if isinstance(entry, Mapping)
+                    and _geometry_manual_entry_detector_display_point(entry) is not None
+                ]
+                for key, entries in (candidate_groups or {}).items()
+                if isinstance(key, tuple)
+            }
+            legacy_detector_grouped = {
+                key: entries for key, entries in legacy_detector_grouped.items() if entries
+            }
+            if legacy_detector_grouped:
+                simulated_peaks = normalized_rows
+                active_simulated_peaks = local_active_simulated_peaks
+                detector_picker_source_rows = local_detector_picker_source_rows
+                detector_picker_rows = []
+                detector_picker_grouped_candidates = {}
+                grouped_candidates = legacy_detector_grouped
+                simulated_lookup = build_simulated_lookup(active_simulated_peaks)
+                cache_action = str(action)
+                cache_source = str(source)
+                cache_provenance = [str(step) for step in provenance]
+                if (
+                    stale_reason_override is None
+                    and stale_reason == matching_empty_detector_cache_stale_reason
+                ):
+                    stale_reason = matching_empty_detector_cache_stale_reason
+                else:
+                    stale_reason = stale_reason_override
+                return True
             display_height, display_width = _geometry_manual_detector_shape(background_image)
             detector_diag = _geometry_manual_detector_picker_row_diagnostics(
                 local_detector_picker_source_rows,
@@ -8793,6 +9534,82 @@ def geometry_manual_nearest_candidate_to_point(
     return best_entry, float(np.sqrt(best_d2))
 
 
+def _geometry_manual_saved_background_point(
+    entry: Mapping[str, object] | None,
+    *,
+    use_caked_display: bool,
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    if bool(use_caked_display):
+        point = _geometry_manual_finite_point(
+            entry,
+            (
+                ("refined_background_two_theta_deg", "refined_background_phi_deg"),
+                ("background_two_theta_deg", "background_phi_deg"),
+                ("caked_x", "caked_y"),
+                ("raw_caked_x", "raw_caked_y"),
+            ),
+        )
+        if point is not None:
+            return point
+        if _geometry_manual_entry_display_frame(entry) == "caked":
+            return _geometry_manual_finite_point(entry, (("display_col", "display_row"),))
+        return None
+
+    point = _geometry_manual_tuple_point(entry, "geometry_detector_display_px")
+    if point is not None:
+        return point
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("refined_detector_display_col", "refined_detector_display_row"),
+            ("x", "y"),
+        ),
+    )
+
+
+def _geometry_manual_saved_background_pair_at(
+    entries: Sequence[dict[str, object]] | None,
+    col: float,
+    row: float,
+    *,
+    use_caked_display: bool,
+    window_size: float,
+) -> tuple[int | None, dict[str, object] | None, float]:
+    best_index: int | None = None
+    best_entry: dict[str, object] | None = None
+    best_d2 = float("inf")
+    try:
+        hit_window = max(0.0, float(window_size))
+    except Exception:
+        hit_window = 0.0
+    if hit_window <= 0.0:
+        return None, None, float("nan")
+
+    for index, raw_entry in enumerate(entries or ()):
+        if not isinstance(raw_entry, dict):
+            continue
+        point = _geometry_manual_saved_background_point(
+            raw_entry,
+            use_caked_display=bool(use_caked_display),
+        )
+        if point is None:
+            continue
+        d2 = (float(point[0]) - float(col)) ** 2 + (float(point[1]) - float(row)) ** 2
+        if d2 < best_d2:
+            best_d2 = float(d2)
+            best_index = int(index)
+            best_entry = dict(raw_entry)
+
+    if best_entry is None or not np.isfinite(best_d2):
+        return None, None, float("nan")
+    distance = float(np.sqrt(best_d2))
+    if distance > float(hit_window):
+        return None, None, float("nan")
+    return best_index, best_entry, distance
+
+
 def _geometry_manual_points_match(
     left: tuple[float, float] | None,
     right: tuple[float, float] | None,
@@ -9640,10 +10457,23 @@ def geometry_manual_refine_preview_point(
 
     match_cfg = dict(state.get("match_config", {})) if isinstance(state, dict) else {}
     background_context = state.get("background_context") if isinstance(state, dict) else None
-    fallback_radius = max(
-        3,
-        int(round(min(8.0, 0.33 * float(match_cfg.get("search_radius_px", 18.0))))),
-    )
+    auto_refine_radius = None
+    if isinstance(state, dict) and state.get("manual_auto_refine_search_radius_px") is not None:
+        try:
+            raw_auto_refine_radius = float(state.get("manual_auto_refine_search_radius_px"))
+        except Exception:
+            raw_auto_refine_radius = float("nan")
+        if np.isfinite(raw_auto_refine_radius):
+            auto_refine_radius = geometry_manual_normalize_auto_refine_search_radius_px(
+                raw_auto_refine_radius
+            )
+    if auto_refine_radius is not None:
+        fallback_radius = max(3, int(round(float(auto_refine_radius))))
+    else:
+        fallback_radius = max(
+            3,
+            int(round(min(8.0, 0.33 * float(match_cfg.get("search_radius_px", 18.0))))),
+        )
 
     refined_col = float(raw_col)
     refined_row = float(raw_row)
@@ -10884,6 +11714,8 @@ def build_geometry_manual_initial_pairs_display(
 
         if bool(use_caked_display):
             saved_caked_point = _saved_caked_sim_point(saved_entry)
+            if saved_caked_point is not None:
+                return saved_caked_point
             if saved_native_detector_point is not None:
                 projected_caked_point = _live_caked_point(projected_sim_entry)
                 if projected_caked_point is not None:
@@ -11160,7 +11992,7 @@ def build_geometry_manual_initial_pairs_display(
             sim_source_entry = (
                 dict(caked_projection_entry)
                 if isinstance(caked_projection_entry, Mapping)
-                else None
+                else geometry_manual_lookup_source_entry(simulated_lookup, entry)
             )
         else:
             raw_sim_source_entry = geometry_manual_lookup_source_entry(
@@ -11229,6 +12061,9 @@ def build_geometry_manual_initial_pairs_display(
         caked_projection_resolved = bool(
             use_caked_display and isinstance(caked_projection_entry, Mapping)
         )
+        caked_sim_source_available = bool(
+            use_caked_display and isinstance(sim_source_entry, Mapping)
+        )
         if _lookup_entry_was_stale_unrefined(
             raw_caked_projection_entry,
             caked_projection_entry,
@@ -11239,7 +12074,7 @@ def build_geometry_manual_initial_pairs_display(
             sim_source_entry,
         ):
             initial_entry["simulated_lookup_stale_unrefined_rebuilt"] = True
-        if bool(use_caked_display) and not caked_projection_resolved:
+        if bool(use_caked_display) and not caked_sim_source_available:
             initial_entry["sim_display_unresolved"] = True
             _copy_q_values_from_sources(initial_entry, entry)
             initial_pairs_display.append(initial_entry)
@@ -11706,7 +12541,7 @@ def make_runtime_geometry_manual_projection_callbacks(
     def _pick_uses_caked_space() -> bool:
         if not bool(_resolve_runtime_value(caked_view_enabled)):
             return False
-        return _caked_grid_available()
+        return bool(_caked_grid_available() or _caked_projection_context_available())
 
     def _caked_grid_available() -> bool:
         background_image = _resolve_runtime_value(last_caked_background_image_unscaled)
@@ -13127,7 +13962,12 @@ def make_runtime_geometry_manual_callbacks(
             update_status=update_status,
         )
 
-    def _toggle_selection_at(col: float, row: float) -> bool:
+    def _toggle_selection_at(
+        col: float,
+        row: float,
+        *,
+        saved_pair_move_only: bool = False,
+    ) -> bool:
         print_geometry_manual_live_code_path_stamp()
         handled, _next_session, suppress_drag = geometry_manual_toggle_selection_at(
             float(col),
@@ -13153,6 +13993,7 @@ def make_runtime_geometry_manual_callbacks(
             caked_search_phi_deg=float(caked_search_phi_deg),
             find_peak_record_for_click_fn=find_peak_record_for_click,
             profile_cache=_profile_cache(),
+            saved_pair_move_only=bool(saved_pair_move_only),
         )
         if callable(set_suppress_drag_press_once):
             set_suppress_drag_press_once(bool(suppress_drag))
@@ -13369,6 +14210,7 @@ def geometry_manual_toggle_selection_at(
     caked_search_phi_deg: float = DEFAULT_CAKED_SEARCH_PHI_DEG,
     profile_cache: Mapping[str, object] | None = None,
     trace_picker_input_fn: Callable[[dict[str, object]], None] | None = None,
+    saved_pair_move_only: bool = False,
 ) -> tuple[bool, dict[str, object], bool]:
     """Select one manual Qr/Qz group and arm background-point placement."""
 
@@ -13380,6 +14222,94 @@ def geometry_manual_toggle_selection_at(
 
     cache_data = get_cache_data(background_image=display_background)
     picker_trace: dict[str, object] | None = None
+    existing_entries = [dict(entry) for entry in pairs_for_index(int(current_background_index))]
+    group_window = (
+        float(pick_search_window_px)
+        if not use_caked_space
+        else float(max(caked_search_phi_deg, 2.0 * caked_search_tth_deg))
+    )
+    move_window = (
+        float(group_window)
+        if bool(use_caked_space)
+        else float(max(4.0, min(float(group_window), 8.0)))
+    )
+    move_index, move_entry, move_dist = _geometry_manual_saved_background_pair_at(
+        existing_entries,
+        float(col),
+        float(row),
+        use_caked_display=bool(use_caked_space),
+        window_size=float(move_window),
+    )
+    if bool(saved_pair_move_only) and move_index is not None and isinstance(move_entry, dict):
+        move_group_key = _geometry_manual_real_q_group_key(move_entry)
+        if move_group_key is not None:
+            q_entries = (
+                listed_q_group_entries()
+                if callable(listed_q_group_entries)
+                else listed_q_group_entries
+            )
+            q_entry = next(
+                (
+                    entry
+                    for entry in q_entries
+                    if isinstance(entry, dict) and entry.get("key") == move_group_key
+                ),
+                None,
+            )
+            q_label = (
+                format_q_group_line(q_entry)
+                if isinstance(q_entry, dict) and callable(format_q_group_line)
+                else f"group={move_group_key}"
+            )
+            manual_run_id = geometry_manual_start_run_id()
+            tagged_candidate_key = candidate_source_key(move_entry)
+            next_session = {
+                "manual_geometry_run_id": manual_run_id,
+                "manual_trace_version": MANUAL_GEOMETRY_TRACE_VERSION,
+                "background_index": int(current_background_index),
+                "group_key": move_group_key,
+                "group_entries": [dict(move_entry)],
+                "pending_entries": [],
+                "target_count": 1,
+                "base_entries": [
+                    dict(entry)
+                    for idx, entry in enumerate(existing_entries)
+                    if int(idx) != int(move_index)
+                ],
+                "cache_signature": (
+                    cache_data.get("signature") if isinstance(cache_data, dict) else None
+                ),
+                "q_label": q_label,
+                "zoom_active": False,
+                "zoom_center": None,
+                "saved_xlim": None,
+                "saved_ylim": None,
+                "preview_last_t": 0.0,
+                "preview_last_xy": None,
+                "moving_saved_pair": True,
+                "moving_saved_pair_index": int(move_index),
+            }
+            if tagged_candidate_key is not None:
+                next_session["tagged_candidate_key"] = tagged_candidate_key
+            next_session["tagged_candidate"] = dict(move_entry)
+            next_session["_tagged_candidate_requires_identity"] = True
+            set_pick_session_fn(next_session)
+            render_current_pairs_fn(update_status=False)
+            update_button_label_fn()
+            if callable(set_status_text):
+                label = str(move_entry.get("label", "")).strip()
+                label_text = f" [{label}]" if label else ""
+                set_status_text(
+                    f"Move saved Qr/Qz background point{label_text} for {q_label} "
+                    f"on background {int(current_background_index) + 1}. "
+                    f"Click the new local peak; it will refine locally before saving. "
+                    f"Hit distance={float(move_dist):.2f}{' deg' if use_caked_space else 'px'}."
+                )
+            return True, next_session, not bool(saved_pair_move_only)
+
+    if bool(saved_pair_move_only):
+        return False, current_session, False
+
     if bool(use_caked_space):
         caked_grouped_candidates = (
             cache_data.get("caked_qr_projection_grouped_candidates")
@@ -13418,11 +14348,6 @@ def geometry_manual_toggle_selection_at(
             )
         return False, current_session, False
 
-    group_window = (
-        float(pick_search_window_px)
-        if not use_caked_space
-        else float(max(caked_search_phi_deg, 2.0 * caked_search_tth_deg))
-    )
     best_group_key = None
     best_group_entries: list[dict[str, object]] = []
     best_dist = float("nan")
@@ -13476,18 +14401,24 @@ def geometry_manual_toggle_selection_at(
                         shared_tagged_candidate = dict(shared_group_entries[int(matched_index)])
                         shared_seed_dist = float(shared_peak_dist)
 
-    if best_group_key is None:
-        best_group_key, best_group_entries, best_dist = choose_group_at_fn(
-            grouped_candidates,
-            float(col),
-            float(row),
-            window_size_px=float(group_window),
-            **(
-                {"use_caked_display": bool(use_caked_space)}
-                if choose_group_at_fn is geometry_manual_choose_group_at
-                else {}
-            ),
-        )
+    nearest_group_key, nearest_group_entries, nearest_dist = choose_group_at_fn(
+        grouped_candidates,
+        float(col),
+        float(row),
+        window_size_px=float(group_window),
+        **(
+            {"use_caked_display": bool(use_caked_space)}
+            if choose_group_at_fn is geometry_manual_choose_group_at
+            else {}
+        ),
+    )
+    if nearest_group_key is not None:
+        if best_group_key is not None and nearest_group_key != best_group_key:
+            shared_tagged_candidate = None
+            shared_seed_dist = float("nan")
+        best_group_key = nearest_group_key
+        best_group_entries = list(nearest_group_entries)
+        best_dist = float(nearest_dist)
     if best_group_key is None:
         if callable(set_status_text):
             set_status_text(
@@ -13514,22 +14445,21 @@ def geometry_manual_toggle_selection_at(
             )
         return False, current_session, False
 
-    existing_entries = [dict(entry) for entry in pairs_for_index(int(current_background_index))]
-    if any(entry.get("q_group_key") == best_group_key for entry in existing_entries):
-        if callable(push_undo_state_fn):
-            push_undo_state_fn()
+    existing_group_keys = {
+        _geometry_manual_real_q_group_key(entry)
+        for entry in existing_entries
+        if isinstance(entry, Mapping)
+    }
+    if best_group_key in existing_group_keys:
         restore_view_fn(redraw=False)
         clear_preview_artists_fn(redraw=False)
         set_pick_session_fn({})
-        remaining_entries = [
-            entry for entry in existing_entries if entry.get("q_group_key") != best_group_key
-        ]
-        set_pairs_for_index_fn(int(current_background_index), remaining_entries)
         render_current_pairs_fn(update_status=False)
         update_button_label_fn()
         if callable(set_status_text):
             set_status_text(
-                f"Removed one saved Qr/Qz set from background {int(current_background_index) + 1}."
+                "That Qr/Qz set is already selected on this background. "
+                "Use Click Remove Placed Peaks to delete it, or drag a saved peak to move it."
             )
         return True, {}, False
 
@@ -13579,8 +14509,15 @@ def geometry_manual_toggle_selection_at(
             seed_candidate=seed_candidate,
             profile_cache=profile_cache,
         )
-        if isinstance(selected_candidate, dict):
+        if isinstance(selected_candidate, dict) and not bool(use_caked_space):
             tagged_candidate = selected_candidate
+    if bool(use_caked_space) and isinstance(tagged_candidate, dict):
+        best_group_entries = _geometry_manual_include_tagged_q_group_candidate(
+            best_group_entries,
+            tagged_candidate,
+            group_key=best_group_key,
+            profile_cache=profile_cache,
+        )
     tagged_dist = (
         geometry_manual_candidate_distance_to_point(
             float(col),
@@ -14241,11 +15178,15 @@ def geometry_manual_place_selection_at(
             )
 
     if isinstance(candidate_distance_details, Mapping):
-        pair_entry["assignment_distance_to_sim"] = float(candidate_dist)
+        if np.isfinite(float(candidate_dist)):
+            pair_entry["assignment_distance_to_sim"] = float(candidate_dist)
         pair_entry["assignment_distance_source"] = str(
             candidate_distance_details.get("distance_source", "<unavailable>")
         )
-        pair_entry.update(status_trace)
+        for status_key, status_value in status_trace.items():
+            if isinstance(status_value, float) and not np.isfinite(float(status_value)):
+                continue
+            pair_entry[status_key] = status_value
         try:
             cache_distance = float(
                 candidate_distance_details.get("cache_current_distance", np.nan)
@@ -14350,12 +15291,17 @@ def geometry_manual_place_selection_at(
         render_current_pairs_fn(update_status=False)
         update_button_label_fn()
         if callable(set_status_text):
+            status_verb = "Moved" if bool(next_session.get("moving_saved_pair")) else "Saved"
             set_status_text(
-                f"Saved {placed_count} manual background points for {q_label} "
+                f"{status_verb} {placed_count} manual background points for {q_label} "
                 + geometry_manual_cmd_provenance_text(
                     run_id=manual_run_id,
                     emitter="geometry_manual_place_selection_at",
-                    event="saved_group",
+                    event=(
+                        "moved_saved_point"
+                        if bool(next_session.get("moving_saved_pair"))
+                        else "saved_group"
+                    ),
                     branch=candidate_branch if candidate_branch is not None else "<none>",
                     actual_source=assignment_source,
                     expected_source=_geometry_manual_expected_distance_source(use_caked_space),
@@ -14399,6 +15345,670 @@ def geometry_manual_place_selection_at(
             + f"Click background peak {next_index} of {total_count}; it will be assigned to the nearest remaining simulated peak."
         )
     return True, next_session
+
+
+def _geometry_manual_auto_refined_seed_point(
+    entry: Mapping[str, object] | None,
+    *,
+    use_caked_space: bool,
+) -> tuple[float, float] | None:
+    if bool(use_caked_space):
+        refined_caked = _geometry_manual_tuple_point(entry, "sim_refined_caked_deg")
+        if refined_caked is None:
+            refined_caked = _geometry_manual_finite_point(
+                entry,
+                (("refined_sim_caked_x", "refined_sim_caked_y"),),
+            )
+        if refined_caked is not None:
+            return refined_caked
+        visual_caked, _source = _geometry_manual_candidate_visual_caked_sim_point(entry)
+        if visual_caked is not None:
+            return visual_caked
+        return _geometry_manual_entry_active_view_point(
+            entry,
+            use_caked_display=True,
+        )
+
+    refined_detector = _geometry_manual_tuple_point(
+        entry,
+        "sim_refined_detector_display_px",
+    )
+    if refined_detector is None:
+        refined_detector = _geometry_manual_finite_point(
+            entry,
+            (("refined_sim_x", "refined_sim_y"),),
+        )
+    if refined_detector is not None and not _geometry_manual_detector_point_is_caked(
+        entry,
+        refined_detector,
+    ):
+        return refined_detector
+    return _geometry_manual_entry_active_view_point(
+        entry,
+        use_caked_display=False,
+    )
+
+
+def geometry_manual_auto_add_q_group_peaks(
+    *,
+    current_background_index: object,
+    display_background: object | None,
+    get_cache_data: Callable[..., dict[str, object]],
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    set_pairs_for_index_fn: Callable[
+        [int, Sequence[dict[str, object]] | None], Sequence[dict[str, object]]
+    ],
+    set_pick_session_fn: Callable[[dict[str, object]], None],
+    clear_preview_artists_fn: Callable[..., None],
+    restore_view_fn: Callable[..., None],
+    render_current_pairs_fn: Callable[..., None],
+    update_button_label_fn: Callable[[], None],
+    refine_preview_point: Callable[..., tuple[float, float]],
+    selected_q_group_entries: Sequence[Mapping[str, object]] | None = None,
+    selected_q_group_keys: Sequence[object] | None = None,
+    format_q_group_line: Callable[[dict[str, object]], str] | None = None,
+    set_status_text: Callable[[str], None] | None = None,
+    push_undo_state_fn: Callable[[], None] | None = None,
+    use_caked_space: bool,
+    caked_angles_to_background_display_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
+    background_display_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    caked_axis_to_image_index_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[
+        [float, Sequence[float] | None], float
+    ] = caked_image_index_to_axis,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+    nearest_candidate_to_point_fn: Callable[
+        [float, float, Sequence[dict[str, object]] | None],
+        tuple[dict[str, object] | None, float],
+    ] = geometry_manual_nearest_candidate_to_point,
+    position_error_px: Callable[
+        [float, float, float, float], float
+    ] = geometry_manual_position_error_px,
+    position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
+    refine_saved_pair_entry_fn: Callable[
+        [dict[str, object], dict[str, object] | None],
+        dict[str, object] | None,
+    ]
+    | None = None,
+    refine_sim_candidate_fn: Callable[..., dict[str, object] | None] | None = None,
+    auto_refine_search_radius_px: float | None = None,
+    profile_cache: Mapping[str, object] | None = None,
+    branch_pair_abs_tol_px: float | None = None,
+    branch_pair_rel_tol: float | None = None,
+    branch_pair_sigma_px: float | None = None,
+    branch_pair_reject: bool = True,
+    final_refine_parallel_workers: int | str | None = None,
+) -> dict[str, object]:
+    """Auto-save manual Qr/Qz placements by refining under simulated group spots."""
+
+    try:
+        background_idx = int(current_background_index)
+    except Exception:
+        background_idx = 0
+
+    if display_background is None:
+        if callable(set_status_text):
+            set_status_text("No background image is loaded for automatic Qr/Qz placement.")
+        return {
+            "placed_count": 0,
+            "completed_group_count": 0,
+            "attempted_group_count": 0,
+            "skipped_group_count": 0,
+            "branch_pair_restraint_results": [],
+        }
+    if not callable(refine_preview_point):
+        if callable(set_status_text):
+            set_status_text("Automatic Qr/Qz placement unavailable: no peak refiner is bound.")
+        return {
+            "placed_count": 0,
+            "completed_group_count": 0,
+            "attempted_group_count": 0,
+            "skipped_group_count": 0,
+            "branch_pair_restraint_results": [],
+        }
+
+    try:
+        cache_data = get_cache_data(background_image=display_background)
+    except Exception:
+        cache_data = {}
+    if not isinstance(cache_data, Mapping):
+        cache_data = {}
+    cache_data = geometry_manual_cache_with_auto_refine_search_radius(
+        cache_data,
+        search_radius_px=auto_refine_search_radius_px,
+    )
+    normalized_auto_refine_radius = (
+        geometry_manual_normalize_auto_refine_search_radius_px(auto_refine_search_radius_px)
+        if auto_refine_search_radius_px is not None
+        else None
+    )
+
+    if bool(use_caked_space):
+        raw_grouped = cache_data.get("caked_qr_projection_grouped_candidates")
+        grouped_candidates = (
+            {
+                gui_controllers.normalize_geometry_q_group_key(group_key): [
+                    {**dict(entry), "q_group_key": group_key}
+                    for entry in (entries or ())
+                    if isinstance(entry, Mapping)
+                ]
+                for group_key, entries in raw_grouped.items()
+                if gui_controllers.normalize_geometry_q_group_key(group_key) is not None
+            }
+            if isinstance(raw_grouped, Mapping)
+            else {}
+        )
+    else:
+        grouped_candidates = geometry_manual_detector_picker_grouped_candidates_from_cache(
+            cache_data,
+            display_background=display_background,
+            profile_cache=profile_cache,
+        )
+
+    normalized_grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for raw_key, raw_entries in grouped_candidates.items():
+        group_key = gui_controllers.normalize_geometry_q_group_key(raw_key)
+        if group_key is None:
+            continue
+        normalized_entries: list[dict[str, object]] = []
+        for raw_entry in raw_entries or ():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            entry["q_group_key"] = group_key
+            if _geometry_manual_q_group_entry_is_000(entry, group_key=group_key):
+                continue
+            normalized_entries.append(entry)
+        if normalized_entries:
+            normalized_grouped[group_key] = normalized_entries
+
+    selected_entries = [
+        dict(entry)
+        for entry in (selected_q_group_entries or ())
+        if isinstance(entry, Mapping)
+    ]
+    label_by_key: dict[tuple[object, ...], str] = {}
+    ordered_keys: list[tuple[object, ...]] = []
+
+    def _append_group_key(value: object) -> None:
+        group_key = gui_controllers.normalize_geometry_q_group_key(value)
+        if group_key is None:
+            return
+        if group_key not in ordered_keys:
+            ordered_keys.append(group_key)
+
+    for raw_entry in selected_entries:
+        key = raw_entry.get("key", raw_entry.get("q_group_key"))
+        group_key = gui_controllers.normalize_geometry_q_group_key(key)
+        if group_key is None:
+            continue
+        if callable(format_q_group_line):
+            try:
+                label_by_key[group_key] = str(format_q_group_line(dict(raw_entry)))
+            except Exception:
+                label_by_key[group_key] = f"group={group_key}"
+        _append_group_key(group_key)
+    for raw_key in selected_q_group_keys or ():
+        _append_group_key(raw_key)
+    if not ordered_keys:
+        ordered_keys = list(normalized_grouped.keys())
+
+    ordered_keys = [key for key in ordered_keys if key in normalized_grouped]
+    if not ordered_keys:
+        if callable(set_status_text):
+            set_status_text(
+                "No active Qr/Qz groups are available for automatic placement. "
+                "Run a simulation update or update the listed Qr sets first."
+            )
+        return {
+            "placed_count": 0,
+            "completed_group_count": 0,
+            "attempted_group_count": 0,
+            "skipped_group_count": 0,
+            "branch_pair_restraint_results": [],
+        }
+
+    selected_key_set = set(ordered_keys)
+
+    def _entry_group_key(entry: Mapping[str, object] | None) -> tuple[object, ...] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        return gui_controllers.normalize_geometry_q_group_key(entry.get("q_group_key"))
+
+    initial_entries = [dict(entry) for entry in pairs_for_index(background_idx)]
+    working_entries = [
+        dict(entry)
+        for entry in initial_entries
+        if _entry_group_key(entry) not in selected_key_set
+    ]
+    session_state: dict[str, object] = {}
+
+    def _store_session(session: dict[str, object]) -> None:
+        nonlocal session_state
+        session_state = dict(session or {})
+
+    def _store_pairs(
+        _index: int,
+        entries: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        nonlocal working_entries
+        working_entries = [
+            dict(entry) for entry in (entries or ()) if isinstance(entry, Mapping)
+        ]
+        return list(working_entries)
+
+    def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    attempted_groups = 0
+    completed_groups = 0
+    skipped_groups = 0
+    placed_count = 0
+    skipped_points = 0
+    final_refined_geometry_peaks = 0
+    completed_keys: list[tuple[object, ...]] = []
+    branch_pair_results: list[dict[str, object]] = []
+    final_refine_parallel_worker_count = 1
+
+    def _auto_final_refine_worker_count(item_count: int) -> int:
+        if int(item_count) <= 1:
+            return 1
+        value = final_refine_parallel_workers
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"", "auto"}:
+                value = None
+            elif text in {"off", "false", "none", "disabled", "serial", "sequential"}:
+                return 1
+        if value is None:
+            try:
+                workers = int(default_reserved_cpu_worker_count())
+            except Exception:
+                workers = 1
+        else:
+            try:
+                workers = int(value)
+            except Exception:
+                workers = 1
+        return int(max(1, min(int(workers), int(item_count), MAX_AUTO_FINAL_REFINE_WORKERS)))
+
+    def _refine_sim_candidate(candidate: Mapping[str, object]) -> dict[str, object]:
+        refined_candidate = dict(candidate)
+        if callable(refine_sim_candidate_fn):
+            try:
+                candidate_update = refine_sim_candidate_fn(
+                    dict(refined_candidate),
+                    use_caked_space=bool(use_caked_space),
+                    cache_data=dict(cache_data),
+                    auto_refine_search_radius_px=normalized_auto_refine_radius,
+                )
+            except Exception:
+                candidate_update = None
+            if isinstance(candidate_update, Mapping):
+                refined_candidate.update(dict(candidate_update))
+        return refined_candidate
+
+    def _final_geometry_refinement_source_entry(
+        saved_entry: Mapping[str, object],
+        source_entries: Sequence[Mapping[str, object]],
+    ) -> dict[str, object] | None:
+        saved_source_key = candidate_source_key(dict(saved_entry))
+        for raw_source_entry in source_entries:
+            if not isinstance(raw_source_entry, Mapping):
+                continue
+            try:
+                source_key = candidate_source_key(dict(raw_source_entry))
+            except Exception:
+                source_key = None
+            if saved_source_key is not None and source_key == saved_source_key:
+                return dict(raw_source_entry)
+
+        saved_branch = _geometry_manual_q_group_physical_branch_slot(
+            saved_entry,
+            profile_cache=profile_cache,
+        )
+        if saved_branch in {0, 1}:
+            for raw_source_entry in source_entries:
+                if not isinstance(raw_source_entry, Mapping):
+                    continue
+                source_branch = _geometry_manual_q_group_physical_branch_slot(
+                    raw_source_entry,
+                    profile_cache=profile_cache,
+                )
+                if source_branch == saved_branch:
+                    return dict(raw_source_entry)
+        return None
+
+    def _merge_final_geometry_refinement(
+        base_entry: Mapping[str, object],
+        refined_entry: Mapping[str, object],
+    ) -> dict[str, object]:
+        merged = dict(base_entry)
+        for key, value in refined_entry.items():
+            key_text = str(key)
+            if (
+                key_text.startswith("refined_sim_")
+                or key_text.startswith("sim_refined_")
+                or key_text.startswith("sim_refinement_")
+            ):
+                merged[key_text] = value
+        return merged
+
+    def _final_refine_group_geometry_entries(
+        group_key: tuple[object, ...],
+        saved_entries: Sequence[Mapping[str, object]],
+        source_entries: Sequence[Mapping[str, object]],
+    ) -> tuple[list[dict[str, object]], int]:
+        nonlocal final_refine_parallel_worker_count
+        if not callable(refine_saved_pair_entry_fn):
+            return [dict(entry) for entry in saved_entries], 0
+
+        saved_items = [
+            dict(entry) for entry in saved_entries if isinstance(entry, Mapping)
+        ]
+
+        def _refine_one_saved_entry(
+            raw_saved_entry: Mapping[str, object],
+        ) -> tuple[dict[str, object], int]:
+            if not isinstance(raw_saved_entry, Mapping):
+                return {}, 0
+            saved_entry = dict(raw_saved_entry)
+            source_entry = _final_geometry_refinement_source_entry(
+                saved_entry,
+                source_entries,
+            )
+            try:
+                refined_entry = refine_saved_pair_entry_fn(
+                    dict(saved_entry),
+                    dict(source_entry) if isinstance(source_entry, dict) else None,
+                )
+            except Exception:
+                refined_entry = None
+            if isinstance(refined_entry, Mapping):
+                saved_entry = _merge_final_geometry_refinement(saved_entry, refined_entry)
+                return saved_entry, 1
+            return saved_entry, 0
+
+        worker_count = _auto_final_refine_worker_count(len(saved_items))
+        actual_worker_count = int(worker_count)
+        if worker_count > 1:
+            try:
+                with make_detached_thread_pool_executor(
+                    max_workers=int(worker_count),
+                    thread_name_prefix="ra-sim-auto-final-refine",
+                ) as executor:
+                    refined_results = list(executor.map(_refine_one_saved_entry, saved_items))
+            except Exception:
+                actual_worker_count = 1
+                refined_results = [_refine_one_saved_entry(entry) for entry in saved_items]
+        else:
+            refined_results = [_refine_one_saved_entry(entry) for entry in saved_items]
+        final_refine_parallel_worker_count = max(
+            int(final_refine_parallel_worker_count),
+            int(actual_worker_count),
+        )
+
+        refined_entries = [entry for entry, _count in refined_results if entry]
+        refined_count = sum(int(count) for _entry, count in refined_results)
+
+        nonlocal working_entries
+        working_entries = [
+            entry for entry in working_entries if _entry_group_key(entry) != group_key
+        ]
+        working_entries.extend(dict(entry) for entry in refined_entries)
+        return refined_entries, int(refined_count)
+
+    for group_key in ordered_keys:
+        raw_group_entries = normalized_grouped.get(group_key, [])
+        group_entries = _geometry_manual_collapse_q_group_representatives(
+            raw_group_entries,
+            profile_cache=profile_cache,
+        )
+        group_entries = [_refine_sim_candidate(entry) for entry in group_entries]
+        group_is_00l = any(
+            _geometry_manual_q_group_entry_is_00l(entry, group_key=group_key)
+            for entry in group_entries
+        )
+        if not group_is_00l:
+            branch0_entry, branch1_entry = _geometry_manual_q_group_required_branch_entries(
+                group_entries,
+                group_key=group_key,
+                profile_cache=profile_cache,
+            )
+            if branch0_entry is None or branch1_entry is None:
+                branch_pair_results.append(
+                    _geometry_manual_branch_pair_result_payload(
+                        group_key,
+                        {
+                            "applied": True,
+                            "accepted": False,
+                            "reason": "missing_required_branch_pair",
+                            "branch_pair_coordinate_frame": None,
+                        },
+                    )
+                )
+                attempted_groups += 1
+                skipped_groups += 1
+                continue
+        target_count = geometry_manual_group_target_count(group_key, group_entries)
+        if not group_entries or target_count <= 0:
+            skipped_groups += 1
+            continue
+
+        attempted_groups += 1
+        q_label = label_by_key.get(group_key, f"group={group_key}")
+        manual_run_id = geometry_manual_start_run_id()
+        session_state = {
+            "manual_geometry_run_id": manual_run_id,
+            "manual_trace_version": MANUAL_GEOMETRY_TRACE_VERSION,
+            "background_index": int(background_idx),
+            "group_key": group_key,
+            "group_entries": [dict(entry) for entry in group_entries],
+            "pending_entries": [],
+            "target_count": int(target_count),
+            "base_entries": [dict(entry) for entry in working_entries],
+            "cache_signature": cache_data.get("signature"),
+            "q_label": q_label,
+            "zoom_active": False,
+            "zoom_center": None,
+            "saved_xlim": None,
+            "saved_ylim": None,
+            "preview_last_t": 0.0,
+            "preview_last_xy": None,
+        }
+
+        for raw_candidate in group_entries:
+            if not geometry_manual_pick_session_active(
+                session_state,
+                current_background_index=background_idx,
+            ):
+                break
+            candidate = dict(raw_candidate)
+            seed_point = _geometry_manual_auto_refined_seed_point(
+                candidate,
+                use_caked_space=bool(use_caked_space),
+            )
+            if seed_point is None:
+                skipped_points += 1
+                continue
+
+            session_state["tagged_candidate_key"] = candidate_source_key(candidate)
+            session_state["tagged_candidate"] = dict(candidate)
+            handled, next_session = geometry_manual_place_selection_at(
+                float(seed_point[0]),
+                float(seed_point[1]),
+                pick_session=session_state,
+                current_background_index=background_idx,
+                display_background=display_background,
+                get_cache_data=lambda **_kwargs: dict(cache_data),
+                refine_preview_point=refine_preview_point,
+                set_pairs_for_index_fn=_store_pairs,
+                set_pick_session_fn=_store_session,
+                clear_preview_artists_fn=_noop,
+                restore_view_fn=_noop,
+                render_current_pairs_fn=_noop,
+                update_button_label_fn=_noop,
+                set_status_text=None,
+                push_undo_state_fn=None,
+                use_caked_space=bool(use_caked_space),
+                caked_angles_to_background_display_coords=(
+                    caked_angles_to_background_display_coords
+                ),
+                background_display_to_native_detector_coords=(
+                    background_display_to_native_detector_coords
+                ),
+                native_detector_coords_to_caked_display_coords=(
+                    native_detector_coords_to_caked_display_coords
+                ),
+                radial_axis=radial_axis,
+                azimuth_axis=azimuth_axis,
+                caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+                caked_image_index_to_axis_fn=caked_image_index_to_axis_fn,
+                candidate_source_key=candidate_source_key,
+                nearest_candidate_to_point_fn=nearest_candidate_to_point_fn,
+                position_error_px=position_error_px,
+                position_sigma_px=position_sigma_px,
+                refine_saved_pair_entry_fn=refine_saved_pair_entry_fn,
+                profile_cache=profile_cache,
+            )
+            if not handled:
+                skipped_points += 1
+                continue
+            session_state = dict(next_session) if isinstance(next_session, dict) else {}
+
+        saved_for_group = [
+            entry for entry in working_entries if _entry_group_key(entry) == group_key
+        ]
+        group_complete = bool(
+            saved_for_group
+            and not geometry_manual_pick_session_active(
+                session_state,
+                current_background_index=background_idx,
+            )
+        )
+        if group_complete:
+            if group_is_00l:
+                branch_pair_results.append(
+                    _geometry_manual_branch_pair_result_payload(
+                        group_key,
+                        {
+                            "applied": False,
+                            "accepted": True,
+                            "reason": "00l_branch_collapsed",
+                            "branch_pair_coordinate_frame": None,
+                        },
+                    )
+                )
+            else:
+                branch0_entry, branch1_entry = _geometry_manual_q_group_required_branch_entries(
+                    saved_for_group,
+                    group_key=group_key,
+                    profile_cache=profile_cache,
+                )
+                branch_pair_result = _score_qr_branch_pair_length_restraint(
+                    branch0_entry,
+                    branch1_entry,
+                    group_key=group_key,
+                    use_caked_space=bool(use_caked_space),
+                    auto_refine_search_radius_px=normalized_auto_refine_radius,
+                    branch_pair_abs_tol_px=branch_pair_abs_tol_px,
+                    branch_pair_rel_tol=branch_pair_rel_tol,
+                    branch_pair_sigma_px=branch_pair_sigma_px,
+                    profile_cache=profile_cache,
+                )
+                branch_pair_results.append(
+                    _geometry_manual_branch_pair_result_payload(group_key, branch_pair_result)
+                )
+                if bool(branch_pair_reject) and not bool(
+                    branch_pair_result.get("accepted", False)
+                ):
+                    working_entries = [
+                        entry for entry in working_entries if _entry_group_key(entry) != group_key
+                    ]
+                    group_complete = False
+
+        if group_complete:
+            saved_for_group, refined_count = _final_refine_group_geometry_entries(
+                group_key,
+                saved_for_group,
+                group_entries,
+            )
+            final_refined_geometry_peaks += int(refined_count)
+            completed_groups += 1
+            placed_count += len(saved_for_group)
+            completed_keys.append(group_key)
+        else:
+            working_entries = [
+                entry for entry in working_entries if _entry_group_key(entry) != group_key
+            ]
+            skipped_groups += 1
+            session_state = {}
+
+    if placed_count <= 0:
+        set_pick_session_fn({})
+        if callable(set_status_text):
+            set_status_text(
+                "Automatic Qr/Qz placement did not save any peaks from the current background."
+            )
+        return {
+            "placed_count": 0,
+            "completed_group_count": int(completed_groups),
+            "attempted_group_count": int(attempted_groups),
+            "skipped_group_count": int(skipped_groups),
+            "skipped_point_count": int(skipped_points),
+            "completed_q_group_keys": [],
+            "branch_pair_restraint_results": list(branch_pair_results),
+            "final_refined_geometry_peak_count": int(final_refined_geometry_peaks),
+            "final_refine_parallel_worker_count": int(final_refine_parallel_worker_count),
+        }
+
+    if callable(push_undo_state_fn):
+        push_undo_state_fn()
+    set_pick_session_fn({})
+    set_pairs_for_index_fn(background_idx, working_entries)
+    clear_preview_artists_fn(redraw=False)
+    if bool(use_caked_space):
+        restore_view_fn(redraw=False)
+    render_current_pairs_fn(update_status=False)
+    update_button_label_fn()
+    if callable(set_status_text):
+        set_status_text(
+            f"Auto-added {placed_count} manual Qr/Qz peak placements across "
+            f"{completed_groups}/{attempted_groups} groups on background "
+            f"{background_idx + 1}"
+            + (f" ({skipped_groups} groups skipped)." if skipped_groups else ".")
+        )
+    return {
+        "placed_count": int(placed_count),
+        "completed_group_count": int(completed_groups),
+        "attempted_group_count": int(attempted_groups),
+        "skipped_group_count": int(skipped_groups),
+        "skipped_point_count": int(skipped_points),
+        "completed_q_group_keys": [tuple(key) for key in completed_keys],
+        "branch_pair_restraint_results": list(branch_pair_results),
+        "final_refined_geometry_peak_count": int(final_refined_geometry_peaks),
+        "final_refine_parallel_worker_count": int(final_refine_parallel_worker_count),
+    }
 
 
 def cancel_geometry_manual_pick_session(
@@ -15135,6 +16745,11 @@ def apply_geometry_manual_pairs_rows(
     render_current_pairs: Callable[..., None],
     update_button_label: Callable[[], None],
     refresh_status: Callable[[], None],
+    backfill_imported_pairs_for_background: Callable[
+        [int, Sequence[dict[str, object]]],
+        Sequence[dict[str, object]],
+    ]
+    | None = None,
     replace_existing: bool = True,
 ) -> tuple[int, int, list[str]]:
     """Import saved manual geometry pairs onto the currently loaded backgrounds."""
@@ -15195,6 +16810,24 @@ def apply_geometry_manual_pairs_rows(
             )
             if restored is not None
         ]
+        if imported_entries and callable(backfill_imported_pairs_for_background):
+            try:
+                backfilled_entries = backfill_imported_pairs_for_background(
+                    int(target_index),
+                    [dict(entry) for entry in imported_entries],
+                )
+            except Exception as exc:
+                warnings.append(
+                    "Imported placements for "
+                    f"'{raw_row.get('background_name', 'unknown background')}' "
+                    f"without detector-to-caked backfill: {exc}"
+                )
+            else:
+                imported_entries = [
+                    dict(entry)
+                    for entry in backfilled_entries or ()
+                    if isinstance(entry, Mapping)
+                ]
         imported_map[int(target_index)] = imported_entries
         if imported_entries:
             matched_backgrounds.add(int(target_index))
@@ -15385,3 +17018,248 @@ def import_geometry_manual_pairs(
     if callable(set_status_text):
         set_status_text(message)
     return message
+
+
+_geometry_manual_toggle_selection_at_base = geometry_manual_toggle_selection_at
+
+
+def _geometry_manual_click_remove_runtime_arg(
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    name: str,
+) -> object | None:
+    if name in kwargs:
+        return kwargs.get(name)
+    for candidate in args:
+        if name == "manual_state" and hasattr(candidate, "pairs_by_background"):
+            return candidate
+        if name == "projection_callbacks" and hasattr(candidate, "entry_display_coords"):
+            return candidate
+    return None
+
+
+def _geometry_manual_click_remove_current_background_index(
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    pairs_by_background: Mapping[object, object],
+) -> int:
+    for key in ("current_background_index", "background_index"):
+        raw_value = kwargs.get(key)
+        raw_value = _resolve_runtime_value(raw_value)
+        try:
+            return int(raw_value)
+        except Exception:
+            pass
+    keys = list(pairs_by_background.keys())
+    if len(keys) == 1:
+        try:
+            return int(keys[0])
+        except Exception:
+            pass
+    return 0
+
+
+def _geometry_manual_click_remove_point(
+    entry: Mapping[str, object],
+    keys: Sequence[tuple[str, str]],
+) -> tuple[float, float] | None:
+    for x_key, y_key in keys:
+        try:
+            x_val = float(entry.get(x_key, np.nan))
+            y_val = float(entry.get(y_key, np.nan))
+        except Exception:
+            continue
+        if np.isfinite(x_val) and np.isfinite(y_val):
+            return float(x_val), float(y_val)
+    return None
+
+
+def _geometry_manual_click_remove_entry_points(
+    entry: Mapping[str, object],
+    projection_callbacks: object | None,
+) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    entry_display_coords = getattr(projection_callbacks, "entry_display_coords", None)
+    if callable(entry_display_coords):
+        try:
+            display_point = entry_display_coords(dict(entry))
+        except Exception:
+            display_point = None
+        if isinstance(display_point, (tuple, list)) and len(display_point) >= 2:
+            try:
+                x_val = float(display_point[0])
+                y_val = float(display_point[1])
+            except Exception:
+                x_val = y_val = float("nan")
+            if np.isfinite(x_val) and np.isfinite(y_val):
+                points.append((float(x_val), float(y_val)))
+
+    for keys in (
+        (
+            ("refined_sim_x", "refined_sim_y"),
+            ("sim_col", "sim_row"),
+            ("sim_col_local", "sim_row_local"),
+            ("display_col", "display_row"),
+            ("x", "y"),
+        ),
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("two_theta_deg", "phi_deg"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+            ("background_two_theta_deg", "background_phi_deg"),
+        ),
+    ):
+        point = _geometry_manual_click_remove_point(entry, keys)
+        if point is not None and point not in points:
+            points.append(point)
+    return points
+
+
+def _geometry_manual_click_remove_hit_q_group_key(
+    entries: Sequence[Mapping[str, object]],
+    col: float,
+    row: float,
+    projection_callbacks: object | None,
+    *,
+    hit_radius: float = 12.0,
+) -> tuple[object, ...] | None:
+    best_key: tuple[object, ...] | None = None
+    best_distance = float("inf")
+    for entry in entries:
+        raw_key = entry.get("q_group_key")
+        if isinstance(raw_key, list):
+            q_group_key = tuple(raw_key)
+        elif isinstance(raw_key, tuple):
+            q_group_key = raw_key
+        else:
+            continue
+        for point_x, point_y in _geometry_manual_click_remove_entry_points(
+            entry,
+            projection_callbacks,
+        ):
+            distance = float(np.hypot(float(point_x) - float(col), float(point_y) - float(row)))
+            if distance < best_distance:
+                best_distance = distance
+                best_key = q_group_key
+    if best_key is not None and best_distance <= float(hit_radius):
+        return best_key
+    return None
+
+
+def geometry_manual_remove_q_group_at(
+    col: float,
+    row: float,
+    *args: object,
+    **kwargs: object,
+) -> bool:
+    manual_state = _geometry_manual_click_remove_runtime_arg(
+        args,
+        kwargs,
+        "manual_state",
+    )
+    if manual_state is None:
+        return False
+    pairs_by_background = getattr(manual_state, "pairs_by_background", None)
+    if not isinstance(pairs_by_background, dict):
+        return False
+    has_explicit_background = any(
+        key in kwargs for key in ("current_background_index", "background_index")
+    )
+    background_index = _geometry_manual_click_remove_current_background_index(
+        args,
+        kwargs,
+        pairs_by_background,
+    )
+    entries = list(pairs_by_background.get(int(background_index), []))
+    projection_callbacks = _geometry_manual_click_remove_runtime_arg(
+        args,
+        kwargs,
+        "projection_callbacks",
+    )
+    q_group_key = _geometry_manual_click_remove_hit_q_group_key(
+        entries,
+        float(col),
+        float(row),
+        projection_callbacks,
+    )
+    if q_group_key is None and not has_explicit_background:
+        for raw_background_index, raw_entries in pairs_by_background.items():
+            try:
+                candidate_background_index = int(raw_background_index)
+            except Exception:
+                continue
+            candidate_entries = list(raw_entries or [])
+            candidate_key = _geometry_manual_click_remove_hit_q_group_key(
+                candidate_entries,
+                float(col),
+                float(row),
+                projection_callbacks,
+            )
+            if candidate_key is None:
+                continue
+            background_index = candidate_background_index
+            entries = candidate_entries
+            q_group_key = candidate_key
+            break
+    if q_group_key is None:
+        return False
+
+    kept_entries = []
+    for entry in entries:
+        raw_key = entry.get("q_group_key")
+        entry_key = tuple(raw_key) if isinstance(raw_key, (list, tuple)) else None
+        if entry_key != tuple(q_group_key):
+            kept_entries.append(dict(entry))
+    removed_count = len(entries) - len(kept_entries)
+    if removed_count <= 0:
+        return False
+    if kept_entries:
+        pairs_by_background[int(background_index)] = kept_entries
+    else:
+        pairs_by_background.pop(int(background_index), None)
+
+    for callback_name in (
+        "cancel_pick_session",
+        "invalidate_pick_cache",
+        "clear_geometry_fit_undo_stack",
+        "render_current_pairs",
+        "refresh_status",
+    ):
+        callback = kwargs.get(callback_name)
+        if not callable(callback):
+            continue
+        try:
+            callback()
+        except TypeError:
+            try:
+                callback(update_status=False)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    set_status_text = kwargs.get("set_status_text")
+    if callable(set_status_text):
+        try:
+            set_status_text(
+                f"Removed {removed_count} placed Qr-set peak(s) from current background."
+            )
+        except Exception:
+            pass
+    return True
+
+
+def geometry_manual_toggle_selection_at(
+    *args: object,
+    remove_q_group_only: bool = False,
+    **kwargs: object,
+) -> object:
+    if bool(remove_q_group_only):
+        try:
+            col = float(args[0])
+            row = float(args[1])
+        except Exception:
+            return False
+        return geometry_manual_remove_q_group_at(col, row, *args[2:], **kwargs)
+    return _geometry_manual_toggle_selection_at_base(*args, **kwargs)

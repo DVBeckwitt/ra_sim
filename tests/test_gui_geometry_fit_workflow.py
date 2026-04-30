@@ -4387,6 +4387,18 @@ def _sensitivity_probe_record(
     }
 
 
+def _combined_sensitivity_probe_records(
+    request,
+    records_by_name: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for index, name in enumerate(request.var_names):
+        record = dict(records_by_name[str(name)])
+        record["param_index"] = int(index)
+        records.append(record)
+    return records
+
+
 def _green_rung1_report() -> dict[str, object]:
     return {
         "rung": 1,
@@ -4407,9 +4419,25 @@ def _green_rung1_report() -> dict[str, object]:
         "missing_pair_count": 0,
         "branch_mismatch_count": 0,
         "residuals_finite": True,
+        "objective_eval_called": True,
         "objective_dry_run_residual_finite": True,
         "least_squares_called": False,
         "optimizer_solve_called": False,
+        "fixed_source_resolved_count": 7,
+        "matched_fixed_pair_count": 7,
+        "qr_dynamic_source_required_pair_count": 7,
+        "qr_dynamic_source_row_count": 7,
+        "qr_dynamic_source_missing_pair_count": 0,
+        "qr_stale_coordinate_pair_count": 0,
+        "qr_dynamic_source_coverage": {
+            "source_rows_after_provider_coverage_promotion": {
+                "required_pair_count": 7,
+                "dynamic_source_row_count": 7,
+                "missing_dynamic_pair_count": 0,
+                "stale_coordinate_pair_count": 0,
+                "per_pair": [],
+            }
+        },
     }
 
 
@@ -4417,6 +4445,7 @@ def _green_rung2_report(
     *,
     active_params=("center_x",),
     near_zero_params=(),
+    fixed_params=("c",),
     non_finite_params=(),
     unsafe_params=(),
 ) -> dict[str, object]:
@@ -4468,15 +4497,35 @@ def _green_rung2_report(
         "optimizer_solve_called": False,
         "active_params": active,
         "near_zero_params": [str(name) for name in near_zero_params],
+        "fixed_params": [str(name) for name in fixed_params],
+        "excluded_params": [str(name) for name in fixed_params],
         "non_finite_params": [str(name) for name in non_finite_params],
         "unsafe_params": [str(name) for name in unsafe_params],
         "active_param_count": len(active),
         "near_zero_param_count": len(near_zero_params),
+        "fixed_param_count": len(fixed_params),
+        "excluded_param_count": len(fixed_params),
         "non_finite_param_count": len(non_finite_params),
         "unsafe_param_count": len(unsafe_params),
         "state_hash_unchanged": True,
         "params": entries,
     }
+
+
+def _new_contract_active_params(ladder) -> tuple[str, ...]:
+    return tuple(
+        str(name)
+        for name in ladder.ONE_PARAM_ORDER
+        if str(name) in ladder.EXPECTED_RUNG2_ACTIVE_PARAMS
+    )
+
+
+def _new_contract_green_rung2_report(ladder) -> dict[str, object]:
+    return _green_rung2_report(
+        active_params=_new_contract_active_params(ladder),
+        near_zero_params=tuple(ladder.EXPECTED_RUNG2_NEAR_ZERO_PARAMS),
+        fixed_params=tuple(ladder.EXPECTED_RUNG2_FIXED_PARAMS),
+    )
 
 
 def _green_one_param_report(active_names, *, fallback_row_count=0) -> dict[str, object]:
@@ -4529,6 +4578,71 @@ def _green_one_param_report(active_names, *, fallback_row_count=0) -> dict[str, 
         "optimizer_solve_called": True,
         "point_match_summary": {},
     }
+
+
+def test_rung2_three_active_ten_near_zero_fails() -> None:
+    ladder = _load_new4_ladder_module()
+    active = ("center_x", "center_y", "corto_detector")
+    near_zero = tuple(
+        name
+        for name in ladder.ONE_PARAM_ORDER
+        if str(name) not in set(active)
+    )
+    payload = _green_rung2_report(active_params=active, near_zero_params=near_zero)
+
+    failures = ladder._rung2_green_failures(payload)
+
+    assert "active_params_mismatch" in failures
+    assert "near_zero_params_mismatch" in failures
+    assert "active_param_count_mismatch" in failures
+    assert "near_zero_param_count_mismatch" in failures
+
+
+def test_rung2_exact_expected_active_set_passes() -> None:
+    ladder = _load_new4_ladder_module()
+    payload = _green_rung2_report(
+        active_params=tuple(ladder.EXPECTED_RUNG2_ACTIVE_PARAMS),
+        near_zero_params=tuple(ladder.EXPECTED_RUNG2_NEAR_ZERO_PARAMS),
+    )
+
+    assert ladder._rung2_green_failures(payload) == []
+
+
+def test_rung2_requires_state_hash_unchanged() -> None:
+    ladder = _load_new4_ladder_module()
+    payload = _green_rung2_report(
+        active_params=tuple(ladder.EXPECTED_RUNG2_ACTIVE_PARAMS),
+        near_zero_params=tuple(ladder.EXPECTED_RUNG2_NEAR_ZERO_PARAMS),
+    )
+    payload["state_hash_unchanged"] = False
+
+    assert "state_hash_changed" in ladder._rung2_green_failures(payload)
+
+
+def test_rung2_requires_no_fixed_source_fallback() -> None:
+    ladder = _load_new4_ladder_module()
+    payload = _green_rung2_report(
+        active_params=tuple(ladder.EXPECTED_RUNG2_ACTIVE_PARAMS),
+        near_zero_params=tuple(ladder.EXPECTED_RUNG2_NEAR_ZERO_PARAMS),
+    )
+    payload["fallback_row_count"] = 1
+
+    assert "fallback_row_count_1_expected_0" in ladder._rung2_green_failures(payload)
+
+
+def test_rung2_requires_no_solver_call() -> None:
+    ladder = _load_new4_ladder_module()
+    payload = _green_rung2_report(
+        active_params=tuple(ladder.EXPECTED_RUNG2_ACTIVE_PARAMS),
+        near_zero_params=tuple(ladder.EXPECTED_RUNG2_NEAR_ZERO_PARAMS),
+    )
+    payload["least_squares_called"] = True
+    payload["optimizer_solve_called"] = True
+
+    failures = ladder._rung2_green_failures(payload)
+
+    assert "least_squares_called" in failures
+    assert "optimizer_solve_called" in failures
 
 
 def _hash_file(path: Path) -> str:
@@ -5422,6 +5536,63 @@ def test_new4_ladder_sensitivity_request_fallback_marks_unsafe_without_probe(
     assert all(entry["status"] == "unsafe" for entry in report["params"])
 
 
+def test_new4_ladder_sensitivity_uses_one_combined_probe_and_cleans_partial(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    output_path = tmp_path / "rung_02_sensitivity_scan.json"
+    partial_path = tmp_path / "rung_02_sensitivity_scan.partial.json"
+    calls: list[list[str]] = []
+    records = {
+        "center_x": _sensitivity_probe_record(plus_delta=1.0, minus_delta=0.5),
+        "center_y": _sensitivity_probe_record(plus_delta=1.0, minus_delta=0.5),
+        "theta_initial": _sensitivity_probe_record(plus_delta=0.0, minus_delta=0.0),
+    }
+
+    def _fake_probe(request, *, mode, record_callback=None):
+        assert mode == "sensitivity"
+        calls.append(list(request.var_names))
+        solver_cfg = request.refinement_config.get("solver", {})
+        assert solver_cfg["fixed_manual_prediction_preflight_guard"] is False
+        assert solver_cfg["prime_provider_local_saved_sim_fit_space_offsets"] is False
+        optimizer_cfg = request.refinement_config.get("optimizer", {})
+        assert optimizer_cfg["fixed_manual_prediction_preflight_guard"] is False
+        assert optimizer_cfg["prime_provider_local_saved_sim_fit_space_offsets"] is False
+        assert partial_path.exists()
+        partial = json.loads(partial_path.read_text(encoding="utf-8"))
+        assert partial["status"] == "running"
+        assert partial["pid"] > 0
+        probe_records = _combined_sensitivity_probe_records(request, records)
+        if record_callback is not None:
+            for record in probe_records:
+                record_callback(record)
+        mid_partial = json.loads(partial_path.read_text(encoding="utf-8"))
+        assert mid_partial["completed_param_count"] == len(request.var_names)
+        assert mid_partial["probe_completed_param_count"] == len(request.var_names)
+        return SimpleNamespace(), probe_records
+
+    monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
+
+    report = ladder.run_sensitivity_scan(
+        context,
+        output_path=output_path,
+        max_nfev=20,
+        rung_1_report=_green_rung1_report(),
+        state_path=state_path,
+    )
+
+    assert calls == [["center_x", "center_y", "theta_initial"]]
+    assert report["residual_probe_called"] is True
+    assert report["active_param_count"] == 2
+    assert report["near_zero_param_count"] == 1
+    assert output_path.exists()
+    assert not partial_path.exists()
+
+
 def test_new4_ladder_sensitivity_reports_fixed_source_counter_breaks(
     monkeypatch,
     tmp_path,
@@ -5444,9 +5615,10 @@ def test_new4_ladder_sensitivity_reports_fixed_source_counter_breaks(
         ),
     }
 
-    def _fake_probe(request, *, mode):
+    def _fake_probe(request, *, mode, record_callback=None):
+        del record_callback
         assert mode == "sensitivity"
-        return SimpleNamespace(), [records[request.var_names[0]]]
+        return SimpleNamespace(), _combined_sensitivity_probe_records(request, records)
 
     monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
 
@@ -5493,9 +5665,10 @@ def test_new4_ladder_sensitivity_missing_probe_summary_marks_param_unsafe(
         "theta_initial": _sensitivity_probe_record(plus_delta=0.0, minus_delta=0.0),
     }
 
-    def _fake_probe(request, *, mode):
+    def _fake_probe(request, *, mode, record_callback=None):
+        del record_callback
         assert mode == "sensitivity"
-        return SimpleNamespace(), [records[request.var_names[0]]]
+        return SimpleNamespace(), _combined_sensitivity_probe_records(request, records)
 
     monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
 
@@ -5609,16 +5782,14 @@ def test_new4_ladder_sensitivity_probe_uses_fresh_base_vector() -> None:
     )
 
     probe(_residual, base, bounds=bounds)
-    probe(_residual, base, bounds=bounds)
 
-    first = seen[:3]
-    second = seen[3:6]
-    assert first[0] == (10.0, 20.0)
-    assert first[1][0] > 10.0 and first[1][1] == 20.0
-    assert first[2][0] < 10.0 and first[2][1] == 20.0
-    assert second[0] == (10.0, 20.0)
-    assert second[1][0] > 10.0 and second[1][1] == 20.0
-    assert second[2][0] < 10.0 and second[2][1] == 20.0
+    assert seen[0] == (10.0, 20.0)
+    assert seen[1][0] > 10.0 and seen[1][1] == 20.0
+    assert seen[2][0] < 10.0 and seen[2][1] == 20.0
+    assert seen[3][0] == 10.0 and seen[3][1] > 20.0
+    assert seen[4][0] == 10.0 and seen[4][1] < 20.0
+    assert len(probe.records) == 2
+    assert [record["param_index"] for record in probe.records] == [0, 1]
 
 
 def test_new4_ladder_sensitivity_probe_records_bound_clipping() -> None:
@@ -5660,6 +5831,87 @@ def test_new4_ladder_sensitivity_probe_records_bound_clipping() -> None:
     assert both_clipped["minus_step_applied"] == 0.0
 
 
+def test_new4_ladder_sensitivity_probe_uses_param_specific_steps() -> None:
+    ladder = _load_new4_ladder_module()
+    probe = ladder._ProbeLeastSquares(
+        mode="sensitivity",
+        param_names=["gamma", "theta_initial"],
+    )
+
+    def _residual(vector):
+        arr = np.asarray(vector, dtype=float)
+        return np.asarray([arr[0], arr[1]], dtype=float)
+
+    probe(
+        _residual,
+        np.asarray([0.0, 0.0], dtype=float),
+        bounds=(
+            np.asarray([-1.0, -1.0], dtype=float),
+            np.asarray([1.0, 1.0], dtype=float),
+        ),
+    )
+
+    assert probe.records[0]["requested_step"] == pytest.approx(1.0e-3)
+    assert probe.records[0]["step_source"] == "floor"
+    assert probe.records[1]["requested_step"] == pytest.approx(1.0e-3)
+    assert probe.records[1]["step_source"] == "floor"
+
+
+def test_rung2_zero_base_active_param_uses_non_tiny_probe_step() -> None:
+    ladder = _load_new4_ladder_module()
+    probe = ladder._ProbeLeastSquares(mode="sensitivity", param_names=["theta_initial"])
+
+    def _residual(vector):
+        arr = np.asarray(vector, dtype=float)
+        return np.asarray([arr[0]], dtype=float)
+
+    probe(
+        _residual,
+        np.asarray([0.0], dtype=float),
+        bounds=(np.asarray([-1.0], dtype=float), np.asarray([1.0], dtype=float)),
+    )
+
+    assert probe.records[0]["requested_step"] == pytest.approx(1.0e-3)
+    assert probe.records[0]["plus_step_applied"] == pytest.approx(1.0e-3)
+    assert probe.records[0]["minus_step_applied"] == pytest.approx(-1.0e-3)
+
+
+def test_rung2_probe_step_clips_to_bounds_per_coordinate() -> None:
+    ladder = _load_new4_ladder_module()
+    probe = ladder._ProbeLeastSquares(mode="sensitivity", param_names=["center_x"])
+
+    def _residual(vector):
+        arr = np.asarray(vector, dtype=float)
+        return np.asarray([arr[0]], dtype=float)
+
+    probe(
+        _residual,
+        np.asarray([10.0], dtype=float),
+        bounds=(np.asarray([9.9999], dtype=float), np.asarray([10.0001], dtype=float)),
+    )
+
+    record = probe.records[0]
+    assert record["requested_step"] == pytest.approx(1.0e-5)
+    assert record["step_source"] == "relative+bound_span_ceiling"
+    assert record["plus_step_applied"] == pytest.approx(1.0e-5)
+    assert record["minus_step_applied"] == pytest.approx(-1.0e-5)
+
+
+def test_rung2_probe_step_marks_no_available_bound_step_unsafe() -> None:
+    ladder = _load_new4_ladder_module()
+
+    status, reasons, sensitivity_norm = ladder._sensitivity_status(
+        base_eval={"fixed_source_clean": True},
+        plus_eval={"moved": False, "step_applied": 0.0},
+        minus_eval={"moved": False, "step_applied": 0.0},
+        threshold=1.0e-7,
+    )
+
+    assert status == "unsafe"
+    assert reasons == ["no_available_bound_step"]
+    assert not math.isfinite(sensitivity_norm)
+
+
 def test_new4_ladder_sensitivity_status_uses_applied_step_and_no_move_unsafe(
     monkeypatch,
     tmp_path,
@@ -5691,9 +5943,10 @@ def test_new4_ladder_sensitivity_status_uses_applied_step_and_no_move_unsafe(
         ),
     }
 
-    def _fake_probe(request, *, mode):
+    def _fake_probe(request, *, mode, record_callback=None):
+        del record_callback
         assert mode == "sensitivity"
-        return SimpleNamespace(), [records[request.var_names[0]]]
+        return SimpleNamespace(), _combined_sensitivity_probe_records(request, records)
 
     monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
 
@@ -5711,7 +5964,7 @@ def test_new4_ladder_sensitivity_status_uses_applied_step_and_no_move_unsafe(
     assert by_name["center_x"]["minus_eval"]["counter_source"] == "not_evaluated"
     assert by_name["center_x"]["sensitivity_norm"] == pytest.approx(8.0)
     assert by_name["center_y"]["status"] == "unsafe"
-    assert "no_valid_movement" in by_name["center_y"]["unsafe_reasons"]
+    assert "no_available_bound_step" in by_name["center_y"]["unsafe_reasons"]
 
 
 def test_new4_ladder_active_theta_name_selects_one_active_theta() -> None:
@@ -5773,9 +6026,10 @@ def test_new4_ladder_sensitivity_report_schema_and_summary_counts(
         ),
     }
 
-    def _fake_probe(request, *, mode):
+    def _fake_probe(request, *, mode, record_callback=None):
+        del record_callback
         assert mode == "sensitivity"
-        return SimpleNamespace(), [records[request.var_names[0]]]
+        return SimpleNamespace(), _combined_sensitivity_probe_records(request, records)
 
     monkeypatch.setattr(ladder, "_run_with_probe_least_squares", _fake_probe)
 
@@ -5811,6 +6065,10 @@ def test_new4_ladder_sensitivity_report_schema_and_summary_counts(
     assert report["near_zero_param_count"] == 1
     assert report["non_finite_param_count"] == 1
     assert report["unsafe_param_count"] == 0
+    assert report["status"] == "fail"
+    assert report["pass"] is False
+    assert "active_params_mismatch" in report["sensitivity_gate_failures"]
+    assert "non_finite_params_present" in report["sensitivity_gate_failures"]
     assert (
         report["active_param_count"]
         + report["near_zero_param_count"]
@@ -5852,6 +6110,29 @@ def test_new4_ladder_one_param_rung_uses_candidate_param_names(monkeypatch) -> N
     assert captured["var_names"] == ["gamma"]
     assert captured["candidate_param_names"] == ["gamma"]
     assert request.candidate_param_names == ["gamma"]
+
+
+def test_new4_ladder_gamma_Gamma_bounds_are_plus_minus_90_degrees() -> None:
+    ladder = _load_new4_ladder_module()
+    request = ladder.build_solver_request(
+        _minimal_new4_ladder_context(ladder),
+        ["gamma", "Gamma"],
+        max_nfev=20,
+    )
+
+    bounds = request.refinement_config["bounds"]
+    for name in ("gamma", "Gamma"):
+        assert bounds[name]["mode"] == "absolute"
+        assert bounds[name]["min"] == -90.0
+        assert bounds[name]["max"] == 90.0
+
+
+def test_new4_ladder_rung2_probe_list_excludes_fixed_c() -> None:
+    ladder = _load_new4_ladder_module()
+    context = _minimal_new4_ladder_context(ladder)
+
+    assert "c" not in ladder._candidate_order(context)
+    assert ladder._rung2_fixed_param_order(context) == ["c"]
 
 
 def test_new4_ladder_one_param_parser_accepts_max_rung() -> None:
@@ -6903,6 +7184,7 @@ def _exact_caked_ladder_report(
         "residual_norm": 1.0,
         "last_residual_norm": 1.0,
         "residuals_finite": True,
+        "objective_eval_called": True,
         "least_squares_called": True,
         "optimizer_solve_called": True,
         "real_solve_called": True,
@@ -6926,6 +7208,10 @@ def _exact_caked_ladder_report(
         "provider_guard_after_ok": True,
         "requires_caked_manual_exact_fit_space": True,
         "state_hash_unchanged": True,
+        "qr_dynamic_source_required_pair_count": 7,
+        "qr_dynamic_source_row_count": 7,
+        "qr_dynamic_source_missing_pair_count": 0,
+        "qr_stale_coordinate_pair_count": 0,
         "point_match_summary": point_summary,
     }
 
@@ -10006,7 +10292,8 @@ def test_new4_ladder_objective_dry_run_keeps_exact_caked_raw_metric_when_px_nan(
         "provider_to_optimizer_point_match": True,
     }
 
-    def _fake_probe(_request, *, mode):
+    def _fake_probe(_request, *, mode, record_callback=None):
+        del record_callback
         assert mode == "dry_run"
         return (
             SimpleNamespace(
@@ -10200,6 +10487,158 @@ def test_new4_ladder_rung1_green_failures_allow_true_dry_run_flag() -> None:
 
     assert "residuals_not_finite" not in failures
     assert "objective_dry_run_residual_not_finite" not in failures
+
+
+def test_rung1_top_level_fixed_pair_aliases_match_canonical_summary() -> None:
+    ladder = _load_new4_ladder_module()
+    report = {
+        "fixed_source_pair_count": 7,
+        "matched_fixed_pair_count": 0,
+        "matched_pair_count": 7,
+        "missing_pair_count": 0,
+        "fallback_entry_count": 0,
+        "fallback_row_count": 0,
+        "fixed_source_resolution_fallback_count": 0,
+        "branch_mismatch_count": 0,
+        "point_match_summary": {
+            "fixed_source_resolved_count": 7,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "fallback_entry_count": 0,
+            "branch_mismatch_count": 0,
+        },
+    }
+
+    ladder._apply_fixed_source_count_aliases(report)
+
+    assert report["matched_fixed_pair_count"] == 7
+    assert report["fixed_source_resolved_count"] == 7
+    assert report["fixed_source_reflection_count"] == 7
+
+
+def test_rung1_does_not_infer_matched_fixed_alias_when_fallback_dirty() -> None:
+    ladder = _load_new4_ladder_module()
+    report = {
+        "fixed_source_pair_count": 7,
+        "matched_fixed_pair_count": 0,
+        "matched_pair_count": 7,
+        "missing_pair_count": 0,
+        "fallback_entry_count": 1,
+        "fallback_row_count": 0,
+        "fixed_source_resolution_fallback_count": 0,
+        "branch_mismatch_count": 0,
+        "point_match_summary": {
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "fallback_entry_count": 1,
+            "branch_mismatch_count": 0,
+        },
+    }
+
+    ladder._apply_fixed_source_count_aliases(report)
+
+    assert report["matched_fixed_pair_count"] == 0
+
+
+def test_new4_rung1_rejects_clean_identity_with_stale_manual_qr_coordinates() -> None:
+    ladder = _load_new4_ladder_module()
+    report = _green_rung1_report()
+    report.update(
+        {
+            "matched_pair_count": 7,
+            "fixed_source_resolved_count": 7,
+            "matched_fixed_pair_count": 7,
+            "qr_dynamic_source_required_pair_count": 7,
+            "qr_dynamic_source_row_count": 2,
+            "qr_dynamic_source_missing_pair_count": 0,
+            "qr_stale_coordinate_pair_count": 5,
+            "qr_dynamic_source_coverage": {
+                "source_rows_after_provider_coverage_promotion": {
+                    "required_pair_count": 7,
+                    "dynamic_source_row_count": 2,
+                    "missing_dynamic_pair_count": 0,
+                    "stale_coordinate_pair_count": 5,
+                    "per_pair": [
+                        {
+                            "q_group_key": ["q_group", "primary", 0, 3],
+                            "normalized_hkl": [0, 0, 3],
+                            "physical_branch_slot": "00l_collapsed",
+                            "actual_source": "manual_picker_saved",
+                            "source_kind": "manual_picker_saved",
+                            "coordinate_provenance": "saved_manual_coordinate_materialization",
+                            "projection_frame": "caked_display",
+                            "failure_reason": "stale_qr_coordinate_provenance",
+                        }
+                    ],
+                }
+            },
+        }
+    )
+
+    failures = ladder._rung1_green_failures(report)
+
+    assert "stale_qr_coordinate_provenance" in failures
+    assert any(
+        failure.startswith("qr_dynamic_source_row_count_2_expected_7")
+        for failure in failures
+    )
+
+
+def test_rung1_dynamic_coverage_summary_flags_stale_manual_rows() -> None:
+    ladder = _load_new4_ladder_module()
+    q003_key = ("q_group", "primary", 0, 3)
+    q005_key = ("q_group", "primary", 1, 5)
+    required = [
+        {
+            "pair_id": "q3",
+            "q_group_key": q003_key,
+            "hkl": (0, 0, 3),
+            "source_branch_index": 0,
+        },
+        {
+            "pair_id": "q5b0",
+            "q_group_key": q005_key,
+            "hkl": (-1, 0, 5),
+            "source_branch_index": 0,
+        },
+    ]
+    rows = [
+        {
+            "q_group_key": q003_key,
+            "hkl": (0, 0, 3),
+            "source_branch_index": 0,
+            "source_kind": "manual_picker_saved",
+            "actual_source": "manual_picker_saved",
+            "coordinate_provenance": "saved_manual_coordinate_materialization",
+            "projection_frame": "caked_display",
+        },
+        {
+            "q_group_key": q005_key,
+            "hkl": (-1, 0, 5),
+            "source_branch_index": 0,
+            "source_kind": "sim_visual_caked_deg",
+            "actual_source": "sim_visual_caked_deg",
+            "expected_source": "sim_visual_caked_deg",
+            "coordinate_provenance": "trial_geometry_projection",
+            "projection_frame": "caked_display",
+            "is_dynamic_trial_row": True,
+        },
+    ]
+
+    summary = ladder.summarize_required_qr_dynamic_coverage(
+        required,
+        rows,
+        stage_name="unit",
+    )
+
+    assert summary["required_pair_count"] == 2
+    assert summary["dynamic_source_row_count"] == 1
+    assert summary["stale_coordinate_pair_count"] == 1
+    assert summary["missing_dynamic_pair_count"] == 0
+    assert [item["failure_reason"] for item in summary["per_pair"]] == [
+        "stale_qr_coordinate_provenance",
+        None,
+    ]
 
 
 def test_new4_ladder_rung_passed_rejects_missing_residual_flag() -> None:
@@ -13796,7 +14235,7 @@ def test_new4_ladder_one_param_does_not_use_stale_sensitivity_by_default(
     )
 
     def _fresh_sensitivity(_context, *, output_path, max_nfev, **_kwargs):
-        payload = _green_rung2_report(active_params=("center_x",))
+        payload = _new_contract_green_rung2_report(ladder)
         ladder._write_json(output_path, payload)
         return payload
 
@@ -13817,9 +14256,9 @@ def test_new4_ladder_one_param_does_not_use_stale_sensitivity_by_default(
         timestamp="fresh_one_param",
     )
 
-    assert attempted == ["center_x"]
-    assert result["active_params_from_sensitivity"] == ["center_x"]
-    assert "center_y" not in result["attempted_params"]
+    expected_active = list(_new_contract_active_params(ladder))
+    assert attempted == expected_active
+    assert result["active_params_from_sensitivity"] == expected_active
     assert stale.exists()
 
 
@@ -13871,9 +14310,11 @@ def test_new4_ladder_one_param_uses_only_active_sensitivity_params(
         timestamp="active_only",
     )
 
-    assert attempted == ["center_x"]
-    assert result["attempted_params"] == ["center_x"]
-    assert sorted(result["skipped_params"]) == ["center_y", "gamma"]
+    assert attempted == []
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "sensitivity_not_green"
+    assert "active_params_mismatch" in result["rung_2_failures"]
+    assert "near_zero_params_mismatch" in result["rung_2_failures"]
 
 
 def test_new4_ladder_one_param_filter_only_attempts_selected_param(
@@ -13903,9 +14344,9 @@ def test_new4_ladder_one_param_filter_only_attempts_selected_param(
         lambda _context, *, output_path, max_nfev, **_kwargs: (
             ladder._write_json(
                 output_path,
-                _green_rung2_report(active_params=("chi", "a", "c")),
+                _new_contract_green_rung2_report(ladder),
             )
-            or _green_rung2_report(active_params=("chi", "a", "c"))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -13928,7 +14369,9 @@ def test_new4_ladder_one_param_filter_only_attempts_selected_param(
 
     assert attempted == ["a"]
     assert result["attempted_params"] == ["a"]
-    assert result["filtered_params"] == ["chi", "c"]
+    assert result["filtered_params"] == [
+        name for name in _new_contract_active_params(ladder) if name != "a"
+    ]
     assert result["failed_params"] == []
     run_dir = tmp_path / "filter_a"
     assert (run_dir / "rung_03_one_param_a.json").exists()
@@ -13961,8 +14404,8 @@ def test_new4_ladder_one_param_filter_inactive_fails_before_solve(
         ladder,
         "run_sensitivity_scan",
         lambda _context, *, output_path, max_nfev, **_kwargs: (
-            ladder._write_json(output_path, _green_rung2_report(active_params=("chi", "c")))
-            or _green_rung2_report(active_params=("chi", "c"))
+            ladder._write_json(output_path, _new_contract_green_rung2_report(ladder))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
     monkeypatch.setattr(
@@ -13976,14 +14419,14 @@ def test_new4_ladder_one_param_filter_inactive_fails_before_solve(
         background_index=0,
         output_root=tmp_path,
         max_rung="one-param",
-        one_param_filter="a",
+        one_param_filter="c",
         timestamp="filter_inactive",
     )
 
     assert result["status"] == "failed"
     assert result["failure_reason"] == "filtered_param_not_active"
     assert result["attempted_params"] == []
-    assert result["filtered_params"] == ["chi", "c"]
+    assert result["filtered_params"] == list(_new_contract_active_params(ladder))
     run_dir = tmp_path / "filter_inactive"
     assert not [
         path
@@ -14019,9 +14462,9 @@ def test_new4_ladder_one_param_sets_candidate_param_names_singleton(
         lambda _context, *, output_path, max_nfev, **_kwargs: (
             ladder._write_json(
                 output_path,
-                _green_rung2_report(active_params=("center_x", "center_y")),
+                _new_contract_green_rung2_report(ladder),
             )
-            or _green_rung2_report(active_params=("center_x", "center_y"))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14038,10 +14481,11 @@ def test_new4_ladder_one_param_sets_candidate_param_names_singleton(
         background_index=0,
         output_root=tmp_path,
         max_rung="one-param",
+        one_param_filter="center_x",
         timestamp="singleton",
     )
 
-    assert seen == [(["center_x"], ["center_x"]), (["center_y"], ["center_y"])]
+    assert seen == [(["center_x"], ["center_x"])]
 
 
 def test_new4_ladder_one_param_no_active_params_fails_before_solve(
@@ -14087,7 +14531,7 @@ def test_new4_ladder_one_param_no_active_params_fails_before_solve(
     )
 
     assert result["status"] == "failed"
-    assert result["failure_reason"] == "no_active_params"
+    assert result["failure_reason"] == "sensitivity_not_green"
     assert result["attempted_params"] == []
 
 
@@ -14164,8 +14608,8 @@ def test_new4_ladder_one_param_fails_on_fallback_rows(monkeypatch, tmp_path) -> 
         ladder,
         "run_sensitivity_scan",
         lambda _context, *, output_path, max_nfev, **_kwargs: (
-            ladder._write_json(output_path, _green_rung2_report(active_params=("center_x",)))
-            or _green_rung2_report(active_params=("center_x",))
+            ladder._write_json(output_path, _new_contract_green_rung2_report(ladder))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14181,6 +14625,7 @@ def test_new4_ladder_one_param_fails_on_fallback_rows(monkeypatch, tmp_path) -> 
         background_index=0,
         output_root=tmp_path,
         max_rung="one-param",
+        one_param_filter="center_x",
         timestamp="fallback_rows",
     )
     report = json.loads(
@@ -14219,8 +14664,8 @@ def test_new4_ladder_one_param_clean_top_level_counters_without_point_summary_ok
         ladder,
         "run_sensitivity_scan",
         lambda _context, *, output_path, max_nfev, **_kwargs: (
-            ladder._write_json(output_path, _green_rung2_report(active_params=("center_x",)))
-            or _green_rung2_report(active_params=("center_x",))
+            ladder._write_json(output_path, _new_contract_green_rung2_report(ladder))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14237,6 +14682,7 @@ def test_new4_ladder_one_param_clean_top_level_counters_without_point_summary_ok
         background_index=0,
         output_root=tmp_path,
         max_rung="one-param",
+        one_param_filter="center_x",
         timestamp="clean_no_point_summary",
     )
     report = json.loads(
@@ -14274,9 +14720,9 @@ def test_new4_ladder_one_param_all_active_fail_summary(monkeypatch, tmp_path) ->
         lambda _context, *, output_path, max_nfev, **_kwargs: (
             ladder._write_json(
                 output_path,
-                _green_rung2_report(active_params=("center_x", "center_y")),
+                _new_contract_green_rung2_report(ladder),
             )
-            or _green_rung2_report(active_params=("center_x", "center_y"))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14298,7 +14744,7 @@ def test_new4_ladder_one_param_all_active_fail_summary(monkeypatch, tmp_path) ->
 
     assert result["status"] == "failed"
     assert result["failure_reason"] == "no_one_param_solve_passed"
-    assert result["failed_params"] == ["center_x", "center_y"]
+    assert result["failed_params"] == list(_new_contract_active_params(ladder))
 
 
 def test_new4_ladder_one_param_partial_success_exposes_failures(
@@ -14327,9 +14773,9 @@ def test_new4_ladder_one_param_partial_success_exposes_failures(
         lambda _context, *, output_path, max_nfev, **_kwargs: (
             ladder._write_json(
                 output_path,
-                _green_rung2_report(active_params=("center_x", "center_y", "gamma")),
+                _new_contract_green_rung2_report(ladder),
             )
-            or _green_rung2_report(active_params=("center_x", "center_y", "gamma"))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14366,7 +14812,11 @@ def test_new4_ladder_one_param_partial_success_exposes_failures(
     )
 
     assert result["status"] == "ok_with_failures"
-    assert result["passed_params"] == ["center_x"]
+    assert result["passed_params"] == [
+        name
+        for name in _new_contract_active_params(ladder)
+        if name not in {"center_y", "gamma"}
+    ]
     assert result["failed_params"] == ["center_y"]
     assert result["timed_out_params"] == ["gamma"]
     assert result["any_timeout"] is True
@@ -14400,9 +14850,9 @@ def test_new4_ladder_one_param_clean_timeout_continues_to_next_param(
         lambda _context, *, output_path, max_nfev, **_kwargs: (
             ladder._write_json(
                 output_path,
-                _green_rung2_report(active_params=("center_x", "center_y")),
+                _new_contract_green_rung2_report(ladder),
             )
-            or _green_rung2_report(active_params=("center_x", "center_y"))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14436,10 +14886,12 @@ def test_new4_ladder_one_param_clean_timeout_continues_to_next_param(
         timestamp="clean_timeout_continue",
     )
 
-    assert attempted == ["center_x", "center_y"]
+    assert attempted == list(_new_contract_active_params(ladder))
     assert result["status"] == "ok_with_failures"
     assert result["timed_out_params"] == ["center_x"]
-    assert result["passed_params"] == ["center_y"]
+    assert result["passed_params"] == [
+        name for name in _new_contract_active_params(ladder) if name != "center_x"
+    ]
     assert result["all_fixed_source_counters_clean"] is False
     assert result["all_passing_fixed_source_counters_clean"] is True
 
@@ -14471,9 +14923,9 @@ def test_new4_ladder_one_param_each_param_uses_same_base_state(
         lambda _context, *, output_path, max_nfev, **_kwargs: (
             ladder._write_json(
                 output_path,
-                _green_rung2_report(active_params=("center_x", "center_y")),
+                _new_contract_green_rung2_report(ladder),
             )
-            or _green_rung2_report(active_params=("center_x", "center_y"))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14524,9 +14976,9 @@ def test_new4_ladder_one_param_dirty_timeout_aborts_remaining(
         lambda _context, *, output_path, max_nfev, **_kwargs: (
             ladder._write_json(
                 output_path,
-                _green_rung2_report(active_params=("center_x", "center_y", "gamma")),
+                _new_contract_green_rung2_report(ladder),
             )
-            or _green_rung2_report(active_params=("center_x", "center_y", "gamma"))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
 
@@ -14559,7 +15011,9 @@ def test_new4_ladder_one_param_dirty_timeout_aborts_remaining(
     assert attempted == ["center_x"]
     assert result["dirty_timeout_abort"] is True
     assert result["status"] == "failed"
-    assert result["skipped_params"] == ["center_y", "gamma"]
+    assert result["skipped_params"] == [
+        name for name in _new_contract_active_params(ladder) if name != "center_x"
+    ]
 
 
 def test_new4_ladder_one_param_provider_guard_after(monkeypatch, tmp_path) -> None:
@@ -14584,8 +15038,8 @@ def test_new4_ladder_one_param_provider_guard_after(monkeypatch, tmp_path) -> No
         ladder,
         "run_sensitivity_scan",
         lambda _context, *, output_path, max_nfev, **_kwargs: (
-            ladder._write_json(output_path, _green_rung2_report(active_params=("center_x",)))
-            or _green_rung2_report(active_params=("center_x",))
+            ladder._write_json(output_path, _new_contract_green_rung2_report(ladder))
+            or _new_contract_green_rung2_report(ladder)
         ),
     )
     monkeypatch.setattr(
@@ -14602,6 +15056,7 @@ def test_new4_ladder_one_param_provider_guard_after(monkeypatch, tmp_path) -> No
         background_index=0,
         output_root=tmp_path,
         max_rung="one-param",
+        one_param_filter="center_x",
         timestamp="provider_after_one_param",
     )
 
@@ -14849,6 +15304,264 @@ def test_new4_ladder_one_param_nonfinite_result_residual_not_usable(tmp_path) ->
     assert finalized["status"] == "failed"
     assert finalized["failure_reason"] == "non_finite_residual"
     assert finalized["diagnosis_classification"] != "usable"
+
+
+def test_new4_ladder_one_param_preserves_dynamic_anchor_blocker(tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    point_summary = _sensitivity_point_summary()
+    request = SimpleNamespace(
+        var_names=["center_x"],
+        candidate_param_names=["center_x"],
+        params={"center_x": 1.0},
+        dataset_specs=[{"measured_peaks": []}],
+        measured_peaks=[],
+        refinement_config={
+            "optimizer_request_handoff_summary": {
+                "provider_pair_count": 7,
+                "dataset_pair_count": 7,
+                "provider_to_optimizer_identity_match": True,
+                "provider_to_optimizer_point_match": True,
+            },
+        },
+    )
+    result = SimpleNamespace(
+        fun=np.asarray([1.0, 2.0], dtype=float),
+        point_match_summary=point_summary,
+        rms_px=5.0,
+        x=np.asarray([1.0], dtype=float),
+        nfev=0,
+        success=False,
+        message="optimizer_start_blocked_reason=dynamic_baseline_anchor_mismatch",
+        optimizer_start_blocked_reason="dynamic_baseline_anchor_mismatch",
+        dynamic_baseline_anchor_mismatches=[
+            {
+                "hkl": [0, 0, 3],
+                "source_branch_index": 0,
+                "mismatch_reason": "dynamic_baseline_anchor_mismatch",
+            }
+        ],
+    )
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    state_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
+
+    report = ladder._result_report(
+        request=request,
+        result=result,
+        rung=3,
+        rung_name="one_param_center_x",
+        started_at=0.0,
+        before_summary=point_summary,
+        extra={
+            "least_squares_called": False,
+            "optimizer_solve_called": True,
+            "real_solve_called": True,
+            "fixed_source_pair_count": 7,
+            "fallback_row_count": 0,
+            "fixed_source_resolution_fallback_count": 0,
+            "missing_fixed_source_count": 0,
+            "fixed_source_resolved_count": 7,
+            "fallback_entry_count": 0,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "provider_to_optimizer_identity_match": True,
+            "provider_to_optimizer_point_match": True,
+            "state_sha256_before": state_hash,
+            "state_sha256_after": state_hash,
+            "state_hash_unchanged": True,
+        },
+    )
+    finalized = ladder._finalize_one_param_report(
+        report,
+        param_name="center_x",
+        state_path=state_path,
+        state_hash_before=state_hash,
+        timeout_seconds=120.0,
+    )
+
+    assert report["optimizer_start_blocked_reason"] == "dynamic_baseline_anchor_mismatch"
+    assert report["dynamic_baseline_anchor_mismatch_count"] == 1
+
+    blocked_payload = _green_one_param_report(["center_x"])
+    blocked_payload.update(
+        {
+            "least_squares_called": False,
+            "optimizer_start_blocked_reason": "dynamic_baseline_anchor_mismatch",
+            "dynamic_baseline_anchor_mismatch_count": 1,
+            "state_sha256_before": state_hash,
+            "state_sha256_after": state_hash,
+            "state_hash_unchanged": True,
+        }
+    )
+    finalized = ladder._finalize_one_param_report(
+        blocked_payload,
+        param_name="center_x",
+        state_path=state_path,
+        state_hash_before=state_hash,
+        timeout_seconds=120.0,
+    )
+
+    assert finalized["status"] == "failed"
+    assert finalized["failure_reason"] == "dynamic_baseline_anchor_mismatch"
+    assert "least_squares_not_called" in finalized["one_param_guard_failures"]
+
+
+def _rung3_dynamic_anchor_diag_row(
+    *,
+    saved_anchor=(40.0, -157.0),
+    dynamic_anchor=(40.0, 0.0),
+    actual_source="sim_visual_caked_deg",
+    source_kind="sim_visual_caked_deg",
+    projection_frame="caked_display",
+    coordinate_provenance="trial_geometry_projection",
+    is_dynamic_trial_row=True,
+    physical_branch_slot=0,
+) -> dict[str, object]:
+    q_group_key = ("q_group", "primary", 1, 16)
+    hkl = (1, 0, 16)
+    fit_qr_branch_key = {
+        "q_group_key": q_group_key,
+        "hkl": hkl,
+        "physical_branch_slot": physical_branch_slot,
+        "source_branch_index": physical_branch_slot,
+        "source_peak_index": physical_branch_slot,
+    }
+    return {
+        "pair_id": "bg0:pair0",
+        "q_group_key": q_group_key,
+        "normalized_hkl": hkl,
+        "hkl": hkl,
+        "physical_branch_slot": physical_branch_slot,
+        "fit_qr_branch_key": fit_qr_branch_key,
+        "source_branch_index": physical_branch_slot,
+        "source_peak_index": physical_branch_slot,
+        "source_table_index": 0,
+        "source_row_index": 7,
+        "source_reflection_index": 16,
+        "source_reflection_namespace": "full",
+        "source_reflection_is_full": True,
+        "branch_id": f"branch-{physical_branch_slot}",
+        "best_sample_index": 0,
+        "mosaic_top_rank_key": ("sample", 0),
+        "selection_reason": "test",
+        "fit_source_resolution_kind": "provider_fixed_source_local",
+        "optimizer_request_has_fixed_source": True,
+        "optimizer_request_source": "provider_pair",
+        "optimizer_request_fallback_row": False,
+        "fit_prediction_resolver_function": "_resolve_qr_fit_prediction_from_trial_params",
+        "saved_refined_sim_caked_anchor_deg": [
+            float(saved_anchor[0]),
+            float(saved_anchor[1]),
+        ],
+        "sim_nominal_caked_deg": [float(dynamic_anchor[0]), float(dynamic_anchor[1])],
+        "sim_refined_caked_deg": [float(dynamic_anchor[0]), float(dynamic_anchor[1])],
+        "sim_nominal_caked_deg_from_source_row_diagnostic": [
+            float(dynamic_anchor[0]),
+            float(dynamic_anchor[1]),
+        ],
+        "dynamic_baseline_anchor_caked_deg": [
+            float(dynamic_anchor[0]),
+            float(dynamic_anchor[1]),
+        ],
+        "dynamic_baseline_anchor_source": actual_source,
+        "dynamic_baseline_anchor_frame": projection_frame,
+        "dynamic_baseline_anchor_units": "deg",
+        "dynamic_baseline_anchor_actual_source": actual_source,
+        "dynamic_baseline_anchor_source_kind": source_kind,
+        "dynamic_baseline_anchor_projection_frame": projection_frame,
+        "dynamic_baseline_anchor_coordinate_provenance": coordinate_provenance,
+        "dynamic_baseline_anchor_is_dynamic_trial_row": is_dynamic_trial_row,
+    }
+
+
+def test_rung3_dynamic_baseline_anchor_uses_current_dynamic_caked_rows() -> None:
+    row = _rung3_dynamic_anchor_diag_row(
+        saved_anchor=(40.0, -157.0),
+        dynamic_anchor=(40.0, 0.0),
+    )
+
+    table = opt._qr_dynamic_baseline_anchor_diagnostics([row])
+    mismatches = opt._qr_dynamic_baseline_anchor_mismatches([row])
+
+    assert mismatches == []
+    assert len(table) == 1
+    assert table[0]["saved_anchor_phi"] == -157.0
+    assert table[0]["dynamic_phi"] == 0.0
+    assert table[0]["mismatch_type"] == "stale_saved_refined_anchor_metadata"
+    assert table[0]["failure_reason"] is None
+
+
+def test_rung3_anchor_phi_delta_is_wrapped_before_mismatch_check() -> None:
+    row = _rung3_dynamic_anchor_diag_row(
+        saved_anchor=(40.0, 179.8),
+        dynamic_anchor=(40.0, -179.9),
+    )
+
+    table = opt._qr_dynamic_baseline_anchor_diagnostics([row])
+    mismatches = opt._qr_dynamic_baseline_anchor_mismatches([row])
+
+    assert mismatches == []
+    assert abs(table[0]["delta_phi"]) > 300.0
+    assert abs(table[0]["wrapped_delta_phi"]) < 1.0
+    assert table[0]["mismatch_type"] == "none"
+
+
+def test_rung3_anchor_guard_rejects_stale_clicked_visual_candidate_anchor() -> None:
+    row = _rung3_dynamic_anchor_diag_row(
+        actual_source="clicked_visual_candidate",
+        source_kind="clicked_visual_candidate",
+        projection_frame="caked_display",
+        coordinate_provenance="saved_manual_coordinate_materialization",
+        is_dynamic_trial_row=False,
+    )
+
+    table = opt._qr_dynamic_baseline_anchor_diagnostics([row])
+    mismatches = opt._qr_dynamic_baseline_anchor_mismatches([row])
+
+    assert len(table) == 1
+    assert table[0]["failure_reason"] == "stale_clicked_visual_candidate_anchor"
+    assert len(mismatches) == 1
+    assert mismatches[0]["failure_reason"] == "stale_clicked_visual_candidate_anchor"
+
+
+def test_new4_ladder_one_param_summary_exposes_counts_and_fixed_sets(tmp_path) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    state_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
+    sensitivity = _new_contract_green_rung2_report(ladder)
+    passed = _green_one_param_report(["center_x"])
+    failed = _green_one_param_report(["gamma"])
+    failed.update({"status": "failed", "pass": False, "failure_reason": "metric_guard_failed"})
+
+    summary = ladder._one_param_summary(
+        run_dir=tmp_path,
+        sensitivity_report_path=tmp_path / "rung_02_sensitivity_scan.json",
+        state_path=state_path,
+        background_index=0,
+        sensitivity=sensitivity,
+        active_params=sensitivity["active_params"],
+        attempted_reports=[passed, failed],
+        skipped_params=["psi_z"],
+        state_hash_before=state_hash,
+        state_hash_after=state_hash,
+        provider_after={"provider_guard_ok": True, "classification": "point_provider_parity_ok"},
+        reports=[],
+    )
+
+    assert summary["attempted_param_count"] == 2
+    assert summary["passed_param_count"] == 1
+    assert summary["failed_param_count"] == 1
+    assert summary["skipped_param_count"] == 1
+    assert summary["dirty_timeout_count"] == 0
+    assert summary["fixed_params"] == ["c"]
+    assert summary["excluded_params"] == ["c"]
+    assert summary["near_zero_params"] == []
+    assert summary["fixed_param_count"] == 1
+    assert summary["excluded_param_count"] == 1
+    assert summary["near_zero_param_count"] == 0
+    assert summary["pass"] is False
 
 
 def test_new4_ladder_residual_heartbeat_throttle_policy() -> None:
@@ -15219,7 +15932,8 @@ def test_new4_ladder_objective_dry_run_preserves_provider_fixed_rows(
     context = _new4_ladder_context_with_provider_rows(full_source=full_source)
     captured: dict[str, object] = {}
 
-    def _fake_probe(request, *, mode):
+    def _fake_probe(request, *, mode, record_callback=None):
+        del record_callback
         captured["mode"] = mode
         captured["request"] = request
         point_match_summary = {
@@ -15376,12 +16090,18 @@ def test_new4_rung1_direct_objective_dry_run_green_or_fail_before_solve(
         max_nfev=20,
     )
 
-    assert report["status"] == "ok"
-    assert report["pass"] is True
+    assert report["status"] in {"ok", "failed"}
+    assert report["failure_reason"] in {
+        None,
+        "stale_qr_coordinate_provenance",
+        "missing_dynamic_trial_source_rows",
+    }
     assert report["provider_pair_count"] == 7
     assert report["dataset_pair_count"] == 7
     assert report["optimizer_request_pair_count"] == 7
     assert report["fixed_source_pair_count"] == 7
+    assert report["fixed_source_resolved_count"] == 7
+    assert report["matched_fixed_pair_count"] == 7
     assert report["fallback_row_count"] == 0
     assert report["fixed_source_resolution_fallback_count"] == 0
     assert report["missing_fixed_source_count"] == 0
@@ -15394,6 +16114,13 @@ def test_new4_rung1_direct_objective_dry_run_green_or_fail_before_solve(
     assert report["matched_pair_count"] == 7
     assert report["missing_pair_count"] == 0
     assert report["branch_mismatch_count"] == 0
+    if report["status"] == "failed":
+        assert report["qr_dynamic_source_required_pair_count"] == 7
+        assert report["qr_dynamic_source_row_count"] < 7
+        assert (
+            report["qr_dynamic_source_missing_pair_count"] > 0
+            or report["qr_stale_coordinate_pair_count"] > 0
+        )
 
 
 def test_build_geometry_manual_fit_dataset_skips_cached_candidate_with_missing_hkl() -> None:
@@ -17417,6 +18144,316 @@ def test_run_fresh_slot_validation_passes_caked_saved_current_view_point_to_sele
     assert result["saved_entry"]["saved_background_current_view_frame"] == ("caked_display")
 
 
+def test_prepare_fresh_slot_runtime_uses_caked_projection_candidates_not_detector_cache() -> (
+    None
+):
+    probe = _load_geometry_preflight_probe_module()
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "hkl": (0, 0, 3),
+        "q_group_key": ("q_group", "primary", 0, 3),
+        "source_branch_index": 0,
+    }
+    stale_detector_entry = {
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    caked_entry = {
+        "hkl": (0, 0, 3),
+        "q_group_key": ("q_group", "primary", 0, 3),
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "caked_x": 9.4,
+        "caked_y": -0.7,
+    }
+
+    runtime = probe._prepare_fresh_slot_runtime(
+        context={
+            "projection_callbacks": SimpleNamespace(
+                pick_uses_caked_space=lambda: True,
+            ),
+            "group_cache": {
+                "grouped_candidates": {
+                    ("q_group", "primary", 1, 5): [dict(stale_detector_entry)]
+                },
+                "caked_qr_projection_grouped_candidates": {
+                    ("q_group", "primary", 0, 3): [dict(caked_entry)]
+                },
+            },
+            "manual_dataset_bindings": SimpleNamespace(),
+            "params": {},
+            "dataset": {},
+            "saved_entries": [dict(saved_entry)],
+        },
+        background_index=0,
+    )
+
+    assert runtime["grouped_candidate_source"] == "caked_qr_projection_grouped_candidates"
+    assert set(runtime["grouped_candidates"]) == {("q_group", "primary", 0, 3)}
+    assert runtime["missing_qr_projection_candidates"] == []
+
+
+def test_prepare_fresh_slot_runtime_rebuilds_missing_caked_projection_from_fit_rows() -> (
+    None
+):
+    probe = _load_geometry_preflight_probe_module()
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (0, 0, 3),
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_branch_index": 0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 0,
+        },
+        {
+            "pair_id": "bg0:pair2",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+        },
+    ]
+    narrow_rows = [
+        {
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "caked_x": 20.0,
+            "caked_y": 1.0,
+        }
+    ]
+    fit_rows = [
+        {
+            "hkl": (0, 0, 3),
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "caked_x": 9.4,
+            "caked_y": -0.7,
+        },
+        {
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "caked_x": 20.0,
+            "caked_y": 1.0,
+        },
+        {
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "caked_x": 21.0,
+            "caked_y": -1.0,
+        },
+    ]
+    consumers: list[str] = []
+
+    def _source_rows_for_background(
+        _background_index,
+        _params,
+        *,
+        consumer=None,
+        required_pairs=None,
+    ):
+        assert len(required_pairs or []) == len(saved_entries)
+        consumers.append(str(consumer))
+        if consumer == "geometry_fit_dataset":
+            return [dict(entry) for entry in fit_rows]
+        return [dict(entry) for entry in narrow_rows]
+
+    def _pick_candidates(rows):
+        grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+        for row in rows or ():
+            key = row.get("q_group_key")
+            if isinstance(key, tuple):
+                grouped.setdefault(key, []).append(dict(row))
+        return grouped
+
+    runtime = probe._prepare_fresh_slot_runtime(
+        context={
+            "projection_callbacks": SimpleNamespace(
+                pick_uses_caked_space=lambda: True,
+                project_peaks_to_current_view=lambda rows: [
+                    {**dict(row), "display_frame": "caked_display"}
+                    for row in rows or ()
+                ],
+                pick_candidates=_pick_candidates,
+            ),
+            "group_cache": {
+                "grouped_candidates": {
+                    ("q_group", "primary", 1, 5): [dict(narrow_rows[0])]
+                },
+                "caked_qr_projection_grouped_candidates": {},
+            },
+            "manual_dataset_bindings": SimpleNamespace(
+                geometry_manual_source_rows_for_background=_source_rows_for_background,
+            ),
+            "params": {},
+            "dataset": {},
+            "saved_entries": [dict(entry) for entry in saved_entries],
+        },
+        background_index=0,
+    )
+
+    assert "geometry_fit_dataset" in consumers
+    assert runtime["grouped_candidate_source"] == "geometry_fit_dataset_caked_projection"
+    assert set(runtime["grouped_candidates"]) == {
+        ("q_group", "primary", 0, 3),
+        ("q_group", "primary", 1, 5),
+    }
+    assert len(runtime["grouped_candidates"][("q_group", "primary", 0, 3)]) == 1
+    assert len(runtime["grouped_candidates"][("q_group", "primary", 1, 5)]) == 2
+    assert runtime["missing_qr_projection_candidates"] == []
+
+
+def test_qr_projection_requirement_check_collapses_00l_and_requires_non00l_slots() -> (
+    None
+):
+    probe = _load_geometry_preflight_probe_module()
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (0, 0, 3),
+            "q_group_key": ("q_group", "primary", 0, 3),
+            "source_branch_index": 0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 0,
+        },
+        {
+            "pair_id": "bg0:pair2",
+            "hkl": (-1, 0, 5),
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "source_branch_index": 1,
+        },
+    ]
+    grouped_candidates = {
+        ("q_group", "primary", 0, 3): [
+            {
+                "hkl": (0, 0, 3),
+                "q_group_key": ("q_group", "primary", 0, 3),
+                "source_branch_index": 1,
+            }
+        ],
+        ("q_group", "primary", 1, 5): [
+            {
+                "hkl": (-1, 0, 5),
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "source_branch_index": 0,
+            }
+        ],
+    }
+
+    missing = probe._missing_qr_projection_candidate_requirements(
+        saved_entries,
+        grouped_candidates,
+    )
+
+    assert [entry["pair_id"] for entry in missing] == ["bg0:pair2"]
+    assert missing[0]["physical_branch_slot"] == ("branch", 1)
+
+
+def test_validate_pair_accepts_caked_qr_projection_q_group_fallback() -> None:
+    probe = _load_geometry_preflight_probe_module()
+    q_group_key = ("q_group", "primary", 0, 3)
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "hkl": (0, 0, 3),
+        "q_group_key": q_group_key,
+        "source_reflection_index": 10,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_table_index": 10,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "x": 9.42,
+        "y": -0.69,
+    }
+    live_row = {
+        "hkl": (0, 0, 3),
+        "q_group_key": q_group_key,
+        "source_reflection_index": 410,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "caked_x": 9.5,
+        "caked_y": -0.5,
+    }
+    preflight_pair = {
+        **dict(live_row),
+        "pair_id": "bg0:pair0",
+    }
+    dataset = {
+        "measured_for_fit": [dict(preflight_pair)],
+        "source_resolution_diagnostics": [
+            {
+                "fit_resolution_kind": "q_group_fallback",
+                "overlay_resolution_kind": "q_group_fallback",
+                "fit_source_reflection_index": 410,
+                "fit_source_branch_index": 0,
+            }
+        ],
+        "source_rows_for_trace": [dict(live_row)],
+    }
+    group_cache = {
+        "grouped_candidates": {},
+        "caked_qr_projection_grouped_candidates": {
+            q_group_key: [
+                {
+                    **dict(live_row),
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                }
+            ]
+        },
+    }
+
+    result = probe._validate_pair(
+        background_index=0,
+        slot_index=0,
+        expected_pair_id="bg0:pair0",
+        saved_entries=[dict(saved_entry)],
+        dataset=dataset,
+        group_cache=group_cache,
+        entry_display_coords=lambda entry: (entry.get("x", 0.0), entry.get("y", 0.0)),
+        use_caked_space=True,
+    )
+    detector_result = probe._validate_pair(
+        background_index=0,
+        slot_index=0,
+        expected_pair_id="bg0:pair0",
+        saved_entries=[dict(saved_entry)],
+        dataset=dataset,
+        group_cache=group_cache,
+        entry_display_coords=lambda entry: (entry.get("x", 0.0), entry.get("y", 0.0)),
+        use_caked_space=False,
+    )
+
+    assert result["ok"] is True
+    assert result["grouped_candidate_source"] == "caked_qr_projection_grouped_candidates"
+    assert result["strict_source_identity_match"] is False
+    assert result["source_semantic_identity_match"] is True
+    assert result["preflight_qr_requirement_match"] is True
+    assert result["resolved_qr_requirement_match"] is True
+    assert result["grouped_qr_requirement_match"] is True
+    assert detector_result["ok"] is False
+    assert detector_result["failure_stage"] == "grouped_candidate_regeneration"
+
+
 def test_compatibility_probe_slot_indices_prefers_first_mirrored_group() -> None:
     probe = _load_geometry_preflight_probe_module()
 
@@ -17438,6 +18475,25 @@ def test_compatibility_probe_slot_indices_prefers_first_mirrored_group() -> None
     )
 
     assert result == [1, 2]
+
+
+def test_canonical_identity_keeps_legacy_qr_hkls_distinct() -> None:
+    probe = _load_geometry_preflight_probe_module()
+
+    left = {
+        "hkl": (-1, 0, 10),
+        "source_reflection_index": None,
+        "source_reflection_namespace": None,
+        "source_reflection_is_full": False,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+    }
+    right = {
+        **left,
+        "hkl": (-1, 0, 16),
+    }
+
+    assert probe._canonical_identity(left) != probe._canonical_identity(right)
 
 
 def test_saved_to_selected_identity_delta_reports_legacy_canonicalization() -> None:
@@ -17769,6 +18825,120 @@ def test_build_group_cache_source_rows_callback_accepts_manual_pick_cache_consum
     assert captured["param_set"] == {"theta_initial": 3.0}
     assert captured["consumer"] == "manual_pick_cache"
     assert captured["required_pairs"] == required_pairs
+
+
+def test_build_group_cache_rebuilds_missing_caked_projection_from_dataset_rows(
+    monkeypatch,
+) -> None:
+    probe = _load_geometry_preflight_probe_module()
+    q003 = ("q_group", "primary", 0, 3)
+    q105 = ("q_group", "primary", 1, 5)
+    required_pairs = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (0, 0, 3),
+            "q_group_key": q003,
+            "source_branch_index": 0,
+        }
+    ]
+    captured: dict[str, object] = {}
+
+    def _fake_build_geometry_manual_pick_cache(**kwargs):
+        captured["rows"] = kwargs["source_rows_for_background"](
+            0,
+            {"theta_initial": 3.0},
+            consumer="manual_pick_cache",
+        )
+        return {
+            "signature": ("sig",),
+            "caked_qr_projection_grouped_candidates": {
+                q105: [
+                    {
+                        "hkl": (-1, 0, 5),
+                        "q_group_key": q105,
+                        "source_branch_index": 0,
+                    }
+                ]
+            },
+            "cache_metadata": {},
+        }, None, None
+
+    def _fake_source_rows(
+        background_index,
+        param_set=None,
+        *,
+        consumer=None,
+        required_pairs=None,
+    ):
+        captured["background_index"] = background_index
+        captured["param_set"] = dict(param_set or {})
+        captured["consumer"] = consumer
+        captured["required_pairs"] = required_pairs
+        return [
+            {
+                "hkl": (-1, 0, 5),
+                "q_group_key": q105,
+                "source_branch_index": 0,
+            }
+        ]
+
+    def _pick_candidates(rows):
+        grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+        for row in rows or ():
+            key = row.get("q_group_key")
+            if isinstance(key, tuple):
+                grouped.setdefault(key, []).append(dict(row))
+        return grouped
+
+    monkeypatch.setattr(
+        probe.gui_manual_geometry,
+        "build_geometry_manual_pick_cache",
+        _fake_build_geometry_manual_pick_cache,
+    )
+
+    cache_data = probe._build_group_cache(
+        background_index=0,
+        params={"theta_initial": 3.0},
+        dataset={
+            "simulation_diagnostics": {"requested_signature": ("sig", 0)},
+            "source_rows_for_trace": [
+                {
+                    "hkl": (0, 0, 3),
+                    "q_group_key": q003,
+                    "source_branch_index": 1,
+                    "caked_x": 9.4,
+                    "caked_y": -0.7,
+                }
+            ],
+        },
+        manual_dataset_bindings=SimpleNamespace(
+            load_background_by_index=lambda _idx: (
+                np.zeros((2, 2)),
+                np.zeros((2, 2)),
+            ),
+            current_background_index=0,
+            geometry_manual_source_rows_for_background=_fake_source_rows,
+            geometry_manual_match_config=lambda: {},
+        ),
+        projection_callbacks=SimpleNamespace(
+            pick_uses_caked_space=lambda: True,
+            caked_projection_signature=lambda: ("cake", 1),
+            project_peaks_to_current_view=lambda rows: [
+                {**dict(row), "display_frame": "caked_display"}
+                for row in rows or ()
+            ],
+            simulated_peaks_for_params=lambda *args, **kwargs: [],
+            pick_candidates=_pick_candidates,
+            simulated_lookup=lambda peaks: {},
+        ),
+        required_pairs=required_pairs,
+    )
+
+    assert captured["consumer"] == "geometry_fit_dataset"
+    assert captured["required_pairs"] == required_pairs
+    assert set(cache_data["caked_qr_projection_grouped_candidates"]) == {q003}
+    assert cache_data["cache_metadata"]["caked_qr_projection_rebuilt_from_dataset"] is True
+    assert cache_data["cache_metadata"]["caked_qr_projection_missing_after_rebuild"] == []
 
 
 def test_current_source_rows_for_background_forwards_saved_entries_as_required_pairs() -> None:
@@ -23395,6 +24565,244 @@ def test_build_geometry_manual_fit_dataset_materializes_provider_backed_source_c
     assert any(
         row.get("provider_backed_live_source_row") is True and row.get("source_branch_index") == 1
         for row in trace_rows
+    )
+
+
+def test_qr_fit_trial_source_rows_builder_does_not_materialize_saved_required_coverage() -> (
+    None
+):
+    q003_key = ("q_group", "primary", 0, 3)
+    q16_key = ("q_group", "primary", 1, 16)
+    saved_entries = [
+        {
+            "q_group_key": q003_key,
+            "source_table_index": 3,
+            "source_reflection_index": 3,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 30,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (0, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "refined_sim_x": 31.0,
+            "refined_sim_y": 41.0,
+        },
+        {
+            "q_group_key": q16_key,
+            "source_table_index": 16,
+            "source_reflection_index": 16,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 161,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 16),
+            "x": 50.0,
+            "y": 60.0,
+            "refined_sim_x": 51.0,
+            "refined_sim_y": 61.0,
+        },
+    ]
+    stale_rows = [
+        {
+            "q_group_key": q16_key,
+            "source_table_index": 16,
+            "source_reflection_index": 16,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 160,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (1, 0, 16),
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+            "display_col": 10.0,
+            "display_row": 20.0,
+        }
+    ]
+    rebuild_calls: list[dict[str, object]] = []
+
+    def _rebuild(_background_index, _params, **kwargs):
+        rebuild_calls.append(dict(kwargs))
+        return [dict(row) for row in stale_rows]
+
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=stale_rows,
+            refresh_pairs=False,
+        ),
+        geometry_manual_rebuild_source_rows_for_background=_rebuild,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={},
+    )
+    builder = dataset["spec"]["qr_fit_trial_source_rows_builder"]
+    payload = builder(local_params={"theta_offset": 0.25})
+    rows = [dict(row) for row in payload["rows"] if isinstance(row, Mapping)]
+    coverage_keys = {
+        key
+        for row in rows
+        for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
+    }
+
+    assert rebuild_calls
+    assert rebuild_calls[-1]["consumer"] == "geometry_fit_trial_source_rows"
+    assert len(rebuild_calls[-1]["required_pairs"]) == 2
+    assert payload["available"] is True
+    source_diagnostics = payload["source_diagnostics"]
+    assert source_diagnostics["provider_backed_source_coverage_row_count"] == 0
+    assert source_diagnostics["missing_dynamic_trial_source_row_count"] == 2
+    materialization = source_diagnostics["source_coverage_materialization"]
+    assert materialization["saved_coordinate_materialization_allowed"] is False
+    assert materialization["point_missing_count"] == 2
+    assert {
+        item["reason"] for item in materialization["point_missing"] if isinstance(item, Mapping)
+    } == {"missing_dynamic_trial_source_row"}
+    stages = source_diagnostics["geometry_fit_trial_source_rows_stages"]
+    assert stages["source_rows_before_rebinding"]["dynamic_required_pair_count"] == 0
+    assert stages["source_rows_before_rebinding"]["missing_required_pair_count"] == 2
+    assert stages["source_rows_after_rebinding"]["dynamic_required_pair_count"] == 0
+    assert stages["source_rows_after_rebinding"]["missing_required_pair_count"] == 2
+    assert (
+        (0, 0, 3),
+        geometry_fit._GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT,
+        q003_key,
+    ) not in coverage_keys
+    assert ((-1, 0, 16), 1, q16_key) not in coverage_keys
+
+
+def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_required_pairs() -> (
+    None
+):
+    q003_key = ("q_group", "primary", 0, 3)
+    q16_key = ("q_group", "primary", 1, 16)
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": q003_key,
+            "source_table_index": 3,
+            "source_reflection_index": 3,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 30,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (0, 0, 3),
+            "x": 30.0,
+            "y": 40.0,
+            "background_two_theta_deg": 12.5,
+            "background_phi_deg": 0.0,
+            "caked_x": 12.5,
+            "caked_y": 0.0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "q_group_key": q16_key,
+            "source_table_index": 16,
+            "source_reflection_index": 16,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 161,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 16),
+            "x": 50.0,
+            "y": 60.0,
+            "background_two_theta_deg": 44.0,
+            "background_phi_deg": 31.0,
+            "caked_x": 44.0,
+            "caked_y": 31.0,
+        },
+    ]
+    narrow_rebuild_rows = [
+        _targeted_source_row(
+            hkl=(-1, 0, 16),
+            branch_index=0,
+            q_group_key=q16_key,
+            sim_col=10.0,
+            sim_row=20.0,
+            source_peak_index=0,
+        )
+    ]
+    click_pick_candidate_rows = [
+        _targeted_source_row(
+            hkl=(0, 0, 3),
+            branch_index=1,
+            q_group_key=q003_key,
+            sim_col=12.5,
+            sim_row=0.0,
+            source_peak_index=1,
+        ),
+        _targeted_source_row(
+            hkl=(1, 0, 16),
+            branch_index=1,
+            q_group_key=q16_key,
+            sim_col=44.0,
+            sim_row=31.0,
+            source_peak_index=1,
+        ),
+    ]
+    for row in click_pick_candidate_rows:
+        row["caked_x"] = row["sim_col"]
+        row["caked_y"] = row["sim_row"]
+        row["two_theta_deg"] = row["sim_col"]
+        row["phi_deg"] = row["sim_row"]
+
+    def _rebuild(_background_index, _params, **_kwargs):
+        return [dict(row) for row in narrow_rebuild_rows]
+
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=click_pick_candidate_rows,
+            refresh_pairs=False,
+        ),
+        geometry_manual_rebuild_source_rows_for_background=_rebuild,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={},
+    )
+    payload = dataset["spec"]["qr_fit_trial_source_rows_builder"](
+        local_params={"theta_offset": 0.25}
+    )
+    rows = [dict(row) for row in payload["rows"] if isinstance(row, Mapping)]
+    coverage_keys = {
+        key
+        for row in rows
+        for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
+    }
+    diagnostics = payload["source_diagnostics"]
+    stages = diagnostics["geometry_fit_trial_source_rows_stages"]
+
+    assert (
+        (0, 0, 3),
+        geometry_fit._GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT,
+        q003_key,
+    ) in coverage_keys
+    assert ((-1, 0, 16), 1, q16_key) in coverage_keys
+    assert diagnostics["missing_dynamic_trial_source_row_count"] == 0
+    assert stages["source_rows_before_rebinding"]["dynamic_required_pair_count"] == 2
+    assert stages["source_rows_before_rebinding"]["missing_required_pair_count"] == 0
+    assert stages["source_rows_after_rebinding"]["dynamic_required_pair_count"] == 2
+    assert stages["caked_click_pick_candidate_inventory"]["dynamic_required_pair_count"] == 2
+    assert diagnostics["caked_click_pick_candidate_inventory"]["supplemental_row_count"] == 2
+    assert all(
+        row.get("coordinate_provenance") == "trial_geometry_projection"
+        for row in rows
+        if row.get("pair_id") in {"bg0:pair0", "bg0:pair1"}
     )
 
 

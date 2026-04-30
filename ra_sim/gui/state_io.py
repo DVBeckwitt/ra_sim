@@ -261,6 +261,7 @@ def collect_full_gui_state_snapshot(
     background_limits_user_override: bool,
     simulation_limits_user_override: bool,
     scale_factor_user_override: bool,
+    simulation_overlay_visible: bool = True,
 ) -> dict[str, object]:
     """Build a portable snapshot of the current GUI state."""
 
@@ -356,6 +357,7 @@ def collect_full_gui_state_snapshot(
         },
         "flags": {
             "background_visible": bool(background_visible),
+            "simulation_overlay_visible": bool(simulation_overlay_visible),
             "background_backend_rotation_k": int(background_backend_rotation_k),
             "background_backend_flip_x": bool(background_backend_flip_x),
             "background_backend_flip_y": bool(background_backend_flip_y),
@@ -555,6 +557,7 @@ def apply_gui_state_flags(
     *,
     current_flags: Mapping[str, object],
     toggle_background: Callable[[], None],
+    toggle_simulation_overlay: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Apply saved non-Tk GUI flags and return the updated flag state."""
 
@@ -562,6 +565,10 @@ def apply_gui_state_flags(
         "background_visible": _coerce_gui_state_bool(
             current_flags.get("background_visible", False),
             fallback=False,
+        ),
+        "simulation_overlay_visible": _coerce_gui_state_bool(
+            current_flags.get("simulation_overlay_visible", True),
+            fallback=True,
         ),
         "background_backend_rotation_k": _coerce_gui_state_rotation_k(
             current_flags.get("background_backend_rotation_k", 0),
@@ -598,6 +605,20 @@ def apply_gui_state_flags(
     if desired_background_visible != bool(updated_flags["background_visible"]):
         toggle_background()
         updated_flags["background_visible"] = desired_background_visible
+
+    desired_simulation_overlay_visible = _coerce_gui_state_bool(
+        flags.get(
+            "simulation_overlay_visible",
+            updated_flags["simulation_overlay_visible"],
+        ),
+        fallback=bool(updated_flags["simulation_overlay_visible"]),
+    )
+    if desired_simulation_overlay_visible != bool(
+        updated_flags["simulation_overlay_visible"]
+    ):
+        if callable(toggle_simulation_overlay):
+            toggle_simulation_overlay()
+        updated_flags["simulation_overlay_visible"] = desired_simulation_overlay_visible
 
     updated_flags["background_backend_rotation_k"] = _coerce_gui_state_rotation_k(
         flags.get(

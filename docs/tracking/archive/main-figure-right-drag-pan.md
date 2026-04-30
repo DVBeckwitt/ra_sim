@@ -12,7 +12,10 @@ Last updated: 2026-04-29
 Right-button drag panning stopped working on the main 2D detector and caked
 figures. Wheel zoom still worked. The regression was in canvas interaction
 dispatch: a stale left-drag suppression flag could consume the next right-button
-press before pan session setup ran.
+press before pan session setup ran. A follow-up real-GUI failure showed another
+startup gate: right-button press events can carry valid `event.x`/`event.y`
+pixels while `event.xdata`/`event.ydata` are missing, and the old pan starter
+rejected those events before the pixel-delta pan path could run.
 
 ## Current state
 
@@ -29,6 +32,11 @@ motion and release remain robust when backend motion/release events report
 `button=None`; release commits pending preview limits once and ends the live
 interaction.
 
+Follow-up fix: `_start_pan_session()` is now pixel-first. It accepts right
+presses inside the main axes by `event.inaxes` or by finite pointer pixels
+inside `axis.bbox`, derives the anchor from pixels when axis data is missing,
+and preserves the old `xdata`/`ydata` path when those values are valid.
+
 ## Next actions
 
 - None for this bug. Reopen only if right-drag panning fails again in detector
@@ -39,7 +47,7 @@ interaction.
 ## Validation
 
 - 2026-04-29: `python -m pytest tests/test_gui_canvas_interactions.py -ra -q`
-  passed, `43 passed`.
+  passed, `48 passed`.
 - 2026-04-29: `python -m pytest tests/test_gui_runtime_geometry_preview.py -ra`
   passed, `3 passed`.
 - 2026-04-29: `python -m pytest tests/test_gui_tk_primary_viewport.py -ra -q`

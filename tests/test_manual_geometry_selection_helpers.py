@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -3399,6 +3400,68 @@ def test_apply_geometry_manual_pairs_rows_replaces_state_and_refreshes_callbacks
     assert ("refresh", None) in calls
 
 
+def test_apply_geometry_manual_pairs_rows_backfills_legacy_detector_pairs_with_caked_cache() -> None:
+    calls: list[tuple[str, object]] = []
+    replaced: dict[int, list[dict[str, object]]] = {}
+
+    imported_backgrounds, imported_pairs, warnings = mg.apply_geometry_manual_pairs_rows(
+        [
+            {
+                "background_path": "bg_0.osc",
+                "background_name": "bg_0.osc",
+                "entries": [
+                    {
+                        "label": "1,0,0",
+                        "hkl": [1, 0, 0],
+                        "x": 5.0,
+                        "y": 6.0,
+                        "raw_x": 4.5,
+                        "raw_y": 5.5,
+                        "q_group_key": ["q_group", "primary", 1.0, 0],
+                    }
+                ],
+            }
+        ],
+        osc_files=["bg_0.osc"],
+        pairs_for_index=lambda _idx: [],
+        replace_pairs_by_background=lambda mapping: replaced.update(mapping),
+        clear_preview_artists=lambda **kwargs: calls.append(("clear", kwargs)),
+        cancel_pick_session=lambda **kwargs: calls.append(("cancel", kwargs)),
+        invalidate_pick_cache=lambda: calls.append(("invalidate", None)),
+        clear_manual_undo_stack=lambda: calls.append(("clear_manual", None)),
+        clear_geometry_fit_undo_stack=lambda: calls.append(("clear_fit", None)),
+        render_current_pairs=lambda **kwargs: calls.append(("render", kwargs)),
+        update_button_label=lambda: calls.append(("button", None)),
+        refresh_status=lambda: calls.append(("refresh", None)),
+        backfill_imported_pairs_for_background=lambda background_index, entries: (
+            mg.geometry_manual_backfill_missing_caked_coordinates(
+                entries,
+                background_display_to_native_detector_coords=lambda col, row: (
+                    float(col) + 100.0 + int(background_index),
+                    float(row) + 200.0 + int(background_index),
+                ),
+                native_detector_coords_to_caked_display_coords=lambda col, row: (
+                    float(col) / 10.0,
+                    float(row) / 10.0,
+                ),
+            )[0]
+        ),
+    )
+
+    assert (imported_backgrounds, imported_pairs, warnings) == (1, 1, [])
+    saved = replaced[0][0]
+    assert saved["manual_background_input_origin"] == "detector"
+    assert saved["background_two_theta_deg"] == 10.5
+    assert saved["background_phi_deg"] == 20.6
+    assert saved["caked_x"] == 10.5
+    assert saved["caked_y"] == 20.6
+    assert saved["geometry_caked_deg"] == (10.5, 20.6)
+    assert saved["raw_caked_x"] == 10.45
+    assert saved["raw_caked_y"] == 20.55
+    assert saved["raw_detector_native_px"] == (104.5, 205.5)
+    assert saved["geometry_detector_native_px"] == (105.0, 206.0)
+
+
 def test_apply_geometry_manual_pairs_snapshot_reloads_backgrounds_before_apply(
     tmp_path,
 ) -> None:
@@ -6476,6 +6539,1248 @@ def test_match_geometry_manual_group_to_background_builds_source_lookup() -> Non
     )
 
     assert matches == {("source", 3, 8): (1.5, 2.5)}
+
+
+def _qr_branch_candidate(
+    *,
+    group_key: tuple[object, ...],
+    branch: int,
+    hkl: tuple[int, int, int],
+    sim_col: float,
+    sim_row: float,
+    source_row_index: int,
+    label: str | None = None,
+) -> dict[str, object]:
+    return {
+        "label": label or f"{hkl[0]},{hkl[1]},{hkl[2]} branch {branch}",
+        "hkl": hkl,
+        "q_group_key": group_key,
+        "sim_col": float(sim_col),
+        "sim_row": float(sim_row),
+        "source_table_index": 1,
+        "source_row_index": int(source_row_index),
+        "source_branch_index": int(branch),
+        "source_peak_index": int(branch),
+    }
+
+
+def test_qr_branch_pair_length_restraint_accepts_matching_non_00l_pair() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    branch0 = {
+        **_qr_branch_candidate(
+            group_key=group_key,
+            branch=0,
+            hkl=(1, 0, 2),
+            sim_col=10.0,
+            sim_row=10.0,
+            source_row_index=1,
+        ),
+        "x": 10.0,
+        "y": 10.0,
+        "refined_sim_x": 10.0,
+        "refined_sim_y": 10.0,
+    }
+    branch1 = {
+        **_qr_branch_candidate(
+            group_key=group_key,
+            branch=1,
+            hkl=(-1, 0, 2),
+            sim_col=30.0,
+            sim_row=10.0,
+            source_row_index=2,
+        ),
+        "x": 31.0,
+        "y": 10.0,
+        "refined_sim_x": 30.0,
+        "refined_sim_y": 10.0,
+    }
+
+    result = mg._score_qr_branch_pair_length_restraint(
+        branch0,
+        branch1,
+        group_key=group_key,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=2.0,
+        branch_pair_rel_tol=0.05,
+    )
+
+    assert result["applied"] is True
+    assert result["accepted"] is True
+    assert result["reason"] == "within_tolerance"
+    assert result["branch_pair_coordinate_frame"] == "current_view_display"
+    assert result["d_obs"] == 21.0
+    assert result["d_pred"] == 20.0
+
+
+def test_qr_branch_pair_length_restraint_rejects_bad_non_00l_pair() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    branch0 = {
+        **_qr_branch_candidate(
+            group_key=group_key,
+            branch=0,
+            hkl=(1, 0, 2),
+            sim_col=10.0,
+            sim_row=10.0,
+            source_row_index=1,
+        ),
+        "x": 10.0,
+        "y": 10.0,
+        "refined_sim_x": 10.0,
+        "refined_sim_y": 10.0,
+    }
+    branch1 = {
+        **_qr_branch_candidate(
+            group_key=group_key,
+            branch=1,
+            hkl=(-1, 0, 2),
+            sim_col=30.0,
+            sim_row=10.0,
+            source_row_index=2,
+        ),
+        "x": 70.0,
+        "y": 10.0,
+        "refined_sim_x": 30.0,
+        "refined_sim_y": 10.0,
+    }
+
+    result = mg._score_qr_branch_pair_length_restraint(
+        branch0,
+        branch1,
+        group_key=group_key,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=4.0,
+        branch_pair_rel_tol=0.10,
+    )
+
+    assert result["accepted"] is False
+    assert result["reason"] == "branch_pair_length_out_of_tolerance"
+    assert result["length_error"] == 40.0
+
+
+def test_qr_branch_pair_length_restraint_skips_00l() -> None:
+    group_key = ("q_group", "primary", 0, 3)
+    result = mg._score_qr_branch_pair_length_restraint(
+        {"hkl": (0, 0, 3), "q_group_key": group_key},
+        None,
+        group_key=group_key,
+        use_caked_space=False,
+    )
+
+    assert result == {
+        "applied": False,
+        "accepted": True,
+        "reason": "00l_branch_collapsed",
+        "branch_pair_coordinate_frame": None,
+    }
+
+
+def test_qr_branch_pair_length_restraint_requires_two_non_00l_branches() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    result = mg._score_qr_branch_pair_length_restraint(
+        _qr_branch_candidate(
+            group_key=group_key,
+            branch=0,
+            hkl=(1, 0, 2),
+            sim_col=10.0,
+            sim_row=10.0,
+            source_row_index=1,
+        ),
+        None,
+        group_key=group_key,
+        use_caked_space=False,
+    )
+
+    assert result["applied"] is True
+    assert result["accepted"] is False
+    assert result["reason"] == "missing_required_branch_pair"
+
+
+def test_qr_branch_pair_length_restraint_uses_relative_and_absolute_gate() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+
+    def _entry(branch: int, observed_x: float, predicted_x: float) -> dict[str, object]:
+        return {
+            **_qr_branch_candidate(
+                group_key=group_key,
+                branch=branch,
+                hkl=((1 if branch == 0 else -1), 0, 2),
+                sim_col=predicted_x,
+                sim_row=0.0,
+                source_row_index=branch + 1,
+            ),
+            "x": observed_x,
+            "y": 0.0,
+            "refined_sim_x": predicted_x,
+            "refined_sim_y": 0.0,
+        }
+
+    accepted = mg._score_qr_branch_pair_length_restraint(
+        _entry(0, 0.0, 0.0),
+        _entry(1, 115.0, 100.0),
+        group_key=group_key,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=5.0,
+        branch_pair_rel_tol=0.20,
+    )
+    rejected = mg._score_qr_branch_pair_length_restraint(
+        _entry(0, 0.0, 0.0),
+        _entry(1, 130.0, 100.0),
+        group_key=group_key,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=5.0,
+        branch_pair_rel_tol=0.20,
+    )
+
+    assert accepted["gate_px"] == 20.0
+    assert accepted["accepted"] is True
+    assert rejected["accepted"] is False
+
+
+def test_auto_add_branch_pair_restraint_uses_same_coordinate_frame_for_obs_and_pred() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    branch0 = {
+        **_qr_branch_candidate(
+            group_key=group_key,
+            branch=0,
+            hkl=(1, 0, 2),
+            sim_col=0.0,
+            sim_row=0.0,
+            source_row_index=1,
+        ),
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 20.0,
+        "refined_sim_caked_x": 10.0,
+        "refined_sim_caked_y": 20.0,
+        "detector_x": 1000.0,
+        "detector_y": 1000.0,
+        "refined_sim_native_x": 1000.0,
+        "refined_sim_native_y": 1000.0,
+    }
+    branch1 = {
+        **_qr_branch_candidate(
+            group_key=group_key,
+            branch=1,
+            hkl=(-1, 0, 2),
+            sim_col=0.0,
+            sim_row=0.0,
+            source_row_index=2,
+        ),
+        "background_two_theta_deg": 25.0,
+        "background_phi_deg": 20.0,
+        "refined_sim_caked_x": 20.0,
+        "refined_sim_caked_y": 20.0,
+        "detector_x": 2000.0,
+        "detector_y": 2000.0,
+    }
+
+    result = mg._score_qr_branch_pair_length_restraint(
+        branch0,
+        branch1,
+        group_key=group_key,
+        use_caked_space=True,
+        branch_pair_abs_tol_px=6.0,
+        branch_pair_rel_tol=0.10,
+    )
+
+    assert result["accepted"] is True
+    assert result["branch_pair_coordinate_frame"] == "caked_display"
+    assert result["d_obs"] == 15.0
+    assert result["d_pred"] == 10.0
+
+
+def test_geometry_manual_auto_add_q_group_peaks_refines_enabled_groups() -> None:
+    group_a = ("q_group", "primary", 0, 1)
+    group_b = ("q_group", "primary", 0, 2)
+    group_disabled = ("q_group", "primary", 0, 3)
+    saved_sets: list[list[dict[str, object]]] = []
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    undo_events: list[str] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_a: [
+                    {
+                        "label": "0,0,1",
+                        "hkl": (0, 0, 1),
+                        "q_group_key": group_a,
+                        "sim_col": 10.0,
+                        "sim_row": 11.0,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    }
+                ],
+                group_b: [
+                    {
+                        "label": "0,0,2",
+                        "hkl": (0, 0, 2),
+                        "q_group_key": group_b,
+                        "sim_col": 20.0,
+                        "sim_row": 21.0,
+                        "source_table_index": 2,
+                        "source_row_index": 3,
+                    }
+                ],
+                group_disabled: [
+                    {
+                        "label": "0,0,3",
+                        "hkl": (0, 0, 3),
+                        "q_group_key": group_disabled,
+                        "sim_col": 28.0,
+                        "sim_row": 29.0,
+                        "source_table_index": 3,
+                        "source_row_index": 4,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [
+            {"label": "kept", "q_group_key": ("q_group", "old", 9, 0)}
+        ],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col) + 0.25,
+            float(raw_row) + 0.5,
+        ),
+        selected_q_group_entries=[{"key": group_a}, {"key": group_b}],
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: undo_events.append("undo"),
+        use_caked_space=False,
+    )
+
+    assert result["placed_count"] == 2
+    assert result["completed_group_count"] == 2
+    assert undo_events == ["undo"]
+    assert sessions[-1] == {}
+    assert saved_sets
+    saved_labels = [entry["label"] for entry in saved_sets[-1]]
+    assert saved_labels == ["kept", "0,0,1", "0,0,2"]
+    assert all(entry["label"] != "0,0,3" for entry in saved_sets[-1])
+    assert saved_sets[-1][1]["x"] == 10.25
+    assert saved_sets[-1][1]["y"] == 11.5
+    assert "Auto-added 2 manual Qr/Qz peak placements" in status_messages[-1]
+
+
+def test_geometry_manual_auto_add_q_group_peaks_uses_refined_sim_seed() -> None:
+    group_key = ("q_group", "primary", 0, 1)
+    refine_inputs: list[tuple[float, float]] = []
+    saved_sets: list[list[dict[str, object]]] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "0,0,1",
+                        "hkl": (0, 0, 1),
+                        "q_group_key": group_key,
+                        "sim_col": 10.0,
+                        "sim_row": 11.0,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            refine_inputs.append((float(raw_col), float(raw_row)))
+            or (float(raw_col) + 0.5, float(raw_row) + 0.75)
+        ),
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        refine_sim_candidate_fn=lambda candidate, **_kwargs: {
+            **dict(candidate),
+            "refined_sim_x": 14.0,
+            "refined_sim_y": 15.0,
+            "sim_refined_detector_display_px": (14.0, 15.0),
+        },
+    )
+
+    assert result["placed_count"] == 1
+    assert refine_inputs == [(14.0, 15.0)]
+    assert saved_sets[-1][0]["x"] == 14.5
+    assert saved_sets[-1][0]["y"] == 15.75
+
+
+def test_geometry_manual_auto_add_q_group_peaks_passes_aggressive_radius() -> None:
+    group_key = ("q_group", "primary", 0, 1)
+    seen: dict[str, object] = {}
+
+    def _refine_sim_candidate(candidate, **kwargs):
+        seen["sim_radius"] = kwargs.get("auto_refine_search_radius_px")
+        return dict(candidate)
+
+    def _refine_preview_point(_candidate, raw_col, raw_row, **kwargs):
+        cache_data = kwargs.get("cache_data")
+        seen["preview_radius"] = cache_data["match_config"]["search_radius_px"]
+        seen["preview_margin"] = cache_data["match_config"]["context_margin_px"]
+        seen["auto_marker"] = cache_data["manual_auto_refine_search_radius_px"]
+        return float(raw_col), float(raw_row)
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "match_config": {"search_radius_px": 8.0, "context_margin_px": 20.0},
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "0,0,1",
+                        "hkl": (0, 0, 1),
+                        "q_group_key": group_key,
+                        "sim_col": 10.0,
+                        "sim_row": 11.0,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: [
+            dict(entry) for entry in (entries or [])
+        ],
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=_refine_preview_point,
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        refine_sim_candidate_fn=_refine_sim_candidate,
+        auto_refine_search_radius_px=72.0,
+    )
+
+    assert result["placed_count"] == 1
+    assert seen == {
+        "sim_radius": 72.0,
+        "preview_radius": 72.0,
+        "preview_margin": 432.0,
+        "auto_marker": 72.0,
+    }
+
+
+def test_auto_add_q_group_peaks_applies_branch_pair_length_restraint() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    saved_sets: list[list[dict[str, object]]] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((48, 48), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=0,
+                        hkl=(1, 0, 4),
+                        sim_col=10.0,
+                        sim_row=20.0,
+                        source_row_index=1,
+                        label="branch-0",
+                    ),
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=1,
+                        hkl=(-1, 0, 4),
+                        sim_col=30.0,
+                        sim_row=20.0,
+                        source_row_index=2,
+                        label="branch-1",
+                    ),
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col) + 1.0,
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=2.0,
+        branch_pair_rel_tol=0.05,
+    )
+
+    assert result["placed_count"] == 2
+    assert [entry["label"] for entry in saved_sets[-1]] == ["branch-0", "branch-1"]
+    diagnostics = result["branch_pair_restraint_results"][0]
+    assert diagnostics["branch_pair_restraint_applied"] is True
+    assert diagnostics["branch_pair_restraint_accepted"] is True
+    assert diagnostics["branch_pair_coordinate_frame"] == "current_view_display"
+    assert diagnostics["branch_pair_length_observed_px"] == 20.0
+    assert diagnostics["branch_pair_length_predicted_px"] == 20.0
+
+
+def test_auto_add_q_group_peaks_final_refines_geometry_after_branch_restraint() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    saved_sets: list[list[dict[str, object]]] = []
+    refine_calls: dict[str, int] = {}
+
+    def _final_refine(entry: dict[str, object], candidate=None) -> dict[str, object]:
+        label = str(entry.get("label"))
+        refine_calls[label] = int(refine_calls.get(label, 0)) + 1
+        updated = dict(entry)
+        if refine_calls[label] >= 2:
+            updated["x"] = 999.0
+            updated["y"] = 999.0
+            updated["refined_sim_x"] = float(candidate["sim_col"]) + 2.0
+            updated["refined_sim_y"] = float(candidate["sim_row"]) + 3.0
+        else:
+            updated["refined_sim_x"] = float(candidate["sim_col"])
+            updated["refined_sim_y"] = float(candidate["sim_row"])
+        return updated
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((48, 48), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=0,
+                        hkl=(1, 0, 4),
+                        sim_col=10.0,
+                        sim_row=20.0,
+                        source_row_index=1,
+                        label="branch-0",
+                    ),
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=1,
+                        hkl=(-1, 0, 4),
+                        sim_col=30.0,
+                        sim_row=20.0,
+                        source_row_index=2,
+                        label="branch-1",
+                    ),
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col),
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        refine_saved_pair_entry_fn=_final_refine,
+        branch_pair_abs_tol_px=2.0,
+        branch_pair_rel_tol=0.05,
+    )
+
+    assert result["placed_count"] == 2
+    assert result["final_refined_geometry_peak_count"] == 2
+    assert refine_calls == {"branch-0": 2, "branch-1": 2}
+    saved_by_label = {entry["label"]: entry for entry in saved_sets[-1]}
+    assert saved_by_label["branch-0"]["x"] == 10.0
+    assert saved_by_label["branch-0"]["y"] == 20.0
+    assert saved_by_label["branch-0"]["refined_sim_x"] == 12.0
+    assert saved_by_label["branch-0"]["refined_sim_y"] == 23.0
+    assert saved_by_label["branch-1"]["x"] == 30.0
+    assert saved_by_label["branch-1"]["y"] == 20.0
+    assert saved_by_label["branch-1"]["refined_sim_x"] == 32.0
+    assert saved_by_label["branch-1"]["refined_sim_y"] == 23.0
+
+
+def test_auto_add_q_group_peaks_final_refines_geometry_in_parallel() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    barrier = threading.Barrier(2)
+    lock = threading.Lock()
+    refine_calls: dict[str, int] = {}
+    final_thread_ids: list[int] = []
+
+    def _final_refine(entry: dict[str, object], candidate=None) -> dict[str, object]:
+        label = str(entry.get("label"))
+        with lock:
+            call_index = int(refine_calls.get(label, 0)) + 1
+            refine_calls[label] = call_index
+        updated = dict(entry)
+        if call_index >= 2:
+            final_thread_ids.append(threading.get_ident())
+            barrier.wait(timeout=5.0)
+            updated["refined_sim_x"] = float(candidate["sim_col"]) + 4.0
+            updated["refined_sim_y"] = float(candidate["sim_row"]) + 5.0
+        return updated
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((48, 48), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=0,
+                        hkl=(1, 0, 4),
+                        sim_col=10.0,
+                        sim_row=20.0,
+                        source_row_index=1,
+                        label="branch-0",
+                    ),
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=1,
+                        hkl=(-1, 0, 4),
+                        sim_col=30.0,
+                        sim_row=20.0,
+                        source_row_index=2,
+                        label="branch-1",
+                    ),
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: [
+            dict(entry) for entry in (entries or [])
+        ],
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col),
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        refine_saved_pair_entry_fn=_final_refine,
+        final_refine_parallel_workers=2,
+        branch_pair_abs_tol_px=2.0,
+        branch_pair_rel_tol=0.05,
+    )
+
+    assert result["placed_count"] == 2
+    assert result["final_refined_geometry_peak_count"] == 2
+    assert result["final_refine_parallel_worker_count"] == 2
+    assert refine_calls == {"branch-0": 2, "branch-1": 2}
+    assert len(set(final_thread_ids)) == 2
+
+
+def test_auto_add_q_group_peaks_rejects_non_00l_bad_branch_pair() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    saved_sets: list[list[dict[str, object]]] = []
+
+    def _refine_preview_point(candidate, raw_col, raw_row, **_kwargs):
+        if candidate.get("source_branch_index") == 1:
+            return float(raw_col) + 40.0, float(raw_row)
+        return float(raw_col), float(raw_row)
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((96, 96), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=0,
+                        hkl=(1, 0, 4),
+                        sim_col=10.0,
+                        sim_row=20.0,
+                        source_row_index=1,
+                    ),
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=1,
+                        hkl=(-1, 0, 4),
+                        sim_col=30.0,
+                        sim_row=20.0,
+                        source_row_index=2,
+                    ),
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=_refine_preview_point,
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=4.0,
+        branch_pair_rel_tol=0.05,
+    )
+
+    assert result["placed_count"] == 0
+    assert result["skipped_group_count"] == 1
+    assert saved_sets == []
+    diagnostics = result["branch_pair_restraint_results"][0]
+    assert diagnostics["branch_pair_restraint_accepted"] is False
+    assert diagnostics["branch_pair_reject_reason"] == "branch_pair_length_out_of_tolerance"
+
+
+def test_auto_add_q_group_peaks_keeps_00l_collapsed_branch_without_pair_restraint() -> None:
+    group_key = ("q_group", "primary", 0, 4)
+    saved_sets: list[list[dict[str, object]]] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "0,0,4",
+                        "hkl": (0, 0, 4),
+                        "q_group_key": group_key,
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col),
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert result["placed_count"] == 1
+    assert saved_sets[-1][0]["label"] == "0,0,4"
+    diagnostics = result["branch_pair_restraint_results"][0]
+    assert diagnostics["branch_pair_restraint_applied"] is False
+    assert diagnostics["branch_pair_reject_reason"] == "00l_branch_collapsed"
+
+
+def test_auto_add_q_group_peaks_excludes_000_origin_group() -> None:
+    origin_group = ("q_group", "primary", 0, 0)
+    rod_group = ("q_group", "primary", 0, 1)
+    saved_sets: list[list[dict[str, object]]] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                origin_group: [
+                    {
+                        "label": "0,0,0",
+                        "hkl": (0, 0, 0),
+                        "q_group_key": origin_group,
+                        "sim_col": 5.0,
+                        "sim_row": 6.0,
+                    }
+                ],
+                rod_group: [
+                    {
+                        "label": "0,0,1",
+                        "hkl": (0, 0, 1),
+                        "q_group_key": rod_group,
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col),
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": origin_group}, {"key": rod_group}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert result["placed_count"] == 1
+    assert [entry["label"] for entry in saved_sets[-1]] == ["0,0,1"]
+    assert result["completed_q_group_keys"] == [("primary", 0, 1)]
+
+
+def test_auto_add_branch_pair_reject_false_keeps_scored_bad_pair() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    saved_sets: list[list[dict[str, object]]] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((96, 96), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=0,
+                        hkl=(1, 0, 4),
+                        sim_col=10.0,
+                        sim_row=20.0,
+                        source_row_index=1,
+                    ),
+                    _qr_branch_candidate(
+                        group_key=group_key,
+                        branch=1,
+                        hkl=(-1, 0, 4),
+                        sim_col=30.0,
+                        sim_row=20.0,
+                        source_row_index=2,
+                    ),
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col) + (40.0 if candidate.get("source_branch_index") == 1 else 0.0),
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": group_key}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=4.0,
+        branch_pair_rel_tol=0.05,
+        branch_pair_reject=False,
+    )
+
+    assert result["placed_count"] == 2
+    assert len(saved_sets[-1]) == 2
+    assert result["branch_pair_restraint_results"][0]["branch_pair_restraint_accepted"] is False
+
+
+def test_auto_search_aggression_scales_branch_pair_tolerance() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+
+    def _run(radius: float) -> dict[str, object]:
+        return mg.geometry_manual_auto_add_q_group_peaks(
+            current_background_index=0,
+            display_background=np.zeros((96, 96), dtype=float),
+            get_cache_data=lambda **_kwargs: {
+                "signature": ("cache",),
+                "detector_picker_grouped_candidates": {
+                    group_key: [
+                        _qr_branch_candidate(
+                            group_key=group_key,
+                            branch=0,
+                            hkl=(1, 0, 4),
+                            sim_col=10.0,
+                            sim_row=20.0,
+                            source_row_index=1,
+                        ),
+                        _qr_branch_candidate(
+                            group_key=group_key,
+                            branch=1,
+                            hkl=(-1, 0, 4),
+                            sim_col=30.0,
+                            sim_row=20.0,
+                            source_row_index=2,
+                        ),
+                    ],
+                },
+            },
+            pairs_for_index=lambda _index: [],
+            set_pairs_for_index_fn=lambda _index, entries: [
+                dict(entry) for entry in (entries or [])
+            ],
+            set_pick_session_fn=lambda _session: None,
+            clear_preview_artists_fn=lambda **_kwargs: None,
+            restore_view_fn=lambda **_kwargs: None,
+            render_current_pairs_fn=lambda **_kwargs: None,
+            update_button_label_fn=lambda: None,
+            refine_preview_point=lambda candidate, raw_col, raw_row, **_kwargs: (
+                float(raw_col) + (15.0 if candidate.get("source_branch_index") == 1 else 0.0),
+                float(raw_row),
+            ),
+            selected_q_group_entries=[{"key": group_key}],
+            push_undo_state_fn=lambda: None,
+            use_caked_space=False,
+            auto_refine_search_radius_px=radius,
+        )
+
+    low = _run(24.0)
+    high = _run(72.0)
+
+    assert low["placed_count"] == 0
+    assert low["branch_pair_restraint_results"][0]["branch_pair_length_gate_px"] == 12.0
+    assert high["placed_count"] == 2
+    assert high["branch_pair_restraint_results"][0]["branch_pair_length_gate_px"] == 20.0
+
+
+def test_auto_add_branch_pair_restraint_does_not_allow_hkl_only_fallback() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    result = mg._score_qr_branch_pair_length_restraint(
+        {
+            **_qr_branch_candidate(
+                group_key=group_key,
+                branch=0,
+                hkl=(1, 0, 4),
+                sim_col=10.0,
+                sim_row=20.0,
+                source_row_index=1,
+            ),
+            "x": 10.0,
+            "y": 20.0,
+            "refined_sim_x": 10.0,
+            "refined_sim_y": 20.0,
+        },
+        {
+            "label": "same-hkl-without-branch",
+            "hkl": (1, 0, 4),
+            "q_group_key": group_key,
+            "x": 30.0,
+            "y": 20.0,
+            "refined_sim_x": 30.0,
+            "refined_sim_y": 20.0,
+        },
+        group_key=group_key,
+        use_caked_space=False,
+    )
+
+    assert result["accepted"] is False
+    assert result["reason"] == "missing_required_branch_pair"
+
+
+def test_auto_add_branch_pair_restraint_requires_q_group_key_match() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    other_group = ("q_group", "primary", 2, 4)
+    result = mg._score_qr_branch_pair_length_restraint(
+        {
+            **_qr_branch_candidate(
+                group_key=group_key,
+                branch=0,
+                hkl=(1, 0, 4),
+                sim_col=10.0,
+                sim_row=20.0,
+                source_row_index=1,
+            ),
+            "x": 10.0,
+            "y": 20.0,
+            "refined_sim_x": 10.0,
+            "refined_sim_y": 20.0,
+        },
+        {
+            **_qr_branch_candidate(
+                group_key=other_group,
+                branch=1,
+                hkl=(-1, 0, 4),
+                sim_col=30.0,
+                sim_row=20.0,
+                source_row_index=2,
+            ),
+            "x": 30.0,
+            "y": 20.0,
+            "refined_sim_x": 30.0,
+            "refined_sim_y": 20.0,
+        },
+        group_key=group_key,
+        use_caked_space=False,
+    )
+
+    assert result["accepted"] is False
+    assert result["reason"] == "q_group_key_mismatch"
+
+
+def test_auto_add_branch_pair_restraint_does_not_change_manual_click_behavior() -> None:
+    group_key = ("q_group", "primary", 1, 4)
+    candidate = _qr_branch_candidate(
+        group_key=group_key,
+        branch=0,
+        hkl=(1, 0, 4),
+        sim_col=10.0,
+        sim_row=20.0,
+        source_row_index=1,
+    )
+    saved_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        10.0,
+        20.0,
+        pick_session={
+            "manual_geometry_run_id": "manual-test",
+            "background_index": 0,
+            "group_key": group_key,
+            "group_entries": [dict(candidate)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+        },
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {"signature": ("cache",)},
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col) + 0.25,
+            float(raw_row) + 0.5,
+        ),
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert len(saved_sets[-1]) == 1
+    assert saved_sets[-1][0]["source_branch_index"] == 0
+    assert saved_sets[-1][0]["x"] == 10.25
+    assert saved_sets[-1][0]["y"] == 20.5
+
+
+def test_auto_add_branch_pair_reject_removes_tentative_working_entries() -> None:
+    bad_group = ("q_group", "primary", 1, 4)
+    good_group = ("q_group", "primary", 2, 4)
+    saved_sets: list[list[dict[str, object]]] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((96, 96), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                bad_group: [
+                    _qr_branch_candidate(
+                        group_key=bad_group,
+                        branch=0,
+                        hkl=(1, 0, 4),
+                        sim_col=10.0,
+                        sim_row=20.0,
+                        source_row_index=1,
+                        label="bad-0",
+                    ),
+                    _qr_branch_candidate(
+                        group_key=bad_group,
+                        branch=1,
+                        hkl=(-1, 0, 4),
+                        sim_col=30.0,
+                        sim_row=20.0,
+                        source_row_index=2,
+                        label="bad-1",
+                    ),
+                ],
+                good_group: [
+                    _qr_branch_candidate(
+                        group_key=good_group,
+                        branch=0,
+                        hkl=(2, 0, 4),
+                        sim_col=40.0,
+                        sim_row=20.0,
+                        source_row_index=3,
+                        label="good-0",
+                    ),
+                    _qr_branch_candidate(
+                        group_key=good_group,
+                        branch=1,
+                        hkl=(-2, 0, 4),
+                        sim_col=60.0,
+                        sim_row=20.0,
+                        source_row_index=4,
+                        label="good-1",
+                    ),
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [{"label": "kept", "q_group_key": ("q_group", "old", 9, 0)}],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col)
+            + (
+                40.0
+                if candidate.get("source_row_index") == 2
+                and candidate.get("source_branch_index") == 1
+                else 0.0
+            ),
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": bad_group}, {"key": good_group}],
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        branch_pair_abs_tol_px=4.0,
+        branch_pair_rel_tol=0.05,
+    )
+
+    assert result["placed_count"] == 2
+    assert result["completed_group_count"] == 1
+    assert [entry["label"] for entry in saved_sets[-1]] == ["kept", "good-0", "good-1"]
+    assert all(not str(entry["label"]).startswith("bad-") for entry in saved_sets[-1])
+
+
+def test_geometry_manual_remove_q_group_peak_entries_removes_selected_sets() -> None:
+    group_a = ("q_group", "primary", 1, 0)
+    group_b = ("q_group", "primary", 2, 0)
+
+    kept_entries, removed_count, removed_keys = (
+        mg.geometry_manual_remove_q_group_peak_entries(
+            [
+                {"label": "a1", "q_group_key": group_a},
+                {"label": "b1", "q_group_key": group_b},
+                {"label": "old", "q_group_key": ("q_group", "old", 9, 0)},
+            ],
+            selected_q_group_entries=[{"key": group_a}],
+        )
+    )
+
+    assert removed_count == 1
+    assert removed_keys == {("primary", 1, 0)}
+    assert [entry["label"] for entry in kept_entries] == ["b1", "old"]
+
+
+def test_geometry_manual_auto_add_q_group_peaks_discards_incomplete_groups() -> None:
+    group_key = ("q_group", "primary", 4, 0)
+    saved_sets: list[list[dict[str, object]]] = []
+    sessions: list[dict[str, object]] = []
+    undo_events: list[str] = []
+    status_messages: list[str] = []
+
+    result = mg.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "detector_picker_grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "4,0,0 +",
+                        "hkl": (4, 0, 0),
+                        "q_group_key": group_key,
+                        "sim_col": 10.0,
+                        "sim_row": 11.0,
+                        "source_branch_index": 0,
+                    },
+                    {
+                        "label": "4,0,0 -",
+                        "hkl": (-4, 0, 0),
+                        "q_group_key": group_key,
+                        "sim_col": 12.0,
+                        "sim_row": 13.0,
+                        "source_branch_index": 1,
+                    },
+                ],
+            },
+        },
+        pairs_for_index=lambda _index: [
+            {"label": "kept", "q_group_key": ("q_group", "old", 9, 0)}
+        ],
+        set_pairs_for_index_fn=lambda _index, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or [dict(entry) for entry in (entries or [])]
+        ),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        refine_preview_point=lambda _candidate, raw_col, raw_row, **_kwargs: (
+            float(raw_col),
+            float(raw_row),
+        ),
+        selected_q_group_entries=[{"key": group_key}],
+        candidate_source_key=lambda _candidate: ("same-source",),
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: undo_events.append("undo"),
+        use_caked_space=False,
+    )
+
+    assert result["placed_count"] == 0
+    assert result["skipped_group_count"] == 1
+    assert saved_sets == []
+    assert undo_events == []
+    assert sessions[-1] == {}
+    assert "did not save any peaks" in status_messages[-1]
 
 
 def test_geometry_manual_pick_cache_signature_tracks_background_state() -> None:
@@ -11433,6 +12738,280 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
     assert set_sessions[-1]["tagged_candidate_key"] == ("source_branch", 1, 1)
 
 
+def test_geometry_manual_toggle_selection_at_prefers_nearest_group_over_shared_cache() -> (
+    None
+):
+    near_key = ("q_group", "primary", 1, 2)
+    shared_key = ("q_group", "primary", 1, 5)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((64, 64), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                near_key: [
+                    {
+                        "label": "nearest",
+                        "hkl": (1, 0, 2),
+                        "q_group_key": near_key,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                        "sim_col": 10.25,
+                        "sim_row": 20.25,
+                    }
+                ],
+                shared_key: [
+                    {
+                        "label": "shared-but-not-nearest",
+                        "hkl": (1, 0, 5),
+                        "q_group_key": shared_key,
+                        "source_table_index": 1,
+                        "source_row_index": 5,
+                        "sim_col": 14.0,
+                        "sim_row": 24.0,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": near_key}, {"key": shared_key}],
+        format_q_group_line=lambda entry: (
+            "near group" if entry.get("key") == near_key else "shared group"
+        ),
+        find_peak_record_for_click_fn=lambda _col, _row, _max_axis_distance: (
+            7,
+            {
+                "label": "shared",
+                "hkl": (1, 0, 5),
+                "q_group_key": shared_key,
+                "source_table_index": 1,
+                "source_row_index": 5,
+                "sim_col": 10.1,
+                "sim_row": 20.1,
+            },
+            0.2,
+            True,
+        ),
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == near_key
+    assert next_session["tagged_candidate"]["label"] == "nearest"
+
+
+def test_geometry_manual_toggle_selection_at_does_not_duplicate_saved_qr_set() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    saved_sets: list[list[dict[str, object]]] = []
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    existing_entry = {
+        "label": "saved",
+        "hkl": (1, 0, 2),
+        "q_group_key": group_key,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "x": 100.0,
+        "y": 100.0,
+        "geometry_detector_display_px": (100.0, 100.0),
+    }
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((128, 128), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "new",
+                        "hkl": (1, 0, 2),
+                        "q_group_key": group_key,
+                        "source_table_index": 1,
+                        "source_row_index": 3,
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _idx: [dict(existing_entry)],
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is False
+    assert next_session == {}
+    assert sessions[-1] == {}
+    assert saved_sets == []
+    assert "already selected" in status_messages[-1]
+
+
+def test_geometry_manual_toggle_selection_at_caked_keeps_clicked_nearest_seed() -> None:
+    group_key = ("q_group", "primary", 1, 8)
+    clicked = _manual_qr_caked_branch_row(
+        group_key,
+        label="clicked-near",
+        hkl=(1, 0, 8),
+        branch_id="+x",
+        source_branch_index=0,
+        caked_x=10.0,
+        caked_y=20.0,
+        source_row_index=1,
+    )
+    clicked["mosaic_weight"] = 0.1
+    far_mosaic_top = _manual_qr_caked_branch_row(
+        group_key,
+        label="far-mosaic-top",
+        hkl=(1, 0, 8),
+        branch_id="+x",
+        source_branch_index=0,
+        caked_x=16.0,
+        caked_y=26.0,
+        source_row_index=2,
+    )
+    far_mosaic_top["mosaic_weight"] = 0.9
+    other_branch = _manual_qr_caked_branch_row(
+        group_key,
+        label="other-branch",
+        hkl=(-1, 0, 8),
+        branch_id="-x",
+        source_branch_index=1,
+        caked_x=40.0,
+        caked_y=-20.0,
+        source_row_index=3,
+    )
+    other_branch["mosaic_weight"] = 0.7
+    rows = [clicked, far_mosaic_top, other_branch]
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.1,
+        20.1,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {},
+            "caked_qr_projection_grouped_candidates": {
+                group_key: [dict(row) for row in rows]
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["tagged_candidate"]["label"] == "clicked-near"
+    by_branch = {
+        int(entry["source_branch_index"]): entry for entry in next_session["group_entries"]
+    }
+    assert by_branch[0]["label"] == "clicked-near"
+    assert by_branch[1]["label"] == "other-branch"
+
+
+def test_geometry_manual_toggle_selection_at_caked_does_not_duplicate_saved_qr_set() -> None:
+    group_key = ("q_group", "primary", 1, 8)
+    saved_sets: list[list[dict[str, object]]] = []
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    existing_entry = {
+        "label": "already-saved",
+        "hkl": (1, 0, 8),
+        "q_group_key": group_key,
+        "source_table_index": 159,
+        "source_row_index": 1,
+        "source_branch_index": 0,
+        "caked_x": 100.0,
+        "caked_y": 120.0,
+    }
+    candidate = _manual_qr_caked_branch_row(
+        group_key,
+        label="candidate",
+        hkl=(1, 0, 8),
+        branch_id="+x",
+        source_branch_index=0,
+        caked_x=10.0,
+        caked_y=20.0,
+        source_row_index=2,
+    )
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {},
+            "caked_qr_projection_grouped_candidates": {group_key: [dict(candidate)]},
+        },
+        pairs_for_index=lambda _idx: [dict(existing_entry)],
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is False
+    assert next_session == {}
+    assert sessions[-1] == {}
+    assert saved_sets == []
+    assert "already selected" in status_messages[-1]
+
+
 def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_permutation() -> None:
     group_key = ("q_group", "primary", 1, 5)
     left = {
@@ -11869,6 +13448,90 @@ def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
     assert "Saved 1 manual background points for selected group" in status_messages[-1]
 
 
+def test_geometry_manual_place_selection_at_detector_pick_saves_projected_caked_coordinates() -> None:
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": group_key,
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "caked_x": 999.0,
+        "caked_y": 998.0,
+        "background_two_theta_deg": 997.0,
+        "background_phi_deg": 996.0,
+    }
+    saved_entry_sets: list[list[dict[str, object]]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session={
+            "group_key": group_key,
+            "group_entries": [dict(candidate)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) / 10.0,
+            float(row) / 10.0,
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    saved = saved_entry_sets[-1][0]
+    assert saved["manual_background_input_origin"] == "detector"
+    assert saved["geometry_detector_native_px"] == (105.0, 206.0)
+    assert saved["raw_detector_native_px"] == (104.8, 205.9)
+    assert saved["background_two_theta_deg"] == 10.5
+    assert saved["background_phi_deg"] == 20.6
+    assert saved["refined_background_two_theta_deg"] == 10.5
+    assert saved["refined_background_phi_deg"] == 20.6
+    assert saved["caked_x"] == 10.5
+    assert saved["caked_y"] == 20.6
+    assert saved["geometry_caked_deg"] == (10.5, 20.6)
+    assert saved["raw_caked_x"] == 10.48
+    assert saved["raw_caked_y"] == 20.59
+    assert saved["raw_caked_two_theta_deg"] == 10.48
+    assert saved["raw_caked_phi_deg"] == 20.59
+
+    serialized = mg.geometry_manual_pair_entry_to_jsonable(saved)
+    assert serialized is not None
+    assert serialized["background_two_theta_deg"] == 10.5
+    assert serialized["background_phi_deg"] == 20.6
+    assert serialized["caked_x"] == 10.5
+    assert serialized["caked_y"] == 20.6
+    assert serialized["raw_caked_x"] == 10.48
+    assert serialized["raw_caked_y"] == 20.59
+
+
 def test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callback() -> None:
     saved_entry_sets: list[list[dict[str, object]]] = []
 
@@ -11923,6 +13586,244 @@ def test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callba
     assert saved_entry_sets[-1][0]["refined_sim_caked_y"] == 12.0
     assert saved_entry_sets[-1][0]["refined_sim_x"] == 13.0
     assert saved_entry_sets[-1][0]["refined_sim_y"] == 14.0
+
+
+def test_geometry_manual_toggle_selection_at_starts_saved_background_peak_move_mode() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    saved_entries = [
+        {
+            "label": "left",
+            "hkl": (1, 0, 2),
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 20,
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "x": 10.0,
+            "y": 20.0,
+            "geometry_detector_display_px": (10.0, 20.0),
+            "refined_sim_x": 9.5,
+            "refined_sim_y": 19.5,
+        },
+        {
+            "label": "right",
+            "hkl": (-1, 0, 2),
+            "q_group_key": group_key,
+            "branch_id": "-x",
+            "source_branch_index": 1,
+            "source_reflection_index": 21,
+            "source_table_index": 1,
+            "source_row_index": 3,
+            "x": 30.0,
+            "y": 40.0,
+            "geometry_detector_display_px": (30.0, 40.0),
+            "refined_sim_x": 30.5,
+            "refined_sim_y": 39.5,
+        },
+    ]
+    sessions: list[dict[str, object]] = []
+    saved_sets: list[list[dict[str, object]]] = []
+    status_messages: list[str] = []
+
+    handled, session, armed = mg.geometry_manual_toggle_selection_at(
+        10.4,
+        20.3,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {"signature": ("cache",)},
+        pairs_for_index=lambda _idx: [dict(entry) for entry in saved_entries],
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda value: sessions.append(dict(value)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+        saved_pair_move_only=True,
+    )
+
+    assert handled is True
+    assert armed is False
+    assert saved_sets == []
+    assert session["moving_saved_pair"] is True
+    assert session["moving_saved_pair_index"] == 0
+    assert session["target_count"] == 1
+    assert session["group_key"] == group_key
+    assert session["group_entries"][0]["label"] == "left"
+    assert session["tagged_candidate"]["label"] == "left"
+    assert session["tagged_candidate_key"] == ("source_branch", 1, 0)
+    assert session["base_entries"] == [saved_entries[1]]
+    assert sessions[-1]["moving_saved_pair"] is True
+    assert "Move saved Qr/Qz background point [left]" in status_messages[-1]
+    assert "refine locally" in status_messages[-1]
+
+
+def test_geometry_manual_toggle_selection_at_caked_pick_mode_ignores_saved_move_hit() -> None:
+    key_003 = ("q_group", "primary", 0, 3)
+    key_006 = ("q_group", "primary", 0, 6)
+    row_003 = _manual_qr_caked_branch_row(
+        key_003,
+        label="0,0,3",
+        hkl=(0, 0, 3),
+        branch_id="unknown:00l:003",
+        source_branch_index=0,
+        caked_x=20.0,
+        caked_y=0.0,
+        source_row_index=3,
+    )
+    row_006 = _manual_qr_caked_branch_row(
+        key_006,
+        label="0,0,6",
+        hkl=(0, 0, 6),
+        branch_id="unknown:00l:006",
+        source_branch_index=0,
+        caked_x=26.0,
+        caked_y=0.0,
+        source_row_index=6,
+    )
+    saved_003 = {
+        **dict(row_003),
+        "x": 20.0,
+        "y": 0.0,
+        "caked_x": 20.0,
+        "caked_y": 0.0,
+        "background_two_theta_deg": 20.0,
+        "background_phi_deg": 0.0,
+    }
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    handled, session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        26.0,
+        0.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {},
+            "caked_qr_projection_grouped_candidates": {
+                key_003: [dict(row_003)],
+                key_006: [dict(row_006)],
+            },
+        },
+        pairs_for_index=lambda _idx: [dict(saved_003)],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda value: sessions.append(dict(value)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": key_003}, {"key": key_006}],
+        format_q_group_line=lambda entry: str(entry.get("key")),
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert session["group_key"] == key_006
+    assert session.get("moving_saved_pair") is not True
+    assert session["tagged_candidate"]["hkl"] == (0, 0, 6)
+    assert sessions[-1]["group_key"] == key_006
+    assert "Move saved Qr/Qz background point" not in status_messages[-1]
+
+
+def test_geometry_manual_moved_saved_background_peak_refines_locally() -> None:
+    group_key = ("q_group", "primary", 1, 2)
+    kept = {
+        "label": "right",
+        "hkl": (-1, 0, 2),
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 21,
+        "source_table_index": 1,
+        "source_row_index": 3,
+        "x": 30.0,
+        "y": 40.0,
+        "geometry_detector_display_px": (30.0, 40.0),
+        "refined_sim_x": 30.5,
+        "refined_sim_y": 39.5,
+    }
+    moving = {
+        "label": "left",
+        "hkl": (1, 0, 2),
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 20,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "x": 10.0,
+        "y": 20.0,
+        "geometry_detector_display_px": (10.0, 20.0),
+        "refined_sim_x": 9.5,
+        "refined_sim_y": 19.5,
+    }
+    saved_sets: list[list[dict[str, object]]] = []
+    refined_calls: list[tuple[str, float, float]] = []
+    status_messages: list[str] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        12.4,
+        22.8,
+        pick_session={
+            "manual_geometry_run_id": 123,
+            "group_key": group_key,
+            "group_entries": [dict(moving)],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [dict(kept)],
+            "q_label": "selected group",
+            "background_index": 0,
+            "tagged_candidate_key": ("source_branch", 1, 0),
+            "tagged_candidate": dict(moving),
+            "_tagged_candidate_requires_identity": True,
+            "moving_saved_pair": True,
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda candidate, col, row, **_kwargs: (
+            refined_calls.append((str(candidate.get("label")), float(col), float(row)))
+            or (13.0, 24.0)
+        ),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert refined_calls == [("left", 12.4, 22.8)]
+    assert len(saved_sets[-1]) == 2
+    by_label = {entry["label"]: entry for entry in saved_sets[-1]}
+    assert by_label["right"]["x"] == 30.0
+    assert by_label["right"]["y"] == 40.0
+    assert by_label["left"]["x"] == 13.0
+    assert by_label["left"]["y"] == 24.0
+    assert by_label["left"]["geometry_detector_display_px"] == (13.0, 24.0)
+    assert "Moved 1 manual background points for selected group" in status_messages[-1]
 
 
 def test_geometry_manual_place_selection_at_uses_tagged_candidate_first() -> None:

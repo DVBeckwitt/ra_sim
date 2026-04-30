@@ -215,6 +215,7 @@ def test_collect_snapshot_persists_background_subtraction_vars() -> None:
     )
 
     variables = snapshot["variables"]
+    files = snapshot["files"]
     assert variables["background_subtraction_enabled_var"] is True
     assert variables["background_subtraction_mode_var"] == "radial"
     assert variables["background_subtraction_display_mode_var"] == "model"
@@ -243,6 +244,8 @@ def test_collect_snapshot_persists_background_subtraction_vars() -> None:
     assert variables["background_subtraction_clip_for_display_var"] is True
     assert variables["background_subtraction_diagnostics_var"] is False
     assert "background_subtraction_status_var" not in variables
+    assert files["primary_cif_path"] == "primary.cif"
+    assert files["secondary_cif_path"] is None
 
 
 def test_saved_state_without_background_subtraction_fields_still_loads(tmp_path) -> None:

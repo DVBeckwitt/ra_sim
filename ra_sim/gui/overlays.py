@@ -173,6 +173,9 @@ def _plot_pair_label_text(
     start_xy: tuple[float, float] | None,
     end_xy: tuple[float, float] | None,
     color: str,
+    fontsize: float = 8.0,
+    alpha: float = 1.0,
+    bbox_alpha: float = 0.82,
     zorder: int = 6,
 ) -> object | None:
     if start_xy is not None and end_xy is not None:
@@ -191,11 +194,17 @@ def _plot_pair_label_text(
         float(anchor[1]),
         label,
         color=color,
-        fontsize=8,
+        fontsize=float(fontsize),
+        alpha=float(alpha),
         ha="center",
         va="center",
         zorder=zorder,
-        bbox=dict(facecolor="white", alpha=0.82, edgecolor="none", pad=1.0),
+        bbox=dict(
+            facecolor="white",
+            alpha=float(bbox_alpha),
+            edgecolor="none",
+            pad=1.0,
+        ),
     )
 
 
@@ -223,6 +232,22 @@ def _format_pair_identity_label(
     if not label:
         return q_text
     return f"{label}\n{q_text}"
+
+
+def _format_q_group_identity_label(entry: Mapping[str, object] | None) -> str:
+    """Return a compact one-per-Qr-set label without per-HKL text."""
+
+    label = "Qr set"
+    q_group_key = _normalize_q_group_key(
+        entry.get("q_group_key") if isinstance(entry, Mapping) else None
+    )
+    if (
+        isinstance(q_group_key, tuple)
+        and len(q_group_key) >= 4
+        and q_group_key[0] == "q_group"
+    ):
+        label = f"Qr set {q_group_key[2]}/{q_group_key[3]}"
+    return _format_pair_identity_label(entry, label)
 
 
 def draw_geometry_fit_overlay(
@@ -489,6 +514,7 @@ def draw_initial_geometry_pairs_overlay(
     )
 
     limit = max(1, int(max_display_markers))
+    labeled_q_group_keys: set[tuple[object, ...]] = set()
     for idx, entry in enumerate(initial_pairs):
         if idx >= limit:
             break
@@ -496,10 +522,12 @@ def draw_initial_geometry_pairs_overlay(
         bg_display = entry.get("bg_display")
         if sim_display is None and bg_display is None:
             continue
-        hkl_label = _format_pair_identity_label(
+        q_group_key = _normalize_q_group_key(entry.get("q_group_key"))
+        pair_label = _format_pair_identity_label(
             entry,
             str(entry.get("hkl", entry.get("label", idx))),
         )
+        q_group_label = _format_q_group_identity_label(entry) if q_group_key is not None else ""
 
         if sim_display is not None:
             sim_pt, = ax.plot(
@@ -527,8 +555,9 @@ def draw_initial_geometry_pairs_overlay(
             geometry_pick_artists.append(bg_pt)
 
         if sim_display is not None and bg_display is not None and show_pair_connectors:
+            label_text = "" if q_group_key is not None else pair_label
             link = ax.annotate(
-                hkl_label,
+                label_text,
                 xy=(float(bg_display[0]), float(bg_display[1])),
                 xytext=(float(sim_display[0]), float(sim_display[1])),
                 color="#636e72",
@@ -545,13 +574,29 @@ def draw_initial_geometry_pairs_overlay(
                 zorder=6,
             )
             geometry_pick_artists.append(link)
-        else:
+        elif q_group_key is None:
             label = _plot_pair_label_text(
                 ax,
-                hkl_label,
+                pair_label,
                 start_xy=sim_display,
                 end_xy=bg_display,
                 color="#636e72",
+                zorder=6,
+            )
+            if label is not None:
+                geometry_pick_artists.append(label)
+
+        if q_group_key is not None and q_group_key not in labeled_q_group_keys:
+            labeled_q_group_keys.add(q_group_key)
+            label = _plot_pair_label_text(
+                ax,
+                q_group_label,
+                start_xy=sim_display,
+                end_xy=bg_display,
+                color="#2d3436",
+                fontsize=6.5,
+                alpha=0.58,
+                bbox_alpha=0.3,
                 zorder=6,
             )
             if label is not None:

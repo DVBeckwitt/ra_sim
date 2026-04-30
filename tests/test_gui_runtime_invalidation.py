@@ -193,6 +193,9 @@ def test_full_simulation_uses_broad_invalidation() -> None:
     assert state.primary_hit_table_cache == {}
     assert state.primary_relative_hit_table_cache == {}
     assert state.secondary_relative_hit_table_cache == []
+    assert state.geometry_q_group_entries_cache == []
+    assert state.stored_intersection_cache is None
+    assert state.stored_hit_table_signature is None
     assert state.last_analysis_signature is None
     assert state.peak_records == []
 

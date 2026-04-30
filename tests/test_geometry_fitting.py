@@ -3319,6 +3319,172 @@ def _provider_local_singleton_entry(**overrides: object) -> dict[str, object]:
     return entry
 
 
+def _locked_qr_fixed_source_entry(**overrides: object) -> dict[str, object]:
+    entry = _provider_local_singleton_entry(
+        q_group_key=("q_group", "primary", 1, 10),
+        branch_group_key=("branch_group", "primary", 1),
+        source_table_index=99,
+        resolved_table_index=0,
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        source_reflection_index=910,
+        source_reflection_namespace="subset",
+        source_reflection_is_full=False,
+        branch_id="locked-branch",
+        best_sample_index=3,
+        mosaic_top_rank_key=("rank", 3),
+        selection_reason="manual_pick",
+    )
+    entry.update(overrides)
+    return entry
+
+
+def _locked_qr_trial_source_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "hkl": (2, 0, 0),
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "branch_group_key": ("branch_group", "primary", 1),
+        "source_table_index": 0,
+        "source_row_index": 5,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "source_reflection_index": 42,
+        "source_reflection_namespace": "subset",
+        "source_reflection_is_full": False,
+        "branch_id": "trial-branch",
+        "best_sample_index": 7,
+        "mosaic_top_rank_key": ("rank", 7),
+        "selection_reason": "trial_rebuild",
+        "native_col": 12.0,
+        "native_row": 13.0,
+    }
+    row.update(overrides)
+    return row
+
+
+def _locked_qr_source_rows_payload(rows: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "available": bool(rows),
+        "rows": [dict(row) for row in rows],
+        "row_count": len(rows),
+        "source": "unit_test",
+        "source_rows_signature": "unit-test",
+    }
+
+
+def test_locked_qr_fixed_source_resolves_stale_row_by_q_group_hkl_branch_slot() -> None:
+    locked = _locked_qr_fixed_source_entry()
+    source_row = _locked_qr_trial_source_row(
+        source_table_index=3,
+        source_row_index=77,
+        source_reflection_index=321,
+        branch_id="trial-different-identity",
+    )
+
+    point, payload = opt._resolve_locked_qr_trial_detector_point_from_source_rows(
+        locked,
+        source_rows_payload=_locked_qr_source_rows_payload([source_row]),
+    )
+
+    assert point == (12.0, 13.0)
+    assert payload["resolution_reason"] == "locked_fit_qr_q_group_hkl_branch_slot_resolved"
+    assert payload["trial_source_rows_fit_qr_branch_key_candidate_count"] == 0
+    assert payload["trial_source_rows_q_group_hkl_slot_candidate_count"] == 1
+    assert payload["resolved_source_row_position"] == 0
+
+
+def test_locked_qr_fixed_source_uses_single_provider_backed_branch_slot_proof() -> None:
+    locked = _locked_qr_fixed_source_entry()
+    rows = [
+        _locked_qr_trial_source_row(source_table_index=1, source_row_index=10),
+        _locked_qr_trial_source_row(source_table_index=2, source_row_index=11),
+        _locked_qr_trial_source_row(
+            source_table_index=99,
+            source_row_index=24,
+            row_origin="manual_picker_saved_source_coverage",
+            provider_backed_live_source_row=True,
+            native_col=21.0,
+            native_row=22.0,
+        ),
+    ]
+
+    point, payload = opt._resolve_locked_qr_trial_detector_point_from_source_rows(
+        locked,
+        source_rows_payload=_locked_qr_source_rows_payload(rows),
+    )
+
+    assert point == (21.0, 22.0)
+    assert payload["resolution_reason"] == "locked_fit_qr_q_group_hkl_branch_slot_resolved"
+    assert payload["trial_source_rows_q_group_hkl_slot_candidate_count"] == 3
+    assert payload["trial_source_rows_q_group_hkl_slot_proven_candidate_count"] == 1
+    assert payload["locked_representative_intensity_defaulted"] is True
+
+
+def test_locked_qr_fixed_source_resolves_zero_qr_00l_with_collapsed_branch() -> None:
+    locked = _locked_qr_fixed_source_entry(
+        hkl=(0, 0, 3),
+        q_group_key=("q_group", "primary", 0, 3),
+        branch_group_key=("branch_group", "primary", 0),
+        source_branch_index=0,
+        source_peak_index=0,
+    )
+    source_row = _locked_qr_trial_source_row(
+        hkl=(0, 0, 3),
+        q_group_key=("q_group", "primary", 0, 3),
+        branch_group_key=("branch_group", "primary", 1),
+        source_branch_index=1,
+        source_peak_index=1,
+        source_table_index=4,
+        source_row_index=10,
+    )
+
+    point, payload = opt._resolve_locked_qr_trial_detector_point_from_source_rows(
+        locked,
+        source_rows_payload=_locked_qr_source_rows_payload([source_row]),
+    )
+
+    assert point == (12.0, 13.0)
+    assert payload["resolution_reason"] == "locked_fit_qr_q_group_hkl_00l_collapsed_resolved"
+    assert payload["locked_qr_zero_qr_00l_branch_unconstrained"] is True
+    assert payload["trial_source_rows_q_group_hkl_slot_candidate_count"] == 1
+
+
+def test_locked_qr_fixed_source_rejects_non00l_without_branch_slot_proof() -> None:
+    locked = _locked_qr_fixed_source_entry(source_branch_index=1, source_peak_index=1)
+    source_row = _locked_qr_trial_source_row()
+    source_row.pop("source_branch_index")
+    source_row.pop("source_peak_index")
+
+    point, payload = opt._resolve_locked_qr_trial_detector_point_from_source_rows(
+        locked,
+        source_rows_payload=_locked_qr_source_rows_payload([source_row]),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "locked_fit_qr_q_group_hkl_branch_slot_missing"
+    assert payload["trial_source_rows_q_group_hkl_slot_candidate_count"] == 0
+    assert payload["trial_source_rows_q_group_hkl_slot_missing_branch_count"] == 1
+
+
+def test_locked_qr_fixed_source_rejects_non00l_ambiguous_branch_slot_proof() -> None:
+    locked = _locked_qr_fixed_source_entry(source_branch_index=1, source_peak_index=1)
+    rows = [
+        _locked_qr_trial_source_row(source_table_index=1, source_row_index=10),
+        _locked_qr_trial_source_row(source_table_index=2, source_row_index=11),
+    ]
+
+    point, payload = opt._resolve_locked_qr_trial_detector_point_from_source_rows(
+        locked,
+        source_rows_payload=_locked_qr_source_rows_payload(rows),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "locked_fit_qr_q_group_hkl_branch_slot_ambiguous"
+    assert payload["trial_source_rows_q_group_hkl_slot_candidate_count"] == 2
+    assert payload["ambiguous_candidate_count"] == 2
+
+
 def test_resolve_fixed_source_matches_rescues_provider_local_singleton_row() -> None:
     entry = _provider_local_singleton_entry(q_group_key=("q", 2))
     hit_tables = [np.asarray([[1.0, 4.0, 4.0, -10.0, 2.0, 0.0, 0.0]], dtype=np.float64)]

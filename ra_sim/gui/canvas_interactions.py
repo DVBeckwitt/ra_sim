@@ -362,6 +362,35 @@ def _event_has_axis_data(
     )
 
 
+def _event_inside_axis_pixels(axis: Any, event: Any) -> bool:
+    bbox = getattr(axis, "bbox", None)
+    if bbox is None:
+        return False
+    try:
+        bbox_x0 = float(bbox.x0)
+        bbox_y0 = float(bbox.y0)
+        bbox_width = float(bbox.width)
+        bbox_height = float(bbox.height)
+        event_x = float(getattr(event, "x", np.nan))
+        event_y = float(getattr(event, "y", np.nan))
+    except Exception:
+        return False
+    if (
+        not np.isfinite(bbox_x0)
+        or not np.isfinite(bbox_y0)
+        or not np.isfinite(bbox_width)
+        or not np.isfinite(bbox_height)
+        or bbox_width <= 0.0
+        or bbox_height <= 0.0
+        or not np.isfinite(event_x)
+        or not np.isfinite(event_y)
+    ):
+        return False
+    return bool(
+        bbox_x0 <= event_x <= bbox_x0 + bbox_width and bbox_y0 <= event_y <= bbox_y0 + bbox_height
+    )
+
+
 def _manual_pick_click_coords(
     bindings: CanvasInteractionBindings,
     event: Any,
@@ -408,6 +437,103 @@ def _set_manual_pick_skip_release_once(
     )
 
 
+def _manual_drag_move_enabled(bindings: CanvasInteractionBindings) -> bool:
+    return bool(getattr(bindings.geometry_runtime_state, "manual_drag_move_enabled", False))
+
+
+def _manual_drag_move_active(bindings: CanvasInteractionBindings) -> bool:
+    return bool(getattr(bindings.geometry_runtime_state, "_manual_drag_move_active", False))
+
+
+def _set_manual_drag_move_active(
+    bindings: CanvasInteractionBindings,
+    enabled: bool,
+) -> None:
+    setattr(bindings.geometry_runtime_state, "_manual_drag_move_active", bool(enabled))
+
+
+def _start_manual_drag_move(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    if not _manual_drag_move_enabled(bindings):
+        return False
+    if bool(getattr(bindings.geometry_runtime_state, "manual_pick_armed", False)):
+        return False
+    if bool(bindings.manual_pick_session_active()):
+        return False
+    if bool(getattr(bindings.peak_selection_state, "hkl_pick_armed", False)):
+        return False
+    if bool(getattr(bindings.geometry_preview_state, "exclude_armed", False)):
+        return False
+    analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
+    if bool(getattr(analysis_peak_state, "pick_armed", False)):
+        return False
+    if not _is_left_button_event(event):
+        return False
+
+    manual_pick_coords = _manual_pick_click_coords(bindings, event)
+    if manual_pick_coords is None:
+        return False
+    try:
+        handled = bindings.toggle_geometry_manual_selection_at(
+            float(manual_pick_coords[0]),
+            float(manual_pick_coords[1]),
+            saved_pair_move_only=True,
+        )
+    except TypeError:
+        return False
+    if not bool(handled) or not bool(bindings.manual_pick_session_active()):
+        return False
+    _set_manual_pick_skip_release_once(bindings, False)
+    bindings.peak_selection_state.suppress_drag_press_once = False
+    _set_manual_drag_move_active(bindings, True)
+    _begin_live_interaction(bindings)
+    bindings.update_geometry_manual_pick_preview(
+        float(manual_pick_coords[0]),
+        float(manual_pick_coords[1]),
+        force=True,
+    )
+    return True
+
+
+def _update_manual_drag_move(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    if not _manual_drag_move_active(bindings):
+        return False
+    _touch_live_interaction(bindings)
+    manual_pick_coords = _manual_pick_click_coords(bindings, event)
+    if manual_pick_coords is None:
+        return True
+    bindings.update_geometry_manual_pick_preview(
+        float(manual_pick_coords[0]),
+        float(manual_pick_coords[1]),
+    )
+    return True
+
+
+def _finish_manual_drag_move(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    if not _manual_drag_move_active(bindings):
+        return False
+    _set_manual_drag_move_active(bindings, False)
+    manual_pick_coords = _manual_pick_click_coords(bindings, event)
+    if manual_pick_coords is not None and bool(bindings.manual_pick_session_active()):
+        bindings.place_geometry_manual_selection_at(
+            float(manual_pick_coords[0]),
+            float(manual_pick_coords[1]),
+        )
+    else:
+        bindings.clear_geometry_manual_preview_artists(redraw=False)
+        bindings.render_current_geometry_manual_pairs(update_status=False)
+    _end_live_interaction(bindings)
+    return True
+
+
 def _clear_manual_pick_zoom_state(bindings: CanvasInteractionBindings) -> None:
     session = getattr(bindings.geometry_manual_state, "pick_session", None)
     if not isinstance(session, dict):
@@ -422,24 +548,41 @@ def _start_pan_session(
     bindings: CanvasInteractionBindings,
     event: Any,
 ) -> bool:
-    if not _event_has_axis_data(bindings, event):
-        return False
     limits = _current_live_limits(bindings)
     if limits is None:
         return False
-    x0, y0 = bindings.clamp_to_axis_view(
-        bindings.axis,
-        float(event.xdata),
-        float(event.ydata),
-    )
+    event_in_axis = getattr(event, "inaxes", None) is bindings.axis
+    pixel_inside_axis = _event_inside_axis_pixels(bindings.axis, event)
+    if not event_in_axis and not pixel_inside_axis:
+        return False
+
+    pixel_position = _event_axis_pixel_position(bindings.axis, event)
+    if _event_has_axis_data(bindings, event):
+        x0, y0 = bindings.clamp_to_axis_view(
+            bindings.axis,
+            float(event.xdata),
+            float(event.ydata),
+        )
+    else:
+        anchor_fractions = _event_axis_pixel_anchor_fractions(bindings.axis, event)
+        if anchor_fractions is None or pixel_position is None:
+            return False
+        x0 = _limits_anchor_from_fraction(limits[0], anchor_fractions[0])
+        y0 = _limits_anchor_from_fraction(limits[1], anchor_fractions[1])
+
+    if pixel_position is None:
+        x_anchor_px = float(getattr(event, "x", np.nan))
+        y_anchor_px = float(getattr(event, "y", np.nan))
+    else:
+        x_anchor_px, y_anchor_px = pixel_position
     setattr(
         bindings.geometry_runtime_state,
         "_canvas_pan_session",
         {
             "x_anchor": float(x0),
             "y_anchor": float(y0),
-            "x_anchor_px": float(getattr(event, "x", np.nan)),
-            "y_anchor_px": float(getattr(event, "y", np.nan)),
+            "x_anchor_px": float(x_anchor_px),
+            "y_anchor_px": float(y_anchor_px),
             "xlim": limits[0],
             "ylim": limits[1],
         },
@@ -474,9 +617,7 @@ def _event_axis_pixel_position(axis: Any, event: Any) -> tuple[float, float] | N
     return clamped_x, clamped_y
 
 
-def _event_axis_anchor_fractions_or_none(axis: Any, event: Any) -> tuple[float, float] | None:
-    if getattr(event, "inaxes", None) is not axis:
-        return None
+def _event_axis_pixel_anchor_fractions(axis: Any, event: Any) -> tuple[float, float] | None:
     pixel_position = _event_axis_pixel_position(axis, event)
     bbox = getattr(axis, "bbox", None)
     if pixel_position is None or bbox is None:
@@ -510,6 +651,12 @@ def _event_axis_anchor_fractions_or_none(axis: Any, event: Any) -> tuple[float, 
         )
     )
     return anchor_fraction_x, anchor_fraction_y
+
+
+def _event_axis_anchor_fractions_or_none(axis: Any, event: Any) -> tuple[float, float] | None:
+    if getattr(event, "inaxes", None) is not axis:
+        return None
+    return _event_axis_pixel_anchor_fractions(axis, event)
 
 
 def _event_axis_anchor_fractions(axis: Any, event: Any) -> tuple[float, float]:
@@ -889,6 +1036,9 @@ def handle_runtime_canvas_press(
             _begin_live_interaction(bindings)
         return started
 
+    if _start_manual_drag_move(bindings, event):
+        return True
+
     if bool(bindings.peak_selection_state.suppress_drag_press_once):
         bindings.peak_selection_state.suppress_drag_press_once = False
         if not _is_left_button_event(event):
@@ -986,6 +1136,8 @@ def handle_runtime_canvas_motion(
         return _update_pan_session(bindings, event)
     if _is_right_button_event(event):
         return False
+    if _manual_drag_move_active(bindings):
+        return _update_manual_drag_move(bindings, event)
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
         bindings.manual_pick_session_active()
@@ -1023,6 +1175,9 @@ def handle_runtime_canvas_release(
 
     if not _is_left_button_event(event):
         return False
+
+    if _manual_drag_move_active(bindings):
+        return _finish_manual_drag_move(bindings, event)
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
         if bool(bindings.manual_pick_session_active()):
@@ -1250,3 +1405,84 @@ def make_runtime_canvas_interaction_callbacks(
         on_release=_safe_runtime_callback(handle_runtime_canvas_release),
         on_scroll=_safe_runtime_callback(handle_runtime_canvas_scroll),
     )
+
+
+_GLOBAL_MANUAL_CLICK_REMOVE_ENABLED = False
+_handle_runtime_canvas_click_base = handle_runtime_canvas_click
+_handle_runtime_canvas_press_base = handle_runtime_canvas_press
+
+
+def _manual_click_remove_enabled(bindings: CanvasInteractionBindings) -> bool:
+    return bool(
+        getattr(bindings.geometry_runtime_state, "manual_click_remove_enabled", False)
+        or _GLOBAL_MANUAL_CLICK_REMOVE_ENABLED
+    )
+
+
+def _manual_click_remove_available(bindings: CanvasInteractionBindings) -> bool:
+    if bool(getattr(bindings.geometry_runtime_state, "manual_pick_armed", False)):
+        return False
+    if bool(getattr(bindings.geometry_preview_state, "exclude_armed", False)):
+        return False
+    if bool(getattr(bindings.peak_selection_state, "hkl_pick_armed", False)):
+        return False
+    analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
+    if bool(getattr(analysis_peak_state, "pick_armed", False)):
+        return False
+    if bool(bindings.manual_pick_session_active()):
+        return False
+    return True
+
+
+def _manual_click_remove_coords(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> tuple[float, float] | None:
+    if not _manual_click_remove_enabled(bindings):
+        return None
+    if not _manual_click_remove_available(bindings):
+        return None
+    if getattr(event, "button", None) != 1:
+        return None
+    return _manual_pick_click_coords(bindings, event)
+
+
+def handle_runtime_canvas_click(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    coords = _manual_click_remove_coords(bindings, event)
+    if coords is not None:
+        try:
+            handled = bindings.toggle_geometry_manual_selection_at(
+                float(coords[0]),
+                float(coords[1]),
+                remove_q_group_only=True,
+            )
+        except TypeError:
+            try:
+                from ra_sim.gui import manual_geometry
+
+                handled = manual_geometry.geometry_manual_remove_q_group_at(
+                    float(coords[0]),
+                    float(coords[1]),
+                    manual_state=bindings.geometry_manual_state,
+                )
+            except Exception:
+                handled = False
+        if bool(handled):
+            bindings.clear_geometry_manual_preview_artists(redraw=False)
+            bindings.render_current_geometry_manual_pairs(update_status=False)
+            _set_status_text(bindings, "Removed placed Qr-set peaks.")
+            _draw_idle(bindings)
+        return bool(handled)
+    return _handle_runtime_canvas_click_base(bindings, event)
+
+
+def handle_runtime_canvas_press(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    if _manual_click_remove_coords(bindings, event) is not None:
+        return True
+    return _handle_runtime_canvas_press_base(bindings, event)

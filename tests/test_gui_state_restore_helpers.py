@@ -284,6 +284,7 @@ def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> 
         osc_files=[tmp_path / "a.osc"],
         current_background_index=0,
         background_visible=True,
+        simulation_overlay_visible=False,
         background_backend_rotation_k=3,
         background_backend_flip_x=False,
         background_backend_flip_y=True,
@@ -309,6 +310,7 @@ def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> 
         }
     ]
     assert snapshot["files"]["background_files"] == [str(tmp_path / "a.osc")]
+    assert snapshot["flags"]["simulation_overlay_visible"] is False
 
 
 def test_apply_gui_state_geometry_restores_peak_cache_when_present() -> None:
@@ -492,14 +494,18 @@ def test_apply_gui_state_geometry_defers_legacy_mask_resolution_until_structural
 
 
 def test_apply_gui_state_flags_toggles_visibility_and_updates_values() -> None:
-    toggled = {"count": 0}
+    toggled = {"background": 0, "simulation": 0}
 
     def _toggle_background() -> None:
-        toggled["count"] += 1
+        toggled["background"] += 1
+
+    def _toggle_simulation_overlay() -> None:
+        toggled["simulation"] += 1
 
     updated = state_io.apply_gui_state_flags(
         {
             "background_visible": False,
+            "simulation_overlay_visible": False,
             "background_backend_rotation_k": 5,
             "background_backend_flip_x": True,
             "background_backend_flip_y": True,
@@ -509,6 +515,7 @@ def test_apply_gui_state_flags_toggles_visibility_and_updates_values() -> None:
         },
         current_flags={
             "background_visible": True,
+            "simulation_overlay_visible": True,
             "background_backend_rotation_k": 1,
             "background_backend_flip_x": False,
             "background_backend_flip_y": False,
@@ -517,11 +524,13 @@ def test_apply_gui_state_flags_toggles_visibility_and_updates_values() -> None:
             "scale_factor_user_override": True,
         },
         toggle_background=_toggle_background,
+        toggle_simulation_overlay=_toggle_simulation_overlay,
     )
 
-    assert toggled["count"] == 1
+    assert toggled == {"background": 1, "simulation": 1}
     assert updated == {
         "background_visible": False,
+        "simulation_overlay_visible": False,
         "background_backend_rotation_k": 1,
         "background_backend_flip_x": True,
         "background_backend_flip_y": True,
@@ -532,14 +541,18 @@ def test_apply_gui_state_flags_toggles_visibility_and_updates_values() -> None:
 
 
 def test_apply_gui_state_flags_tolerates_legacy_string_values() -> None:
-    toggled = {"count": 0}
+    toggled = {"background": 0, "simulation": 0}
 
     def _toggle_background() -> None:
-        toggled["count"] += 1
+        toggled["background"] += 1
+
+    def _toggle_simulation_overlay() -> None:
+        toggled["simulation"] += 1
 
     updated = state_io.apply_gui_state_flags(
         {
             "background_visible": "false",
+            "simulation_overlay_visible": "off",
             "background_backend_rotation_k": "bad",
             "background_backend_flip_x": "yes",
             "background_backend_flip_y": "0",
@@ -549,6 +562,7 @@ def test_apply_gui_state_flags_tolerates_legacy_string_values() -> None:
         },
         current_flags={
             "background_visible": True,
+            "simulation_overlay_visible": True,
             "background_backend_rotation_k": 3,
             "background_backend_flip_x": False,
             "background_backend_flip_y": True,
@@ -557,11 +571,13 @@ def test_apply_gui_state_flags_tolerates_legacy_string_values() -> None:
             "scale_factor_user_override": True,
         },
         toggle_background=_toggle_background,
+        toggle_simulation_overlay=_toggle_simulation_overlay,
     )
 
-    assert toggled["count"] == 1
+    assert toggled == {"background": 1, "simulation": 1}
     assert updated == {
         "background_visible": False,
+        "simulation_overlay_visible": False,
         "background_backend_rotation_k": 3,
         "background_backend_flip_x": True,
         "background_backend_flip_y": False,

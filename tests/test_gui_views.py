@@ -1730,6 +1730,7 @@ def test_primary_cif_controls_store_vars_and_bind_actions(monkeypatch) -> None:
     )
 
     assert isinstance(view_state.cif_frame, _FakeCollapsibleFrame)
+    assert view_state.cif_frame.expanded is True
     assert view_state.cif_file_var.get() == "example.cif"
     assert view_state.cif_entry.textvariable is view_state.cif_file_var
     assert isinstance(view_state.cif_actions_frame, _FakeFrame)
@@ -1737,6 +1738,7 @@ def test_primary_cif_controls_store_vars_and_bind_actions(monkeypatch) -> None:
     assert view_state.apply_button is _FakeButton.created[1]
     assert view_state.diffuse_ht_button is _FakeButton.created[2]
     assert view_state.export_diffuse_ht_button is _FakeButton.created[3]
+    assert view_state.browse_button.kwargs["text"] == "Import CIF..."
     assert _FakeLabel.created[0].text == "Path"
 
     view_state.cif_entry.bindings["<Return>"]("event")
@@ -2623,9 +2625,12 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
     monkeypatch,
 ) -> None:
     _FakeButton.created = []
+    _FakeCheckbutton.created = []
     monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
 
     view_state = state.GeometryToolActionsViewState()
     calls = []
@@ -2655,14 +2660,24 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
         "Undo Fit",
         "Redo Fit",
         None,
+        None,
         "Undo Placement",
-        "Export Placements...",
     ]
     assert (
         _FakeButton.created[2].kwargs["textvariable"] is view_state.geometry_manual_pick_button_var
     )
+    assert view_state.geometry_manual_add_all_button is None
+    assert view_state.geometry_manual_remove_qr_set_button is None
+    assert view_state.geometry_manual_auto_search_radius_var is None
+    assert view_state.geometry_manual_auto_search_radius_slider is None
+    assert view_state.geometry_manual_drag_move_var.get() is False
+    assert view_state.geometry_manual_drag_move_checkbutton is _FakeCheckbutton.created[0]
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "Drag Move Placed Peaks"
+    assert view_state.geometry_manual_click_remove_var.get() is False
+    assert view_state.geometry_manual_click_remove_checkbutton is _FakeCheckbutton.created[1]
+    assert _FakeCheckbutton.created[1].kwargs["text"] == "Click Remove Placed Peaks"
     assert view_state.geometry_manual_refine_button is None
-    assert _FakeButton.created[6].kwargs["textvariable"] is (
+    assert _FakeButton.created[3].kwargs["textvariable"] is (
         view_state.geometry_preview_exclude_button_var
     )
 
@@ -2689,12 +2704,69 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
         "undo-fit",
         "redo-fit",
         "toggle-pick",
+        "toggle-preview",
         "undo-placement",
+        "clear",
         "export",
         "import",
-        "toggle-preview",
-        "clear",
     ]
+
+
+def test_geometry_tool_action_controls_can_add_all_qr_set_button(monkeypatch) -> None:
+    _FakeButton.created = []
+    _FakeCheckbutton.created = []
+    _FakeLabel.created = []
+    _FakeScale.created = []
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Scale", _FakeScale)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+
+    view_state = state.GeometryToolActionsViewState()
+    calls = []
+
+    views.create_geometry_tool_action_controls(
+        parent=object(),
+        view_state=view_state,
+        on_toggle_manual_pick=lambda: calls.append("toggle-pick"),
+        on_refine_manual_pairs=lambda: calls.append("refine"),
+        on_undo_manual_placement=lambda: calls.append("undo-placement"),
+        on_export_manual_pairs=lambda: calls.append("export"),
+        on_import_manual_pairs=lambda: calls.append("import"),
+        on_toggle_preview_exclude=lambda: calls.append("toggle-preview"),
+        on_clear_manual_pairs=lambda: calls.append("clear"),
+        on_add_all_qr_set_peaks=lambda: calls.append("add-all"),
+        on_remove_qr_set_peaks=lambda: calls.append("remove"),
+        auto_refine_radius_value=36.0,
+        on_auto_refine_radius_changed=lambda value: calls.append(("radius", float(value))),
+        manual_drag_move_enabled=True,
+        on_manual_drag_move_changed=lambda value: calls.append(("drag-move", bool(value))),
+    )
+
+    assert view_state.geometry_manual_add_all_button is not None
+    assert view_state.geometry_manual_add_all_button.kwargs["text"] == "Add All Qr Set Peaks"
+    assert view_state.geometry_manual_remove_qr_set_button is not None
+    assert view_state.geometry_manual_remove_qr_set_button.kwargs["text"] == "Remove Qr Set Peaks"
+    assert view_state.geometry_manual_auto_search_radius_var is None
+    assert view_state.geometry_manual_auto_search_radius_slider is None
+    assert view_state.geometry_manual_auto_search_radius_value_label is None
+    assert _FakeScale.created == []
+    assert view_state.geometry_manual_drag_move_var.get() is True
+    assert view_state.geometry_manual_drag_move_checkbutton is _FakeCheckbutton.created[0]
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "Drag Move Placed Peaks"
+    assert view_state.geometry_manual_click_remove_var.get() is False
+    assert view_state.geometry_manual_click_remove_checkbutton is _FakeCheckbutton.created[1]
+    assert _FakeCheckbutton.created[1].kwargs["text"] == "Click Remove Placed Peaks"
+
+    view_state.geometry_manual_add_all_button.command()
+    view_state.geometry_manual_remove_qr_set_button.command()
+    view_state.geometry_manual_drag_move_var.set(False)
+    view_state.geometry_manual_drag_move_checkbutton.command()
+    assert calls == ["add-all", "remove", ("drag-move", False)]
 
 
 def test_hkl_lookup_controls_store_vars_bind_entries_and_support_updates(
@@ -3001,6 +3073,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
         selected_qr_rod_key="phase-a|1",
         selected_qr_rod_options=[("phase-a|1", "phase-a m=1 | Qr=1.2500 A^-1")],
         on_toggle_integrate_selected_qr_rod=lambda: toggle_calls.append("toggle"),
+        on_toggle_mirror_selected_qr_phi=lambda: toggle_calls.append("mirror"),
         on_selected_qr_rod_changed=lambda value: slider_calls.append(("rod-select", value)),
         on_apply_entry=lambda entry_var, value_var, slider: apply_calls.append(
             (
@@ -3052,8 +3125,12 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.phi_max_entry.textvariable is view_state.phi_max_entry_var
     assert view_state.qz_min_entry.textvariable is view_state.qz_min_entry_var
     assert view_state.delta_qr_entry.textvariable is view_state.delta_qr_entry_var
-    assert _FakeCheckbutton.created[0].kwargs["text"] == "Enable selected Qr rod ROI"
-    assert view_state.integrate_selected_qr_rod_checkbutton is _FakeCheckbutton.created[0]
+    assert view_state.integrate_selected_qr_rod_checkbutton.kwargs["text"] == (
+        "Enable selected Qr rod ROI"
+    )
+    assert view_state.mirror_selected_qr_phi_checkbutton.kwargs["text"] == "Mirror ±φ band"
+    assert view_state.mirror_selected_qr_phi_var.get() is False
+    assert view_state.mirror_selected_qr_phi_checkbutton.state == views.tk.DISABLED
     assert view_state.tth_min_slider is _FakeScale.created[0]
     assert view_state.tth_max_slider is _FakeScale.created[1]
     assert view_state.phi_min_slider is _FakeScale.created[2]
@@ -3084,8 +3161,9 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     view_state.delta_qr_slider.command("0.125")
     assert slider_calls == [("tth-min", 3.0), ("phi-max", 17.5), ("delta-qr", 0.125)]
 
-    _FakeCheckbutton.created[0].command()
-    assert toggle_calls == ["toggle"]
+    view_state.integrate_selected_qr_rod_checkbutton.command()
+    view_state.mirror_selected_qr_phi_checkbutton.command()
+    assert toggle_calls == ["toggle", "mirror"]
     view_state.selected_qr_rod_display_var.set("phase-a m=1 | Qr=1.2500 A^-1")
     view_state.selected_qr_rod_combobox.bindings["<<ComboboxSelected>>"](None)
     assert slider_calls[-1] == ("rod-select", "phase-a m=1 | Qr=1.2500 A^-1")

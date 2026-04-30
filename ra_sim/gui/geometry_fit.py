@@ -5607,6 +5607,7 @@ def rebuild_geometry_fit_source_rows(
         normalized_preflight_mode == "manual_geometry_targeted"
         and collected_required_branch_group_keys
     )
+    force_fresh_simulation = lookup_context == "geometry_fit_trial_source_rows"
     required_branch_group_keys_digest = _geometry_fit_required_branch_group_keys_digest(
         collected_required_branch_group_keys,
         background_index=int(background_idx),
@@ -5784,7 +5785,7 @@ def rebuild_geometry_fit_source_rows(
                 copied_rows,
                 collected_required_branch_group_keys,
             )
-            if targeted_preflight_enabled
+            if targeted_preflight_enabled and not force_fresh_simulation
             else (
                 copied_rows,
                 {
@@ -6043,6 +6044,7 @@ def rebuild_geometry_fit_source_rows(
         Sequence[int] | None,
     ]:
         build_kwargs: dict[str, object] = {}
+        build_kwargs["consumer"] = lookup_context
         if targeted_preflight_enabled:
             build_kwargs.update(
                 {
@@ -6070,6 +6072,29 @@ def rebuild_geometry_fit_source_rows(
             hit_tables_local,
             **build_kwargs,
         )
+        try:
+            build_signature = str(inspect.signature(build_source_rows_from_hit_tables))
+        except Exception:
+            build_signature = "<unavailable>"
+        _update_targeted_runtime_flags(
+            build_source_rows_accepted_keywords=list(accepted_build_keywords),
+            build_source_rows_requested_keywords=list(build_kwargs),
+            build_source_rows_consumer_kwarg_passed=(
+                "consumer" in accepted_build_keywords
+            ),
+            build_source_rows_callback_signature=build_signature,
+        )
+        trial_supplemental_diag = getattr(
+            build_source_rows_from_hit_tables,
+            "last_trial_supplemental_diag",
+            None,
+        )
+        if isinstance(trial_supplemental_diag, Mapping):
+            _update_targeted_runtime_flags(
+                trial_source_row_supplemental_diagnostics=copy.deepcopy(
+                    dict(trial_supplemental_diag)
+                )
+            )
         build_used_targeted_filter = "required_branch_group_keys" in accepted_build_keywords
         if targeted_preflight_enabled:
             source_rows_built_from_targeted_hit_tables = bool(
@@ -6309,7 +6334,7 @@ def rebuild_geometry_fit_source_rows(
             metadata=cache_metadata,
         )
 
-    if targeted_preflight_enabled:
+    if targeted_preflight_enabled and not force_fresh_simulation:
         rebuild_attempts.append("targeted_projected_cache")
         targeted_cache_started_at = perf_counter()
         _emit_rebuild_stage(
@@ -6429,7 +6454,11 @@ def rebuild_geometry_fit_source_rows(
             row_count=int(len(targeted_cache_rows)),
         )
 
-    if can_use_live_runtime_cache and callable(build_live_rows):
+    if (
+        can_use_live_runtime_cache
+        and callable(build_live_rows)
+        and not force_fresh_simulation
+    ):
         rebuild_attempts.append("live_runtime_cache")
         validation_started_at = perf_counter()
         _emit_rebuild_stage(
@@ -6529,7 +6558,9 @@ def rebuild_geometry_fit_source_rows(
                 hkl_missing_candidate_count=0,
             )
 
-    if memory_cache_signature is not None and memory_cache_signature != requested_signature:
+    if force_fresh_simulation:
+        rebuild_attempts.append("fresh_simulation_required_for_trial_source_rows")
+    elif memory_cache_signature is not None and memory_cache_signature != requested_signature:
         rebuild_attempts.append("last_intersection_cache_memory_signature_mismatch")
         _emit_rebuild_stage(
             "source_cache_memory_intersection_cache_start",
@@ -6541,7 +6572,7 @@ def rebuild_geometry_fit_source_rows(
             status="signature_mismatch",
             row_count=0,
         )
-    else:
+    elif not force_fresh_simulation:
         rebuild_attempts.append("last_intersection_cache_memory")
         memory_cache_started_at = perf_counter()
         _emit_rebuild_stage(
@@ -6596,132 +6627,137 @@ def rebuild_geometry_fit_source_rows(
                 intersection_cache_local=memory_intersection_cache,
             )
 
-    rebuild_attempts.append("last_intersection_cache_log")
-    logged_cache_started_at = perf_counter()
-    _emit_rebuild_stage(
-        "source_cache_logged_intersection_cache_start",
-        cache_source="last_intersection_cache_log",
-    )
-    logged_metadata: Mapping[str, object] | None = None
-    metadata_only_logged_lookup = callable(load_logged_intersection_cache_metadata)
-    if callable(load_logged_intersection_cache_metadata):
-        try:
-            logged_metadata = load_logged_intersection_cache_metadata()
-        except Exception:
-            logged_metadata = None
-    logged_match_payload = _resolve_logged_cache_match_payload(logged_metadata)
-    if not bool(logged_match_payload.get("matches", False)):
+    if not force_fresh_simulation:
+        rebuild_attempts.append("last_intersection_cache_log")
+        logged_cache_started_at = perf_counter()
         _emit_rebuild_stage(
-            "source_cache_logged_intersection_cache_miss",
-            stage_started_at=logged_cache_started_at,
+            "source_cache_logged_intersection_cache_start",
             cache_source="last_intersection_cache_log",
-            row_count=0,
-            hit_table_count=0,
-            status=str(
-                logged_match_payload.get("mismatch_reason")
-                or logged_match_payload.get("status")
-                or ("params_mismatch" if isinstance(logged_metadata, Mapping) else "empty_cache")
-            ),
-            expected_signature_digest=logged_match_payload.get("expected_signature_digest"),
-            actual_signature_digest=logged_match_payload.get("actual_signature_digest"),
-            mismatch_reason=logged_match_payload.get("mismatch_reason"),
-            heavy_hit_table_load_attempted=bool(
-                logged_match_payload.get("heavy_hit_table_load_attempted", False)
-            ),
         )
-    else:
-        logged_intersection_cache: Sequence[object] = []
-        if callable(load_logged_intersection_cache):
+        logged_metadata: Mapping[str, object] | None = None
+        metadata_only_logged_lookup = callable(load_logged_intersection_cache_metadata)
+        if callable(load_logged_intersection_cache_metadata):
             try:
-                logged_intersection_cache, logged_metadata = load_logged_intersection_cache()
-                logged_match_payload["heavy_hit_table_load_attempted"] = True
+                logged_metadata = load_logged_intersection_cache_metadata()
             except Exception:
-                logged_intersection_cache, logged_metadata = [], logged_metadata
-        if logged_intersection_cache:
-            logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = (
-                _build_source_rows_result(
-                    logged_intersection_cache,
-                    cache_source="last_intersection_cache_log",
-                )
-            )
+                logged_metadata = None
+        logged_match_payload = _resolve_logged_cache_match_payload(logged_metadata)
+        if not bool(logged_match_payload.get("matches", False)):
             _emit_rebuild_stage(
-                "source_cache_logged_intersection_cache_ready",
+                "source_cache_logged_intersection_cache_miss",
                 stage_started_at=logged_cache_started_at,
                 cache_source="last_intersection_cache_log",
-                row_count=int(len(logged_rows)),
-                hit_table_count=int(len(logged_intersection_cache)),
-                status="ready",
+                row_count=0,
+                hit_table_count=0,
+                status=str(
+                    logged_match_payload.get("mismatch_reason")
+                    or logged_match_payload.get("status")
+                    or ("params_mismatch" if isinstance(logged_metadata, Mapping) else "empty_cache")
+                ),
+                expected_signature_digest=logged_match_payload.get("expected_signature_digest"),
+                actual_signature_digest=logged_match_payload.get("actual_signature_digest"),
+                mismatch_reason=logged_match_payload.get("mismatch_reason"),
+                heavy_hit_table_load_attempted=bool(
+                    logged_match_payload.get("heavy_hit_table_load_attempted", False)
+                ),
             )
-            if logged_rows:
-                if targeted_preflight_enabled:
-                    _update_targeted_runtime_flags(
-                        targeted_cache_hit=True,
+        else:
+            logged_intersection_cache: Sequence[object] = []
+            if callable(load_logged_intersection_cache):
+                try:
+                    logged_intersection_cache, logged_metadata = load_logged_intersection_cache()
+                    logged_match_payload["heavy_hit_table_load_attempted"] = True
+                except Exception:
+                    logged_intersection_cache, logged_metadata = [], logged_metadata
+            if logged_intersection_cache:
+                logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = (
+                    _build_source_rows_result(
+                        logged_intersection_cache,
                         cache_source="last_intersection_cache_log",
                     )
-                return _success_result(
-                    logged_rows,
-                    rebuild_source="last_intersection_cache_log",
-                    peak_table_lattice=logged_lattice,
-                    hit_tables_local=logged_hit_tables,
-                    source_reflection_indices=logged_source_reflection_indices,
-                    intersection_cache_local=logged_intersection_cache,
-                    metadata={
-                        **(dict(logged_metadata) if isinstance(logged_metadata, Mapping) else {}),
-                        "expected_signature_digest": logged_match_payload.get(
-                            "expected_signature_digest"
-                        ),
-                        "actual_signature_digest": logged_match_payload.get(
-                            "actual_signature_digest"
-                        ),
-                    },
                 )
-        _emit_rebuild_stage(
-            "source_cache_logged_intersection_cache_miss",
-            stage_started_at=logged_cache_started_at,
-            cache_source="last_intersection_cache_log",
-            row_count=0,
-            hit_table_count=0,
-            status="empty_cache",
-            heavy_hit_table_load_attempted=bool(
-                logged_match_payload.get("heavy_hit_table_load_attempted", False)
-            ),
-        )
-    if (
-        not metadata_only_logged_lookup
-        and callable(load_logged_intersection_cache)
-        and not callable(load_logged_intersection_cache_metadata)
-    ):
-        logged_intersection_cache, logged_metadata = [], None
-        try:
-            logged_intersection_cache, logged_metadata = load_logged_intersection_cache()
-        except Exception:
-            logged_intersection_cache, logged_metadata = [], None
-        if (
-            logged_intersection_cache
-            and callable(logged_cache_matches_params)
-            and bool(_resolve_logged_cache_match_payload(logged_metadata).get("matches", False))
-        ):
-            logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = (
-                _build_source_rows_result(
-                    logged_intersection_cache,
+                _emit_rebuild_stage(
+                    "source_cache_logged_intersection_cache_ready",
+                    stage_started_at=logged_cache_started_at,
                     cache_source="last_intersection_cache_log",
+                    row_count=int(len(logged_rows)),
+                    hit_table_count=int(len(logged_intersection_cache)),
+                    status="ready",
                 )
+                if logged_rows:
+                    if targeted_preflight_enabled:
+                        _update_targeted_runtime_flags(
+                            targeted_cache_hit=True,
+                            cache_source="last_intersection_cache_log",
+                        )
+                    return _success_result(
+                        logged_rows,
+                        rebuild_source="last_intersection_cache_log",
+                        peak_table_lattice=logged_lattice,
+                        hit_tables_local=logged_hit_tables,
+                        source_reflection_indices=logged_source_reflection_indices,
+                        intersection_cache_local=logged_intersection_cache,
+                        metadata={
+                            **(
+                                dict(logged_metadata)
+                                if isinstance(logged_metadata, Mapping)
+                                else {}
+                            ),
+                            "expected_signature_digest": logged_match_payload.get(
+                                "expected_signature_digest"
+                            ),
+                            "actual_signature_digest": logged_match_payload.get(
+                                "actual_signature_digest"
+                            ),
+                        },
+                    )
+            _emit_rebuild_stage(
+                "source_cache_logged_intersection_cache_miss",
+                stage_started_at=logged_cache_started_at,
+                cache_source="last_intersection_cache_log",
+                row_count=0,
+                hit_table_count=0,
+                status="empty_cache",
+                heavy_hit_table_load_attempted=bool(
+                    logged_match_payload.get("heavy_hit_table_load_attempted", False)
+                ),
             )
-            if logged_rows:
-                if targeted_preflight_enabled:
-                    _update_targeted_runtime_flags(
-                        targeted_cache_hit=True,
+        if (
+            not metadata_only_logged_lookup
+            and callable(load_logged_intersection_cache)
+            and not callable(load_logged_intersection_cache_metadata)
+        ):
+            logged_intersection_cache, logged_metadata = [], None
+            try:
+                logged_intersection_cache, logged_metadata = load_logged_intersection_cache()
+            except Exception:
+                logged_intersection_cache, logged_metadata = [], None
+            if (
+                logged_intersection_cache
+                and callable(logged_cache_matches_params)
+                and bool(_resolve_logged_cache_match_payload(logged_metadata).get("matches", False))
+            ):
+                logged_rows, logged_lattice, logged_hit_tables, logged_source_reflection_indices = (
+                    _build_source_rows_result(
+                        logged_intersection_cache,
                         cache_source="last_intersection_cache_log",
                     )
-                return _success_result(
-                    logged_rows,
-                    rebuild_source="last_intersection_cache_log",
-                    peak_table_lattice=logged_lattice,
-                    hit_tables_local=logged_hit_tables,
-                    source_reflection_indices=logged_source_reflection_indices,
-                    intersection_cache_local=logged_intersection_cache,
-                    metadata=logged_metadata,
                 )
+                if logged_rows:
+                    if targeted_preflight_enabled:
+                        _update_targeted_runtime_flags(
+                            targeted_cache_hit=True,
+                            cache_source="last_intersection_cache_log",
+                        )
+                    return _success_result(
+                        logged_rows,
+                        rebuild_source="last_intersection_cache_log",
+                        peak_table_lattice=logged_lattice,
+                        hit_tables_local=logged_hit_tables,
+                        source_reflection_indices=logged_source_reflection_indices,
+                        intersection_cache_local=logged_intersection_cache,
+                        metadata=logged_metadata,
+                    )
 
     rebuild_attempts.append("fresh_simulation")
     fresh_started_at = perf_counter()
@@ -9865,27 +9901,511 @@ def build_geometry_manual_fit_dataset(
     def _augment_source_rows_with_provider_coverage(
         rows: Sequence[object] | None,
         diagnostics: Mapping[str, object] | None,
+        *,
+        require_provider_backed_rows: bool = False,
+        allow_saved_coordinate_materialization: bool = True,
     ) -> tuple[list[dict[str, object]], dict[str, object]]:
         augmented_rows = [dict(item) for item in (rows or ()) if isinstance(item, Mapping)]
         augmented_diagnostics = dict(diagnostics or {})
         coverage_keys = {
             key for row in augmented_rows for key in _geometry_fit_source_coverage_alias_keys(row)
         }
+        provider_backed_keys = {
+            key
+            for row in augmented_rows
+            if bool(row.get("provider_backed_live_source_row", False))
+            or str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage"
+            for key in _geometry_fit_source_coverage_alias_keys(row)
+        }
         materialized_rows: list[dict[str, object]] = []
+        promoted_rows: list[dict[str, object]] = []
         point_missing: list[dict[str, object]] = []
+
+        def _source_identity_value(
+            item: Mapping[str, object],
+            *keys: str,
+        ) -> int | None:
+            for key in keys:
+                value = _geometry_fit_coerce_nonnegative_index(item.get(key))
+                if value is not None and value >= 0:
+                    return int(value)
+            return None
+
+        def _finite_point_for_keys(
+            item: Mapping[str, object],
+            x_key: str,
+            y_key: str,
+        ) -> tuple[float, float] | None:
+            try:
+                point = (float(item.get(x_key)), float(item.get(y_key)))
+            except Exception:
+                return None
+            if not (np.isfinite(point[0]) and np.isfinite(point[1])):
+                return None
+            return float(point[0]), float(point[1])
+
+        def _points_for_tuple_keys(
+            item: Mapping[str, object],
+            keys: Sequence[str],
+        ) -> list[tuple[float, float]]:
+            points: list[tuple[float, float]] = []
+            for key in keys:
+                point = _geometry_fit_point_list(item.get(key))
+                if point is None:
+                    continue
+                points.append((float(point[0]), float(point[1])))
+            return points
+
+        def _target_match_points(item: Mapping[str, object]) -> list[tuple[float, float]]:
+            points: list[tuple[float, float]] = []
+            points.extend(
+                _points_for_tuple_keys(
+                    item,
+                    (
+                        "manual_selected_simulated_point",
+                        "provider_selected_simulated_point",
+                        "selected_live_simulated_current_view_point",
+                        "simulated_point",
+                        "sim_display",
+                        "sim_native",
+                        "sim_caked_display",
+                    ),
+                )
+            )
+            for x_key, y_key in (
+                ("refined_sim_native_x", "refined_sim_native_y"),
+                ("refined_sim_x", "refined_sim_y"),
+                ("refined_sim_caked_x", "refined_sim_caked_y"),
+                ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ):
+                point = _finite_point_for_keys(item, x_key, y_key)
+                if point is None:
+                    continue
+                points.append((float(point[0]), float(point[1])))
+            return points
+
+        def _row_match_points(item: Mapping[str, object]) -> list[tuple[float, float]]:
+            points: list[tuple[float, float]] = []
+            points.extend(
+                _points_for_tuple_keys(
+                    item,
+                    (
+                        "sim_display",
+                        "sim_native",
+                        "sim_caked_display",
+                    ),
+                )
+            )
+            for x_key, y_key in (
+                ("native_col", "native_row"),
+                ("sim_native_x", "sim_native_y"),
+                ("sim_col_raw", "sim_row_raw"),
+                ("sim_col", "sim_row"),
+                ("display_col", "display_row"),
+                ("caked_x", "caked_y"),
+                ("two_theta_deg", "phi_deg"),
+                ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ):
+                point = _finite_point_for_keys(item, x_key, y_key)
+                if point is None:
+                    continue
+                points.append((float(point[0]), float(point[1])))
+            return points
+
+        def _fresh_row_match_distance(
+            target: Mapping[str, object],
+            row: Mapping[str, object],
+        ) -> float | None:
+            target_points = _target_match_points(target)
+            row_points = _row_match_points(row)
+            if not target_points or not row_points:
+                return None
+            best_distance: float | None = None
+            for target_x, target_y in target_points:
+                for row_x, row_y in row_points:
+                    distance = math.hypot(float(row_x) - float(target_x), float(row_y) - float(target_y))
+                    if not np.isfinite(distance):
+                        continue
+                    if best_distance is None or float(distance) < float(best_distance):
+                        best_distance = float(distance)
+            return best_distance
+
+        def _best_unique_match_by_score_and_distance(
+            target: Mapping[str, object],
+            scored_rows: Sequence[tuple[int, int, dict[str, object]]],
+        ) -> list[tuple[int, dict[str, object]]]:
+            if not scored_rows:
+                return []
+            best_score = max(score for score, _row_idx, _row in scored_rows)
+            best_scored = [
+                (row_idx, row)
+                for score, row_idx, row in scored_rows
+                if int(score) == int(best_score)
+            ]
+            if len(best_scored) <= 1:
+                return best_scored
+            distanced: list[tuple[float, int, dict[str, object]]] = []
+            for row_idx, row in best_scored:
+                distance = _fresh_row_match_distance(target, row)
+                if distance is None:
+                    continue
+                distanced.append((float(distance), int(row_idx), row))
+            if not distanced:
+                return []
+            best_distance = min(distance for distance, _row_idx, _row in distanced)
+            best = [
+                (row_idx, row)
+                for distance, row_idx, row in distanced
+                if abs(float(distance) - float(best_distance)) <= 1.0e-9
+            ]
+            return best if len(best) == 1 else []
+
+        def _fresh_row_match_score(
+            target: Mapping[str, object],
+            target_key: object,
+            row: Mapping[str, object],
+        ) -> int | None:
+            if bool(row.get("provider_backed_live_source_row", False)) or (
+                str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage"
+            ):
+                return None
+            if not (
+                isinstance(target_key, tuple)
+                and len(target_key) >= 3
+                and isinstance(target_key[0], tuple)
+            ):
+                return None
+            row_hkl = _geometry_fit_normalized_hkl(
+                row.get("normalized_hkl", row.get("hkl", row.get("source_hkl")))
+            )
+            target_hkl = tuple(int(v) for v in target_key[0])
+            target_table = _source_identity_value(
+                target,
+                "source_table_index",
+                "resolved_table_index",
+            )
+            target_row = _source_identity_value(
+                target,
+                "source_row_index",
+                "resolved_source_row_index",
+                "resolved_source_row_position",
+            )
+            target_peak = _source_identity_value(
+                target,
+                "source_peak_index",
+                "resolved_peak_index",
+            )
+            target_reflection = _source_identity_value(
+                target,
+                "source_reflection_index",
+                "legacy_source_reflection_index",
+            )
+            target_branch_slot = target_key[1]
+            row_branch = _geometry_fit_source_branch_index(row)
+            row_table = _source_identity_value(
+                row,
+                "source_table_index",
+                "resolved_table_index",
+            )
+            row_index = _source_identity_value(
+                row,
+                "source_row_index",
+                "resolved_source_row_index",
+                "resolved_source_row_position",
+            )
+            row_peak = _source_identity_value(
+                row,
+                "source_peak_index",
+                "resolved_peak_index",
+            )
+            row_reflection = _source_identity_value(
+                row,
+                "source_reflection_index",
+                "legacy_source_reflection_index",
+            )
+            identity_score = 0
+            target_group = (
+                _geometry_fit_stable_group_identity(target_key[2])
+                if isinstance(target_key, tuple) and len(target_key) >= 3
+                else None
+            )
+            row_group = _geometry_fit_group_identity(row)
+            group_matches = (
+                _geometry_fit_group_identity_is_q_group(target_group)
+                and target_group is not None
+                and row_group == target_group
+            )
+            strong_identity_score = 0
+            if (
+                target_table is not None
+                and row_table is not None
+                and int(row_table) == int(target_table)
+            ):
+                identity_score += 4
+                strong_identity_score += 4
+            if target_row is not None and row_index is not None and int(row_index) == int(target_row):
+                identity_score += 4
+                strong_identity_score += 4
+            if target_peak is not None and row_peak is not None and int(row_peak) == int(target_peak):
+                identity_score += 2
+            if (
+                target_reflection is not None
+                and row_reflection is not None
+                and int(row_reflection) == int(target_reflection)
+            ):
+                identity_score += 6
+                strong_identity_score += 6
+            hkl_matches = row_hkl == target_hkl
+            if not hkl_matches and not group_matches and strong_identity_score <= 0:
+                return None
+
+            score = int(identity_score)
+            if hkl_matches:
+                score += 8
+            if group_matches:
+                score += 6
+            if target_branch_slot == _GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT:
+                score += 2
+            elif target_branch_slot in {0, 1}:
+                if row_branch != int(target_branch_slot):
+                    return None
+                score += 4
+            else:
+                return None
+            return int(score)
+
+        def _matching_fresh_rows(
+            target: Mapping[str, object],
+            target_key: object,
+        ) -> list[tuple[int, dict[str, object]]]:
+            matches: list[tuple[int, dict[str, object]]] = []
+            for row_idx, row in enumerate(augmented_rows):
+                if target_key not in _geometry_fit_source_coverage_alias_keys(row):
+                    continue
+                if bool(row.get("provider_backed_live_source_row", False)) or (
+                    str(row.get("row_origin", "") or "")
+                    == "manual_picker_saved_source_coverage"
+                ):
+                    continue
+                matches.append((int(row_idx), row))
+            if len(matches) <= 1:
+                if matches:
+                    return matches
+                scored_matches: list[tuple[int, int, dict[str, object]]] = []
+                for row_idx, row in enumerate(augmented_rows):
+                    score = _fresh_row_match_score(target, target_key, row)
+                    if score is not None:
+                        scored_matches.append((int(score), int(row_idx), row))
+                return _best_unique_match_by_score_and_distance(target, scored_matches)
+
+            target_table = _source_identity_value(
+                target,
+                "source_table_index",
+                "resolved_table_index",
+            )
+            target_row = _source_identity_value(
+                target,
+                "source_row_index",
+                "resolved_source_row_index",
+                "resolved_source_row_position",
+            )
+            target_peak = _source_identity_value(
+                target,
+                "source_peak_index",
+                "resolved_peak_index",
+            )
+            target_reflection = _source_identity_value(
+                target,
+                "source_reflection_index",
+                "legacy_source_reflection_index",
+            )
+
+            scored: list[tuple[int, int, dict[str, object]]] = []
+            for row_idx, row in matches:
+                score = 0
+                row_table = _source_identity_value(
+                    row,
+                    "source_table_index",
+                    "resolved_table_index",
+                )
+                row_index = _source_identity_value(
+                    row,
+                    "source_row_index",
+                    "resolved_source_row_index",
+                    "resolved_source_row_position",
+                )
+                row_peak = _source_identity_value(
+                    row,
+                    "source_peak_index",
+                    "resolved_peak_index",
+                )
+                row_reflection = _source_identity_value(
+                    row,
+                    "source_reflection_index",
+                    "legacy_source_reflection_index",
+                )
+                if (
+                    target_table is not None
+                    and row_table is not None
+                    and int(row_table) == int(target_table)
+                ):
+                    score += 4
+                if target_row is not None and row_index is not None and int(row_index) == int(target_row):
+                    score += 4
+                if target_peak is not None and row_peak is not None and int(row_peak) == int(target_peak):
+                    score += 2
+                if (
+                    target_reflection is not None
+                    and row_reflection is not None
+                    and int(row_reflection) == int(target_reflection)
+                ):
+                    score += 2
+                scored.append((int(score), int(row_idx), row))
+            if not scored:
+                return matches
+            best_score = max(score for score, _row_idx, _row in scored)
+            if best_score <= 0:
+                return _best_unique_match_by_score_and_distance(
+                    target,
+                    [(1, row_idx, row) for row_idx, row in matches],
+                )
+            return _best_unique_match_by_score_and_distance(target, scored)
+
+        def _promote_fresh_source_row(
+            *,
+            pair_idx: int,
+            target_key: object,
+            entry: Mapping[str, object],
+        ) -> bool:
+            matches = _matching_fresh_rows(entry, target_key)
+            if len(matches) != 1:
+                return False
+            row_index, row = matches[0]
+            coverage_payload = _geometry_fit_source_coverage_key_payload(target_key)
+            promoted = dict(row)
+            aliases = list(promoted.get("source_coverage_aliases") or [])
+            if coverage_payload is not None and coverage_payload not in aliases:
+                aliases.append(coverage_payload)
+            if aliases:
+                promoted["source_coverage_aliases"] = aliases
+            for key in (
+                "hkl",
+                "normalized_hkl",
+                "q_group_key",
+                "source_q_group_key",
+                "branch_group_key",
+                "source_table_index",
+                "source_reflection_index",
+                "source_reflection_namespace",
+                "source_reflection_is_full",
+                "source_row_index",
+                "source_branch_index",
+                "source_peak_index",
+                "legacy_source_reflection_index",
+                "legacy_source_peak_index",
+                "branch_id",
+                "best_sample_index",
+                "mosaic_top_rank_key",
+                "selection_reason",
+                "selected_source_identity_canonical",
+            ):
+                locked_value = entry.get(key)
+                if locked_value is None:
+                    continue
+                if promoted.get(key) is not None and promoted.get(key) != locked_value:
+                    promoted.setdefault(f"trial_{key}", promoted.get(key))
+                promoted[key] = locked_value
+            promoted["provider_backed_live_source_row"] = True
+            promoted["provider_backed_live_source_row_reason"] = (
+                "geometry_fit_dataset_required_source_coverage"
+            )
+            if use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries):
+                promoted["source_kind"] = "sim_visual_caked_deg"
+                promoted["actual_source"] = "sim_visual_caked_deg"
+                promoted["expected_source"] = "sim_visual_caked_deg"
+                promoted["projection_frame"] = "caked_display"
+                promoted["coordinate_provenance"] = "trial_geometry_projection"
+                promoted["is_dynamic_trial_row"] = True
+            promoted.setdefault(
+                "row_origin",
+                str(row.get("row_origin") or "geometry_fit_dataset_required_source_row"),
+            )
+            promoted["physical_branch_slot"] = (
+                coverage_payload.get("branch_slot") if isinstance(coverage_payload, Mapping) else None
+            )
+            promoted["fit_qr_branch_key"] = {
+                "q_group_key": _geometry_fit_cache_jsonable(promoted.get("q_group_key")),
+                "hkl": _geometry_fit_cache_jsonable(
+                    promoted.get("normalized_hkl", promoted.get("hkl"))
+                ),
+                "physical_branch_slot": promoted.get("physical_branch_slot"),
+                "source_branch_index": promoted.get("source_branch_index"),
+                "source_peak_index": promoted.get("source_peak_index"),
+            }
+            promoted["background_index"] = int(background_idx)
+            promoted["overlay_match_index"] = int(pair_idx)
+            promoted["pair_id"] = str(
+                entry.get("pair_id") or f"bg{int(background_idx)}:pair{pair_idx}"
+            )
+            augmented_rows[int(row_index)] = promoted
+            promoted_rows.append(promoted)
+            provider_backed_keys.update(_geometry_fit_source_coverage_alias_keys(promoted))
+            return True
+
         for pair_idx, selected_input in enumerate(selected_entry_inputs):
             raw_entry = selected_input.get("entry")
             if not isinstance(raw_entry, Mapping):
                 continue
             entry = dict(raw_entry)
-            target_key = normalize_new4_source_coverage_key(entry)
-            if target_key is None or target_key in coverage_keys:
-                continue
             raw_saved_entry = (
                 dict(selected_input.get("raw_saved_entry"))
                 if isinstance(selected_input.get("raw_saved_entry"), Mapping)
                 else None
             )
+            truth_pair = manual_picker_truth_by_order.get((int(background_idx), int(pair_idx)), {})
+            simulated_point = _geometry_fit_point_list(
+                truth_pair.get("manual_selected_simulated_point")
+            )
+            simulated_frame = _geometry_fit_normalize_point_frame(
+                truth_pair.get("manual_selected_simulated_frame")
+            )
+            if simulated_point is not None and simulated_frame != "unknown":
+                entry["manual_selected_simulated_point"] = [
+                    float(simulated_point[0]),
+                    float(simulated_point[1]),
+                ]
+                entry["manual_selected_simulated_frame"] = simulated_frame
+                entry["manual_simulated_point_source"] = str(
+                    truth_pair.get("manual_simulated_point_source") or ""
+                )
+                _geometry_fit_put_simulated_point_fields(
+                    entry,
+                    simulated_point,
+                    simulated_frame,
+                )
+            target_key = normalize_new4_source_coverage_key(entry)
+            if target_key is None:
+                continue
+            if target_key in coverage_keys and (
+                not require_provider_backed_rows or target_key in provider_backed_keys
+            ):
+                continue
+            if require_provider_backed_rows:
+                if _promote_fresh_source_row(
+                    pair_idx=int(pair_idx),
+                    target_key=target_key,
+                    entry=entry,
+                ):
+                    continue
+            if not allow_saved_coordinate_materialization:
+                point_missing.append(
+                    {
+                        "pair_index": int(pair_idx),
+                        "target_key": _geometry_fit_source_coverage_key_payload(target_key),
+                        "reason": "missing_dynamic_trial_source_row",
+                    }
+                )
+                continue
             provider_row = _provider_backed_source_row_for_target(
                 pair_idx=int(pair_idx),
                 entry=entry,
@@ -9902,12 +10422,17 @@ def build_geometry_manual_fit_dataset(
                 continue
             materialized_rows.append(provider_row)
             coverage_keys.update(_geometry_fit_source_coverage_alias_keys(provider_row))
+            provider_backed_keys.update(_geometry_fit_source_coverage_alias_keys(provider_row))
         if materialized_rows:
             augmented_rows.extend(materialized_rows)
-        if materialized_rows or point_missing:
+        if materialized_rows or promoted_rows or point_missing:
             augmented_diagnostics["source_coverage_materialization"] = {
                 "provider_backed_row_count": int(len(materialized_rows)),
+                "provider_backed_fresh_row_count": int(len(promoted_rows)),
                 "point_missing_count": int(len(point_missing)),
+                "saved_coordinate_materialization_allowed": bool(
+                    allow_saved_coordinate_materialization
+                ),
                 "provider_backed_keys": [
                     _geometry_fit_source_coverage_key_payload(
                         normalize_new4_source_coverage_key(row)
@@ -9916,11 +10441,21 @@ def build_geometry_manual_fit_dataset(
                 ],
                 "point_missing": point_missing,
             }
+            augmented_diagnostics["provider_backed_fresh_source_coverage_row_count"] = int(
+                len(promoted_rows)
+            )
             augmented_diagnostics["provider_backed_source_coverage_row_count"] = int(
                 len(materialized_rows)
             )
             augmented_diagnostics["coverage_source_present_point_missing_count"] = int(
                 len(point_missing)
+            )
+            augmented_diagnostics["missing_dynamic_trial_source_row_count"] = int(
+                sum(
+                    1
+                    for item in point_missing
+                    if str(item.get("reason") or "") == "missing_dynamic_trial_source_row"
+                )
             )
         coverage_diagnostics = _source_coverage_filter_diagnostics(augmented_rows)
         if coverage_diagnostics:
@@ -9940,6 +10475,686 @@ def build_geometry_manual_fit_dataset(
             payload = repr(rows).encode("utf-8", errors="replace")
         return hashlib.sha1(payload).hexdigest()
 
+    def _trial_row_is_dynamic(row: Mapping[str, object]) -> bool:
+        if str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage":
+            return False
+        actual_source = str(row.get("actual_source") or "").strip()
+        source_kind = str(row.get("source_kind") or "").strip()
+        projection_frame = str(row.get("projection_frame") or "").strip()
+        provenance = str(row.get("coordinate_provenance") or "").strip()
+        if actual_source != "sim_visual_caked_deg" or source_kind != "sim_visual_caked_deg":
+            return False
+        if projection_frame != "caked_display":
+            return False
+        if provenance and provenance != "trial_geometry_projection":
+            return False
+        if "is_dynamic_trial_row" in row and row.get("is_dynamic_trial_row") is not True:
+            return False
+        return True
+
+    def _trial_stage_lineage(row: Mapping[str, object] | None) -> dict[str, object]:
+        if not isinstance(row, Mapping):
+            return {}
+        return {
+            "source_kind": row.get("source_kind"),
+            "actual_source": row.get("actual_source"),
+            "expected_source": row.get("expected_source"),
+            "coordinate_provenance": row.get("coordinate_provenance"),
+            "projection_frame": row.get("projection_frame"),
+            "is_dynamic_trial_row": row.get("is_dynamic_trial_row"),
+            "source_table_index": row.get("source_table_index"),
+            "source_row_index": row.get("source_row_index"),
+            "source_branch_index": row.get("source_branch_index"),
+            "source_peak_index": row.get("source_peak_index"),
+            "row_index_namespace": row.get("row_index_namespace"),
+            "row_origin": row.get("row_origin"),
+            "fit_qr_branch_key": _geometry_fit_cache_jsonable(row.get("fit_qr_branch_key")),
+        }
+
+    def _trial_row_matches_target_key(
+        row: Mapping[str, object] | None,
+        target_key: object,
+    ) -> bool:
+        if not isinstance(row, Mapping):
+            return False
+        row_keys = _geometry_fit_source_coverage_alias_keys(row)
+        if target_key in row_keys:
+            return True
+        if (
+            not isinstance(target_key, tuple)
+            or len(target_key) < 3
+            or target_key[2] is None
+        ):
+            return False
+        row_group = _geometry_fit_group_identity(row)
+        target_group = _geometry_fit_stable_group_identity(target_key[2])
+        if (
+            row_group is None
+            or target_group is None
+            or not _geometry_fit_group_identity_is_q_group(target_group)
+            or row_group != target_group
+        ):
+            return False
+        target_branch = target_key[1]
+        if target_branch == _GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT:
+            return True
+        row_branch = _geometry_fit_source_branch_index(row)
+        return target_branch in {0, 1} and row_branch == int(target_branch)
+
+    def _trial_stage_summary(
+        stage_name: str,
+        rows: Sequence[object] | None,
+    ) -> dict[str, object]:
+        stage_rows = [dict(row) for row in (rows or ()) if isinstance(row, Mapping)]
+        q_group_counts: dict[str, int] = {}
+        hkl_counts: dict[str, int] = {}
+        branch_counts: dict[str, int] = {}
+        for row in stage_rows:
+            payload = _geometry_fit_source_coverage_key_payload(
+                normalize_new4_source_coverage_key(row)
+            )
+            if isinstance(payload, Mapping):
+                q_label = json.dumps(
+                    _geometry_fit_cache_jsonable(payload.get("q_group_key")),
+                    sort_keys=True,
+                )
+                h_label = json.dumps(
+                    _geometry_fit_cache_jsonable(payload.get("hkl")),
+                    sort_keys=True,
+                )
+                b_label = json.dumps(
+                    _geometry_fit_cache_jsonable(payload.get("branch_slot")),
+                    sort_keys=True,
+                )
+            else:
+                q_label = "<missing>"
+                h_label = "<missing>"
+                b_label = "<missing>"
+            q_group_counts[q_label] = q_group_counts.get(q_label, 0) + 1
+            hkl_counts[h_label] = hkl_counts.get(h_label, 0) + 1
+            branch_counts[b_label] = branch_counts.get(b_label, 0) + 1
+
+        per_pair: list[dict[str, object]] = []
+        dynamic_count = 0
+        stale_count = 0
+        missing_count = 0
+        for pair_idx, selected_input in enumerate(selected_entry_inputs):
+            raw_entry = selected_input.get("entry")
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            target_key = normalize_new4_source_coverage_key(entry)
+            target_payload = _geometry_fit_source_coverage_key_payload(target_key)
+            matches: list[tuple[int, dict[str, object]]] = []
+            for row_idx, row in enumerate(stage_rows):
+                if _trial_row_matches_target_key(row, target_key):
+                    matches.append((int(row_idx), row))
+            dynamic_matches = [
+                (row_idx, row) for row_idx, row in matches if _trial_row_is_dynamic(row)
+            ]
+            selected_index: int | None = None
+            selected_row: dict[str, object] | None = None
+            drop_reason: str | None = None
+            if dynamic_matches:
+                selected_index, selected_row = dynamic_matches[0]
+                dynamic_count += 1
+            elif matches:
+                selected_index, selected_row = matches[0]
+                stale_count += 1
+                drop_reason = "stale_qr_coordinate_provenance"
+            else:
+                missing_count += 1
+                drop_reason = "missing_dynamic_trial_source_row"
+            per_pair.append(
+                {
+                    "pair_id": str(
+                        entry.get("pair_id") or f"bg{int(background_idx)}:pair{pair_idx}"
+                    ),
+                    "pair_index": int(pair_idx),
+                    "q_group_key": (
+                        _geometry_fit_cache_jsonable(target_payload.get("q_group_key"))
+                        if isinstance(target_payload, Mapping)
+                        else None
+                    ),
+                    "normalized_hkl": (
+                        _geometry_fit_cache_jsonable(target_payload.get("hkl"))
+                        if isinstance(target_payload, Mapping)
+                        else None
+                    ),
+                    "physical_branch_slot": (
+                        _geometry_fit_cache_jsonable(target_payload.get("branch_slot"))
+                        if isinstance(target_payload, Mapping)
+                        else None
+                    ),
+                    "fit_qr_branch_key": _geometry_fit_cache_jsonable(
+                        entry.get("fit_qr_branch_key")
+                    ),
+                    "present": bool(matches),
+                    "matched_source_row_count": int(len(matches)),
+                    "dynamic_match_count": int(len(dynamic_matches)),
+                    "source_row_array_index": selected_index,
+                    "drop_reason": drop_reason,
+                    **_trial_stage_lineage(selected_row),
+                }
+            )
+        return {
+            "stage_name": str(stage_name),
+            "row_count": int(len(stage_rows)),
+            "required_pair_count": int(len(per_pair)),
+            "dynamic_required_pair_count": int(dynamic_count),
+            "missing_required_pair_count": int(missing_count),
+            "stale_required_pair_count": int(stale_count),
+            "q_group_counts": q_group_counts,
+            "hkl_counts": hkl_counts,
+            "branch_counts": branch_counts,
+            "per_required_pair": per_pair,
+        }
+
+    def _mark_dynamic_trial_source_rows(rows: Sequence[object] | None) -> list[dict[str, object]]:
+        marked: list[dict[str, object]] = []
+        for item in rows or ():
+            if not isinstance(item, Mapping):
+                continue
+            row = dict(item)
+            if str(row.get("row_origin", "") or "") != "manual_picker_saved_source_coverage":
+                row.setdefault("source_kind", "sim_visual_caked_deg")
+                row.setdefault("actual_source", "sim_visual_caked_deg")
+                row.setdefault("expected_source", "sim_visual_caked_deg")
+                row.setdefault("projection_frame", "caked_display")
+                row.setdefault("coordinate_provenance", "trial_geometry_projection")
+                row.setdefault("is_dynamic_trial_row", True)
+            marked.append(row)
+        return marked
+
+    def _trial_candidate_sort_key(
+        target: Mapping[str, object],
+        target_key: object,
+        row: Mapping[str, object],
+        row_idx: int,
+    ) -> tuple[int, float, int]:
+        score = 0
+        if target_key in _geometry_fit_source_coverage_alias_keys(row):
+            score += 64
+        target_hkl = (
+            tuple(int(v) for v in target_key[0])
+            if isinstance(target_key, tuple)
+            and len(target_key) >= 1
+            and isinstance(target_key[0], tuple)
+            else None
+        )
+        row_hkl = _geometry_fit_normalized_hkl(
+            row.get("normalized_hkl", row.get("hkl", row.get("source_hkl")))
+        )
+        if target_hkl is not None and row_hkl == target_hkl:
+            score += 16
+        for target_field, row_field, weight in (
+            ("source_reflection_index", "source_reflection_index", 32),
+            ("source_table_index", "source_table_index", 24),
+            ("source_row_index", "source_row_index", 8),
+            ("source_peak_index", "source_peak_index", 4),
+        ):
+            target_value = _geometry_fit_coerce_nonnegative_index(target.get(target_field))
+            row_value = _geometry_fit_coerce_nonnegative_index(row.get(row_field))
+            if target_value is not None and row_value is not None and target_value == row_value:
+                score += int(weight)
+
+        target_points: list[tuple[float, float]] = []
+        for key in (
+            "manual_selected_simulated_point",
+            "provider_selected_simulated_point",
+            "selected_live_simulated_current_view_point",
+            "simulated_point",
+            "sim_caked_display",
+            "sim_display",
+        ):
+            point = _geometry_fit_point_list(target.get(key))
+            if point is not None:
+                target_points.append((float(point[0]), float(point[1])))
+        row_points: list[tuple[float, float]] = []
+        for key in ("sim_caked_display", "sim_display"):
+            point = _geometry_fit_point_list(row.get(key))
+            if point is not None:
+                row_points.append((float(point[0]), float(point[1])))
+        for x_key, y_key in (
+            ("caked_x", "caked_y"),
+            ("two_theta_deg", "phi_deg"),
+            ("sim_col", "sim_row"),
+            ("display_col", "display_row"),
+        ):
+            try:
+                point = (float(row.get(x_key)), float(row.get(y_key)))
+            except Exception:
+                point = None
+            if point is not None and np.isfinite(point[0]) and np.isfinite(point[1]):
+                row_points.append((float(point[0]), float(point[1])))
+        distance = float("inf")
+        for target_x, target_y in target_points:
+            for row_x, row_y in row_points:
+                candidate_distance = math.hypot(float(row_x) - float(target_x), float(row_y) - float(target_y))
+                if np.isfinite(candidate_distance):
+                    distance = min(distance, float(candidate_distance))
+        return (-int(score), float(distance), int(row_idx))
+
+    def _trial_hkl_two_theta_deg(
+        hkl_value: object,
+        params_local: Mapping[str, object],
+    ) -> float | None:
+        hkl = _geometry_fit_normalized_hkl(hkl_value)
+        if hkl is None:
+            return None
+        try:
+            a_value = float(params_local.get("a"))
+            c_value = float(params_local.get("c"))
+            wavelength_value = float(
+                params_local.get(
+                    "lambda",
+                    params_local.get("wavelength", params_local.get("wavelength_angstrom")),
+                )
+            )
+        except Exception:
+            return None
+        if not (
+            np.isfinite(a_value)
+            and np.isfinite(c_value)
+            and np.isfinite(wavelength_value)
+            and a_value > 0.0
+            and c_value > 0.0
+            and wavelength_value > 0.0
+        ):
+            return None
+        h_val, k_val, l_val = (int(hkl[0]), int(hkl[1]), int(hkl[2]))
+        m_val = float(h_val * h_val + h_val * k_val + k_val * k_val)
+        inv_d_sq = (4.0 / 3.0) * m_val / (a_value * a_value)
+        inv_d_sq += float(l_val * l_val) / (c_value * c_value)
+        if not (np.isfinite(inv_d_sq) and inv_d_sq > 0.0):
+            return None
+        d_spacing = 1.0 / math.sqrt(float(inv_d_sq))
+        sin_theta = wavelength_value / (2.0 * d_spacing)
+        if not np.isfinite(sin_theta) or sin_theta <= 0.0 or sin_theta >= 1.0:
+            return None
+        return float(2.0 * math.degrees(math.asin(float(sin_theta))))
+
+    def _trial_row_caked_point(
+        row: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        if not isinstance(row, Mapping):
+            return None
+        for x_key, y_key in (
+            ("caked_x", "caked_y"),
+            ("two_theta_deg", "phi_deg"),
+            ("display_col", "display_row"),
+            ("sim_col", "sim_row"),
+        ):
+            try:
+                x_val = float(row.get(x_key))
+                y_val = float(row.get(y_key))
+            except Exception:
+                continue
+            if np.isfinite(x_val) and np.isfinite(y_val):
+                return float(x_val), float(y_val)
+        point = _geometry_fit_point_list(row.get("sim_caked_display"))
+        if point is not None:
+            return float(point[0]), float(point[1])
+        point = _geometry_fit_point_list(row.get("sim_visual_caked_deg"))
+        if point is not None:
+            return float(point[0]), float(point[1])
+        return None
+
+    def _build_dynamic_trial_completion_row(
+        target: Mapping[str, object],
+        target_key: object,
+        *,
+        active_params: Mapping[str, object],
+        candidate_rows: Sequence[Mapping[str, object]],
+    ) -> tuple[dict[str, object] | None, str]:
+        if (
+            not isinstance(target_key, tuple)
+            or len(target_key) < 3
+            or not isinstance(target_key[0], tuple)
+        ):
+            return None, "invalid_target_key"
+        target_hkl = tuple(int(v) for v in target_key[0])
+        target_branch = target_key[1]
+        target_group = _geometry_fit_stable_group_identity(target_key[2])
+        if target_group is None:
+            return None, "missing_q_group_key"
+        two_theta = _trial_hkl_two_theta_deg(target_hkl, active_params)
+        if two_theta is None:
+            return None, "missing_analytic_two_theta"
+
+        sibling_row: dict[str, object] | None = None
+        sibling_point: tuple[float, float] | None = None
+        if target_branch in {0, 1}:
+            sibling_candidates: list[tuple[float, int, dict[str, object], tuple[float, float]]] = []
+            for row_idx, raw_row in enumerate(candidate_rows or ()):
+                if not isinstance(raw_row, Mapping) or not _trial_row_is_dynamic(raw_row):
+                    continue
+                row_group = _geometry_fit_group_identity(raw_row)
+                if row_group != target_group:
+                    continue
+                row_branch = _geometry_fit_source_branch_index(raw_row)
+                if row_branch == int(target_branch):
+                    continue
+                point = _trial_row_caked_point(raw_row)
+                if point is None:
+                    continue
+                sibling_candidates.append(
+                    (
+                        abs(float(point[0]) - float(two_theta)),
+                        int(row_idx),
+                        dict(raw_row),
+                        (float(point[0]), float(point[1])),
+                    )
+                )
+            if not sibling_candidates:
+                return None, "missing_dynamic_sibling_branch"
+            _distance, _row_idx, sibling_row, sibling_point = min(
+                sibling_candidates,
+                key=lambda item: (float(item[0]), int(item[1])),
+            )
+
+        if target_branch == _GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT:
+            caked_point = (float(two_theta), 0.0)
+            completion_reason = "analytic_00l_collapsed"
+        elif target_branch in {0, 1} and sibling_point is not None:
+            caked_point = (float(two_theta), -float(sibling_point[1]))
+            completion_reason = "mirrored_dynamic_q_group_branch"
+        else:
+            return None, "unsupported_branch_slot"
+
+        row: dict[str, object] = {
+            "background_index": int(background_idx),
+            "q_group_key": target_group,
+            "hkl": target_hkl,
+            "normalized_hkl": target_hkl,
+            "label": f"{target_hkl[0]},{target_hkl[1]},{target_hkl[2]}",
+            "source_kind": "sim_visual_caked_deg",
+            "actual_source": "sim_visual_caked_deg",
+            "expected_source": "sim_visual_caked_deg",
+            "projection_frame": "caked_display",
+            "coordinate_provenance": "trial_geometry_projection",
+            "is_dynamic_trial_row": True,
+            "row_origin": "geometry_fit_trial_dynamic_completion",
+            "dynamic_completion_reason": completion_reason,
+            "consumer": "geometry_fit_trial_source_rows",
+            "caked_x": float(caked_point[0]),
+            "caked_y": float(caked_point[1]),
+            "two_theta_deg": float(caked_point[0]),
+            "phi_deg": float(caked_point[1]),
+            "display_col": float(caked_point[0]),
+            "display_row": float(caked_point[1]),
+            "sim_col": float(caked_point[0]),
+            "sim_row": float(caked_point[1]),
+            "sim_caked_display": (float(caked_point[0]), float(caked_point[1])),
+            "sim_visual_caked_deg": (float(caked_point[0]), float(caked_point[1])),
+        }
+        for key in (
+            "pair_id",
+            "source_table_index",
+            "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
+            "source_row_index",
+        ):
+            if key in target:
+                row[key] = copy.deepcopy(target.get(key))
+        if isinstance(sibling_row, Mapping):
+            row["dynamic_completion_sibling_source_table_index"] = sibling_row.get(
+                "source_table_index"
+            )
+            row["dynamic_completion_sibling_source_row_index"] = sibling_row.get(
+                "source_row_index"
+            )
+            row["dynamic_completion_sibling_branch"] = _geometry_fit_source_branch_index(
+                sibling_row
+            )
+        if target_branch in {0, 1}:
+            row["physical_branch_slot"] = int(target_branch)
+            row["source_branch_index"] = int(target_branch)
+            row["source_peak_index"] = int(target_branch)
+            row["source_branch_index_namespace"] = "physical_branch_slot"
+        else:
+            row["physical_branch_slot"] = _GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT
+            row["source_branch_index"] = _GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT
+            row["source_peak_index"] = 0
+            row["source_branch_index_namespace"] = "00l_collapsed"
+            row["is_00l_collapsed"] = True
+        coverage_payload = _geometry_fit_source_coverage_key_payload(target_key)
+        if isinstance(coverage_payload, Mapping):
+            row["source_coverage_aliases"] = [dict(coverage_payload)]
+        return row, completion_reason
+
+    def _supplement_dynamic_trial_rows_from_candidate_pool(
+        existing_rows: Sequence[object] | None,
+        *,
+        active_params: Mapping[str, object],
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        diag: dict[str, object] = {
+            "attempted": False,
+            "candidate_row_count": 0,
+            "supplemental_row_count": 0,
+            "missing_before_count": 0,
+            "missing_after_count": 0,
+            "per_pair": [],
+        }
+        if not callable(manual_dataset_bindings.geometry_manual_simulated_peaks_for_params):
+            diag["skip_reason"] = "simulated_peaks_provider_unavailable"
+            return [], diag
+
+        current_rows = [dict(row) for row in (existing_rows or ()) if isinstance(row, Mapping)]
+        missing_targets: list[tuple[int, dict[str, object], object]] = []
+        for pair_idx, selected_input in enumerate(selected_entry_inputs):
+            raw_entry = selected_input.get("entry")
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            target_key = normalize_new4_source_coverage_key(entry)
+            if target_key is None:
+                continue
+            if any(
+                _trial_row_is_dynamic(row) and _trial_row_matches_target_key(row, target_key)
+                for row in current_rows
+            ):
+                continue
+            missing_targets.append((int(pair_idx), entry, target_key))
+        diag["missing_before_count"] = int(len(missing_targets))
+        if not missing_targets:
+            return [], diag
+
+        diag["attempted"] = True
+        supplemental: list[dict[str, object]] = []
+        remaining_targets: list[tuple[int, dict[str, object], object]] = []
+        for pair_idx, target, target_key in missing_targets:
+            completion_row, completion_reason = _build_dynamic_trial_completion_row(
+                target,
+                target_key,
+                active_params=active_params,
+                candidate_rows=current_rows,
+            )
+            if completion_row is None:
+                remaining_targets.append((pair_idx, target, target_key))
+                continue
+            pair_id = str(target.get("pair_id") or f"bg{int(background_idx)}:pair{pair_idx}")
+            completion_row["background_index"] = int(background_idx)
+            completion_row["overlay_match_index"] = int(pair_idx)
+            completion_row["pair_id"] = str(pair_id)
+            supplemental.append(dict(completion_row))
+            diag["per_pair"].append(
+                {
+                    "pair_id": str(pair_id),
+                    "pair_index": int(pair_idx),
+                    "target_key": _geometry_fit_source_coverage_key_payload(target_key),
+                    "matched_candidate_count": 0,
+                    "selected": True,
+                    "selected_candidate_index": -1,
+                    "dynamic_completion_reason": completion_reason,
+                    "dynamic_completion_source": "source_rows_before_rebinding",
+                    **_trial_stage_lineage(completion_row),
+                }
+            )
+        diag["dynamic_completion_before_candidate_pool_count"] = int(len(supplemental))
+        if not remaining_targets:
+            combined_rows = current_rows + supplemental
+            remaining_missing = 0
+            for _pair_idx, _target, target_key in missing_targets:
+                if not any(
+                    _trial_row_is_dynamic(row)
+                    and _trial_row_matches_target_key(row, target_key)
+                    for row in combined_rows
+                ):
+                    remaining_missing += 1
+            diag["raw_candidate_row_count"] = 0
+            diag["projected_candidate_row_count"] = 0
+            diag["candidate_row_count"] = 0
+            diag["_candidate_pool_rows_for_stage"] = []
+            diag["supplemental_row_count"] = int(len(supplemental))
+            diag["missing_after_count"] = int(remaining_missing)
+            return supplemental, diag
+
+        try:
+            raw_candidates = (
+                manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
+                    dict(active_params),
+                    prefer_cache=False,
+                )
+                or []
+            )
+        except TypeError:
+            try:
+                raw_candidates = (
+                    manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
+                        dict(active_params),
+                    )
+                    or []
+                )
+            except Exception as exc:
+                diag["skip_reason"] = f"simulated_peaks_provider_error:{type(exc).__name__}"
+                return [], diag
+        except Exception as exc:
+            diag["skip_reason"] = f"simulated_peaks_provider_error:{type(exc).__name__}"
+            return [], diag
+
+        raw_candidate_rows = [
+            dict(row) for row in (raw_candidates or ()) if isinstance(row, Mapping)
+        ]
+        diag["raw_candidate_row_count"] = int(len(raw_candidate_rows))
+        if callable(manual_dataset_bindings.geometry_manual_last_simulation_diagnostics):
+            try:
+                provider_diag = manual_dataset_bindings.geometry_manual_last_simulation_diagnostics()
+            except Exception:
+                provider_diag = None
+            if isinstance(provider_diag, Mapping):
+                diag["simulated_candidate_provider_diagnostics"] = copy.deepcopy(
+                    dict(provider_diag)
+                )
+        projected_candidates = _project_source_rows_for_current_view(raw_candidates)
+        diag["projected_candidate_row_count"] = int(len(projected_candidates or ()))
+        candidate_rows = _mark_dynamic_trial_source_rows(projected_candidates)
+        for row in candidate_rows:
+            row.setdefault("row_origin", "geometry_fit_trial_caked_candidate_pool")
+            row["consumer"] = "geometry_fit_trial_source_rows"
+            row.setdefault("source_kind", "sim_visual_caked_deg")
+            row.setdefault("actual_source", "sim_visual_caked_deg")
+            row.setdefault("expected_source", "sim_visual_caked_deg")
+            row.setdefault("projection_frame", "caked_display")
+            row.setdefault("coordinate_provenance", "trial_geometry_projection")
+            row.setdefault("is_dynamic_trial_row", True)
+            branch_idx = _geometry_fit_source_branch_index(row)
+            if branch_idx in {0, 1}:
+                row.setdefault("physical_branch_slot", int(branch_idx))
+                row.setdefault("source_branch_index_namespace", "physical_branch_slot")
+        diag["candidate_row_count"] = int(len(candidate_rows))
+        diag["_candidate_pool_rows_for_stage"] = [dict(row) for row in candidate_rows]
+
+        selected_candidate_ids: set[int] = set()
+        for pair_idx, target, target_key in remaining_targets:
+            matches = [
+                (row_idx, row)
+                for row_idx, row in enumerate(candidate_rows)
+                if row_idx not in selected_candidate_ids
+                and _trial_row_is_dynamic(row)
+                and _trial_row_matches_target_key(row, target_key)
+            ]
+            pair_diag = {
+                "pair_id": str(target.get("pair_id") or f"bg{int(background_idx)}:pair{pair_idx}"),
+                "pair_index": int(pair_idx),
+                "target_key": _geometry_fit_source_coverage_key_payload(target_key),
+                "matched_candidate_count": int(len(matches)),
+                "selected": False,
+            }
+            if not matches:
+                completion_row, completion_reason = _build_dynamic_trial_completion_row(
+                    target,
+                    target_key,
+                    active_params=active_params,
+                    candidate_rows=candidate_rows,
+                )
+                if completion_row is None:
+                    pair_diag["drop_reason"] = "missing_from_caked_click_pick_candidate_inventory"
+                    pair_diag["dynamic_completion_failure_reason"] = completion_reason
+                    diag["per_pair"].append(pair_diag)
+                    continue
+                best_row_idx = -1
+                best_row = completion_row
+                pair_diag["dynamic_completion_reason"] = completion_reason
+            else:
+                best_row_idx, best_row = min(
+                    matches,
+                    key=lambda item: _trial_candidate_sort_key(
+                        target,
+                        target_key,
+                        item[1],
+                        item[0],
+                    ),
+                )
+                selected_candidate_ids.add(int(best_row_idx))
+            supplemental_row = dict(best_row)
+            supplemental_row["background_index"] = int(background_idx)
+            supplemental_row["overlay_match_index"] = int(pair_idx)
+            supplemental_row["pair_id"] = str(pair_diag["pair_id"])
+            coverage_payload = _geometry_fit_source_coverage_key_payload(target_key)
+            if isinstance(coverage_payload, Mapping):
+                aliases = list(supplemental_row.get("source_coverage_aliases") or [])
+                if coverage_payload not in aliases:
+                    aliases.append(dict(coverage_payload))
+                supplemental_row["source_coverage_aliases"] = aliases
+                supplemental_row["physical_branch_slot"] = coverage_payload.get("branch_slot")
+                if (
+                    coverage_payload.get("branch_slot")
+                    == _GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT
+                ):
+                    supplemental_row["is_00l_collapsed"] = True
+            supplemental_row["fit_qr_branch_key"] = {
+                "q_group_key": _geometry_fit_cache_jsonable(supplemental_row.get("q_group_key")),
+                "hkl": _geometry_fit_cache_jsonable(
+                    supplemental_row.get("normalized_hkl", supplemental_row.get("hkl"))
+                ),
+                "physical_branch_slot": supplemental_row.get("physical_branch_slot"),
+                "source_branch_index": supplemental_row.get("source_branch_index"),
+                "source_peak_index": supplemental_row.get("source_peak_index"),
+            }
+            supplemental.append(supplemental_row)
+            pair_diag.update(
+                {
+                    "selected": True,
+                    "selected_candidate_index": int(best_row_idx),
+                    **_trial_stage_lineage(supplemental_row),
+                }
+            )
+            diag["per_pair"].append(pair_diag)
+
+        combined_rows = current_rows + supplemental
+        remaining_missing = 0
+        for _pair_idx, _target, target_key in missing_targets:
+            if not any(
+                _trial_row_is_dynamic(row) and _trial_row_matches_target_key(row, target_key)
+                for row in combined_rows
+            ):
+                remaining_missing += 1
+        diag["supplemental_row_count"] = int(len(supplemental))
+        diag["missing_after_count"] = int(remaining_missing)
+        return supplemental, diag
+
     def _qr_fit_trial_source_rows_builder(
         *,
         local_params: Mapping[str, object] | None = None,
@@ -9950,6 +11165,7 @@ def build_geometry_manual_fit_dataset(
         raw_rows: object = []
         source = "unavailable"
         rebuild_attempted = False
+        detector_source_rows = False
         if callable(manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background):
             rebuild_attempted = True
             try:
@@ -9957,12 +11173,13 @@ def build_geometry_manual_fit_dataset(
                     manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background(
                         int(background_idx),
                         active_params,
-                        consumer="geometry_fit_trial_prediction",
+                        consumer="geometry_fit_trial_source_rows",
                         required_pairs=selected_entries,
                     )
                     or []
                 )
                 source = "geometry_manual_rebuild_source_rows_for_background"
+                detector_source_rows = True
             except TypeError:
                 try:
                     raw_rows = (
@@ -10028,9 +11245,124 @@ def build_geometry_manual_fit_dataset(
                     raw_rows = []
             except Exception:
                 raw_rows = []
-        projected_rows = _project_source_rows_for_current_view(raw_rows)
-        rows = [dict(entry) for entry in projected_rows if isinstance(entry, Mapping)]
+        caked_trial_rows = bool(
+            use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries)
+        )
+        projected_rows = (
+            _project_source_rows_for_current_view(raw_rows)
+            if caked_trial_rows or not detector_source_rows
+            else [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
+        )
+        if caked_trial_rows and source in {
+            "geometry_manual_rebuild_source_rows_for_background",
+            "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
+            "geometry_manual_simulated_peaks_for_params",
+        }:
+            projected_rows = _mark_dynamic_trial_source_rows(projected_rows)
+        supplemental_rows: list[dict[str, object]] = []
+        supplemental_diag: dict[str, object] = {}
+        candidate_pool_rows: list[dict[str, object]] = []
+        if caked_trial_rows:
+            supplemental_rows, supplemental_diag = (
+                _supplement_dynamic_trial_rows_from_candidate_pool(
+                    projected_rows,
+                    active_params=active_params,
+                )
+            )
+            if isinstance(supplemental_diag, Mapping):
+                raw_candidate_rows = supplemental_diag.pop(
+                    "_candidate_pool_rows_for_stage",
+                    [],
+                )
+                candidate_pool_rows = [
+                    dict(row) for row in (raw_candidate_rows or ()) if isinstance(row, Mapping)
+                ]
+            if supplemental_rows:
+                projected_rows = [
+                    dict(row) for row in (projected_rows or ()) if isinstance(row, Mapping)
+                ] + [dict(row) for row in supplemental_rows]
         diagnostics = _current_simulation_diagnostics()
+        trial_stages = {
+            "required_pairs": _trial_stage_summary("required_pairs", selected_entries),
+            "caked_click_pick_candidate_inventory": _trial_stage_summary(
+                "caked_click_pick_candidate_inventory",
+                candidate_pool_rows,
+            ),
+            "collector_input_rows": _trial_stage_summary(
+                "collector_input_rows",
+                candidate_pool_rows,
+            ),
+            "source_rows_raw": _trial_stage_summary("source_rows_raw", raw_rows),
+            "source_rows_after_consumer_filter": _trial_stage_summary(
+                "source_rows_after_consumer_filter",
+                projected_rows,
+            ),
+            "source_rows_before_rebinding": _trial_stage_summary(
+                "source_rows_before_rebinding",
+                projected_rows,
+            ),
+        }
+        rows, diagnostics = _augment_source_rows_with_provider_coverage(
+            projected_rows,
+            diagnostics,
+            require_provider_backed_rows=True,
+            allow_saved_coordinate_materialization=False,
+        )
+        trial_stages["source_rows_after_rebinding"] = _trial_stage_summary(
+            "source_rows_after_rebinding",
+            rows,
+        )
+        diagnostics = dict(diagnostics)
+        diagnostics["geometry_fit_trial_source_rows_stages"] = trial_stages
+        if supplemental_diag:
+            diagnostics["caked_click_pick_candidate_inventory"] = copy.deepcopy(
+                dict(supplemental_diag)
+            )
+        trial_geometry_hash = _geometry_fit_digest_payload(active_params)
+        for row in rows:
+            row["trial_geometry_hash"] = str(trial_geometry_hash)
+            coverage_payload = _geometry_fit_source_coverage_key_payload(
+                normalize_new4_source_coverage_key(row)
+            )
+            if coverage_payload is not None:
+                row.setdefault("physical_branch_slot", coverage_payload.get("branch_slot"))
+                row.setdefault(
+                    "fit_qr_branch_key",
+                    {
+                        "q_group_key": _geometry_fit_cache_jsonable(row.get("q_group_key")),
+                        "hkl": _geometry_fit_cache_jsonable(
+                            row.get("normalized_hkl", row.get("hkl"))
+                        ),
+                        "physical_branch_slot": row.get("physical_branch_slot"),
+                        "source_branch_index": row.get("source_branch_index"),
+                        "source_peak_index": row.get("source_peak_index"),
+                    },
+                )
+            if caked_trial_rows:
+                row.setdefault("expected_source", "sim_visual_caked_deg")
+                row.setdefault("projection_frame", "caked_display")
+                if row.get("actual_source") is None:
+                    if str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage":
+                        row["actual_source"] = str(
+                            row.get("provider_simulated_point_source")
+                            or row.get("sim_visual_source")
+                            or "clicked_visual_candidate"
+                        )
+                    else:
+                        row["actual_source"] = "sim_visual_caked_deg"
+                row.setdefault("source_kind", row.get("actual_source"))
+                if str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage":
+                    row.setdefault(
+                        "coordinate_provenance",
+                        "saved_manual_coordinate_materialization",
+                    )
+                    row.setdefault("is_dynamic_trial_row", False)
+                elif (
+                    str(row.get("actual_source") or "") == "sim_visual_caked_deg"
+                    and str(row.get("source_kind") or "") == "sim_visual_caked_deg"
+                ):
+                    row.setdefault("coordinate_provenance", "trial_geometry_projection")
+                    row.setdefault("is_dynamic_trial_row", True)
         return {
             "available": bool(rows),
             "rows": rows,

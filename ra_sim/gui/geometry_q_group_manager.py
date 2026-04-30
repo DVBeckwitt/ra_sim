@@ -2289,6 +2289,9 @@ def simulate_geometry_fit_hit_tables(
                 table_matches_group = _row_matches_required_hkl_family(table_hkl)
                 if not table_matches_group:
                     continue
+            if source_index_required:
+                filtered_hit_tables.append(np.asarray(arr, dtype=np.float64).copy())
+                continue
             if required_hkls:
                 row_mask = np.asarray(
                     [_row_matches_required_hkl_family(row[4:7]) for row in arr],

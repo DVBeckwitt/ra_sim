@@ -135,6 +135,7 @@ def build_runtime_background_workflow(
     views_module,
     workspace_view_state,
     background_backend_debug_view_state,
+    toggle_simulation_overlay: Callable[[], bool] | None = None,
     **kwargs,
 ) -> RuntimeBackgroundWorkflow:
     """Assemble the live background runtime and its control wiring."""
@@ -145,11 +146,16 @@ def build_runtime_background_workflow(
         **kwargs,
     )
     callbacks = runtime.callbacks
+    controls_kwargs = {
+        "views_module": views_module,
+        "workspace_view_state": workspace_view_state,
+        "background_backend_debug_view_state": background_backend_debug_view_state,
+        "background_callbacks": callbacks,
+    }
+    if callable(toggle_simulation_overlay):
+        controls_kwargs["toggle_simulation_overlay"] = toggle_simulation_overlay
     controls_runtime = bootstrap_module.build_runtime_background_controls_bootstrap(
-        views_module=views_module,
-        workspace_view_state=workspace_view_state,
-        background_backend_debug_view_state=background_backend_debug_view_state,
-        background_callbacks=callbacks,
+        **controls_kwargs
     )
     return RuntimeBackgroundWorkflow(
         runtime=runtime,

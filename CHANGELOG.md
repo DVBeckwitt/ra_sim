@@ -53,11 +53,15 @@
 - **GUI and UX updates**
   - Added a GUI control and saved-state flag for hiding or showing the simulation overlay independently from the background image.
   - Changed selected-Qr rod Qz controls to default to `0..5` and clamp slider bounds to the positive caked-Qz candidate range.
+  - Reorganized Match-tab peak tools so `Drag Move Placed Peaks` stays visible beside the manual pick control, removed the auto-search radius slider from the peak tool row, and renamed the point-removal toggle to `Click Remove Placed Peaks`.
   - Made the Setup tab expose an expanded primary-CIF import control, with replacement CIF loads routed through full simulation, optics, picker, and analysis cache invalidation.
-  - Added Match-tab `Add All Qr Set Peaks`, auto-search radius, and `Remove Qr Set Peaks` controls so enabled Qr/Qz selector groups can be auto-saved through the manual-pick refinement path with a wider search radius or removed from the current background.
+  - Added Match-tab `Add All Qr Set Peaks` and `Remove Qr Set Peaks` controls so enabled Qr/Qz selector groups can be auto-saved through the manual-pick refinement path or removed from the current background.
   - Added an auto-add-only Qr branch-pair length restraint so non-`00l` Qr sets require branch 0 and branch 1 to agree with the same-frame simulated branch length, while `00l` sets keep collapsed/single-branch behavior.
   - Skipped the origin `(0,0,0)` reflection during Qr/Qz auto-add so it is not auto-selected as a collapsed branch.
   - Added manual-geometry move support for already placed Qr/Qz background points: clicking a saved point arms a one-point replacement and the new placement is refined locally before saving; the Match tab also has a runtime-only `Drag Move Placed Peaks` option for click-drag-release replacement.
+  - Fixed caked-view manual Qr/Qz picking so normal pick mode ignores saved-placement move hits unless the explicit drag-move tool is enabled, preventing an already selected caked Qr set from stealing later clicks.
+  - Saved detector-origin manual Qr/Qz placements with projected caked `(2theta, phi)` coordinates and backfilled those cache fields when importing legacy GUI state files that do not contain them.
+  - Reduced Qr/HKL image tags to one smaller, more transparent label per Qr set so placed and candidate peaks remain visible.
   - Routed enabled diffuse-background subtraction into manual/auto Qr picking through the existing `Use before fit/pick` option, preserving raw backgrounds and keeping subtraction off unless enabled.
   - Parallelized the post-placement geometry refinement pass for auto-added Qr/Qz peaks with a bounded CPU worker pool.
   - Added selected-Qr rod `Mirror +/-phi band` integration so caked high-azimuth lobes can be selected as a symmetric `|phi|` band without filling the central phi rows.

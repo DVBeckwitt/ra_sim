@@ -196,6 +196,7 @@ def _canonical_identity(entry: Mapping[str, object] | None) -> tuple[object, ...
     if not isinstance(entry, Mapping):
         return None
     return (
+        _normalize_hkl(entry.get("hkl")),
         entry.get("source_reflection_index"),
         entry.get("source_reflection_namespace"),
         entry.get("source_reflection_is_full"),
@@ -919,6 +920,131 @@ def _group_inventory(
             }
         )
     return inventory
+
+
+def _candidate_matches_saved_qr_requirement(
+    saved_entry: Mapping[str, object],
+    candidate: Mapping[str, object],
+    *,
+    group_key: object,
+) -> bool:
+    target_q_group_key = _normalize_q_group_key(saved_entry.get("q_group_key"))
+    candidate_group_key = _normalize_q_group_key(
+        candidate.get("q_group_key", group_key)
+    )
+    if target_q_group_key is None or candidate_group_key is None:
+        return False
+    if tuple(candidate_group_key) != tuple(target_q_group_key):
+        return False
+
+    target_hkl = _normalize_hkl(saved_entry.get("hkl"))
+    candidate_hkl = _normalize_hkl(candidate.get("hkl"))
+    if target_hkl is not None and candidate_hkl != target_hkl:
+        return False
+
+    if _probe_entry_is_zero_qr_00l(saved_entry):
+        return True
+    target_slot = gui_manual_geometry._geometry_manual_q_group_physical_branch_slot(
+        saved_entry,
+        group_key=target_q_group_key,
+    )
+    candidate_slot = gui_manual_geometry._geometry_manual_q_group_physical_branch_slot(
+        candidate,
+        group_key=candidate_group_key,
+    )
+    return bool(target_slot is not None and candidate_slot == target_slot)
+
+
+def _has_saved_qr_requirement_candidate(
+    saved_entry: Mapping[str, object],
+    grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+) -> bool:
+    grouped = grouped_candidates if isinstance(grouped_candidates, Mapping) else {}
+    for group_key, raw_candidates in grouped.items():
+        for raw_candidate in raw_candidates or ():
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            if _candidate_matches_saved_qr_requirement(
+                saved_entry,
+                raw_candidate,
+                group_key=group_key,
+            ):
+                return True
+    return False
+
+
+def _missing_qr_projection_candidate_requirements(
+    saved_entries: Sequence[Mapping[str, object]] | None,
+    grouped_candidates: Mapping[tuple[object, ...], Sequence[dict[str, object]]] | None,
+) -> list[dict[str, object]]:
+    missing: list[dict[str, object]] = []
+    grouped = grouped_candidates if isinstance(grouped_candidates, Mapping) else {}
+    for slot_index, raw_saved_entry in enumerate(saved_entries or ()):
+        if not isinstance(raw_saved_entry, Mapping):
+            continue
+        saved_entry = dict(raw_saved_entry)
+        target_q_group_key = _normalize_q_group_key(saved_entry.get("q_group_key"))
+        target_hkl = _normalize_hkl(saved_entry.get("hkl"))
+        target_slot = (
+            ("00l",)
+            if _probe_entry_is_zero_qr_00l(saved_entry)
+            else gui_manual_geometry._geometry_manual_q_group_physical_branch_slot(
+                saved_entry,
+                group_key=target_q_group_key,
+            )
+        )
+        if not _has_saved_qr_requirement_candidate(saved_entry, grouped):
+            missing.append(
+                {
+                    "slot_index": int(slot_index),
+                    "pair_id": saved_entry.get("pair_id"),
+                    "hkl": target_hkl,
+                    "q_group_key": target_q_group_key,
+                    "physical_branch_slot": target_slot,
+                }
+            )
+    return missing
+
+
+def _collapse_caked_projection_candidates(
+    projected_rows: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    active_rows = [
+        dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)
+    ]
+    try:
+        collapsed = gui_manual_geometry._geometry_manual_collapse_q_group_representatives(
+            active_rows
+        )
+    except Exception:
+        collapsed = active_rows
+    return [dict(entry) for entry in collapsed if isinstance(entry, Mapping)]
+
+
+def _project_caked_qr_grouped_candidates(
+    projection_callbacks,
+    rows: Sequence[Mapping[str, object]] | None,
+) -> dict[tuple[object, ...], list[dict[str, object]]]:
+    try:
+        projected_rows = projection_callbacks.project_peaks_to_current_view(
+            [dict(entry) for entry in rows or () if isinstance(entry, Mapping)]
+        )
+    except Exception:
+        projected_rows = []
+    projected_rows = _collapse_caked_projection_candidates(projected_rows)
+    try:
+        grouped = projection_callbacks.pick_candidates(projected_rows)
+    except Exception:
+        grouped = {}
+    if not isinstance(grouped, Mapping):
+        return {}
+    return {
+        _normalize_q_group_key(group_key): [
+            dict(entry) for entry in entries or () if isinstance(entry, Mapping)
+        ]
+        for group_key, entries in grouped.items()
+        if _normalize_q_group_key(group_key) is not None
+    }
 
 
 def _select_live_candidate_for_saved_entry(
@@ -2170,6 +2296,15 @@ def _build_group_cache(
     if isinstance(simulation_diagnostics, Mapping):
         requested_signature = simulation_diagnostics.get("requested_signature")
 
+    try:
+        use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
+    except Exception:
+        use_caked_space = False
+    try:
+        caked_projection_signature = projection_callbacks.caked_projection_signature()
+    except Exception:
+        caked_projection_signature = None
+
     source_rows_callback = getattr(
         manual_dataset_bindings,
         "geometry_manual_source_rows_for_background",
@@ -2189,7 +2324,8 @@ def _build_group_cache(
                     source_snapshot_signature=requested_signature,
                     background_index=int(kwargs["background_index"]),
                     background_image=kwargs["background_image"],
-                    use_caked_space=False,
+                    use_caked_space=use_caked_space,
+                    caked_projection_signature=caked_projection_signature,
                 )
             ),
             disabled_qr_sets=(),
@@ -2202,7 +2338,9 @@ def _build_group_cache(
                     int(bg_index),
                     param_set,
                     consumer=str(
-                        kwargs.get("consumer") or "geometry_fit_group_cache"
+                        "geometry_fit_dataset"
+                        if use_caked_space and required_pairs
+                        else kwargs.get("consumer") or "geometry_fit_group_cache"
                     ),
                     required_pairs=(
                         kwargs.get("required_pairs")
@@ -2216,8 +2354,45 @@ def _build_group_cache(
         peak_records=[],
         build_grouped_candidates=projection_callbacks.pick_candidates,
         build_simulated_lookup=projection_callbacks.simulated_lookup,
+        project_peaks_to_current_view=(
+            projection_callbacks.project_peaks_to_current_view
+            if use_caked_space
+            else None
+        ),
         current_match_config=manual_dataset_bindings.geometry_manual_match_config,
     )
+    if use_caked_space and required_pairs:
+        caked_grouped = (
+            cache_data.get("caked_qr_projection_grouped_candidates", {})
+            if isinstance(cache_data.get("caked_qr_projection_grouped_candidates", {}), Mapping)
+            else {}
+        )
+        missing = _missing_qr_projection_candidate_requirements(
+            required_pairs,
+            caked_grouped,
+        )
+        if missing:
+            dataset_rows = [
+                dict(entry)
+                for entry in dataset.get("source_rows_for_trace", ()) or ()
+                if isinstance(entry, Mapping)
+            ]
+            dataset_grouped = _project_caked_qr_grouped_candidates(
+                projection_callbacks,
+                dataset_rows,
+            )
+            dataset_missing = _missing_qr_projection_candidate_requirements(
+                required_pairs,
+                dataset_grouped,
+            )
+            if len(dataset_missing) < len(missing):
+                cache_data = dict(cache_data)
+                cache_data["caked_qr_projection_grouped_candidates"] = dataset_grouped
+                metadata = dict(cache_data.get("cache_metadata", {}) or {})
+                metadata["caked_qr_projection_rebuilt_from_dataset"] = True
+                metadata["caked_qr_projection_missing_before_rebuild"] = missing
+                metadata["caked_qr_projection_missing_after_rebuild"] = dataset_missing
+                cache_data["cache_metadata"] = metadata
     return cache_data
 
 
@@ -2321,6 +2496,7 @@ def _validate_pair(
     dataset: Mapping[str, object],
     group_cache: Mapping[str, object],
     entry_display_coords,
+    use_caked_space: bool = False,
 ) -> dict[str, object]:
     saved_entry = dict(saved_entries[int(slot_index)])
     saved_entry["q_group_key"] = _normalize_q_group_key(saved_entry.get("q_group_key"))
@@ -2346,7 +2522,27 @@ def _validate_pair(
         if _normalize_q_group_key(entry.get("q_group_key")) == q_group_key
         and _normalize_hkl(entry.get("hkl")) == _normalize_hkl(saved_entry.get("hkl"))
     ]
-    grouped_candidates = list((group_cache.get("grouped_candidates", {}) or {}).get(q_group_key, []) or ())
+    grouped_candidate_field = (
+        "caked_qr_projection_grouped_candidates"
+        if use_caked_space
+        else "grouped_candidates"
+    )
+    grouped_candidate_map = (
+        group_cache.get(grouped_candidate_field, {})
+        if isinstance(group_cache.get(grouped_candidate_field, {}), Mapping)
+        else {}
+    )
+    grouped_candidates: list[dict[str, object]] = []
+    for raw_group_key, raw_group_entries in grouped_candidate_map.items():
+        if _normalize_q_group_key(raw_group_key) != q_group_key:
+            continue
+        grouped_candidates.extend(
+            [
+                dict(entry)
+                for entry in raw_group_entries or ()
+                if isinstance(entry, Mapping)
+            ]
+        )
     resolved_live_row = _find_resolved_live_row(
         live_rows=live_rows_all,
         resolution_diag=resolution_diag,
@@ -2354,23 +2550,76 @@ def _validate_pair(
     display_hint = _display_hint(saved_entry, entry_display_coords=entry_display_coords)
     fit_kind = resolution_diag.get("fit_resolution_kind")
     overlay_kind = resolution_diag.get("overlay_resolution_kind")
-    ok = bool(
-        _identity_payload(preflight_pair) == expected_identity
-        and _identity_payload(resolved_live_row, pair_id=expected_pair_id) == expected_identity
-        and preflight_pair.get("pair_id") == expected_pair_id
-        and fit_kind in {"source_row", "source_peak"}
-        and overlay_kind in {"source_row", "source_peak"}
+    strict_resolution_kinds = {"source_row", "source_peak"}
+    q_group_resolution_kinds = strict_resolution_kinds | {"q_group_fallback"}
+    preflight_identity_matches = _identity_payload(preflight_pair) == expected_identity
+    resolved_identity_matches = (
+        _identity_payload(resolved_live_row, pair_id=expected_pair_id)
+        == expected_identity
     )
+    strict_source_identity_match = bool(
+        preflight_identity_matches
+        and resolved_identity_matches
+        and preflight_pair.get("pair_id") == expected_pair_id
+        and fit_kind in strict_resolution_kinds
+        and overlay_kind in strict_resolution_kinds
+    )
+    preflight_qr_requirement_match = bool(
+        q_group_key is not None
+        and _candidate_matches_saved_qr_requirement(
+            saved_entry,
+            preflight_pair,
+            group_key=q_group_key,
+        )
+    )
+    resolved_qr_requirement_match = bool(
+        q_group_key is not None
+        and isinstance(resolved_live_row, Mapping)
+        and _candidate_matches_saved_qr_requirement(
+            saved_entry,
+            resolved_live_row,
+            group_key=q_group_key,
+        )
+    )
+    grouped_qr_requirement_match = bool(
+        _has_saved_qr_requirement_candidate(saved_entry, grouped_candidate_map)
+    )
+    source_semantic_identity_match = bool(
+        use_caked_space
+        and preflight_pair.get("pair_id") == expected_pair_id
+        and fit_kind in q_group_resolution_kinds
+        and overlay_kind in q_group_resolution_kinds
+        and preflight_qr_requirement_match
+        and resolved_qr_requirement_match
+        and grouped_qr_requirement_match
+    )
+    ok = bool(strict_source_identity_match or source_semantic_identity_match)
     failure_stage = None
-    if not grouped_candidates:
+    if ok:
+        failure_stage = None
+    elif not grouped_candidates:
         failure_stage = "grouped_candidate_regeneration"
     elif not live_rows:
         failure_stage = "live_source_row_regeneration"
-    elif _identity_payload(resolved_live_row, pair_id=expected_pair_id) != expected_identity:
+    elif use_caked_space and not grouped_qr_requirement_match:
+        failure_stage = "grouped_candidate_regeneration"
+    elif use_caked_space and not resolved_qr_requirement_match:
         failure_stage = "resolved_live_row_selection"
-    elif _identity_payload(preflight_pair) != expected_identity or preflight_pair.get("pair_id") != expected_pair_id:
+    elif (
+        not use_caked_space
+        and _identity_payload(resolved_live_row, pair_id=expected_pair_id)
+        != expected_identity
+    ):
+        failure_stage = "resolved_live_row_selection"
+    elif (
+        _identity_payload(preflight_pair) != expected_identity
+        or preflight_pair.get("pair_id") != expected_pair_id
+    ):
         failure_stage = "preflight_copyback"
-    elif fit_kind not in {"source_row", "source_peak"} or overlay_kind not in {"source_row", "source_peak"}:
+    elif (
+        fit_kind not in strict_resolution_kinds
+        or overlay_kind not in strict_resolution_kinds
+    ):
         failure_stage = "resolved_live_row_selection"
     return {
         "ok": ok,
@@ -2393,6 +2642,12 @@ def _validate_pair(
         "overlay_resolution_kind": overlay_kind,
         "row_candidate_status": resolution_diag.get("row_candidate_status"),
         "peak_candidate_status": resolution_diag.get("peak_candidate_status"),
+        "grouped_candidate_source": grouped_candidate_field,
+        "strict_source_identity_match": strict_source_identity_match,
+        "source_semantic_identity_match": source_semantic_identity_match,
+        "preflight_qr_requirement_match": preflight_qr_requirement_match,
+        "resolved_qr_requirement_match": resolved_qr_requirement_match,
+        "grouped_qr_requirement_match": grouped_qr_requirement_match,
         "failure_stage": failure_stage,
         "chosen_resolved_live_row": _compact_entry(
             resolved_live_row,
@@ -2777,6 +3032,8 @@ def _run_saved_state_compatibility_validation(
     dataset = dict(context["dataset"])
     group_cache = dict(context["group_cache"])
     manual_dataset_bindings = context["manual_dataset_bindings"]
+    projection_callbacks = context["projection_callbacks"]
+    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
     result = {
         key: value
         for key, value in context.items()
@@ -2815,6 +3072,7 @@ def _run_saved_state_compatibility_validation(
             dataset=dataset,
             group_cache=group_cache,
             entry_display_coords=manual_dataset_bindings.geometry_manual_entry_display_coords,
+            use_caked_space=use_caked_space,
         )
         checked_pairs.append(pair_result)
         if not bool(pair_result.get("ok", False)):
@@ -2849,6 +3107,7 @@ def _run_saved_state_compatibility_validation(
             dataset=dataset,
             group_cache=group_cache,
             entry_display_coords=manual_dataset_bindings.geometry_manual_entry_display_coords,
+            use_caked_space=use_caked_space,
         )
         full_sweep.append(
             {
@@ -2959,6 +3218,28 @@ def _current_source_rows_for_background(
         for entry in dataset.get("source_rows_for_trace", ()) or ()
         if isinstance(entry, Mapping)
     ]
+
+
+def _dataset_source_rows_for_background(
+    *,
+    background_index: int,
+    context: Mapping[str, object],
+) -> list[dict[str, object]]:
+    dataset = context.get("dataset")
+    if not isinstance(dataset, Mapping):
+        return []
+    rows: list[dict[str, object]] = []
+    for raw_entry in dataset.get("source_rows_for_trace", ()) or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        try:
+            row_background_index = int(raw_entry.get("background_index", background_index))
+        except Exception:
+            row_background_index = int(background_index)
+        if int(row_background_index) != int(background_index):
+            continue
+        rows.append(dict(raw_entry))
+    return rows
 
 
 def _call_source_rows_for_background(
@@ -3075,6 +3356,7 @@ def _run_single_slot_preflight_validation(
     dataset = dict(context["dataset"])
     group_cache = dict(context["group_cache"])
     manual_dataset_bindings = context["manual_dataset_bindings"]
+    projection_callbacks = context["projection_callbacks"]
     pair_result = _validate_pair(
         background_index=int(background_index),
         slot_index=int(slot_index),
@@ -3083,6 +3365,7 @@ def _run_single_slot_preflight_validation(
         dataset=dataset,
         group_cache=group_cache,
         entry_display_coords=manual_dataset_bindings.geometry_manual_entry_display_coords,
+        use_caked_space=bool(projection_callbacks.pick_uses_caked_space()),
     )
     result = _public_context_fields(context)
     result["slot_index"] = int(slot_index)
@@ -3352,6 +3635,11 @@ def _prepare_fresh_slot_runtime(
 ) -> dict[str, object]:
     projection_callbacks = context["projection_callbacks"]
     group_cache = dict(context["group_cache"])
+    saved_entries = [
+        dict(entry)
+        for entry in context.get("saved_entries", ()) or ()
+        if isinstance(entry, Mapping)
+    ]
     current_source_rows = _current_source_rows_for_background(
         background_index=int(background_index),
         context=context,
@@ -3365,18 +3653,48 @@ def _prepare_fresh_slot_runtime(
             group_cache.get("caked_qr_projection_grouped_candidates", {}) or {}
         )
         grouped_candidate_source = "caked_qr_projection_grouped_candidates"
-        if not grouped_candidates and current_source_rows:
-            try:
-                projected_rows = projection_callbacks.project_peaks_to_current_view(
-                    current_source_rows
+        missing_qr_projection_candidates = _missing_qr_projection_candidate_requirements(
+            saved_entries,
+            grouped_candidates,
+        )
+
+        if missing_qr_projection_candidates:
+            fit_source_rows = _current_source_rows_for_background(
+                background_index=int(background_index),
+                context=context,
+                consumer="geometry_fit_dataset",
+            )
+            grouped_candidates = _project_caked_qr_grouped_candidates(
+                projection_callbacks,
+                fit_source_rows,
+            )
+            grouped_candidate_source = "geometry_fit_dataset_caked_projection"
+            if fit_source_rows:
+                current_source_rows = fit_source_rows
+            missing_qr_projection_candidates = (
+                _missing_qr_projection_candidate_requirements(
+                    saved_entries,
+                    grouped_candidates,
                 )
-            except Exception:
-                projected_rows = []
-            try:
-                grouped_candidates = projection_callbacks.pick_candidates(projected_rows)
-            except Exception:
-                grouped_candidates = {}
-            grouped_candidate_source = "current_live_source_rows_caked_projection"
+            )
+        if missing_qr_projection_candidates:
+            dataset_source_rows = _dataset_source_rows_for_background(
+                background_index=int(background_index),
+                context=context,
+            )
+            dataset_grouped_candidates = _project_caked_qr_grouped_candidates(
+                projection_callbacks,
+                dataset_source_rows,
+            )
+            dataset_missing = _missing_qr_projection_candidate_requirements(
+                saved_entries,
+                dataset_grouped_candidates,
+            )
+            if len(dataset_missing) < len(missing_qr_projection_candidates):
+                grouped_candidates = dataset_grouped_candidates
+                grouped_candidate_source = "dataset_source_rows_for_trace_caked_projection"
+                current_source_rows = dataset_source_rows
+                missing_qr_projection_candidates = dataset_missing
     else:
         grouped_candidates = dict(group_cache.get("grouped_candidates", {}) or {})
         grouped_candidate_source = "pick_cache"
@@ -3392,6 +3710,9 @@ def _prepare_fresh_slot_runtime(
         "current_source_rows": current_source_rows,
         "grouped_candidates": grouped_candidates,
         "grouped_candidate_source": grouped_candidate_source,
+        "missing_qr_projection_candidates": (
+            missing_qr_projection_candidates if use_caked_space else []
+        ),
     }
 
 
@@ -3452,6 +3773,59 @@ def _run_fresh_slot_validation(
         saved_entry,
         use_caked_space=use_caked_space,
     )
+    missing_qr_projection_candidates = [
+        dict(entry)
+        for entry in prepared_runtime.get("missing_qr_projection_candidates", ()) or ()
+        if isinstance(entry, Mapping)
+    ]
+    result["missing_qr_projection_candidates"] = missing_qr_projection_candidates
+    slot_missing_qr_projection_candidates = [
+        dict(entry)
+        for entry in missing_qr_projection_candidates
+        if int(entry.get("slot_index", -1)) == int(slot_index)
+    ]
+    if use_caked_space and slot_missing_qr_projection_candidates:
+        failed_pair = {
+            "ok": False,
+            "failure_stage": "missing_required_qr_projection_candidates",
+            "selection_status": "missing_required_qr_projection_candidate",
+            "saved_background_current_view_point": saved_background_current_view_point,
+            "saved_background_current_view_frame": saved_background_current_view_frame,
+            "saved_target_hkl": _normalize_hkl(saved_entry.get("hkl")),
+            "saved_target_branch_index": (
+                None
+                if _probe_entry_is_zero_qr_00l(saved_entry)
+                else _normalized_branch_index(saved_entry)
+            ),
+            "saved_target_q_group_key": _normalize_q_group_key(
+                saved_entry.get("q_group_key")
+            ),
+            "group_inventory": _group_inventory(grouped_candidates),
+            "missing_qr_projection_candidates": (
+                slot_missing_qr_projection_candidates
+            ),
+        }
+        result["saved_entry"] = {
+            **dict(saved_entry),
+            **_identity_payload(saved_entry, pair_id=pair_id),
+            "q_group_key": _normalize_q_group_key(saved_entry.get("q_group_key")),
+            "saved_source_identity_fields": _source_locator_payload(saved_entry),
+            "saved_measured_detector_point": _point_payload(saved_measured_detector_point),
+            "saved_background_current_view_point": _point_payload(
+                saved_background_current_view_point
+            ),
+            "saved_background_current_view_frame": saved_background_current_view_frame,
+            "saved_simulated_detector_hint": _point_payload(
+                saved_simulated_detector_hint
+            ),
+        }
+        result["grouped_candidate_source"] = grouped_candidate_source
+        result["candidate_selection"] = failed_pair
+        result["failed_pair"] = failed_pair
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["rebind_ok"] = False
+        return result
     selected_candidate_result = _select_live_candidate_for_saved_entry(
         saved_entry=saved_entry,
         grouped_candidates=grouped_candidates,

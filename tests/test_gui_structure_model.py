@@ -727,6 +727,8 @@ def test_primary_cif_reload_helpers_apply_and_restore(monkeypatch, tmp_path) -> 
     )
 
     assert state.cif_file == str(cif_path)
+    assert state.cf is plan.cf
+    assert state.blk is plan.blk
     assert state.occupancy_site_labels == ["I1", "Nb1"]
     assert state.occupancy_site_expanded_map == [0, 1, 0]
     assert state.occupancy_site_count == 2

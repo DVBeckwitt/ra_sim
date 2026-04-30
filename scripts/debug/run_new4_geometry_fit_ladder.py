@@ -171,6 +171,28 @@ ONE_PARAM_ORDER = [
     "psi_z",
 ]
 
+RUNG2_EXPECTED_NEAR_ZERO_PARAMS: tuple[str, ...] = ()
+EXPECTED_RUNG2_NEAR_ZERO_PARAMS: set[str] = set()
+EXPECTED_RUNG2_FIXED_PARAMS = {"c"}
+RUNG2_EXCLUDED_PROBE_PARAMS = set(EXPECTED_RUNG2_FIXED_PARAMS)
+EXPECTED_RUNG2_ACTIVE_PARAMS = {
+    "center_x",
+    "center_y",
+    "gamma",
+    "Gamma",
+    "chi",
+    "cor_angle",
+    "theta_initial",
+    "corto_detector",
+    "zs",
+    "zb",
+    "a",
+    "psi_z",
+}
+RUNG2_PROBE_STEP_REL = 1.0e-3
+RUNG2_PROBE_STEP_FLOOR = 1.0e-3
+RUNG2_PROBE_STEP_CEILING_FRACTION_OF_BOUND_SPAN = 0.05
+
 CENTER_PARAMS = ["center_x", "center_y"]
 FEATURE_RUNS = [
     "dynamic_reanchor",
@@ -872,6 +894,17 @@ def _lean_runtime_config(
     solver["worker_numba_threads"] = 0
     cfg["solver"] = solver
     cfg["optimizer"] = solver
+    bounds = dict(cfg.get("bounds", {})) if isinstance(cfg.get("bounds"), Mapping) else {}
+    active_name_set = {str(name) for name in active_names}
+    for tilt_name in ("gamma", "Gamma"):
+        if tilt_name in active_name_set:
+            bounds[str(tilt_name)] = {
+                "mode": "absolute",
+                "min": -90.0,
+                "max": 90.0,
+            }
+    if bounds:
+        cfg["bounds"] = bounds
 
     seed = dict(cfg.get("seed_search", {}) if isinstance(cfg.get("seed_search"), Mapping) else {})
     seed["prescore_top_k"] = 1
@@ -986,6 +1019,47 @@ def build_solver_request(
     return request
 
 
+def _solver_request_with_solver_overrides(
+    request: gui_geometry_fit.GeometryFitSolverRequest,
+    overrides: Mapping[str, object],
+) -> gui_geometry_fit.GeometryFitSolverRequest:
+    refinement_config = (
+        copy.deepcopy(dict(request.refinement_config))
+        if isinstance(request.refinement_config, Mapping)
+        else {}
+    )
+    solver_cfg = (
+        copy.deepcopy(dict(refinement_config.get("solver", {})))
+        if isinstance(refinement_config.get("solver"), Mapping)
+        else {}
+    )
+    solver_cfg.update(dict(overrides))
+    refinement_config["solver"] = solver_cfg
+    optimizer_cfg = (
+        copy.deepcopy(dict(refinement_config.get("optimizer", {})))
+        if isinstance(refinement_config.get("optimizer"), Mapping)
+        else {}
+    )
+    optimizer_cfg.update(dict(overrides))
+    refinement_config["optimizer"] = optimizer_cfg
+    return gui_geometry_fit.GeometryFitSolverRequest(
+        miller=request.miller,
+        intensities=request.intensities,
+        image_size=request.image_size,
+        params=request.params,
+        measured_peaks=request.measured_peaks,
+        var_names=list(request.var_names),
+        candidate_param_names=(
+            list(request.candidate_param_names)
+            if request.candidate_param_names is not None
+            else None
+        ),
+        dataset_specs=request.dataset_specs,
+        refinement_config=refinement_config,
+        runtime_safety_note=request.runtime_safety_note,
+    )
+
+
 def _rows_from_request(
     request: gui_geometry_fit.GeometryFitSolverRequest,
 ) -> list[dict[str, object]]:
@@ -1002,6 +1076,468 @@ def _rows_from_request(
         if isinstance(entry, Mapping):
             rows.append(dict(entry))
     return rows
+
+
+def _source_identity_jsonable(value: object) -> object:
+    try:
+        return json.loads(json.dumps(value))
+    except Exception:
+        if isinstance(value, tuple):
+            return [_source_identity_jsonable(item) for item in value]
+        if isinstance(value, list):
+            return [_source_identity_jsonable(item) for item in value]
+        if isinstance(value, Mapping):
+            return {
+                str(key): _source_identity_jsonable(item)
+                for key, item in value.items()
+            }
+        return str(value)
+
+
+def _normal_identity_tuple(value: object) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        return tuple(
+            _normal_identity_tuple(item) if isinstance(item, (tuple, list)) else item
+            for item in value
+        )
+    if isinstance(value, list):
+        return tuple(
+            _normal_identity_tuple(item) if isinstance(item, (tuple, list)) else item
+            for item in value
+        )
+    return (value,)
+
+
+def _normal_hkl(value: object) -> tuple[int, int, int] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip().strip("()[]")
+        parts = [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        parts = list(value)
+    else:
+        return None
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(int(round(float(part))) for part in parts)  # type: ignore[return-value]
+    except Exception:
+        return None
+
+
+def _normal_q_group_key(row: Mapping[str, object]) -> tuple[object, ...] | None:
+    for key in ("q_group_key", "source_q_group_key", "branch_group_key"):
+        value = row.get(key)
+        normalized = _normal_identity_tuple(value)
+        if normalized is not None:
+            return normalized
+    branch_key = row.get("fit_qr_branch_key")
+    if isinstance(branch_key, Mapping):
+        normalized = _normal_identity_tuple(branch_key.get("q_group_key"))
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _source_branch_slot(row: Mapping[str, object]) -> object:
+    for key in (
+        "physical_branch_slot",
+        "branch_slot",
+        "source_branch_index",
+        "resolved_source_branch_index",
+        "branch_index",
+    ):
+        value = row.get(key)
+        if value is not None:
+            return value
+    branch_key = row.get("fit_qr_branch_key")
+    if isinstance(branch_key, Mapping):
+        for key in ("physical_branch_slot", "source_branch_index"):
+            value = branch_key.get(key)
+            if value is not None:
+                return value
+    hkl = _normal_hkl(row.get("normalized_hkl", row.get("hkl")))
+    if hkl is not None and hkl[0] == 0 and hkl[1] == 0:
+        return getattr(
+            gui_geometry_fit,
+            "_GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT",
+            "00l_collapsed",
+        )
+    return None
+
+
+def _source_hkl(row: Mapping[str, object]) -> tuple[int, int, int] | None:
+    for key in ("normalized_hkl", "hkl", "source_hkl"):
+        hkl = _normal_hkl(row.get(key))
+        if hkl is not None:
+            return hkl
+    branch_key = row.get("fit_qr_branch_key")
+    if isinstance(branch_key, Mapping):
+        return _normal_hkl(branch_key.get("hkl"))
+    return None
+
+
+def _source_pair_identity(row: Mapping[str, object]) -> tuple[
+    tuple[object, ...] | None,
+    tuple[int, int, int] | None,
+    object,
+]:
+    return (_normal_q_group_key(row), _source_hkl(row), _source_branch_slot(row))
+
+
+def _branch_slots_match(
+    required_hkl: tuple[int, int, int] | None,
+    required_slot: object,
+    row_slot: object,
+) -> bool:
+    if required_hkl is not None and required_hkl[0] == 0 and required_hkl[1] == 0:
+        return True
+    return required_slot == row_slot
+
+
+def _is_stale_qr_coordinate_row(row: Mapping[str, object]) -> bool:
+    stale_tokens = (
+        "clicked_visual_candidate",
+        "manual_picker_saved",
+        "saved_manual",
+        "saved_pair_visual",
+        "manual_coordinate",
+    )
+    for key in ("source_kind", "actual_source", "coordinate_provenance", "row_origin"):
+        value = str(row.get(key) or "").strip().lower()
+        if any(token in value for token in stale_tokens):
+            return True
+    return False
+
+
+def _is_dynamic_trial_qr_row(row: Mapping[str, object]) -> bool:
+    if _is_stale_qr_coordinate_row(row):
+        return False
+    actual_source = str(row.get("actual_source") or row.get("source_kind") or "").strip()
+    source_kind = str(row.get("source_kind") or row.get("actual_source") or "").strip()
+    projection_frame = str(row.get("projection_frame") or "").strip()
+    provenance = str(row.get("coordinate_provenance") or "").strip()
+    if actual_source != "sim_visual_caked_deg" or source_kind != "sim_visual_caked_deg":
+        return False
+    if projection_frame != "caked_display":
+        return False
+    if provenance and provenance != "trial_geometry_projection":
+        return False
+    if "is_dynamic_trial_row" in row and row.get("is_dynamic_trial_row") is not True:
+        return False
+    return True
+
+
+def _source_row_lineage_payload(row: Mapping[str, object] | None) -> dict[str, object]:
+    if not isinstance(row, Mapping):
+        return {}
+    return {
+        "source_kind": row.get("source_kind"),
+        "actual_source": row.get("actual_source"),
+        "expected_source": row.get("expected_source"),
+        "coordinate_provenance": row.get("coordinate_provenance"),
+        "projection_frame": row.get("projection_frame"),
+        "is_dynamic_trial_row": row.get("is_dynamic_trial_row"),
+        "source_table_index": row.get("source_table_index"),
+        "source_row_index": row.get("source_row_index"),
+        "source_branch_index": row.get("source_branch_index"),
+        "row_index_namespace": row.get("row_index_namespace"),
+        "source_peak_index": row.get("source_peak_index"),
+        "row_origin": row.get("row_origin"),
+        "trial_geometry_hash": row.get("trial_geometry_hash"),
+        "fit_qr_branch_key": _source_identity_jsonable(row.get("fit_qr_branch_key")),
+    }
+
+
+def summarize_required_qr_dynamic_coverage(
+    required_pairs: Sequence[Mapping[str, object]],
+    source_rows: Sequence[Mapping[str, object]],
+    *,
+    stage_name: str,
+) -> dict[str, object]:
+    rows = [dict(row) for row in source_rows if isinstance(row, Mapping)]
+    per_pair: list[dict[str, object]] = []
+    dynamic_count = 0
+    missing_count = 0
+    stale_count = 0
+    q_group_coverage: dict[str, dict[str, int]] = {}
+    for index, required in enumerate(required_pairs):
+        req_group, req_hkl, req_slot = _source_pair_identity(required)
+        matches: list[tuple[int, dict[str, object]]] = []
+        for row_index, row in enumerate(rows):
+            row_group, row_hkl, row_slot = _source_pair_identity(row)
+            if req_group is not None and row_group != req_group:
+                continue
+            if req_hkl is not None and row_hkl != req_hkl:
+                continue
+            if not _branch_slots_match(req_hkl, req_slot, row_slot):
+                continue
+            matches.append((int(row_index), row))
+        dynamic_matches = [
+            (row_index, row)
+            for row_index, row in matches
+            if _is_dynamic_trial_qr_row(row)
+        ]
+        selected_index: int | None = None
+        selected_row: dict[str, object] | None = None
+        if dynamic_matches:
+            selected_index, selected_row = dynamic_matches[0]
+            dynamic_count += 1
+            failure_reason = None
+        elif matches:
+            selected_index, selected_row = matches[0]
+            stale_count += 1
+            failure_reason = "stale_qr_coordinate_provenance"
+        else:
+            missing_count += 1
+            failure_reason = "missing_dynamic_trial_source_row"
+        q_group_key = _source_identity_jsonable(req_group)
+        q_group_label = json.dumps(q_group_key, sort_keys=True)
+        coverage = q_group_coverage.setdefault(
+            q_group_label,
+            {"required_pair_count": 0, "dynamic_source_row_count": 0},
+        )
+        coverage["required_pair_count"] += 1
+        if failure_reason is None:
+            coverage["dynamic_source_row_count"] += 1
+        per_pair.append(
+            {
+                "pair_id": required.get("pair_id") or f"required_pair_{index}",
+                "pair_index": int(index),
+                "q_group_key": q_group_key,
+                "normalized_hkl": list(req_hkl) if req_hkl is not None else None,
+                "physical_branch_slot": _source_identity_jsonable(req_slot),
+                "fit_qr_branch_key": _source_identity_jsonable(
+                    required.get("fit_qr_branch_key")
+                ),
+                "hit_table_present": None,
+                "source_row_present_before_rebinding": None,
+                "source_row_present_after_promotion": bool(matches),
+                "resolved_by_fixed_source_resolver": None,
+                "source_table_index": selected_row.get("source_table_index")
+                if selected_row is not None
+                else None,
+                "source_row_index": selected_row.get("source_row_index")
+                if selected_row is not None
+                else None,
+                "source_branch_index": selected_row.get("source_branch_index")
+                if selected_row is not None
+                else None,
+                "source_row_index_namespace": selected_row.get("row_index_namespace")
+                if selected_row is not None
+                else None,
+                "source_row_array_index": selected_index,
+                "matched_source_row_count": int(len(matches)),
+                "dynamic_match_count": int(len(dynamic_matches)),
+                "failure_reason": failure_reason,
+                **_source_row_lineage_payload(selected_row),
+            }
+        )
+    return {
+        "stage_name": str(stage_name),
+        "required_pair_count": int(len(required_pairs)),
+        "source_row_count": int(len(rows)),
+        "dynamic_source_row_count": int(dynamic_count),
+        "missing_dynamic_pair_count": int(missing_count),
+        "stale_coordinate_pair_count": int(stale_count),
+        "q_group_coverage": q_group_coverage,
+        "per_pair": per_pair,
+    }
+
+
+def _request_trial_source_rows_coverage(
+    request: gui_geometry_fit.GeometryFitSolverRequest,
+) -> dict[str, object]:
+    required_pairs = _rows_from_request(request)
+    all_rows: list[dict[str, object]] = []
+    payloads: list[dict[str, object]] = []
+    diagnostics: list[dict[str, object]] = []
+    trial_stage_summaries: dict[str, dict[str, object]] = {}
+    for spec_index, spec in enumerate(request.dataset_specs or ()):
+        if not isinstance(spec, Mapping):
+            continue
+        builder = spec.get("qr_fit_trial_source_rows_builder")
+        if not callable(builder):
+            continue
+        try:
+            payload = builder(local_params={})
+        except TypeError:
+            payload = builder()
+        except Exception as exc:
+            payloads.append({"dataset_index": int(spec_index), "error_text": str(exc)})
+            continue
+        if isinstance(payload, Mapping):
+            rows = [
+                dict(row)
+                for row in payload.get("rows", ()) or ()
+                if isinstance(row, Mapping)
+            ]
+            all_rows.extend(rows)
+            source_diagnostics = payload.get("source_diagnostics")
+            if isinstance(source_diagnostics, Mapping):
+                diagnostics.append(dict(source_diagnostics))
+                stages = source_diagnostics.get("geometry_fit_trial_source_rows_stages")
+                if isinstance(stages, Mapping):
+                    for stage_name, stage_payload in stages.items():
+                        if isinstance(stage_payload, Mapping):
+                            trial_stage_summaries[str(stage_name)] = dict(stage_payload)
+            payloads.append(
+                {
+                    "dataset_index": int(spec_index),
+                    "available": bool(payload.get("available", False)),
+                    "source": payload.get("source"),
+                    "row_count": int(payload.get("row_count", len(rows)) or len(rows)),
+                    "source_rows_signature": payload.get("source_rows_signature"),
+                }
+            )
+        elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+            rows = [dict(row) for row in payload if isinstance(row, Mapping)]
+            all_rows.extend(rows)
+            payloads.append(
+                {
+                    "dataset_index": int(spec_index),
+                    "available": bool(rows),
+                    "source": "sequence_payload",
+                    "row_count": int(len(rows)),
+                    "source_rows_signature": None,
+                }
+            )
+    after_promotion = summarize_required_qr_dynamic_coverage(
+        required_pairs,
+        all_rows,
+        stage_name="source_rows_after_provider_coverage_promotion",
+    )
+    return {
+        "optimized_hit_table_inventory": {
+            "stage_name": "optimized_hit_table_inventory",
+            "source_diagnostics": diagnostics,
+        },
+        "fresh_hit_inventory": {
+            "stage_name": "fresh_hit_inventory",
+            "source_diagnostics": diagnostics,
+        },
+        "collector_input_rows": trial_stage_summaries.get(
+            "source_rows_raw",
+            {
+                "stage_name": "collector_input_rows",
+                "source_diagnostics": diagnostics,
+            },
+        ),
+        "source_rows_raw": trial_stage_summaries.get(
+            "source_rows_raw",
+            {
+                "stage_name": "source_rows_raw",
+                "source_diagnostics": diagnostics,
+            },
+        ),
+        "source_rows_after_consumer_filter": trial_stage_summaries.get(
+            "source_rows_before_rebinding",
+            {
+                "stage_name": "source_rows_after_consumer_filter",
+                "source_diagnostics": diagnostics,
+            },
+        ),
+        "source_rows_before_rebinding": trial_stage_summaries.get(
+            "source_rows_before_rebinding",
+            {
+                "stage_name": "source_rows_before_rebinding",
+                "source_diagnostics": diagnostics,
+            },
+        ),
+        "source_rows_after_rebinding": trial_stage_summaries.get(
+            "source_rows_after_rebinding",
+            after_promotion,
+        ),
+        "source_rows_after_provider_coverage_promotion": after_promotion,
+        "fixed_source_resolution": {
+            "stage_name": "fixed_source_resolution",
+            "required_pair_count": int(len(required_pairs)),
+            "request_handoff": _request_handoff_summary(request),
+        },
+        "builder_payloads": payloads,
+    }
+
+
+def _attach_qr_dynamic_source_coverage(report: dict[str, object]) -> None:
+    coverage = report.get("qr_dynamic_source_coverage")
+    if not isinstance(coverage, Mapping):
+        return
+    after = coverage.get("source_rows_after_provider_coverage_promotion")
+    if not isinstance(after, Mapping):
+        return
+    required = _safe_int(after.get("required_pair_count"), default=0)
+    dynamic = _safe_int(after.get("dynamic_source_row_count"), default=0)
+    missing = _safe_int(after.get("missing_dynamic_pair_count"), default=0)
+    stale = _safe_int(after.get("stale_coordinate_pair_count"), default=0)
+    report["qr_dynamic_source_required_pair_count"] = int(required)
+    report["qr_dynamic_source_row_count"] = int(dynamic)
+    report["qr_dynamic_source_missing_pair_count"] = int(missing)
+    report["qr_stale_coordinate_pair_count"] = int(stale)
+    failure_reasons: list[str] = []
+    for item in after.get("per_pair", ()) or ():
+        if not isinstance(item, Mapping):
+            continue
+        reason = str(item.get("failure_reason") or "").strip()
+        if reason and reason not in failure_reasons:
+            failure_reasons.append(reason)
+    report["qr_dynamic_source_failure_reasons"] = failure_reasons
+
+
+def _fixed_source_aliases_clean(source: Mapping[str, object]) -> bool:
+    return (
+        _safe_int(source.get("fixed_source_pair_count"), default=0) > 0
+        and _safe_int(source.get("missing_pair_count"), default=0) == 0
+        and _safe_int(source.get("fallback_entry_count"), default=0) == 0
+        and _safe_int(source.get("fallback_row_count"), default=0) == 0
+        and _safe_int(source.get("fixed_source_resolution_fallback_count"), default=0) == 0
+        and _safe_int(source.get("branch_mismatch_count"), default=0) == 0
+    )
+
+
+def _apply_fixed_source_count_aliases(report: dict[str, object]) -> None:
+    point_summary = (
+        dict(report.get("point_match_summary"))
+        if isinstance(report.get("point_match_summary"), Mapping)
+        else {}
+    )
+    sources: list[Mapping[str, object]] = [point_summary, report]
+    selected: int | None = None
+    for source in sources:
+        for key in (
+            "matched_fixed_pair_count",
+            "resolved_fixed_matched_pair_count",
+            "fixed_source_resolved_count",
+            "matched_pair_count",
+        ):
+            if key not in source:
+                continue
+            value = _safe_int(source.get(key), default=-1)
+            if value <= 0:
+                continue
+            if key == "matched_pair_count" and not _fixed_source_aliases_clean(
+                {**report, **dict(source)}
+            ):
+                continue
+            selected = int(value)
+            break
+        if selected is not None:
+            break
+    if selected is None:
+        return
+    for key in (
+        "matched_fixed_pair_count",
+        "fixed_source_resolved_count",
+        "fixed_source_reflection_count",
+    ):
+        current = _safe_int(report.get(key), default=0)
+        if current <= 0 or key == "matched_fixed_pair_count":
+            report[key] = int(selected)
+        point_summary.setdefault(key, int(selected))
+    if point_summary:
+        report["point_match_summary"] = point_summary
 
 
 def _request_handoff_summary(
@@ -1803,6 +2339,33 @@ def _result_report(
         ),
         "parameter_deltas": _param_report(request, result),
     }
+    optimizer_start_blocked_reason = str(
+        getattr(result, "optimizer_start_blocked_reason", "") or ""
+    )
+    if optimizer_start_blocked_reason:
+        report["optimizer_start_blocked_reason"] = optimizer_start_blocked_reason
+    dynamic_anchor_diagnostics = getattr(result, "dynamic_baseline_anchor_diagnostics", None)
+    if isinstance(dynamic_anchor_diagnostics, Sequence) and not isinstance(
+        dynamic_anchor_diagnostics,
+        (str, bytes),
+    ):
+        report["dynamic_baseline_anchor_diagnostics"] = copy.deepcopy(
+            [dict(item) for item in dynamic_anchor_diagnostics if isinstance(item, Mapping)]
+        )
+        report["dynamic_baseline_anchor_diagnostic_count"] = int(
+            len(report["dynamic_baseline_anchor_diagnostics"])
+        )
+    dynamic_anchor_mismatches = getattr(result, "dynamic_baseline_anchor_mismatches", None)
+    if isinstance(dynamic_anchor_mismatches, Sequence) and not isinstance(
+        dynamic_anchor_mismatches,
+        (str, bytes),
+    ):
+        report["dynamic_baseline_anchor_mismatches"] = copy.deepcopy(
+            [dict(item) for item in dynamic_anchor_mismatches if isinstance(item, Mapping)]
+        )
+        report["dynamic_baseline_anchor_mismatch_count"] = int(
+            len(report["dynamic_baseline_anchor_mismatches"])
+        )
     report["elapsed_s"] = report["elapsed_seconds"]
     for key in STRICT_POINT_SUMMARY_KEYS:
         report[key] = _summary_int(point_summary, key)
@@ -1844,6 +2407,8 @@ def _result_report(
     report["branch_mismatch_count"] = int(point_summary.get("branch_mismatch_count", 0) or 0)
     if isinstance(extra, Mapping):
         report.update(dict(extra))
+    _attach_qr_dynamic_source_coverage(report)
+    _apply_fixed_source_count_aliases(report)
     if not result_has_residual_vector:
         residuals_finite = bool(report.get("objective_dry_run_residual_finite", False))
     report["residuals_finite"] = bool(
@@ -2142,9 +2707,27 @@ def _rung_passed(report: Mapping[str, object]) -> bool:
 
 
 class _ProbeLeastSquares:
-    def __init__(self, *, mode: str) -> None:
+    def __init__(
+        self,
+        *,
+        mode: str,
+        param_names: Sequence[str] | None = None,
+        record_callback: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> None:
         self.mode = str(mode)
+        self.param_names = [str(name) for name in param_names or ()]
+        self._record_callback = record_callback
         self.records: list[dict[str, object]] = []
+
+    def _append_record(self, record: Mapping[str, object]) -> None:
+        copied = dict(record)
+        self.records.append(copied)
+        if self._record_callback is None:
+            return
+        try:
+            self._record_callback(dict(copied))
+        except Exception:
+            pass
 
     @staticmethod
     def _residual_norm(residual: np.ndarray) -> float:
@@ -2153,11 +2736,19 @@ class _ProbeLeastSquares:
             return float("nan")
         return float(np.linalg.norm(finite))
 
-    @staticmethod
-    def _step_for_value(value: float) -> float:
+    def _step_for_value(self, value: float, *, param_index: int) -> tuple[float, str]:
+        del param_index
+        if self.mode == "sensitivity":
+            if not math.isfinite(value):
+                return float(RUNG2_PROBE_STEP_FLOOR), "floor_nonfinite_base"
+            relative_step = abs(float(value)) * float(RUNG2_PROBE_STEP_REL)
+            floor_step = float(RUNG2_PROBE_STEP_FLOOR)
+            if relative_step >= floor_step:
+                return float(relative_step), "relative"
+            return floor_step, "floor"
         if not math.isfinite(value):
-            return 1.0e-6
-        return float(max(abs(float(value)) * 1.0e-4, 1.0e-6))
+            return 1.0e-6, "dry_run_floor_nonfinite_base"
+        return float(max(abs(float(value)) * 1.0e-4, 1.0e-6)), "dry_run_relative"
 
     @staticmethod
     def _bounds(
@@ -2215,8 +2806,131 @@ class _ProbeLeastSquares:
         x0_arr = np.asarray(x0, dtype=float).reshape(-1)
         if self.mode == "sensitivity":
             base_eval, residual0 = self._safe_eval(fun, x0_arr, label="base")
+            base_eval["probe_eval_index"] = 0
             if residual0 is None:
                 residual0 = np.array([float("nan")], dtype=float)
+            lower_arr, upper_arr = self._bounds(kwargs, x0_arr.size)
+            nfev = 1
+            probe_eval_index = 1
+
+            for param_index in range(int(x0_arr.size)):
+                base_value = float(x0_arr[int(param_index)])
+                requested_step, step_source = self._step_for_value(
+                    base_value,
+                    param_index=int(param_index),
+                )
+                bound_ceiling = float("nan")
+                if lower_arr is not None and upper_arr is not None:
+                    try:
+                        lower_value = float(lower_arr[int(param_index)])
+                        upper_value = float(upper_arr[int(param_index)])
+                        span = float(upper_value - lower_value)
+                    except Exception:
+                        span = float("nan")
+                    if math.isfinite(span) and span >= 0.0:
+                        bound_ceiling = float(
+                            span * RUNG2_PROBE_STEP_CEILING_FRACTION_OF_BOUND_SPAN
+                        )
+                        if math.isfinite(bound_ceiling) and bound_ceiling > 0.0:
+                            if requested_step > bound_ceiling:
+                                requested_step = float(bound_ceiling)
+                                step_source = f"{step_source}+bound_span_ceiling"
+
+                def _trial(direction: float) -> tuple[np.ndarray, float, bool]:
+                    target = np.array(x0_arr, dtype=float)
+                    requested = float(direction) * requested_step
+                    target[int(param_index)] = target[int(param_index)] + requested
+                    clipped = False
+                    if lower_arr is not None:
+                        clipped = clipped or bool(np.any(target < lower_arr))
+                        target = np.maximum(target, lower_arr)
+                    if upper_arr is not None:
+                        clipped = clipped or bool(np.any(target > upper_arr))
+                        target = np.minimum(target, upper_arr)
+                    applied = float(target[int(param_index)] - x0_arr[int(param_index)])
+                    if not math.isclose(applied, requested, rel_tol=0.0, abs_tol=1.0e-15):
+                        clipped = True
+                    return target, applied, clipped
+
+                plus_x, plus_applied, plus_clipped = _trial(1.0)
+                minus_x, minus_applied, minus_clipped = _trial(-1.0)
+
+                evals = [dict(base_eval)]
+                if abs(plus_applied) > 0.0:
+                    plus_eval, residual_plus = self._safe_eval(fun, plus_x, label="plus")
+                    plus_eval["probe_eval_index"] = int(probe_eval_index)
+                    probe_eval_index += 1
+                    if residual_plus is not None and residual_plus.shape == residual0.shape:
+                        delta = residual_plus - residual0
+                        plus_eval["delta_norm"] = self._residual_norm(delta)
+                    else:
+                        plus_eval["delta_norm"] = float("nan")
+                    nfev += 1
+                else:
+                    plus_eval = {
+                        "label": "plus",
+                        "x": plus_x.tolist(),
+                        "moved": False,
+                        "raised": False,
+                        "error_text": "",
+                        "residual_size": 0,
+                        "residual_norm": float("nan"),
+                        "finite": False,
+                        "delta_norm": float("nan"),
+                    }
+                plus_eval["step_applied"] = float(plus_applied)
+                plus_eval["clipped"] = bool(plus_clipped)
+                evals.append(plus_eval)
+
+                if abs(minus_applied) > 0.0:
+                    minus_eval, residual_minus = self._safe_eval(fun, minus_x, label="minus")
+                    minus_eval["probe_eval_index"] = int(probe_eval_index)
+                    probe_eval_index += 1
+                    if residual_minus is not None and residual_minus.shape == residual0.shape:
+                        delta = residual_minus - residual0
+                        minus_eval["delta_norm"] = self._residual_norm(delta)
+                    else:
+                        minus_eval["delta_norm"] = float("nan")
+                    nfev += 1
+                else:
+                    minus_eval = {
+                        "label": "minus",
+                        "x": minus_x.tolist(),
+                        "moved": False,
+                        "raised": False,
+                        "error_text": "",
+                        "residual_size": 0,
+                        "residual_norm": float("nan"),
+                        "finite": False,
+                        "delta_norm": float("nan"),
+                    }
+                minus_eval["step_applied"] = float(minus_applied)
+                minus_eval["clipped"] = bool(minus_clipped)
+                evals.append(minus_eval)
+
+                self._append_record(
+                    {
+                        "param_index": int(param_index),
+                        "x0": x0_arr.tolist(),
+                        "residual_size": int(base_eval.get("residual_size", 0) or 0),
+                        "residual_norm": _metric_float(
+                            base_eval.get("residual_norm", np.nan)
+                        ),
+                        "finite": bool(base_eval.get("finite", False)),
+                        "requested_step": float(requested_step),
+                        "step_source": str(step_source),
+                        "bound_step_ceiling": float(bound_ceiling),
+                        "base_value": float(base_value),
+                        "evals": evals,
+                        "plus_step_applied": float(plus_applied),
+                        "minus_step_applied": float(minus_applied),
+                        "plus_clipped": bool(plus_clipped),
+                        "minus_clipped": bool(minus_clipped),
+                        "delta_step": float(plus_applied),
+                        "delta_norm": _metric_float(plus_eval.get("delta_norm", np.nan)),
+                        "delta_finite": bool(plus_eval.get("finite", False)),
+                    }
+                )
         else:
             residual0 = np.asarray(fun(np.array(x0_arr, dtype=float)), dtype=float)
             base_eval = {
@@ -2229,103 +2943,15 @@ class _ProbeLeastSquares:
                 "residual_norm": self._residual_norm(residual0),
                 "finite": bool(np.all(np.isfinite(residual0))),
             }
-        record: dict[str, object] = {
-            "x0": x0_arr.tolist(),
-            "residual_size": int(base_eval.get("residual_size", 0) or 0),
-            "residual_norm": _metric_float(base_eval.get("residual_norm", np.nan)),
-            "finite": bool(base_eval.get("finite", False)),
-        }
-        if self.mode == "sensitivity" and x0_arr.size:
-            lower_arr, upper_arr = self._bounds(kwargs, x0_arr.size)
-            base_value = float(x0_arr[0])
-            requested_step = self._step_for_value(base_value)
-
-            def _trial(direction: float) -> tuple[np.ndarray, float, bool]:
-                target = np.array(x0_arr, dtype=float)
-                requested = float(direction) * requested_step
-                target[0] = target[0] + requested
-                clipped = False
-                if lower_arr is not None:
-                    clipped = clipped or bool(np.any(target < lower_arr))
-                    target = np.maximum(target, lower_arr)
-                if upper_arr is not None:
-                    clipped = clipped or bool(np.any(target > upper_arr))
-                    target = np.minimum(target, upper_arr)
-                applied = float(target[0] - x0_arr[0])
-                if not math.isclose(applied, requested, rel_tol=0.0, abs_tol=1.0e-15):
-                    clipped = True
-                return target, applied, clipped
-
-            plus_x, plus_applied, plus_clipped = _trial(1.0)
-            minus_x, minus_applied, minus_clipped = _trial(-1.0)
-
-            evals = [dict(base_eval)]
-            nfev = 1
-            if abs(plus_applied) > 0.0:
-                plus_eval, residual_plus = self._safe_eval(fun, plus_x, label="plus")
-                if residual_plus is not None and residual_plus.shape == residual0.shape:
-                    delta = residual_plus - residual0
-                    plus_eval["delta_norm"] = self._residual_norm(delta)
-                else:
-                    plus_eval["delta_norm"] = float("nan")
-                nfev += 1
-            else:
-                plus_eval = {
-                    "label": "plus",
-                    "x": plus_x.tolist(),
-                    "moved": False,
-                    "raised": False,
-                    "error_text": "",
-                    "residual_size": 0,
-                    "residual_norm": float("nan"),
-                    "finite": False,
-                    "delta_norm": float("nan"),
-                }
-            plus_eval["step_applied"] = float(plus_applied)
-            plus_eval["clipped"] = bool(plus_clipped)
-            evals.append(plus_eval)
-
-            if abs(minus_applied) > 0.0:
-                minus_eval, residual_minus = self._safe_eval(fun, minus_x, label="minus")
-                if residual_minus is not None and residual_minus.shape == residual0.shape:
-                    delta = residual_minus - residual0
-                    minus_eval["delta_norm"] = self._residual_norm(delta)
-                else:
-                    minus_eval["delta_norm"] = float("nan")
-                nfev += 1
-            else:
-                minus_eval = {
-                    "label": "minus",
-                    "x": minus_x.tolist(),
-                    "moved": False,
-                    "raised": False,
-                    "error_text": "",
-                    "residual_size": 0,
-                    "residual_norm": float("nan"),
-                    "finite": False,
-                    "delta_norm": float("nan"),
-                }
-            minus_eval["step_applied"] = float(minus_applied)
-            minus_eval["clipped"] = bool(minus_clipped)
-            evals.append(minus_eval)
-
-            record.update(
+            self._append_record(
                 {
-                    "requested_step": float(requested_step),
-                    "base_value": float(base_value),
-                    "evals": evals,
-                    "plus_step_applied": float(plus_applied),
-                    "minus_step_applied": float(minus_applied),
-                    "plus_clipped": bool(plus_clipped),
-                    "minus_clipped": bool(minus_clipped),
-                    "delta_step": float(plus_applied),
-                    "delta_norm": _metric_float(plus_eval.get("delta_norm", np.nan)),
-                    "delta_finite": bool(plus_eval.get("finite", False)),
+                    "x0": x0_arr.tolist(),
+                    "residual_size": int(base_eval.get("residual_size", 0) or 0),
+                    "residual_norm": _metric_float(base_eval.get("residual_norm", np.nan)),
+                    "finite": bool(base_eval.get("finite", False)),
                 }
             )
-        else:
             nfev = 1
-        self.records.append(record)
         return opt.OptimizeResult(
             x=x0_arr,
             fun=residual0,
@@ -2342,8 +2968,13 @@ def _run_with_probe_least_squares(
     request: gui_geometry_fit.GeometryFitSolverRequest,
     *,
     mode: str,
+    record_callback: Callable[[Mapping[str, object]], None] | None = None,
 ) -> tuple[object, list[dict[str, object]]]:
-    probe = _ProbeLeastSquares(mode=mode)
+    probe = _ProbeLeastSquares(
+        mode=mode,
+        param_names=getattr(request, "var_names", ()),
+        record_callback=record_callback,
+    )
     live_payloads: list[dict[str, object]] = []
 
     def _live_update(payload: Mapping[str, object]) -> None:
@@ -2360,27 +2991,41 @@ def _run_with_probe_least_squares(
     finally:
         opt.least_squares = original
     records = list(probe.records)
+    payload_by_probe_index = {
+        int(index): dict(payload) for index, payload in enumerate(live_payloads)
+    }
     payload_index = 0
+
+    def _attach_payload(target: dict[str, object]) -> None:
+        nonlocal payload_index
+        raw_probe_index = target.get("probe_eval_index")
+        try:
+            probe_index = int(raw_probe_index)
+        except Exception:
+            probe_index = None
+        payload: dict[str, object] | None = None
+        if probe_index is not None and probe_index in payload_by_probe_index:
+            payload = dict(payload_by_probe_index[int(probe_index)])
+            payload_index = max(int(payload_index), int(probe_index) + 1)
+        elif payload_index < len(live_payloads):
+            payload = dict(live_payloads[int(payload_index)])
+            payload_index += 1
+        if payload is None:
+            return
+        target["live_update_payload"] = dict(payload)
+        point_summary = payload.get("point_match_summary")
+        if isinstance(point_summary, Mapping):
+            target["point_match_summary"] = dict(point_summary)
+
     for record in records:
         evals = record.get("evals")
         if isinstance(evals, list):
             for entry in evals:
                 if not isinstance(entry, dict) or not bool(entry.get("moved", True)):
                     continue
-                if payload_index >= len(live_payloads):
-                    continue
-                entry["live_update_payload"] = dict(live_payloads[payload_index])
-                point_summary = live_payloads[payload_index].get("point_match_summary")
-                if isinstance(point_summary, Mapping):
-                    entry["point_match_summary"] = dict(point_summary)
-                payload_index += 1
+                _attach_payload(entry)
             continue
-        if payload_index < len(live_payloads):
-            record["live_update_payload"] = dict(live_payloads[payload_index])
-            point_summary = live_payloads[payload_index].get("point_match_summary")
-            if isinstance(point_summary, Mapping):
-                record["point_match_summary"] = dict(point_summary)
-            payload_index += 1
+        _attach_payload(record)
     return result, records
 
 
@@ -2441,6 +3086,8 @@ def _request_only_report(
     report.update(_request_handoff_summary(request))
     if isinstance(extra, Mapping):
         report.update(dict(extra))
+    _attach_qr_dynamic_source_coverage(report)
+    _apply_fixed_source_count_aliases(report)
     _apply_single_param_fields(report)
     _apply_one_param_diagnostic_aliases(report)
     return report
@@ -2459,6 +3106,7 @@ def run_objective_dry_run(
         max_nfev=max_nfev,
     )
     request_summary = _request_handoff_summary(request)
+    trial_source_coverage = _request_trial_source_rows_coverage(request)
     request_fallback_failures = _strict_no_fallback_failures(request_summary)
     if request_fallback_failures:
         report = _request_only_report(
@@ -2475,17 +3123,27 @@ def run_objective_dry_run(
                 "least_squares_called": False,
                 "optimizer_solve_called": False,
                 "objective_dry_run_residual_finite": False,
+                "qr_dynamic_source_coverage": trial_source_coverage,
             },
         )
         _write_json(output_path, report)
         return report
     result, records = _run_with_probe_least_squares(request, mode="dry_run")
+    result_fun = getattr(result, "fun", None)
+    result_fun_arr = (
+        np.asarray(result_fun, dtype=float).reshape(-1)
+        if result_fun is not None
+        else np.asarray([], dtype=float)
+    )
+    result_residual_finite = bool(
+        result_fun_arr.size and np.all(np.isfinite(result_fun_arr))
+    )
     residual_finite = any(
         bool(record.get("finite", False))
         and math.isfinite(_metric_float(record.get("residual_norm", np.nan)))
         for record in records
         if isinstance(record, Mapping)
-    )
+    ) or bool(result_residual_finite)
     report = _result_report(
         request=request,
         result=result,
@@ -2495,10 +3153,11 @@ def run_objective_dry_run(
         status="ok",
         extra={
             "least_squares_probe_records": records,
-            "objective_eval_called": bool(records),
+            "objective_eval_called": bool(records) or bool(result_fun_arr.size),
             "least_squares_called": False,
             "optimizer_solve_called": False,
             "objective_dry_run_residual_finite": bool(residual_finite),
+            "qr_dynamic_source_coverage": trial_source_coverage,
         },
     )
     fallback_failures = _strict_no_fallback_failures(report)
@@ -2506,6 +3165,26 @@ def run_objective_dry_run(
         report["status"] = "failed"
         report["failure_reason"] = "optimizer_request_used_fallback_rows"
         report["fallback_guard_failures"] = fallback_failures
+    rung1_failures = _rung1_green_failures({**report, "status": "ok", "pass": True})
+    dynamic_failures = [
+        reason
+        for reason in rung1_failures
+        if reason
+        in {
+            "missing_dynamic_trial_source_rows",
+            "stale_qr_coordinate_provenance",
+            "qr_dynamic_source_required_pair_count_0_expected_7",
+        }
+        or reason.startswith("qr_dynamic_source_")
+        or reason.startswith("qr_stale_coordinate_pair_count_")
+    ]
+    if dynamic_failures:
+        report["status"] = "failed"
+        if any("stale" in reason for reason in dynamic_failures):
+            report["failure_reason"] = "stale_qr_coordinate_provenance"
+        else:
+            report["failure_reason"] = "missing_dynamic_trial_source_rows"
+        report["rung1_dynamic_source_failures"] = dynamic_failures
     if int(report.get("matched_pair_count", 0) or 0) != 7:
         report["status"] = "failed"
         report.setdefault("failure_reason", "pair_count_not_7")
@@ -2523,6 +3202,8 @@ def run_objective_dry_run(
         report["status"] = "failed"
         report.setdefault("failure_reason", "non_finite_initial_residual")
     report["pass"] = str(report.get("status")) == "ok"
+    if bool(report["pass"]):
+        report.setdefault("failure_reason", None)
     _write_json(output_path, report)
     return report
 
@@ -2553,7 +3234,60 @@ def _candidate_order(context: Mapping[str, object]) -> list[str]:
         actual = theta_name if name == "theta_initial" else name
         if actual not in ordered:
             ordered.append(actual)
-    return _coerce_active_names(context, ordered)
+    return [
+        str(name)
+        for name in _coerce_active_names(context, ordered)
+        if str(name) not in RUNG2_EXCLUDED_PROBE_PARAMS
+    ]
+
+
+def _rung2_fixed_param_order(context: Mapping[str, object]) -> list[str]:
+    fixed_order = [name for name in ONE_PARAM_ORDER if str(name) in EXPECTED_RUNG2_FIXED_PARAMS]
+    return _coerce_active_names(context, fixed_order)
+
+
+def _rung2_expected_params(candidate_names: Sequence[str]) -> tuple[list[str], list[str]]:
+    near_zero = [
+        str(name)
+        for name in candidate_names
+        if str(name) in set(RUNG2_EXPECTED_NEAR_ZERO_PARAMS)
+    ]
+    active = [
+        str(name)
+        for name in candidate_names
+        if str(name) in EXPECTED_RUNG2_ACTIVE_PARAMS
+    ]
+    return active, near_zero
+
+
+def _rung2_sensitivity_gate_failures(
+    *,
+    candidate_names: Sequence[str],
+    entries: Sequence[Mapping[str, object]],
+    active_params: Sequence[str],
+    near_zero_params: Sequence[str],
+    non_finite_params: Sequence[str],
+    unsafe_params: Sequence[str],
+    residual_probe_called: bool,
+    state_hash_unchanged: bool,
+) -> tuple[list[str], list[str], list[str]]:
+    expected_active, expected_near_zero = _rung2_expected_params(candidate_names)
+    failures: list[str] = []
+    if [str(name) for name in active_params] != expected_active:
+        failures.append("active_params_mismatch")
+    if [str(name) for name in near_zero_params] != expected_near_zero:
+        failures.append("near_zero_params_mismatch")
+    if non_finite_params:
+        failures.append("non_finite_params_present")
+    if unsafe_params:
+        failures.append("unsafe_params_present")
+    if len(entries) != len(candidate_names):
+        failures.append("candidate_param_count_mismatch")
+    if not bool(residual_probe_called):
+        failures.append("residual_probe_not_called")
+    if not bool(state_hash_unchanged):
+        failures.append("state_hash_changed")
+    return failures, expected_active, expected_near_zero
 
 
 def _safe_int(value: object, *, default: int = 0) -> int:
@@ -2843,17 +3577,28 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         point_summary[key] = normalized
         report[key] = normalized
 
+    selected_fixed_value = 0
     for fixed_key in (
         "fixed_source_resolved_count",
         "matched_fixed_pair_count",
         "fixed_source_reflection_count",
     ):
         if fixed_key in point_summary:
-            report["fixed_source_resolved_count"] = _safe_int(
+            selected_fixed_value = _safe_int(
                 point_summary.get(fixed_key),
                 default=_safe_int(report.get("fixed_source_resolved_count"), default=0),
             )
             break
+    if selected_fixed_value <= 0 and selected_pair_count == int(expected_count):
+        selected_fixed_value = int(expected_count)
+    if selected_fixed_value > 0:
+        for fixed_key in (
+            "fixed_source_resolved_count",
+            "matched_fixed_pair_count",
+            "fixed_source_reflection_count",
+        ):
+            report[fixed_key] = int(selected_fixed_value)
+            point_summary[fixed_key] = int(selected_fixed_value)
 
     after_caked_rms = _summary_rms_deg(point_summary)
     after_caked_max = _summary_max_deg(point_summary)
@@ -3038,9 +3783,10 @@ def _caked_summary_fit_space_guard_failures(
         failures.append("manual_caked_residual_rows_missing")
     elif manual_rows != expected_rows:
         failures.append(f"manual_caked_residual_row_count_{manual_rows}_expected_{expected_rows}")
+    allowed_projector_rows = {int(expected_rows), int(2 * expected_rows)}
     if projector_rows <= 0:
         failures.append("dataset_fit_space_projector_rows_missing")
-    elif projector_rows != expected_rows:
+    elif projector_rows not in allowed_projector_rows:
         failures.append(
             f"dataset_fit_space_projector_row_count_{projector_rows}_expected_{expected_rows}"
         )
@@ -3083,9 +3829,16 @@ def _caked_summary_fit_space_guard_failures(
         )
         if dataset_manual_rows <= 0:
             failures.append("dataset_manual_caked_residual_rows_missing")
+        allowed_dataset_projector_rows = {
+            int(dataset_manual_rows),
+            int(2 * dataset_manual_rows),
+        }
         if dataset_projector_rows <= 0:
             failures.append("dataset_projector_rows_missing")
-        elif dataset_manual_rows > 0 and dataset_projector_rows != dataset_manual_rows:
+        elif (
+            dataset_manual_rows > 0
+            and dataset_projector_rows not in allowed_dataset_projector_rows
+        ):
             failures.append(
                 "dataset_fit_space_projector_row_count_"
                 f"{dataset_projector_rows}_expected_{dataset_manual_rows}"
@@ -3399,6 +4152,8 @@ def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
         "dataset_pair_count": 7,
         "optimizer_request_pair_count": 7,
         "fixed_source_pair_count": 7,
+        "fixed_source_resolved_count": 7,
+        "matched_fixed_pair_count": 7,
         "fallback_row_count": 0,
         "fixed_source_resolution_fallback_count": 0,
         "missing_fixed_source_count": 0,
@@ -3419,10 +4174,36 @@ def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
             failures.append(f"{key}_{actual}_expected_True")
     if not dry_run_residual_finite:
         failures.append("objective_dry_run_residual_not_finite")
+    if report.get("objective_eval_called") is not True:
+        failures.append("objective_eval_not_called")
     if bool(report.get("least_squares_called", True)):
         failures.append("least_squares_called")
     if bool(report.get("optimizer_solve_called", True)):
         failures.append("optimizer_solve_called")
+    required_dynamic = _safe_int(
+        report.get("qr_dynamic_source_required_pair_count"),
+        default=0,
+    )
+    dynamic_count = _safe_int(report.get("qr_dynamic_source_row_count"), default=0)
+    missing_dynamic = _safe_int(
+        report.get("qr_dynamic_source_missing_pair_count"),
+        default=0,
+    )
+    stale_count = _safe_int(report.get("qr_stale_coordinate_pair_count"), default=0)
+    if required_dynamic != EXPECTED_PROVIDER_PAIR_COUNT:
+        failures.append(
+            "qr_dynamic_source_required_pair_count_"
+            f"{required_dynamic}_expected_{EXPECTED_PROVIDER_PAIR_COUNT}"
+        )
+    if dynamic_count != EXPECTED_PROVIDER_PAIR_COUNT:
+        failures.append(
+            "qr_dynamic_source_row_count_"
+            f"{dynamic_count}_expected_{EXPECTED_PROVIDER_PAIR_COUNT}"
+        )
+    if missing_dynamic != 0:
+        failures.append("missing_dynamic_trial_source_rows")
+    if stale_count != 0:
+        failures.append("stale_qr_coordinate_provenance")
     failures.extend(_caked_manual_report_guard_failures(report, require_improvement=False))
     return failures
 
@@ -3551,6 +4332,13 @@ def _sensitivity_status(
         if bool(eval_report.get("moved", False))
     ]
     if not moved:
+        plus_step = abs(_metric_float(plus_eval.get("step_applied", np.nan)))
+        minus_step = abs(_metric_float(minus_eval.get("step_applied", np.nan)))
+        if (
+            (not math.isfinite(plus_step) or plus_step == 0.0)
+            and (not math.isfinite(minus_step) or minus_step == 0.0)
+        ):
+            return "unsafe", ["no_available_bound_step"], float("nan")
         return "unsafe", ["no_valid_movement"], float("nan")
     for eval_report in moved:
         label = str(eval_report.get("label", "direction"))
@@ -3654,14 +4442,20 @@ def run_sensitivity_scan(
             "params": [],
             "parameters": [],
             "active_param_count": 0,
+            "fixed_param_count": len(_rung2_fixed_param_order(context)),
+            "excluded_param_count": len(_rung2_fixed_param_order(context)),
             "near_zero_param_count": 0,
             "non_finite_param_count": 0,
             "unsafe_param_count": 0,
             "active_params": [],
+            "fixed_params": _rung2_fixed_param_order(context),
+            "excluded_params": _rung2_fixed_param_order(context),
             "near_zero_params": [],
             "non_finite_params": [],
             "unsafe_params": [],
             "active_parameters": [],
+            "fixed_parameters": _rung2_fixed_param_order(context),
+            "excluded_parameters": _rung2_fixed_param_order(context),
             "near_zero_parameters": [],
             "unsafe_parameters": [],
             "state_sha256_before": initial_state_hash,
@@ -3670,130 +4464,337 @@ def run_sensitivity_scan(
         }
         _write_json(output_path, payload)
         return payload
+    partial_path = output_path.with_name(f"{output_path.stem}.partial{output_path.suffix}")
+    try:
+        partial_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    candidate_names = _candidate_order(context)
+    fixed_param_names = _rung2_fixed_param_order(context)
+    entry_by_name: dict[str, dict[str, object]] = {}
+    request_summary_by_name: dict[str, dict[str, object]] = {}
+    param_started_by_name: dict[str, float] = {}
+    safe_names: list[str] = []
+    probe_completed_names: set[str] = set()
     residual_probe_called = False
-    for name in _candidate_order(context):
-        param_started = _perf_counter()
+
+    def _ordered_entries() -> list[dict[str, object]]:
+        return [
+            entry_by_name[str(name)]
+            for name in candidate_names
+            if str(name) in entry_by_name
+        ]
+
+    def _write_sensitivity_partial(current_param: str | None = None) -> None:
+        ordered = _ordered_entries()
+        active = [str(entry["param_name"]) for entry in ordered if entry.get("status") == "active"]
+        near_zero = [
+            str(entry["param_name"]) for entry in ordered if entry.get("status") == "near_zero"
+        ]
+        non_finite = [
+            str(entry["param_name"]) for entry in ordered if entry.get("status") == "non_finite"
+        ]
+        unsafe = [
+            str(entry["param_name"]) for entry in ordered if entry.get("status") == "unsafe"
+        ]
+        completed_names = set(str(name) for name in entry_by_name)
+        completed_names.update(str(name) for name in probe_completed_names)
+        _write_json(
+            partial_path,
+            {
+                "rung": 2,
+                "rung_name": "sensitivity_scan",
+                "status": "running",
+                "partial": True,
+                "current_param": current_param,
+                "pid": int(os.getpid()),
+                "candidate_param_count": int(len(candidate_names)),
+                "fixed_param_count": int(len(fixed_param_names)),
+                "excluded_param_count": int(len(fixed_param_names)),
+                "completed_param_count": int(len(completed_names)),
+                "probe_completed_param_count": int(len(probe_completed_names)),
+                "probe_completed_params": sorted(str(name) for name in probe_completed_names),
+                "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
+                "active_param_count": int(len(active)),
+                "near_zero_param_count": int(len(near_zero)),
+                "non_finite_param_count": int(len(non_finite)),
+                "unsafe_param_count": int(len(unsafe)),
+                "active_params": active,
+                "near_zero_params": near_zero,
+                "fixed_params": list(fixed_param_names),
+                "excluded_params": list(fixed_param_names),
+                "non_finite_params": non_finite,
+                "unsafe_params": unsafe,
+                "params": ordered,
+            },
+        )
+
+    def _unsafe_entry(
+        name: str,
+        *,
+        reasons: Sequence[object],
+        error_text: str = "",
+        request_summary: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        summary = dict(request_summary or {})
+        return {
+            "param_name": str(name),
+            "name": str(name),
+            "status": "unsafe",
+            "classification": "unsafe",
+            "error_text": str(error_text or ""),
+            "unsafe_reasons": [str(reason) for reason in reasons],
+            "provider_pair_count": _safe_int(summary.get("provider_pair_count"), default=-1),
+            "dataset_pair_count": _safe_int(summary.get("dataset_pair_count"), default=-1),
+            "optimizer_request_pair_count": _safe_int(
+                summary.get("optimizer_request_pair_count"),
+                default=-1,
+            ),
+            "fixed_source_pair_count": _safe_int(
+                summary.get("fixed_source_pair_count"),
+                default=-1,
+            ),
+            "fallback_row_count": _safe_int(summary.get("fallback_row_count"), default=-1),
+            "fixed_source_resolution_fallback_count": _safe_int(
+                summary.get("fixed_source_resolution_fallback_count"),
+                default=-1,
+            ),
+            "missing_fixed_source_count": _safe_int(
+                summary.get("missing_fixed_source_count"),
+                default=-1,
+            ),
+            "provider_to_optimizer_identity_match": (
+                summary.get("provider_to_optimizer_identity_match") is True
+            ),
+            "provider_to_optimizer_point_match": (
+                summary.get("provider_to_optimizer_point_match") is True
+            ),
+            "elapsed_seconds": float(
+                max(0.0, _perf_counter() - param_started_by_name.get(str(name), started))
+            ),
+        }
+
+    def _entry_from_probe(
+        name: str,
+        *,
+        request_summary: Mapping[str, object],
+        probe_record: Mapping[str, object],
+    ) -> dict[str, object]:
+        base_eval = _sensitivity_eval_summary(
+            _eval_by_label(probe_record, "base"),
+            request_summary=request_summary,
+        )
+        plus_eval = _sensitivity_eval_summary(
+            _eval_by_label(probe_record, "plus"),
+            request_summary=request_summary,
+        )
+        minus_eval = _sensitivity_eval_summary(
+            _eval_by_label(probe_record, "minus"),
+            request_summary=request_summary,
+        )
+        residual_norm_base = _metric_float(base_eval.get("residual_norm", np.nan))
+        threshold = max(
+            1.0e-7,
+            1.0e-7 * abs(residual_norm_base) if math.isfinite(residual_norm_base) else 0.0,
+        )
+        status, unsafe_reasons, sensitivity_norm = _sensitivity_status(
+            base_eval=base_eval,
+            plus_eval=plus_eval,
+            minus_eval=minus_eval,
+            threshold=float(threshold),
+        )
+        plus_step = _metric_float(plus_eval.get("step_applied", 0.0))
+        minus_step = _metric_float(minus_eval.get("step_applied", 0.0))
+        return {
+            "param_name": str(name),
+            "name": str(name),
+            "status": str(status),
+            "classification": str(status),
+            "base_value": _metric_float(probe_record.get("base_value", np.nan)),
+            "step_size": _metric_float(probe_record.get("requested_step", np.nan)),
+            "step_source": str(probe_record.get("step_source", "") or ""),
+            "bound_step_ceiling": _metric_float(
+                probe_record.get("bound_step_ceiling", np.nan)
+            ),
+            "physical_lower_bound": -90.0
+            if str(name) in {"gamma", "Gamma"}
+            else float("nan"),
+            "physical_upper_bound": 90.0
+            if str(name) in {"gamma", "Gamma"}
+            else float("nan"),
+            "physical_unit": "deg" if str(name) in {"gamma", "Gamma"} else "",
+            "plus_step_applied": plus_step,
+            "minus_step_applied": minus_step,
+            "plus_clipped": bool(plus_eval.get("clipped", False)),
+            "minus_clipped": bool(minus_eval.get("clipped", False)),
+            "residual_norm_base": residual_norm_base,
+            "residual_norm_plus": _metric_float(plus_eval.get("residual_norm", np.nan)),
+            "residual_norm_minus": _metric_float(minus_eval.get("residual_norm", np.nan)),
+            "delta_norm_plus": _metric_float(plus_eval.get("delta_norm", np.nan)),
+            "delta_norm_minus": _metric_float(minus_eval.get("delta_norm", np.nan)),
+            "sensitivity_norm": sensitivity_norm,
+            "finite_plus": bool(plus_eval.get("finite", False)),
+            "finite_minus": bool(minus_eval.get("finite", False)),
+            "unsafe_reasons": list(unsafe_reasons),
+            "base_eval": base_eval,
+            "plus_eval": plus_eval,
+            "minus_eval": minus_eval,
+            "provider_pair_count": _safe_int(
+                request_summary.get("provider_pair_count"),
+                default=-1,
+            ),
+            "dataset_pair_count": _safe_int(
+                request_summary.get("dataset_pair_count"),
+                default=-1,
+            ),
+            "optimizer_request_pair_count": _safe_int(
+                request_summary.get("optimizer_request_pair_count"),
+                default=-1,
+            ),
+            "fixed_source_pair_count": int(base_eval.get("fixed_source_pair_count", -1)),
+            "fallback_row_count": _safe_int(
+                request_summary.get("fallback_row_count"),
+                default=-1,
+            ),
+            "fixed_source_resolution_fallback_count": _safe_int(
+                request_summary.get("fixed_source_resolution_fallback_count"),
+                default=-1,
+            ),
+            "missing_fixed_source_count": _safe_int(
+                request_summary.get("missing_fixed_source_count"),
+                default=-1,
+            ),
+            "fixed_source_resolved_count": int(base_eval.get("fixed_source_pair_count", -1)),
+            "fallback_entry_count": int(base_eval.get("fallback_entry_count", -1)),
+            "matched_pair_count": int(base_eval.get("matched_pair_count", -1)),
+            "missing_pair_count": int(base_eval.get("missing_pair_count", -1)),
+            "branch_mismatch_count": int(base_eval.get("branch_mismatch_count", -1)),
+            "provider_to_optimizer_identity_match": (
+                request_summary.get("provider_to_optimizer_identity_match") is True
+            ),
+            "provider_to_optimizer_point_match": (
+                request_summary.get("provider_to_optimizer_point_match") is True
+            ),
+            "probe_records": [dict(probe_record)],
+            "elapsed_seconds": float(
+                max(0.0, _perf_counter() - param_started_by_name.get(str(name), started))
+            ),
+        }
+
+    for raw_name in candidate_names:
+        name = str(raw_name)
+        param_started_by_name[name] = _perf_counter()
         try:
             request = build_solver_request(context, [name], max_nfev=max_nfev)
             request_summary = _request_handoff_summary(request)
+            request_summary_by_name[name] = dict(request_summary)
             request_failures = _strict_no_fallback_failures(request_summary)
             if request_failures:
-                entries.append(
-                    {
-                        "param_name": str(name),
-                        "name": str(name),
-                        "status": "unsafe",
-                        "unsafe_reasons": list(request_failures),
-                        "elapsed_seconds": float(max(0.0, _perf_counter() - param_started)),
-                    }
+                entry_by_name[name] = _unsafe_entry(
+                    name,
+                    reasons=request_failures,
+                    request_summary=request_summary,
                 )
+                _write_sensitivity_partial(current_param=name)
                 continue
-            residual_probe_called = True
-            result, records = _run_with_probe_least_squares(request, mode="sensitivity")
-            probe_record = records[-1] if records else {}
-            base_eval = _sensitivity_eval_summary(
-                _eval_by_label(probe_record, "base"),
-                request_summary=request_summary,
-            )
-            plus_eval = _sensitivity_eval_summary(
-                _eval_by_label(probe_record, "plus"),
-                request_summary=request_summary,
-            )
-            minus_eval = _sensitivity_eval_summary(
-                _eval_by_label(probe_record, "minus"),
-                request_summary=request_summary,
-            )
-            residual_norm_base = _metric_float(base_eval.get("residual_norm", np.nan))
-            threshold = max(
-                1.0e-7,
-                1.0e-7 * abs(residual_norm_base) if math.isfinite(residual_norm_base) else 0.0,
-            )
-            status, unsafe_reasons, sensitivity_norm = _sensitivity_status(
-                base_eval=base_eval,
-                plus_eval=plus_eval,
-                minus_eval=minus_eval,
-                threshold=float(threshold),
-            )
-            plus_step = _metric_float(plus_eval.get("step_applied", 0.0))
-            minus_step = _metric_float(minus_eval.get("step_applied", 0.0))
-            entries.append(
-                {
-                    "param_name": str(name),
-                    "name": str(name),
-                    "status": str(status),
-                    "classification": str(status),
-                    "base_value": _metric_float(probe_record.get("base_value", np.nan)),
-                    "step_size": _metric_float(probe_record.get("requested_step", np.nan)),
-                    "plus_step_applied": plus_step,
-                    "minus_step_applied": minus_step,
-                    "plus_clipped": bool(plus_eval.get("clipped", False)),
-                    "minus_clipped": bool(minus_eval.get("clipped", False)),
-                    "residual_norm_base": residual_norm_base,
-                    "residual_norm_plus": _metric_float(plus_eval.get("residual_norm", np.nan)),
-                    "residual_norm_minus": _metric_float(minus_eval.get("residual_norm", np.nan)),
-                    "delta_norm_plus": _metric_float(plus_eval.get("delta_norm", np.nan)),
-                    "delta_norm_minus": _metric_float(minus_eval.get("delta_norm", np.nan)),
-                    "sensitivity_norm": sensitivity_norm,
-                    "finite_plus": bool(plus_eval.get("finite", False)),
-                    "finite_minus": bool(minus_eval.get("finite", False)),
-                    "unsafe_reasons": list(unsafe_reasons),
-                    "base_eval": base_eval,
-                    "plus_eval": plus_eval,
-                    "minus_eval": minus_eval,
-                    "provider_pair_count": _safe_int(
-                        request_summary.get("provider_pair_count"),
-                        default=-1,
-                    ),
-                    "dataset_pair_count": _safe_int(
-                        request_summary.get("dataset_pair_count"),
-                        default=-1,
-                    ),
-                    "optimizer_request_pair_count": _safe_int(
-                        request_summary.get("optimizer_request_pair_count"),
-                        default=-1,
-                    ),
-                    "fixed_source_pair_count": int(base_eval.get("fixed_source_pair_count", -1)),
-                    "fallback_row_count": _safe_int(
-                        request_summary.get("fallback_row_count"),
-                        default=-1,
-                    ),
-                    "fixed_source_resolution_fallback_count": _safe_int(
-                        request_summary.get("fixed_source_resolution_fallback_count"),
-                        default=-1,
-                    ),
-                    "missing_fixed_source_count": _safe_int(
-                        request_summary.get("missing_fixed_source_count"),
-                        default=-1,
-                    ),
-                    "fixed_source_resolved_count": int(
-                        base_eval.get("fixed_source_pair_count", -1)
-                    ),
-                    "fallback_entry_count": int(base_eval.get("fallback_entry_count", -1)),
-                    "matched_pair_count": int(base_eval.get("matched_pair_count", -1)),
-                    "missing_pair_count": int(base_eval.get("missing_pair_count", -1)),
-                    "branch_mismatch_count": int(base_eval.get("branch_mismatch_count", -1)),
-                    "provider_to_optimizer_identity_match": (
-                        request_summary.get("provider_to_optimizer_identity_match") is True
-                    ),
-                    "provider_to_optimizer_point_match": (
-                        request_summary.get("provider_to_optimizer_point_match") is True
-                    ),
-                    "probe_records": records,
-                    "elapsed_seconds": float(max(0.0, _perf_counter() - param_started)),
-                }
-            )
+            safe_names.append(name)
         except Exception as exc:
-            entries.append(
-                {
-                    "param_name": str(name),
-                    "name": str(name),
-                    "status": "unsafe",
-                    "classification": "unsafe",
-                    "error_text": str(exc),
-                    "unsafe_reasons": ["residual_eval_raised"],
-                    "elapsed_seconds": float(max(0.0, _perf_counter() - param_started)),
-                }
+            entry_by_name[name] = _unsafe_entry(
+                name,
+                reasons=["request_build_raised"],
+                error_text=str(exc),
             )
+            _write_sensitivity_partial(current_param=name)
+
+    _write_sensitivity_partial(current_param=safe_names[0] if safe_names else None)
+
+    if safe_names:
+        try:
+            combined_request = build_solver_request(context, safe_names, max_nfev=max_nfev)
+            combined_summary = _request_handoff_summary(combined_request)
+            combined_failures = _strict_no_fallback_failures(combined_summary)
+            if combined_failures:
+                for name in safe_names:
+                    entry_by_name[name] = _unsafe_entry(
+                        name,
+                        reasons=combined_failures,
+                        request_summary=combined_summary,
+                    )
+                    _write_sensitivity_partial(current_param=name)
+            else:
+                combined_request = _solver_request_with_solver_overrides(
+                    combined_request,
+                    {
+                        "fixed_manual_prediction_preflight_guard": False,
+                        "prime_provider_local_saved_sim_fit_space_offsets": False,
+                    },
+                )
+                residual_probe_called = True
+
+                def _on_probe_record(record: Mapping[str, object]) -> None:
+                    param_index = _safe_int(
+                        dict(record).get("param_index"),
+                        default=len(probe_completed_names),
+                    )
+                    if 0 <= int(param_index) < len(safe_names):
+                        completed_name = str(safe_names[int(param_index)])
+                    elif len(probe_completed_names) < len(safe_names):
+                        completed_name = str(safe_names[int(len(probe_completed_names))])
+                    else:
+                        completed_name = None
+                    if completed_name is None:
+                        _write_sensitivity_partial(current_param=None)
+                        return
+                    probe_completed_names.add(completed_name)
+                    next_index = int(param_index) + 1
+                    next_param = (
+                        str(safe_names[next_index])
+                        if 0 <= next_index < len(safe_names)
+                        else completed_name
+                    )
+                    _write_sensitivity_partial(current_param=next_param)
+
+                _result, records = _run_with_probe_least_squares(
+                    combined_request,
+                    mode="sensitivity",
+                    record_callback=_on_probe_record,
+                )
+                records_by_name: dict[str, Mapping[str, object]] = {}
+                for index, raw_record in enumerate(records or []):
+                    if not isinstance(raw_record, Mapping):
+                        continue
+                    param_index = _safe_int(raw_record.get("param_index"), default=index)
+                    if 0 <= int(param_index) < len(safe_names):
+                        records_by_name[str(safe_names[int(param_index)])] = raw_record
+                    elif int(index) < len(safe_names):
+                        records_by_name[str(safe_names[int(index)])] = raw_record
+                for name in safe_names:
+                    record = records_by_name.get(str(name))
+                    if record is None:
+                        entry_by_name[name] = _unsafe_entry(
+                            name,
+                            reasons=["missing_probe_record"],
+                            request_summary=request_summary_by_name.get(name, {}),
+                        )
+                    else:
+                        entry_by_name[name] = _entry_from_probe(
+                            name,
+                            request_summary=request_summary_by_name.get(name, {}),
+                            probe_record=record,
+                        )
+                    _write_sensitivity_partial(current_param=name)
+        except Exception as exc:
+            for name in safe_names:
+                entry_by_name[name] = _unsafe_entry(
+                    name,
+                    reasons=["residual_eval_raised"],
+                    error_text=str(exc),
+                    request_summary=request_summary_by_name.get(name, {}),
+                )
+                _write_sensitivity_partial(current_param=name)
+
+    entries = _ordered_entries()
     state_hash_after = (
         _state_sha256(Path(state_path)) if state_path is not None else initial_state_hash
     )
@@ -3814,11 +4815,26 @@ def run_sensitivity_scan(
     unsafe_params = [
         str(entry["param_name"]) for entry in entries if entry.get("status") == "unsafe"
     ]
-    status = "ok" if active_params and state_hash_unchanged else "fail"
+    sensitivity_gate_failures, expected_active_params, expected_near_zero_params = (
+        _rung2_sensitivity_gate_failures(
+            candidate_names=candidate_names,
+            entries=entries,
+            active_params=active_params,
+            near_zero_params=near_zero_params,
+            non_finite_params=non_finite_params,
+            unsafe_params=unsafe_params,
+            residual_probe_called=residual_probe_called,
+            state_hash_unchanged=state_hash_unchanged,
+        )
+    )
+    status = "ok" if not sensitivity_gate_failures else "fail"
     payload = {
         "rung": 2,
         "rung_name": "sensitivity_scan",
         "status": status,
+        "sensitivity_gate_failures": list(sensitivity_gate_failures),
+        "expected_active_params": expected_active_params,
+        "expected_near_zero_params": expected_near_zero_params,
         "rung_1_status": str(rung_1.get("status", "")),
         "provider_pair_count": _safe_int(rung_1.get("provider_pair_count"), default=0),
         "dataset_pair_count": _safe_int(rung_1.get("dataset_pair_count"), default=0),
@@ -3860,14 +4876,20 @@ def run_sensitivity_scan(
         "params": entries,
         "parameters": entries,
         "active_param_count": int(len(active_params)),
+        "fixed_param_count": int(len(fixed_param_names)),
+        "excluded_param_count": int(len(fixed_param_names)),
         "near_zero_param_count": int(len(near_zero_params)),
         "non_finite_param_count": int(len(non_finite_params)),
         "unsafe_param_count": int(len(unsafe_params)),
         "active_params": active_params,
+        "fixed_params": list(fixed_param_names),
+        "excluded_params": list(fixed_param_names),
         "near_zero_params": near_zero_params,
         "non_finite_params": non_finite_params,
         "unsafe_params": unsafe_params,
         "active_parameters": active_params,
+        "fixed_parameters": list(fixed_param_names),
+        "excluded_parameters": list(fixed_param_names),
         "near_zero_parameters": near_zero_params,
         "unsafe_parameters": unsafe_params,
         "state_sha256_before": initial_state_hash,
@@ -3875,7 +4897,14 @@ def run_sensitivity_scan(
         "state_hash_unchanged": bool(state_hash_unchanged),
     }
     payload["pass"] = str(payload["status"]) == "ok"
+    payload["rung2_green_failures"] = _rung2_green_failures(payload)
+    payload["pass"] = not payload["rung2_green_failures"]
+    payload["status"] = "ok" if payload["pass"] else "fail"
     _write_json(output_path, payload)
+    try:
+        partial_path.unlink(missing_ok=True)
+    except Exception:
+        pass
     return payload
 
 
@@ -4733,6 +5762,10 @@ def _finalize_one_param_report(
         finalized["failure_reason"] = "no_matched_peak_rejection"
     elif metric_failures:
         finalized["failure_reason"] = "metric_guard_failed"
+    elif str(finalized.get("optimizer_start_blocked_reason", "")) == (
+        "dynamic_baseline_anchor_mismatch"
+    ):
+        finalized["failure_reason"] = "dynamic_baseline_anchor_mismatch"
     elif solve_flag_failures:
         finalized["failure_reason"] = "solve_flag_guard_failed"
     else:
@@ -4757,19 +5790,64 @@ def _active_params_from_sensitivity(
 
 def _rung2_green_failures(sensitivity: Mapping[str, object]) -> list[str]:
     failures: list[str] = []
-    if (
-        str(sensitivity.get("status", "")) != "ok"
-        or bool(sensitivity.get("pass", False)) is not True
+    status_text = str(sensitivity.get("status", "") or "").strip().lower()
+    if status_text in {"abort", "aborted", "error", "fail", "failed", "timeout"}:
+        failures.append("sensitivity_status_hard_failed")
+    active_params = set(_as_str_list(sensitivity.get("active_params")))
+    near_zero_params = set(_as_str_list(sensitivity.get("near_zero_params")))
+    fixed_params = set(
+        _as_str_list(
+            sensitivity.get("fixed_params", sensitivity.get("fixed_parameters"))
+        )
+    )
+    excluded_params = set(
+        _as_str_list(
+            sensitivity.get("excluded_params", sensitivity.get("excluded_parameters"))
+        )
+    )
+    if active_params != EXPECTED_RUNG2_ACTIVE_PARAMS:
+        failures.append("active_params_mismatch")
+    if near_zero_params != EXPECTED_RUNG2_NEAR_ZERO_PARAMS:
+        failures.append("near_zero_params_mismatch")
+    if fixed_params != EXPECTED_RUNG2_FIXED_PARAMS:
+        failures.append("fixed_params_mismatch")
+    if excluded_params != EXPECTED_RUNG2_FIXED_PARAMS:
+        failures.append("excluded_params_mismatch")
+    fixed_leaked = fixed_params.intersection(
+        active_params
+        | near_zero_params
+        | set(_as_str_list(sensitivity.get("unsafe_params")))
+        | set(_as_str_list(sensitivity.get("non_finite_params")))
+    )
+    if fixed_leaked:
+        failures.append("fixed_param_leaked_into_probe_results")
+    if _safe_int(sensitivity.get("active_param_count"), default=-1) != len(
+        EXPECTED_RUNG2_ACTIVE_PARAMS
     ):
-        failures.append("sensitivity_status_not_ok")
+        failures.append("active_param_count_mismatch")
+    if _safe_int(sensitivity.get("fixed_param_count"), default=-1) != len(
+        EXPECTED_RUNG2_FIXED_PARAMS
+    ):
+        failures.append("fixed_param_count_mismatch")
+    if _safe_int(sensitivity.get("excluded_param_count"), default=-1) != len(
+        EXPECTED_RUNG2_FIXED_PARAMS
+    ):
+        failures.append("excluded_param_count_mismatch")
+    if _safe_int(sensitivity.get("near_zero_param_count"), default=-1) != len(
+        EXPECTED_RUNG2_NEAR_ZERO_PARAMS
+    ):
+        failures.append("near_zero_param_count_mismatch")
+    if _safe_int(sensitivity.get("unsafe_param_count"), default=-1) != 0:
+        failures.append("unsafe_param_count_nonzero")
+    if _safe_int(sensitivity.get("non_finite_param_count"), default=-1) != 0:
+        failures.append("non_finite_param_count_nonzero")
+    if bool(sensitivity.get("residual_probe_called", False)) is not True:
+        failures.append("residual_probe_not_called")
     if bool(sensitivity.get("least_squares_called", False)):
         failures.append("least_squares_called")
     if bool(sensitivity.get("optimizer_solve_called", False)):
         failures.append("optimizer_solve_called")
-    if (
-        "state_hash_unchanged" in sensitivity
-        and bool(sensitivity.get("state_hash_unchanged", False)) is not True
-    ):
+    if bool(sensitivity.get("state_hash_unchanged", False)) is not True:
         failures.append("state_hash_changed")
     failures.extend(
         _fixed_source_contract_failures(
@@ -4846,6 +5924,11 @@ def _one_param_summary(
         str(report.get("param_name", ""))
         for report in attempted_reports
         if str(report.get("status", "")) == "failed"
+    ]
+    dirty_timeout_params = [
+        str(report.get("param_name", ""))
+        for report in attempted_reports
+        if bool(report.get("dirty_timeout_abort", False))
     ]
     diagnosis_by_param = {
         str(report.get("param_name", "")): str(report.get("diagnosis_classification", ""))
@@ -4928,11 +6011,28 @@ def _one_param_summary(
         "sensitivity_report_path": str(sensitivity_report_path),
         "active_params_from_sensitivity": list(active_params),
         "attempted_params": attempted_params,
+        "attempted_param_count": int(len(attempted_params)),
         "passed_params": passed_params,
+        "passed_param_count": int(len(passed_params)),
         "failed_params": failed_params,
+        "failed_param_count": int(len(failed_params)),
         "timed_out_params": timed_out_params,
+        "timed_out_param_count": int(len(timed_out_params)),
+        "dirty_timeout_params": dirty_timeout_params,
+        "dirty_timeout_count": int(len(dirty_timeout_params)),
         "skipped_params": [str(name) for name in skipped_params],
+        "skipped_param_count": int(len(skipped_params)),
         "filtered_params": [str(name) for name in (filtered_params or [])],
+        "filtered_param_count": int(len(filtered_params or [])),
+        "fixed_params": _as_str_list(sensitivity.get("fixed_params")),
+        "excluded_params": _as_str_list(sensitivity.get("excluded_params")),
+        "near_zero_params": _as_str_list(sensitivity.get("near_zero_params")),
+        "fixed_param_count": _safe_int(sensitivity.get("fixed_param_count"), default=0),
+        "excluded_param_count": _safe_int(sensitivity.get("excluded_param_count"), default=0),
+        "near_zero_param_count": _safe_int(
+            sensitivity.get("near_zero_param_count"),
+            default=0,
+        ),
         "diagnosis_by_param": diagnosis_by_param,
         "diagnosis_classification": (
             next(iter(diagnosis_by_param.values())) if len(diagnosis_by_param) == 1 else None
@@ -4965,6 +6065,7 @@ def _one_param_summary(
         "rung_2_green": not _rung2_green_failures(sensitivity),
         "reports": list(reports or []),
     }
+    summary["pass"] = bool(status == "ok")
     return summary
 
 

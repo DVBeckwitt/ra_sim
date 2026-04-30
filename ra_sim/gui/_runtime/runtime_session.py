@@ -3686,6 +3686,52 @@ def _native_detector_coords_to_detector_display_coords_for_background(
     return _to_display
 
 
+def _background_display_to_native_detector_coords_for_background(
+    background_index: int,
+) -> Callable[[float, float], tuple[float | None, float | None]] | None:
+    """Build a display->native detector transform pinned to one background."""
+
+    try:
+        bg_idx = int(background_index)
+    except Exception:
+        return None
+    native_background = None
+    try:
+        if bg_idx == int(background_runtime_state.current_background_index):
+            native_background = _get_current_background_native()
+        else:
+            native_background, _display_background = _load_background_image_by_index(bg_idx)
+    except Exception:
+        native_background = None
+    if native_background is None:
+        return None
+    try:
+        shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    except Exception:
+        return None
+    if len(shape) < 2 or min(shape) <= 0:
+        return None
+
+    def _to_native(col: float, row: float) -> tuple[float | None, float | None]:
+        try:
+            native_col, native_row = _rotate_point_for_display(
+                float(col),
+                float(row),
+                shape,
+                -int(DISPLAY_ROTATE_K),
+            )
+        except Exception:
+            return None, None
+        if not (np.isfinite(native_col) and np.isfinite(native_row)):
+            return None, None
+        return float(native_col), float(native_row)
+
+    _to_native.__name__ = (
+        f"_background_display_to_native_detector_coords_bg_{int(bg_idx)}"
+    )
+    return _to_native
+
+
 def _geometry_manual_detector_display_from_native(
     col: float,
     row: float,
@@ -6553,6 +6599,26 @@ def _apply_geometry_manual_pairs_rows(
 ) -> tuple[int, int, list[str]]:
     """Import saved manual geometry pairs onto the currently loaded backgrounds."""
 
+    def _backfill_imported_pairs_for_background(
+        background_index: int,
+        entries: Sequence[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        display_to_native = _background_display_to_native_detector_coords_for_background(
+            int(background_index)
+        )
+        if display_to_native is None:
+            display_to_native = _background_display_to_native_detector_coords
+        backfilled, _changed_count = (
+            gui_manual_geometry.geometry_manual_backfill_missing_caked_coordinates(
+                entries,
+                background_display_to_native_detector_coords=display_to_native,
+                native_detector_coords_to_caked_display_coords=(
+                    _native_detector_coords_to_live_caked_coords
+                ),
+            )
+        )
+        return [dict(entry) for entry in backfilled]
+
     return gui_manual_geometry.apply_geometry_manual_pairs_rows(
         rows,
         osc_files=background_runtime_state.osc_files,
@@ -6567,8 +6633,54 @@ def _apply_geometry_manual_pairs_rows(
         render_current_pairs=_render_current_geometry_manual_pairs,
         update_button_label=_update_geometry_manual_pick_button_label,
         refresh_status=_refresh_background_status,
+        backfill_imported_pairs_for_background=_backfill_imported_pairs_for_background,
         replace_existing=replace_existing,
     )
+
+
+def _backfill_geometry_manual_pair_caked_coordinate_cache() -> int:
+    """Fill legacy detector-origin manual pairs once caked projection is available."""
+
+    pairs_by_background = getattr(geometry_manual_state, "pairs_by_background", None)
+    if not isinstance(pairs_by_background, dict):
+        return 0
+    changed_total = 0
+    for raw_background_index, raw_entries in list(pairs_by_background.items()):
+        try:
+            background_index = int(raw_background_index)
+        except Exception:
+            continue
+        entries = [dict(entry) for entry in raw_entries or () if isinstance(entry, Mapping)]
+        if not entries:
+            continue
+        display_to_native = _background_display_to_native_detector_coords_for_background(
+            int(background_index)
+        )
+        if display_to_native is None:
+            display_to_native = _background_display_to_native_detector_coords
+        backfilled, changed_count = (
+            gui_manual_geometry.geometry_manual_backfill_missing_caked_coordinates(
+                entries,
+                background_display_to_native_detector_coords=display_to_native,
+                native_detector_coords_to_caked_display_coords=(
+                    _native_detector_coords_to_live_caked_coords
+                ),
+            )
+        )
+        if changed_count <= 0:
+            continue
+        pairs_by_background[int(background_index)] = [dict(entry) for entry in backfilled]
+        changed_total += int(changed_count)
+    if changed_total > 0:
+        try:
+            _invalidate_geometry_manual_pick_cache()
+        except Exception:
+            pass
+        try:
+            _clear_geometry_fit_dataset_cache()
+        except Exception:
+            pass
+    return int(changed_total)
 
 
 def _apply_geometry_manual_pairs_snapshot(
@@ -12425,6 +12537,11 @@ def _set_live_caked_transform_bundle(bundle: CakeTransformBundle | None) -> None
             "_live_caked_transform_bundle",
             bundle if isinstance(bundle, CakeTransformBundle) else None,
         )
+    if isinstance(bundle, CakeTransformBundle):
+        try:
+            _backfill_geometry_manual_pair_caked_coordinate_cache()
+        except Exception:
+            pass
 
 
 def caking(

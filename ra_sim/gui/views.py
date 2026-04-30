@@ -2666,7 +2666,7 @@ def create_background_subtraction_controls(
     )
     _add_help_label(
         quick_frame,
-        "Preset -> Fit -> Preview -> Use for fit",
+        "Preset -> Fit -> Preview -> Use before fit/pick",
     )
     status_label = ttk.Label(
         quick_frame,
@@ -2789,9 +2789,12 @@ def create_background_subtraction_controls(
     )
     _add_check(
         basic.frame,
-        "Use for fit",
+        "Use before fit/pick",
         apply_to_fit_var,
-        tooltip="When checked, auto-match and fit comparison use the subtracted image.",
+        tooltip=(
+            "When checked, manual/auto Qr picking, auto-match, and fit comparison "
+            "use the subtracted image."
+        ),
     )
     _add_check(
         basic.frame,
@@ -2888,7 +2891,10 @@ def create_background_subtraction_controls(
             ("radial_plus_phi_block_model", "Radial + phi"),
             ("slow_caked_model", "Slow 2D"),
         ),
-        tooltip="Choose what to display. This does not change fitting unless Use for fit is checked.",
+        tooltip=(
+            "Choose what to display. This does not change picking or fitting unless "
+            "Use before fit/pick is checked."
+        ),
     )
     _add_help_label(
         preview.frame,
@@ -3232,11 +3238,11 @@ def create_background_subtraction_controls(
         mode = _var_text(mode_var, "off")
         apply_to_fit = bool(getattr(apply_to_fit_var, "get", lambda: False)())
         if enabled and mode != "off" and apply_to_fit:
-            text = "Used for fit and auto-match."
+            text = "Used before Qr picking, auto-match, and fit."
         elif enabled and mode != "off":
-            text = "Preview only. Fit uses raw."
+            text = "Preview only. Qr picking and fit use raw."
         else:
-            text = "Off. Fit uses raw."
+            text = "Off. Qr picking and fit use raw."
         _set_var_value(fit_usage_var, text)
 
     def _refresh_summaries(*_args: object) -> None:
@@ -3369,7 +3375,7 @@ def create_primary_cif_controls(
 ) -> None:
     """Create the primary-CIF path and diffuse-HT action controls."""
 
-    cif_frame = CollapsibleFrame(parent, text="Primary CIF")
+    cif_frame = CollapsibleFrame(parent, text="Primary CIF", expanded=True)
     cif_frame.pack(fill=tk.X, padx=5, pady=5)
     ttk.Label(cif_frame.frame, text="Path").pack(anchor=tk.W, padx=5, pady=(2, 0))
 
@@ -3383,7 +3389,7 @@ def create_primary_cif_controls(
 
     browse_button = ttk.Button(
         cif_actions_frame,
-        text="Browse...",
+        text="Import CIF...",
         command=on_browse_primary_cif,
     )
     browse_button.pack(side=tk.LEFT, padx=(0, 5))
@@ -5077,6 +5083,14 @@ def create_geometry_tool_action_controls(
     on_import_manual_pairs: Callable[[], None],
     on_toggle_preview_exclude: Callable[[], None],
     on_clear_manual_pairs: Callable[[], None],
+    on_add_all_qr_set_peaks: Callable[[], None] | None = None,
+    on_remove_qr_set_peaks: Callable[[], None] | None = None,
+    auto_refine_radius_value: float | None = None,
+    on_auto_refine_radius_changed: Callable[[float], None] | None = None,
+    manual_drag_move_enabled: bool = False,
+    on_manual_drag_move_changed: Callable[[bool], None] | None = None,
+    manual_click_remove_enabled: bool = False,
+    on_manual_click_remove_changed: Callable[[bool], None] | None = None,
     manual_pick_text: str = "Pick Qr Sets on Image",
     preview_exclude_text: str = "Choose Active Qr/Qz Groups",
 ) -> None:
@@ -5093,44 +5107,132 @@ def create_geometry_tool_action_controls(
     )
     geometry_manual_pick_button.pack(side=tk.LEFT, padx=5, pady=2)
 
-    geometry_manual_undo_button = ttk.Button(
-        parent,
-        text="Undo Placement",
-        command=on_undo_manual_placement,
+    geometry_manual_drag_move_var = tk.BooleanVar(value=bool(manual_drag_move_enabled))
+    geometry_manual_drag_move_checkbutton = ttk.Checkbutton(
+        geometry_manual_pick_row,
+        text="Drag Move Placed Peaks",
+        variable=geometry_manual_drag_move_var,
+        command=(
+            lambda: on_manual_drag_move_changed(
+                bool(geometry_manual_drag_move_var.get())
+            )
+            if callable(on_manual_drag_move_changed)
+            else None
+        ),
     )
-    geometry_manual_undo_button.pack(side=tk.TOP, padx=5, pady=2)
+    geometry_manual_drag_move_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
 
-    geometry_manual_export_button = ttk.Button(
-        parent,
-        text="Export Placements...",
-        command=on_export_manual_pairs,
+    geometry_manual_click_remove_var = tk.BooleanVar(
+        value=bool(manual_click_remove_enabled)
     )
-    geometry_manual_export_button.pack(side=tk.TOP, padx=5, pady=2)
 
-    geometry_manual_import_button = ttk.Button(
-        parent,
-        text="Import Placements...",
-        command=on_import_manual_pairs,
+    def _set_click_remove() -> None:
+        enabled = bool(geometry_manual_click_remove_var.get())
+        if callable(on_manual_click_remove_changed):
+            on_manual_click_remove_changed(enabled)
+            return
+        try:
+            from ra_sim.gui import canvas_interactions
+
+            canvas_interactions._GLOBAL_MANUAL_CLICK_REMOVE_ENABLED = enabled
+        except Exception:
+            pass
+
+    geometry_manual_click_remove_checkbutton = ttk.Checkbutton(
+        geometry_manual_pick_row,
+        text="Click Remove Placed Peaks",
+        variable=geometry_manual_click_remove_var,
+        command=_set_click_remove,
     )
-    geometry_manual_import_button.pack(side=tk.TOP, padx=5, pady=2)
+    geometry_manual_click_remove_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
+    _set_click_remove()
+
+    geometry_manual_qr_set_row = ttk.Frame(parent)
+    geometry_manual_qr_set_row.pack(side=tk.TOP, padx=0, pady=0, anchor="w")
 
     geometry_preview_exclude_button_var = tk.StringVar(value=str(preview_exclude_text))
     geometry_preview_exclude_button = ttk.Button(
-        parent,
+        geometry_manual_qr_set_row,
         textvariable=geometry_preview_exclude_button_var,
         command=on_toggle_preview_exclude,
     )
-    geometry_preview_exclude_button.pack(side=tk.TOP, padx=5, pady=2)
+    geometry_preview_exclude_button.pack(side=tk.LEFT, padx=5, pady=2)
+
+    geometry_manual_add_all_button = None
+    if callable(on_add_all_qr_set_peaks):
+        geometry_manual_add_all_button = ttk.Button(
+            geometry_manual_qr_set_row,
+            text="Add All Qr Set Peaks",
+            command=on_add_all_qr_set_peaks,
+        )
+        geometry_manual_add_all_button.pack(side=tk.LEFT, padx=5, pady=2)
+
+    geometry_manual_remove_qr_set_button = None
+    if callable(on_remove_qr_set_peaks):
+        geometry_manual_remove_qr_set_button = ttk.Button(
+            geometry_manual_qr_set_row,
+            text="Remove Qr Set Peaks",
+            command=on_remove_qr_set_peaks,
+        )
+        geometry_manual_remove_qr_set_button.pack(side=tk.LEFT, padx=5, pady=2)
+
+    geometry_manual_auto_search_radius_var = None
+    geometry_manual_auto_search_radius_label = None
+    geometry_manual_auto_search_radius_value_label = None
+    geometry_manual_auto_search_radius_slider = None
+
+    geometry_manual_placement_row = ttk.Frame(parent)
+    geometry_manual_placement_row.pack(side=tk.TOP, padx=0, pady=0, anchor="w")
+
+    geometry_manual_undo_button = ttk.Button(
+        geometry_manual_placement_row,
+        text="Undo Placement",
+        command=on_undo_manual_placement,
+    )
+    geometry_manual_undo_button.pack(side=tk.LEFT, padx=5, pady=2)
 
     clear_geometry_preview_exclusions_button = ttk.Button(
-        parent,
+        geometry_manual_placement_row,
         text="Clear Current Image Pairs",
         command=on_clear_manual_pairs,
     )
-    clear_geometry_preview_exclusions_button.pack(side=tk.TOP, padx=5, pady=2)
+    clear_geometry_preview_exclusions_button.pack(side=tk.LEFT, padx=5, pady=2)
+
+    geometry_manual_io_row = ttk.Frame(parent)
+    geometry_manual_io_row.pack(side=tk.TOP, padx=0, pady=0, anchor="w")
+
+    geometry_manual_export_button = ttk.Button(
+        geometry_manual_io_row,
+        text="Export Placements...",
+        command=on_export_manual_pairs,
+    )
+    geometry_manual_export_button.pack(side=tk.LEFT, padx=5, pady=2)
+
+    geometry_manual_import_button = ttk.Button(
+        geometry_manual_io_row,
+        text="Import Placements...",
+        command=on_import_manual_pairs,
+    )
+    geometry_manual_import_button.pack(side=tk.LEFT, padx=5, pady=2)
 
     view_state.geometry_manual_pick_button_var = geometry_manual_pick_button_var
     view_state.geometry_manual_pick_button = geometry_manual_pick_button
+    view_state.geometry_manual_click_remove_var = geometry_manual_click_remove_var
+    view_state.geometry_manual_click_remove_checkbutton = (
+        geometry_manual_click_remove_checkbutton
+    )
+    view_state.geometry_manual_add_all_button = geometry_manual_add_all_button
+    view_state.geometry_manual_remove_qr_set_button = geometry_manual_remove_qr_set_button
+    view_state.geometry_manual_auto_search_radius_var = geometry_manual_auto_search_radius_var
+    view_state.geometry_manual_auto_search_radius_label = geometry_manual_auto_search_radius_label
+    view_state.geometry_manual_auto_search_radius_value_label = (
+        geometry_manual_auto_search_radius_value_label
+    )
+    view_state.geometry_manual_auto_search_radius_slider = (
+        geometry_manual_auto_search_radius_slider
+    )
+    view_state.geometry_manual_drag_move_var = geometry_manual_drag_move_var
+    view_state.geometry_manual_drag_move_checkbutton = geometry_manual_drag_move_checkbutton
     view_state.geometry_manual_refine_button = None
     view_state.geometry_manual_undo_button = geometry_manual_undo_button
     view_state.geometry_manual_export_button = geometry_manual_export_button
@@ -5534,9 +5636,11 @@ def create_integration_range_controls(
     on_delta_qr_changed: Callable[[object], None],
     on_apply_entry: Callable[[object, object, object], None],
     integrate_selected_qr_rod: bool = False,
+    mirror_selected_qr_phi: bool = False,
     selected_qr_rod_key: str = "",
     selected_qr_rod_options: Sequence[tuple[str, str]] | None = None,
     on_toggle_integrate_selected_qr_rod: Callable[[], None] | None = None,
+    on_toggle_mirror_selected_qr_phi: Callable[[], None] | None = None,
     on_selected_qr_rod_changed: Callable[[object], None] | None = None,
 ) -> None:
     """Create the 1D integration-range controls and store their widget refs."""
@@ -5671,6 +5775,25 @@ def create_integration_range_controls(
         ),
     )
 
+    mirror_selected_qr_phi_var = tk.BooleanVar(value=bool(mirror_selected_qr_phi))
+    mirror_selected_qr_phi_checkbutton = ttk.Checkbutton(
+        rod_section_frame,
+        text="Mirror ±φ band",
+        variable=mirror_selected_qr_phi_var,
+        command=(
+            on_toggle_mirror_selected_qr_phi
+            if callable(on_toggle_mirror_selected_qr_phi)
+            else None
+        ),
+        state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
+    )
+    mirror_selected_qr_phi_checkbutton.pack(
+        side=tk.TOP,
+        anchor=tk.W,
+        padx=5,
+        pady=(0, 4),
+    )
+
     _create_range_row(
         parent_frame=rectangle_section_frame,
         prefix="tth_min",
@@ -5750,6 +5873,8 @@ def create_integration_range_controls(
     view_state.rod_section_frame = rod_section_frame
     view_state.integrate_selected_qr_rod_var = integrate_selected_qr_rod_var
     view_state.integrate_selected_qr_rod_checkbutton = integrate_selected_qr_rod_checkbutton
+    view_state.mirror_selected_qr_phi_var = mirror_selected_qr_phi_var
+    view_state.mirror_selected_qr_phi_checkbutton = mirror_selected_qr_phi_checkbutton
     view_state.selected_qr_rod_container = selected_qr_rod_container
     view_state.selected_qr_rod_key_var = selected_qr_rod_key_var
     view_state.selected_qr_rod_display_var = selected_qr_rod_display_var
@@ -7184,3 +7309,12 @@ def open_hbn_geometry_debug_window(
     set_hbn_geometry_debug_text(view_state, text)
     _sync_fit2d_theme_scope(root, window)
     return True
+
+
+_create_geometry_tool_action_controls_base = create_geometry_tool_action_controls
+
+
+def create_geometry_tool_action_controls(*args: object, **kwargs: object) -> GeometryToolActionsViewState:
+    """Create geometry action controls."""
+
+    return _create_geometry_tool_action_controls_base(*args, **kwargs)

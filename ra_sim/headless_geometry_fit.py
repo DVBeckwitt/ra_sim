@@ -2741,6 +2741,81 @@ def run_headless_geometry_fit(
             return [dict(entry) for entry in (projected or ()) if isinstance(entry, Mapping)]
         return [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
 
+    def _geometry_manual_simulated_peaks_for_params(
+        param_set: dict[str, object] | None = None,
+        *,
+        prefer_cache: bool = True,
+    ) -> list[dict[str, object]]:
+        params_local = dict(value_callbacks.current_params())
+        if isinstance(param_set, Mapping):
+            params_local.update(dict(param_set))
+        if bool(prefer_cache):
+            cached = projection_callbacks.simulated_peaks_for_params(
+                params_local,
+                prefer_cache=True,
+            )
+            if cached:
+                return [dict(entry) for entry in cached if isinstance(entry, Mapping)]
+        required_pairs = [
+            dict(entry)
+            for entry in _pairs_for_index(int(background_state.current_background_index))
+            if isinstance(entry, Mapping)
+        ]
+        required_targets = gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=int(background_state.current_background_index),
+        )
+        required_branch_keys = gui_geometry_fit._geometry_fit_required_branch_group_keys(
+            required_targets
+        )
+        try:
+            hit_tables = _simulate_hit_tables_for_fit(
+                structure_state.miller,
+                structure_state.intensities,
+                int(defaults.image_size),
+                params_local,
+                required_branch_group_keys=required_branch_keys,
+                required_manual_fit_targets=required_targets,
+                preflight_mode="manual_geometry_targeted",
+            )
+            source_rows, _lattice, _hit_tables, _source_indices = _build_source_rows_from_hit_tables(
+                hit_tables,
+                image_size_value=int(defaults.image_size),
+                params_local=params_local,
+                native_sim_to_display_coords=lambda col, row, image_shape_local: (
+                    gui_geometry_overlay.native_sim_to_display_coords(
+                        col,
+                        row,
+                        image_shape_local,
+                        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                    )
+                ),
+                allow_nominal_hkl_indices=True,
+            )
+            projected_rows = _project_peaks_to_current_view_for_dataset(source_rows)
+            if projected_rows:
+                return [
+                    dict(entry)
+                    for entry in projected_rows
+                    if isinstance(entry, Mapping)
+                ]
+        except Exception:
+            pass
+        try:
+            preview_rows = simulation_callbacks.simulate_preview_style_peaks(
+                structure_state.miller,
+                structure_state.intensities,
+                int(defaults.image_size),
+                params_local,
+            )
+        except Exception:
+            return []
+        return [
+            dict(entry)
+            for entry in _project_peaks_to_current_view_for_dataset(preview_rows)
+            if isinstance(entry, Mapping)
+        ]
+
     def _signature_numeric(value: object) -> object:
         try:
             parsed = float(value)
@@ -3131,6 +3206,7 @@ def run_headless_geometry_fit(
             ) = None,
             required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
             preflight_mode: str = "full",
+            consumer: str | None = None,
         ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
             schema = _load_intersection_cache_schema()
             table_list = list(source_tables or ())
@@ -3140,7 +3216,10 @@ def run_headless_geometry_fit(
                 hit_tables_local = diffraction.intersection_cache_to_hit_tables(table_list)
             else:
                 hit_tables_local = _copy_hit_tables(table_list)
-            if str(preflight_mode or "full") == "manual_geometry_targeted":
+            if (
+                str(preflight_mode or "full") == "manual_geometry_targeted"
+                and str(consumer or consumer_name) != "geometry_fit_trial_source_rows"
+            ):
                 hit_tables_local = _filter_hit_tables_for_required_branch_groups(
                     hit_tables_local,
                     required_branch_group_keys=required_branch_group_keys,
@@ -3407,7 +3486,7 @@ def run_headless_geometry_fit(
                 )
             )
         ),
-        geometry_manual_simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
+        geometry_manual_simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
         geometry_manual_simulated_lookup=projection_callbacks.simulated_lookup,
         geometry_manual_source_rows_for_background=_geometry_manual_source_rows_for_background,
         geometry_manual_rebuild_source_rows_for_background=(

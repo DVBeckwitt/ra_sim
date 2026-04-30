@@ -188,6 +188,50 @@ def test_draw_initial_geometry_pairs_overlay_draws_q_group_line_segments() -> No
         plt.close(fig)
 
 
+def test_draw_initial_geometry_pairs_overlay_uses_one_faint_q_group_label() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 1, 0),
+                    "q_group_key": ("q_group", "primary", 1, 0),
+                    "sim_display": (10.0, 20.0),
+                    "bg_display": (12.0, 22.0),
+                },
+                {
+                    "hkl": (-1, 1, 0),
+                    "q_group_key": ("q_group", "primary", 1, 0),
+                    "sim_display": (30.0, 24.0),
+                    "bg_display": (32.0, 26.0),
+                },
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        labels = [artist.get_text() for artist in ax.texts if artist.get_text()]
+        q_group_labels = [label for label in labels if label.startswith("Qr set")]
+        label_artist = next(
+            artist for artist in ax.texts if artist.get_text().startswith("Qr set")
+        )
+
+        assert q_group_labels == ["Qr set 1/0"]
+        assert all("(1, 1, 0)" not in label for label in labels)
+        assert all("(-1, 1, 0)" not in label for label in labels)
+        assert float(label_artist.get_fontsize()) < 8.0
+        assert float(label_artist.get_alpha()) < 0.7
+    finally:
+        plt.close(fig)
+
+
 def test_draw_initial_geometry_pairs_overlay_draws_shared_qz_axis_line_for_hk0() -> None:
     fig, ax = plt.subplots()
     try:
