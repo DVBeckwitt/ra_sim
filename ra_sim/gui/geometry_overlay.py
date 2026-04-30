@@ -42,6 +42,13 @@ def rotated_shape_for_display(shape: tuple[int, ...], k: int) -> tuple[int, ...]
     return normalized_shape
 
 
+def rotated_image_shape(shape: tuple[int, ...], k: int) -> tuple[int, int]:
+    """Return the 2D image shape after applying ``np.rot90(image, k)``."""
+
+    rotated = rotated_shape_for_display(shape, int(k))
+    return int(rotated[0]), int(rotated[1])
+
+
 def display_point_to_native_for_rotation(
     col: float,
     row: float,
@@ -61,6 +68,78 @@ def display_point_to_native_for_rotation(
         display_shape,
         -int(k),
     )
+
+
+def rotate_point_for_display_extent(
+    col: float,
+    row: float,
+    shape: tuple[int, ...],
+    k: int,
+) -> tuple[float, float]:
+    """Rotate a continuous image-coordinate point using image extents.
+
+    Pixel-index transforms use ``width - 1 - x``. Beam-center geometry uses
+    detector extents, so a 3000 px detector uses ``3000 - x``.
+    """
+
+    height, width = int(shape[0]), int(shape[1])
+    col_new = float(col)
+    row_new = float(row)
+
+    for _ in range(int(k) % 4):
+        row_new, col_new, height, width = (
+            width - col_new,
+            row_new,
+            width,
+            height,
+        )
+
+    return float(col_new), float(row_new)
+
+
+def detector_native_to_display_coords(
+    col: float,
+    row: float,
+    native_shape: tuple[int, ...],
+    k: int,
+) -> tuple[float, float]:
+    """Project native detector ``(col, row)`` into the rotated detector display."""
+
+    return rotate_point_for_display(float(col), float(row), native_shape, int(k))
+
+
+def detector_display_to_native_coords(
+    col: float,
+    row: float,
+    native_shape: tuple[int, ...],
+    k: int,
+) -> tuple[float, float]:
+    """Invert the detector display rotation back to native pixel coordinates."""
+
+    display_shape = rotated_image_shape(native_shape, int(k))
+    return rotate_point_for_display(float(col), float(row), display_shape, -int(k))
+
+
+def beam_center_row_col_from_detector_display(
+    display_col: float,
+    display_row: float,
+    native_shape: tuple[int, ...],
+    k: int,
+) -> tuple[float, float]:
+    """Return slider-order ``(row, col)`` for a picked detector-display point.
+
+    Beam-center sliders use detector geometry coordinates, not raw pixel-index
+    coordinates. The inverse rotation therefore uses image extents.
+    """
+
+    display_shape = rotated_image_shape(native_shape, int(k))
+    native_col, native_row = rotate_point_for_display_extent(
+        float(display_col),
+        float(display_row),
+        display_shape,
+        -int(k),
+    )
+    return float(native_row), float(native_col)
 
 
 def transform_points_orientation(

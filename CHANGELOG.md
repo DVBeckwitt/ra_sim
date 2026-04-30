@@ -61,6 +61,7 @@
 
 - **GUI and UX updates**
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, local peak refinement, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
+  - Fixed `Pick Beam Center` conversion to use detector-extent beam-center coordinates instead of raw pixel-index inversion, avoiding a one-pixel frame error in the default rotated detector view.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.
   - Fixed full GUI-state import so legacy manual placements with detector pixels but missing caked `2theta,phi` anchors rebuild those anchors from the exact caked projection before geometry figures or fits consume them.
   - Warmed caked Qr/Qz projection cache data immediately after detector-mode Qr/Qz selector changes, so manual picking can use caked sim/background coordinates without first switching to caked view.

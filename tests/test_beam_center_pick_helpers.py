@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from ra_sim.gui import geometry_overlay, manual_geometry
 
@@ -55,6 +56,58 @@ def test_beam_center_display_to_native_row_col_mapping_uses_display_shape() -> N
     assert center_y == 1453.0
 
 
+def test_beam_center_default_display_pick_maps_to_slider_row_col() -> None:
+    row, col = geometry_overlay.beam_center_row_col_from_detector_display(
+        1404.0,
+        1453.0,
+        (3000, 3000),
+        -1,
+    )
+
+    assert row == pytest.approx(1596.0)
+    assert col == pytest.approx(1453.0)
+
+
+def test_beam_center_mapping_uses_extent_not_pixel_index_frame() -> None:
+    pixel_col, pixel_row = geometry_overlay.detector_display_to_native_coords(
+        1404.0,
+        1453.0,
+        (3000, 3000),
+        -1,
+    )
+    beam_row, beam_col = geometry_overlay.beam_center_row_col_from_detector_display(
+        1404.0,
+        1453.0,
+        (3000, 3000),
+        -1,
+    )
+
+    assert (pixel_row, pixel_col) == pytest.approx((1595.0, 1453.0))
+    assert (beam_row, beam_col) == pytest.approx((1596.0, 1453.0))
+
+
+def test_detector_display_to_native_round_trips_non_square_pixel_indices() -> None:
+    native_shape = (2400, 3000)
+    native_col = 211.0
+    native_row = 1777.0
+
+    display_col, display_row = geometry_overlay.detector_native_to_display_coords(
+        native_col,
+        native_row,
+        native_shape,
+        -1,
+    )
+    roundtrip_col, roundtrip_row = geometry_overlay.detector_display_to_native_coords(
+        display_col,
+        display_row,
+        native_shape,
+        -1,
+    )
+
+    assert roundtrip_col == pytest.approx(native_col)
+    assert roundtrip_row == pytest.approx(native_row)
+
+
 def test_beam_center_projection_callback_unrotates_non_square_display() -> None:
     native_shape = (3142, 3092)
     native_background = np.zeros(native_shape, dtype=float)
@@ -87,16 +140,12 @@ def test_beam_center_projection_callback_unrotates_non_square_display() -> None:
 
 
 def test_beam_center_visual_pick_maps_to_default_center_frame() -> None:
-    display_shape = (3000, 3000)
-    display_col = 1596.0
-    display_row = 1546.0
-
-    center_col, center_row = geometry_overlay.rotate_point_for_display(
-        display_col,
-        display_row,
-        display_shape,
+    center_row, center_col = geometry_overlay.beam_center_row_col_from_detector_display(
+        1404.0,
+        1453.0,
+        (3000, 3000),
         -1,
     )
 
-    assert center_row == 1596.0
-    assert center_col == 1453.0
+    assert center_row == pytest.approx(1596.0)
+    assert center_col == pytest.approx(1453.0)

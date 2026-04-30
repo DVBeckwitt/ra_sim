@@ -57,7 +57,12 @@ Beam center background pick status note:
 loaded detector/background image, switches out of caked/q-space views, shows the
 background if hidden, previews the same local refinement used by manual Qr/Qz
 placement, and commits native detector `center_x = row`, `center_y = col` on
-release. Targeted canvas/view/helper/import-safe/state tests pass. Full
+release. The latest coordinate bug is fixed by converting the refined display
+point through the detector-extent beam-center transform:
+`display_col=1404`, `display_row=1453` now maps to `row=1596`, `col=1453`.
+Targeted beam-center/canvas tests and targeted compile pass. The broader
+view-suite check is blocked by an existing Tk default-root failure in the
+stacking-panel test path. Full
 `ra_sim.dev check` remains blocked by existing formatter/test drift in the dirty
 worktree, tracked in the feature note.
 

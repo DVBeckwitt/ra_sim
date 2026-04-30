@@ -3702,12 +3702,11 @@ def _background_display_to_native_detector_coords_for_background(
 
     def _to_native(col: float, row: float) -> tuple[float | None, float | None]:
         try:
-            native_col, native_row = gui_geometry_overlay.display_point_to_native_for_rotation(
+            native_col, native_row = gui_geometry_overlay.detector_display_to_native_coords(
                 float(col),
                 float(row),
                 shape,
                 int(DISPLAY_ROTATE_K),
-                rotate_point_for_display_fn=_rotate_point_for_display,
             )
         except Exception:
             return None, None
@@ -7356,6 +7355,42 @@ def _current_beam_center_pick_background_image() -> np.ndarray | None:
     return background_array
 
 
+def _current_beam_center_native_shape() -> tuple[int, int] | None:
+    """Return native detector image shape for beam-center coordinate conversion."""
+
+    try:
+        native_background = _get_current_background_native()
+    except Exception:
+        native_background = None
+    if native_background is not None:
+        try:
+            shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+        except Exception:
+            shape = ()
+        if len(shape) >= 2 and min(shape[:2]) > 0:
+            return int(shape[0]), int(shape[1])
+
+    try:
+        image_size_value = int(image_size)
+    except Exception:
+        image_size_value = 0
+    if image_size_value > 0:
+        return image_size_value, image_size_value
+
+    display_background = _current_beam_center_pick_background_image()
+    if display_background is None:
+        return None
+    try:
+        display_shape = tuple(int(v) for v in np.asarray(display_background).shape[:2])
+    except Exception:
+        return None
+    if len(display_shape) < 2 or min(display_shape[:2]) <= 0:
+        return None
+    if int(DISPLAY_ROTATE_K) % 2:
+        return int(display_shape[1]), int(display_shape[0])
+    return int(display_shape[0]), int(display_shape[1])
+
+
 def _beam_center_pick_session_active() -> bool:
     """Return whether a beam-center press/zoom placement session is active."""
     session = getattr(geometry_runtime_state, "beam_center_pick_session", None)
@@ -7558,23 +7593,17 @@ def _beam_center_display_to_center_coords(
     col: float,
     row: float,
 ) -> tuple[float, float] | None:
-    """Map detector-view display pixels into beam-center row/col coordinates."""
+    """Map detector-view display pixels into beam-center col/row coordinates."""
 
-    display_background = _current_beam_center_pick_background_image()
-    if display_background is None:
+    native_shape = _current_beam_center_native_shape()
+    if native_shape is None:
         return None
     try:
-        shape = tuple(int(v) for v in np.asarray(display_background).shape[:2])
-    except Exception:
-        return None
-    if len(shape) < 2 or min(shape) <= 0:
-        return None
-    try:
-        center_col, center_row = _rotate_point_for_display(
+        center_row, center_col = gui_geometry_overlay.beam_center_row_col_from_detector_display(
             float(col),
             float(row),
-            shape,
-            int(SIMULATION_GEOMETRY_ROTATE_K),
+            native_shape,
+            int(DISPLAY_ROTATE_K),
         )
     except Exception:
         return None
