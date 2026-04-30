@@ -934,8 +934,7 @@ def test_saved_state_correlated_span_extra_end_is_incomplete(tmp_path) -> None:
     assert render["phase_status"] == "not_detected"
     assert render["median_ms"] is None
     assert render["missing_phase_reason"] == (
-        "incomplete_span:first_gui_render_after_compute.start"
-        "->first_gui_render_after_compute.end"
+        "incomplete_span:first_gui_render_after_compute.start->first_gui_render_after_compute.end"
     )
 
 

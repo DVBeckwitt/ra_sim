@@ -19544,6 +19544,23 @@ def test_runtime_impl_gui_state_import_disables_peak_pick_when_selected_qr_rod_r
     assert sync_index < roi_index < disable_index
 
 
+def test_runtime_impl_gui_state_import_prepares_caked_view_before_manual_restore() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index(
+        "def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:"
+    )
+    block_end = source.index("def _export_full_gui_state() -> None:", block_start)
+    block = source[block_start:block_end]
+
+    detect_index = block.index(
+        "geometry_manual_pairs_rows_missing_caked_backfill_count("
+    )
+    ensure_index = block.index("_ensure_geometry_fit_caked_view(force_refresh=True)")
+    restore_index = block.index("gui_state_io.apply_gui_state_geometry(")
+
+    assert detect_index < ensure_index < restore_index
+
+
 def test_runtime_impl_full_gui_state_export_includes_selected_qr_rod_fields() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     block_start = source.index("def _collect_full_gui_state_snapshot() -> dict[str, object]:")

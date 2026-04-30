@@ -61,6 +61,7 @@ non-interactive path:
 
 - Fixed: caked-view Qr/Qz picking no longer lets an already saved placement intercept normal pick clicks. Move/edit behavior now requires the explicit drag-move tool, so selecting a later set such as `006` is not redirected to an earlier saved set such as `003`.
 - Fixed: detector-view manual Qr/Qz placements now save the projected caked `(2theta, phi)` cache values, and imported legacy GUI states missing those fields are backfilled when a caked transform is available.
+- Fixed: headless `fit-geometry` now performs the same legacy manual-pair caked-coordinate backfill before preparing the geometry fit and returns an updated saved-state snapshot when rows were repaired.
 - Added: auto-add uses a same-frame branch-pair length restraint for non-`00l` Qr sets, skips `(0,0,0)`, runs a final local refinement pass after placement, and can parallelize that refinement on CPU workers.
 - Added: placed Qr/Qz background peaks can be moved and locally refined again, and whole Qr sets can be removed from one click through the Match-tab tools under `Pick Qr Sets`.
 - Default: diffuse background subtraction is still off by default, including notebook startup state. Enable `Use before fit/pick` only when subtraction should feed picking and fitting.

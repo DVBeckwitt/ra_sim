@@ -10191,6 +10191,9 @@ def geometry_manual_trace_live_caked_visual_source_event(
 ) -> None:
     """Print live-only visual-source ledger rows for the (-1,0,10) caked picker."""
 
+    if str(os.environ.get("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", "")).strip() == "1":
+        return
+
     resolved_run_id = (
         str(manual_geometry_run_id)
         if manual_geometry_run_id is not None

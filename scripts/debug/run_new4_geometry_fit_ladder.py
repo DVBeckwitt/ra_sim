@@ -884,6 +884,7 @@ def _lean_runtime_config(
         solver.pop("dynamic_point_geometry_fit", None)
         cfg.pop("projection_view_mode", None)
     solver["max_nfev"] = int(max_nfev)
+    solver["min_max_nfev"] = 1
     solver["loss"] = "linear"
     solver["f_scale_px"] = 1.0
     solver["weighted_matching"] = False
@@ -1087,10 +1088,7 @@ def _source_identity_jsonable(value: object) -> object:
         if isinstance(value, list):
             return [_source_identity_jsonable(item) for item in value]
         if isinstance(value, Mapping):
-            return {
-                str(key): _source_identity_jsonable(item)
-                for key, item in value.items()
-            }
+            return {str(key): _source_identity_jsonable(item) for key, item in value.items()}
         return str(value)
 
 
@@ -1180,7 +1178,9 @@ def _source_hkl(row: Mapping[str, object]) -> tuple[int, int, int] | None:
     return None
 
 
-def _source_pair_identity(row: Mapping[str, object]) -> tuple[
+def _source_pair_identity(
+    row: Mapping[str, object],
+) -> tuple[
     tuple[object, ...] | None,
     tuple[int, int, int] | None,
     object,
@@ -1277,9 +1277,7 @@ def summarize_required_qr_dynamic_coverage(
                 continue
             matches.append((int(row_index), row))
         dynamic_matches = [
-            (row_index, row)
-            for row_index, row in matches
-            if _is_dynamic_trial_qr_row(row)
+            (row_index, row) for row_index, row in matches if _is_dynamic_trial_qr_row(row)
         ]
         selected_index: int | None = None
         selected_row: dict[str, object] | None = None
@@ -1310,9 +1308,7 @@ def summarize_required_qr_dynamic_coverage(
                 "q_group_key": q_group_key,
                 "normalized_hkl": list(req_hkl) if req_hkl is not None else None,
                 "physical_branch_slot": _source_identity_jsonable(req_slot),
-                "fit_qr_branch_key": _source_identity_jsonable(
-                    required.get("fit_qr_branch_key")
-                ),
+                "fit_qr_branch_key": _source_identity_jsonable(required.get("fit_qr_branch_key")),
                 "hit_table_present": None,
                 "source_row_present_before_rebinding": None,
                 "source_row_present_after_promotion": bool(matches),
@@ -1370,11 +1366,7 @@ def _request_trial_source_rows_coverage(
             payloads.append({"dataset_index": int(spec_index), "error_text": str(exc)})
             continue
         if isinstance(payload, Mapping):
-            rows = [
-                dict(row)
-                for row in payload.get("rows", ()) or ()
-                if isinstance(row, Mapping)
-            ]
+            rows = [dict(row) for row in payload.get("rows", ()) or () if isinstance(row, Mapping)]
             all_rows.extend(rows)
             source_diagnostics = payload.get("source_diagnostics")
             if isinstance(source_diagnostics, Mapping):
@@ -2355,6 +2347,26 @@ def _result_report(
         report["dynamic_baseline_anchor_diagnostic_count"] = int(
             len(report["dynamic_baseline_anchor_diagnostics"])
         )
+        report["dynamic_baseline_anchor_alignment_columns"] = [
+            "pair_id",
+            "q_group_key",
+            "normalized_hkl",
+            "physical_branch_slot",
+            "fit_qr_branch_key",
+            "visual_point_x",
+            "visual_point_y",
+            "cached_two_theta_deg",
+            "cached_phi_deg",
+            "dynamic_two_theta_deg",
+            "dynamic_phi_deg",
+            "delta_two_theta_deg",
+            "delta_phi_deg_raw",
+            "delta_phi_deg_wrapped",
+            "frame_match",
+            "units_match",
+            "axis_order_match",
+            "failure_reason",
+        ]
     dynamic_anchor_mismatches = getattr(result, "dynamic_baseline_anchor_mismatches", None)
     if isinstance(dynamic_anchor_mismatches, Sequence) and not isinstance(
         dynamic_anchor_mismatches,
@@ -2913,9 +2925,7 @@ class _ProbeLeastSquares:
                         "param_index": int(param_index),
                         "x0": x0_arr.tolist(),
                         "residual_size": int(base_eval.get("residual_size", 0) or 0),
-                        "residual_norm": _metric_float(
-                            base_eval.get("residual_norm", np.nan)
-                        ),
+                        "residual_norm": _metric_float(base_eval.get("residual_norm", np.nan)),
                         "finite": bool(base_eval.get("finite", False)),
                         "requested_step": float(requested_step),
                         "step_source": str(step_source),
@@ -3135,9 +3145,7 @@ def run_objective_dry_run(
         if result_fun is not None
         else np.asarray([], dtype=float)
     )
-    result_residual_finite = bool(
-        result_fun_arr.size and np.all(np.isfinite(result_fun_arr))
-    )
+    result_residual_finite = bool(result_fun_arr.size and np.all(np.isfinite(result_fun_arr)))
     residual_finite = any(
         bool(record.get("finite", False))
         and math.isfinite(_metric_float(record.get("residual_norm", np.nan)))
@@ -3248,15 +3256,9 @@ def _rung2_fixed_param_order(context: Mapping[str, object]) -> list[str]:
 
 def _rung2_expected_params(candidate_names: Sequence[str]) -> tuple[list[str], list[str]]:
     near_zero = [
-        str(name)
-        for name in candidate_names
-        if str(name) in set(RUNG2_EXPECTED_NEAR_ZERO_PARAMS)
+        str(name) for name in candidate_names if str(name) in set(RUNG2_EXPECTED_NEAR_ZERO_PARAMS)
     ]
-    active = [
-        str(name)
-        for name in candidate_names
-        if str(name) in EXPECTED_RUNG2_ACTIVE_PARAMS
-    ]
+    active = [str(name) for name in candidate_names if str(name) in EXPECTED_RUNG2_ACTIVE_PARAMS]
     return active, near_zero
 
 
@@ -3540,7 +3542,9 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
     elif not exact_fit_space_available:
         exact_fit_space_available = bool(report.get("exact_fit_space_projector_available", False))
         if not exact_fit_space_available:
-            exact_fit_space_available = bool(point_summary.get("exact_fit_space_projector_available", False))
+            exact_fit_space_available = bool(
+                point_summary.get("exact_fit_space_projector_available", False)
+            )
     point_summary["exact_fit_space_projector_available"] = exact_fit_space_available
     report["exact_fit_space_projector_available"] = exact_fit_space_available
     if "exact_fit_space_projection_reason" in best_source:
@@ -3577,6 +3581,7 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         point_summary[key] = normalized
         report[key] = normalized
 
+    selected_pair_count = _safe_int(point_summary.get("matched_pair_count"), default=0)
     selected_fixed_value = 0
     for fixed_key in (
         "fixed_source_resolved_count",
@@ -3653,7 +3658,10 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
     if (
         after_metric_name
         and after_metric_unit
-        and (not current_metric_is_usable or current_metric_unit not in {RAW_ANGULAR_METRIC_UNIT, WEIGHTED_ANGULAR_METRIC_UNIT})
+        and (
+            not current_metric_is_usable
+            or current_metric_unit not in {RAW_ANGULAR_METRIC_UNIT, WEIGHTED_ANGULAR_METRIC_UNIT}
+        )
     ):
         report["after_caked_metric_name"] = after_metric_name
         report["after_caked_metric_unit"] = after_metric_unit
@@ -3720,18 +3728,22 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
             "polish_fallback_entry_count_after": int(selected_fallback_count),
             "polish_branch_mismatch_count_after": int(selected_branch_mismatch_count),
         }
-        polish_state_stale = any(
-            _safe_int(report.get(key), default=-999999) != expected_value
-            for key, expected_value in polish_selected_fields.items()
-        ) or any(
-            _as_str_list(report.get(key))
-            for key in (
-                "polish_lost_pair_ids",
-                "polish_missing_pair_ids",
-                "polish_fallback_pair_ids",
-                "polish_rematched_pair_ids",
+        polish_state_stale = (
+            any(
+                _safe_int(report.get(key), default=-999999) != expected_value
+                for key, expected_value in polish_selected_fields.items()
             )
-        ) or bool(report.get("polish_lost_pair_details"))
+            or any(
+                _as_str_list(report.get(key))
+                for key in (
+                    "polish_lost_pair_ids",
+                    "polish_missing_pair_ids",
+                    "polish_fallback_pair_ids",
+                    "polish_rematched_pair_ids",
+                )
+            )
+            or bool(report.get("polish_lost_pair_details"))
+        )
         if polish_state_stale:
             report.update(polish_selected_fields)
             report["polish_lost_pair_ids"] = []
@@ -3836,8 +3848,7 @@ def _caked_summary_fit_space_guard_failures(
         if dataset_projector_rows <= 0:
             failures.append("dataset_projector_rows_missing")
         elif (
-            dataset_manual_rows > 0
-            and dataset_projector_rows not in allowed_dataset_projector_rows
+            dataset_manual_rows > 0 and dataset_projector_rows not in allowed_dataset_projector_rows
         ):
             failures.append(
                 "dataset_fit_space_projector_row_count_"
@@ -4197,8 +4208,7 @@ def _rung1_green_failures(report: Mapping[str, object]) -> list[str]:
         )
     if dynamic_count != EXPECTED_PROVIDER_PAIR_COUNT:
         failures.append(
-            "qr_dynamic_source_row_count_"
-            f"{dynamic_count}_expected_{EXPECTED_PROVIDER_PAIR_COUNT}"
+            f"qr_dynamic_source_row_count_{dynamic_count}_expected_{EXPECTED_PROVIDER_PAIR_COUNT}"
         )
     if missing_dynamic != 0:
         failures.append("missing_dynamic_trial_source_rows")
@@ -4334,9 +4344,8 @@ def _sensitivity_status(
     if not moved:
         plus_step = abs(_metric_float(plus_eval.get("step_applied", np.nan)))
         minus_step = abs(_metric_float(minus_eval.get("step_applied", np.nan)))
-        if (
-            (not math.isfinite(plus_step) or plus_step == 0.0)
-            and (not math.isfinite(minus_step) or minus_step == 0.0)
+        if (not math.isfinite(plus_step) or plus_step == 0.0) and (
+            not math.isfinite(minus_step) or minus_step == 0.0
         ):
             return "unsafe", ["no_available_bound_step"], float("nan")
         return "unsafe", ["no_valid_movement"], float("nan")
@@ -4480,11 +4489,7 @@ def run_sensitivity_scan(
     residual_probe_called = False
 
     def _ordered_entries() -> list[dict[str, object]]:
-        return [
-            entry_by_name[str(name)]
-            for name in candidate_names
-            if str(name) in entry_by_name
-        ]
+        return [entry_by_name[str(name)] for name in candidate_names if str(name) in entry_by_name]
 
     def _write_sensitivity_partial(current_param: str | None = None) -> None:
         ordered = _ordered_entries()
@@ -4495,9 +4500,7 @@ def run_sensitivity_scan(
         non_finite = [
             str(entry["param_name"]) for entry in ordered if entry.get("status") == "non_finite"
         ]
-        unsafe = [
-            str(entry["param_name"]) for entry in ordered if entry.get("status") == "unsafe"
-        ]
+        unsafe = [str(entry["param_name"]) for entry in ordered if entry.get("status") == "unsafe"]
         completed_names = set(str(name) for name in entry_by_name)
         completed_names.update(str(name) for name in probe_completed_names)
         _write_json(
@@ -4614,15 +4617,9 @@ def run_sensitivity_scan(
             "base_value": _metric_float(probe_record.get("base_value", np.nan)),
             "step_size": _metric_float(probe_record.get("requested_step", np.nan)),
             "step_source": str(probe_record.get("step_source", "") or ""),
-            "bound_step_ceiling": _metric_float(
-                probe_record.get("bound_step_ceiling", np.nan)
-            ),
-            "physical_lower_bound": -90.0
-            if str(name) in {"gamma", "Gamma"}
-            else float("nan"),
-            "physical_upper_bound": 90.0
-            if str(name) in {"gamma", "Gamma"}
-            else float("nan"),
+            "bound_step_ceiling": _metric_float(probe_record.get("bound_step_ceiling", np.nan)),
+            "physical_lower_bound": -90.0 if str(name) in {"gamma", "Gamma"} else float("nan"),
+            "physical_upper_bound": 90.0 if str(name) in {"gamma", "Gamma"} else float("nan"),
             "physical_unit": "deg" if str(name) in {"gamma", "Gamma"} else "",
             "plus_step_applied": plus_step,
             "minus_step_applied": minus_step,
@@ -4958,18 +4955,106 @@ def _worker_solve_once(
     diagnostic_logging: bool = False,
 ) -> dict[str, object]:
     started = _perf_counter()
+    started_wall_time = time.time()
     phase_timing_s: dict[str, float] = {}
     context_reused = context is not None
+    partial_path = output_path.with_name(f"{output_path.stem}.partial{output_path.suffix}")
+    current_phase = "subprocess_start"
+    least_squares_started_at: float | None = None
+    residual_eval_times_s: list[float] = []
+    dynamic_source_row_rebuild_count = 0
+    manual_pick_cache_rebuild_count = 0
+    caked_projection_rebuild_count = 0
+    last_fixed_source_resolved_count: int | None = None
+    last_dynamic_qr_row_count: int | None = None
+    optimizer_nfev: int | None = None
+    optimizer_njev: int | None = None
 
     def _record_phase(name: str, phase_started: float) -> None:
         phase_timing_s[name] = float(max(0.0, _perf_counter() - phase_started))
 
+    def _optional_int(value: object) -> int | None:
+        try:
+            if value is None:
+                return None
+            return int(value)
+        except Exception:
+            return None
+
+    def _first_present_int(source: Mapping[str, object], keys: Sequence[str]) -> int | None:
+        for key in keys:
+            value = _optional_int(source.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _partial_phase_timing() -> dict[str, object]:
+        least_squares_s: object = phase_timing_s.get("solve_geometry_fit_request_s")
+        if least_squares_started_at is not None and current_phase in {
+            "least_squares_start",
+            "least_squares_eval",
+            "finalizing",
+            "done",
+        }:
+            least_squares_s = float(max(0.0, _perf_counter() - least_squares_started_at))
+        return {
+            "request_build_s": phase_timing_s.get("build_solver_request_s"),
+            "anchor_alignment_s": phase_timing_s.get("request_handoff_guard_s"),
+            "initial_objective_s": phase_timing_s.get("dry_run_s"),
+            "least_squares_s": least_squares_s,
+        }
+
+    def _write_worker_partial(status: str = "running") -> None:
+        timing = _partial_phase_timing()
+        payload = {
+            "param_name": str(active_names[0]) if len(active_names) == 1 else None,
+            "pid": int(os.getpid()),
+            "status": str(status),
+            "started_at": float(started_wall_time),
+            "elapsed_s": float(max(0.0, _perf_counter() - started)),
+            "phase": str(current_phase),
+            "request_build_s": timing["request_build_s"],
+            "anchor_alignment_s": timing["anchor_alignment_s"],
+            "initial_objective_s": timing["initial_objective_s"],
+            "least_squares_s": timing["least_squares_s"],
+            "residual_eval_count": int(len(residual_eval_times_s)),
+            "last_residual_eval_s": (
+                float(residual_eval_times_s[-1]) if residual_eval_times_s else None
+            ),
+            "mean_residual_eval_s": (
+                float(np.mean(residual_eval_times_s)) if residual_eval_times_s else None
+            ),
+            "max_residual_eval_s": (
+                float(np.max(residual_eval_times_s)) if residual_eval_times_s else None
+            ),
+            "dynamic_source_row_rebuild_count": int(dynamic_source_row_rebuild_count),
+            "dynamic_source_coordinate_recompute_count": int(dynamic_source_row_rebuild_count),
+            "manual_pick_cache_rebuild_count": int(manual_pick_cache_rebuild_count),
+            "caked_projection_rebuild_count": int(caked_projection_rebuild_count),
+            "optimizer_nfev": optimizer_nfev,
+            "optimizer_njev": optimizer_njev,
+            "last_fixed_source_resolved_count": last_fixed_source_resolved_count,
+            "last_dynamic_qr_row_count": last_dynamic_qr_row_count,
+            "phase_timing_s": dict(phase_timing_s),
+        }
+        try:
+            _write_json(partial_path, payload)
+        except Exception:
+            pass
+
+    def _set_worker_phase(phase: str, status: str = "running") -> None:
+        nonlocal current_phase
+        current_phase = str(phase)
+        _write_worker_partial(status=status)
+
     state_hash_before = _state_sha256(Path(state_path))
     _reset_heartbeat_file(heartbeat_path)
+    _set_worker_phase("subprocess_start")
     _heartbeat_write(
         heartbeat_path,
         {
             "status": "starting",
+            "phase": str(current_phase),
             "rung": int(rung),
             "rung_name": str(rung_name),
             "active_params": [str(name) for name in active_names],
@@ -4978,6 +5063,7 @@ def _worker_solve_once(
             "diagnostic_logging": bool(diagnostic_logging),
         },
     )
+    _set_worker_phase("request_build")
     phase_started = _perf_counter()
     if context is None:
         with _solver_debug_logging_scope(diagnostic_logging):
@@ -4993,6 +5079,7 @@ def _worker_solve_once(
             feature=feature,
         )
     _record_phase("build_solver_request_s", phase_started)
+    _set_worker_phase("anchor_alignment")
     phase_started = _perf_counter()
     request_summary = _request_handoff_summary(request)
     request_summary["requested_var_names"] = [str(name) for name in request.var_names]
@@ -5004,6 +5091,7 @@ def _worker_solve_once(
     _heartbeat_write(heartbeat_path, request_summary)
     request_fallback_failures = _strict_no_fallback_failures(request_summary)
     _record_phase("request_handoff_guard_s", phase_started)
+    _write_worker_partial()
     if request_fallback_failures:
         report = _request_only_report(
             request=request,
@@ -5021,13 +5109,31 @@ def _worker_solve_once(
             },
         )
         _write_json(output_path, report)
-        _heartbeat_write(heartbeat_path, {"status": str(report.get("status", "")), "done": True})
+        _set_worker_phase("done", status=str(report.get("status", "")))
+        _heartbeat_write(
+            heartbeat_path,
+            {"status": str(report.get("status", "")), "phase": str(current_phase), "done": True},
+        )
         return report
-    phase_started = _perf_counter()
-    with _solver_debug_logging_scope(diagnostic_logging):
-        before_result, _records = _run_with_probe_least_squares(request, mode="dry_run")
-    _record_phase("dry_run_s", phase_started)
-    before_summary = _point_match_summary(before_result)
+    skip_initial_objective = int(rung) == 3 and len(active_names) == 1
+    before_summary: Mapping[str, object] | None = None
+    if skip_initial_objective:
+        phase_timing_s["dry_run_s"] = 0.0
+        _heartbeat_write(
+            heartbeat_path,
+            {
+                "initial_objective_skipped": True,
+                "initial_objective_skip_reason": "rung3_one_param_uses_first_solver_eval",
+            },
+        )
+    else:
+        _set_worker_phase("initial_objective")
+        phase_started = _perf_counter()
+        with _solver_debug_logging_scope(diagnostic_logging):
+            before_result, _records = _run_with_probe_least_squares(request, mode="dry_run")
+        _record_phase("dry_run_s", phase_started)
+        before_summary = _point_match_summary(before_result)
+    _write_worker_partial()
     param_name = str(active_names[0]) if len(active_names) == 1 else ""
     current_bounds = _current_bounds_for_param(request, param_name) if param_name else None
     heartbeat_count = 0
@@ -5040,6 +5146,7 @@ def _worker_solve_once(
         payload: dict[str, object] = {
             "status": "running",
             "last_optimizer_status": str(text),
+            "phase": str(current_phase),
         }
         if "eval=" in str(text):
             try:
@@ -5051,16 +5158,69 @@ def _worker_solve_once(
     def _live_update(payload: Mapping[str, object]) -> None:
         nonlocal heartbeat_count, fixed_source_counters_dirty_seen
         nonlocal last_residual_heartbeat_write_s
+        nonlocal dynamic_source_row_rebuild_count, manual_pick_cache_rebuild_count
+        nonlocal caked_projection_rebuild_count, last_fixed_source_resolved_count
+        nonlocal last_dynamic_qr_row_count, optimizer_nfev, optimizer_njev
+        nonlocal before_summary
         point_summary = (
             dict(payload.get("point_match_summary", {}))
             if isinstance(payload.get("point_match_summary", {}), Mapping)
             else {}
         )
+        if before_summary is None and point_summary:
+            before_summary = copy.deepcopy(point_summary)
+        _set_worker_phase("least_squares_eval")
         heartbeat_count += 1
         eval_count = _safe_int(
             payload.get("evaluation_count", payload.get("nfev", heartbeat_count)),
             default=heartbeat_count,
         )
+        optimizer_nfev = int(eval_count)
+        optimizer_njev = _optional_int(payload.get("njev"))
+        residual_eval_elapsed_s = _metric_float(
+            payload.get("residual_eval_elapsed_s", payload.get("last_residual_eval_s", np.nan))
+        )
+        if math.isfinite(residual_eval_elapsed_s):
+            residual_eval_times_s.append(float(residual_eval_elapsed_s))
+        live_cache_records = _as_mapping_list(payload.get("live_cache_records"))
+        if live_cache_records:
+            if any(
+                str(record.get("source_rows_rebuilt_or_reused", "") or "").startswith("rebuilt")
+                for record in live_cache_records
+            ):
+                dynamic_source_row_rebuild_count += 1
+            if any(bool(record.get("objective_process_peaks_called", False)) for record in live_cache_records):
+                caked_projection_rebuild_count += 1
+            if any(bool(record.get("manual_pick_cache_rebuilt", False)) for record in live_cache_records):
+                manual_pick_cache_rebuild_count += 1
+            for record in live_cache_records:
+                value = _optional_int(record.get("manual_pick_cache_rebuild_count"))
+                if value is not None:
+                    manual_pick_cache_rebuild_count = max(
+                        int(manual_pick_cache_rebuild_count),
+                        int(value),
+                    )
+        fixed_resolved_count = _first_present_int(
+            point_summary,
+            (
+                "fixed_source_resolved_count",
+                "matched_fixed_pair_count",
+                "fixed_source_pair_count",
+            ),
+        )
+        if fixed_resolved_count is not None:
+            last_fixed_source_resolved_count = int(fixed_resolved_count)
+        dynamic_qr_count = _first_present_int(
+            point_summary,
+            (
+                "dynamic_qr_row_count",
+                "qr_dynamic_source_row_count",
+                "manual_caked_residual_row_count",
+                "fixed_source_pair_count",
+            ),
+        )
+        if dynamic_qr_count is not None:
+            last_dynamic_qr_row_count = int(dynamic_qr_count)
         cost = _metric_float(payload.get("current_cost", payload.get("cost", np.nan)))
         residual_norm = _residual_norm_from_value(payload.get("residual_norm", np.nan))
         if not math.isfinite(residual_norm):
@@ -5099,10 +5259,20 @@ def _worker_solve_once(
             "point_match_summary": point_summary,
             "fixed_source_counters_clean": bool(clean),
             "fixed_source_counter_failures": failures,
+            "residual_eval_elapsed_s": (
+                float(residual_eval_elapsed_s) if math.isfinite(residual_eval_elapsed_s) else None
+            ),
+            "dynamic_source_row_rebuild_count": int(dynamic_source_row_rebuild_count),
+            "dynamic_source_coordinate_recompute_count": int(dynamic_source_row_rebuild_count),
+            "manual_pick_cache_rebuild_count": int(manual_pick_cache_rebuild_count),
+            "caked_projection_rebuild_count": int(caked_projection_rebuild_count),
+            "last_fixed_source_resolved_count": last_fixed_source_resolved_count,
+            "last_dynamic_qr_row_count": last_dynamic_qr_row_count,
         }
         if heartbeat_count == 1:
             phase_timing_s["first_residual_elapsed_s"] = float(trace_entry["elapsed_s"])
         residual_eval_trace.append(trace_entry)
+        _write_worker_partial()
         now = time.monotonic()
         if not _should_write_residual_heartbeat(
             heartbeat_count=int(heartbeat_count),
@@ -5117,10 +5287,29 @@ def _worker_solve_once(
             heartbeat_path,
             {
                 "status": "running",
+                "phase": str(current_phase),
                 "last_point_match_summary": point_summary,
                 "current_rms_px": rms_px,
                 "current_max_error_px": max_error_px,
                 "last_residual_eval": trace_entry,
+                "residual_eval_count": int(len(residual_eval_times_s)),
+                "last_residual_eval_s": trace_entry.get("residual_eval_elapsed_s"),
+                "mean_residual_eval_s": (
+                    float(np.mean(residual_eval_times_s)) if residual_eval_times_s else None
+                ),
+                "max_residual_eval_s": (
+                    float(np.max(residual_eval_times_s)) if residual_eval_times_s else None
+                ),
+                "dynamic_source_row_rebuild_count": int(dynamic_source_row_rebuild_count),
+                "dynamic_source_coordinate_recompute_count": int(
+                    dynamic_source_row_rebuild_count
+                ),
+                "manual_pick_cache_rebuild_count": int(manual_pick_cache_rebuild_count),
+                "caked_projection_rebuild_count": int(caked_projection_rebuild_count),
+                "optimizer_nfev": optimizer_nfev,
+                "optimizer_njev": optimizer_njev,
+                "last_fixed_source_resolved_count": last_fixed_source_resolved_count,
+                "last_dynamic_qr_row_count": last_dynamic_qr_row_count,
                 "heartbeat_count": int(heartbeat_count),
                 "last_heartbeat_elapsed_s": trace_entry["elapsed_s"],
                 "last_nfev": int(eval_count),
@@ -5150,9 +5339,14 @@ def _worker_solve_once(
         original_least_squares = opt.least_squares
 
         def _counted_least_squares(*args, **kwargs):
-            nonlocal least_squares_called
+            nonlocal least_squares_called, least_squares_started_at
             least_squares_called = True
-            _heartbeat_write(heartbeat_path, {"least_squares_called": True})
+            least_squares_started_at = _perf_counter()
+            _set_worker_phase("least_squares_start")
+            _heartbeat_write(
+                heartbeat_path,
+                {"least_squares_called": True, "phase": str(current_phase)},
+            )
             return original_least_squares(*args, **kwargs)
 
         def _counted_solve_fit(*args, **kwargs):
@@ -5160,6 +5354,7 @@ def _worker_solve_once(
             nonlocal effective_var_names_seen_by_solver
             nonlocal effective_candidate_param_names_seen_by_solver
             optimizer_solve_called = True
+            _set_worker_phase("least_squares_start")
             try:
                 effective_var_names_seen_by_solver = [
                     str(name) for name in (args[5] if len(args) > 5 else [])
@@ -5176,6 +5371,7 @@ def _worker_solve_once(
                 heartbeat_path,
                 {
                     "optimizer_solve_called": True,
+                    "phase": str(current_phase),
                     "effective_var_names_seen_by_solver": list(effective_var_names_seen_by_solver),
                     "effective_candidate_param_names_seen_by_solver": list(
                         effective_candidate_param_names_seen_by_solver
@@ -5187,6 +5383,7 @@ def _worker_solve_once(
         opt.least_squares = _counted_least_squares
         try:
             phase_started = _perf_counter()
+            _set_worker_phase("least_squares_start")
             with _solver_debug_logging_scope(diagnostic_logging):
                 result = gui_geometry_fit.solve_geometry_fit_request(
                     request,
@@ -5195,6 +5392,7 @@ def _worker_solve_once(
                     live_update_callback=_live_update,
                 )
             _record_phase("solve_geometry_fit_request_s", phase_started)
+            _set_worker_phase("finalizing")
         finally:
             opt.least_squares = original_least_squares
         state_hash_after = _state_sha256(Path(state_path))
@@ -5225,7 +5423,27 @@ def _worker_solve_once(
                 "dirty_timeout_abort": False,
                 "child_process_killed_cleanly": None,
                 "phase_timing_s": dict(phase_timing_s),
+                "phase": str(current_phase),
+                "initial_objective_skipped": bool(skip_initial_objective),
                 "first_residual_elapsed_s": phase_timing_s.get("first_residual_elapsed_s"),
+                "residual_eval_count": int(len(residual_eval_times_s)),
+                "last_residual_eval_s": (
+                    float(residual_eval_times_s[-1]) if residual_eval_times_s else None
+                ),
+                "mean_residual_eval_s": (
+                    float(np.mean(residual_eval_times_s)) if residual_eval_times_s else None
+                ),
+                "max_residual_eval_s": (
+                    float(np.max(residual_eval_times_s)) if residual_eval_times_s else None
+                ),
+                "dynamic_source_row_rebuild_count": int(dynamic_source_row_rebuild_count),
+                "dynamic_source_coordinate_recompute_count": int(dynamic_source_row_rebuild_count),
+                "manual_pick_cache_rebuild_count": int(manual_pick_cache_rebuild_count),
+                "caked_projection_rebuild_count": int(caked_projection_rebuild_count),
+                "optimizer_nfev": optimizer_nfev,
+                "optimizer_njev": optimizer_njev,
+                "last_fixed_source_resolved_count": last_fixed_source_resolved_count,
+                "last_dynamic_qr_row_count": last_dynamic_qr_row_count,
                 "solver_context_reused": bool(context_reused),
                 "diagnostic_logging": bool(diagnostic_logging),
             },
@@ -5261,7 +5479,27 @@ def _worker_solve_once(
             "dirty_timeout_abort": False,
             "child_process_killed_cleanly": None,
             "phase_timing_s": dict(phase_timing_s),
+            "phase": str(current_phase),
+            "initial_objective_skipped": bool(skip_initial_objective),
             "first_residual_elapsed_s": phase_timing_s.get("first_residual_elapsed_s"),
+            "residual_eval_count": int(len(residual_eval_times_s)),
+            "last_residual_eval_s": (
+                float(residual_eval_times_s[-1]) if residual_eval_times_s else None
+            ),
+            "mean_residual_eval_s": (
+                float(np.mean(residual_eval_times_s)) if residual_eval_times_s else None
+            ),
+            "max_residual_eval_s": (
+                float(np.max(residual_eval_times_s)) if residual_eval_times_s else None
+            ),
+            "dynamic_source_row_rebuild_count": int(dynamic_source_row_rebuild_count),
+            "dynamic_source_coordinate_recompute_count": int(dynamic_source_row_rebuild_count),
+            "manual_pick_cache_rebuild_count": int(manual_pick_cache_rebuild_count),
+            "caked_projection_rebuild_count": int(caked_projection_rebuild_count),
+            "optimizer_nfev": optimizer_nfev,
+            "optimizer_njev": optimizer_njev,
+            "last_fixed_source_resolved_count": last_fixed_source_resolved_count,
+            "last_dynamic_qr_row_count": last_dynamic_qr_row_count,
             "solver_context_reused": bool(context_reused),
             "diagnostic_logging": bool(diagnostic_logging),
         }
@@ -5269,16 +5507,42 @@ def _worker_solve_once(
         _apply_single_param_fields(report)
         _apply_one_param_diagnostic_aliases(report)
     report["phase_timing_s"] = dict(phase_timing_s)
+    report["phase"] = str(current_phase)
+    report["initial_objective_skipped"] = bool(skip_initial_objective)
     report["first_residual_elapsed_s"] = phase_timing_s.get("first_residual_elapsed_s")
+    report["residual_eval_count"] = int(len(residual_eval_times_s))
+    report["last_residual_eval_s"] = (
+        float(residual_eval_times_s[-1]) if residual_eval_times_s else None
+    )
+    report["mean_residual_eval_s"] = (
+        float(np.mean(residual_eval_times_s)) if residual_eval_times_s else None
+    )
+    report["max_residual_eval_s"] = (
+        float(np.max(residual_eval_times_s)) if residual_eval_times_s else None
+    )
+    report["dynamic_source_row_rebuild_count"] = int(dynamic_source_row_rebuild_count)
+    report["dynamic_source_coordinate_recompute_count"] = int(dynamic_source_row_rebuild_count)
+    report["manual_pick_cache_rebuild_count"] = int(manual_pick_cache_rebuild_count)
+    report["caked_projection_rebuild_count"] = int(caked_projection_rebuild_count)
+    report["optimizer_nfev"] = optimizer_nfev
+    report["optimizer_njev"] = optimizer_njev
+    report["last_fixed_source_resolved_count"] = last_fixed_source_resolved_count
+    report["last_dynamic_qr_row_count"] = last_dynamic_qr_row_count
     report["solver_context_reused"] = bool(context_reused)
     report["diagnostic_logging"] = bool(diagnostic_logging)
     _apply_caked_fit_space_evidence_fields(report)
+    _set_worker_phase("finalizing")
     phase_started = _perf_counter()
     _write_json(output_path, report)
     _record_phase("report_write_s", phase_started)
     report["phase_timing_s"] = dict(phase_timing_s)
+    report["phase"] = str(current_phase)
     _write_json(output_path, report)
-    _heartbeat_write(heartbeat_path, {"status": str(report.get("status", "")), "done": True})
+    _set_worker_phase("done", status=str(report.get("status", "")))
+    _heartbeat_write(
+        heartbeat_path,
+        {"status": str(report.get("status", "")), "phase": str(current_phase), "done": True},
+    )
     return report
 
 
@@ -5338,6 +5602,10 @@ def _timeout_report(
     feature: str | None = None,
 ) -> dict[str, object]:
     heartbeat = _read_json(heartbeat_path)
+    partial_path = heartbeat_path.with_name(
+        heartbeat_path.name.replace(".heartbeat.json", ".partial.json")
+    )
+    partial = _read_json(partial_path)
     hash_before = str(state_hash_before or heartbeat.get("state_sha256_before") or "")
     hash_after = _state_sha256(Path(state_path)) if state_path is not None else ""
     point_summary = (
@@ -5358,6 +5626,8 @@ def _timeout_report(
                 return last_record.get(candidate)
             if candidate in heartbeat and heartbeat.get(candidate) is not None:
                 return heartbeat.get(candidate)
+            if candidate in partial and partial.get(candidate) is not None:
+                return partial.get(candidate)
             if candidate in point_summary and point_summary.get(candidate) is not None:
                 return point_summary.get(candidate)
         return None
@@ -5395,9 +5665,39 @@ def _timeout_report(
         "timeout_s": float(timeout_seconds),
         "last_heartbeat_elapsed_s": _partial_value("last_heartbeat_elapsed_s", "elapsed_s"),
         "heartbeat_count": _safe_int(heartbeat.get("heartbeat_count", len(trace)), default=0),
+        "phase": _partial_value("phase"),
+        "request_build_s": _partial_value("request_build_s"),
+        "anchor_alignment_s": _partial_value("anchor_alignment_s"),
+        "initial_objective_s": _partial_value("initial_objective_s"),
+        "least_squares_s": _partial_value("least_squares_s"),
         "last_emitted_optimizer_status": heartbeat.get("last_optimizer_status"),
         "nfev": _partial_value("nfev", "last_nfev", "eval_count"),
         "last_nfev": _partial_value("last_nfev", "nfev", "eval_count"),
+        "residual_eval_count": _partial_value("residual_eval_count", "heartbeat_count"),
+        "last_residual_eval_s": _partial_value("last_residual_eval_s"),
+        "mean_residual_eval_s": _partial_value("mean_residual_eval_s"),
+        "max_residual_eval_s": _partial_value("max_residual_eval_s"),
+        "dynamic_source_row_rebuild_count": _partial_value(
+            "dynamic_source_row_rebuild_count"
+        ),
+        "dynamic_source_coordinate_recompute_count": _partial_value(
+            "dynamic_source_coordinate_recompute_count",
+            "dynamic_source_row_rebuild_count",
+        ),
+        "manual_pick_cache_rebuild_count": _partial_value("manual_pick_cache_rebuild_count"),
+        "caked_projection_rebuild_count": _partial_value("caked_projection_rebuild_count"),
+        "optimizer_nfev": _partial_value("optimizer_nfev", "nfev", "last_nfev"),
+        "optimizer_njev": _partial_value("optimizer_njev", "njev"),
+        "last_fixed_source_resolved_count": _partial_value(
+            "last_fixed_source_resolved_count",
+            "fixed_source_resolved_count",
+            "fixed_source_pair_count",
+        ),
+        "last_dynamic_qr_row_count": _partial_value(
+            "last_dynamic_qr_row_count",
+            "dynamic_qr_row_count",
+            "manual_caked_residual_row_count",
+        ),
         "last_residual_norm": last_residual_norm,
         "last_cost": _partial_value("last_cost", "cost"),
         "last_rms_px": after_rms,
@@ -5441,7 +5741,11 @@ def _timeout_report(
         "phase_timing_s": (
             dict(heartbeat.get("phase_timing_s", {}))
             if isinstance(heartbeat.get("phase_timing_s", {}), Mapping)
-            else {}
+            else (
+                dict(partial.get("phase_timing_s", {}))
+                if isinstance(partial.get("phase_timing_s", {}), Mapping)
+                else {}
+            )
         ),
         "first_residual_elapsed_s": heartbeat.get("first_residual_elapsed_s"),
         "solver_context_reused": bool(heartbeat.get("solver_context_reused", False)),
@@ -5587,6 +5891,7 @@ def _run_solver_rung_with_timeout(
         env["RA_SIM_DISABLE_LOGGING"] = "1"
         env["RA_SIM_DISABLE_ALL_LOGGING"] = "1"
         env["RA_SIM_LOG_INTERSECTION_CACHE"] = "0"
+        env["RA_SIM_SUPPRESS_LIVE_CAKED_TRACE"] = "1"
     process = subprocess.Popen(
         cmd,
         cwd=str(REPO_ROOT),
@@ -5796,14 +6101,10 @@ def _rung2_green_failures(sensitivity: Mapping[str, object]) -> list[str]:
     active_params = set(_as_str_list(sensitivity.get("active_params")))
     near_zero_params = set(_as_str_list(sensitivity.get("near_zero_params")))
     fixed_params = set(
-        _as_str_list(
-            sensitivity.get("fixed_params", sensitivity.get("fixed_parameters"))
-        )
+        _as_str_list(sensitivity.get("fixed_params", sensitivity.get("fixed_parameters")))
     )
     excluded_params = set(
-        _as_str_list(
-            sensitivity.get("excluded_params", sensitivity.get("excluded_parameters"))
-        )
+        _as_str_list(sensitivity.get("excluded_params", sensitivity.get("excluded_parameters")))
     )
     if active_params != EXPECTED_RUNG2_ACTIVE_PARAMS:
         failures.append("active_params_mismatch")

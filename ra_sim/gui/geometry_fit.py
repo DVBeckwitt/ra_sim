@@ -6079,9 +6079,7 @@ def rebuild_geometry_fit_source_rows(
         _update_targeted_runtime_flags(
             build_source_rows_accepted_keywords=list(accepted_build_keywords),
             build_source_rows_requested_keywords=list(build_kwargs),
-            build_source_rows_consumer_kwarg_passed=(
-                "consumer" in accepted_build_keywords
-            ),
+            build_source_rows_consumer_kwarg_passed=("consumer" in accepted_build_keywords),
             build_source_rows_callback_signature=build_signature,
         )
         trial_supplemental_diag = getattr(
@@ -6454,11 +6452,7 @@ def rebuild_geometry_fit_source_rows(
             row_count=int(len(targeted_cache_rows)),
         )
 
-    if (
-        can_use_live_runtime_cache
-        and callable(build_live_rows)
-        and not force_fresh_simulation
-    ):
+    if can_use_live_runtime_cache and callable(build_live_rows) and not force_fresh_simulation:
         rebuild_attempts.append("live_runtime_cache")
         validation_started_at = perf_counter()
         _emit_rebuild_stage(
@@ -6652,7 +6646,9 @@ def rebuild_geometry_fit_source_rows(
                 status=str(
                     logged_match_payload.get("mismatch_reason")
                     or logged_match_payload.get("status")
-                    or ("params_mismatch" if isinstance(logged_metadata, Mapping) else "empty_cache")
+                    or (
+                        "params_mismatch" if isinstance(logged_metadata, Mapping) else "empty_cache"
+                    )
                 ),
                 expected_signature_digest=logged_match_payload.get("expected_signature_digest"),
                 actual_signature_digest=logged_match_payload.get("actual_signature_digest"),
@@ -10023,7 +10019,9 @@ def build_geometry_manual_fit_dataset(
             best_distance: float | None = None
             for target_x, target_y in target_points:
                 for row_x, row_y in row_points:
-                    distance = math.hypot(float(row_x) - float(target_x), float(row_y) - float(target_y))
+                    distance = math.hypot(
+                        float(row_x) - float(target_x), float(row_y) - float(target_y)
+                    )
                     if not np.isfinite(distance):
                         continue
                     if best_distance is None or float(distance) < float(best_distance):
@@ -10143,10 +10141,18 @@ def build_geometry_manual_fit_dataset(
             ):
                 identity_score += 4
                 strong_identity_score += 4
-            if target_row is not None and row_index is not None and int(row_index) == int(target_row):
+            if (
+                target_row is not None
+                and row_index is not None
+                and int(row_index) == int(target_row)
+            ):
                 identity_score += 4
                 strong_identity_score += 4
-            if target_peak is not None and row_peak is not None and int(row_peak) == int(target_peak):
+            if (
+                target_peak is not None
+                and row_peak is not None
+                and int(row_peak) == int(target_peak)
+            ):
                 identity_score += 2
             if (
                 target_reflection is not None
@@ -10183,8 +10189,7 @@ def build_geometry_manual_fit_dataset(
                 if target_key not in _geometry_fit_source_coverage_alias_keys(row):
                     continue
                 if bool(row.get("provider_backed_live_source_row", False)) or (
-                    str(row.get("row_origin", "") or "")
-                    == "manual_picker_saved_source_coverage"
+                    str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage"
                 ):
                     continue
                 matches.append((int(row_idx), row))
@@ -10250,9 +10255,17 @@ def build_geometry_manual_fit_dataset(
                     and int(row_table) == int(target_table)
                 ):
                     score += 4
-                if target_row is not None and row_index is not None and int(row_index) == int(target_row):
+                if (
+                    target_row is not None
+                    and row_index is not None
+                    and int(row_index) == int(target_row)
+                ):
                     score += 4
-                if target_peak is not None and row_peak is not None and int(row_peak) == int(target_peak):
+                if (
+                    target_peak is not None
+                    and row_peak is not None
+                    and int(row_peak) == int(target_peak)
+                ):
                     score += 2
                 if (
                     target_reflection is not None
@@ -10331,7 +10344,9 @@ def build_geometry_manual_fit_dataset(
                 str(row.get("row_origin") or "geometry_fit_dataset_required_source_row"),
             )
             promoted["physical_branch_slot"] = (
-                coverage_payload.get("branch_slot") if isinstance(coverage_payload, Mapping) else None
+                coverage_payload.get("branch_slot")
+                if isinstance(coverage_payload, Mapping)
+                else None
             )
             promoted["fit_qr_branch_key"] = {
                 "q_group_key": _geometry_fit_cache_jsonable(promoted.get("q_group_key")),
@@ -10520,11 +10535,7 @@ def build_geometry_manual_fit_dataset(
         row_keys = _geometry_fit_source_coverage_alias_keys(row)
         if target_key in row_keys:
             return True
-        if (
-            not isinstance(target_key, tuple)
-            or len(target_key) < 3
-            or target_key[2] is None
-        ):
+        if not isinstance(target_key, tuple) or len(target_key) < 3 or target_key[2] is None:
             return False
         row_group = _geometry_fit_group_identity(row)
         target_group = _geometry_fit_stable_group_identity(target_key[2])
@@ -10703,6 +10714,9 @@ def build_geometry_manual_fit_dataset(
             "manual_selected_simulated_point",
             "provider_selected_simulated_point",
             "selected_live_simulated_current_view_point",
+            "sim_visual_caked_deg",
+            "sim_visual_deg",
+            "sim_refined_caked_deg",
             "simulated_point",
             "sim_caked_display",
             "sim_display",
@@ -10711,7 +10725,13 @@ def build_geometry_manual_fit_dataset(
             if point is not None:
                 target_points.append((float(point[0]), float(point[1])))
         row_points: list[tuple[float, float]] = []
-        for key in ("sim_caked_display", "sim_display"):
+        for key in (
+            "sim_visual_caked_deg",
+            "sim_visual_deg",
+            "sim_refined_caked_deg",
+            "sim_caked_display",
+            "sim_display",
+        ):
             point = _geometry_fit_point_list(row.get(key))
             if point is not None:
                 row_points.append((float(point[0]), float(point[1])))
@@ -10730,7 +10750,9 @@ def build_geometry_manual_fit_dataset(
         distance = float("inf")
         for target_x, target_y in target_points:
             for row_x, row_y in row_points:
-                candidate_distance = math.hypot(float(row_x) - float(target_x), float(row_y) - float(target_y))
+                candidate_distance = math.hypot(
+                    float(row_x) - float(target_x), float(row_y) - float(target_y)
+                )
                 if np.isfinite(candidate_distance):
                     distance = min(distance, float(candidate_distance))
         return (-int(score), float(distance), int(row_idx))
@@ -10902,9 +10924,7 @@ def build_geometry_manual_fit_dataset(
             row["dynamic_completion_sibling_source_table_index"] = sibling_row.get(
                 "source_table_index"
             )
-            row["dynamic_completion_sibling_source_row_index"] = sibling_row.get(
-                "source_row_index"
-            )
+            row["dynamic_completion_sibling_source_row_index"] = sibling_row.get("source_row_index")
             row["dynamic_completion_sibling_branch"] = _geometry_fit_source_branch_index(
                 sibling_row
             )
@@ -10998,8 +11018,7 @@ def build_geometry_manual_fit_dataset(
             remaining_missing = 0
             for _pair_idx, _target, target_key in missing_targets:
                 if not any(
-                    _trial_row_is_dynamic(row)
-                    and _trial_row_matches_target_key(row, target_key)
+                    _trial_row_is_dynamic(row) and _trial_row_matches_target_key(row, target_key)
                     for row in combined_rows
                 ):
                     remaining_missing += 1
@@ -11040,7 +11059,9 @@ def build_geometry_manual_fit_dataset(
         diag["raw_candidate_row_count"] = int(len(raw_candidate_rows))
         if callable(manual_dataset_bindings.geometry_manual_last_simulation_diagnostics):
             try:
-                provider_diag = manual_dataset_bindings.geometry_manual_last_simulation_diagnostics()
+                provider_diag = (
+                    manual_dataset_bindings.geometry_manual_last_simulation_diagnostics()
+                )
             except Exception:
                 provider_diag = None
             if isinstance(provider_diag, Mapping):
@@ -11342,7 +11363,10 @@ def build_geometry_manual_fit_dataset(
                 row.setdefault("expected_source", "sim_visual_caked_deg")
                 row.setdefault("projection_frame", "caked_display")
                 if row.get("actual_source") is None:
-                    if str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage":
+                    if (
+                        str(row.get("row_origin", "") or "")
+                        == "manual_picker_saved_source_coverage"
+                    ):
                         row["actual_source"] = str(
                             row.get("provider_simulated_point_source")
                             or row.get("sim_visual_source")
@@ -14288,6 +14312,7 @@ def build_geometry_manual_fit_dataset(
             detector_image: object,
             *,
             local_params: Mapping[str, object] | None = None,
+            axes_only: bool = False,
         ) -> dict[str, object] | None:
             active_params = local_params if isinstance(local_params, Mapping) else params_i
             try:
@@ -14310,6 +14335,32 @@ def build_geometry_manual_fit_dataset(
                     "fit_space_local_params_signature": _geometry_fit_projection_signature(
                         _geometry_fit_transform_driven_param_payload(active_params)
                     ),
+                }
+            if bool(axes_only):
+                return {
+                    "available": True,
+                    "axes_only": True,
+                    "image": None,
+                    "radial_axis": np.asarray(active_bundle.radial_deg, dtype=np.float64),
+                    "azimuth_axis": np.asarray(
+                        active_bundle.gui_azimuth_deg,
+                        dtype=np.float64,
+                    ),
+                    "raw_azimuth_axis": np.asarray(
+                        active_bundle.raw_azimuth_deg,
+                        dtype=np.float64,
+                    ),
+                    "detector_simulation_signature": "axes_only",
+                    "caked_simulation_signature": "axes_only",
+                    "fit_space_local_params_signature": _geometry_fit_projection_signature(
+                        _geometry_fit_transform_driven_param_payload(active_params)
+                    ),
+                    "cake_bundle_signature": _geometry_fit_cake_bundle_signature(
+                        active_bundle,
+                        local_params=active_params,
+                    ),
+                    "source_rows_rebuilt_or_reused": "axes_reused_for_trial_params",
+                    "reuse_valid_for_same_params_signature": True,
                 }
             try:
                 caked_result = integrate_detector_to_cake_lut(

@@ -4583,11 +4583,7 @@ def _green_one_param_report(active_names, *, fallback_row_count=0) -> dict[str, 
 def test_rung2_three_active_ten_near_zero_fails() -> None:
     ladder = _load_new4_ladder_module()
     active = ("center_x", "center_y", "corto_detector")
-    near_zero = tuple(
-        name
-        for name in ladder.ONE_PARAM_ORDER
-        if str(name) not in set(active)
-    )
+    near_zero = tuple(name for name in ladder.ONE_PARAM_ORDER if str(name) not in set(active))
     payload = _green_rung2_report(active_params=active, near_zero_params=near_zero)
 
     failures = ladder._rung2_green_failures(payload)
@@ -10579,8 +10575,7 @@ def test_new4_rung1_rejects_clean_identity_with_stale_manual_qr_coordinates() ->
 
     assert "stale_qr_coordinate_provenance" in failures
     assert any(
-        failure.startswith("qr_dynamic_source_row_count_2_expected_7")
-        for failure in failures
+        failure.startswith("qr_dynamic_source_row_count_2_expected_7") for failure in failures
     )
 
 
@@ -11743,6 +11738,7 @@ def test_new4_ladder_lean_runtime_config_preserves_caked_manual_path() -> None:
     assert cfg["solver"]["manual_point_fit_mode"] is True
     assert cfg["solver"]["dynamic_point_geometry_fit"] is True
     assert cfg["solver"]["max_nfev"] == 6
+    assert cfg["solver"]["min_max_nfev"] == 1
     ladder._assert_caked_manual_runtime_config(cfg)
 
 
@@ -14813,9 +14809,7 @@ def test_new4_ladder_one_param_partial_success_exposes_failures(
 
     assert result["status"] == "ok_with_failures"
     assert result["passed_params"] == [
-        name
-        for name in _new_contract_active_params(ladder)
-        if name not in {"center_y", "gamma"}
+        name for name in _new_contract_active_params(ladder) if name not in {"center_y", "gamma"}
     ]
     assert result["failed_params"] == ["center_y"]
     assert result["timed_out_params"] == ["gamma"]
@@ -15417,6 +15411,8 @@ def _rung3_dynamic_anchor_diag_row(
     coordinate_provenance="trial_geometry_projection",
     is_dynamic_trial_row=True,
     physical_branch_slot=0,
+    dynamic_physical_branch_slot=None,
+    dynamic_units="deg",
 ) -> dict[str, object]:
     q_group_key = ("q_group", "primary", 1, 16)
     hkl = (1, 0, 16)
@@ -15450,6 +15446,10 @@ def _rung3_dynamic_anchor_diag_row(
         "optimizer_request_source": "provider_pair",
         "optimizer_request_fallback_row": False,
         "fit_prediction_resolver_function": "_resolve_qr_fit_prediction_from_trial_params",
+        "sim_visual_caked_deg": [
+            float(dynamic_anchor[0]),
+            float(dynamic_anchor[1]),
+        ],
         "saved_refined_sim_caked_anchor_deg": [
             float(saved_anchor[0]),
             float(saved_anchor[1]),
@@ -15466,12 +15466,17 @@ def _rung3_dynamic_anchor_diag_row(
         ],
         "dynamic_baseline_anchor_source": actual_source,
         "dynamic_baseline_anchor_frame": projection_frame,
-        "dynamic_baseline_anchor_units": "deg",
+        "dynamic_baseline_anchor_units": str(dynamic_units),
         "dynamic_baseline_anchor_actual_source": actual_source,
         "dynamic_baseline_anchor_source_kind": source_kind,
         "dynamic_baseline_anchor_projection_frame": projection_frame,
         "dynamic_baseline_anchor_coordinate_provenance": coordinate_provenance,
         "dynamic_baseline_anchor_is_dynamic_trial_row": is_dynamic_trial_row,
+        "dynamic_baseline_anchor_physical_branch_slot": (
+            physical_branch_slot
+            if dynamic_physical_branch_slot is None
+            else dynamic_physical_branch_slot
+        ),
     }
 
 
@@ -15490,6 +15495,17 @@ def test_rung3_dynamic_baseline_anchor_uses_current_dynamic_caked_rows() -> None
     assert table[0]["dynamic_phi"] == 0.0
     assert table[0]["mismatch_type"] == "stale_saved_refined_anchor_metadata"
     assert table[0]["failure_reason"] is None
+    assert table[0]["visual_point_source"] == "sim_visual_caked_deg"
+    assert table[0]["cached_point_source"] == "sim_nominal_caked_deg_from_source_row_diagnostic"
+    assert table[0]["cached_two_theta_deg"] == 40.0
+    assert table[0]["cached_phi_deg"] == 0.0
+    assert table[0]["dynamic_two_theta_deg"] == 40.0
+    assert table[0]["dynamic_phi_deg"] == 0.0
+    assert table[0]["delta_two_theta_deg"] == 0.0
+    assert table[0]["delta_phi_deg_wrapped"] == 0.0
+    assert table[0]["frame_match"] is True
+    assert table[0]["units_match"] is True
+    assert table[0]["axis_order_match"] is True
 
 
 def test_rung3_anchor_phi_delta_is_wrapped_before_mismatch_check() -> None:
@@ -15505,6 +15521,48 @@ def test_rung3_anchor_phi_delta_is_wrapped_before_mismatch_check() -> None:
     assert abs(table[0]["delta_phi"]) > 300.0
     assert abs(table[0]["wrapped_delta_phi"]) < 1.0
     assert table[0]["mismatch_type"] == "none"
+
+
+def test_caked_qr_phi_delta_is_wrapped_before_anchor_mismatch() -> None:
+    row = _rung3_dynamic_anchor_diag_row(
+        saved_anchor=(40.0, 0.0),
+        dynamic_anchor=(40.0, -179.9),
+    )
+    row["sim_nominal_caked_deg_from_source_row_diagnostic"] = [40.0, 179.8]
+    row["sim_visual_caked_deg"] = [40.0, 179.8]
+
+    table = opt._qr_dynamic_baseline_anchor_diagnostics([row])
+    mismatches = opt._qr_dynamic_baseline_anchor_mismatches([row])
+
+    assert mismatches == []
+    assert abs(table[0]["delta_phi_deg_raw"]) > 300.0
+    assert abs(table[0]["delta_phi_deg_wrapped"]) < 1.0
+
+
+def test_caked_qr_anchor_rejects_degrees_radians_mismatch() -> None:
+    row = _rung3_dynamic_anchor_diag_row(dynamic_units="rad")
+
+    table = opt._qr_dynamic_baseline_anchor_diagnostics([row])
+    mismatches = opt._qr_dynamic_baseline_anchor_mismatches([row])
+
+    assert table[0]["units_match"] is False
+    assert table[0]["failure_reason"] == "dynamic_anchor_units_not_degrees"
+    assert table[0]["mismatch_type"] == "degrees_radians_mismatch"
+    assert len(mismatches) == 1
+
+
+def test_caked_qr_anchor_rejects_wrong_branch_slot() -> None:
+    row = _rung3_dynamic_anchor_diag_row(
+        physical_branch_slot=0,
+        dynamic_physical_branch_slot=1,
+    )
+
+    table = opt._qr_dynamic_baseline_anchor_diagnostics([row])
+    mismatches = opt._qr_dynamic_baseline_anchor_mismatches([row])
+
+    assert table[0]["branch_slot_match"] is False
+    assert table[0]["failure_reason"] == "branch_slot_mismatch"
+    assert len(mismatches) == 1
 
 
 def test_rung3_anchor_guard_rejects_stale_clicked_visual_candidate_anchor() -> None:
@@ -15711,6 +15769,35 @@ def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> Non
                 ],
             },
         )
+        partial_path = kwargs["output_path"].with_name(
+            f"{kwargs['output_path'].stem}.partial{kwargs['output_path'].suffix}"
+        )
+        ladder._write_json(
+            partial_path,
+            {
+                "param_name": "gamma",
+                "pid": os.getpid(),
+                "status": "running",
+                "started_at": time.time(),
+                "elapsed_s": 0.02,
+                "phase": "least_squares_eval",
+                "request_build_s": 0.1,
+                "anchor_alignment_s": 0.2,
+                "initial_objective_s": 0.3,
+                "least_squares_s": 0.4,
+                "residual_eval_count": 2,
+                "last_residual_eval_s": 0.05,
+                "mean_residual_eval_s": 0.04,
+                "max_residual_eval_s": 0.05,
+                "dynamic_source_row_rebuild_count": 2,
+                "manual_pick_cache_rebuild_count": 0,
+                "caked_projection_rebuild_count": 2,
+                "optimizer_nfev": 2,
+                "optimizer_njev": None,
+                "last_fixed_source_resolved_count": 7,
+                "last_dynamic_qr_row_count": 7,
+            },
+        )
         time.sleep(0.2)
         return {"status": "ok", "pass": True}
 
@@ -15765,6 +15852,22 @@ def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> Non
         "state_sha256_after",
         "state_hash_unchanged",
         "failure_reason",
+        "phase",
+        "request_build_s",
+        "anchor_alignment_s",
+        "initial_objective_s",
+        "least_squares_s",
+        "residual_eval_count",
+        "last_residual_eval_s",
+        "mean_residual_eval_s",
+        "max_residual_eval_s",
+        "dynamic_source_row_rebuild_count",
+        "manual_pick_cache_rebuild_count",
+        "caked_projection_rebuild_count",
+        "optimizer_nfev",
+        "optimizer_njev",
+        "last_fixed_source_resolved_count",
+        "last_dynamic_qr_row_count",
         "last_nfev",
         "last_residual_norm",
         "last_rms_px",
@@ -15786,6 +15889,16 @@ def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> Non
     assert written["last_residual_norm"] == 12.0
     assert written["last_point_match_summary"]["matched_pair_count"] == 7
     assert written["heartbeat_count"] == 1
+    assert written["phase"] == "least_squares_eval"
+    assert written["least_squares_s"] == 0.4
+    assert written["residual_eval_count"] == 2
+    assert written["last_residual_eval_s"] == 0.05
+    assert written["dynamic_source_row_rebuild_count"] == 2
+    assert written["manual_pick_cache_rebuild_count"] == 0
+    assert written["caked_projection_rebuild_count"] == 2
+    assert written["optimizer_nfev"] == 2
+    assert written["last_fixed_source_resolved_count"] == 7
+    assert written["last_dynamic_qr_row_count"] == 7
 
 
 def test_new4_ladder_warm_solver_passes_context_to_worker(
@@ -18144,9 +18257,7 @@ def test_run_fresh_slot_validation_passes_caked_saved_current_view_point_to_sele
     assert result["saved_entry"]["saved_background_current_view_frame"] == ("caked_display")
 
 
-def test_prepare_fresh_slot_runtime_uses_caked_projection_candidates_not_detector_cache() -> (
-    None
-):
+def test_prepare_fresh_slot_runtime_uses_caked_projection_candidates_not_detector_cache() -> None:
     probe = _load_geometry_preflight_probe_module()
     saved_entry = {
         "pair_id": "bg0:pair0",
@@ -18175,9 +18286,7 @@ def test_prepare_fresh_slot_runtime_uses_caked_projection_candidates_not_detecto
                 pick_uses_caked_space=lambda: True,
             ),
             "group_cache": {
-                "grouped_candidates": {
-                    ("q_group", "primary", 1, 5): [dict(stale_detector_entry)]
-                },
+                "grouped_candidates": {("q_group", "primary", 1, 5): [dict(stale_detector_entry)]},
                 "caked_qr_projection_grouped_candidates": {
                     ("q_group", "primary", 0, 3): [dict(caked_entry)]
                 },
@@ -18195,9 +18304,7 @@ def test_prepare_fresh_slot_runtime_uses_caked_projection_candidates_not_detecto
     assert runtime["missing_qr_projection_candidates"] == []
 
 
-def test_prepare_fresh_slot_runtime_rebuilds_missing_caked_projection_from_fit_rows() -> (
-    None
-):
+def test_prepare_fresh_slot_runtime_rebuilds_missing_caked_projection_from_fit_rows() -> None:
     probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
@@ -18283,15 +18390,12 @@ def test_prepare_fresh_slot_runtime_rebuilds_missing_caked_projection_from_fit_r
             "projection_callbacks": SimpleNamespace(
                 pick_uses_caked_space=lambda: True,
                 project_peaks_to_current_view=lambda rows: [
-                    {**dict(row), "display_frame": "caked_display"}
-                    for row in rows or ()
+                    {**dict(row), "display_frame": "caked_display"} for row in rows or ()
                 ],
                 pick_candidates=_pick_candidates,
             ),
             "group_cache": {
-                "grouped_candidates": {
-                    ("q_group", "primary", 1, 5): [dict(narrow_rows[0])]
-                },
+                "grouped_candidates": {("q_group", "primary", 1, 5): [dict(narrow_rows[0])]},
                 "caked_qr_projection_grouped_candidates": {},
             },
             "manual_dataset_bindings": SimpleNamespace(
@@ -18315,9 +18419,7 @@ def test_prepare_fresh_slot_runtime_rebuilds_missing_caked_projection_from_fit_r
     assert runtime["missing_qr_projection_candidates"] == []
 
 
-def test_qr_projection_requirement_check_collapses_00l_and_requires_non00l_slots() -> (
-    None
-):
+def test_qr_projection_requirement_check_collapses_00l_and_requires_non00l_slots() -> None:
     probe = _load_geometry_preflight_probe_module()
     saved_entries = [
         {
@@ -18849,19 +18951,23 @@ def test_build_group_cache_rebuilds_missing_caked_projection_from_dataset_rows(
             {"theta_initial": 3.0},
             consumer="manual_pick_cache",
         )
-        return {
-            "signature": ("sig",),
-            "caked_qr_projection_grouped_candidates": {
-                q105: [
-                    {
-                        "hkl": (-1, 0, 5),
-                        "q_group_key": q105,
-                        "source_branch_index": 0,
-                    }
-                ]
+        return (
+            {
+                "signature": ("sig",),
+                "caked_qr_projection_grouped_candidates": {
+                    q105: [
+                        {
+                            "hkl": (-1, 0, 5),
+                            "q_group_key": q105,
+                            "source_branch_index": 0,
+                        }
+                    ]
+                },
+                "cache_metadata": {},
             },
-            "cache_metadata": {},
-        }, None, None
+            None,
+            None,
+        )
 
     def _fake_source_rows(
         background_index,
@@ -18924,8 +19030,7 @@ def test_build_group_cache_rebuilds_missing_caked_projection_from_dataset_rows(
             pick_uses_caked_space=lambda: True,
             caked_projection_signature=lambda: ("cake", 1),
             project_peaks_to_current_view=lambda rows: [
-                {**dict(row), "display_frame": "caked_display"}
-                for row in rows or ()
+                {**dict(row), "display_frame": "caked_display"} for row in rows or ()
             ],
             simulated_peaks_for_params=lambda *args, **kwargs: [],
             pick_candidates=_pick_candidates,
@@ -24568,9 +24673,7 @@ def test_build_geometry_manual_fit_dataset_materializes_provider_backed_source_c
     )
 
 
-def test_qr_fit_trial_source_rows_builder_does_not_materialize_saved_required_coverage() -> (
-    None
-):
+def test_qr_fit_trial_source_rows_builder_does_not_materialize_saved_required_coverage() -> None:
     q003_key = ("q_group", "primary", 0, 3)
     q16_key = ("q_group", "primary", 1, 16)
     saved_entries = [
@@ -24648,9 +24751,7 @@ def test_qr_fit_trial_source_rows_builder_does_not_materialize_saved_required_co
     payload = builder(local_params={"theta_offset": 0.25})
     rows = [dict(row) for row in payload["rows"] if isinstance(row, Mapping)]
     coverage_keys = {
-        key
-        for row in rows
-        for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
+        key for row in rows for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
     }
 
     assert rebuild_calls
@@ -24780,9 +24881,7 @@ def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_
     )
     rows = [dict(row) for row in payload["rows"] if isinstance(row, Mapping)]
     coverage_keys = {
-        key
-        for row in rows
-        for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
+        key for row in rows for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
     }
     diagnostics = payload["source_diagnostics"]
     stages = diagnostics["geometry_fit_trial_source_rows_stages"]
@@ -24804,6 +24903,144 @@ def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_
         for row in rows
         if row.get("pair_id") in {"bg0:pair0", "bg0:pair1"}
     )
+
+
+def test_rung3_refinement_recomputes_qr_rows_from_refined_geometry() -> None:
+    q16_key = ("q_group", "primary", 1, 16)
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": q16_key,
+            "source_row_index": 161,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 16),
+            "background_two_theta_deg": 44.0,
+            "background_phi_deg": 31.0,
+            "caked_x": 44.0,
+            "caked_y": 31.0,
+            "sim_visual_caked_deg": (44.0, 31.0),
+        }
+    ]
+    calls: list[float] = []
+
+    def _dynamic_rows(_background_index, params, **_kwargs):
+        delta = float(params.get("center_x", 0.0) or 0.0)
+        calls.append(delta)
+        row = _targeted_source_row(
+            hkl=(-1, 0, 16),
+            branch_index=1,
+            q_group_key=q16_key,
+            sim_col=44.0 + delta,
+            sim_row=31.0,
+            source_peak_index=1,
+        )
+        row.update(
+            {
+                "caked_x": 44.0 + delta,
+                "caked_y": 31.0,
+                "two_theta_deg": 44.0 + delta,
+                "phi_deg": 31.0,
+                "sim_visual_caked_deg": (44.0 + delta, 31.0),
+            }
+        )
+        return [row]
+
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=[],
+            refresh_pairs=False,
+        ),
+        geometry_manual_rebuild_source_rows_for_background=_dynamic_rows,
+        geometry_manual_source_rows_for_background=_dynamic_rows,
+    )
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"center_x": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={},
+    )
+    builder = dataset["spec"]["qr_fit_trial_source_rows_builder"]
+
+    baseline = builder(local_params={"center_x": 0.0})
+    trial = builder(local_params={"center_x": 0.5})
+    baseline_row = baseline["rows"][0]
+    trial_row = trial["rows"][0]
+
+    assert calls[-2:] == [0.0, 0.5]
+    assert baseline["source_rows_signature"] != trial["source_rows_signature"]
+    assert baseline_row["sim_visual_caked_deg"] == (44.0, 31.0)
+    assert trial_row["sim_visual_caked_deg"] == (44.5, 31.0)
+    assert trial_row["actual_source"] == "sim_visual_caked_deg"
+    assert trial_row["coordinate_provenance"] == "trial_geometry_projection"
+    assert trial_row["is_dynamic_trial_row"] is True
+    assert trial_row.get("actual_source") != "clicked_visual_candidate"
+
+
+def test_rung3_refinement_does_not_update_saved_click_targets() -> None:
+    q16_key = ("q_group", "primary", 1, 16)
+    saved_entry = {
+        "pair_id": "bg0:pair0",
+        "q_group_key": q16_key,
+        "source_row_index": 161,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "hkl": (-1, 0, 16),
+        "background_two_theta_deg": 44.0,
+        "background_phi_deg": 31.0,
+        "caked_x": 44.0,
+        "caked_y": 31.0,
+        "sim_visual_caked_deg": (44.0, 31.0),
+    }
+    saved_entries = [dict(saved_entry)]
+
+    def _dynamic_rows(_background_index, params, **_kwargs):
+        delta = float(params.get("center_x", 0.0) or 0.0)
+        row = _targeted_source_row(
+            hkl=(-1, 0, 16),
+            branch_index=1,
+            q_group_key=q16_key,
+            sim_col=44.0 + delta,
+            sim_row=31.0,
+            source_peak_index=1,
+        )
+        row.update(
+            {
+                "caked_x": 44.0 + delta,
+                "caked_y": 31.0,
+                "two_theta_deg": 44.0 + delta,
+                "phi_deg": 31.0,
+                "sim_visual_caked_deg": (44.0 + delta, 31.0),
+            }
+        )
+        return [row]
+
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=[],
+            refresh_pairs=False,
+        ),
+        geometry_manual_rebuild_source_rows_for_background=_dynamic_rows,
+        geometry_manual_source_rows_for_background=_dynamic_rows,
+    )
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"center_x": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={},
+    )
+
+    trial = dataset["spec"]["qr_fit_trial_source_rows_builder"](local_params={"center_x": 0.5})
+
+    assert saved_entries == [saved_entry]
+    assert dataset["measured_for_fit"][0]["caked_x"] == 44.0
+    assert dataset["measured_for_fit"][0]["caked_y"] == 31.0
+    assert trial["rows"][0]["sim_visual_caked_deg"] == (44.5, 31.0)
+    assert trial["rows"][0]["caked_x"] == 44.5
 
 
 def test_non_00l_source_coverage_not_one_per_q_group() -> None:

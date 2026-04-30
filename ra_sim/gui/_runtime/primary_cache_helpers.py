@@ -186,7 +186,7 @@ def store_primary_cache_payload(
                 simulation_runtime_state.primary_relative_hit_table_cache = {}
             center_values = list(detector_center)[:2]
             simulation_runtime_state.primary_relative_hit_table_cache_center = tuple(
-                float(value) for value in center_values
+                float(cast(Any, value)) for value in center_values
             )
             simulation_runtime_state.primary_relative_hit_table_cache_signature = (
                 cache_signature

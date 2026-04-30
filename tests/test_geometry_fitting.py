@@ -77,6 +77,56 @@ def _fake_process_peaks_same_hkl_two_hits(*args, **kwargs):
     return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
 
+def test_trial_sim_caked_image_payload_accepts_axes_only_builder():
+    calls = []
+
+    def axes_builder(detector_image, *, local_params=None, axes_only=False):
+        del detector_image, local_params
+        calls.append(bool(axes_only))
+        return {
+            "available": True,
+            "axes_only": True,
+            "image": None,
+            "radial_axis": np.asarray([1.0, 2.0], dtype=np.float64),
+            "azimuth_axis": np.asarray([-1.0, 1.0], dtype=np.float64),
+            "detector_simulation_signature": "axes_only",
+            "caked_simulation_signature": "axes_only",
+        }
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.empty((0, 3), dtype=np.float64),
+        intensities=np.empty((0,), dtype=np.float64),
+        measured_entries=[],
+        original_indices=np.empty((0,), dtype=np.int64),
+        total_reflection_count=0,
+        fixed_source_reflection_count=0,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        sim_caked_image_builder=axes_builder,
+        sim_caked_image_builder_kind="test_axes_only",
+    )
+
+    payload = opt._build_trial_sim_caked_image_payload(
+        dataset_ctx,
+        sim_buffer=np.zeros((4, 4), dtype=np.float64),
+        trial_params={},
+        axes_only=True,
+    )
+
+    assert calls == [True]
+    assert payload["available"] is True
+    assert payload["axes_only"] is True
+    assert payload["image"].size == 0
+    assert payload["radial_axis"].tolist() == [1.0, 2.0]
+    assert payload["azimuth_axis"].tolist() == [-1.0, 1.0]
+
+
 def test_estimate_pixel_size_prefers_positive_sources_in_order():
     params = _base_params(12)
     params["pixel_size"] = 2.5e-4

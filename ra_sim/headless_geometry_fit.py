@@ -508,6 +508,38 @@ def _headless_native_detector_coords_to_detector_display_coords_for_background(
     return _to_display
 
 
+def _headless_background_display_to_native_detector_coords_for_background(
+    load_background_by_index,
+    background_index: int,
+    *,
+    display_rotate_k: int = DISPLAY_ROTATE_K,
+):
+    try:
+        bg_idx = int(background_index)
+    except Exception:
+        return None
+    try:
+        native_background, _display_background = load_background_by_index(bg_idx)
+        native_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    except Exception:
+        return None
+    if len(native_shape) < 2 or min(native_shape) <= 0:
+        return None
+
+    def _to_native(col: float, row: float):
+        return gui_geometry_overlay.rotate_point_for_display(
+            float(col),
+            float(row),
+            native_shape,
+            -int(display_rotate_k),
+        )
+
+    _to_native.__name__ = (
+        f"_headless_background_display_to_native_detector_coords_bg_{bg_idx}"
+    )
+    return _to_native
+
+
 def _coerce_float(value: object, default: float) -> float:
     try:
         parsed = float(value)
@@ -2529,6 +2561,100 @@ def run_headless_geometry_fit(
         caked_views_by_background[background_idx] = hydrated_payload
         return hydrated_payload
 
+    def _native_detector_coords_to_caked_coords_for_background(
+        background_index: int,
+    ):
+        payload = _geometry_fit_caked_view_for_index(int(background_index))
+        if not isinstance(payload, Mapping):
+            return None
+        exact_cake = _load_exact_cake_portable_module()
+        transform_bundle = payload.get("transform_bundle")
+        if not isinstance(transform_bundle, exact_cake.CakeTransformBundle):
+            return None
+
+        def _to_caked(col: float, row: float) -> tuple[float, float] | None:
+            try:
+                two_theta_value, phi_value = exact_cake.detector_pixel_to_caked_bin(
+                    transform_bundle,
+                    float(col),
+                    float(row),
+                )
+            except Exception:
+                return None
+            if two_theta_value is None or phi_value is None:
+                return None
+            try:
+                two_theta_float = float(two_theta_value)
+                phi_float = float(phi_value)
+            except Exception:
+                return None
+            if not (np.isfinite(two_theta_float) and np.isfinite(phi_float)):
+                return None
+            return float(two_theta_float), float(phi_float)
+
+        return _to_caked
+
+    def _backfill_headless_manual_pair_caked_coordinates() -> tuple[int, list[int]]:
+        changed_total = 0
+        failed_indices: list[int] = []
+        previous_background_idx = int(background_state.current_background_index)
+        try:
+            for raw_background_idx, raw_entries in list(pairs_by_background.items()):
+                try:
+                    background_idx = int(raw_background_idx)
+                except Exception:
+                    continue
+                entries = [
+                    dict(entry)
+                    for entry in (raw_entries or ())
+                    if isinstance(entry, Mapping)
+                ]
+                if not entries or not any(
+                    gui_manual_geometry.geometry_manual_entry_needs_caked_coordinate_backfill(
+                        entry
+                    )
+                    for entry in entries
+                ):
+                    continue
+                display_to_native = (
+                    _headless_background_display_to_native_detector_coords_for_background(
+                        _load_background_by_index,
+                        background_idx,
+                        display_rotate_k=DISPLAY_ROTATE_K,
+                    )
+                )
+                native_to_caked = _native_detector_coords_to_caked_coords_for_background(
+                    background_idx
+                )
+                if native_to_caked is None:
+                    failed_indices.append(int(background_idx))
+                    continue
+                backfilled, changed_count = (
+                    gui_manual_geometry.geometry_manual_backfill_missing_caked_coordinates(
+                        entries,
+                        background_display_to_native_detector_coords=display_to_native,
+                        native_detector_coords_to_caked_display_coords=native_to_caked,
+                    )
+                )
+                if changed_count <= 0:
+                    continue
+                pairs_by_background[int(background_idx)] = [
+                    dict(entry) for entry in backfilled
+                ]
+                changed_total += int(changed_count)
+        finally:
+            if int(background_state.current_background_index) != int(previous_background_idx):
+                try:
+                    _load_background_by_index(previous_background_idx)
+                except Exception:
+                    pass
+        return int(changed_total), failed_indices
+
+    (
+        manual_caked_backfill_changed_count,
+        manual_caked_backfill_failed_indices,
+    ) = _backfill_headless_manual_pair_caked_coordinates()
+
     def _geometry_fit_required_background_indices() -> list[int]:
         selected = [int(idx) for idx in _current_geometry_fit_background_indices(strict=True)]
         if _geometry_fit_uses_shared_theta_offset(selected):
@@ -3673,8 +3799,22 @@ def run_headless_geometry_fit(
     if execution.apply_result is None:
         raise RuntimeError("Geometry fit finished without an apply result.")
 
+    updated_state = _updated_state_snapshot(saved_state, defaults, var_store)
+    if manual_caked_backfill_changed_count > 0:
+        geometry_out = updated_state.get("geometry")
+        if not isinstance(geometry_out, dict):
+            geometry_out = {}
+            updated_state["geometry"] = geometry_out
+        geometry_out["manual_pairs"] = gui_manual_geometry.geometry_manual_pairs_export_rows(
+            pairs_by_background=pairs_by_background,
+            osc_files=defaults.osc_files,
+            pairs_for_index=_pairs_for_index,
+        )
+    if manual_caked_backfill_failed_indices:
+        pass
+
     return HeadlessGeometryFitResult(
-        state=_updated_state_snapshot(saved_state, defaults, var_store),
+        state=updated_state,
         log_path=Path(execution.log_path),
         accepted=bool(execution.apply_result.accepted),
         rejection_reason=(

@@ -2177,10 +2177,7 @@ def _detector_to_caked_manual_trace_projection_state() -> dict[str, object]:
         azimuth_count = 0
     try:
         caked_image = getattr(simulation_runtime_state, "last_caked_image_unscaled", None)
-        image_ready = bool(
-            caked_image is not None
-            and np.asarray(caked_image).size
-        )
+        image_ready = bool(caked_image is not None and np.asarray(caked_image).size)
     except Exception:
         image_ready = False
     bundle = getattr(simulation_runtime_state, "last_caked_transform_bundle", None)
@@ -2274,11 +2271,12 @@ def _detector_to_caked_manual_trace_saved_entries() -> list[dict[str, object]]:
                 refreshed = None
             if isinstance(refreshed, Mapping):
                 entry = dict(refreshed)
-        if (
-            gui_manual_geometry._geometry_manual_trace_group_key(entry)
-            == ("q_group", "primary", 1, 10)
-            and gui_manual_geometry._geometry_manual_trace_hkl(entry) == (-1, 0, 10)
-        ):
+        if gui_manual_geometry._geometry_manual_trace_group_key(entry) == (
+            "q_group",
+            "primary",
+            1,
+            10,
+        ) and gui_manual_geometry._geometry_manual_trace_hkl(entry) == (-1, 0, 10):
             entries.append(entry)
     return entries
 
@@ -2319,17 +2317,12 @@ def _emit_detector_to_caked_manual_trace(
         f"callback_available={'yes' if state.get('callback_available') else 'no'}",
         f"caked_projection_ready={'yes' if state.get('caked_projection_ready') else 'no'}",
         "trace_emitted_before_caked_ready=no",
-        (
-            "trace_deferred_until_caked_ready="
-            f"{'yes' if trace_deferred_until_caked_ready else 'no'}"
-        ),
+        (f"trace_deferred_until_caked_ready={'yes' if trace_deferred_until_caked_ready else 'no'}"),
     ]
     if pending_background_index is not None:
         header_parts.append(f"pending_background_index={int(pending_background_index)}")
     if pending_manual_geometry_run_id:
-        header_parts.append(
-            f"pending_manual_geometry_run_id={pending_manual_geometry_run_id}"
-        )
+        header_parts.append(f"pending_manual_geometry_run_id={pending_manual_geometry_run_id}")
     print(" ".join(header_parts))
     for entry in sorted(
         trace_entries,
@@ -2366,9 +2359,7 @@ def _emit_detector_to_caked_manual_trace(
             ),
         )
         if geometry_native is None:
-            geometry_native = _detector_to_caked_manual_trace_display_to_native(
-                geometry_display
-            )
+            geometry_native = _detector_to_caked_manual_trace_display_to_native(geometry_display)
         sim_display = _detector_to_caked_manual_trace_point(
             entry,
             "sim_visual_detector_display_px",
@@ -2393,24 +2384,20 @@ def _emit_detector_to_caked_manual_trace(
                 "sim_visual_detector_native_px",
                 (),
             )
-        raw_caked = (
-            _detector_to_caked_manual_trace_native_to_caked(raw_native)
-            or _detector_to_caked_manual_trace_point(entry, "raw_caked_deg", ())
-        )
-        geometry_caked = (
-            _detector_to_caked_manual_trace_native_to_caked(geometry_native)
-            or _detector_to_caked_manual_trace_point(entry, "geometry_caked_deg", ())
-        )
-        sim_caked = (
-            _detector_to_caked_manual_trace_native_to_caked(sim_native)
-            or _detector_to_caked_manual_trace_point(entry, "sim_visual_caked_deg", ())
-        )
+        raw_caked = _detector_to_caked_manual_trace_native_to_caked(
+            raw_native
+        ) or _detector_to_caked_manual_trace_point(entry, "raw_caked_deg", ())
+        geometry_caked = _detector_to_caked_manual_trace_native_to_caked(
+            geometry_native
+        ) or _detector_to_caked_manual_trace_point(entry, "geometry_caked_deg", ())
+        sim_caked = _detector_to_caked_manual_trace_native_to_caked(
+            sim_native
+        ) or _detector_to_caked_manual_trace_point(entry, "sim_visual_caked_deg", ())
         delta = None
         if geometry_caked is not None and sim_caked is not None:
             delta = (
                 float(geometry_caked[0]) - float(sim_caked[0]),
-                ((float(geometry_caked[1]) - float(sim_caked[1]) + 180.0) % 360.0)
-                - 180.0,
+                ((float(geometry_caked[1]) - float(sim_caked[1]) + 180.0) % 360.0) - 180.0,
             )
         branch = entry.get("source_branch_index", "<none>")
         row_stamp = gui_manual_geometry.geometry_manual_cmd_provenance_text(
@@ -2505,9 +2492,7 @@ def _emit_or_defer_detector_to_caked_manual_trace(reason: str) -> bool:
             pending_detector_to_caked_manual_trace = {
                 "reason": str(reason),
                 "background_index": _detector_to_caked_manual_trace_background_index(),
-                "manual_geometry_run_id": _detector_to_caked_manual_trace_run_id(
-                    snapshot
-                ),
+                "manual_geometry_run_id": _detector_to_caked_manual_trace_run_id(snapshot),
                 "trace_deferred_until_caked_ready": True,
                 "entries": snapshot,
                 "entry_count": int(len(snapshot)),
@@ -2532,8 +2517,7 @@ def _flush_pending_detector_to_caked_manual_trace(reason: str = "caked_projectio
     pending_background_index = pending.get("background_index")
     if (
         isinstance(pending_background_index, int)
-        and pending_background_index
-        != _detector_to_caked_manual_trace_background_index()
+        and pending_background_index != _detector_to_caked_manual_trace_background_index()
     ):
         pending_detector_to_caked_manual_trace = None
         return False
@@ -2550,9 +2534,7 @@ def _flush_pending_detector_to_caked_manual_trace(reason: str = "caked_projectio
         trace_deferred_until_caked_ready=True,
         entries=entries,
         pending_background_index=(
-            int(pending_background_index)
-            if isinstance(pending_background_index, int)
-            else None
+            int(pending_background_index) if isinstance(pending_background_index, int) else None
         ),
         pending_manual_geometry_run_id=(
             str(pending.get("manual_geometry_run_id"))
@@ -2560,6 +2542,8 @@ def _flush_pending_detector_to_caked_manual_trace(reason: str = "caked_projectio
             else None
         ),
     )
+
+
 _scattering_angles_to_detector_pixel = None
 _detector_pixel_to_scattering_angles = None
 _get_detector_angular_maps = None
@@ -2709,9 +2693,7 @@ def _background_subtraction_defaults() -> dict[str, object]:
 
     geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
     subtraction_cfg = (
-        geometry_cfg.get("background_subtraction", {})
-        if isinstance(geometry_cfg, Mapping)
-        else {}
+        geometry_cfg.get("background_subtraction", {}) if isinstance(geometry_cfg, Mapping) else {}
     )
     return diffuse_background_config_to_mapping(
         diffuse_background_config_from_mapping(
@@ -3094,7 +3076,9 @@ def _background_subtraction_axes_for_image(
         raw_phi = ai.chiArray(shape=detector_shape, unit="deg")
     except TypeError:
         raw_phi = np.rad2deg(ai.chiArray(shape=detector_shape))
-    return np.asarray(two_theta, dtype=np.float64), np.asarray(raw_phi_to_gui_phi(raw_phi), dtype=np.float64)
+    return np.asarray(two_theta, dtype=np.float64), np.asarray(
+        raw_phi_to_gui_phi(raw_phi), dtype=np.float64
+    )
 
 
 def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[str, object] | None:
@@ -3162,7 +3146,9 @@ def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[st
     background_runtime_state.background_subtraction_result = result
     background_runtime_state.background_subtraction_signature = signature
     diagnostics = result.get("diagnostics", {}) if isinstance(result, Mapping) else {}
-    valid_fraction = diagnostics.get("valid_fraction", None) if isinstance(diagnostics, Mapping) else None
+    valid_fraction = (
+        diagnostics.get("valid_fraction", None) if isinstance(diagnostics, Mapping) else None
+    )
     valid_text = ""
     if valid_fraction is not None:
         try:
@@ -3188,7 +3174,10 @@ def _current_background_backend_for_comparison() -> np.ndarray | None:
             corrected_array = np.asarray(corrected, dtype=np.float64)
         except Exception:
             corrected_array = None
-        if isinstance(corrected_array, np.ndarray) and corrected_array.shape == np.asarray(raw_background).shape:
+        if (
+            isinstance(corrected_array, np.ndarray)
+            and corrected_array.shape == np.asarray(raw_background).shape
+        ):
             return corrected_array
     return raw_background
 
@@ -3249,8 +3238,7 @@ def _current_background_display_for_matching() -> np.ndarray | None:
     )
     cached_display = background_runtime_state.background_subtraction_fit_display
     if (
-        display_signature
-        == background_runtime_state.background_subtraction_fit_display_signature
+        display_signature == background_runtime_state.background_subtraction_fit_display_signature
         and isinstance(cached_display, np.ndarray)
         and cached_display.shape == np.asarray(raw_display).shape
     ):
@@ -3260,9 +3248,7 @@ def _current_background_display_for_matching() -> np.ndarray | None:
         isinstance(display_array, np.ndarray)
         and display_array.shape == np.asarray(raw_display).shape
     ):
-        background_runtime_state.background_subtraction_fit_display_signature = (
-            display_signature
-        )
+        background_runtime_state.background_subtraction_fit_display_signature = display_signature
         background_runtime_state.background_subtraction_fit_display = display_array
         return display_array
     return raw_display
@@ -3285,9 +3271,7 @@ def _current_background_display_for_mode() -> np.ndarray | None:
         display_array = _background_subtraction_backend_array_to_display(result.get("model"))
         return display_array if display_array is not None else raw_display
     if display_mode == "radial_model":
-        display_array = _background_subtraction_backend_array_to_display(
-            result.get("radial_model")
-        )
+        display_array = _background_subtraction_backend_array_to_display(result.get("radial_model"))
         return display_array if display_array is not None else raw_display
     if display_mode == "phi_block_model":
         display_array = _background_subtraction_backend_array_to_display(
@@ -3384,7 +3368,9 @@ def _write_background_phi_block_grid_csv(result: Mapping[str, object], outdir: P
             dtype=np.float64,
         )
         phi_edges = np.asarray(result.get("phi_block_phi_edges_deg"), dtype=np.float64).reshape(-1)
-        theta_edges = np.asarray(result.get("phi_block_theta_edges_deg"), dtype=np.float64).reshape(-1)
+        theta_edges = np.asarray(result.get("phi_block_theta_edges_deg"), dtype=np.float64).reshape(
+            -1
+        )
     except Exception:
         return
     if grid.ndim != 2 or counts.shape != grid.shape:
@@ -3680,9 +3666,7 @@ def _native_detector_coords_to_detector_display_coords_for_background(
             shape,
         )
 
-    _to_display.__name__ = (
-        f"_native_detector_coords_to_detector_display_coords_bg_{int(bg_idx)}"
-    )
+    _to_display.__name__ = f"_native_detector_coords_to_detector_display_coords_bg_{int(bg_idx)}"
     return _to_display
 
 
@@ -3726,9 +3710,7 @@ def _background_display_to_native_detector_coords_for_background(
             return None, None
         return float(native_col), float(native_row)
 
-    _to_native.__name__ = (
-        f"_background_display_to_native_detector_coords_bg_{int(bg_idx)}"
-    )
+    _to_native.__name__ = f"_background_display_to_native_detector_coords_bg_{int(bg_idx)}"
     return _to_native
 
 
@@ -4083,9 +4065,7 @@ def _initialize_runtime_root_block_01() -> None:
     #                                  TK SETUP
     ###############################################################################
     _timing_event("tk.root.create.start", phase="startup")
-    root = gui_views.create_root_window(
-        gui_views.format_app_window_title("RA-SIM Simulation")
-    )
+    root = gui_views.create_root_window(gui_views.format_app_window_title("RA-SIM Simulation"))
     _timing_event("tk.root.create.end", phase="startup")
     root.minsize(1200, 760)
     fit2d_error_sound_var = tk.BooleanVar(value=False)
@@ -5471,9 +5451,7 @@ def _initialize_runtime_controls_block_background_subtraction() -> None:
     background_subtraction_phi_block_smooth_theta_bins_var = (
         view_state.phi_block_smooth_theta_bins_var
     )
-    background_subtraction_phi_block_smooth_phi_bins_var = (
-        view_state.phi_block_smooth_phi_bins_var
-    )
+    background_subtraction_phi_block_smooth_phi_bins_var = view_state.phi_block_smooth_phi_bins_var
     background_subtraction_phi_block_outlier_sigma_var = view_state.phi_block_outlier_sigma_var
     background_subtraction_phi_block_interpolation_var = view_state.phi_block_interpolation_var
     background_subtraction_phi_block_scale_var = view_state.phi_block_scale_var
@@ -5881,9 +5859,7 @@ def _refine_geometry_manual_auto_seed_candidate(
 
     if not isinstance(candidate, dict):
         return None
-    search_radius = _geometry_manual_auto_refine_search_radius_px(
-        auto_refine_search_radius_px
-    )
+    search_radius = _geometry_manual_auto_refine_search_radius_px(auto_refine_search_radius_px)
     try:
         refined_candidate = gui_manual_geometry.geometry_manual_refine_qr_sim_peak_for_view(
             candidate,
@@ -6283,14 +6259,10 @@ def _remove_current_geometry_q_group_peaks() -> None:
         geometry_q_group_state,
     )
     if not selected_entries:
-        progress_label_geometry.config(
-            text="No enabled Qr/Qz groups are selected for removal."
-        )
+        progress_label_geometry.config(text="No enabled Qr/Qz groups are selected for removal.")
         return
 
-    current_entries = [
-        dict(entry) for entry in _geometry_manual_pairs_for_index(background_index)
-    ]
+    current_entries = [dict(entry) for entry in _geometry_manual_pairs_for_index(background_index)]
     if not current_entries:
         progress_label_geometry.config(
             text="No saved Qr/Qz placements exist for the current background image."
@@ -6789,15 +6761,11 @@ def _caked_or_q_space_projection_cache_present() -> bool:
         is not None
         or getattr(simulation_runtime_state, "last_q_space_qr_values", None) is not None
         or getattr(simulation_runtime_state, "last_q_space_qz_values", None) is not None
-        or getattr(simulation_runtime_state, "last_q_space_payload_signature", None)
-        is not None
+        or getattr(simulation_runtime_state, "last_q_space_payload_signature", None) is not None
         or bool(getattr(simulation_runtime_state, "geometry_fit_caking_ai_cache", None))
         or (
             isinstance(caking_cache, dict)
-            and (
-                bool(caking_cache.get("sim_results"))
-                or bool(caking_cache.get("bg_results"))
-            )
+            and (bool(caking_cache.get("sim_results")) or bool(caking_cache.get("bg_results")))
         )
     )
 
@@ -7143,9 +7111,7 @@ def _geometry_manual_refine_preview_point(
             ),
             caked_axis_to_image_index_fn=_caked_axis_to_image_index,
             caked_image_index_to_axis_fn=_caked_image_index_to_axis,
-            refine_caked_peak_center_fn=_geometry_manual_caked_peak_center_fn_for_cache(
-                cache_data
-            ),
+            refine_caked_peak_center_fn=_geometry_manual_caked_peak_center_fn_for_cache(cache_data),
         )
         if isinstance(resolved_pick, Mapping):
             try:
@@ -7340,10 +7306,7 @@ def _refresh_geometry_manual_pick_session() -> dict[str, object]:
 
     if _geometry_manual_pick_uses_caked_space():
         caked_grouped_candidates = cache_data.get("caked_qr_projection_grouped_candidates")
-        if not (
-            isinstance(caked_grouped_candidates, Mapping)
-            and bool(caked_grouped_candidates)
-        ):
+        if not (isinstance(caked_grouped_candidates, Mapping) and bool(caked_grouped_candidates)):
             return current_session
         grouped_candidates = caked_grouped_candidates
     else:
@@ -7424,9 +7387,7 @@ def _match_geometry_manual_group_to_background(
 ) -> dict[tuple[object, ...], tuple[float, float]]:
     """Return refined measured peak centers for one clicked symmetric Qr/Qz group."""
     background_local = (
-        _current_background_display_for_matching()
-        if background_image is None
-        else background_image
+        _current_background_display_for_matching() if background_image is None else background_image
     )
     return gui_manual_geometry.match_geometry_manual_group_to_background(
         candidate_entries,
@@ -7499,9 +7460,7 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
         )
     unscaled_image = getattr(simulation_runtime_state, "unscaled_image", None)
     if detector_shape is None and unscaled_image is not None:
-        detector_shape = _geometry_fit_detector_shape_2d(
-            np.asarray(unscaled_image).shape[:2]
-        )
+        detector_shape = _geometry_fit_detector_shape_2d(np.asarray(unscaled_image).shape[:2])
 
     ai_value = simulation_runtime_state.ai_cache.get("ai")
     caked_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
@@ -7638,7 +7597,7 @@ def _geometry_fit_caked_view_for_index(
     subtraction_result = background_runtime_state.background_subtraction_result
     if isinstance(subtraction_result, Mapping):
         payload.update(
-        {
+            {
                 "background_raw": subtraction_result.get("raw"),
                 "background_model": subtraction_result.get("model"),
                 "background_subtracted": subtraction_result.get("corrected"),
@@ -9132,9 +9091,10 @@ def _geometry_manual_caked_peak_center_fn_for_cache(
 ) -> Callable[..., tuple[float, float]]:
     """Use widened caked windows only for auto-placement cache payloads."""
 
-    if isinstance(cache_data, Mapping) and cache_data.get(
-        "manual_auto_refine_search_radius_px"
-    ) is not None:
+    if (
+        isinstance(cache_data, Mapping)
+        and cache_data.get("manual_auto_refine_search_radius_px") is not None
+    ):
         return _geometry_manual_auto_refine_caked_peak_center_fn(
             cache_data.get("manual_auto_refine_search_radius_px")
         )
@@ -9305,9 +9265,7 @@ def _initialize_runtime_controls_block_04() -> None:
             native_detector_coords_to_caked_display_coords=(
                 _native_detector_coords_to_caked_display_coords
             ),
-            caked_angles_to_detector_display_coords=(
-                _caked_angles_to_background_display_coords
-            ),
+            caked_angles_to_detector_display_coords=(_caked_angles_to_background_display_coords),
             replace_cache_state=_set_geometry_manual_pick_cache_state,
             current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
             pairs_for_index=_geometry_manual_pairs_for_index,
@@ -9500,11 +9458,9 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
             if manual_geometry_module is None:
                 from ra_sim.gui import manual_geometry as manual_geometry_module
             runtime_state = globals().get("simulation_runtime_state")
-            grouped = (
-                manual_geometry_module.geometry_manual_detector_picker_grouped_candidates_from_cache(
-                    cache_data,
-                    profile_cache=getattr(runtime_state, "profile_cache", {}),
-                )
+            grouped = manual_geometry_module.geometry_manual_detector_picker_grouped_candidates_from_cache(
+                cache_data,
+                profile_cache=getattr(runtime_state, "profile_cache", {}),
             )
             signature_kind = "detector_picker_grouped"
         if not isinstance(grouped, dict):
@@ -12853,8 +12809,8 @@ def _apply_secondary_detector_remap_artifacts(
         payload.get("image"),
         dtype=np.float64,
     )
-    simulation_runtime_state.stored_secondary_intersection_cache = (
-        _copy_intersection_cache_tables(payload.get("intersection_cache", []))
+    simulation_runtime_state.stored_secondary_intersection_cache = _copy_intersection_cache_tables(
+        payload.get("intersection_cache", [])
     )
     simulation_runtime_state.stored_secondary_intersection_cache_signature = hit_table_signature
     simulation_runtime_state.stored_secondary_max_positions = _copy_hit_tables(
@@ -16738,9 +16694,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             raw_hit_tables=result.get("primary_hit_tables_raw", []),
             best_sample_indices=result.get("primary_best_sample_indices", []),
             detector_center=result.get("center"),
-            detector_remap_cache_signature=result.get(
-                "primary_detector_remap_cache_signature"
-            ),
+            detector_remap_cache_signature=result.get("primary_detector_remap_cache_signature"),
             store_detector_relative_hit_tables=True,
         )
         if bool(result.get("run_secondary", False)):
@@ -18315,15 +18269,11 @@ def do_update():
         if requires_worker is not None:
             update_decision_trace["requires_worker"] = bool(requires_worker)
         if missing_contribution_count is not None:
-            update_decision_trace["missing_contribution_count"] = int(
-                missing_contribution_count
-            )
+            update_decision_trace["missing_contribution_count"] = int(missing_contribution_count)
         if center_remap_used is not None:
             update_decision_trace["center_remap_used"] = bool(center_remap_used)
         if primary_prune_cache_mode is not None:
-            update_decision_trace["primary_prune_cache_mode"] = str(
-                primary_prune_cache_mode
-            )
+            update_decision_trace["primary_prune_cache_mode"] = str(primary_prune_cache_mode)
 
     def _set_qr_selector_trace(
         *,
@@ -18432,9 +18382,7 @@ def do_update():
         update_decision_trace["classifier_update_action"] = decision.action.value
         update_decision_trace["classifier_update_reason"] = str(decision.reason)
         update_decision_trace["classifier_requires_worker"] = bool(decision.requires_worker)
-        update_decision_trace["classifier_requires_analysis"] = bool(
-            decision.requires_analysis
-        )
+        update_decision_trace["classifier_requires_analysis"] = bool(decision.requires_analysis)
         update_decision_trace["classifier_missing_contribution_count"] = int(
             len(decision.missing_contribution_keys)
         )
@@ -18449,9 +18397,7 @@ def do_update():
         simulation_runtime_state.current_update_trace_id = int(update_trace_id)
         simulation_runtime_state.current_update_trace_stage = str(update_trace_stage)
         decision_fields = {
-            key: value
-            for key, value in update_decision_trace.items()
-            if value is not None
+            key: value for key, value in update_decision_trace.items() if value is not None
         }
         decision_fields.update(fields)
         _append_runtime_update_trace(
@@ -18861,9 +18807,7 @@ def do_update():
             None,
         ),
         source_mode=primary_requested_source_mode,
-        cached_source_mode=str(
-            getattr(simulation_runtime_state, "primary_source_mode", "")
-        ),
+        cached_source_mode=str(getattr(simulation_runtime_state, "primary_source_mode", "")),
         active_keys=primary_requested_contribution_keys,
         previous_active_keys=getattr(
             simulation_runtime_state,
@@ -18927,9 +18871,7 @@ def do_update():
             except Exception:
                 return frozenset()
 
-    classifier_missing_keys = _safe_frozenset(
-        getattr(classifier_prune_action, "missing_keys", ())
-    )
+    classifier_missing_keys = _safe_frozenset(getattr(classifier_prune_action, "missing_keys", ()))
     all_primary_source_signature = (
         (
             "qr",
@@ -18940,11 +18882,7 @@ def do_update():
         else (
             "miller",
             id(getattr(simulation_runtime_state, "sim_miller1_all", None)),
-            tuple(
-                np.asarray(
-                    getattr(simulation_runtime_state, "sim_miller1_all", ())
-                ).shape
-            ),
+            tuple(np.asarray(getattr(simulation_runtime_state, "sim_miller1_all", ())).shape),
         )
     )
     all_secondary_source_signature = (
@@ -18957,23 +18895,13 @@ def do_update():
             primary_requested_source_mode,
             all_primary_source_signature,
             all_secondary_source_signature,
-            _runtime_array_signature(
-                getattr(simulation_runtime_state, "sim_intens1_all", ())
-            ),
-            _runtime_array_signature(
-                getattr(simulation_runtime_state, "sim_intens2_all", ())
-            ),
+            _runtime_array_signature(getattr(simulation_runtime_state, "sim_intens1_all", ())),
+            _runtime_array_signature(getattr(simulation_runtime_state, "sim_intens2_all", ())),
             bool(
                 len(getattr(simulation_runtime_state, "sim_primary_qr_all", {}) or {}) > 0
-                or _runtime_array_has_rows(
-                    getattr(simulation_runtime_state, "sim_miller1_all", ())
-                )
+                or _runtime_array_has_rows(getattr(simulation_runtime_state, "sim_miller1_all", ()))
             ),
-            bool(
-                _runtime_array_has_rows(
-                    getattr(simulation_runtime_state, "sim_miller2_all", ())
-                )
-            ),
+            bool(_runtime_array_has_rows(getattr(simulation_runtime_state, "sim_miller2_all", ()))),
         ),
         physics_sig=(
             round(float(gamma_updated), 9),
@@ -19245,10 +19173,7 @@ def do_update():
         and classifier_decision.action is UpdateAction.FULL_SIMULATION
     ):
         center_remap_fallback_reason = (
-            (
-                _detector_center_remap_cache_fallback_reason()
-                or classifier_decision.reason
-            )
+            (_detector_center_remap_cache_fallback_reason() or classifier_decision.reason)
             if classifier_decision.reason == "detector_center_changed_without_exact_cache"
             else classifier_decision.reason
         )
@@ -19274,8 +19199,7 @@ def do_update():
             UpdateAction.PRIMARY_PRUNE_FILL,
         }
         and (
-            classifier_decision.action
-            not in {UpdateAction.DISPLAY_ONLY, UpdateAction.COMBINE_ONLY}
+            classifier_decision.action not in {UpdateAction.DISPLAY_ONLY, UpdateAction.COMBINE_ONLY}
             or not initial_image_signature_changed
         )
         else UpdateAction.FULL_SIMULATION
@@ -19344,9 +19268,7 @@ def do_update():
             or getattr(simulation_runtime_state, "stored_secondary_sim_image", None) is not None
         )
     )
-    prune_reuse_fast_path = bool(
-        effective_update_action is UpdateAction.PRIMARY_PRUNE_REUSE
-    )
+    prune_reuse_fast_path = bool(effective_update_action is UpdateAction.PRIMARY_PRUNE_REUSE)
     center_remap_fast_path = bool(
         effective_update_action is UpdateAction.DETECTOR_CENTER_REMAP
         and exact_detector_center_remap_available
@@ -19379,9 +19301,7 @@ def do_update():
         ready_job_kind = str(ready_simulation_result.get("job_kind", "full"))
         _set_update_decision(
             update_action=(
-                "primary_prune_fill"
-                if ready_job_kind == "primary_fill"
-                else "full_simulation"
+                "primary_prune_fill" if ready_job_kind == "primary_fill" else "full_simulation"
             ),
             update_reason=f"ready_{ready_job_kind}_simulation_result",
             requires_worker=False,
@@ -19450,9 +19370,7 @@ def do_update():
                 c_primary=float(c_updated),
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
-            _refresh_primary_relative_remap_cache_signature(
-                primary_detector_remap_cache_signature
-            )
+            _refresh_primary_relative_remap_cache_signature(primary_detector_remap_cache_signature)
             if _hit_table_state_present_for_run_sides(
                 run_primary=primary_run_available,
                 run_secondary=secondary_run_available,
@@ -19651,9 +19569,7 @@ def do_update():
             "hit_table_signature": requested_hit_table_sig,
             "primary_contribution_cache_signature": primary_contribution_cache_signature,
             "primary_detector_remap_cache_signature": primary_detector_remap_cache_signature,
-            "secondary_detector_remap_cache_signature": (
-                secondary_detector_remap_cache_signature
-            ),
+            "secondary_detector_remap_cache_signature": (secondary_detector_remap_cache_signature),
             "primary_source_mode": primary_requested_source_mode,
             "primary_contribution_keys": list(selected_primary_keys),
             "active_primary_contribution_keys": list(primary_requested_contribution_keys),
@@ -19742,9 +19658,7 @@ def do_update():
                 {},
             )
             primary_keys = tuple(primary_requested_contribution_keys) or tuple(
-                primary_relative_cache.keys()
-                if isinstance(primary_relative_cache, Mapping)
-                else ()
+                primary_relative_cache.keys() if isinstance(primary_relative_cache, Mapping) else ()
             )
             primary_relative_tables = [
                 np.asarray(primary_relative_cache[key], dtype=np.float64).copy()
@@ -19766,9 +19680,7 @@ def do_update():
             simulation_runtime_state.primary_source_mode = primary_requested_source_mode
             simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
             simulation_runtime_state.primary_active_contribution_keys = list(primary_keys)
-            simulation_runtime_state.primary_relative_hit_table_cache_center = (
-                current_center_pair
-            )
+            simulation_runtime_state.primary_relative_hit_table_cache_center = current_center_pair
             remapped_primary = gui_runtime_primary_cache.rematerialize_primary_artifacts(
                 primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
                 primary_best_sample_index_cache=getattr(
@@ -19835,9 +19747,7 @@ def do_update():
                 remapped_secondary,
                 hit_table_signature=requested_hit_table_sig,
             )
-            simulation_runtime_state.secondary_relative_hit_table_cache_center = (
-                current_center_pair
-            )
+            simulation_runtime_state.secondary_relative_hit_table_cache_center = current_center_pair
         elif getattr(simulation_runtime_state, "stored_secondary_sim_image", None) is not None:
             _clear_secondary_simulation_artifacts()
         if _hit_table_state_present_for_run_sides(
@@ -19877,8 +19787,7 @@ def do_update():
             qr_selector_branch_identity_retained=True,
             detector_projection_cache_refreshed=True,
             caked_projection_cache_invalidated=bool(
-                remap_caked_projection_cache_present
-                or caked_projection_cache_invalidated
+                remap_caked_projection_cache_present or caked_projection_cache_invalidated
             ),
             geometry_fitter_handoff_valid=not bool(
                 remap_manual_projection_cache_present
@@ -19907,8 +19816,7 @@ def do_update():
             else UpdateAction.FULL_SIMULATION
         )
         prune_hit_table_identity_changed = bool(
-            pre_picker_action
-            in {UpdateAction.PRIMARY_PRUNE_REUSE, UpdateAction.PRIMARY_PRUNE_FILL}
+            pre_picker_action in {UpdateAction.PRIMARY_PRUNE_REUSE, UpdateAction.PRIMARY_PRUNE_FILL}
             and requested_hit_table_sig != pre_update_hit_table_signature
         )
         pre_picker_policy = _invalidate_picker_handoff_caches_for_update_action(
@@ -19968,9 +19876,7 @@ def do_update():
             ),
             update_reason=incremental_sf_prune_action.reason,
             requires_worker=bool(incremental_sf_prune_action.mode in {"fill", "full"}),
-            missing_contribution_count=int(
-                len(incremental_sf_prune_action.missing_keys)
-            ),
+            missing_contribution_count=int(len(incremental_sf_prune_action.missing_keys)),
             center_remap_used=False,
             primary_prune_cache_mode=incremental_sf_prune_action.mode,
         )
@@ -20003,9 +19909,7 @@ def do_update():
                 c_primary=float(c_updated),
             )
             _apply_primary_cache_artifacts(rematerialized_primary)
-            _refresh_primary_relative_remap_cache_signature(
-                primary_detector_remap_cache_signature
-            )
+            _refresh_primary_relative_remap_cache_signature(primary_detector_remap_cache_signature)
             if _hit_table_state_present_for_run_sides(
                 run_primary=primary_run_available,
                 run_secondary=secondary_run_available,
@@ -20055,9 +19959,7 @@ def do_update():
                     update_action="full_simulation",
                     update_reason=incremental_sf_prune_action.reason,
                     requires_worker=True,
-                    missing_contribution_count=int(
-                        len(incremental_sf_prune_action.missing_keys)
-                    ),
+                    missing_contribution_count=int(len(incremental_sf_prune_action.missing_keys)),
                     center_remap_used=False,
                     primary_prune_cache_mode=incremental_sf_prune_action.mode,
                 )
@@ -20066,12 +19968,8 @@ def do_update():
                 _set_update_decision(
                     update_action="primary_prune_fill",
                     update_reason=incremental_sf_prune_action.reason,
-                    requires_worker=bool(
-                        request_status in {"submitted", "queued", "running"}
-                    ),
-                    missing_contribution_count=int(
-                        len(incremental_sf_prune_action.missing_keys)
-                    ),
+                    requires_worker=bool(request_status in {"submitted", "queued", "running"}),
+                    missing_contribution_count=int(len(incremental_sf_prune_action.missing_keys)),
                     center_remap_used=False,
                     primary_prune_cache_mode=incremental_sf_prune_action.mode,
                 )
@@ -20112,9 +20010,7 @@ def do_update():
                     _set_update_decision(
                         update_action="full_simulation",
                         update_reason="live_preview_requested",
-                        requires_worker=bool(
-                            request_status in {"submitted", "queued", "running"}
-                        ),
+                        requires_worker=bool(request_status in {"submitted", "queued", "running"}),
                         missing_contribution_count=int(
                             len(incremental_sf_prune_action.missing_keys)
                         ),
@@ -20172,9 +20068,7 @@ def do_update():
                     update_action="full_simulation",
                     update_reason="initial_sync_simulation",
                     requires_worker=False,
-                    missing_contribution_count=int(
-                        len(incremental_sf_prune_action.missing_keys)
-                    ),
+                    missing_contribution_count=int(len(incremental_sf_prune_action.missing_keys)),
                     center_remap_used=False,
                     primary_prune_cache_mode=incremental_sf_prune_action.mode,
                 )
@@ -20197,12 +20091,8 @@ def do_update():
                 _set_update_decision(
                     update_action="full_simulation",
                     update_reason=incremental_sf_prune_action.reason,
-                    requires_worker=bool(
-                        request_status in {"submitted", "queued", "running"}
-                    ),
-                    missing_contribution_count=int(
-                        len(incremental_sf_prune_action.missing_keys)
-                    ),
+                    requires_worker=bool(request_status in {"submitted", "queued", "running"}),
+                    missing_contribution_count=int(len(incremental_sf_prune_action.missing_keys)),
                     center_remap_used=False,
                     primary_prune_cache_mode=incremental_sf_prune_action.mode,
                 )
@@ -20388,8 +20278,7 @@ def do_update():
             )
             _invalidate_picker_handoff_caches_for_update_action(
                 applied_policy_action,
-                physics_signature_changed=applied_policy_action
-                is UpdateAction.FULL_SIMULATION,
+                physics_signature_changed=applied_policy_action is UpdateAction.FULL_SIMULATION,
                 hit_table_signature_changed=applied_policy_action
                 in {UpdateAction.FULL_SIMULATION, UpdateAction.PRIMARY_PRUNE_FILL},
                 q_group_content_signature_changed=(
@@ -20860,9 +20749,7 @@ def do_update():
             _set_update_decision(
                 update_action="analysis_only",
                 update_reason="analysis_cache_miss",
-                requires_worker=bool(
-                    analysis_request_status in {"submitted", "queued", "running"}
-                ),
+                requires_worker=bool(analysis_request_status in {"submitted", "queued", "running"}),
                 missing_contribution_count=0,
                 center_remap_used=False,
                 primary_prune_cache_mode="none",
@@ -22431,9 +22318,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             warnings.append(f"manual placement caked backfill: {exc}")
         else:
             if _current_live_caked_transform_bundle() is None:
-                warnings.append(
-                    "manual placement caked backfill: caked projector unavailable"
-                )
+                warnings.append("manual placement caked backfill: caked projector unavailable")
 
     def _timed_geometry_manual_pairs_snapshot(*args, **kwargs):
         with _saved_state_timing_span("saved_state.geometry_manual_pairs_restore"):
@@ -24194,6 +24079,7 @@ def _geometry_fit_filter_hit_tables_for_required_branch_groups(
             and key[2] is not None
             and tuple(key[2]) == q_group_key
         ]
+
     filtered_tables: list[object] = []
     considered_count = 0
     expanded_count = 0
@@ -24548,15 +24434,9 @@ def _commit_geometry_manual_source_row_rebuild_result(
     else:
         simulation_runtime_state.source_row_snapshots.pop(int(background_idx), None)
 
-    strict_projection_return = (
-        not is_current_background
-        and str(
-            diagnostics.get("projection_view_mode") or _geometry_fit_targeted_projection_view_mode()
-        )
-        .strip()
-        .lower()
-        in {"caked", "q_space"}
-    )
+    strict_projection_return = not is_current_background and str(
+        diagnostics.get("projection_view_mode") or _geometry_fit_targeted_projection_view_mode()
+    ).strip().lower() in {"caked", "q_space"}
     final_return_row_count = int(
         len(projected_rows)
         if projected_rows
@@ -24693,10 +24573,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)
-        if (
-            str(preflight_mode or "full") == "manual_geometry_targeted"
-            and str(consumer or lookup_context) != "geometry_fit_trial_source_rows"
-        ):
+        if str(preflight_mode or "full") == "manual_geometry_targeted":
             hit_tables_local, _filter_diag = (
                 _geometry_fit_filter_hit_tables_for_required_branch_groups(
                     hit_tables_local,
@@ -24762,10 +24639,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
                 row_hkl = tuple(
                     int(v)
                     for v in (
-                        row.get("normalized_hkl")
-                        or row.get("hkl")
-                        or row.get("source_hkl")
-                        or ()
+                        row.get("normalized_hkl") or row.get("hkl") or row.get("source_hkl") or ()
                     )[:3]
                 )
             except Exception:
@@ -25143,12 +25017,8 @@ def _geometry_manual_source_rows_for_background(
                     "status": str(status),
                     "source_snapshot_status": str(status),
                     "rebuild_attempted": bool(dataset_debug["rebuild_attempted"]),
-                    "source_snapshot_rebuild_attempted": bool(
-                        dataset_debug["rebuild_attempted"]
-                    ),
-                    "rebuild_returned_row_count": int(
-                        dataset_debug["rebuild_returned_row_count"]
-                    ),
+                    "source_snapshot_rebuild_attempted": bool(dataset_debug["rebuild_attempted"]),
+                    "rebuild_returned_row_count": int(dataset_debug["rebuild_returned_row_count"]),
                     "source_snapshot_rebuild_returned_row_count": int(
                         dataset_debug["rebuild_returned_row_count"]
                     ),
@@ -25833,7 +25703,10 @@ def _geometry_manual_source_rows_for_background(
         status = "snapshot_hit_empty_rows"
         if not bool(projection_view_signature.get("available", True)):
             status = "snapshot_hit_projection_unavailable"
-        elif isinstance(snapshot_projection_signature, Mapping) and not snapshot_projection_signature_matches:
+        elif (
+            isinstance(snapshot_projection_signature, Mapping)
+            and not snapshot_projection_signature_matches
+        ):
             status = "snapshot_hit_signature_mismatch"
         elif targeted_preflight_enabled and rows_to_project and not projected_rows:
             status = "snapshot_hit_required_pairs_filtered_out"
@@ -32773,8 +32646,7 @@ def _show_analysis_tab_detached_placeholders() -> None:
     ttk.Label(
         app_shell_view_state.analysis_peak_tools_frame,
         text=(
-            "Peak picking, fitting, and integration controls moved to the detached "
-            "Analyze window."
+            "Peak picking, fitting, and integration controls moved to the detached Analyze window."
         ),
         justify=tk.LEFT,
         wraplength=360,
@@ -33511,9 +33383,7 @@ def _initialize_runtime_controls_block_46() -> None:
         on_sample_count_slide=_preview_random_sample_count,
         on_commit_sample_count=lambda _event: _apply_random_sample_count(trigger_update=True),
         on_events_per_phase_slide=_preview_events_per_beam_phase,
-        on_commit_events_per_phase=lambda _event: _apply_events_per_beam_phase(
-            trigger_update=True
-        ),
+        on_commit_events_per_phase=lambda _event: _apply_events_per_beam_phase(trigger_update=True),
         on_rod_points_per_gz_slide=_preview_rod_points_per_gz,
         on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(trigger_update=True),
         events_per_phase_independent=False,
@@ -35946,9 +35816,7 @@ def _run_async_geometry_fit_worker_job(
                         "stored_rows": _copy_source_rows(refreshed_bundle.stored_rows),
                         "projected_rows": _copy_source_rows(refreshed_bundle.projected_rows),
                         "row_count": int(len(refreshed_bundle.stored_rows or ())),
-                        "projected_row_count": int(
-                            len(refreshed_bundle.projected_rows or ())
-                        ),
+                        "projected_row_count": int(len(refreshed_bundle.projected_rows or ())),
                         "created_from": str(
                             refreshed_bundle.cache_source or "geometry_fit_background_cache"
                         ),
@@ -36003,10 +35871,7 @@ def _run_async_geometry_fit_worker_job(
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)
-        if (
-            str(preflight_mode or "full") == "manual_geometry_targeted"
-            and str(consumer or "") != "geometry_fit_trial_source_rows"
-        ):
+        if str(preflight_mode or "full") == "manual_geometry_targeted":
             hit_tables_local, _filter_diag = (
                 _geometry_fit_filter_hit_tables_for_required_branch_groups(
                     hit_tables_local,

@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-27
+Last updated: 2026-04-30
 
 ## Summary
 
@@ -160,6 +160,30 @@ seconds total, about 53.4x faster. First residual time improved from a 62.07
 second average to a 0.35 second average. End-to-end pair ladder runtime is
 still not fully solved because one-time context capture and pre-solve setup
 remain expensive.
+
+## 2026-04-30 headless backfill and ladder telemetry
+
+Legacy GUI states that stored detector/background pixels for manual Qr/Qz pairs
+but missed caked `(2theta, phi)` anchors are now repaired before headless
+geometry-fit preparation. The headless CLI and shared headless runner rebuild
+each affected background's exact-cake transform, convert background-display
+points back to native detector coordinates, project through the background's
+own caked bundle, and write repaired `manual_pairs` into the returned state
+snapshot. This keeps GUI import, CLI `fit-geometry`, and saved-state replay on
+the same caked-coordinate contract.
+
+Rung 3 dynamic source-row probes now support an axes-only caked payload. The
+trial source-row builder can reuse caked axes and signatures under changed
+trial parameters, recompute `sim_visual_caked_deg` from refined geometry, and
+leave saved click targets unchanged.
+
+New4 ladder workers now write `.partial.json` progress payloads during solves.
+Timeout reports can recover the current phase, least-squares timing,
+residual-evaluation timing, optimizer `nfev/njev`, dynamic row rebuild counts,
+manual-pick cache rebuild counts, caked projection rebuild counts, and last
+fixed/dynamic row counts even when a worker does not finish. Singleton solve
+rungs also skip the redundant initial dry-run objective and use the first
+solver evaluation as the baseline.
 
 ## 2026-04-26 Qr/Qz caked residual objective status
 

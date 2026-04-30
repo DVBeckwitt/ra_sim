@@ -52,11 +52,13 @@ ra_sim/simulation/output.png
 scripts/debug/simulation.npz
 
 # Generated diagnostic artifacts
+/artifacts/background_peak_fits/
 /artifacts/geometry_fit_correlations/
 /artifacts/geometry_fit_coordinate_diagnostics/
 /artifacts/geometry_fit_gui_states/new4_point_provider_report_after*.json
 /artifacts/geometry_fit_gui_states/new4_point_provider_report_rung7*.json
 /artifacts/geometry_fit_ladder/new4/20*/
+/artifacts/geometry_fit_ladder/new4_full_validation/20*/
 /artifacts/geometry_fit_ladder/new4/*_rung7_feature_gate_provider_*.json
 /artifacts/geometry_fit_ladder/new4/codex_provider_*/
 /artifacts/geometry_fit_ladder/new4/codex_provider_*.json
@@ -70,10 +72,12 @@ scripts/debug/simulation.npz
 /artifacts/geometry_fit_ladder/new4_a_diagnose/
 /artifacts/geometry_fit_ladder/new4_debug_blocks*/
 /artifacts/geometry_fit_ladder/new4_debug_pairs/
+/artifacts/geometry_fit_worker_test.log
 /artifacts/gui_timing/
 /artifacts/perf/gui_timing/
 /artifacts/q_group_peak_sensitivity/
 /artifacts/q_group_peak_sensitivity.zip
+/temp/
 
 # Accidental root-level probe files with random 8-char names
 /[0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_]

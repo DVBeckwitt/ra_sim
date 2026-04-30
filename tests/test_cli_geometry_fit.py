@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import _SubParsersAction
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -37,6 +38,16 @@ def test_cli_build_parser_includes_fit_geometry_command() -> None:
 
     parser = cli._build_parser()
     assert "fit-geometry" in _get_subparser_choices(parser)
+
+
+def test_shared_headless_geometry_fit_backfills_caked_manual_pairs_before_prepare() -> None:
+    source = inspect.getsource(headless_geometry_fit.run_headless_geometry_fit)
+
+    backfill_index = source.index("_backfill_headless_manual_pair_caked_coordinates()")
+    prepare_index = source.index("prepare_runtime_geometry_fit_run(")
+
+    assert "geometry_manual_backfill_missing_caked_coordinates(" in source
+    assert backfill_index < prepare_index
 
 
 def test_cli_build_parser_accepts_fit_geometry_active_vars_option() -> None:

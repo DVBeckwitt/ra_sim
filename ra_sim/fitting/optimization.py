@@ -190,8 +190,7 @@ def _angular_degree_residual_audit_summary(
     range_expected_count = int(raw_expected_count)
     range_pair_count = min((range_expected_count, *angle_lengths))
     range_length_failure_count = int(
-        max((range_expected_count, *angle_lengths))
-        - min((range_expected_count, *angle_lengths))
+        max((range_expected_count, *angle_lengths)) - min((range_expected_count, *angle_lengths))
     )
     measured_phi_wrapped_full = (measured_phi_arr + 180.0) % 360.0 - 180.0
     projected_phi_wrapped_full = (projected_phi_arr + 180.0) % 360.0 - 180.0
@@ -354,19 +353,11 @@ def _angular_degree_residual_audit_summary(
         "raw_angular_vector_norm_bound_deg": float(RAW_ANGULAR_VECTOR_NORM_BOUND_DEG),
         "raw_angular_range_row_count": int(range_expected_count),
         "raw_angular_range_failure_count": int(range_failure_count),
-        "raw_angular_delta_recompute_failure_count": int(
-            raw_delta_recompute_failure_count
-        ),
-        "weighted_angular_recompute_failure_count": int(
-            weighted_recompute_failure_count
-        ),
+        "raw_angular_delta_recompute_failure_count": int(raw_delta_recompute_failure_count),
+        "weighted_angular_recompute_failure_count": int(weighted_recompute_failure_count),
         "optimizer_point_component_count": int(optimizer_point_component_count),
-        "optimizer_point_component_failure_count": int(
-            optimizer_point_component_failure_count
-        ),
-        "raw_angular_range_sanity_ok": bool(
-            range_expected_count > 0 and range_failure_count == 0
-        ),
+        "optimizer_point_component_failure_count": int(optimizer_point_component_failure_count),
+        "raw_angular_range_sanity_ok": bool(range_expected_count > 0 and range_failure_count == 0),
         "measured_two_theta_min_deg": float(measured_two_theta_min),
         "measured_two_theta_max_deg": float(measured_two_theta_max),
         "projected_two_theta_min_deg": float(projected_two_theta_min),
@@ -433,9 +424,7 @@ def _angular_degree_residual_audit_summary(
         )
     summary["optimizer_component_rms_weighted_deg"] = _component_rms(solver_residual_arr)
     summary["optimizer_component_count"] = int(solver_residual_arr.size)
-    summary["optimizer_component_nonfinite_count"] = _component_nonfinite_count(
-        solver_residual_arr
-    )
+    summary["optimizer_component_nonfinite_count"] = _component_nonfinite_count(solver_residual_arr)
     return summary
 
 
@@ -529,9 +518,7 @@ def _merged_angular_degree_residual_audit_summary(
                         current_failure_count = int(diagnostic_summary.get(key, 0) or 0)
                     except Exception:
                         current_failure_count = 0
-                    diagnostic_summary[key] = int(
-                        max(current_failure_count, dataset_failure_count)
-                    )
+                    diagnostic_summary[key] = int(max(current_failure_count, dataset_failure_count))
             raw_delta_total = max(
                 int(diagnostic_summary.get("raw_angular_delta_failure_count", 0) or 0),
                 int(diagnostic_summary.get("raw_angular_delta_recompute_failure_count", 0) or 0),
@@ -594,9 +581,7 @@ def _merged_angular_degree_residual_audit_summary(
         except Exception:
             dataset_raw_count = 0
         try:
-            raw_delta_failure_count += int(
-                summary.get("raw_angular_delta_failure_count", 0) or 0
-            )
+            raw_delta_failure_count += int(summary.get("raw_angular_delta_failure_count", 0) or 0)
         except Exception:
             raw_delta_failure_count += int(dataset_raw_count)
         try:
@@ -639,9 +624,7 @@ def _merged_angular_degree_residual_audit_summary(
         except Exception:
             dataset_weighted_count = 0
         try:
-            weighted_failure_count += int(
-                summary.get("weighted_angular_failure_count", 0) or 0
-            )
+            weighted_failure_count += int(summary.get("weighted_angular_failure_count", 0) or 0)
         except Exception:
             weighted_failure_count += int(dataset_weighted_count)
         try:
@@ -704,9 +687,7 @@ def _merged_angular_degree_residual_audit_summary(
         if dataset_component_count > 0:
             optimizer_component_count += int(dataset_component_count)
             optimizer_component_nonfinite_count += int(dataset_component_nonfinite_count)
-            if dataset_component_nonfinite_count > 0 or not np.isfinite(
-                dataset_optimizer_rms
-            ):
+            if dataset_component_nonfinite_count > 0 or not np.isfinite(dataset_optimizer_rms):
                 optimizer_component_rms_valid = False
                 continue
             optimizer_component_sq_sum += (
@@ -729,9 +710,7 @@ def _merged_angular_degree_residual_audit_summary(
         "raw_angular_vector_norm_bound_deg": float(RAW_ANGULAR_VECTOR_NORM_BOUND_DEG),
         "raw_angular_row_count": int(raw_count),
         "raw_angular_delta_failure_count": int(raw_delta_failure_count),
-        "raw_angular_delta_recompute_failure_count": int(
-            raw_delta_recompute_failure_count
-        ),
+        "raw_angular_delta_recompute_failure_count": int(raw_delta_recompute_failure_count),
         "raw_angular_rms_deg": (
             float(np.sqrt(raw_sq_sum / float(raw_count)))
             if raw_count > 0 and raw_rms_valid
@@ -741,9 +720,7 @@ def _merged_angular_degree_residual_audit_summary(
         "raw_angular_component_max_abs_deg": float(raw_component_max),
         "weighted_angular_row_count": int(weighted_count),
         "weighted_angular_failure_count": int(weighted_failure_count),
-        "weighted_angular_recompute_failure_count": int(
-            weighted_recompute_failure_count
-        ),
+        "weighted_angular_recompute_failure_count": int(weighted_recompute_failure_count),
         "weighted_angular_rms_weighted_deg": (
             float(np.sqrt(weighted_sq_sum / float(weighted_count)))
             if weighted_count > 0 and weighted_rms_valid and weighted_failure_count == 0
@@ -751,9 +728,7 @@ def _merged_angular_degree_residual_audit_summary(
         ),
         "weighted_angular_max_weighted_deg": float(weighted_max),
         "optimizer_point_component_count": int(optimizer_point_component_count),
-        "optimizer_point_component_failure_count": int(
-            optimizer_point_component_failure_count
-        ),
+        "optimizer_point_component_failure_count": int(optimizer_point_component_failure_count),
         "optimizer_component_rms_weighted_deg": (
             float(np.sqrt(optimizer_component_sq_sum / float(optimizer_component_count)))
             if optimizer_component_count > 0 and optimizer_component_rms_valid
@@ -1882,9 +1857,7 @@ class GeometryFitDatasetContext:
     fit_space_projector_unavailable_reason: str | None = None
     sim_caked_image_builder: Optional[Callable[..., Mapping[str, object] | None]] = None
     sim_caked_image_builder_kind: str | None = None
-    qr_fit_trial_source_rows_builder: Optional[
-        Callable[..., Mapping[str, object] | None]
-    ] = None
+    qr_fit_trial_source_rows_builder: Optional[Callable[..., Mapping[str, object] | None]] = None
     qr_fit_trial_source_rows_builder_kind: str | None = None
     baseline_fit_params: Optional[Dict[str, object]] = None
 
@@ -1927,9 +1900,7 @@ def _copy_geometry_fit_dataset_context(
         sim_caked_image_builder=dataset_ctx.sim_caked_image_builder,
         sim_caked_image_builder_kind=dataset_ctx.sim_caked_image_builder_kind,
         qr_fit_trial_source_rows_builder=dataset_ctx.qr_fit_trial_source_rows_builder,
-        qr_fit_trial_source_rows_builder_kind=(
-            dataset_ctx.qr_fit_trial_source_rows_builder_kind
-        ),
+        qr_fit_trial_source_rows_builder_kind=(dataset_ctx.qr_fit_trial_source_rows_builder_kind),
         baseline_fit_params=(
             dict(dataset_ctx.baseline_fit_params)
             if isinstance(dataset_ctx.baseline_fit_params, Mapping)
@@ -3951,9 +3922,7 @@ def _build_geometry_fit_dataset_contexts(
                 sim_caked_image_builder=sim_caked_image_builder,
                 sim_caked_image_builder_kind=sim_caked_image_builder_kind,
                 qr_fit_trial_source_rows_builder=qr_fit_trial_source_rows_builder,
-                qr_fit_trial_source_rows_builder_kind=(
-                    qr_fit_trial_source_rows_builder_kind
-                ),
+                qr_fit_trial_source_rows_builder_kind=(qr_fit_trial_source_rows_builder_kind),
                 baseline_fit_params=baseline_fit_params,
             )
         )
@@ -5401,11 +5370,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 )
                 dynamic_reanchor_trace.append(event)
 
-        if (
-            dynamic_reanchor_enabled
-            and not fixed_manual_fit_space_anchor
-            and sim_point is not None
-        ):
+        if dynamic_reanchor_enabled and not fixed_manual_fit_space_anchor and sim_point is not None:
             if original_entry is None or event is None:
                 original_entry = dict(measured_entry)
                 _before_resolved, event = _new_dynamic_reanchor_event(
@@ -6090,7 +6055,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                         * float(priority_weight),
                         **priority_fields,
                     }
-            )
+                )
             continue
 
         if pending_reanchor_acceptance and event is not None:
@@ -6335,15 +6300,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "sim_nominal_caked_deg": _dynamic_reanchor_jsonable(nominal_caked),
                 "sim_refined_caked_deg": _dynamic_reanchor_jsonable(refined_caked),
                 "params_signature": fit_prediction.get("params_signature"),
-                "simulation_source_signature": fit_prediction.get(
-                    "simulation_source_signature"
-                ),
-                "caked_projection_signature": fit_prediction.get(
-                    "caked_projection_signature"
-                ),
-                "caked_simulation_signature": fit_prediction.get(
-                    "caked_simulation_signature"
-                ),
+                "simulation_source_signature": fit_prediction.get("simulation_source_signature"),
+                "caked_projection_signature": fit_prediction.get("caked_projection_signature"),
+                "caked_simulation_signature": fit_prediction.get("caked_simulation_signature"),
                 "source_rows_rebuilt_or_reused": fit_prediction.get(
                     "source_rows_rebuilt_or_reused"
                 ),
@@ -6405,12 +6364,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     "measured_phi_deg": float(measured_phi_wrapped),
                     "simulated_two_theta_deg": float(sim_two_theta),
                     "simulated_phi_deg": float(sim_phi),
-                    "predicted_nominal_caked_deg": _dynamic_reanchor_jsonable(
-                        nominal_caked
-                    ),
-                    "predicted_refined_caked_deg": _dynamic_reanchor_jsonable(
-                        refined_caked
-                    ),
+                    "predicted_nominal_caked_deg": _dynamic_reanchor_jsonable(nominal_caked),
+                    "predicted_refined_caked_deg": _dynamic_reanchor_jsonable(refined_caked),
                     "projected_two_theta_deg": float(sim_two_theta),
                     "projected_phi_deg": float(projected_phi_wrapped),
                     "delta_two_theta_deg": float(delta_two_theta),
@@ -12932,12 +12887,9 @@ def _fixed_manual_qr_pair_requires_shared_resolver(entry: Mapping[str, object]) 
     q_group_key = _normalized_q_group_key(entry.get("q_group_key"))
     if q_group_key is not None:
         _, source_missing, source_payload = _fit_qr_branch_key_payload(entry)
-        has_source_identity = (
-            source_payload.get("source_row_index") is not None
-            and (
-                source_payload.get("source_table_index") is not None
-                or source_payload.get("source_reflection_index") is not None
-            )
+        has_source_identity = source_payload.get("source_row_index") is not None and (
+            source_payload.get("source_table_index") is not None
+            or source_payload.get("source_reflection_index") is not None
         )
         has_branch_identity = (
             source_payload.get("source_branch_index") in {0, 1}
@@ -12983,9 +12935,7 @@ def _resolve_exact_fixed_manual_source_row(
     payload: Dict[str, object] = {
         "source_row_resolution_required": True,
         "requested_source_table_index": _nonnegative_index(entry.get("source_table_index")),
-        "requested_resolved_table_index": _nonnegative_index(
-            entry.get("resolved_table_index")
-        ),
+        "requested_resolved_table_index": _nonnegative_index(entry.get("resolved_table_index")),
         "requested_source_row_index": int(row_idx) if row_idx is not None else None,
         "requested_branch_index": int(requested_branch) if requested_branch in {0, 1} else None,
         "source_row_count": int(len(row_records)),
@@ -13034,11 +12984,7 @@ def _resolve_exact_fixed_manual_source_row(
         payload["source_row_rejection_reason"] = "source_row_hkl_mismatch"
         return None, payload, "source_row_hkl_mismatch"
     branch_required = _provider_local_requires_branch_proof(entry)
-    if (
-        branch_required
-        and requested_branch in {0, 1}
-        and source_row_branch not in {0, 1}
-    ):
+    if branch_required and requested_branch in {0, 1} and source_row_branch not in {0, 1}:
         payload["source_row_rejection_reason"] = "source_row_branch_missing"
         return None, payload, "source_row_branch_missing"
     if (
@@ -13051,8 +12997,7 @@ def _resolve_exact_fixed_manual_source_row(
         return None, payload, "source_row_branch_mismatch"
     if (
         not branch_required
-        and
-        requested_branch in {0, 1}
+        and requested_branch in {0, 1}
         and source_row_branch in {0, 1}
         and int(source_row_branch) != int(requested_branch)
     ):
@@ -13207,9 +13152,7 @@ def _provider_local_resolve_stale_fixed_source_row(
     if requested_hkl is None:
         payload["prediction_source_status"] = "unavailable"
         return None, payload, "provider_local_hkl_missing"
-    payload["requested_source_table_index"] = _nonnegative_index(
-        entry.get("source_table_index")
-    )
+    payload["requested_source_table_index"] = _nonnegative_index(entry.get("source_table_index"))
     payload["requested_resolved_table_index"] = _nonnegative_index(
         entry.get("resolved_table_index")
     )
@@ -13223,9 +13166,7 @@ def _provider_local_resolve_stale_fixed_source_row(
         )
         if value in {0, 1}
     ]
-    requested_branch = (
-        int(requested_branch_values[0]) if requested_branch_values else None
-    )
+    requested_branch = int(requested_branch_values[0]) if requested_branch_values else None
 
     valid_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
     hkl_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
@@ -13345,9 +13286,7 @@ def _provider_local_saved_sim_detector_point(
         "optimizer_request_has_fixed_source": bool(
             entry.get("optimizer_request_has_fixed_source", False)
         ),
-        "optimizer_request_fallback_row": bool(
-            entry.get("optimizer_request_fallback_row", False)
-        ),
+        "optimizer_request_fallback_row": bool(entry.get("optimizer_request_fallback_row", False)),
         "fit_source_resolution_kind": entry.get("fit_source_resolution_kind"),
     }
     if not _fixed_manual_pair_requires_exact_source_row(entry):
@@ -13384,9 +13323,7 @@ def _provider_local_saved_sim_detector_point(
     if duplicate_hkl_unproven:
         payload["prediction_source_status"] = "unavailable_ambiguous"
         return None, payload, "provider_local_duplicate_hkl_unproven"
-    stale_row_proof_available = bool(
-        entry.get("provider_local_stale_row_proof_available", False)
-    )
+    stale_row_proof_available = bool(entry.get("provider_local_stale_row_proof_available", False))
     saved_identity_proven = _provider_local_saved_sim_identity_proven(
         entry,
         requested_hkl=requested_hkl,
@@ -13401,9 +13338,7 @@ def _provider_local_saved_sim_detector_point(
         or entry.get("provider_local_stale_row_proof_available", False)
         or entry.get("provider_local_branch_representative_proof_available", False)
     )
-    payload["provider_local_saved_sim_detector_row_proof_available"] = bool(
-        row_proof_available
-    )
+    payload["provider_local_saved_sim_detector_row_proof_available"] = bool(row_proof_available)
     if not row_proof_available:
         payload["prediction_source_status"] = "unavailable"
         return None, payload, "provider_local_saved_sim_detector_row_proof_missing"
@@ -13525,9 +13460,7 @@ def _provider_local_saved_sim_detector_point(
             float(canonical_native[1]),
         ]
         payload["display_to_native_saved_sim_detector_display_px_source"] = canonical_key
-        payload["display_to_native_saved_sim_detector_display_px_proof_source"] = (
-            canonical_source
-        )
+        payload["display_to_native_saved_sim_detector_display_px_proof_source"] = canonical_source
     if raw_native is not None:
         payload["saved_sim_detector_native_px"] = [
             float(raw_native[0]),
@@ -13560,9 +13493,7 @@ def _provider_local_saved_sim_detector_point(
             and abs(float(raw_native[1]) - float(canonical_native[1])) <= 1.0e-6
         )
         if not raw_native_matches_canonical:
-            payload["saved_sim_detector_native_rejected_reason"] = (
-                "display_native_mismatch"
-            )
+            payload["saved_sim_detector_native_rejected_reason"] = "display_native_mismatch"
 
     if canonical_native is not None and display_point is not None:
         payload.update(
@@ -13575,9 +13506,7 @@ def _provider_local_saved_sim_detector_point(
                 "provider_local_saved_sim_detector_input_frame": "native_detector",
                 "provider_local_saved_sim_detector_uses_canonical_projection": True,
                 "provider_local_saved_sim_detector_uses_visual_base_theta": False,
-                "provider_local_stale_row_proof_available": bool(
-                    stale_row_proof_available
-                ),
+                "provider_local_stale_row_proof_available": bool(stale_row_proof_available),
                 "provider_local_saved_sim_detector_raw_native_matches_canonical": bool(
                     raw_native_matches_canonical
                 ),
@@ -13928,9 +13857,7 @@ def _resolve_fixed_source_matches(
                     try:
                         sim_col = float(stale_row[1])
                         sim_row = float(stale_row[2])
-                        sim_hkl = tuple(
-                            int(v) for v in (_hit_row_hkl(stale_row) or (0, 0, 0))
-                        )
+                        sim_hkl = tuple(int(v) for v in (_hit_row_hkl(stale_row) or (0, 0, 0)))
                     except Exception:
                         _store_resolution_diag(
                             entry,
@@ -14042,9 +13969,7 @@ def _resolve_fixed_source_matches(
                     try:
                         sim_col = float(stale_row[1])
                         sim_row = float(stale_row[2])
-                        sim_hkl = tuple(
-                            int(v) for v in (_hit_row_hkl(stale_row) or (0, 0, 0))
-                        )
+                        sim_hkl = tuple(int(v) for v in (_hit_row_hkl(stale_row) or (0, 0, 0)))
                     except Exception:
                         _store_resolution_diag(
                             entry,
@@ -14060,9 +13985,7 @@ def _resolve_fixed_source_matches(
                         )
                         continue
                     resolved_from_peak = True
-                    resolved_diag_reason = str(
-                        stale_payload.get("resolution_reason", stale_reason)
-                    )
+                    resolved_diag_reason = str(stale_payload.get("resolution_reason", stale_reason))
                     resolved_diag_extra = {
                         **dict(exact_payload),
                         **dict(stale_payload),
@@ -14074,8 +13997,7 @@ def _resolve_fixed_source_matches(
                 else:
                     resolution_reason = (
                         str(stale_reason)
-                        if stale_payload.get("prediction_source_status")
-                        == "unavailable_ambiguous"
+                        if stale_payload.get("prediction_source_status") == "unavailable_ambiguous"
                         else "prediction_branch_source_switched"
                     )
                     _store_resolution_diag(
@@ -15030,9 +14952,7 @@ def _resolve_geometry_fit_correspondence(
                         "projection_available": True,
                         "projection_finite": True,
                         "off_detector": False,
-                        "trusted_full_reflection_remapped": bool(
-                            trusted_full_reflection_remapped
-                        ),
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
                         "source_row_preferred_over_branch_representative": True,
                     }
                 )
@@ -15153,9 +15073,7 @@ def _resolve_geometry_fit_correspondence(
                         )
                         if requested_hkl is not None
                         else 0,
-                        "provider_local_locked_branch_match_row_count": int(
-                            len(branch_records)
-                        ),
+                        "provider_local_locked_branch_match_row_count": int(len(branch_records)),
                     }
                 )
                 if len(branch_records) == 1:
@@ -15218,9 +15136,7 @@ def _resolve_geometry_fit_correspondence(
                         "projection_available": True,
                         "projection_finite": True,
                         "off_detector": False,
-                        "trusted_full_reflection_remapped": bool(
-                            trusted_full_reflection_remapped
-                        ),
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
                         "frozen_branch_index_recovered_from_provider_identity": bool(
                             local_branch_frozen_index_recovered
                         ),
@@ -15250,9 +15166,7 @@ def _resolve_geometry_fit_correspondence(
                     "projection_available": False,
                     "projection_finite": False,
                     "off_detector": False,
-                    "trusted_full_reflection_remapped": bool(
-                        trusted_full_reflection_remapped
-                    ),
+                    "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
                     "exact_source_row_was_available": False,
                 }
             )
@@ -15284,9 +15198,7 @@ def _resolve_geometry_fit_correspondence(
                         "projection_available": True,
                         "projection_finite": True,
                         "off_detector": False,
-                        "trusted_full_reflection_remapped": bool(
-                            trusted_full_reflection_remapped
-                        ),
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
                         "frozen_branch_index_recovered_from_provider_identity": bool(
                             local_branch_frozen_index_recovered
                         ),
@@ -15309,8 +15221,7 @@ def _resolve_geometry_fit_correspondence(
             rejected_reason = str(saved_detector_reason)
             resolution_reason = (
                 rejected_reason
-                if saved_detector_payload.get("prediction_source_status")
-                == "unavailable_ambiguous"
+                if saved_detector_payload.get("prediction_source_status") == "unavailable_ambiguous"
                 else "prediction_branch_source_switched"
             )
             switched_extra = dict(branch_trace)
@@ -15329,9 +15240,7 @@ def _resolve_geometry_fit_correspondence(
                     "projection_available": False,
                     "projection_finite": False,
                     "off_detector": False,
-                    "trusted_full_reflection_remapped": bool(
-                        trusted_full_reflection_remapped
-                    ),
+                    "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
                     "frozen_branch_index_recovered_from_provider_identity": bool(
                         local_branch_frozen_index_recovered
                     ),
@@ -15618,11 +15527,7 @@ def _resolve_geometry_fit_correspondence(
         sim_hkl=_branch_sim_hkl(row, fallback=correspondence.get("hkl")),
         extra={
             "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
-            **(
-                _shared_qr_row_extra("resolved_source_row")
-                if shared_qr_required
-                else {}
-            ),
+            **(_shared_qr_row_extra("resolved_source_row") if shared_qr_required else {}),
             **(
                 {
                     "resolution_subreason": "provider_local_source_row_proof",
@@ -15978,11 +15883,7 @@ def _geometry_objective_signature_for_dataset(
     fit_context: Mapping[str, object],
 ) -> GeometryObjectiveSignature:
     active_names = tuple(
-        sorted(
-            str(name)
-            for name in trial_params.get("_active_fit_param_names", ())
-            if str(name)
-        )
+        sorted(str(name) for name in trial_params.get("_active_fit_param_names", ()) if str(name))
     )
     physics_names = (
         "a",
@@ -16005,9 +15906,7 @@ def _geometry_objective_signature_for_dataset(
         "optics_mode",
     )
     physics_payload = {
-        name: trial_params.get(name)
-        for name in physics_names
-        if name in trial_params
+        name: trial_params.get(name) for name in physics_names if name in trial_params
     }
     if isinstance(trial_params.get("mosaic_params"), Mapping):
         physics_payload["mosaic_params"] = trial_params.get("mosaic_params")
@@ -16020,9 +15919,7 @@ def _geometry_objective_signature_for_dataset(
 
     subset = dataset_ctx.subset
     measured_entries = [
-        dict(entry)
-        for entry in (subset.measured_entries or [])
-        if isinstance(entry, Mapping)
+        dict(entry) for entry in (subset.measured_entries or []) if isinstance(entry, Mapping)
     ]
 
     def _entry_signature(fields: Sequence[str]) -> str:
@@ -16130,7 +16027,9 @@ def _geometry_objective_signature_for_dataset(
     )
 
 
-def _nearest_caked_axis_index(axis: np.ndarray, value: float, *, angular: bool = False) -> int | None:
+def _nearest_caked_axis_index(
+    axis: np.ndarray, value: float, *, angular: bool = False
+) -> int | None:
     if axis.size <= 0 or not np.isfinite(float(value)):
         return None
     if angular:
@@ -16264,9 +16163,7 @@ def _refine_sim_caked_peak_from_image(
     positive_patch = np.where(np.isfinite(patch) & (patch > 0.0), patch, 0.0)
     finite_values = patch[np.isfinite(patch)]
     local_sum = float(np.sum(positive_patch, dtype=np.float64))
-    local_max_value = (
-        float(np.max(positive_patch)) if positive_patch.size else 0.0
-    )
+    local_max_value = float(np.max(positive_patch)) if positive_patch.size else 0.0
     nonzero_count = int(np.count_nonzero(positive_patch > 0.0))
     common_unavailable = {
         "image_shape": [int(img.shape[0]), int(img.shape[1])],
@@ -16342,6 +16239,7 @@ def _build_trial_sim_caked_image_payload(
     *,
     sim_buffer: object,
     trial_params: Mapping[str, object],
+    axes_only: bool = False,
 ) -> Dict[str, object]:
     if not isinstance(dataset_ctx, GeometryFitDatasetContext) or not callable(
         dataset_ctx.sim_caked_image_builder
@@ -16352,10 +16250,29 @@ def _build_trial_sim_caked_image_payload(
             "detector_simulation_signature": _fit_prediction_array_signature(sim_buffer),
         }
     try:
-        payload = dataset_ctx.sim_caked_image_builder(
-            sim_buffer,
-            local_params=dict(trial_params),
-        )
+        if bool(axes_only):
+            payload = dataset_ctx.sim_caked_image_builder(
+                sim_buffer,
+                local_params=dict(trial_params),
+                axes_only=True,
+            )
+        else:
+            payload = dataset_ctx.sim_caked_image_builder(
+                sim_buffer,
+                local_params=dict(trial_params),
+            )
+    except TypeError:
+        try:
+            payload = dataset_ctx.sim_caked_image_builder(
+                sim_buffer,
+                local_params=dict(trial_params),
+            )
+        except Exception as exc:
+            return {
+                "available": False,
+                "unavailable_reason": f"sim_caked_image_builder_exception:{type(exc).__name__}",
+                "detector_simulation_signature": _fit_prediction_array_signature(sim_buffer),
+            }
     except Exception as exc:
         return {
             "available": False,
@@ -16373,14 +16290,18 @@ def _build_trial_sim_caked_image_payload(
     radial_axis = result.get("radial_axis")
     azimuth_axis = result.get("azimuth_axis")
     try:
-        img = np.asarray(image, dtype=np.float64)
+        img = (
+            np.asarray([], dtype=np.float64)
+            if image is None
+            else np.asarray(image, dtype=np.float64)
+        )
         radial = np.asarray(radial_axis, dtype=np.float64).reshape(-1)
         azimuth = np.asarray(azimuth_axis, dtype=np.float64).reshape(-1)
     except Exception:
         img = np.asarray([], dtype=np.float64)
         radial = np.asarray([], dtype=np.float64)
         azimuth = np.asarray([], dtype=np.float64)
-    available = bool(
+    image_available = bool(
         img.ndim == 2
         and img.size > 0
         and radial.size > 0
@@ -16388,12 +16309,17 @@ def _build_trial_sim_caked_image_payload(
         and img.shape[1] == radial.size
         and img.shape[0] == azimuth.size
     )
+    axes_only_available = bool(
+        axes_only and bool(result.get("axes_only", False)) and radial.size > 0 and azimuth.size > 0
+    )
+    available = bool(image_available or axes_only_available)
     result.update(
         {
             "available": bool(available),
             "image": img,
             "radial_axis": radial,
             "azimuth_axis": azimuth,
+            "axes_only": bool(result.get("axes_only", False)),
             "detector_simulation_signature": result.get(
                 "detector_simulation_signature",
                 _fit_prediction_array_signature(sim_buffer),
@@ -16738,15 +16664,9 @@ def _fit_qr_branch_key_payload(
     entry: Mapping[str, object],
 ) -> Tuple[Tuple[object, ...], List[str], Dict[str, object]]:
     identity = _fit_qr_identity_source(entry)
-    source_label = str(
-        _fit_qr_first_value(entry, identity, ("source_label",)) or "primary"
-    )
-    q_group_key = _normalized_q_group_key(
-        _fit_qr_first_value(entry, identity, ("q_group_key",))
-    )
-    hkl = _normalized_hkl_key(
-        _fit_qr_first_value(entry, identity, ("hkl", "normalized_hkl"))
-    )
+    source_label = str(_fit_qr_first_value(entry, identity, ("source_label",)) or "primary")
+    q_group_key = _normalized_q_group_key(_fit_qr_first_value(entry, identity, ("q_group_key",)))
+    hkl = _normalized_hkl_key(_fit_qr_first_value(entry, identity, ("hkl", "normalized_hkl")))
     branch_index = _fit_qr_branch_index(entry)
     peak_index = _nonnegative_index(
         _fit_qr_first_value(entry, identity, ("source_peak_index", "resolved_peak_index"))
@@ -16783,9 +16703,7 @@ def _fit_qr_branch_key_payload(
     branch_id = str(_fit_qr_first_value(entry, identity, ("branch_id",)) or "").strip()
     if branch_id.startswith("unknown:"):
         branch_id = ""
-    branch_source = str(
-        _fit_qr_first_value(entry, identity, ("branch_source",)) or ""
-    ).strip()
+    branch_source = str(_fit_qr_first_value(entry, identity, ("branch_source",)) or "").strip()
     best_sample_index = _nonnegative_index(
         _fit_qr_first_value(entry, identity, ("best_sample_index", "frozen_best_sample_index"))
     )
@@ -17061,11 +16979,7 @@ def _build_trial_qr_source_rows_payload(
             "unavailable_reason": "qr_fit_trial_source_rows_builder_invalid_payload",
         }
     result = dict(payload)
-    rows = [
-        dict(entry)
-        for entry in (result.get("rows", ()) or ())
-        if isinstance(entry, Mapping)
-    ]
+    rows = [dict(entry) for entry in (result.get("rows", ()) or ()) if isinstance(entry, Mapping)]
     result["rows"] = rows
     result["available"] = bool(rows)
     result["row_count"] = int(len(rows))
@@ -17090,9 +17004,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
     *,
     source_rows_payload: Mapping[str, object],
 ) -> Tuple[Optional[Tuple[float, float]], Dict[str, object]]:
-    locked_key, missing_fields, locked_payload = _fit_qr_branch_key_payload(
-        locked_correspondence
-    )
+    locked_key, missing_fields, locked_payload = _fit_qr_branch_key_payload(locked_correspondence)
     locked_fit_key, locked_fit_missing, locked_fit_payload = _fit_qr_locked_fit_key_payload(
         locked_correspondence
     )
@@ -17160,9 +17072,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
                             candidate_key=candidate_key,
                             candidate_missing=candidate_missing,
                             candidate_payload=candidate_payload,
-                            resolution_reason=(
-                                "locked_fit_qr_q_group_hkl_00l_collapsed_resolved"
-                            ),
+                            resolution_reason=("locked_fit_qr_q_group_hkl_00l_collapsed_resolved"),
                         )
                     )
                 elif not locked_branch_slot_valid or row_branch not in {0, 1}:
@@ -17175,9 +17085,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
                             candidate_key=candidate_key,
                             candidate_missing=candidate_missing,
                             candidate_payload=candidate_payload,
-                            resolution_reason=(
-                                "locked_fit_qr_q_group_hkl_branch_slot_resolved"
-                            ),
+                            resolution_reason=("locked_fit_qr_q_group_hkl_branch_slot_resolved"),
                         )
                     )
             continue
@@ -17214,9 +17122,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         "trial_source_rows_same_q_group_hkl_count": int(len(same_hkl_qgroup)),
         "trial_source_rows_same_hkl_branch_count": int(len(same_hkl_branch)),
         "trial_source_rows_fit_qr_branch_key_candidate_count": int(len(candidates)),
-        "trial_source_rows_q_group_hkl_slot_candidate_count": int(
-            len(q_group_hkl_slot_candidates)
-        ),
+        "trial_source_rows_q_group_hkl_slot_candidate_count": int(len(q_group_hkl_slot_candidates)),
         "trial_source_rows_q_group_hkl_slot_proven_candidate_count": int(
             len(
                 [
@@ -17238,9 +17144,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         ),
         "objective_cache_mode": source_rows_payload.get("objective_cache_mode"),
         "objective_cache_hit": bool(source_rows_payload.get("objective_cache_hit", False)),
-        "objective_cache_reject_reason": source_rows_payload.get(
-            "objective_cache_reject_reason"
-        ),
+        "objective_cache_reject_reason": source_rows_payload.get("objective_cache_reject_reason"),
         "objective_process_peaks_called": bool(
             source_rows_payload.get("objective_process_peaks_called", False)
         ),
@@ -17249,8 +17153,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
         payload["identity_missing_fields"] = list(missing_fields)
     if not bool(source_rows_payload.get("available", False)):
         payload["resolution_reason"] = str(
-            source_rows_payload.get("unavailable_reason")
-            or "qr_fit_trial_source_rows_unavailable"
+            source_rows_payload.get("unavailable_reason") or "qr_fit_trial_source_rows_unavailable"
         )
         return None, payload
     if len(candidates) != 1:
@@ -17293,10 +17196,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
     point_payload = dict(candidate.get("point_payload") or {})
     candidate_identity = dict(candidate.get("candidate_identity") or {})
     resolved_native_px = point_payload.get("native_px")
-    if (
-        isinstance(resolved_native_px, (list, tuple, np.ndarray))
-        and len(resolved_native_px) >= 2
-    ):
+    if isinstance(resolved_native_px, (list, tuple, np.ndarray)) and len(resolved_native_px) >= 2:
         native_col = _safe_float(resolved_native_px[0], float("nan"))
         native_row = _safe_float(resolved_native_px[1], float("nan"))
     else:
@@ -17361,9 +17261,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
                 "physical_branch_slot",
                 candidate_identity.get("source_branch_index"),
             ),
-            "resolved_fit_qr_branch_key": _dynamic_reanchor_jsonable(
-                row.get("fit_qr_branch_key")
-            ),
+            "resolved_fit_qr_branch_key": _dynamic_reanchor_jsonable(row.get("fit_qr_branch_key")),
             "resolved_actual_source": row.get("actual_source", row.get("source_kind")),
             "resolved_source_kind": row.get("source_kind", row.get("actual_source")),
             "resolved_projection_frame": row.get("projection_frame"),
@@ -17371,9 +17269,7 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
             "resolved_row_origin": row.get("row_origin"),
             "resolved_is_dynamic_trial_row": row.get("is_dynamic_trial_row"),
             "locked_representative_intensity": float(representative_intensity),
-            "locked_representative_intensity_defaulted": bool(
-                representative_intensity_defaulted
-            ),
+            "locked_representative_intensity_defaulted": bool(representative_intensity_defaulted),
             "sim_nominal_detector_native_px_from_source_row": [
                 float(native_col),
                 float(native_row),
@@ -17402,12 +17298,8 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
                 row.get("actual_source"),
             ),
             "dynamic_baseline_anchor_projection_frame": row.get("projection_frame"),
-            "dynamic_baseline_anchor_coordinate_provenance": row.get(
-                "coordinate_provenance"
-            ),
-            "dynamic_baseline_anchor_is_dynamic_trial_row": row.get(
-                "is_dynamic_trial_row"
-            ),
+            "dynamic_baseline_anchor_coordinate_provenance": row.get("coordinate_provenance"),
+            "dynamic_baseline_anchor_is_dynamic_trial_row": row.get("is_dynamic_trial_row"),
             "dynamic_baseline_anchor_row_origin": row.get("row_origin"),
             "dynamic_baseline_anchor_q_group_key": _dynamic_reanchor_jsonable(
                 candidate_identity.get("q_group_key", row.get("q_group_key"))
@@ -17465,6 +17357,85 @@ def _fit_qr_caked_pair_from_fields(
     if not (np.isfinite(point[0]) and np.isfinite(point[1])):
         return None
     return point
+
+
+def _wrap_delta_phi_deg(delta: float) -> float:
+    return ((float(delta) + 180.0) % 360.0) - 180.0
+
+
+def _fit_qr_first_caked_pair_payload(
+    entry: Mapping[str, object],
+    *,
+    tuple_keys: Sequence[str] = (),
+    field_pairs: Sequence[Tuple[str, str, str]] = (),
+) -> Dict[str, object]:
+    for key in tuple_keys:
+        point = _fit_qr_caked_pair_from_entry(entry, key)
+        if point is not None:
+            return {"point": point, "source": str(key)}
+    for x_key, y_key, source in field_pairs:
+        point = _fit_qr_caked_pair_from_fields(entry, x_key, y_key)
+        if point is not None:
+            return {"point": point, "source": str(source)}
+    return {"point": None, "source": None}
+
+
+def _fit_qr_visual_caked_anchor_payload(
+    entry: Mapping[str, object],
+) -> Dict[str, object]:
+    return _fit_qr_first_caked_pair_payload(
+        entry,
+        tuple_keys=(
+            "sim_visual_caked_deg",
+            "sim_visual_deg",
+            "sim_caked",
+            "saved_refined_sim_caked_anchor_deg",
+        ),
+        field_pairs=(
+            ("refined_sim_caked_x", "refined_sim_caked_y", "refined_sim_caked_x/y"),
+            ("sim_refined_caked_x", "sim_refined_caked_y", "sim_refined_caked_x/y"),
+        ),
+    )
+
+
+def _fit_qr_cached_caked_anchor_payload(
+    entry: Mapping[str, object],
+) -> Dict[str, object]:
+    return _fit_qr_first_caked_pair_payload(
+        entry,
+        tuple_keys=(
+            "sim_nominal_caked_deg_from_source_row_diagnostic",
+            "dynamic_baseline_anchor_caked_deg",
+            "sim_visual_caked_deg",
+            "sim_caked_display",
+        ),
+        field_pairs=(
+            ("caked_x", "caked_y", "caked_x/y"),
+            ("raw_caked_x", "raw_caked_y", "raw_caked_x/y"),
+            ("two_theta_deg", "phi_deg", "two_theta_deg/phi_deg"),
+        ),
+    )
+
+
+def _fit_qr_axis_order_match(
+    visual_point: Tuple[float, float] | None,
+    cached_point: Tuple[float, float] | None,
+    *,
+    tol: float = 1.0e-6,
+) -> bool | None:
+    if visual_point is None or cached_point is None:
+        return None
+    direct = abs(float(visual_point[0]) - float(cached_point[0])) <= float(tol) and abs(
+        _wrap_delta_phi_deg(float(visual_point[1]) - float(cached_point[1]))
+    ) <= float(tol)
+    swapped = abs(float(visual_point[0]) - float(cached_point[1])) <= float(tol) and abs(
+        _wrap_delta_phi_deg(float(visual_point[1]) - float(cached_point[0]))
+    ) <= float(tol)
+    if direct:
+        return True
+    if swapped:
+        return False
+    return None
 
 
 def _fit_qr_current_dynamic_caked_anchor(
@@ -17630,9 +17601,7 @@ def _qr_dynamic_baseline_anchor_diagnostics(
             continue
         if not _fixed_manual_pair_requires_exact_source_row(raw_entry):
             continue
-        resolver_function = str(
-            raw_entry.get("fit_prediction_resolver_function", "") or ""
-        )
+        resolver_function = str(raw_entry.get("fit_prediction_resolver_function", "") or "")
         if resolver_function != "_resolve_qr_fit_prediction_from_trial_params":
             continue
 
@@ -17640,11 +17609,23 @@ def _qr_dynamic_baseline_anchor_diagnostics(
             raw_entry,
             "saved_refined_sim_caked_anchor_deg",
         )
+        visual_payload = _fit_qr_visual_caked_anchor_payload(raw_entry)
+        cached_payload = _fit_qr_cached_caked_anchor_payload(raw_entry)
+        visual_anchor = visual_payload.get("point")
+        cached_anchor = cached_payload.get("point")
+        if not isinstance(visual_anchor, tuple):
+            visual_anchor = None
+        if not isinstance(cached_anchor, tuple):
+            cached_anchor = None
         dynamic_anchor = _fit_qr_current_dynamic_caked_anchor(raw_entry)
         nominal_anchor = _fit_qr_caked_pair_from_entry(raw_entry, "sim_nominal_caked_deg")
         identity = _fit_qr_dynamic_anchor_identity_payload(raw_entry)
         source_fields = _fit_qr_dynamic_anchor_source_fields(raw_entry)
 
+        visual_x = visual_anchor[0] if visual_anchor is not None else None
+        visual_y = visual_anchor[1] if visual_anchor is not None else None
+        cached_theta = cached_anchor[0] if cached_anchor is not None else None
+        cached_phi = cached_anchor[1] if cached_anchor is not None else None
         saved_theta = saved_anchor[0] if saved_anchor is not None else None
         saved_phi = saved_anchor[1] if saved_anchor is not None else None
         dynamic_theta = dynamic_anchor[0] if dynamic_anchor is not None else None
@@ -17661,31 +17642,43 @@ def _qr_dynamic_baseline_anchor_diagnostics(
             )
             delta_r = float(math.hypot(float(delta_theta), float(wrapped_delta_phi)))
 
-        q_group_match = bool(
-            identity.get("q_group_key") == identity.get("dynamic_q_group_key")
-        )
+        compare_anchor = cached_anchor if cached_anchor is not None else visual_anchor
+        delta_two_theta_deg: float | None = None
+        delta_phi_deg_raw: float | None = None
+        delta_phi_deg_wrapped: float | None = None
+        delta_r_deg: float | None = None
+        if compare_anchor is not None and dynamic_anchor is not None:
+            delta_two_theta_deg = float(dynamic_anchor[0] - compare_anchor[0])
+            delta_phi_deg_raw = float(dynamic_anchor[1] - compare_anchor[1])
+            delta_phi_deg_wrapped = float(_wrap_delta_phi_deg(delta_phi_deg_raw))
+            delta_r_deg = float(
+                math.hypot(float(delta_two_theta_deg), float(delta_phi_deg_wrapped))
+            )
+
+        q_group_match = bool(identity.get("q_group_key") == identity.get("dynamic_q_group_key"))
         hkl_match = bool(identity.get("normalized_hkl") == identity.get("dynamic_hkl"))
         branch_slot_match = bool(
-            identity.get("physical_branch_slot")
-            == identity.get("dynamic_physical_branch_slot")
+            identity.get("physical_branch_slot") == identity.get("dynamic_physical_branch_slot")
         )
         projection_frame_match = bool(
             str(source_fields.get("projection_frame") or source_fields.get("frame") or "")
             == "caked_display"
         )
+        frame_match = bool(projection_frame_match)
         failure_reason: str | None = None
         dynamic_units = str(source_fields.get("units") or "deg")
+        units_match = bool(dynamic_units == "deg")
+        axis_order_match = _fit_qr_axis_order_match(visual_anchor, cached_anchor)
         if dynamic_anchor is None:
             failure_reason = "missing_current_dynamic_caked_row_anchor"
-        elif dynamic_units != "deg":
+        elif not units_match:
             failure_reason = "dynamic_anchor_units_not_degrees"
         elif (
             str(source_fields.get("actual_source") or "") == "clicked_visual_candidate"
             or str(source_fields.get("source_kind") or "") == "clicked_visual_candidate"
             or str(source_fields.get("coordinate_provenance") or "")
             == "saved_manual_coordinate_materialization"
-            or str(source_fields.get("row_origin") or "")
-            == "manual_picker_saved_source_coverage"
+            or str(source_fields.get("row_origin") or "") == "manual_picker_saved_source_coverage"
             or source_fields.get("is_dynamic_trial_row") is False
         ):
             failure_reason = "stale_clicked_visual_candidate_anchor"
@@ -17739,19 +17732,39 @@ def _qr_dynamic_baseline_anchor_diagnostics(
                 "saved_anchor_theta": saved_theta,
                 "saved_anchor_phi": saved_phi,
                 "saved_anchor_units": "deg" if saved_anchor is not None else None,
+                "visual_point_x": visual_x,
+                "visual_point_y": visual_y,
+                "visual_point_frame": "caked_display" if visual_anchor is not None else None,
+                "visual_point_source": visual_payload.get("source"),
+                "cached_two_theta_deg": cached_theta,
+                "cached_phi_deg": cached_phi,
+                "cached_point_source": cached_payload.get("source"),
+                "cached_projection_frame": "caked_display" if cached_anchor is not None else None,
+                "cached_units": "deg" if cached_anchor is not None else None,
                 "dynamic_row_source": source_fields.get("source"),
                 "dynamic_row_frame": source_fields.get("frame"),
+                "dynamic_two_theta_deg": dynamic_theta,
+                "dynamic_phi_deg": dynamic_phi,
+                "dynamic_row_source_kind": source_fields.get("source_kind"),
+                "dynamic_projection_frame": source_fields.get("frame"),
+                "dynamic_units": dynamic_units,
                 "dynamic_theta": dynamic_theta,
                 "dynamic_phi": dynamic_phi,
-                "dynamic_units": dynamic_units,
                 "delta_theta": delta_theta,
                 "delta_phi": delta_phi,
                 "delta_r": delta_r,
                 "wrapped_delta_phi": wrapped_delta_phi,
+                "delta_two_theta_deg": delta_two_theta_deg,
+                "delta_phi_deg_raw": delta_phi_deg_raw,
+                "delta_phi_deg_wrapped": delta_phi_deg_wrapped,
+                "delta_r_deg": delta_r_deg,
                 "branch_slot_match": bool(branch_slot_match),
                 "q_group_match": bool(q_group_match),
                 "hkl_match": bool(hkl_match),
                 "projection_frame_match": bool(projection_frame_match),
+                "frame_match": bool(frame_match),
+                "units_match": bool(units_match),
+                "axis_order_match": axis_order_match,
                 "failure_reason": failure_reason,
                 "mismatch_type": mismatch_type,
                 "actual_source": source_fields.get("actual_source"),
@@ -17835,16 +17848,13 @@ def _fit_qr_saved_sim_caked_alignment_payload(
         "dynamic_baseline_anchor_source_rows_signature": source_rows_payload.get(
             "source_rows_signature"
         ),
-        "dynamic_baseline_anchor_resolution_reason": resolution_payload.get(
-            "resolution_reason"
-        ),
+        "dynamic_baseline_anchor_resolution_reason": resolution_payload.get("resolution_reason"),
     }
     if saved_anchor_payload is not None:
         payload["saved_refined_sim_caked_anchor_deg"] = list(saved_anchor_payload)
     if baseline_point is None:
         payload["status"] = str(
-            resolution_payload.get("resolution_reason")
-            or "baseline_locked_branch_unavailable"
+            resolution_payload.get("resolution_reason") or "baseline_locked_branch_unavailable"
         )
         cache[cache_key] = dict(payload)
         return dict(payload)
@@ -17963,9 +17973,7 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
         if 0 <= int(idx) < len(hit_tables) and int(idx) not in table_candidates:
             table_candidates.append(int(idx))
         if trusted_full_reflection_local_index_map is not None:
-            mapped = _nonnegative_index(
-                trusted_full_reflection_local_index_map.get(int(idx))
-            )
+            mapped = _nonnegative_index(trusted_full_reflection_local_index_map.get(int(idx)))
             if (
                 mapped is not None
                 and 0 <= int(mapped) < len(hit_tables)
@@ -18186,8 +18194,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "exact_center_remap_cache_available",
                 bool(
                     callable(dataset_ctx.fit_space_projector)
-                    and str(dataset_ctx.fit_space_projector_kind or "")
-                    == "exact_caked_bundle"
+                    and str(dataset_ctx.fit_space_projector_kind or "") == "exact_caked_bundle"
                 ),
             )
         source_rows_payload = _build_trial_qr_source_rows_payload(
@@ -18231,9 +18238,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         resolution_payload = dict(hit_table_payload)
         resolution_payload.update(
             {
-                "trial_source_rows_available": bool(
-                    source_rows_diag.get("available", False)
-                ),
+                "trial_source_rows_available": bool(source_rows_diag.get("available", False)),
                 "trial_source_rows_count": int(
                     source_rows_diag.get(
                         "row_count",
@@ -18241,9 +18246,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     )
                     or 0
                 ),
-                "trial_source_rows_signature": source_rows_diag.get(
-                    "source_rows_signature"
-                ),
+                "trial_source_rows_signature": source_rows_diag.get("source_rows_signature"),
                 "trial_source_rows_source": source_rows_diag.get("source"),
                 "source_rows_rebuilt_or_reused": source_rows_diag.get(
                     "source_rows_rebuilt_or_reused"
@@ -18252,9 +18255,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     "reuse_valid_for_same_params_signature"
                 ),
                 "objective_cache_mode": source_rows_diag.get("objective_cache_mode"),
-                "objective_cache_hit": bool(
-                    source_rows_diag.get("objective_cache_hit", False)
-                ),
+                "objective_cache_hit": bool(source_rows_diag.get("objective_cache_hit", False)),
                 "objective_cache_reject_reason": source_rows_diag.get(
                     "objective_cache_reject_reason"
                 ),
@@ -18318,10 +18319,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         Gamma_deg=float(fit_context.get("Gamma_deg", 0.0)),
     )
     resolved_display = resolution_payload.get("resolved_detector_display_px")
-    if (
-        isinstance(resolved_display, (list, tuple, np.ndarray))
-        and len(resolved_display) >= 2
-    ):
+    if isinstance(resolved_display, (list, tuple, np.ndarray)) and len(resolved_display) >= 2:
         try:
             display_px = [float(resolved_display[0]), float(resolved_display[1])]
         except Exception:
@@ -18338,9 +18336,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 float(np.asarray(projection_meta.get("native_cols", [np.nan]))[0]),
                 float(np.asarray(projection_meta.get("native_rows", [np.nan]))[0]),
             ],
-            "caked_projection_signature": projection_meta.get(
-                "fit_space_local_params_signature"
-            ),
+            "caked_projection_signature": projection_meta.get("fit_space_local_params_signature"),
             "cake_bundle_signature": projection_meta.get("cake_bundle_signature"),
             "fit_space_projector_kind": projection_meta.get("fit_space_projector_kind"),
             "projection_meta": dict(projection_meta),
@@ -18403,9 +18399,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 float(projected_nominal_caked[0]),
                 float(projected_nominal_caked[1]),
             ],
-            "dynamic_baseline_anchor_coordinate_baseline_used": bool(
-                dynamic_source_anchor_used
-            ),
+            "dynamic_baseline_anchor_coordinate_baseline_used": bool(dynamic_source_anchor_used),
             "sim_nominal_caked_deg": [
                 float(nominal_caked[0]),
                 float(nominal_caked[1]),
@@ -18425,12 +18419,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "dynamic_baseline_anchor_source": alignment_payload.get(
                 "dynamic_baseline_anchor_source"
             ),
-            "dynamic_baseline_anchor_frame": alignment_payload.get(
-                "dynamic_baseline_anchor_frame"
-            ),
-            "dynamic_baseline_anchor_units": alignment_payload.get(
-                "dynamic_baseline_anchor_units"
-            ),
+            "dynamic_baseline_anchor_frame": alignment_payload.get("dynamic_baseline_anchor_frame"),
+            "dynamic_baseline_anchor_units": alignment_payload.get("dynamic_baseline_anchor_units"),
             "dynamic_baseline_anchor_actual_source": alignment_payload.get(
                 "dynamic_baseline_anchor_actual_source"
             ),
@@ -18452,9 +18442,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "dynamic_baseline_anchor_q_group_key": alignment_payload.get(
                 "dynamic_baseline_anchor_q_group_key"
             ),
-            "dynamic_baseline_anchor_hkl": alignment_payload.get(
-                "dynamic_baseline_anchor_hkl"
-            ),
+            "dynamic_baseline_anchor_hkl": alignment_payload.get("dynamic_baseline_anchor_hkl"),
             "dynamic_baseline_anchor_physical_branch_slot": alignment_payload.get(
                 "dynamic_baseline_anchor_physical_branch_slot"
             ),
@@ -18500,9 +18488,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "locked_representative_detector_deposit_sum_intensity": locked_detector_payload.get(
                 "deposit_sum_intensity"
             ),
-            "sim_refinement_caked_image_source": (
-                "locked_mosaic_representative_detector_image"
-            ),
+            "sim_refinement_caked_image_source": ("locked_mosaic_representative_detector_image"),
             "sim_refinement_policy": "refined_only_fail_closed",
             "sim_refinement_fallback_used": False,
         }
@@ -18533,6 +18519,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
         sim_buffer=selected_sim_buffer,
         trial_params=trial_params,
+        axes_only=True,
     )
     out.update(
         {
@@ -18618,16 +18605,12 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "image": projected_caked_payload.get("image"),
             "radial_axis": projected_caked_payload.get("radial_axis"),
             "azimuth_axis": projected_caked_payload.get("azimuth_axis"),
-            "caked_simulation_signature": projected_caked_payload.get(
-                "caked_simulation_signature"
-            ),
+            "caked_simulation_signature": projected_caked_payload.get("caked_simulation_signature"),
         }
     )
     out.update(
         {
-            "caked_simulation_signature": projected_caked_payload.get(
-                "caked_simulation_signature"
-            ),
+            "caked_simulation_signature": projected_caked_payload.get("caked_simulation_signature"),
             "sim_refinement_caked_image_source": (
                 "locked_mosaic_representative_projected_caked_image:"
                 f"{dataset_ctx.sim_caked_image_builder_kind}"
@@ -18652,9 +18635,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         }
     )
     try:
-        caked_img_for_stats = np.asarray(
-            refinement_caked_payload.get("image"), dtype=np.float64
-        )
+        caked_img_for_stats = np.asarray(refinement_caked_payload.get("image"), dtype=np.float64)
         caked_radial_for_stats = np.asarray(
             refinement_caked_payload.get("radial_axis"), dtype=np.float64
         ).reshape(-1)
@@ -18720,12 +18701,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "sim_refinement_local_max_intensity": refinement.get("local_max_intensity"),
             "sim_refinement_local_sum_intensity": refinement.get("local_sum_intensity"),
             "sim_refinement_local_nonzero_count": refinement.get("local_nonzero_count"),
-            "sim_refinement_subpixel_method": refinement.get(
-                "subpixel_refinement_method"
-            ),
-            "sim_refinement_subpixel_status": refinement.get(
-                "subpixel_refinement_status"
-            ),
+            "sim_refinement_subpixel_method": refinement.get("subpixel_refinement_method"),
+            "sim_refinement_subpixel_status": refinement.get("subpixel_refinement_status"),
             "sim_refinement_subpixel": "yes"
             if str(refinement.get("subpixel_refinement_status", "")).lower()
             not in {"", "none", "integer_bin_argmax"}
@@ -18773,12 +18750,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
             )
         except Exception:
             saved_anchor_delta = None
-        if (
-            saved_anchor_delta is not None
-            and (
-                abs(float(saved_anchor_delta[0])) > 0.5
-                or abs(float(saved_anchor_delta[1])) > 1.0
-            )
+        if saved_anchor_delta is not None and (
+            abs(float(saved_anchor_delta[0])) > 0.5 or abs(float(saved_anchor_delta[1])) > 1.0
         ):
             out["sim_refinement_rejected_anchor_mismatch"] = True
             out["sim_refinement_anchor_guard_status"] = "rejected_anchor_mismatch"
@@ -18826,9 +18799,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "sim_refinement_caked_bin_size_two_theta_deg": refinement.get(
                 "caked_bin_size_two_theta_deg"
             ),
-            "sim_refinement_caked_bin_size_phi_deg": refinement.get(
-                "caked_bin_size_phi_deg"
-            ),
+            "sim_refinement_caked_bin_size_phi_deg": refinement.get("caked_bin_size_phi_deg"),
             "sim_refinement_nominal_pixel_index": refinement.get("nominal_pixel_index"),
             "sim_refinement_local_max_pixel_index": refinement.get("local_max_pixel_index"),
             "sim_refinement_local_max_patch_index": refinement.get("local_max_patch_index"),
@@ -18956,9 +18927,7 @@ def _measured_fit_space_diag_fields(
         "measured_cached_two_theta_deg": meta.get("cached_two_theta_deg"),
         "measured_cached_phi_deg": meta.get("cached_phi_deg"),
         "fit_space_projector_kind": meta.get("fit_space_projector_kind"),
-        "measured_fit_space_local_params_signature": meta.get(
-            "fit_space_local_params_signature"
-        ),
+        "measured_fit_space_local_params_signature": meta.get("fit_space_local_params_signature"),
         "measured_cake_bundle_signature": meta.get("cake_bundle_signature"),
         "cake_bundle_signature": meta.get("cake_bundle_signature"),
         "measured_invalid_projection_reason": meta.get("invalid_projection_reason"),
@@ -20132,7 +20101,8 @@ def fit_geometry_parameters(
     objective_trace_max_evals = max(1, objective_trace_max_evals)
 
     solver_max_nfev = int(solver_cfg.get("max_nfev", 120 if point_match_mode else 60))
-    solver_max_nfev = max(20, solver_max_nfev)
+    solver_max_nfev_floor = int(solver_cfg.get("min_max_nfev", 20))
+    solver_max_nfev = max(max(1, solver_max_nfev_floor), solver_max_nfev)
     full_beam_polish_enabled = bool(
         full_beam_polish_cfg.get(
             "enabled",
@@ -21818,9 +21788,7 @@ def fit_geometry_parameters(
             ).reshape(-1)
             if solver_vector.size < 2 and match_status == "missing_pair":
                 try:
-                    missing_penalty = float(
-                        raw_entry.get("weighted_missing_penalty_deg", np.nan)
-                    )
+                    missing_penalty = float(raw_entry.get("weighted_missing_penalty_deg", np.nan))
                 except Exception:
                     missing_penalty = float("nan")
                 if np.isfinite(missing_penalty):
@@ -21838,36 +21806,24 @@ def fit_geometry_parameters(
                     raw_entry.get("source_table_index")
                 ),
                 "source_row_index": _objective_trace_jsonable(raw_entry.get("source_row_index")),
-                "source_branch_index": (
-                    int(branch_index) if branch_index is not None else None
-                ),
-                "source_peak_index": _objective_trace_jsonable(
-                    raw_entry.get("source_peak_index")
-                ),
+                "source_branch_index": (int(branch_index) if branch_index is not None else None),
+                "source_peak_index": _objective_trace_jsonable(raw_entry.get("source_peak_index")),
                 "resolved_table_index": _objective_trace_jsonable(
                     raw_entry.get("resolved_table_index")
                 ),
                 "resolved_peak_index": _objective_trace_jsonable(
                     raw_entry.get("resolved_peak_index")
                 ),
-                "resolved_sim_hkl": _objective_trace_jsonable(
-                    raw_entry.get("resolved_sim_hkl")
-                ),
+                "resolved_sim_hkl": _objective_trace_jsonable(raw_entry.get("resolved_sim_hkl")),
                 "branch_id": _objective_trace_jsonable(
                     raw_entry.get("branch_id", raw_entry.get("branch_group_key"))
                 ),
-                "best_sample_index": _objective_trace_jsonable(
-                    raw_entry.get("best_sample_index")
-                ),
+                "best_sample_index": _objective_trace_jsonable(raw_entry.get("best_sample_index")),
                 "mosaic_top_rank_key": _objective_trace_jsonable(
                     raw_entry.get("mosaic_top_rank_key")
                 ),
-                "selection_reason": _objective_trace_jsonable(
-                    raw_entry.get("selection_reason")
-                ),
-                "locked_qr_fit_key": _objective_trace_jsonable(
-                    raw_entry.get("locked_qr_fit_key")
-                ),
+                "selection_reason": _objective_trace_jsonable(raw_entry.get("selection_reason")),
+                "locked_qr_fit_key": _objective_trace_jsonable(raw_entry.get("locked_qr_fit_key")),
                 "locked_qr_fit_identity": _objective_trace_jsonable(
                     raw_entry.get("locked_qr_fit_identity")
                 ),
@@ -21880,9 +21836,7 @@ def fit_geometry_parameters(
                 "resolved_selection_reason": _objective_trace_jsonable(
                     raw_entry.get("resolved_selection_reason")
                 ),
-                "locked_representative_intensity": raw_entry.get(
-                    "locked_representative_intensity"
-                ),
+                "locked_representative_intensity": raw_entry.get("locked_representative_intensity"),
                 "match_status": str(raw_entry.get("match_status", "")),
                 "match_kind": str(raw_entry.get("match_kind", "")),
                 "resolution_kind": str(raw_entry.get("resolution_kind", "")),
@@ -21892,9 +21846,7 @@ def fit_geometry_parameters(
                     raw_entry.get("fit_prediction_resolver_function", "")
                     or raw_entry.get("resolver_function", "")
                 ),
-                "fit_qr_branch_key": _objective_trace_jsonable(
-                    raw_entry.get("fit_qr_branch_key")
-                ),
+                "fit_qr_branch_key": _objective_trace_jsonable(raw_entry.get("fit_qr_branch_key")),
                 "fit_qr_branch_key_missing_fields": _objective_trace_jsonable(
                     raw_entry.get("fit_qr_branch_key_missing_fields")
                 ),
@@ -21929,15 +21881,11 @@ def fit_geometry_parameters(
                 ],
                 "observed_detector_field_name": raw_entry.get("measured_detector_field_name"),
                 "observed_detector_input_frame": raw_entry.get("measured_detector_input_frame"),
-                "observed_detector_frame_reason": raw_entry.get(
-                    "measured_detector_frame_reason"
-                ),
+                "observed_detector_frame_reason": raw_entry.get("measured_detector_frame_reason"),
                 "observed_caked_projection_signature": raw_entry.get(
                     "measured_fit_space_local_params_signature"
                 ),
-                "observed_caked_bundle_signature": raw_entry.get(
-                    "measured_cake_bundle_signature"
-                ),
+                "observed_caked_bundle_signature": raw_entry.get("measured_cake_bundle_signature"),
                 "observed_fit_space_source": raw_entry.get("measured_fit_space_source"),
                 "observed_caked_deg": [
                     float(raw_entry.get("measured_two_theta_deg", np.nan)),
@@ -22013,9 +21961,7 @@ def fit_geometry_parameters(
                 "sim_refinement_subpixel_status": str(
                     raw_entry.get("sim_refinement_subpixel_status", "")
                 ),
-                "sim_refinement_subpixel": str(
-                    raw_entry.get("sim_refinement_subpixel", "")
-                ),
+                "sim_refinement_subpixel": str(raw_entry.get("sim_refinement_subpixel", "")),
                 "sim_refinement_bin_center_only": bool(
                     raw_entry.get("sim_refinement_bin_center_only", False)
                 ),
@@ -22026,9 +21972,7 @@ def fit_geometry_parameters(
                 "sim_refinement_fallback_used": bool(
                     raw_entry.get("sim_refinement_fallback_used", False)
                 ),
-                "locked_qr_detector_point_source": raw_entry.get(
-                    "locked_qr_detector_point_source"
-                ),
+                "locked_qr_detector_point_source": raw_entry.get("locked_qr_detector_point_source"),
                 "locked_representative_detector_deposit_nonzero_count": raw_entry.get(
                     "locked_representative_detector_deposit_nonzero_count"
                 ),
@@ -22043,9 +21987,7 @@ def fit_geometry_parameters(
                 ),
                 "locked_representative_caked_deposit_fractional_pixel_index": (
                     _objective_trace_jsonable(
-                        raw_entry.get(
-                            "locked_representative_caked_deposit_fractional_pixel_index"
-                        )
+                        raw_entry.get("locked_representative_caked_deposit_fractional_pixel_index")
                     )
                 ),
                 "locked_representative_caked_deposit_intensity": raw_entry.get(
@@ -22074,30 +22016,22 @@ def fit_geometry_parameters(
                 ),
                 "sim_refinement_caked_global_max_delta_from_nominal_deg": (
                     _objective_trace_jsonable(
-                        raw_entry.get(
-                            "sim_refinement_caked_global_max_delta_from_nominal_deg"
-                        )
+                        raw_entry.get("sim_refinement_caked_global_max_delta_from_nominal_deg")
                     )
                 ),
                 "params_signature": raw_entry.get("params_signature"),
-                "detector_simulation_signature": raw_entry.get(
-                    "detector_simulation_signature"
-                ),
+                "detector_simulation_signature": raw_entry.get("detector_simulation_signature"),
                 "simulation_source_signature": raw_entry.get("simulation_source_signature"),
                 "simulation_cache_signature": raw_entry.get("simulation_cache_signature"),
                 "caked_projection_signature": raw_entry.get("caked_projection_signature"),
                 "caked_simulation_signature": raw_entry.get("caked_simulation_signature"),
-                "source_rows_rebuilt_or_reused": raw_entry.get(
-                    "source_rows_rebuilt_or_reused"
-                ),
+                "source_rows_rebuilt_or_reused": raw_entry.get("source_rows_rebuilt_or_reused"),
                 "reuse_valid_for_same_params_signature": raw_entry.get(
                     "reuse_valid_for_same_params_signature"
                 ),
                 "objective_cache_mode": raw_entry.get("objective_cache_mode"),
                 "objective_cache_hit": bool(raw_entry.get("objective_cache_hit", False)),
-                "objective_cache_reject_reason": raw_entry.get(
-                    "objective_cache_reject_reason"
-                ),
+                "objective_cache_reject_reason": raw_entry.get("objective_cache_reject_reason"),
                 "objective_process_peaks_called": bool(
                     raw_entry.get("objective_process_peaks_called", False)
                 ),
@@ -22108,9 +22042,7 @@ def fit_geometry_parameters(
                     "objective_residual_component_count"
                 ),
                 "trial_source_rows_count": raw_entry.get("trial_source_rows_count"),
-                "trial_source_rows_signature": raw_entry.get(
-                    "trial_source_rows_signature"
-                ),
+                "trial_source_rows_signature": raw_entry.get("trial_source_rows_signature"),
                 "trial_source_rows_source": raw_entry.get("trial_source_rows_source"),
                 "trial_source_rows_fit_qr_branch_key_candidate_count": raw_entry.get(
                     "trial_source_rows_fit_qr_branch_key_candidate_count"
@@ -22811,9 +22743,7 @@ def fit_geometry_parameters(
                 continue
             if not _fixed_manual_pair_requires_exact_source_row(raw_entry):
                 continue
-            resolver_function = str(
-                raw_entry.get("fit_prediction_resolver_function", "") or ""
-            )
+            resolver_function = str(raw_entry.get("fit_prediction_resolver_function", "") or "")
             shared_dynamic_resolver = (
                 resolver_function == "_resolve_qr_fit_prediction_from_trial_params"
             )
@@ -22967,12 +22897,8 @@ def fit_geometry_parameters(
                     "fit_observed_caked_x0": (float(fit_two_theta), float(fit_phi)),
                     "delta_2theta": float(delta_two_theta),
                     "delta_phi_wrapped": float(delta_phi),
-                    "measured_detector_field_name": raw_entry.get(
-                        "measured_detector_field_name"
-                    ),
-                    "measured_detector_input_frame": raw_entry.get(
-                        "measured_detector_input_frame"
-                    ),
+                    "measured_detector_field_name": raw_entry.get("measured_detector_field_name"),
+                    "measured_detector_input_frame": raw_entry.get("measured_detector_input_frame"),
                     "fit_space_projector_kind": raw_entry.get("fit_space_projector_kind"),
                     "cake_bundle_signature": raw_entry.get("cake_bundle_signature"),
                 }
@@ -23016,8 +22942,8 @@ def fit_geometry_parameters(
             preflight_diagnostics
         )
         if preflight_anchor_diagnostics:
-            geometry_fit_debug_summary["dynamic_baseline_anchor_diagnostics"] = (
-                copy.deepcopy(preflight_anchor_diagnostics)
+            geometry_fit_debug_summary["dynamic_baseline_anchor_diagnostics"] = copy.deepcopy(
+                preflight_anchor_diagnostics
             )
             geometry_fit_debug_summary["dynamic_baseline_anchor_diagnostic_count"] = int(
                 len(preflight_anchor_diagnostics)
@@ -23027,9 +22953,7 @@ def fit_geometry_parameters(
         )
         if preflight_anchor_mismatches:
             blocked_summary = copy.deepcopy(geometry_fit_debug_summary)
-            blocked_summary["optimizer_start_blocked_reason"] = (
-                "dynamic_baseline_anchor_mismatch"
-            )
+            blocked_summary["optimizer_start_blocked_reason"] = "dynamic_baseline_anchor_mismatch"
             blocked_summary["dynamic_baseline_anchor_mismatches"] = copy.deepcopy(
                 preflight_anchor_mismatches
             )
@@ -23038,17 +22962,12 @@ def fit_geometry_parameters(
                 fun=preflight_fun,
                 success=False,
                 status=0,
-                message=(
-                    "optimizer_start_blocked_reason="
-                    "dynamic_baseline_anchor_mismatch"
-                ),
+                message=("optimizer_start_blocked_reason=dynamic_baseline_anchor_mismatch"),
                 nfev=0,
                 active_mask=np.zeros(np.asarray(x0_arr, dtype=float).shape, dtype=int),
                 optimality=float("nan"),
             )
-            blocked_result.optimizer_start_blocked_reason = (
-                "dynamic_baseline_anchor_mismatch"
-            )
+            blocked_result.optimizer_start_blocked_reason = "dynamic_baseline_anchor_mismatch"
             blocked_result.dynamic_baseline_anchor_diagnostics = copy.deepcopy(
                 preflight_anchor_diagnostics
             )
@@ -23066,8 +22985,8 @@ def fit_geometry_parameters(
             blocked_result.optimizer_solve_called = False
             blocked_result.geometry_fit_debug_summary = blocked_summary
             return blocked_result
-        preflight_saved_projection_mismatches = (
-            _manual_qr_x0_saved_manual_projection_mismatches(preflight_diagnostics)
+        preflight_saved_projection_mismatches = _manual_qr_x0_saved_manual_projection_mismatches(
+            preflight_diagnostics
         )
         if preflight_saved_projection_mismatches:
             geometry_fit_debug_summary["x0_saved_manual_projection_mismatches"] = copy.deepcopy(
@@ -23089,9 +23008,7 @@ def fit_geometry_parameters(
                 fallback_count += 1
                 continue
             status = str(raw_entry.get("sim_refinement_status", "") or "")
-            subpixel_status = str(
-                raw_entry.get("sim_refinement_subpixel_status", "") or ""
-            ).lower()
+            subpixel_status = str(raw_entry.get("sim_refinement_subpixel_status", "") or "").lower()
             local_max = _safe_float(
                 raw_entry.get("sim_refinement_local_max_intensity"),
                 float("nan"),
@@ -23116,9 +23033,7 @@ def fit_geometry_parameters(
                 locked_refinement_failures.append(
                     {
                         "hkl": _dynamic_reanchor_jsonable(raw_entry.get("hkl")),
-                        "branch": _nonnegative_index(
-                            raw_entry.get("source_branch_index")
-                        ),
+                        "branch": _nonnegative_index(raw_entry.get("source_branch_index")),
                         "best_sample_index": raw_entry.get("best_sample_index"),
                         "mosaic_top_rank_key": _dynamic_reanchor_jsonable(
                             raw_entry.get("mosaic_top_rank_key")
@@ -23150,17 +23065,12 @@ def fit_geometry_parameters(
                 fun=preflight_fun,
                 success=False,
                 status=0,
-                message=(
-                    "optimizer_start_blocked_reason="
-                    "locked_mosaic_refinement_unavailable"
-                ),
+                message=("optimizer_start_blocked_reason=locked_mosaic_refinement_unavailable"),
                 nfev=0,
                 active_mask=np.zeros(np.asarray(x0_arr, dtype=float).shape, dtype=int),
                 optimality=float("nan"),
             )
-            blocked_result.optimizer_start_blocked_reason = (
-                "locked_mosaic_refinement_unavailable"
-            )
+            blocked_result.optimizer_start_blocked_reason = "locked_mosaic_refinement_unavailable"
             blocked_result.locked_mosaic_refinement_failures = copy.deepcopy(
                 locked_refinement_failures
             )
@@ -23181,12 +23091,8 @@ def fit_geometry_parameters(
         )
         if preflight_mismatches:
             blocked_summary = copy.deepcopy(geometry_fit_debug_summary)
-            blocked_summary["optimizer_start_blocked_reason"] = (
-                "prediction_resolver_mismatch"
-            )
-            blocked_summary["prediction_resolver_mismatches"] = copy.deepcopy(
-                preflight_mismatches
-            )
+            blocked_summary["optimizer_start_blocked_reason"] = "prediction_resolver_mismatch"
+            blocked_summary["prediction_resolver_mismatches"] = copy.deepcopy(preflight_mismatches)
             blocked_result = OptimizeResult(
                 x=np.asarray(x0_arr, dtype=float).copy(),
                 fun=preflight_fun,
@@ -23198,9 +23104,7 @@ def fit_geometry_parameters(
                 optimality=float("nan"),
             )
             blocked_result.optimizer_start_blocked_reason = "prediction_resolver_mismatch"
-            blocked_result.prediction_resolver_mismatches = copy.deepcopy(
-                preflight_mismatches
-            )
+            blocked_result.prediction_resolver_mismatches = copy.deepcopy(preflight_mismatches)
             blocked_result.objective_trace = copy.deepcopy(objective_trace_records)
             blocked_result.point_match_diagnostics = [
                 dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)
@@ -24528,12 +24432,20 @@ def fit_geometry_parameters(
             )
 
         def _tracked_solver_residual(x_trial: np.ndarray) -> np.ndarray:
+            residual_started_at = time.monotonic()
             residual_arr = np.asarray(
                 solver_residual(np.asarray(x_trial, dtype=float)),
                 dtype=float,
             )
+            residual_elapsed_s = float(max(0.0, time.monotonic() - residual_started_at))
             progress_state["evaluation_count"] = int(progress_state["evaluation_count"]) + 1
             eval_count = int(progress_state["evaluation_count"])
+            progress_state["last_residual_eval_s"] = float(residual_elapsed_s)
+            residual_eval_times = list(progress_state.get("residual_eval_times_s", []) or [])
+            residual_eval_times.append(float(residual_elapsed_s))
+            progress_state["residual_eval_times_s"] = residual_eval_times
+            progress_state["mean_residual_eval_s"] = float(np.mean(residual_eval_times))
+            progress_state["max_residual_eval_s"] = float(np.max(residual_eval_times))
             current_cost = float(
                 _robust_cost(
                     residual_arr,
@@ -24573,6 +24485,10 @@ def fit_geometry_parameters(
                         "improved": bool(improved),
                         "var_names": [str(name) for name in var_names],
                         "x_trial": np.asarray(x_trial, dtype=float).tolist(),
+                        "residual_eval_elapsed_s": float(residual_elapsed_s),
+                        "last_residual_eval_s": float(residual_elapsed_s),
+                        "mean_residual_eval_s": float(progress_state["mean_residual_eval_s"]),
+                        "max_residual_eval_s": float(progress_state["max_residual_eval_s"]),
                     }
                 )
                 try:
@@ -24908,14 +24824,22 @@ def fit_geometry_parameters(
 
         def _tracked_solver_residual(u_trial: np.ndarray) -> np.ndarray:
             u_trial_arr = np.asarray(u_trial, dtype=float)
+            residual_started_at = time.monotonic()
             residual_arr = _residual_u(
                 u_trial_arr,
                 specs=specs,
                 include_priors=include_priors,
                 base_params=base_params,
             )
+            residual_elapsed_s = float(max(0.0, time.monotonic() - residual_started_at))
             progress_state["evaluation_count"] = int(progress_state["evaluation_count"]) + 1
             eval_count = int(progress_state["evaluation_count"])
+            progress_state["last_residual_eval_s"] = float(residual_elapsed_s)
+            residual_eval_times = list(progress_state.get("residual_eval_times_s", []) or [])
+            residual_eval_times.append(float(residual_elapsed_s))
+            progress_state["residual_eval_times_s"] = residual_eval_times
+            progress_state["mean_residual_eval_s"] = float(np.mean(residual_eval_times))
+            progress_state["max_residual_eval_s"] = float(np.max(residual_eval_times))
             current_cost = float(
                 _robust_cost(
                     residual_arr,
@@ -24951,6 +24875,10 @@ def fit_geometry_parameters(
                         "var_names": [str(spec.name) for spec in specs],
                         "x_trial": np.asarray(x_trial, dtype=float).tolist(),
                         "u_trial": u_trial_arr.tolist(),
+                        "residual_eval_elapsed_s": float(residual_elapsed_s),
+                        "last_residual_eval_s": float(residual_elapsed_s),
+                        "mean_residual_eval_s": float(progress_state["mean_residual_eval_s"]),
+                        "max_residual_eval_s": float(progress_state["max_residual_eval_s"]),
                     }
                 )
                 try:
@@ -25096,10 +25024,9 @@ def fit_geometry_parameters(
             ):
                 return None
             trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
-            prefer_source_row_resolution = (
-                _geometry_fit_prefers_source_row_resolution(entry)
-                or _fixed_manual_pair_requires_exact_source_row(entry)
-            )
+            prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(
+                entry
+            ) or _fixed_manual_pair_requires_exact_source_row(entry)
             source_branch_index, _source_branch_source = _measured_source_peak_index_with_source(
                 entry
             )
@@ -30365,15 +30292,11 @@ def fit_geometry_parameters(
         )
         solve_record_count = int(len(mode_results))
         seed_multistart_trace["direct_solver_runs"] = int(solve_record_count)
-        seed_multistart_trace["direct_solver_nfev"] = int(
-            getattr(best_result, "nfev", 0) or 0
-        )
+        seed_multistart_trace["direct_solver_nfev"] = int(getattr(best_result, "nfev", 0) or 0)
         seed_multistart_trace["direct_solver_success"] = bool(
             getattr(best_result, "success", False)
         )
-        seed_multistart_trace["direct_solver_message"] = str(
-            getattr(best_result, "message", "")
-        )
+        seed_multistart_trace["direct_solver_message"] = str(getattr(best_result, "message", ""))
         seed_multistart_trace["selected_direct_mode"] = _format_discrete_mode_label(best_mode)
         geometry_fit_stage_timings["fixed_manual_pair_direct_solve"] = float(
             max(0.0, time.monotonic() - direct_solve_started_at)
@@ -31780,11 +31703,9 @@ def fit_geometry_parameters(
             dynamic_anchor_diagnostics = _qr_dynamic_baseline_anchor_diagnostics(
                 point_match_diagnostics
             )
-            result.dynamic_baseline_anchor_diagnostics = copy.deepcopy(
-                dynamic_anchor_diagnostics
-            )
-            result.dynamic_baseline_anchor_mismatches = (
-                _qr_dynamic_baseline_anchor_mismatches(point_match_diagnostics)
+            result.dynamic_baseline_anchor_diagnostics = copy.deepcopy(dynamic_anchor_diagnostics)
+            result.dynamic_baseline_anchor_mismatches = _qr_dynamic_baseline_anchor_mismatches(
+                point_match_diagnostics
             )
             point_match_summary["dynamic_baseline_anchor_diagnostic_count"] = int(
                 len(dynamic_anchor_diagnostics)
