@@ -32,7 +32,8 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
-  - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI and headless geometry-fit paths, and made beam-center picking refine in detector-display space without the center-dependent caked wrapper.
+  - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI and headless geometry-fit paths, and kept beam-center picking out of the center-dependent caked wrapper.
+  - Fixed beam-center picking to use the clicked detector-display point exactly, avoiding local peak snapping before applying `row = height - display_col`, `col = display_row`.
   - Backfilled legacy manual Qr/Qz pairs that have detector/background pixels but no saved caked `(2theta, phi)` anchors before headless geometry-fit preparation, and carried the repaired `manual_pairs` into the returned saved-state snapshot.
   - Added trial caked axes-only payload support so refined geometry probes can recompute dynamic Qr/Qz source rows without rasterizing a full caked image.
   - Added New4 ladder worker phase/partial-report telemetry, residual-evaluation timing, cache-rebuild counters, and timeout diagnostics; singleton solve rungs can skip the duplicate initial dry-run objective and use the first solver evaluation instead.
@@ -61,7 +62,7 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
-  - Added a Setup `Pick Beam Center` control that uses the current detector/background image, local peak refinement, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
+  - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
   - Added a Match-tab `Place Background Qr Set` control for saving background-only Qr reference peaks with local peak-top refinement and `2theta,phi` labels instead of HKL values.
   - Fixed `Pick Beam Center` conversion to use detector-extent beam-center coordinates instead of raw pixel-index inversion, avoiding a one-pixel frame error in the default rotated detector view.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.

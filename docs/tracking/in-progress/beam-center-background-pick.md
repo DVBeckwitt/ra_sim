@@ -1,7 +1,7 @@
 # Beam Center Background Pick
 
 Type: feature / bug fix
-Status: implemented, second coordinate bug fixed, targeted validation green
+Status: implemented, click-placement bug fixed, targeted validation green
 Last updated: 2026-04-30
 
 ## Problem
@@ -30,9 +30,14 @@ the user picked anything. PONI defaults now stay in native slider order:
 `row = poni1 / pixel_size`, `col = poni2 / pixel_size`.
 
 Beam-center preview also no longer uses the center-dependent caked manual-pick
-wrapper. It now calls the detector-image refiner directly with
-`use_caked_space=False`, so preview refinement is independent of the current
-center that the pick is trying to replace.
+wrapper. It now avoids local peak refinement entirely, so the committed point is
+the exact display point the user clicked.
+
+The placement path was still wrong for exact click placement because the
+beam-center preview could snap the clicked point to a nearby detector-image
+maximum before commit. Beam-center picking now uses the clicked detector-display
+point exactly. For the default 3000 px clockwise display, the committed center
+is `row = 3000 - display_col`, `col = display_row`.
 
 ## Change
 
@@ -40,24 +45,23 @@ center that the pick is trying to replace.
 - The mode uses the current detector/background image. It switches back to
   detector view when needed, shows the background if hidden, and errors if no
   background is loaded.
-- Left press starts a local zoom window, motion previews raw to refined point,
-  and release commits the refined location.
+- Left press starts a local zoom window, motion previews the clicked display
+  point, and release commits that clicked location.
 - Right click cancels and restores the pre-pick view.
-- Commit maps the refined detector-view display `(col,row)` through
+- Commit maps the clicked detector-view display `(col,row)` through
   `beam_center_row_col_from_detector_display(...)`, an extent-based
   beam-center transform kept separate from pixel-index transforms, then sets
   `center_x = center_row` and `center_y = center_col`.
 - Added shared display-rotation helpers so inverse display rotation uses the
   rotated display shape for non-square detector images.
-- The picker reuses the manual Qr/Qz local refiner with detector-space forcing,
-  plus the same preview markers, throttle constants, and zoom window size.
+- The picker no longer uses local peak refinement. It keeps the same preview
+  markers, throttle constants, and zoom window size.
 - Runtime state is transient only; saved-state schema is unchanged.
 - Added `beam_center_row_col_from_poni(...)` and used it from GUI runtime and
   headless geometry-fit defaults so both paths share the same native row/col
   PONI convention.
-- Beam-center preview now bypasses `_geometry_manual_refine_preview_point(...)`
-  and calls `geometry_manual_refine_preview_point(...)` directly in detector
-  space, avoiding the center-dependent caked projection path.
+- Beam-center preview now bypasses all local peak refinement and stores the
+  clicked display point exactly before applying the detector-extent transform.
 
 ## Validation
 
@@ -91,8 +95,8 @@ center that the pick is trying to replace.
     with Tk's `RuntimeError: Too early to create variable: no default root window`;
     this is in the stacking-panel test path, not the beam-center picker path.
 - `python -m pytest tests/test_beam_center_pick_helpers.py -ra`
-  - 11 passed, including PONI row/col defaults, headless default source checks,
-    and detector-space beam-center preview checks.
+  - 12 passed, including PONI row/col defaults, exact clicked-point placement,
+    headless default source checks, and no-refiner preview checks.
 - `python -m compileall ra_sim/gui/geometry_overlay.py ra_sim/gui/_runtime/runtime_session.py ra_sim/headless_geometry_fit.py tests/test_beam_center_pick_helpers.py`
   - passed.
 - `git diff --check -- CHANGELOG.md ra_sim/gui/geometry_overlay.py ra_sim/gui/_runtime/runtime_session.py ra_sim/headless_geometry_fit.py tests/test_beam_center_pick_helpers.py`
@@ -107,10 +111,10 @@ Feature path is implemented. First coordinate bug is fixed by the
 detector-extent display-to-center transform
 (`1404,1453 -> row=1596,col=1453`). Second default-center bug is fixed by
 keeping PONI-derived centers in native row/col order for both GUI and headless
-geometry fit. Preview refinement is detector-space only and no longer depends
-on the stale current center through the caked wrapper.
+geometry fit. Third click-placement bug is fixed by disabling beam-center
+auto-refine: the clicked display point is transformed directly as
+`row = height - display_col`, `col = display_row`.
 
 Targeted beam-center tests, targeted compile, and touched-file diff checks are
-green. Full `python -m ra_sim.dev check` remains blocked by pre-existing
-formatting drift in `ra_sim/fitting/optimization.py`. No saved-state, CLI, or
-artifact schema change. No package version bump.
+green. Full `python -m ra_sim.dev check` was not rerun after the focused fix.
+No saved-state, CLI, or artifact schema change. No package version bump.

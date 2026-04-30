@@ -7546,53 +7546,13 @@ def _apply_beam_center_pick_zoom(
     return True
 
 
-def _refine_beam_center_pick_display_point(
-    raw_col: float,
-    raw_row: float,
-) -> tuple[float, float]:
-    """Refine beam-center pick in detector-display space only."""
-
-    background = _current_beam_center_pick_background_image()
-    if background is None:
-        return float(raw_col), float(raw_row)
-    try:
-        auto_refine_radius = float(
-            getattr(geometry_runtime_state, "manual_auto_refine_search_radius_px", np.nan)
-        )
-    except Exception:
-        auto_refine_radius = float("nan")
-    cache_data: dict[str, object] = {}
-    if np.isfinite(auto_refine_radius):
-        cache_data["manual_auto_refine_search_radius_px"] = float(auto_refine_radius)
-    try:
-        refined_col, refined_row = gui_manual_geometry.geometry_manual_refine_preview_point(
-            None,
-            float(raw_col),
-            float(raw_row),
-            display_background=background,
-            cache_data=cache_data,
-            build_cache_data=None,
-            use_caked_space=False,
-            radial_axis=None,
-            azimuth_axis=None,
-            match_simulated_peaks_to_peak_context=None,
-            peak_maximum_near_in_image_fn=_peak_maximum_near_in_image,
-            caked_axis_to_image_index_fn=_caked_axis_to_image_index,
-            caked_image_index_to_axis_fn=_caked_image_index_to_axis,
-            refine_caked_peak_center_fn=_geometry_manual_caked_peak_center_fn_for_cache(None),
-        )
-    except Exception:
-        return float(raw_col), float(raw_row)
-    return float(refined_col), float(refined_row)
-
-
 def _update_beam_center_pick_preview(
     col: float,
     row: float,
     *,
     force: bool = False,
 ) -> bool:
-    """Show raw->refined beam-center preview using manual Qr/Qz refinement."""
+    """Show beam-center preview using the clicked detector-display point."""
     if not _beam_center_pick_session_active():
         return False
     if not force and not _beam_center_preview_due(float(col), float(row)):
@@ -7600,7 +7560,8 @@ def _update_beam_center_pick_preview(
     display_background = _current_beam_center_pick_background_image()
     if display_background is None:
         return False
-    refined_col, refined_row = _refine_beam_center_pick_display_point(float(col), float(row))
+    refined_col = float(col)
+    refined_row = float(row)
     delta_px = _geometry_manual_position_error_px(
         float(col),
         float(row),

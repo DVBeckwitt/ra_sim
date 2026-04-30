@@ -151,6 +151,18 @@ def test_beam_center_visual_pick_maps_to_default_center_frame() -> None:
     assert center_col == pytest.approx(1453.0)
 
 
+def test_beam_center_pick_uses_clicked_display_point_exactly() -> None:
+    center_row, center_col = geometry_overlay.beam_center_row_col_from_detector_display(
+        1452.0,
+        1599.0,
+        (3000, 3000),
+        -1,
+    )
+
+    assert center_row == pytest.approx(1548.0)
+    assert center_col == pytest.approx(1599.0)
+
+
 def test_beam_center_poni_defaults_keep_native_row_col() -> None:
     pixel_size_m = 1.0e-4
 
@@ -182,18 +194,19 @@ def test_beam_center_poni_defaults_do_not_use_rotated_display_formula() -> None:
     )
 
 
-def test_runtime_beam_center_refiner_bypasses_center_dependent_caked_wrapper() -> None:
+def test_runtime_beam_center_preview_does_not_auto_refine_clicked_point() -> None:
     from pathlib import Path
 
     runtime_path = Path(geometry_overlay.__file__).with_name("_runtime") / "runtime_session.py"
     source = runtime_path.read_text(encoding="utf-8")
-    start = source.index("def _refine_beam_center_pick_display_point(")
-    end = source.index("def _update_beam_center_pick_preview(", start)
+    start = source.index("def _update_beam_center_pick_preview(")
+    end = source.index("def _ensure_slider_includes_value(", start)
     body_source = source[start:end]
 
-    assert "gui_manual_geometry.geometry_manual_refine_preview_point" in body_source
+    assert "refined_col = float(col)" in body_source
+    assert "refined_row = float(row)" in body_source
+    assert "geometry_manual_refine_preview_point" not in body_source
     assert "_geometry_manual_refine_preview_point" not in body_source
-    assert "use_caked_space=False" in body_source
 
 
 def test_headless_defaults_use_same_poni_row_col_frame() -> None:

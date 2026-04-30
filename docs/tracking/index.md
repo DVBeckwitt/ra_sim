@@ -56,16 +56,14 @@ drift in the dirty worktree.
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the
 loaded detector/background image, switches out of caked/q-space views, shows the
-background if hidden, previews the same local refinement used by manual Qr/Qz
-placement, and commits native detector `center_x = row`, `center_y = col` on
-release. The latest coordinate bug is fixed by converting the refined display
-point through the detector-extent beam-center transform:
+background if hidden, and commits the clicked detector-display point as native
+detector `center_x = row`, `center_y = col` on release. The latest coordinate
+bug is fixed by converting the display point through the detector-extent
+beam-center transform:
 `display_col=1404`, `display_row=1453` now maps to `row=1596`, `col=1453`.
-Targeted beam-center/canvas tests and targeted compile pass. The broader
-view-suite check is blocked by an existing Tk default-root failure in the
-stacking-panel test path. Full
-`ra_sim.dev check` remains blocked by existing formatter/test drift in the dirty
-worktree, tracked in the feature note.
+Targeted beam-center/canvas tests, targeted compile, and focused click-mapping
+tests pass. Full `ra_sim.dev check` was not rerun after the focused fix; status
+remains tracked in the feature note.
 
 Background Qr reference pick status note:
 `Place Background Qr Set` is implemented in the Match tab. The mode places a
