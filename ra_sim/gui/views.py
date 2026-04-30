@@ -5096,6 +5096,7 @@ def create_geometry_tool_action_controls(
     on_import_manual_pairs: Callable[[], None],
     on_toggle_preview_exclude: Callable[[], None],
     on_clear_manual_pairs: Callable[[], None],
+    on_place_background_qr_set: Callable[[], None] | None = None,
     on_add_all_qr_set_peaks: Callable[[], None] | None = None,
     on_remove_qr_set_peaks: Callable[[], None] | None = None,
     auto_refine_radius_value: float | None = None,
@@ -5171,6 +5172,15 @@ def create_geometry_tool_action_controls(
     )
     geometry_preview_exclude_button.pack(side=tk.LEFT, padx=5, pady=2)
 
+    geometry_manual_background_qr_button = None
+    if callable(on_place_background_qr_set):
+        geometry_manual_background_qr_button = ttk.Button(
+            geometry_manual_qr_set_row,
+            text="Place Background Qr Set",
+            command=on_place_background_qr_set,
+        )
+        geometry_manual_background_qr_button.pack(side=tk.LEFT, padx=5, pady=2)
+
     geometry_manual_add_all_button = None
     if callable(on_add_all_qr_set_peaks):
         geometry_manual_add_all_button = ttk.Button(
@@ -5234,6 +5244,7 @@ def create_geometry_tool_action_controls(
     view_state.geometry_manual_click_remove_checkbutton = (
         geometry_manual_click_remove_checkbutton
     )
+    view_state.geometry_manual_background_qr_button = geometry_manual_background_qr_button
     view_state.geometry_manual_add_all_button = geometry_manual_add_all_button
     view_state.geometry_manual_remove_qr_set_button = geometry_manual_remove_qr_set_button
     view_state.geometry_manual_auto_search_radius_var = geometry_manual_auto_search_radius_var

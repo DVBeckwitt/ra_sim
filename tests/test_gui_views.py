@@ -2679,6 +2679,7 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
     assert (
         _FakeButton.created[2].kwargs["textvariable"] is view_state.geometry_manual_pick_button_var
     )
+    assert view_state.geometry_manual_background_qr_button is None
     assert view_state.geometry_manual_add_all_button is None
     assert view_state.geometry_manual_remove_qr_set_button is None
     assert view_state.geometry_manual_auto_search_radius_var is None
@@ -2752,6 +2753,7 @@ def test_geometry_tool_action_controls_can_add_all_qr_set_button(monkeypatch) ->
         on_import_manual_pairs=lambda: calls.append("import"),
         on_toggle_preview_exclude=lambda: calls.append("toggle-preview"),
         on_clear_manual_pairs=lambda: calls.append("clear"),
+        on_place_background_qr_set=lambda: calls.append("place-background"),
         on_add_all_qr_set_peaks=lambda: calls.append("add-all"),
         on_remove_qr_set_peaks=lambda: calls.append("remove"),
         auto_refine_radius_value=36.0,
@@ -2760,6 +2762,11 @@ def test_geometry_tool_action_controls_can_add_all_qr_set_button(monkeypatch) ->
         on_manual_drag_move_changed=lambda value: calls.append(("drag-move", bool(value))),
     )
 
+    assert view_state.geometry_manual_background_qr_button is not None
+    assert (
+        view_state.geometry_manual_background_qr_button.kwargs["text"]
+        == "Place Background Qr Set"
+    )
     assert view_state.geometry_manual_add_all_button is not None
     assert view_state.geometry_manual_add_all_button.kwargs["text"] == "Add All Qr Set Peaks"
     assert view_state.geometry_manual_remove_qr_set_button is not None
@@ -2775,11 +2782,12 @@ def test_geometry_tool_action_controls_can_add_all_qr_set_button(monkeypatch) ->
     assert view_state.geometry_manual_click_remove_checkbutton is _FakeCheckbutton.created[1]
     assert _FakeCheckbutton.created[1].kwargs["text"] == "Click Remove Placed Peaks"
 
+    view_state.geometry_manual_background_qr_button.command()
     view_state.geometry_manual_add_all_button.command()
     view_state.geometry_manual_remove_qr_set_button.command()
     view_state.geometry_manual_drag_move_var.set(False)
     view_state.geometry_manual_drag_move_checkbutton.command()
-    assert calls == ["add-all", "remove", ("drag-move", False)]
+    assert calls == ["place-background", "add-all", "remove", ("drag-move", False)]
 
 
 def test_hkl_lookup_controls_store_vars_bind_entries_and_support_updates(

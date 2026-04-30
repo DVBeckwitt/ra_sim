@@ -9294,6 +9294,17 @@ def make_runtime_geometry_tool_action_callbacks(
     )
 
 
+
+def geometry_manual_pair_enabled_for_geometry_fit(entry: object) -> bool:
+    """Return whether a saved manual pair should contribute to geometry solving."""
+
+    if not isinstance(entry, Mapping):
+        return False
+    if gui_manual_geometry.geometry_manual_entry_is_background_qr_reference(entry):
+        return False
+    return not bool(entry.get("geometry_fit_disabled", False))
+
+
 def build_geometry_manual_fit_dataset(
     background_index: int,
     *,
@@ -9477,9 +9488,11 @@ def build_geometry_manual_fit_dataset(
             )
             initial_entry["sim_native_source"] = str(source_text or "provider_detector_native")
 
-    raw_selected_entries = list(
-        manual_dataset_bindings.geometry_manual_pairs_for_index(background_idx) or ()
-    )
+    raw_selected_entries = [
+        entry
+        for entry in (manual_dataset_bindings.geometry_manual_pairs_for_index(background_idx) or ())
+        if geometry_manual_pair_enabled_for_geometry_fit(entry)
+    ]
     if not raw_selected_entries:
         raise RuntimeError(f"background {background_idx + 1} has no saved manual geometry pairs")
 
@@ -15078,9 +15091,15 @@ def prepare_geometry_fit_run(
         if build_all_selected_backgrounds
         else [int(primary_index)]
     )
-    missing_indices = [
-        idx for idx in selected_background_indices if not geometry_manual_pairs_for_index(int(idx))
-    ]
+    missing_indices = []
+    for idx in selected_background_indices:
+        enabled_pairs = [
+            entry
+            for entry in (geometry_manual_pairs_for_index(int(idx)) or ())
+            if geometry_manual_pair_enabled_for_geometry_fit(entry)
+        ]
+        if not enabled_pairs:
+            missing_indices.append(idx)
     if missing_indices:
         missing_names = [
             Path(str(osc_files[idx])).name for idx in missing_indices if 0 <= idx < len(osc_files)
@@ -15444,6 +15463,11 @@ def geometry_manual_fit_space_by_background(
             pairs = pairs_for_index.get(int(idx), pairs_for_index.get(str(int(idx)), ()))
         else:
             pairs = ()
+        pairs = [
+            entry
+            for entry in (pairs or ())
+            if geometry_manual_pair_enabled_for_geometry_fit(entry)
+        ]
         pick_applies = bool(pick_uses_caked_space) and (
             len(indices) == 1
             or (current_background_index is not None and int(idx) == int(current_background_index))

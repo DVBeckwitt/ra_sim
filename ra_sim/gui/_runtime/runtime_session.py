@@ -6123,6 +6123,51 @@ def _refine_current_geometry_manual_pairs() -> None:
     )
 
 
+def _toggle_geometry_background_qr_set_pick_mode() -> None:
+    """Arm one-click placement for a background-only Qr reference point."""
+
+    background_index = int(background_runtime_state.current_background_index)
+    current_session = geometry_manual_state.pick_session
+    if bool(
+        getattr(geometry_runtime_state, "manual_pick_armed", False)
+    ) and gui_manual_geometry.geometry_manual_pick_session_is_background_qr_reference(
+        current_session
+    ):
+        _set_geometry_manual_pick_mode(False, message="Background Qr reference picking disabled.")
+        return
+
+    display_background = _current_geometry_manual_pick_background_image()
+    if display_background is None:
+        progress_label_geometry.config(
+            text="Load a background image before placing a background Qr reference."
+        )
+        return
+
+    if gui_manual_geometry.geometry_manual_pick_session_active(
+        current_session,
+        current_background_index=background_index,
+    ):
+        _set_geometry_manual_pick_mode(False, message="Manual Qr/Qz placement canceled.")
+
+    manual_run_id = gui_manual_geometry.geometry_manual_start_run_id()
+    base_entries = [dict(entry) for entry in _geometry_manual_pairs_for_index(background_index)]
+    session = gui_manual_geometry.start_geometry_manual_background_qr_reference_session(
+        current_background_index=background_index,
+        base_entries=base_entries,
+        manual_run_id=manual_run_id,
+    )
+    _set_geometry_manual_pick_session(session)
+    _set_geometry_manual_pick_mode(
+        True,
+        message=(
+            "Background Qr reference picking armed. Click the background peak; "
+            "local peak fitting will snap to the top and save its 2theta/phi label."
+        ),
+    )
+    _render_current_geometry_manual_pairs(update_status=False)
+    _update_geometry_manual_pick_button_label()
+
+
 def _add_all_current_geometry_q_group_peaks() -> None:
     """Auto-place all enabled Qr/Qz set peaks for the current background."""
 
@@ -16223,8 +16268,14 @@ def _refresh_interaction_mode_banner() -> None:
         title = "Beam center picking active"
         detail = "Press a background-image spot, preview the refined peak, then release."
     elif bool(_geometry_manual_pick_session_active(require_current_background=False)):
-        title = "Manual peak placement active"
-        detail = "Click the measured peak location for the selected simulated group."
+        if gui_manual_geometry.geometry_manual_pick_session_is_background_qr_reference(
+            geometry_manual_state.pick_session
+        ):
+            title = "Background Qr reference placement active"
+            detail = "Click a background peak to fit its top and save its 2theta/phi label."
+        else:
+            title = "Manual peak placement active"
+            detail = "Click the measured peak location for the selected simulated group."
     elif bool(getattr(analysis_peak_selection_state, "pick_armed", False)):
         title = "Analysis peak picking active"
         detail = "Click peaks inside the current caked integration region to mark and fit them."
@@ -31983,6 +32034,7 @@ def _initialize_runtime_controls_block_41() -> None:
             view_state=geometry_tool_actions_view_state,
             on_toggle_manual_pick=_toggle_geometry_manual_pick_mode,
             on_refine_manual_pairs=_refine_current_geometry_manual_pairs,
+            on_place_background_qr_set=_toggle_geometry_background_qr_set_pick_mode,
             on_add_all_qr_set_peaks=_add_all_current_geometry_q_group_peaks,
             on_remove_qr_set_peaks=_remove_current_geometry_q_group_peaks,
             auto_refine_radius_value=_geometry_manual_auto_refine_search_radius_px(),

@@ -61,6 +61,27 @@ def require_new4_state() -> Path:
     return NEW4_STATE_PATH
 
 
+def test_geometry_manual_pair_enabled_for_geometry_fit_skips_background_qr_reference() -> None:
+    assert (
+        geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(
+            {
+                "label": "2theta=10.5000,phi=20.6000",
+                "x": 5.0,
+                "y": 6.0,
+                "background_qr_set_reference": True,
+                "geometry_fit_disabled": True,
+            }
+        )
+        is False
+    )
+    assert (
+        geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(
+            {"label": "1,0,0", "hkl": (1, 0, 0), "x": 5.0, "y": 6.0}
+        )
+        is True
+    )
+
+
 class _DummyVar:
     def __init__(self, value):
         self._value = value

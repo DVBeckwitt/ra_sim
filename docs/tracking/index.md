@@ -30,6 +30,7 @@ downstream of green mosaic fitting.
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Beam center background pick | feature | - | none | p1 | 2026-04-30 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
+| Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
@@ -65,6 +66,16 @@ view-suite check is blocked by an existing Tk default-root failure in the
 stacking-panel test path. Full
 `ra_sim.dev check` remains blocked by existing formatter/test drift in the dirty
 worktree, tracked in the feature note.
+
+Background Qr reference pick status note:
+`Place Background Qr Set` is implemented in the Match tab. The mode places a
+background-only manual reference point, locally refines to the measured peak
+top, saves the refined `(2theta, phi)` as the row label, omits HKL/Qr group
+identity, preserves the row in manual-pair export/import for diagnostic
+notebooks, and marks it disabled for geometry solving. Targeted GUI wiring,
+manual placement serialization, geometry-fit filtering, runtime import, and
+targeted compile checks pass. Full `ra_sim.dev check` remains blocked by
+pre-existing formatting drift in `ra_sim/fitting/optimization.py`.
 
 Weighted-event representative status note:
 `Weighted-event representative cache carry-through` is implemented on fast

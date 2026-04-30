@@ -1512,6 +1512,14 @@ def normalize_geometry_manual_pair_entry(
     if normalized_hkl is not None:
         normalized["hkl"] = normalized_hkl
 
+    for bool_key in (
+        "background_qr_set_reference",
+        "manual_background_reference",
+        "geometry_fit_disabled",
+    ):
+        if bool_key in entry:
+            normalized[bool_key] = bool(entry.get(bool_key, False))
+
     for x_key, y_key in (
         ("background_two_theta_deg", "background_phi_deg"),
         ("caked_x", "caked_y"),
@@ -1561,6 +1569,10 @@ def normalize_geometry_manual_pair_entry(
 
     if entry.get("source_label") is not None:
         normalized["source_label"] = str(entry.get("source_label"))
+    if entry.get("background_qr_set_reference_label_source") is not None:
+        normalized["background_qr_set_reference_label_source"] = str(
+            entry.get("background_qr_set_reference_label_source")
+        )
     if "stale_caked_fields" in entry:
         normalized["stale_caked_fields"] = bool(entry.get("stale_caked_fields", False))
     if entry.get("manual_background_input_frame") is not None:
@@ -1729,6 +1741,7 @@ def normalize_geometry_manual_pair_entry(
         "geometry_detector_native_source",
         "sim_refined_caked_projection_callback",
         "sim_refined_caked_projection_status",
+        "background_qr_set_reference_label_source",
     ):
         raw_text = entry.get(text_key)
         if raw_text is not None and str(raw_text).strip():
@@ -10657,6 +10670,165 @@ def geometry_manual_pair_entry_from_candidate(
     return entry
 
 
+GEOMETRY_MANUAL_BACKGROUND_QR_REFERENCE_GROUP = "background_qr_reference"
+GEOMETRY_MANUAL_BACKGROUND_QR_REFERENCE_LABEL_SOURCE = "background_2theta_phi"
+
+
+def geometry_manual_background_qr_reference_label(
+    two_theta_deg: object,
+    phi_deg: object,
+    *,
+    precision: int = 4,
+) -> str:
+    """Return the HKL-name label for a background-only Qr reference."""
+
+    try:
+        two_theta_value = float(two_theta_deg)
+        phi_value = float(phi_deg)
+    except Exception:
+        return "2theta=nan,phi=nan"
+    digits = max(0, int(precision))
+    return f"2theta={two_theta_value:.{digits}f},phi={phi_value:.{digits}f}"
+
+
+def geometry_manual_entry_is_background_qr_reference(
+    entry: Mapping[str, object] | None,
+) -> bool:
+    """Return whether a saved manual entry is a background-only Qr reference."""
+
+    if not isinstance(entry, Mapping):
+        return False
+    return bool(
+        entry.get("background_qr_set_reference", False)
+        or entry.get("manual_background_reference", False)
+    )
+
+
+def geometry_manual_pick_session_is_background_qr_reference(
+    pick_session: Mapping[str, object] | None,
+) -> bool:
+    """Return whether the active manual session places a background-only Qr point."""
+
+    if not isinstance(pick_session, Mapping):
+        return False
+    if bool(pick_session.get("background_qr_set_reference_mode", False)):
+        return True
+    group_key = pick_session.get("group_key")
+    return (
+        isinstance(group_key, tuple)
+        and len(group_key) >= 1
+        and group_key[0] == GEOMETRY_MANUAL_BACKGROUND_QR_REFERENCE_GROUP
+    )
+
+
+def start_geometry_manual_background_qr_reference_session(
+    *,
+    current_background_index: object,
+    base_entries: Sequence[Mapping[str, object]] | None = None,
+    manual_run_id: object | None = None,
+) -> dict[str, object]:
+    """Build a one-click session for a background-only Qr reference point."""
+
+    try:
+        background_idx = int(current_background_index)
+    except Exception:
+        background_idx = 0
+    run_id = str(manual_run_id) if manual_run_id is not None and str(manual_run_id) else ""
+    if not run_id:
+        run_id = geometry_manual_start_run_id()
+    cleaned_base = [dict(entry) for entry in (base_entries or ()) if isinstance(entry, Mapping)]
+    return {
+        "background_qr_set_reference_mode": True,
+        "background_index": int(background_idx),
+        "group_key": (
+            GEOMETRY_MANUAL_BACKGROUND_QR_REFERENCE_GROUP,
+            int(background_idx),
+            run_id,
+        ),
+        "group_entries": [],
+        "pending_entries": [],
+        "target_count": 1,
+        "base_entries": cleaned_base,
+        "q_label": "background Qr reference",
+        "manual_geometry_run_id": run_id,
+        "manual_trace_version": MANUAL_GEOMETRY_TRACE_VERSION,
+    }
+
+
+def geometry_manual_background_qr_reference_pair_entry(
+    *,
+    peak_col: float,
+    peak_row: float,
+    raw_col: float | None = None,
+    raw_row: float | None = None,
+    detector_col: float | None = None,
+    detector_row: float | None = None,
+    caked_col: float | None = None,
+    caked_row: float | None = None,
+    raw_caked_col: float | None = None,
+    raw_caked_row: float | None = None,
+    placement_error_px: float | None = None,
+    sigma_px: float | None = None,
+    manual_run_id: object | None = None,
+) -> dict[str, object]:
+    """Build a saved manual pair for a background peak with no simulated HKL."""
+
+    caked_label_col = caked_col if caked_col is not None else peak_col
+    caked_label_row = caked_row if caked_row is not None else peak_row
+    entry: dict[str, object] = {
+        "label": geometry_manual_background_qr_reference_label(
+            caked_label_col,
+            caked_label_row,
+        ),
+        "x": float(peak_col),
+        "y": float(peak_row),
+        "background_qr_set_reference": True,
+        "manual_background_reference": True,
+        "geometry_fit_disabled": True,
+        "background_qr_set_reference_label_source": (
+            GEOMETRY_MANUAL_BACKGROUND_QR_REFERENCE_LABEL_SOURCE
+        ),
+        "source_label": "background",
+        "selection_reason": "background_qr_set_reference",
+        "manual_trace_version": MANUAL_GEOMETRY_TRACE_VERSION,
+    }
+    if manual_run_id is not None and str(manual_run_id):
+        entry["manual_geometry_run_id"] = str(manual_run_id)
+    if raw_col is not None and raw_row is not None:
+        entry["raw_x"] = float(raw_col)
+        entry["raw_y"] = float(raw_row)
+        entry["raw_detector_display_px"] = (float(raw_col), float(raw_row))
+    entry["geometry_detector_display_px"] = (float(peak_col), float(peak_row))
+    if detector_col is not None and detector_row is not None:
+        entry["detector_x"] = float(detector_col)
+        entry["detector_y"] = float(detector_row)
+        entry["background_detector_x"] = float(detector_col)
+        entry["background_detector_y"] = float(detector_row)
+        entry["background_detector_input_frame"] = "native_detector"
+    if caked_col is not None and caked_row is not None:
+        entry["manual_background_input_frame"] = "caked_2theta_phi"
+        entry["background_two_theta_deg"] = float(caked_col)
+        entry["background_phi_deg"] = float(caked_row)
+        entry["refined_background_two_theta_deg"] = float(caked_col)
+        entry["refined_background_phi_deg"] = float(caked_row)
+        entry["caked_x"] = float(caked_col)
+        entry["caked_y"] = float(caked_row)
+        entry["geometry_caked_deg"] = (float(caked_col), float(caked_row))
+    if raw_caked_col is not None and raw_caked_row is not None:
+        entry["raw_caked_x"] = float(raw_caked_col)
+        entry["raw_caked_y"] = float(raw_caked_row)
+        entry["raw_caked_deg"] = (float(raw_caked_col), float(raw_caked_row))
+        entry["raw_caked_two_theta_deg"] = float(raw_caked_col)
+        entry["raw_caked_phi_deg"] = float(raw_caked_row)
+        entry.setdefault("background_two_theta_deg", float(raw_caked_col))
+        entry.setdefault("background_phi_deg", float(raw_caked_row))
+    if placement_error_px is not None and np.isfinite(float(placement_error_px)):
+        entry["placement_error_px"] = max(0.0, float(placement_error_px))
+    if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
+        entry["sigma_px"] = float(sigma_px)
+    return entry
+
+
 def _copy_q_values_from_sources(
     target: dict[str, object],
     *sources: Mapping[str, object] | None,
@@ -15090,6 +15262,221 @@ def geometry_manual_place_selection_at(
         return False, current_session
     manual_run_id = _geometry_manual_session_run_id(pick_session)
 
+    if geometry_manual_pick_session_is_background_qr_reference(current_session):
+        cache_data = get_cache_data(background_image=display_background)
+        resolved_background_pick = None
+        if callable(resolve_background_pick_fn):
+            try:
+                resolved_background_pick = resolve_background_pick_fn(
+                    None,
+                    float(col),
+                    float(row),
+                    active_view="caked" if use_caked_space else "detector",
+                    display_background=display_background,
+                    cache_data=cache_data,
+                    refine_detector_pick_fn=refine_preview_point,
+                    caked_angles_to_background_display_coords=(
+                        caked_angles_to_background_display_coords
+                    ),
+                    background_display_to_native_detector_coords=(
+                        background_display_to_native_detector_coords
+                    ),
+                    native_detector_coords_to_caked_display_coords=(
+                        native_detector_coords_to_caked_display_coords
+                    ),
+                    radial_axis=radial_axis,
+                    azimuth_axis=azimuth_axis,
+                    caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+                    caked_image_index_to_axis_fn=caked_image_index_to_axis_fn,
+                )
+            except Exception:
+                resolved_background_pick = None
+
+        def _finite_pair(value: object) -> tuple[float, float] | None:
+            if isinstance(value, (str, bytes)):
+                return None
+            try:
+                if len(value) < 2:  # type: ignore[arg-type]
+                    return None
+                x_value = float(value[0])  # type: ignore[index]
+                y_value = float(value[1])  # type: ignore[index]
+            except Exception:
+                return None
+            if not (np.isfinite(x_value) and np.isfinite(y_value)):
+                return None
+            return float(x_value), float(y_value)
+
+        peak_display: tuple[float, float] | None = None
+        raw_display: tuple[float, float] | None = None
+        detector_native: tuple[float, float] | None = None
+        caked_point: tuple[float, float] | None = None
+        raw_caked_point: tuple[float, float] | None = None
+        if isinstance(resolved_background_pick, dict):
+            peak_display = (
+                float(resolved_background_pick["refined_detector_display_col"]),
+                float(resolved_background_pick["refined_detector_display_row"]),
+            )
+            detector_native = (
+                float(resolved_background_pick["refined_detector_native_col"]),
+                float(resolved_background_pick["refined_detector_native_row"]),
+            )
+            caked_point = (
+                float(resolved_background_pick["refined_background_two_theta_deg"]),
+                float(resolved_background_pick["refined_background_phi_deg"]),
+            )
+            raw_caked_point = (
+                float(
+                    resolved_background_pick.get(
+                        "raw_caked_two_theta_deg",
+                        resolved_background_pick["refined_background_two_theta_deg"],
+                    )
+                ),
+                float(
+                    resolved_background_pick.get(
+                        "raw_caked_phi_deg",
+                        resolved_background_pick["refined_background_phi_deg"],
+                    )
+                ),
+            )
+            if "detector_seed_col" in resolved_background_pick:
+                raw_display = (
+                    float(resolved_background_pick["detector_seed_col"]),
+                    float(resolved_background_pick["detector_seed_row"]),
+                )
+            elif callable(caked_angles_to_background_display_coords):
+                raw_display = _finite_pair(
+                    caked_angles_to_background_display_coords(
+                        float(raw_caked_point[0]),
+                        float(raw_caked_point[1]),
+                    )
+                )
+            if raw_display is None:
+                raw_display = peak_display
+        elif use_caked_space:
+            refined_caked_col, refined_caked_row = refine_preview_point(
+                None,
+                float(col),
+                float(row),
+                display_background=display_background,
+                cache_data=cache_data,
+            )
+            if np.isfinite(float(refined_caked_col)) and np.isfinite(float(refined_caked_row)):
+                caked_point = (float(refined_caked_col), float(refined_caked_row))
+                raw_caked_point = (float(col), float(row))
+                if callable(caked_angles_to_background_display_coords):
+                    peak_display = _finite_pair(
+                        caked_angles_to_background_display_coords(
+                            float(caked_point[0]),
+                            float(caked_point[1]),
+                        )
+                    )
+                    raw_display = _finite_pair(
+                        caked_angles_to_background_display_coords(float(col), float(row))
+                    )
+                if peak_display is not None and callable(
+                    background_display_to_native_detector_coords
+                ):
+                    detector_native = _finite_pair(
+                        background_display_to_native_detector_coords(
+                            float(peak_display[0]),
+                            float(peak_display[1]),
+                        )
+                    )
+        else:
+            refined_col, refined_row = refine_preview_point(
+                None,
+                float(col),
+                float(row),
+                display_background=display_background,
+                cache_data=cache_data,
+            )
+            if np.isfinite(float(refined_col)) and np.isfinite(float(refined_row)):
+                peak_display = (float(refined_col), float(refined_row))
+                raw_display = (float(col), float(row))
+                if callable(background_display_to_native_detector_coords):
+                    detector_native = _finite_pair(
+                        background_display_to_native_detector_coords(
+                            float(peak_display[0]),
+                            float(peak_display[1]),
+                        )
+                    )
+                    raw_detector_native = _finite_pair(
+                        background_display_to_native_detector_coords(float(col), float(row))
+                    )
+                    if raw_detector_native is not None and callable(
+                        native_detector_coords_to_caked_display_coords
+                    ):
+                        raw_caked_point = _finite_pair(
+                            native_detector_coords_to_caked_display_coords(
+                                float(raw_detector_native[0]),
+                                float(raw_detector_native[1]),
+                            )
+                        )
+                if detector_native is not None and callable(
+                    native_detector_coords_to_caked_display_coords
+                ):
+                    caked_point = _finite_pair(
+                        native_detector_coords_to_caked_display_coords(
+                            float(detector_native[0]),
+                            float(detector_native[1]),
+                        )
+                    )
+
+        if peak_display is None or caked_point is None:
+            if callable(set_status_text):
+                set_status_text(
+                    "Background Qr reference picking could not resolve that background peak to 2theta/phi."
+                )
+            return False, current_session
+        if raw_display is None:
+            raw_display = peak_display
+        if raw_caked_point is None:
+            raw_caked_point = caked_point
+        placement_error_px_value = position_error_px(
+            float(raw_display[0]),
+            float(raw_display[1]),
+            float(peak_display[0]),
+            float(peak_display[1]),
+        )
+        sigma_px_value = position_sigma_px(float(placement_error_px_value))
+        pair_entry = geometry_manual_background_qr_reference_pair_entry(
+            peak_col=float(peak_display[0]),
+            peak_row=float(peak_display[1]),
+            raw_col=float(raw_display[0]),
+            raw_row=float(raw_display[1]),
+            detector_col=(float(detector_native[0]) if detector_native is not None else None),
+            detector_row=(float(detector_native[1]) if detector_native is not None else None),
+            caked_col=float(caked_point[0]),
+            caked_row=float(caked_point[1]),
+            raw_caked_col=float(raw_caked_point[0]),
+            raw_caked_row=float(raw_caked_point[1]),
+            placement_error_px=float(placement_error_px_value),
+            sigma_px=float(sigma_px_value),
+            manual_run_id=manual_run_id,
+        )
+        pair_entry["manual_background_input_origin"] = (
+            "caked" if bool(use_caked_space) else "detector"
+        )
+        if callable(push_undo_state_fn):
+            push_undo_state_fn()
+        base_entries = current_session.get("base_entries", [])
+        updated_entries = [dict(entry) for entry in (base_entries or ()) if isinstance(entry, dict)]
+        updated_entries.append(pair_entry)
+        clear_preview_artists_fn(redraw=False)
+        if use_caked_space:
+            restore_view_fn(redraw=False)
+        set_pick_session_fn({})
+        set_pairs_for_index_fn(int(current_background_index), updated_entries)
+        render_current_pairs_fn(update_status=False)
+        update_button_label_fn()
+        if callable(set_status_text):
+            set_status_text(
+                "Saved background Qr reference "
+                f"{pair_entry['label']} on background {int(current_background_index) + 1}; "
+                f"local peak fit moved {float(placement_error_px_value):.2f}px."
+            )
+        return True, {}
+
     remaining_candidates = geometry_manual_unassigned_group_candidates(
         pick_session,
         current_background_index=current_background_index,
@@ -16950,6 +17337,17 @@ def geometry_manual_pair_entry_to_jsonable(
 
     if normalized.get("source_label") is not None:
         row["source_label"] = str(normalized.get("source_label"))
+    for bool_key in (
+        "background_qr_set_reference",
+        "manual_background_reference",
+        "geometry_fit_disabled",
+    ):
+        if bool_key in normalized:
+            row[bool_key] = bool(normalized.get(bool_key, False))
+    if normalized.get("background_qr_set_reference_label_source") is not None:
+        row["background_qr_set_reference_label_source"] = str(
+            normalized.get("background_qr_set_reference_label_source")
+        )
 
     for key in ("branch_id", "branch_source", "selection_reason"):
         if normalized.get(key) is not None:

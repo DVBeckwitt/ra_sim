@@ -13690,6 +13690,63 @@ def test_geometry_manual_place_selection_at_detector_pick_saves_projected_caked_
     assert serialized["raw_caked_y"] == 20.59
 
 
+def test_geometry_manual_place_selection_at_saves_background_qr_reference_without_hkl() -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    session = mg.start_geometry_manual_background_qr_reference_session(
+        current_background_index=0,
+        base_entries=[{"label": "1,0,0", "hkl": (1, 0, 0), "x": 1.0, "y": 2.0}],
+        manual_run_id="manual-test",
+    )
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=session,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) / 10.0,
+            float(row) / 10.0,
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    saved = saved_entry_sets[-1][-1]
+    assert saved["label"] == "2theta=10.5000,phi=20.6000"
+    assert "hkl" not in saved
+    assert "q_group_key" not in saved
+    assert saved["background_qr_set_reference"] is True
+    assert saved["geometry_fit_disabled"] is True
+    assert saved["background_two_theta_deg"] == 10.5
+    assert saved["background_phi_deg"] == 20.6
+
+    serialized = mg.geometry_manual_pair_entry_to_jsonable(saved)
+    assert serialized is not None
+    assert serialized["label"] == "2theta=10.5000,phi=20.6000"
+    assert "hkl" not in serialized
+    assert serialized["background_qr_set_reference"] is True
+    assert serialized["geometry_fit_disabled"] is True
+
+
 def test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callback() -> None:
     saved_entry_sets: list[list[dict[str, object]]] = []
 

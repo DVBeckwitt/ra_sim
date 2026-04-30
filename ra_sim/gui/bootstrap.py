@@ -1329,6 +1329,7 @@ def build_runtime_geometry_tool_action_controls_bootstrap(
     on_import_manual_pairs: Callable[[], None],
     on_toggle_preview_exclude: Callable[[], None],
     on_clear_manual_pairs: Callable[[], None],
+    on_place_background_qr_set: Callable[[], None] | None = None,
     on_add_all_qr_set_peaks: Callable[[], None] | None = None,
     on_remove_qr_set_peaks: Callable[[], None] | None = None,
     auto_refine_radius_value: float | None = None,
@@ -1354,6 +1355,8 @@ def build_runtime_geometry_tool_action_controls_bootstrap(
             kwargs["on_add_all_qr_set_peaks"] = on_add_all_qr_set_peaks
         if on_remove_qr_set_peaks is not None:
             kwargs["on_remove_qr_set_peaks"] = on_remove_qr_set_peaks
+        if on_place_background_qr_set is not None:
+            kwargs["on_place_background_qr_set"] = on_place_background_qr_set
         if auto_refine_radius_value is not None:
             kwargs["auto_refine_radius_value"] = auto_refine_radius_value
         if on_auto_refine_radius_changed is not None:

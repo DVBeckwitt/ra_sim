@@ -474,6 +474,7 @@ class GeometryToolActionsViewState:
     geometry_manual_pick_button: Any = None
     geometry_manual_click_remove_var: Any = None
     geometry_manual_click_remove_checkbutton: Any = None
+    geometry_manual_background_qr_button: Any = None
     geometry_manual_add_all_button: Any = None
     geometry_manual_remove_qr_set_button: Any = None
     geometry_manual_auto_search_radius_var: Any = None

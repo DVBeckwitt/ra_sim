@@ -1388,6 +1388,7 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_add_all() -
         on_clear_manual_pairs=lambda: events.append("clear"),
         on_add_all_qr_set_peaks=lambda: events.append("add-all"),
         on_remove_qr_set_peaks=lambda: events.append("remove"),
+        on_place_background_qr_set=lambda: events.append("place-background"),
         auto_refine_radius_value=48.0,
         on_auto_refine_radius_changed=lambda value: events.append(f"radius:{value:.0f}"),
         manual_drag_move_enabled=True,
@@ -1395,6 +1396,7 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_add_all() -
     )
 
     bundle.create_controls(parent="parent-frame")
+    view_calls[0]["on_place_background_qr_set"]()
     view_calls[0]["on_add_all_qr_set_peaks"]()
     view_calls[0]["on_remove_qr_set_peaks"]()
     view_calls[0]["on_auto_refine_radius_changed"](72.0)
@@ -1402,7 +1404,7 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_add_all() -
 
     assert view_calls[0]["auto_refine_radius_value"] == 48.0
     assert view_calls[0]["manual_drag_move_enabled"] is True
-    assert events == ["add-all", "remove", "radius:72", "drag:False"]
+    assert events == ["place-background", "add-all", "remove", "radius:72", "drag:False"]
 
 
 def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
