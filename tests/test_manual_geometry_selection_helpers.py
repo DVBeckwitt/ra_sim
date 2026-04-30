@@ -8033,6 +8033,91 @@ def test_build_geometry_manual_pick_cache_does_not_reuse_empty_detector_cache_wh
     assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
 
 
+def test_build_geometry_manual_pick_cache_rebuilds_detector_rows_for_listed_sf_groups() -> (
+    None
+):
+    base_key = ("q_group", "primary", 1, 0)
+    sf_key = ("q_group", "primary", 3, 2)
+    partial_rows = [
+        {
+            "q_group_key": base_key,
+            "qr": 1.0,
+            "qz": 0.0,
+            "source_label": "primary",
+            "source_reflection_index": 10,
+            "source_row_index": 0,
+            "best_sample_index": 0,
+            "display_col": 20.0,
+            "display_row": 30.0,
+            "native_col": 20.0,
+            "native_row": 30.0,
+        }
+    ]
+    full_rows = partial_rows + [
+        {
+            "q_group_key": sf_key,
+            "qr": 3.0,
+            "qz": 2.0,
+            "source_label": "primary",
+            "source_reflection_index": 21,
+            "source_row_index": 1,
+            "best_sample_index": 4,
+            "display_col": 80.0,
+            "display_row": 90.0,
+            "native_col": 80.0,
+            "native_row": 90.0,
+        },
+        {
+            "q_group_key": sf_key,
+            "qr": 3.0,
+            "qz": 2.0,
+            "source_label": "primary",
+            "source_reflection_index": 22,
+            "source_row_index": 2,
+            "best_sample_index": 5,
+            "display_col": 86.0,
+            "display_row": 91.0,
+            "native_col": 86.0,
+            "native_row": 91.0,
+        },
+    ]
+    source_calls: list[str] = []
+
+    def source_rows_for_background(_idx, _params=None, *, consumer=None):
+        source_calls.append(str(consumer))
+        rows = full_rows if consumer == "manual_pick_cache_coverage" else partial_rows
+        return [dict(entry) for entry in rows]
+
+    def grouped_candidates(entries):
+        grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+        for entry in entries or ():
+            grouped.setdefault(entry["q_group_key"], []).append(dict(entry))
+        return grouped
+
+    cache_data, _next_sig, _next_state = mg.build_geometry_manual_pick_cache(
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((160, 160), dtype=float),
+        cache_signature_fn=lambda **_kwargs: ("sf-cache",),
+        source_rows_for_background=source_rows_for_background,
+        listed_q_group_keys_for_picker=lambda: {base_key, sf_key},
+        build_grouped_candidates=grouped_candidates,
+        build_simulated_lookup=lambda _entries: {},
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    grouped = cache_data["detector_picker_grouped_candidates"]
+    assert source_calls == ["manual_pick_cache", "manual_pick_cache_coverage"]
+    assert set(grouped) == {base_key, sf_key}
+    assert len(grouped[sf_key]) == 2
+    assert [entry["source_reflection_index"] for entry in grouped[sf_key]] == [21, 22]
+    assert [entry["best_sample_index"] for entry in grouped[sf_key]] == [4, 5]
+    metadata = cache_data["cache_metadata"]
+    assert metadata["detector_picker_coverage_rebuild_attempted"] is True
+    assert metadata["detector_picker_missing_listed_q_group_keys_before"] == [list(sf_key)]
+    assert "detector_picker_missing_listed_q_group_keys" not in metadata
+
+
 def test_build_geometry_manual_pick_cache_skips_caked_only_preview_for_detector_rows() -> None:
     source_row_calls: list[int] = []
     caked_preview_row = {
@@ -20639,6 +20724,131 @@ def test_detector_mode_qr_picker_starts_without_caked_projection_cache() -> None
     assert next_session["group_key"] == group_key
     assert sessions[-1]["group_key"] == group_key
     assert not any("No simulated Qr/Qz groups are available" in text for text in status_messages)
+
+
+def test_caked_qr_picker_falls_back_to_detector_rows_when_projection_cache_missing() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    detector_row = {
+        "q_group_key": group_key,
+        "hkl": (-1, 0, 10),
+        "source_table_index": 160,
+        "source_row_index": 24,
+        "source_branch_index": 0,
+        "display_col": 120.0,
+        "display_row": 130.0,
+        "native_col": 220.0,
+        "native_row": 230.0,
+    }
+    cache_data = {
+        "detector_picker_rows": [dict(detector_row)],
+        "detector_picker_source_rows": [],
+        "detector_picker_grouped_candidates": {},
+        "caked_qr_projection_entries": [],
+        "caked_qr_projection_grouped_candidates": {},
+        "caked_qr_projection_lookup": {},
+    }
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        120.0,
+        130.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((300, 300), dtype=float),
+        get_cache_data=lambda **_kwargs: cache_data,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=True,
+        pick_search_window_px=20.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert sessions[-1]["group_key"] == group_key
+    assert "using detector-space Qr picking" in status_messages[-1]
+    assert "No simulated Qr/Qz groups are available" not in status_messages[-1]
+
+
+def test_caked_qr_picker_starts_sf_detector_fallback_group_with_variable_count() -> None:
+    group_key = ("q_group", "primary", 3, 2)
+    detector_rows = [
+        {
+            "q_group_key": group_key,
+            "hkl": (-3, 0, 2),
+            "qr": 3.0,
+            "qz": 2.0,
+            "source_label": "primary",
+            "source_reflection_index": 21,
+            "source_row_index": 1,
+            "best_sample_index": 4,
+            "display_col": 120.0,
+            "display_row": 130.0,
+            "native_col": 220.0,
+            "native_row": 230.0,
+        },
+        {
+            "q_group_key": group_key,
+            "hkl": (3, 0, 2),
+            "qr": 3.0,
+            "qz": 2.0,
+            "source_label": "primary",
+            "source_reflection_index": 22,
+            "source_row_index": 2,
+            "best_sample_index": 5,
+            "display_col": 127.0,
+            "display_row": 131.0,
+            "native_col": 227.0,
+            "native_row": 231.0,
+        },
+    ]
+    cache_data = {
+        "detector_picker_rows": [dict(entry) for entry in detector_rows],
+        "detector_picker_grouped_candidates": {},
+        "caked_qr_projection_entries": [],
+        "caked_qr_projection_grouped_candidates": {},
+        "caked_qr_projection_lookup": {},
+    }
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        120.0,
+        130.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((300, 300), dtype=float),
+        get_cache_data=lambda **_kwargs: cache_data,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected SF group",
+        use_caked_space=True,
+        pick_search_window_px=20.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["target_count"] == 2
+    assert sessions[-1]["target_count"] == 2
+    assert "using detector-space Qr picking" in status_messages[-1]
+    assert "No simulated Qr/Qz groups are available" not in status_messages[-1]
 
 
 def test_minus_1_0_10_sim_visual_uses_refined_peak_for_both_branches(tmp_path) -> None:

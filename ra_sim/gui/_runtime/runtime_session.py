@@ -8776,15 +8776,17 @@ def _geometry_manual_project_peaks_for_background(
     caked_payload: Mapping[str, object] | None = None,
     background_native: object = None,
     background_display: object = None,
+    strict_caked_projection: bool = True,
 ) -> list[dict[str, object]]:
     normalized_rows = _geometry_fit_rows_for_background(background_index, raw_rows)
     if not normalized_rows:
         return []
 
+    requested_mode_override = None if mode_override is None else str(mode_override).strip().lower()
     normalized_mode = (
         str(
-            mode_override
-            if mode_override is not None
+            requested_mode_override
+            if requested_mode_override is not None
             else _geometry_fit_targeted_projection_view_mode()
         )
         .strip()
@@ -8792,6 +8794,7 @@ def _geometry_manual_project_peaks_for_background(
     )
     if normalized_mode not in {"detector", "caked", "q_space"}:
         normalized_mode = "detector"
+    explicit_detector_projection = requested_mode_override == "detector"
 
     try:
         current_background_index = int(background_runtime_state.current_background_index)
@@ -8815,6 +8818,7 @@ def _geometry_manual_project_peaks_for_background(
 
     if (
         normalized_mode != "caked"
+        and not explicit_detector_projection
         and is_current_background
         and callable(_project_geometry_manual_peaks_to_current_view)
     ):
@@ -8856,6 +8860,8 @@ def _geometry_manual_project_peaks_for_background(
             allow_generated_payload=True,
         )
         if not isinstance(resolved_caked_payload, Mapping):
+            if not bool(strict_caked_projection):
+                return []
             raise RuntimeError(
                 f"exact caked projector unavailable for background {int(background_index) + 1}"
             )
@@ -8873,6 +8879,8 @@ def _geometry_manual_project_peaks_for_background(
             hydrated_caked_payload.get("transform_bundle"),
             CakeTransformBundle,
         ):
+            if not bool(strict_caked_projection):
+                return []
             raise RuntimeError(
                 f"exact caked projector unavailable for background {int(background_index) + 1}"
             )
@@ -8980,7 +8988,7 @@ def _geometry_manual_project_peaks_for_background(
     except Exception:
         if normalized_mode == "q_space":
             return []
-        if normalized_mode == "caked":
+        if normalized_mode == "caked" and bool(strict_caked_projection):
             raise
         return normalized_rows
 
@@ -9897,6 +9905,7 @@ def _initialize_runtime_controls_block_04() -> None:
                 lambda background_index, rows: _geometry_manual_project_peaks_for_background(
                     int(background_index),
                     rows,
+                    strict_caked_projection=False,
                 )
             ),
             entry_display_coords=_geometry_manual_entry_display_coords,
@@ -25140,6 +25149,24 @@ def _geometry_source_snapshot_signature_for_background(
         id(simulation_runtime_state.sim_miller2),
         tuple(np.asarray(simulation_runtime_state.sim_miller2).shape),
     )
+    stacking_p_signature: tuple[object, ...] = ()
+    try:
+        stacking_p_signature = tuple(
+            _geometry_source_signature_numeric(var.get())
+            for var in (p0_var, p1_var, p2_var)
+        )
+    except Exception:
+        stacking_p_signature = ()
+    stacking_weight_signature: tuple[object, ...] = ()
+    try:
+        stacking_weight_signature = tuple(
+            _geometry_source_signature_numeric(value)
+            for value in gui_controllers.normalize_stacking_weight_values(
+                [w0_var.get(), w1_var.get(), w2_var.get()]
+            )
+        )
+    except Exception:
+        stacking_weight_signature = ()
     primary_a = _geometry_source_signature_numeric(params.get("a"))
     primary_c = _geometry_source_signature_numeric(params.get("c"))
     secondary_a = float(av2) if av2 is not None else primary_a
@@ -25161,7 +25188,27 @@ def _geometry_source_snapshot_signature_for_background(
     row_content_signature = gui_geometry_q_group_manager._geometry_q_group_signature_value(
         getattr(simulation_runtime_state, "stored_q_group_content_signature", None)
     )
-    return image_signature + (row_content_signature,)
+    sf_picker_inventory_signature = (
+        "sf_picker_inventory",
+        str(getattr(simulation_runtime_state, "primary_source_mode", "")),
+        str(getattr(simulation_runtime_state, "primary_requested_source_mode", "")),
+        gui_geometry_q_group_manager._geometry_q_group_signature_value(
+            getattr(simulation_runtime_state, "primary_active_contribution_keys", ())
+        ),
+        gui_geometry_q_group_manager._geometry_q_group_signature_value(
+            getattr(simulation_runtime_state, "primary_requested_contribution_keys", ())
+        ),
+        gui_geometry_q_group_manager._geometry_q_group_signature_value(
+            getattr(simulation_runtime_state, "primary_filter_signature", None)
+        ),
+        gui_geometry_q_group_manager._geometry_q_group_signature_value(
+            getattr(simulation_runtime_state, "primary_requested_filter_signature", None)
+        ),
+        tuple(sorted((simulation_runtime_state.sf_prune_stats or {}).items())),
+        stacking_p_signature,
+        stacking_weight_signature,
+    )
+    return image_signature + (row_content_signature, sf_picker_inventory_signature)
 
 
 def _geometry_source_snapshot_payload(
@@ -25568,10 +25615,19 @@ def _geometry_fit_targeted_projection_view_mode() -> str:
     return normalized_mode
 
 
+def _geometry_manual_consumer_is_manual_pick_cache(lookup_context: object) -> bool:
+    return str(lookup_context or "").strip() in {
+        "manual_pick_cache",
+        "manual_pick_cache_coverage",
+    }
+
+
 def _geometry_manual_projection_mode_override_for_consumer(
     lookup_context: str | None,
+    *,
+    background_index: int | None = None,
 ) -> str | None:
-    if str(lookup_context or "").strip() != "manual_pick_cache":
+    if not _geometry_manual_consumer_is_manual_pick_cache(lookup_context):
         return None
     pick_uses_caked = False
     pick_uses_caked_factory = globals().get("_geometry_manual_pick_uses_caked_space")
@@ -25580,7 +25636,35 @@ def _geometry_manual_projection_mode_override_for_consumer(
             pick_uses_caked = bool(pick_uses_caked_factory())
         except Exception:
             pick_uses_caked = False
-    return None if pick_uses_caked else "detector"
+    if not pick_uses_caked:
+        return "detector"
+    if background_index is None:
+        return "detector"
+    try:
+        caked_payload = _geometry_fit_caked_view_for_index(int(background_index))
+    except Exception:
+        caked_payload = None
+    if not isinstance(caked_payload, Mapping):
+        return "detector"
+    try:
+        params_for_payload = dict(_current_geometry_fit_params() or {})
+    except Exception:
+        params_for_payload = {}
+    try:
+        hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            caked_payload,
+            detector_shape=caked_payload.get("detector_shape"),
+            params=params_for_payload,
+            require_background=False,
+        )
+    except Exception:
+        hydrated_payload = None
+    if not isinstance(hydrated_payload, Mapping) or not isinstance(
+        hydrated_payload.get("transform_bundle"),
+        CakeTransformBundle,
+    ):
+        return "detector"
+    return None
 
 
 def _geometry_fit_projection_signature_public(
@@ -26221,7 +26305,8 @@ def _geometry_manual_rebuild_source_rows_for_background(
     live_cache_inventory = _live_cache_inventory_snapshot()
     background_label = _geometry_fit_background_label(background_idx)
     projection_mode_override = _geometry_manual_projection_mode_override_for_consumer(
-        lookup_context
+        lookup_context,
+        background_index=background_idx,
     )
     projection_view_signature = _normalize_geometry_fit_projection_view_signature(
         _geometry_fit_targeted_projection_view_signature(
@@ -26231,6 +26316,20 @@ def _geometry_manual_rebuild_source_rows_for_background(
         background_idx,
     )
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
+    manual_pick_cache_lookup = _geometry_manual_consumer_is_manual_pick_cache(lookup_context)
+    if (
+        manual_pick_cache_lookup
+        and projection_view_mode != "detector"
+        and not bool(projection_view_signature.get("available", True))
+    ):
+        projection_view_signature = _normalize_geometry_fit_projection_view_signature(
+            _geometry_fit_targeted_projection_view_signature(
+                background_idx,
+                mode_override="detector",
+            ),
+            background_idx,
+        )
+        projection_view_mode = str(projection_view_signature.get("mode") or "detector")
     projection_payload = (
         _geometry_fit_resolve_targeted_caked_projection_payload(
             int(background_idx),
@@ -26546,6 +26645,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
                 int(background_idx),
                 rows,
                 mode_override=projection_view_mode,
+                strict_caked_projection=not manual_pick_cache_lookup,
             )
         ),
         project_rows_for_background_view=(
@@ -26554,6 +26654,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
                 rows,
                 mode_override=projection_view_mode,
                 caked_payload=projection_payload,
+                strict_caked_projection=not manual_pick_cache_lookup,
             )
         ),
         required_pairs=required_pairs,
@@ -26602,8 +26703,9 @@ def _geometry_manual_source_rows_for_background(
         or getattr(simulation_runtime_state, "stored_intersection_cache", None) is not None
         or bool(getattr(simulation_runtime_state, "peak_records", None))
     )
+    manual_pick_cache_lookup = _geometry_manual_consumer_is_manual_pick_cache(lookup_context)
     allow_manual_pick_rebuild = bool(
-        lookup_context == "manual_pick_cache"
+        manual_pick_cache_lookup
         and int(background_idx) == int(current_background_idx)
         and has_manual_pick_rebuild_artifacts
     )
@@ -26635,7 +26737,8 @@ def _geometry_manual_source_rows_for_background(
     preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
     targeted_preflight_enabled = preflight_mode == "manual_geometry_targeted"
     projection_mode_override = _geometry_manual_projection_mode_override_for_consumer(
-        lookup_context
+        lookup_context,
+        background_index=background_idx,
     )
     projection_view_signature = _normalize_geometry_fit_projection_view_signature(
         _geometry_fit_targeted_projection_view_signature(
@@ -26645,6 +26748,19 @@ def _geometry_manual_source_rows_for_background(
         background_idx,
     )
     projection_view_mode = str(projection_view_signature.get("mode") or "detector")
+    if (
+        manual_pick_cache_lookup
+        and projection_view_mode != "detector"
+        and not bool(projection_view_signature.get("available", True))
+    ):
+        projection_view_signature = _normalize_geometry_fit_projection_view_signature(
+            _geometry_fit_targeted_projection_view_signature(
+                background_idx,
+                mode_override="detector",
+            ),
+            background_idx,
+        )
+        projection_view_mode = str(projection_view_signature.get("mode") or "detector")
     required_branch_group_keys_digest = (
         gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
             required_branch_group_keys,
@@ -26869,6 +26985,19 @@ def _geometry_manual_source_rows_for_background(
             )
         except Exception:
             pass
+
+    if lookup_context == "manual_pick_cache_coverage" and allow_manual_pick_rebuild:
+        dataset_debug["rebuild_attempted"] = True
+        rebuilt_rows = _geometry_manual_rebuild_source_rows_for_background(
+            background_idx,
+            param_set,
+            consumer=lookup_context,
+            prior_diagnostics=_geometry_manual_last_source_snapshot_diagnostics(),
+            required_pairs=required_pairs,
+        )
+        dataset_debug["rebuild_returned_row_count"] = int(len(rebuilt_rows or ()))
+        if rebuilt_rows:
+            return _finish_source_rows(rebuilt_rows, status="snapshot_rebuilt_coverage")
 
     if targeted_preflight_enabled:
         targeted_cache_payload = _geometry_fit_load_targeted_projected_cache_entry(
@@ -27405,6 +27534,7 @@ def _geometry_manual_source_rows_for_background(
             int(background_idx),
             rows_to_project,
             mode_override=projection_view_mode,
+            strict_caked_projection=not manual_pick_cache_lookup,
         )
         projected_projection_count = int(len(rows_to_project))
         projected_rows = _geometry_fit_rows_for_background(

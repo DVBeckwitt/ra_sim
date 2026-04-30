@@ -17405,6 +17405,127 @@ def test_current_caked_projection_skips_legacy_projector_and_hydrates_exact_bund
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+def test_manual_pick_caked_projection_missing_payload_fails_open(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    resolve_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(ai_cache={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_load_background_image_by_index",
+        lambda idx: (
+            np.full((4, 4), float(idx), dtype=np.float64),
+            np.full((4, 4), float(idx), dtype=np.float64),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda background_index, **kwargs: (
+            resolve_calls.append({"background_index": int(background_index), **dict(kwargs)})
+            or None
+        ),
+        raising=False,
+    )
+
+    rows = runtime_session._geometry_manual_project_peaks_for_background(
+        1,
+        [dict(_geometry_fit_worker_live_row(), background_index=1, row_id="row")],
+        mode_override="caked",
+        strict_caked_projection=False,
+    )
+
+    assert rows == []
+    assert resolve_calls
+    assert resolve_calls[0]["background_index"] == 1
+    assert resolve_calls[0]["allow_generated_payload"] is True
+
+
+def test_manual_pick_detector_override_bypasses_current_caked_projector(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    current_view_calls: list[object] = []
+    detector_callback_modes: list[object] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(ai_cache={}, profile_cache={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_project_geometry_manual_peaks_to_current_view",
+        lambda rows: current_view_calls.append(list(rows or ())) or [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_load_background_image_by_index",
+        lambda _idx: (
+            np.ones((4, 4), dtype=np.float64),
+            np.ones((4, 4), dtype=np.float64),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **kwargs: SimpleNamespace(
+            project_peaks_to_current_view=lambda rows: (
+                detector_callback_modes.append(bool(kwargs["caked_view_enabled"]()))
+                or [
+                    dict(
+                        entry,
+                        display_col=float(entry.get("sim_col", entry.get("display_col", 0.0))),
+                        display_row=float(entry.get("sim_row", entry.get("display_row", 0.0))),
+                        display_frame="detector_display",
+                    )
+                    for entry in rows or ()
+                    if isinstance(entry, Mapping)
+                ]
+            )
+        ),
+    )
+
+    rows = runtime_session._geometry_manual_project_peaks_for_background(
+        0,
+        [dict(_geometry_fit_worker_live_row(), background_index=0, row_id="row")],
+        mode_override="detector",
+        strict_caked_projection=False,
+    )
+
+    assert current_view_calls == []
+    assert detector_callback_modes == [False]
+    assert len(rows) == 1
+    assert rows[0]["row_id"] == "row"
+    assert rows[0]["display_frame"] == "detector_display"
+    assert rows[0]["background_index"] == 0
+
+
     payload = _geometry_fit_worker_caked_payload(
         runtime_session,
         background_value=1.0,
@@ -18672,6 +18793,272 @@ def test_manual_pick_cache_source_rows_rebuilds_when_snapshot_projection_empty(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+def test_manual_pick_cache_caked_view_uses_detector_rows_when_projector_missing(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    runtime_session.background_runtime_state.current_background_index = 0
+    simulation_state.source_row_snapshots = {}
+    simulation_state.stored_max_positions_local = [np.zeros((1, 7), dtype=np.float64)]
+    rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "hkl": (-1, 0, 10),
+            "source_table_index": 3,
+            "source_row_index": 4,
+            "source_branch_index": 0,
+            "display_col": 120.0,
+            "display_row": 130.0,
+            "native_col": 220.0,
+            "native_row": 230.0,
+        }
+    ]
+    rebuild_calls: list[dict[str, object]] = []
+    projection_mode_overrides: list[object] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_view_for_index",
+        lambda _idx: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda _idx, **kwargs: (
+            projection_mode_overrides.append(kwargs.get("mode_override"))
+            or {
+                "mode": str(kwargs.get("mode_override") or "caked"),
+                "detector_shape": [64, 64],
+                "available": kwargs.get("mode_override") == "detector",
+            }
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_rebuild_source_rows_for_background",
+        lambda background_idx, param_set=None, **kwargs: (
+            rebuild_calls.append(
+                {
+                    "background_idx": int(background_idx),
+                    "consumer": kwargs.get("consumer"),
+                    "param_set": dict(param_set or {}),
+                }
+            )
+            or [dict(entry) for entry in rows]
+        ),
+        raising=False,
+    )
+
+    returned_rows = runtime_session._geometry_manual_source_rows_for_background(
+        0,
+        {"a": 4.143},
+        consumer="manual_pick_cache",
+    )
+    diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert returned_rows == [dict(entry) for entry in rows]
+    assert rebuild_calls == [
+        {
+            "background_idx": 0,
+            "consumer": "manual_pick_cache",
+            "param_set": {"a": 4.143},
+        }
+    ]
+    assert projection_mode_overrides == ["detector"]
+    assert diagnostics["projection_view_mode"] == "detector"
+    assert diagnostics["status"] == "snapshot_rebuilt"
+
+
+def test_manual_pick_cache_coverage_rebuild_bypasses_partial_snapshot(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    runtime_session.background_runtime_state.current_background_index = 0
+    simulation_state.stored_max_positions_local = [np.zeros((1, 7), dtype=np.float64)]
+    partial_row = {
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "hkl": (-1, 0, 0),
+        "source_reflection_index": 10,
+        "source_row_index": 0,
+        "display_col": 12.0,
+        "display_row": 14.0,
+        "background_index": 0,
+    }
+    full_rows = [
+        dict(partial_row),
+        {
+            "q_group_key": ("q_group", "primary", 3, 2),
+            "hkl": (-3, 0, 2),
+            "source_reflection_index": 21,
+            "source_row_index": 1,
+            "best_sample_index": 4,
+            "display_col": 42.0,
+            "display_row": 44.0,
+            "background_index": 0,
+        },
+    ]
+    requested_signature = runtime_session._geometry_source_snapshot_signature_for_background(
+        0,
+        {"a": 4.143},
+    )
+    simulation_state.source_row_snapshots = {
+        0: {
+            "simulation_signature": requested_signature,
+            "row_content_signature": None,
+            "stored_rows": [dict(partial_row)],
+            "rows": [dict(partial_row)],
+            "projected_rows": [],
+            "valid_for_picker": True,
+            "valid_for_geometry_fit_dataset": True,
+            "background_index": 0,
+            "created_from": "partial_snapshot",
+        }
+    }
+    rebuild_calls: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_view_for_index",
+        lambda _idx: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda _idx, **kwargs: {
+            "mode": str(kwargs.get("mode_override") or "detector"),
+            "detector_shape": [64, 64],
+            "available": True,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_rebuild_source_rows_for_background",
+        lambda _idx, _params=None, **kwargs: (
+            rebuild_calls.append(str(kwargs.get("consumer")))
+            or [dict(entry) for entry in full_rows]
+        ),
+        raising=False,
+    )
+
+    returned_rows = runtime_session._geometry_manual_source_rows_for_background(
+        0,
+        {"a": 4.143},
+        consumer="manual_pick_cache_coverage",
+    )
+    diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert returned_rows == [dict(entry) for entry in full_rows]
+    assert rebuild_calls == ["manual_pick_cache_coverage"]
+    assert diagnostics["status"] == "snapshot_rebuilt_coverage"
+    assert diagnostics["rebuild_attempted"] is True
+    assert diagnostics["rebuild_returned_row_count"] == 2
+
+
+def test_geometry_source_snapshot_signature_tracks_sf_picker_inventory(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class ValueVar:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    simulation_state = SimpleNamespace(
+        sim_primary_qr={("base",): np.zeros((1, 7), dtype=np.float64)},
+        sim_miller1=np.zeros((1, 3), dtype=np.float64),
+        sim_miller2=np.zeros((1, 3), dtype=np.float64),
+        sf_prune_stats={"qr_kept": 2, "hkl_primary_kept": 3},
+        stored_q_group_content_signature=("rows", 1),
+        primary_source_mode="qr",
+        primary_requested_source_mode="qr",
+        primary_active_contribution_keys=[("sf", "base")],
+        primary_requested_contribution_keys=[("sf", "base")],
+        primary_filter_signature=("filter", "base"),
+        primary_requested_filter_signature=("filter", "base"),
+    )
+    mosaic_params = {
+        "solve_q_steps": 1000,
+        "solve_q_rel_tol": 5.0e-4,
+        "solve_q_mode": 1,
+        "events_per_beam_phase": 25,
+        "_sampling_signature": ("sampling", 25),
+        "beam_x_array": np.zeros(2, dtype=np.float64),
+        "theta_array": np.zeros(3, dtype=np.float64),
+        "sigma_mosaic_deg": 0.0,
+        "gamma_mosaic_deg": 0.0,
+        "eta": 0.0,
+    }
+    p0 = ValueVar(0.01)
+    p1 = ValueVar(0.0)
+    p2 = ValueVar(0.5)
+    w0 = ValueVar(1.0)
+    w1 = ValueVar(1.0)
+    w2 = ValueVar(1.0)
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", simulation_state)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: {"a": 4.143, "c": 28.64, "theta_initial": 0.0},
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "build_mosaic_params", lambda: dict(mosaic_params))
+    monkeypatch.setattr(runtime_session, "_current_optics_mode_flag", lambda: 0)
+    monkeypatch.setattr(runtime_session, "current_sf_prune_bias", lambda: 2.0, raising=False)
+    monkeypatch.setattr(runtime_session, "_current_ordered_structure_scale", lambda: 1.0)
+    monkeypatch.setattr(runtime_session, "_qr_cylinder_replace_simulation_enabled", lambda: False)
+    monkeypatch.setattr(runtime_session, "av2", None, raising=False)
+    monkeypatch.setattr(runtime_session, "cv2", None, raising=False)
+    monkeypatch.setattr(runtime_session, "p0_var", p0, raising=False)
+    monkeypatch.setattr(runtime_session, "p1_var", p1, raising=False)
+    monkeypatch.setattr(runtime_session, "p2_var", p2, raising=False)
+    monkeypatch.setattr(runtime_session, "w0_var", w0, raising=False)
+    monkeypatch.setattr(runtime_session, "w1_var", w1, raising=False)
+    monkeypatch.setattr(runtime_session, "w2_var", w2, raising=False)
+
+    baseline_signature = runtime_session._geometry_source_snapshot_signature_for_background(
+        0,
+        {"a": 4.143},
+    )
+    p1.set(0.99)
+    p_signature = runtime_session._geometry_source_snapshot_signature_for_background(
+        0,
+        {"a": 4.143},
+    )
+    simulation_state.primary_active_contribution_keys = [("sf", "expanded")]
+    key_signature = runtime_session._geometry_source_snapshot_signature_for_background(
+        0,
+        {"a": 4.143},
+    )
+
+    assert p_signature != baseline_signature
+    assert key_signature != p_signature
+
+
     simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
     runtime_session.background_runtime_state.current_background_index = 0
     simulation_state.stored_max_positions_local = [np.zeros((1, 7), dtype=np.float64)]

@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -5099,6 +5099,45 @@ def _geometry_manual_branch_index_from_value(value: object) -> int | None:
     return int(branch) if branch in {0, 1} else None
 
 
+def _geometry_manual_q_group_unknown_source_identity_slot(
+    entry: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+) -> tuple[object, ...] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    identity_parts: list[tuple[str, object]] = []
+    strong_identity_seen = False
+    for key in (
+        "source_label",
+        "source_table_index",
+        "source_reflection_index",
+        "source_row_index",
+        "best_sample_index",
+        "source_peak_index",
+    ):
+        value = entry.get(key)
+        if value is None:
+            continue
+        if key != "source_label":
+            strong_identity_seen = True
+        identity_parts.append((key, _geometry_manual_hashable_identity_value(value)))
+    if strong_identity_seen:
+        normalized_key = _geometry_manual_real_q_group_key(group_key)
+        if normalized_key is None:
+            normalized_key = _geometry_manual_real_q_group_key(entry)
+        return (
+            "source_identity",
+            _geometry_manual_hashable_identity_value(normalized_key),
+            tuple(identity_parts),
+        )
+    raw_hkl = entry.get("normalized_hkl", entry.get("hkl", entry.get("source_hkl")))
+    if raw_hkl is not None:
+        hkl_identity = _geometry_manual_hashable_identity_value(raw_hkl)
+        return ("hkl_identity", hkl_identity)
+    return None
+
+
 def _geometry_manual_q_group_physical_branch_slot(
     entry: Mapping[str, object] | None,
     *,
@@ -5126,6 +5165,12 @@ def _geometry_manual_q_group_physical_branch_slot(
     normalized_key = _geometry_manual_real_q_group_key(group_key)
     if normalized_key is None:
         normalized_key = _geometry_manual_real_q_group_key(entry)
+    source_identity_slot = _geometry_manual_q_group_unknown_source_identity_slot(
+        entry,
+        group_key=normalized_key,
+    )
+    if source_identity_slot is not None:
+        return source_identity_slot
     branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
         entry,
         target_key=normalized_key,
@@ -8557,8 +8602,55 @@ def build_geometry_manual_pick_cache(
     detector_picker_rows: list[dict[str, object]] = []
     detector_picker_grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
     detector_picker_reused_after_background_refresh = False
+    detector_picker_coverage_rebuild_attempted = False
+    detector_picker_coverage_missing_before: list[tuple[object, ...]] = []
+    detector_picker_coverage_missing_after: list[tuple[object, ...]] = []
     source_rows_provider_calls = 0
     existing_cache_reproject_failed = False
+
+    def _listed_picker_q_group_keys() -> list[tuple[object, ...]]:
+        raw_keys = (
+            listed_q_group_keys_for_picker()
+            if callable(listed_q_group_keys_for_picker)
+            else listed_q_group_keys_for_picker
+        )
+        if isinstance(raw_keys, Mapping):
+            iterable = raw_keys.keys()
+        elif isinstance(raw_keys, Iterable) and not isinstance(raw_keys, (str, bytes)):
+            iterable = raw_keys
+        else:
+            iterable = ()
+        normalized: list[tuple[object, ...]] = []
+        seen: set[tuple[object, ...]] = set()
+        for raw_key in iterable:
+            candidate = raw_key
+            if isinstance(raw_key, Mapping):
+                candidate = raw_key.get("key", raw_key.get("q_group_key"))
+            key = _geometry_manual_real_q_group_key(candidate)
+            if key is None and isinstance(raw_key, Mapping):
+                key = _geometry_manual_real_q_group_key(raw_key)
+            if key is None or key in seen:
+                continue
+            normalized.append(key)
+            seen.add(key)
+        return normalized
+
+    def _detector_picker_covered_q_group_keys() -> set[tuple[object, ...]]:
+        covered: set[tuple[object, ...]] = set()
+        for raw_key, entries in detector_picker_grouped_candidates.items():
+            if not entries:
+                continue
+            key = _geometry_manual_real_q_group_key(raw_key)
+            if key is not None:
+                covered.add(key)
+        return covered
+
+    def _missing_listed_detector_picker_q_group_keys() -> list[tuple[object, ...]]:
+        listed_keys = _listed_picker_q_group_keys()
+        if not listed_keys:
+            return []
+        covered = _detector_picker_covered_q_group_keys()
+        return [key for key in listed_keys if key not in covered]
 
     def _apply_candidate_source(
         candidate_rows: Sequence[dict[str, object]] | None,
@@ -8755,7 +8847,9 @@ def build_geometry_manual_pick_cache(
             stale_reason = stale_reason_override
         return True
 
-    def _source_rows_from_background_provider() -> list[dict[str, object]]:
+    def _source_rows_from_background_provider(
+        consumer: str = "manual_pick_cache",
+    ) -> list[dict[str, object]]:
         nonlocal source_rows_provider_calls
         if not callable(source_rows_for_background):
             return []
@@ -8763,7 +8857,7 @@ def build_geometry_manual_pick_cache(
         raw_rows = source_rows_for_background(
             bg_index,
             param_set,
-            consumer="manual_pick_cache",
+            consumer=consumer,
         )
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
 
@@ -9132,6 +9226,49 @@ def build_geometry_manual_pick_cache(
             stale_reason_override=stale_reason,
         ):
             pass
+    if bg_index == current_bg_index and callable(source_rows_for_background):
+        detector_picker_coverage_missing_before = _missing_listed_detector_picker_q_group_keys()
+        if detector_picker_coverage_missing_before:
+            detector_picker_coverage_rebuild_attempted = True
+            coverage_rows = _source_rows_from_background_provider(
+                "manual_pick_cache_coverage"
+            )
+            if coverage_rows:
+                _coverage_detector_rows, coverage_grouped_candidates = (
+                    geometry_manual_detector_picker_candidates_from_rows(
+                        coverage_rows,
+                        display_background=background_image,
+                        profile_cache=profile_cache_for_picker,
+                    )
+                )
+                coverage_group_keys = {
+                    key
+                    for key, entries in coverage_grouped_candidates.items()
+                    if key is not None and entries
+                }
+                if not detector_picker_grouped_candidates or any(
+                    key in coverage_group_keys
+                    for key in detector_picker_coverage_missing_before
+                ):
+                    _apply_candidate_source(
+                        coverage_rows,
+                        action="rebuilt",
+                        source=(
+                            "geometry_manual_source_rows_for_background"
+                            "(manual_pick_cache_coverage)"
+                        ),
+                        provenance=[
+                            "geometry_manual_source_rows_for_background",
+                            "manual_pick_cache_coverage",
+                            "build_grouped_candidates",
+                            "build_simulated_lookup",
+                        ],
+                        reproject=False,
+                        stale_reason_override=stale_reason,
+                    )
+            detector_picker_coverage_missing_after = (
+                _missing_listed_detector_picker_q_group_keys()
+            )
     if not simulated_peaks and stale_reason is None:
         stale_reason = (
             "source snapshot rows were unavailable; no reusable cached "
@@ -9215,6 +9352,24 @@ def build_geometry_manual_pick_cache(
     source_rows_provider_attempted = bool(source_rows_provider_calls > 0)
     cache_metadata = dict(cache_result.get("cache_metadata") or {})
     cache_metadata["source_rows_provider_attempted"] = source_rows_provider_attempted
+    listed_picker_q_group_keys = _listed_picker_q_group_keys()
+    if listed_picker_q_group_keys:
+        detector_picker_coverage_missing_after = _missing_listed_detector_picker_q_group_keys()
+        cache_metadata["listed_q_group_key_count"] = int(len(listed_picker_q_group_keys))
+        cache_metadata["detector_picker_group_count"] = int(
+            len(detector_picker_grouped_candidates)
+        )
+        cache_metadata["detector_picker_coverage_rebuild_attempted"] = bool(
+            detector_picker_coverage_rebuild_attempted
+        )
+        if detector_picker_coverage_missing_before:
+            cache_metadata["detector_picker_missing_listed_q_group_keys_before"] = [
+                list(key) for key in detector_picker_coverage_missing_before
+            ]
+        if detector_picker_coverage_missing_after:
+            cache_metadata["detector_picker_missing_listed_q_group_keys"] = [
+                list(key) for key in detector_picker_coverage_missing_after
+            ]
     if detector_picker_reused_after_background_refresh:
         cache_metadata["detector_picker_reused_after_background_refresh"] = True
     cache_metadata["caked_qr_projection_sidecar_requested"] = bool(
@@ -14432,6 +14587,54 @@ def geometry_manual_toggle_selection_at(
     cache_data = get_cache_data(background_image=display_background)
     picker_trace: dict[str, object] | None = None
     existing_entries = [dict(entry) for entry in pairs_for_index(int(current_background_index))]
+    caked_projection_fallback_note = ""
+    picker_uses_caked_space = bool(use_caked_space)
+    if picker_uses_caked_space:
+        caked_grouped_candidates = (
+            cache_data.get("caked_qr_projection_grouped_candidates")
+            if isinstance(cache_data, Mapping)
+            else None
+        )
+        if isinstance(caked_grouped_candidates, Mapping) and caked_grouped_candidates:
+            grouped_candidates = dict(caked_grouped_candidates)
+        else:
+            caked_projection_fallback_note = (
+                "Exact caked Qr projection unavailable; using detector-space Qr picking. "
+            )
+            grouped_candidates = geometry_manual_detector_picker_grouped_candidates_from_cache(
+                cache_data,
+                display_background=display_background,
+                profile_cache=profile_cache,
+            )
+            picker_trace = geometry_manual_detector_picker_input_trace(
+                cache_data,
+                view_mode="detector",
+                background_index=int(current_background_index),
+                display_background=display_background,
+                grouped_candidates=grouped_candidates,
+                profile_cache=profile_cache,
+            )
+            if callable(trace_picker_input_fn):
+                trace_picker_input_fn(dict(picker_trace))
+            if grouped_candidates:
+                picker_uses_caked_space = False
+    else:
+        grouped_candidates = geometry_manual_detector_picker_grouped_candidates_from_cache(
+            cache_data,
+            display_background=display_background,
+            profile_cache=profile_cache,
+        )
+        picker_trace = geometry_manual_detector_picker_input_trace(
+            cache_data,
+            view_mode="detector",
+            background_index=int(current_background_index),
+            display_background=display_background,
+            grouped_candidates=grouped_candidates,
+            profile_cache=profile_cache,
+        )
+        if callable(trace_picker_input_fn):
+            trace_picker_input_fn(dict(picker_trace))
+    use_caked_space = bool(picker_uses_caked_space)
     group_window = (
         float(pick_search_window_px)
         if not use_caked_space
@@ -14519,41 +14722,13 @@ def geometry_manual_toggle_selection_at(
     if bool(saved_pair_move_only):
         return False, current_session, False
 
-    if bool(use_caked_space):
-        caked_grouped_candidates = (
-            cache_data.get("caked_qr_projection_grouped_candidates")
-            if isinstance(cache_data, Mapping)
-            else None
-        )
-        if not (isinstance(caked_grouped_candidates, Mapping) and caked_grouped_candidates):
-            if callable(set_status_text):
-                set_status_text(
-                    "No simulated Qr/Qz groups are available to pick. Run a simulation update first."
-                )
-            return False, current_session, False
-        grouped_candidates = dict(caked_grouped_candidates)
-    else:
-        grouped_candidates = geometry_manual_detector_picker_grouped_candidates_from_cache(
-            cache_data,
-            display_background=display_background,
-            profile_cache=profile_cache,
-        )
-        picker_trace = geometry_manual_detector_picker_input_trace(
-            cache_data,
-            view_mode="detector",
-            background_index=int(current_background_index),
-            display_background=display_background,
-            grouped_candidates=grouped_candidates,
-            profile_cache=profile_cache,
-        )
-        if callable(trace_picker_input_fn):
-            trace_picker_input_fn(dict(picker_trace))
     if not grouped_candidates:
         if not bool(use_caked_space) and picker_trace is not None:
             print(geometry_manual_format_detector_picker_diagnostic_block(picker_trace))
         if callable(set_status_text):
             set_status_text(
-                "No simulated Qr/Qz groups are available to pick. Run a simulation update first."
+                caked_projection_fallback_note
+                + "No simulated Qr/Qz groups are available to pick. Run a simulation update first."
             )
         return False, current_session, False
 
@@ -14631,10 +14806,13 @@ def geometry_manual_toggle_selection_at(
     if best_group_key is None:
         if callable(set_status_text):
             set_status_text(
-                "No Qr/Qz set found within a "
-                f"{group_window:.1f}x"
-                f"{group_window:.1f}{' deg' if use_caked_space else 'px'} "
-                "window around the clicked position."
+                caked_projection_fallback_note
+                + (
+                    "No Qr/Qz set found within a "
+                    f"{group_window:.1f}x"
+                    f"{group_window:.1f}{' deg' if use_caked_space else 'px'} "
+                    "window around the clicked position."
+                )
             )
         return False, current_session, False
 
@@ -14801,7 +14979,8 @@ def geometry_manual_toggle_selection_at(
             else best_dist
         )
         set_status_text(
-            f"Selected {q_label} (nearest Bragg seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
+            caked_projection_fallback_note
+            + f"Selected {q_label} (nearest Bragg seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
             + geometry_manual_cmd_provenance_text(
                 run_id=manual_run_id,
                 emitter="geometry_manual_toggle_selection_at",
