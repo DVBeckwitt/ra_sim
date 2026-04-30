@@ -7625,11 +7625,32 @@ def _ensure_slider_includes_value(slider_widget: object, value: float, pad: floa
     return True
 
 
+def _set_beam_center_pick_slider_value(
+    slider_widget: object,
+    value_var: object,
+    value: float,
+) -> None:
+    """Set one beam-center slider so the visible slider row refreshes."""
+
+    value_float = float(value)
+    _ensure_slider_includes_value(slider_widget, value_float, pad=5.0)
+    slider_set = getattr(slider_widget, "set", None)
+    if callable(slider_set):
+        try:
+            slider_set(value_float)
+            return
+        except Exception:
+            pass
+    var_set = getattr(value_var, "set", None)
+    if callable(var_set):
+        var_set(value_float)
+
+
 def _beam_center_display_to_center_coords(
     col: float,
     row: float,
 ) -> tuple[float, float] | None:
-    """Map detector-view display pixels into beam-center col/row coordinates."""
+    """Map detector-view display pixels into beam-center row/col coordinates."""
 
     native_shape = _current_beam_center_native_shape()
     if native_shape is None:
@@ -7645,7 +7666,7 @@ def _beam_center_display_to_center_coords(
         return None
     if not (np.isfinite(center_col) and np.isfinite(center_row)):
         return None
-    return float(center_col), float(center_row)
+    return float(center_row), float(center_col)
 
 
 def _commit_beam_center_pick_at(col: float, row: float) -> bool:
@@ -7657,26 +7678,27 @@ def _commit_beam_center_pick_at(col: float, row: float) -> bool:
     session = geometry_runtime_state.beam_center_pick_session
     refined_col = float(session.get("refined_col", col))
     refined_row = float(session.get("refined_row", row))
-    native_point = _beam_center_display_to_center_coords(
-        float(refined_col),
-        float(refined_row),
-    )
-    if not (
-        isinstance(native_point, tuple)
-        and len(native_point) >= 2
-        and native_point[0] is not None
-        and native_point[1] is not None
-        and np.isfinite(float(native_point[0]))
-        and np.isfinite(float(native_point[1]))
-    ):
+    try:
+        center_row, center_col = _beam_center_display_to_center_coords(
+            float(refined_col),
+            float(refined_row),
+        )
+    except (TypeError, ValueError):
         _set_beam_center_pick_status("Beam center pick failed: could not map to detector coords.")
         return False
-    native_col = float(native_point[0])
-    native_row = float(native_point[1])
-    _ensure_slider_includes_value(center_x_scale, native_row, pad=5.0)
-    _ensure_slider_includes_value(center_y_scale, native_col, pad=5.0)
-    center_x_var.set(float(native_row))
-    center_y_var.set(float(native_col))
+    try:
+        center_row = float(center_row)
+        center_col = float(center_col)
+    except (TypeError, ValueError):
+        _set_beam_center_pick_status("Beam center pick failed: could not map to detector coords.")
+        return False
+    if not (np.isfinite(center_row) and np.isfinite(center_col)):
+        _set_beam_center_pick_status("Beam center pick failed: could not map to detector coords.")
+        return False
+    gui_row_value = center_col
+    gui_col_value = center_row
+    _set_beam_center_pick_slider_value(center_x_scale, center_x_var, gui_row_value)
+    _set_beam_center_pick_slider_value(center_y_scale, center_y_var, gui_col_value)
     _restore_beam_center_pick_view(redraw=False)
     _clear_geometry_manual_preview_artists(redraw=False)
     geometry_runtime_state.beam_center_pick_armed = False
@@ -7688,7 +7710,7 @@ def _commit_beam_center_pick_at(col: float, row: float) -> bool:
     _invalidate_simulation_cache()
     schedule_update()
     _set_beam_center_pick_status(
-        f"Beam center set to row={native_row:.2f}, col={native_col:.2f} px "
+        f"Beam center set to row={gui_row_value:.2f}, col={gui_col_value:.2f} px "
         f"from background {int(background_runtime_state.current_background_index) + 1}."
     )
     return True
@@ -34895,7 +34917,7 @@ def _initialize_runtime_controls_block_45() -> None:
     geo_frame = CollapsibleFrame(
         app_shell_view_state.left_col,
         text="Geometry",
-        expanded=True,
+        expanded=False,
     )
     geo_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -34908,7 +34930,7 @@ def _initialize_runtime_controls_block_45() -> None:
     lattice_frame = CollapsibleFrame(
         app_shell_view_state.left_col,
         text="Lattice Parameters",
-        expanded=True,
+        expanded=False,
     )
     lattice_frame.pack(fill=tk.X, padx=5, pady=5)
 

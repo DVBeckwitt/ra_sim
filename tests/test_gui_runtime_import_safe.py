@@ -21297,6 +21297,25 @@ def test_runtime_impl_keeps_simulation_panel_always_expanded() -> None:
     assert "collapsible=False" in panel_block
 
 
+def test_runtime_impl_refine_panels_start_collapsed() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    panel_names = (
+        "geo_frame",
+        "debye_frame",
+        "detector_frame",
+        "lattice_frame",
+        "mosaic_frame",
+        "center_frame",
+    )
+
+    for panel_name in panel_names:
+        panel_start = source.index(f"{panel_name} = CollapsibleFrame(")
+        panel_end = source.index(f"{panel_name}.pack(", panel_start)
+        panel_block = source[panel_start:panel_end]
+        assert "expanded=True" not in panel_block
+        assert "collapsible=False" not in panel_block
+
+
 def test_runtime_impl_builds_shell_before_deferred_runtime_state_load() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     main_start = source.index(

@@ -163,6 +163,24 @@ def test_beam_center_pick_uses_clicked_display_point_exactly() -> None:
     assert center_col == pytest.approx(1599.0)
 
 
+def test_beam_center_pick_gui_column_gets_3000_minus_display_column() -> None:
+    display_col = 1456.0
+    display_row = 1607.0
+    mapped_row, mapped_col = geometry_overlay.beam_center_row_col_from_detector_display(
+        display_col,
+        display_row,
+        (3000, 3000),
+        -1,
+    )
+
+    gui_row_value = mapped_col
+    gui_col_value = mapped_row
+
+    assert gui_row_value == pytest.approx(display_row)
+    assert gui_col_value == pytest.approx(3000.0 - display_col)
+    assert (gui_row_value, gui_col_value) == pytest.approx((1607.0, 1544.0))
+
+
 def test_beam_center_poni_defaults_keep_native_row_col() -> None:
     pixel_size_m = 1.0e-4
 
@@ -207,6 +225,43 @@ def test_runtime_beam_center_preview_does_not_auto_refine_clicked_point() -> Non
     assert "refined_row = float(row)" in body_source
     assert "geometry_manual_refine_preview_point" not in body_source
     assert "_geometry_manual_refine_preview_point" not in body_source
+
+
+def test_runtime_beam_center_commit_reverses_pick_values_for_gui_sliders() -> None:
+    from pathlib import Path
+
+    runtime_path = Path(geometry_overlay.__file__).with_name("_runtime") / "runtime_session.py"
+    source = runtime_path.read_text(encoding="utf-8")
+    mapper_start = source.index("def _beam_center_display_to_center_coords(")
+    mapper_end = source.index("def _commit_beam_center_pick_at(", mapper_start)
+    mapper_source = source[mapper_start:mapper_end]
+    commit_end = source.index("def _cancel_beam_center_pick(", mapper_end)
+    commit_source = source[mapper_end:commit_end]
+
+    assert "return float(center_row), float(center_col)" in mapper_source
+    assert "return float(center_col), float(center_row)" not in mapper_source
+    assert "center_row, center_col = _beam_center_display_to_center_coords(" in commit_source
+    assert "gui_row_value = center_col" in commit_source
+    assert "gui_col_value = center_row" in commit_source
+    assert (
+        "_set_beam_center_pick_slider_value(center_x_scale, center_x_var, gui_row_value)"
+        in commit_source
+    )
+    assert (
+        "_set_beam_center_pick_slider_value(center_y_scale, center_y_var, gui_col_value)"
+        in commit_source
+    )
+    assert (
+        "Beam center set to row={gui_row_value:.2f}, col={gui_col_value:.2f} px"
+        in commit_source
+    )
+    assert "center_x_var.set(float(gui_row_value))" not in commit_source
+    assert "center_y_var.set(float(gui_col_value))" not in commit_source
+    assert "center_x_var.set(float(center_row))" not in commit_source
+    assert "center_y_var.set(float(center_col))" not in commit_source
+    assert "native_point" not in commit_source
+    assert "native_row = float(native_point[0])" not in commit_source
+    assert "native_col = float(native_point[1])" not in commit_source
 
 
 def test_headless_defaults_use_same_poni_row_col_frame() -> None:

@@ -1730,7 +1730,7 @@ def test_primary_cif_controls_store_vars_and_bind_actions(monkeypatch) -> None:
     )
 
     assert isinstance(view_state.cif_frame, _FakeCollapsibleFrame)
-    assert view_state.cif_frame.expanded is True
+    assert view_state.cif_frame.expanded is False
     assert view_state.cif_file_var.get() == "example.cif"
     assert view_state.cif_entry.textvariable is view_state.cif_file_var
     assert isinstance(view_state.cif_actions_frame, _FakeFrame)
@@ -2602,6 +2602,7 @@ def test_ordered_structure_fit_panel_helpers_build_and_rebuild_controls(monkeypa
     )
 
     assert isinstance(view_state.frame, _FakeCollapsibleFrame)
+    assert view_state.frame.expanded is False
     assert isinstance(view_state.fit_button, _FakeButton)
     assert isinstance(view_state.revert_button, _FakeButton)
     assert view_state.revert_button.state == tk.DISABLED

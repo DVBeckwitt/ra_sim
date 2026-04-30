@@ -29,6 +29,10 @@ See also:
 6. Fit structure-factor terms after mosaic is stable. The implementation target is a global multi-image detector-ROI intensity fit with one shared structure-factor parameter vector and one scale nuisance per image.
 7. Save parameter snapshots so iterations stay reproducible.
 
+The Refine tab starts with its parameter sections collapsed. Open only the
+geometry, detector, beam, lattice, mosaic, CIF, or ordered-structure section
+needed for the current step.
+
 ## Headless Counterparts
 
 The same workflows have CLI entry points when you need automation or a
@@ -47,7 +51,7 @@ non-interactive path:
 - Mosaic fitting must refuse stale geometry, stale selected backgrounds, stale Qr/Qz grouping, or changed shared-theta metadata.
 - Structure-factor fitting must not use GUI display normalization. It should compare background-subtracted detector ROI counts to ray-carried simulated intensity summed into the same ROI.
 - Detector-space agreement comes first; 1D views are validation tools, not the primary fitting target.
-- Use Setup > Beam Controls > `Pick Beam Center` to set detector `center_x`/`center_y` directly from the loaded background image. The pick temporarily returns to detector view, shows the background if hidden, zooms around the press point, and commits the clicked detector-display point as native detector row/col on release.
+- Use Setup > Beam Controls > `Pick Beam Center` to set detector `center_x`/`center_y` directly from the loaded background image. The pick temporarily returns to detector view, shows the background if hidden, zooms around the press point, and writes the mapped click through the visible Beam Center Row/Col slider widgets in the GUI order on release.
 - Use `Toggle Simulation` to hide or show the simulated detector/caked overlay without changing the loaded background image, fit inputs, or generated simulation data.
 - Diffuse background subtraction remains off by default. When enabled, the Background Subtraction panel's `Use before fit/pick` option uses the signed subtracted background for Qr picking, auto-match, and fit comparison while keeping the raw background available.
 - In selected-Qr rod ROI mode, the caked ROI mask is detector-backed: detector pixels are classified by Qr/Qz, splatted through the exact-cake LUT, and then clipped to the selected caked phi window. The analytic Qr traces remain display overlays and are only a mask fallback when the LUT context is unavailable.

@@ -34,6 +34,10 @@
 - **Fitting and optimization**
   - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI and headless geometry-fit paths, and kept beam-center picking out of the center-dependent caked wrapper.
   - Fixed beam-center picking to use the clicked detector-display point exactly, avoiding local peak snapping before applying `row = height - display_col`, `col = display_row`.
+  - Fixed beam-center pick commit order so the mapped pick values are reversed into the GUI beam-center slider order.
+  - Clarified the pick path so the visible Beam Center Col field receives `3000 - display_col` for the default 3000 px detector view.
+  - Fixed `Pick Beam Center` to drive the visible Beam Center Row/Col slider widgets directly so their entry boxes refresh after a pick.
+  - Changed Refine tab panels to start collapsed by default, including geometry, beam, lattice, CIF, and ordered-structure sections.
   - Backfilled legacy manual Qr/Qz pairs that have detector/background pixels but no saved caked `(2theta, phi)` anchors before headless geometry-fit preparation, and carried the repaired `manual_pairs` into the returned saved-state snapshot.
   - Added trial caked axes-only payload support so refined geometry probes can recompute dynamic Qr/Qz source rows without rasterizing a full caked image.
   - Added New4 ladder worker phase/partial-report telemetry, residual-evaluation timing, cache-rebuild counters, and timeout diagnostics; singleton solve rungs can skip the duplicate initial dry-run objective and use the first solver evaluation instead.

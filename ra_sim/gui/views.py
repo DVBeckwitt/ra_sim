@@ -3375,7 +3375,7 @@ def create_primary_cif_controls(
 ) -> None:
     """Create the primary-CIF path and diffuse-HT action controls."""
 
-    cif_frame = CollapsibleFrame(parent, text="Primary CIF", expanded=True)
+    cif_frame = CollapsibleFrame(parent, text="Primary CIF", expanded=False)
     cif_frame.pack(fill=tk.X, padx=5, pady=5)
     ttk.Label(cif_frame.frame, text="Path").pack(anchor=tk.W, padx=5, pady=(2, 0))
 
@@ -4652,7 +4652,7 @@ def create_ordered_structure_fit_panel(
 ) -> None:
     """Create the ordered-structure fit panel and store widget references."""
 
-    frame = CollapsibleFrame(parent, text="Ordered Structure Fit", expanded=True)
+    frame = CollapsibleFrame(parent, text="Ordered Structure Fit", expanded=False)
     frame.pack(fill=tk.X, padx=5, pady=5)
 
     actions_frame = ttk.Frame(frame.frame)
