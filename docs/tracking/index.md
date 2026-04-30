@@ -27,16 +27,19 @@ downstream of green mosaic fitting.
 | Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-23 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 | New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-29 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
-| Sim caked detector replay | bug | - | none | p1 | 2026-04-23 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
+| Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
 | Fast-path cache audit and QR selector policy | bug | - | none | p2 | 2026-04-28 | [fast-path-cache-audit-phase1.md](in-progress/fast-path-cache-audit-phase1.md) |
 
 Replay status note: `Sim caked detector replay` remains in progress. Latest
-replay-only patch removed saved-background gating, tightened replay eligibility
-to current caked-projection evidence, and leaves replay-eligible sim rows
-unresolved on reverse-LUT failure. Validation is still pending.
+patch warms detector-mode Qr/Qz caked projection sidecars immediately after
+selector changes, without toggling the GUI to caked view. Detector picker rows
+remain primary, caked sim/background entries and lookups are cached for replay,
+and focused sidecar/Qr selector/import-safe tests pass. Broader workflow
+validation is still blocked by pre-existing local failures and formatting
+drift in the dirty worktree.
 
 Weighted-event representative status note:
 `Weighted-event representative cache carry-through` is implemented on fast

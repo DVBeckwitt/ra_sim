@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-04-23
+Last updated: 2026-04-30
 
 ## Summary
 
@@ -23,6 +23,12 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-04-30 update: detector-mode Qr/Qz selector changes now warm the caked
+projection sidecar immediately, without toggling the GUI into caked view. The
+manual-pick cache can carry detector picker rows plus caked Qr projection
+entries/lookups at the same time, and warmed sidecars are retained by later
+compatible detector-cache reads.
 
 What changed:
 
@@ -51,23 +57,40 @@ What changed:
 - detector initial-build replay no longer lets detector candidate ranking
   overwrite the current caked-projection replay source once replay is eligible;
 - background replay path was left separate.
+- detector-mode manual-pick cache can request `build_caked_projection_sidecar`;
+- sidecar cache signatures include the caked projection signature even while
+  detector mode remains the primary pick mode;
+- runtime Qr/Qz checkbox, bulk include/exclude, and loaded selection changes
+  call a best-effort hidden caked-cache warm callback;
+- the hidden warm path resolves/generated exact-caked payload metadata and
+  projects Qr rows through the same caked projection machinery used by caked
+  view switching, without setting `show_caked_2d_var`;
+- the warmed cache reuses detector picker rows and keeps caked projection
+  entries/grouped candidates/lookups available for manual picking and replay.
 
 Bug/error status:
 
-- code path updated across helper refresh, initial saved redraw, and runtime
-  detector projection;
+- original detector-mode Qr-set cache miss is fixed at helper and runtime
+  wiring level;
+- code path updated across helper refresh, initial saved redraw, runtime
+  detector projection, and detector-mode Qr selector cache warming;
 - adjacent replay regressions found in review were patched in the same blast
   zone;
 - helper-level stale-display regressions and initial-build detector-lookup
   conflicts are covered in targeted tests;
 - saved-background-gating and reverse-LUT-failure replay regressions are now
   covered in targeted tests;
-- validation is still pending.
+- focused detector-mode sidecar and Qr selector warm regressions pass;
+- broader validation remains red/noisy in the current dirty worktree for
+  pre-existing geometry-fit workflow and formatting failures listed below.
 
 Feature status:
 
-- no new operator feature;
-- this is behavior hardening for existing manual Qr/caked replay.
+- no new visible operator control;
+- detector mode stays detector while the caked sim/background coordinates are
+  warmed as hidden cache data;
+- this is behavior hardening for existing manual Qr/caked replay and
+  detector-mode Qr-set selection.
 
 ## Next actions
 
@@ -81,10 +104,32 @@ Feature status:
 
 ## Validation
 
-Not yet run in this worktree:
+Latest local validation, 2026-04-30:
+
+- `python -m compileall ra_sim tests` passed.
+- `python -m ruff check ra_sim/gui/manual_geometry.py ra_sim/gui/geometry_q_group_manager.py ra_sim/gui/_runtime/runtime_session.py tests/test_manual_geometry_selection_helpers.py tests/test_gui_geometry_q_group_manager.py` passed.
+- `python -m pytest tests/test_manual_geometry_selection_helpers.py -k "detector_manual_pick_cache_sidecar or detector_manual_pick_cache_without_sidecar or detector_manual_pick_cache_reuses_warmed_sidecar" -ra` passed (`3 passed`).
+- `python -m pytest tests/test_gui_geometry_q_group_manager.py -k "warm_caked_cache or checkbox_side_effects_update_status or bulk_enable_side_effects_cover_empty_and_live_refresh" -ra` passed (`4 passed`).
+- `python -m pytest tests/test_gui_runtime_import_safe.py -ra` passed
+  (`321 passed`).
+- `git diff --check` passed, with existing CRLF warnings only.
+
+Known remaining local blockers:
+
+- Full `tests/test_gui_geometry_q_group_manager.py -ra` has one unrelated
+  collapse-helper failure; the same `collapsed_count=0` behavior reproduces
+  from `HEAD:ra_sim/gui/geometry_q_group_manager.py`.
+- Full `tests/test_manual_geometry_selection_helpers.py -ra` timed out locally
+  after 304 seconds.
+- Full `tests/test_gui_geometry_fit_workflow.py -ra` remains red in this
+  dirty tree; last-failed rerun reported nine geometry-fit/finalizer/trace
+  failures.
+- `python -m ra_sim.dev check` stops at `ruff format --check` because the
+  current worktree has formatting drift in pre-existing touched files.
+
+Older pending validation:
 
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py -k "sim_replay or detector_replay or initial_pairs"`
-- `python -m ra_sim.dev check`
 - manual GUI replay check
 
 ## Links

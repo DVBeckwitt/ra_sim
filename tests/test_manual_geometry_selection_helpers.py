@@ -3400,7 +3400,9 @@ def test_apply_geometry_manual_pairs_rows_replaces_state_and_refreshes_callbacks
     assert ("refresh", None) in calls
 
 
-def test_apply_geometry_manual_pairs_rows_backfills_legacy_detector_pairs_with_caked_cache() -> None:
+def test_apply_geometry_manual_pairs_rows_backfills_legacy_detector_pairs_with_caked_cache() -> (
+    None
+):
     calls: list[tuple[str, object]] = []
     replaced: dict[int, list[dict[str, object]]] = {}
 
@@ -3460,6 +3462,97 @@ def test_apply_geometry_manual_pairs_rows_backfills_legacy_detector_pairs_with_c
     assert saved["raw_caked_y"] == 20.55
     assert saved["raw_detector_native_px"] == (104.5, 205.5)
     assert saved["geometry_detector_native_px"] == (105.0, 206.0)
+
+
+def test_geometry_manual_rows_detect_all_json_style_missing_caked_anchors() -> None:
+    missing_entries = [
+        {
+            "label": f"legacy-{idx}",
+            "x": float(idx),
+            "y": float(idx + 1),
+            "raw_x": float(idx + 0.25),
+            "raw_y": float(idx + 1.25),
+            "detector_x": float(100 + idx),
+            "detector_y": float(200 + idx),
+        }
+        for idx in range(81)
+    ]
+    caked_entries = [
+        {
+            "label": f"caked-{idx}",
+            "x": float(idx),
+            "y": float(idx + 1),
+            "detector_x": 900.0 + float(idx),
+            "detector_y": 800.0 + float(idx),
+            "background_two_theta_deg": 30.0 + float(idx),
+            "background_phi_deg": -5.0 - float(idx),
+            "caked_x": 30.0 + float(idx),
+            "caked_y": -5.0 - float(idx),
+        }
+        for idx in range(4)
+    ]
+    rows = [
+        {"background_index": 0, "entries": missing_entries[:38]},
+        {"background_index": 1, "entries": [*missing_entries[38:56], *caked_entries]},
+        {"background_index": 2, "entries": missing_entries[56:]},
+    ]
+
+    assert mg.geometry_manual_pairs_rows_missing_caked_backfill_count(rows) == 81
+    assert mg.geometry_manual_pairs_rows_need_caked_backfill(rows) is True
+    assert all(
+        not mg.geometry_manual_entry_needs_caked_coordinate_backfill(entry)
+        for entry in caked_entries
+    )
+
+
+def test_geometry_manual_backfill_prefers_saved_native_detector_pixels() -> None:
+    entries = [
+        {
+            "label": "legacy-native",
+            "x": 5.0,
+            "y": 6.0,
+            "raw_x": 4.5,
+            "raw_y": 5.5,
+            "detector_x": 123.0,
+            "detector_y": 456.0,
+        },
+        {
+            "label": "already-caked",
+            "x": 7.0,
+            "y": 8.0,
+            "detector_x": 999.0,
+            "detector_y": 998.0,
+            "background_two_theta_deg": 12.5,
+            "background_phi_deg": -9.5,
+            "caked_x": 12.5,
+            "caked_y": -9.5,
+        },
+    ]
+
+    backfilled, changed_count = mg.geometry_manual_backfill_missing_caked_coordinates(
+        entries,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) + 1000.0,
+            float(row) + 1000.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) / 10.0,
+            float(row) / 10.0,
+        ),
+    )
+
+    assert changed_count == 1
+    legacy = backfilled[0]
+    assert legacy["geometry_detector_native_px"] == (123.0, 456.0)
+    assert legacy["background_two_theta_deg"] == 12.3
+    assert legacy["background_phi_deg"] == 45.6
+    assert legacy["caked_x"] == 12.3
+    assert legacy["caked_y"] == 45.6
+    already_caked = backfilled[1]
+    assert already_caked["background_two_theta_deg"] == 12.5
+    assert already_caked["background_phi_deg"] == -9.5
+    assert already_caked["caked_x"] == 12.5
+    assert already_caked["caked_y"] == -9.5
 
 
 def test_apply_geometry_manual_pairs_snapshot_reloads_backgrounds_before_apply(
@@ -4116,7 +4209,9 @@ def test_refresh_geometry_manual_pair_entry_recomputes_stale_detector_anchor_onc
     assert refreshed_again["background_detector_y"] == 32.0
 
 
-def test_refresh_geometry_manual_pair_entry_sim_replay_uses_current_projected_caked_point_without_detector_alias_fallback() -> None:
+def test_refresh_geometry_manual_pair_entry_sim_replay_uses_current_projected_caked_point_without_detector_alias_fallback() -> (
+    None
+):
     reverse_calls: list[tuple[float, float]] = []
 
     def _reverse_lut(two_theta, phi):
@@ -4206,7 +4301,9 @@ def test_refresh_geometry_manual_pair_entry_sim_replay_uses_current_projected_ca
     assert "background_detector_frame_provenance" not in refreshed
 
 
-def test_refresh_geometry_manual_pair_entry_sim_replay_ignores_saved_background_angles_and_poisoned_aliases() -> None:
+def test_refresh_geometry_manual_pair_entry_sim_replay_ignores_saved_background_angles_and_poisoned_aliases() -> (
+    None
+):
     reverse_calls: list[tuple[float, float]] = []
 
     def _reverse_lut(two_theta, phi):
@@ -4389,7 +4486,9 @@ def test_refresh_geometry_manual_pair_entry_sim_replay_recomputes_stale_anchor_o
     assert refreshed_again["sim_detector_display_row"] == -6.0
 
 
-def test_refresh_geometry_manual_pair_entry_sim_replay_drops_stale_saved_display_aliases_without_current_detector_display_projection() -> None:
+def test_refresh_geometry_manual_pair_entry_sim_replay_drops_stale_saved_display_aliases_without_current_detector_display_projection() -> (
+    None
+):
     saved_entry = {
         "label": "3,0,4",
         "q_group_key": ("q_group", "primary", 3, 4),
@@ -4457,7 +4556,9 @@ def test_refresh_geometry_manual_pair_entry_sim_replay_drops_stale_saved_display
     assert "sim_row_raw" not in refreshed
 
 
-def test_refresh_geometry_manual_pair_entry_sim_replay_reverse_lut_failure_leaves_unresolved_without_fallback() -> None:
+def test_refresh_geometry_manual_pair_entry_sim_replay_reverse_lut_failure_leaves_unresolved_without_fallback() -> (
+    None
+):
     reverse_calls: list[tuple[float, float]] = []
 
     def _reverse_lut(two_theta, phi):
@@ -6838,9 +6939,7 @@ def test_geometry_manual_auto_add_q_group_peaks_refines_enabled_groups() -> None
                 ],
             },
         },
-        pairs_for_index=lambda _index: [
-            {"label": "kept", "q_group_key": ("q_group", "old", 9, 0)}
-        ],
+        pairs_for_index=lambda _index: [{"label": "kept", "q_group_key": ("q_group", "old", 9, 0)}],
         set_pairs_for_index_fn=lambda _index, entries: (
             saved_sets.append([dict(entry) for entry in (entries or [])])
             or [dict(entry) for entry in (entries or [])]
@@ -6960,9 +7059,7 @@ def test_geometry_manual_auto_add_q_group_peaks_passes_aggressive_radius() -> No
             },
         },
         pairs_for_index=lambda _index: [],
-        set_pairs_for_index_fn=lambda _index, entries: [
-            dict(entry) for entry in (entries or [])
-        ],
+        set_pairs_for_index_fn=lambda _index, entries: [dict(entry) for entry in (entries or [])],
         set_pick_session_fn=lambda _session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
         restore_view_fn=lambda **_kwargs: None,
@@ -7180,9 +7277,7 @@ def test_auto_add_q_group_peaks_final_refines_geometry_in_parallel() -> None:
             },
         },
         pairs_for_index=lambda _index: [],
-        set_pairs_for_index_fn=lambda _index, entries: [
-            dict(entry) for entry in (entries or [])
-        ],
+        set_pairs_for_index_fn=lambda _index, entries: [dict(entry) for entry in (entries or [])],
         set_pick_session_fn=lambda _session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
         restore_view_fn=lambda **_kwargs: None,
@@ -7703,15 +7798,13 @@ def test_geometry_manual_remove_q_group_peak_entries_removes_selected_sets() -> 
     group_a = ("q_group", "primary", 1, 0)
     group_b = ("q_group", "primary", 2, 0)
 
-    kept_entries, removed_count, removed_keys = (
-        mg.geometry_manual_remove_q_group_peak_entries(
-            [
-                {"label": "a1", "q_group_key": group_a},
-                {"label": "b1", "q_group_key": group_b},
-                {"label": "old", "q_group_key": ("q_group", "old", 9, 0)},
-            ],
-            selected_q_group_entries=[{"key": group_a}],
-        )
+    kept_entries, removed_count, removed_keys = mg.geometry_manual_remove_q_group_peak_entries(
+        [
+            {"label": "a1", "q_group_key": group_a},
+            {"label": "b1", "q_group_key": group_b},
+            {"label": "old", "q_group_key": ("q_group", "old", 9, 0)},
+        ],
+        selected_q_group_entries=[{"key": group_a}],
     )
 
     assert removed_count == 1
@@ -7752,9 +7845,7 @@ def test_geometry_manual_auto_add_q_group_peaks_discards_incomplete_groups() -> 
                 ],
             },
         },
-        pairs_for_index=lambda _index: [
-            {"label": "kept", "q_group_key": ("q_group", "old", 9, 0)}
-        ],
+        pairs_for_index=lambda _index: [{"label": "kept", "q_group_key": ("q_group", "old", 9, 0)}],
         set_pairs_for_index_fn=lambda _index, entries: (
             saved_sets.append([dict(entry) for entry in (entries or [])])
             or [dict(entry) for entry in (entries or [])]
@@ -7810,9 +7901,7 @@ def test_build_geometry_manual_pick_cache_reuses_existing_current_background_sta
     existing_cache = {
         "signature": ("cached",),
         "value": 9,
-        "grouped_candidates": {
-            ("q_group", "primary", 1, 0): [{"sim_col": 1.0, "sim_row": 2.0}]
-        },
+        "grouped_candidates": {("q_group", "primary", 1, 0): [{"sim_col": 1.0, "sim_row": 2.0}]},
     }
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
@@ -7944,9 +8033,7 @@ def test_build_geometry_manual_pick_cache_does_not_reuse_empty_detector_cache_wh
     assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
 
 
-def test_build_geometry_manual_pick_cache_skips_caked_only_preview_for_detector_rows() -> (
-    None
-):
+def test_build_geometry_manual_pick_cache_skips_caked_only_preview_for_detector_rows() -> None:
     source_row_calls: list[int] = []
     caked_preview_row = {
         "q_group_key": ("q_group", "primary", 1, 0),
@@ -8442,9 +8529,7 @@ def test_build_geometry_manual_pick_cache_reuses_detector_rows_after_background_
         simulated_peaks_for_params=lambda _params, *, prefer_cache: (
             forwarded_prefer_cache.append(bool(prefer_cache)) or []
         ),
-        source_rows_for_background=lambda *_args, **_kwargs: (
-            source_calls.append(1) or []
-        ),
+        source_rows_for_background=lambda *_args, **_kwargs: source_calls.append(1) or [],
         build_grouped_candidates=lambda entries: {
             entry["q_group_key"]: [dict(entry)]
             for entry in entries or ()
@@ -8469,9 +8554,10 @@ def test_build_geometry_manual_pick_cache_reuses_detector_rows_after_background_
         "background-only cache signature change; reused detector picker rows."
     )
     assert cache_data["cache_metadata"]["detector_picker_reused_after_background_refresh"] is True
-    assert cache_data["detector_picker_trace"][
-        "detector_picker_reused_after_background_refresh"
-    ] is True
+    assert (
+        cache_data["detector_picker_trace"]["detector_picker_reused_after_background_refresh"]
+        is True
+    )
     assert cache_data["detector_picker_rows"]
     assert cache_data["detector_picker_trace"]["detector_picker_candidate_count"] > 0
     assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
@@ -8534,18 +8620,14 @@ def test_build_geometry_manual_pick_cache_reuses_grouped_detector_rows_after_bac
         existing_cache_data={
             "signature": old_signature,
             "placed_signature": old_placed_signature,
-            "grouped_candidates": {
-                ("q_group", "primary", 1, 0): [dict(detector_row)]
-            },
+            "grouped_candidates": {("q_group", "primary", 1, 0): [dict(detector_row)]},
         },
         placed_cache_signature_fn=_placed_signature,
         cache_signature_fn=_cache_signature,
         simulated_peaks_for_params=lambda _params, *, prefer_cache: (
             forwarded_prefer_cache.append(bool(prefer_cache)) or []
         ),
-        source_rows_for_background=lambda *_args, **_kwargs: (
-            source_calls.append(1) or []
-        ),
+        source_rows_for_background=lambda *_args, **_kwargs: source_calls.append(1) or [],
         build_grouped_candidates=lambda entries: {
             entry["q_group_key"]: [dict(entry)]
             for entry in entries or ()
@@ -8569,9 +8651,10 @@ def test_build_geometry_manual_pick_cache_reuses_grouped_detector_rows_after_bac
     assert cache_data["cache_metadata"]["stale_reason"] == (
         "background-only cache signature change; reused detector picker rows."
     )
-    assert cache_data["detector_picker_source_rows"][0][
-        "detector_picker_background_refresh_source"
-    ] == "grouped_candidates"
+    assert (
+        cache_data["detector_picker_source_rows"][0]["detector_picker_background_refresh_source"]
+        == "grouped_candidates"
+    )
     assert cache_data["detector_picker_trace"]["detector_picker_candidate_count"] > 0
     assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
     assert next_sig != old_signature
@@ -8750,16 +8833,12 @@ def test_build_geometry_manual_pick_cache_does_not_replace_valid_detector_cache_
             "signature": old_signature,
             "placed_signature": old_placed_signature,
             "cache_metadata": {"cache_source": "previous_valid_detector_cache"},
-            "grouped_candidates": {
-                ("q_group", "primary", 1, 0): [dict(detector_row)]
-            },
+            "grouped_candidates": {("q_group", "primary", 1, 0): [dict(detector_row)]},
         },
         placed_cache_signature_fn=_placed_signature,
         cache_signature_fn=_cache_signature,
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
-        source_rows_for_background=lambda *_args, **_kwargs: (
-            source_calls.append(1) or []
-        ),
+        source_rows_for_background=lambda *_args, **_kwargs: source_calls.append(1) or [],
         build_grouped_candidates=lambda entries: {
             entry["q_group_key"]: [dict(entry)]
             for entry in entries or ()
@@ -8845,9 +8924,7 @@ def test_manual_pick_cache_trace_reports_snapshot_status_when_final_cache_empty(
 
     assert cache_data["cache_metadata"]["cache_source"] == "source_snapshot_unavailable"
     assert cache_data["cache_metadata"]["source_rows_provider_attempted"] is True
-    assert cache_data["cache_metadata"]["source_snapshot_status"] == (
-        "snapshot_missing_background"
-    )
+    assert cache_data["cache_metadata"]["source_snapshot_status"] == ("snapshot_missing_background")
     assert trace["source_rows_provider_attempted"] is True
     assert trace["source_snapshot_status"] == "snapshot_missing_background"
     assert trace["source_snapshot_rebuild_attempted"] is True
@@ -12738,9 +12815,7 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
     assert set_sessions[-1]["tagged_candidate_key"] == ("source_branch", 1, 1)
 
 
-def test_geometry_manual_toggle_selection_at_prefers_nearest_group_over_shared_cache() -> (
-    None
-):
+def test_geometry_manual_toggle_selection_at_prefers_nearest_group_over_shared_cache() -> None:
     near_key = ("q_group", "primary", 1, 2)
     shared_key = ("q_group", "primary", 1, 5)
 
@@ -12853,8 +12928,7 @@ def test_geometry_manual_toggle_selection_at_does_not_duplicate_saved_qr_set() -
         },
         pairs_for_index=lambda _idx: [dict(existing_entry)],
         set_pairs_for_index_fn=lambda _idx, entries: (
-            saved_sets.append([dict(entry) for entry in (entries or [])])
-            or list(entries or [])
+            saved_sets.append([dict(entry) for entry in (entries or [])]) or list(entries or [])
         ),
         set_pick_session_fn=lambda session: sessions.append(dict(session)),
         restore_view_fn=lambda **_kwargs: None,
@@ -12922,9 +12996,7 @@ def test_geometry_manual_toggle_selection_at_caked_keeps_clicked_nearest_seed() 
         get_cache_data=lambda **_kwargs: {
             "signature": ("cache",),
             "grouped_candidates": {},
-            "caked_qr_projection_grouped_candidates": {
-                group_key: [dict(row) for row in rows]
-            },
+            "caked_qr_projection_grouped_candidates": {group_key: [dict(row) for row in rows]},
         },
         pairs_for_index=lambda _idx: [],
         set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
@@ -12989,8 +13061,7 @@ def test_geometry_manual_toggle_selection_at_caked_does_not_duplicate_saved_qr_s
         },
         pairs_for_index=lambda _idx: [dict(existing_entry)],
         set_pairs_for_index_fn=lambda _idx, entries: (
-            saved_sets.append([dict(entry) for entry in (entries or [])])
-            or list(entries or [])
+            saved_sets.append([dict(entry) for entry in (entries or [])]) or list(entries or [])
         ),
         set_pick_session_fn=lambda session: sessions.append(dict(session)),
         restore_view_fn=lambda **_kwargs: None,
@@ -13448,7 +13519,9 @@ def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
     assert "Saved 1 manual background points for selected group" in status_messages[-1]
 
 
-def test_geometry_manual_place_selection_at_detector_pick_saves_projected_caked_coordinates() -> None:
+def test_geometry_manual_place_selection_at_detector_pick_saves_projected_caked_coordinates() -> (
+    None
+):
     group_key = ("q_group", "primary", 1, 0)
     candidate = {
         "label": "1,0,0",
@@ -13635,8 +13708,7 @@ def test_geometry_manual_toggle_selection_at_starts_saved_background_peak_move_m
         get_cache_data=lambda **_kwargs: {"signature": ("cache",)},
         pairs_for_index=lambda _idx: [dict(entry) for entry in saved_entries],
         set_pairs_for_index_fn=lambda _idx, entries: (
-            saved_sets.append([dict(entry) for entry in (entries or [])])
-            or list(entries or [])
+            saved_sets.append([dict(entry) for entry in (entries or [])]) or list(entries or [])
         ),
         set_pick_session_fn=lambda value: sessions.append(dict(value)),
         restore_view_fn=lambda **_kwargs: None,
@@ -13800,8 +13872,7 @@ def test_geometry_manual_moved_saved_background_peak_refines_locally() -> None:
             or (13.0, 24.0)
         ),
         set_pairs_for_index_fn=lambda _idx, entries: (
-            saved_sets.append([dict(entry) for entry in (entries or [])])
-            or list(entries or [])
+            saved_sets.append([dict(entry) for entry in (entries or [])]) or list(entries or [])
         ),
         set_pick_session_fn=lambda _session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
@@ -14880,6 +14951,68 @@ def _build_cross_view_pick_cache(callbacks, raw_rows):
     return cache_data
 
 
+def _build_detector_cross_view_pick_cache(
+    callbacks,
+    raw_rows,
+    *,
+    build_caked_projection_sidecar=False,
+):
+    def _caked_projector(rows):
+        projected = []
+        for raw_entry in rows or ():
+            entry = dict(raw_entry)
+            native_col = float(entry["native_col"])
+            native_row = float(entry["native_row"])
+            entry.update(
+                {
+                    "display_col": native_col + 10.0,
+                    "display_row": native_row + 20.0,
+                    "caked_x": native_col + 10.0,
+                    "caked_y": native_row + 20.0,
+                    "two_theta_deg": native_col + 10.0,
+                    "phi_deg": native_row + 20.0,
+                    "sim_col_raw": native_col + 100.0,
+                    "sim_row_raw": native_row + 200.0,
+                    "sim_detector_display_col": native_col + 100.0,
+                    "sim_detector_display_row": native_row + 200.0,
+                    "sim_detector_anchor_x": native_col,
+                    "sim_detector_anchor_y": native_row,
+                }
+            )
+            projected.append(entry)
+        return projected
+
+    cache_data, _next_sig, _next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 1.0},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((256, 256), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 8),
+            0,
+            False,
+            ("bg", 0),
+            (
+                "detector_caked_projection_sidecar",
+                ("caked", 10.0, 20.0),
+            )
+            if bool(build_caked_projection_sidecar)
+            else None,
+        ),
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [dict(row) for row in raw_rows],
+        build_grouped_candidates=callbacks.pick_candidates,
+        build_simulated_lookup=_build_lookup,
+        project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        project_peaks_to_caked_view=_caked_projector,
+        current_match_config=lambda: {},
+        build_caked_projection_sidecar=bool(build_caked_projection_sidecar),
+    )
+    return cache_data
+
+
 def _cross_view_caked_projection_lookup_entry(cache_data, oracle):
     projection_lookup = cache_data["caked_qr_projection_lookup"]
     key = tuple(oracle["identity"])
@@ -15113,6 +15246,10 @@ def _manual_qr_caked_branch_row(
         "caked_y": float(caked_y),
         "two_theta_deg": float(caked_x),
         "phi_deg": float(caked_y),
+        "sim_visual_caked_deg": (float(caked_x), float(caked_y)),
+        "sim_visual_deg": (float(caked_x), float(caked_y)),
+        "sim_caked": (float(caked_x), float(caked_y)),
+        "sim_visual_source": "sim_visual_caked_deg",
         "_caked_qr_projection_cache": True,
         "display_frame": "caked_display",
         "current_view_frame": "caked_display",
@@ -15120,6 +15257,68 @@ def _manual_qr_caked_branch_row(
     if source_branch_index is not None:
         row["source_branch_index"] = int(source_branch_index)
     return row
+
+
+def test_caked_qr_visual_point_matches_cached_two_theta_phi_candidate() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    candidate = _manual_qr_caked_branch_row(
+        group_key,
+        label="-1,0,10 +x",
+        hkl=(-1, 0, 10),
+        branch_id="+x",
+        source_branch_index=0,
+        caked_x=42.276621,
+        caked_y=-43.25,
+        source_row_index=10,
+    )
+
+    details = mg.geometry_manual_candidate_distance_details(
+        42.276621,
+        -43.25,
+        candidate,
+        use_caked_display=True,
+    )
+
+    assert details["distance_source"] == "sim_visual_caked_deg"
+    assert details["visual_caked_point"] == candidate["sim_visual_caked_deg"]
+    assert details["cached_two_theta_deg"] == candidate["two_theta_deg"]
+    assert details["cached_phi_deg"] == candidate["phi_deg"]
+    assert details["cached_projection_frame"] == "caked_display"
+    assert details["cached_units"] == "deg"
+
+
+def test_caked_qr_cached_two_theta_phi_round_trips_to_visual_point() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    candidate = _manual_qr_caked_branch_row(
+        group_key,
+        label="-1,0,10 +x",
+        hkl=(-1, 0, 10),
+        branch_id="+x",
+        source_branch_index=0,
+        caked_x=42.276621,
+        caked_y=-43.25,
+        source_row_index=10,
+    )
+
+    visual = candidate["sim_visual_caked_deg"]
+    distance = mg.geometry_manual_candidate_distance_to_point(
+        float(candidate["two_theta_deg"]),
+        float(candidate["phi_deg"]),
+        candidate,
+        use_caked_display=True,
+    )
+    nearest, nearest_distance = mg.geometry_manual_nearest_candidate_to_point(
+        float(candidate["two_theta_deg"]),
+        float(candidate["phi_deg"]),
+        [dict(candidate)],
+        use_caked_display=True,
+    )
+
+    assert visual == (candidate["two_theta_deg"], candidate["phi_deg"])
+    assert distance == 0.0
+    assert nearest is not None
+    assert nearest["source_branch_index"] == 0
+    assert nearest_distance == 0.0
 
 
 def test_caked_qr_selection_collapses_signed_and_unknown_same_branch_to_two() -> None:
@@ -15374,6 +15573,18 @@ def _cross_view_caked_snapshot(callbacks, session):
             float(projected["sim_col_raw"]),
             float(projected["sim_row_raw"]),
         ),
+        "detector_native": (
+            float(projected["native_col"]),
+            float(projected["native_row"]),
+        ),
+        "sim_detector_display": (
+            float(projected["sim_detector_display_col"]),
+            float(projected["sim_detector_display_row"]),
+        ),
+        "sim_detector_anchor": (
+            float(projected["sim_detector_anchor_x"]),
+            float(projected["sim_detector_anchor_y"]),
+        ),
         "caked_angles": (
             float(projected["two_theta_deg"]),
             float(projected["phi_deg"]),
@@ -15400,6 +15611,10 @@ def _cross_view_detector_snapshot(callbacks, session):
         "detector_visual": (
             float(projected["display_col"]),
             float(projected["display_row"]),
+        ),
+        "detector_native": (
+            float(projected["native_col"]),
+            float(projected["native_row"]),
         ),
     }
 
@@ -15500,8 +15715,233 @@ def test_build_geometry_manual_pick_cache_adds_caked_qr_projection_cache() -> No
         (cache_entry["display_col"], cache_entry["display_row"]),
         detector_to_caked["caked_visual"],
     )
+    _assert_pair_close(
+        (cache_entry["sim_detector_anchor_x"], cache_entry["sim_detector_anchor_y"]),
+        detector_to_caked["detector_native"],
+    )
+    _assert_pair_close(
+        (cache_entry["sim_detector_display_col"], cache_entry["sim_detector_display_row"]),
+        detector_to_caked["detector_display"],
+    )
+    assert cache_entry["sim_detector_frame_provenance"] == (
+        "native_detector_coords_to_detector_display_coords"
+    )
     assert "refined_sim_caked_x" not in cache_entry
     assert "refined_sim_x" not in cache_entry
+
+
+def test_detector_manual_pick_cache_sidecar_builds_caked_qr_projection() -> None:
+    use_caked = {"value": False}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "native_col": 2.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
+
+    cache_data = _build_detector_cross_view_pick_cache(
+        callbacks,
+        raw_rows,
+        build_caked_projection_sidecar=True,
+    )
+
+    detector_grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        profile_cache={},
+    )
+    assert detector_grouped[group_key][0]["sim_col_raw"] == 102.0
+    assert detector_grouped[group_key][0]["sim_row_raw"] == 204.0
+    assert cache_data["caked_qr_projection_grouped_candidates"][group_key]
+    caked_entry = cache_data["caked_qr_projection_grouped_candidates"][group_key][0]
+    assert caked_entry["_caked_qr_projection_cache"] is True
+    assert caked_entry["display_frame"] == "caked_display"
+    assert caked_entry["two_theta_deg"] == 12.0
+    assert caked_entry["phi_deg"] == 24.0
+    assert cache_data["cache_metadata"]["caked_qr_projection_sidecar_requested"] is True
+    assert cache_data["cache_metadata"]["caked_qr_projection_entry_count"] == 1
+
+
+def test_detector_manual_pick_cache_without_sidecar_keeps_caked_projection_empty() -> None:
+    use_caked = {"value": False}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "native_col": 2.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
+
+    cache_data = _build_detector_cross_view_pick_cache(
+        callbacks,
+        raw_rows,
+        build_caked_projection_sidecar=False,
+    )
+
+    assert cache_data["detector_picker_grouped_candidates"][group_key]
+    assert cache_data["caked_qr_projection_entries"] == []
+    assert cache_data["caked_qr_projection_grouped_candidates"] == {}
+    assert cache_data["caked_qr_projection_lookup"] == {}
+    assert cache_data["cache_metadata"]["caked_qr_projection_sidecar_requested"] is False
+
+
+def test_detector_manual_pick_cache_reuses_warmed_sidecar_for_detector_reads() -> None:
+    use_caked = {"value": False}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "native_col": 2.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
+    warmed_cache = _build_detector_cross_view_pick_cache(
+        callbacks,
+        raw_rows,
+        build_caked_projection_sidecar=True,
+    )
+
+    cache_data, _next_sig, _next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"a": 1.0},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((256, 256), dtype=float),
+        existing_cache_signature=warmed_cache["signature"],
+        existing_cache_data=warmed_cache,
+        cache_signature_fn=lambda **_kwargs: (
+            ("sim", 8),
+            0,
+            False,
+            ("bg", 0),
+            None,
+        ),
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [dict(row) for row in raw_rows],
+        build_grouped_candidates=callbacks.pick_candidates,
+        build_simulated_lookup=_build_lookup,
+        project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        current_match_config=lambda: {},
+    )
+
+    assert cache_data["signature"] == warmed_cache["signature"]
+    assert cache_data["detector_picker_grouped_candidates"][group_key]
+    assert cache_data["caked_qr_projection_grouped_candidates"][group_key]
+
+
+def test_caked_qr_selection_session_has_detector_projection_fields() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "-3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "-x",
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "source_branch_index": 1,
+            "source_reflection_index": 17,
+            "source_ray_id": "minus-ray",
+            "hkl": (-3, 0, 4),
+            "native_col": 3.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
+    cache_data = _build_cross_view_pick_cache(callbacks, raw_rows)
+    grouped = cache_data["caked_qr_projection_grouped_candidates"]
+    caked_entry = grouped[group_key][0]
+
+    session = _toggle_cross_view_selection(
+        grouped,
+        float(caked_entry["display_col"]),
+        float(caked_entry["display_row"]),
+        use_caked_space=True,
+        group_key=group_key,
+        cache_data=cache_data,
+    )
+    selected = session["tagged_candidate"]
+    session_entry = session["group_entries"][0]
+
+    for entry in (caked_entry, selected, session_entry):
+        _assert_pair_close(
+            (entry["sim_detector_anchor_x"], entry["sim_detector_anchor_y"]),
+            (3.0, 4.0),
+        )
+        _assert_pair_close(
+            (entry["sim_detector_display_col"], entry["sim_detector_display_row"]),
+            (103.0, 204.0),
+        )
+        assert entry["sim_detector_frame_provenance"] == (
+            "native_detector_coords_to_detector_display_coords"
+        )
+
+
+def test_caked_projection_detector_fields_match_detector_view_projection() -> None:
+    use_caked = {"value": True}
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "-3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "-x",
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "source_branch_index": 1,
+            "source_reflection_index": 17,
+            "source_ray_id": "minus-ray",
+            "hkl": (-3, 0, 4),
+            "native_col": 3.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks(use_caked, raw_rows)
+    caked_cache = _build_cross_view_pick_cache(callbacks, raw_rows)
+    caked_entry = caked_cache["caked_qr_projection_grouped_candidates"][group_key][0]
+
+    use_caked["value"] = False
+    detector_entry = callbacks.project_peaks_to_current_view([dict(raw_rows[0])])[0]
+
+    _assert_pair_close(
+        (caked_entry["sim_detector_anchor_x"], caked_entry["sim_detector_anchor_y"]),
+        (detector_entry["native_col"], detector_entry["native_row"]),
+    )
+    _assert_pair_close(
+        (caked_entry["sim_detector_display_col"], caked_entry["sim_detector_display_row"]),
+        (detector_entry["display_col"], detector_entry["display_row"]),
+    )
+    _assert_pair_close(
+        (caked_entry["sim_col_raw"], caked_entry["sim_row_raw"]),
+        (detector_entry["display_col"], detector_entry["display_row"]),
+    )
 
 
 def test_manual_qr_caked_toggle_uses_projection_cache_for_hit_testing() -> None:
@@ -16412,7 +16852,9 @@ def test_manual_qr_caked_saved_replay_matches_detector_origin_caked_baseline() -
     _assert_pair_close(saved_pairs[0]["sim_display"], detector_to_caked["caked_sim_display"])
 
 
-def test_manual_qr_caked_saved_detector_replay_matches_detector_origin_baseline_after_finish() -> None:
+def test_manual_qr_caked_saved_detector_replay_matches_detector_origin_baseline_after_finish() -> (
+    None
+):
     use_caked = {"value": False}
     group_key = ("q_group", "primary", 3, 4)
     raw_rows = [
@@ -16520,8 +16962,7 @@ def test_manual_qr_caked_saved_detector_replay_matches_detector_origin_baseline_
     assert next_session == {}
     saved = saved_entry_sets[-1][0]
     assert (
-        tuple(saved.get(field) for field in _CROSS_VIEW_ID_FIELDS)
-        == detector_baseline["identity"]
+        tuple(saved.get(field) for field in _CROSS_VIEW_ID_FIELDS) == detector_baseline["identity"]
     )
 
     poisoned_saved = dict(saved)
@@ -16576,7 +17017,9 @@ def test_manual_qr_caked_saved_detector_replay_matches_detector_origin_baseline_
     assert tuple(float(v) for v in detector_pairs[0]["sim_display"]) != clicked_caked
 
 
-def test_build_geometry_manual_initial_pairs_display_detector_replay_prefers_source_projection_over_detector_lookup() -> None:
+def test_build_geometry_manual_initial_pairs_display_detector_replay_prefers_source_projection_over_detector_lookup() -> (
+    None
+):
     use_caked = {"value": False}
     group_key = ("q_group", "primary", 3, 4)
     raw_rows = [
@@ -17478,6 +17921,15 @@ def test_caked_manual_seed_returns_to_same_detector_visual_position() -> None:
     assert saved["y"] == 204.0
     assert saved["detector_x"] == 3.0
     assert saved["detector_y"] == 4.0
+    assert saved["background_detector_x"] == 3.0
+    assert saved["background_detector_y"] == 4.0
+    assert saved["geometry_detector_native_px"] == (3.0, 4.0)
+    assert saved["background_two_theta_deg"] == 13.0
+    assert saved["background_phi_deg"] == 24.0
+    assert saved["sim_detector_anchor_x"] == 3.0
+    assert saved["sim_detector_anchor_y"] == 4.0
+    assert saved["sim_detector_display_col"] == 103.0
+    assert saved["sim_detector_display_row"] == 204.0
     assert saved["refined_sim_x"] == 103.0
     assert saved["refined_sim_y"] == 204.0
     assert saved["refined_sim_native_x"] == 3.0
@@ -18033,18 +18485,9 @@ def test_runtime_projection_callbacks_collapse_raw_cache_00l_rows_before_first_c
     assert len([entry for entry in displayed if entry.get("q_group_key") == group_key]) == 1
 
 
-_QR_PICKER_DIAG_LOCAL_STATE_PATH = (
-    Path.home()
-    / ".local"
-    / "share"
-    / "ra_sim"
-    / "new4.json"
-)
+_QR_PICKER_DIAG_LOCAL_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "new4.json"
 _QR_PICKER_DIAG_ARTIFACT_STATE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "artifacts"
-    / "geometry_fit_gui_states"
-    / "new4.json"
+    Path(__file__).resolve().parents[1] / "artifacts" / "geometry_fit_gui_states" / "new4.json"
 )
 _QR_PICKER_DIAG_STATE_OVERRIDE = os.environ.get("RA_SIM_QR_PICKER_DIAG_STATE")
 _QR_PICKER_DIAG_STATE_PATH = (
@@ -18244,7 +18687,9 @@ def _diag_state_current_background_index(saved_state):
     files = saved_state.get("files", {}) if isinstance(saved_state, Mapping) else {}
     if isinstance(files, Mapping) and files.get("current_background_index") is not None:
         return int(files.get("current_background_index"))
-    value = saved_state.get("current_background_index", 0) if isinstance(saved_state, Mapping) else 0
+    value = (
+        saved_state.get("current_background_index", 0) if isinstance(saved_state, Mapping) else 0
+    )
     return int(value)
 
 
@@ -18256,7 +18701,9 @@ def _diag_state_background_name(saved_state, index=0):
     except Exception:
         pass
     geometry_state = saved_state.get("geometry", {}) if isinstance(saved_state, Mapping) else {}
-    manual_pairs = geometry_state.get("manual_pairs", ()) if isinstance(geometry_state, Mapping) else ()
+    manual_pairs = (
+        geometry_state.get("manual_pairs", ()) if isinstance(geometry_state, Mapping) else ()
+    )
     for row in manual_pairs or ():
         if not isinstance(row, Mapping):
             continue
@@ -18324,9 +18771,7 @@ def _diag_new4_inventory(entries, *, include_003=True):
 
 def _diag_new4_expected_inventory(*, include_003=True):
     expected = (
-        _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY
-        if include_003
-        else _NEW4_FIRST_IMAGE_PAIRED_INVENTORY
+        _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY if include_003 else _NEW4_FIRST_IMAGE_PAIRED_INVENTORY
     )
     return sorted(expected, key=repr)
 
@@ -18601,8 +19046,7 @@ def _diag_fresh_source_rows(context, profile_cache):
             )
         ),
         peak_table_lattice=[
-            (params.get("a", np.nan), params.get("c", np.nan), "primary")
-            for _ in hit_tables
+            (params.get("a", np.nan), params.get("c", np.nan), "primary") for _ in hit_tables
         ],
         source_reflection_indices=source_reflection_indices,
         primary_a=params.get("a", np.nan),
@@ -18997,8 +19441,7 @@ def _diag_build_caked_qr_cache(context, rows, detector_cache):
     cache_data = dict(detector_cache)
     cache_data["caked_qr_projection_entries"] = [dict(entry) for entry in entries]
     cache_data["caked_qr_projection_grouped_candidates"] = {
-        key: [dict(entry) for entry in value]
-        for key, value in (grouped or {}).items()
+        key: [dict(entry) for entry in value] for key, value in (grouped or {}).items()
     }
     cache_data["caked_qr_projection_lookup"] = lookup
     return callbacks, cache_data, grouped
@@ -19296,8 +19739,7 @@ def _diag_live_place(
             azimuth_axis,
         ),
         set_pairs_for_index_fn=lambda _idx, entries: (
-            state["saved"].append([dict(entry) for entry in (entries or [])])
-            or list(entries or [])
+            state["saved"].append([dict(entry) for entry in (entries or [])]) or list(entries or [])
         ),
         set_pick_session_fn=lambda value: state["sessions"].append(dict(value)),
         clear_preview_artists_fn=lambda **_kwargs: None,
@@ -19375,7 +19817,9 @@ def _diag_runtime_refresh_pick_session(
     monkeypatch.setattr(
         runtime_session,
         "_set_geometry_manual_pick_session",
-        lambda value: setattr(manual_state, "pick_session", dict(value)) or manual_state.pick_session,
+        lambda value: (
+            setattr(manual_state, "pick_session", dict(value)) or manual_state.pick_session
+        ),
     )
     monkeypatch.setattr(runtime_session.simulation_runtime_state, "profile_cache", profile_cache)
     monkeypatch.setattr(
@@ -19488,7 +19932,9 @@ def _diag_source_ledger_row(
     delta = _diag_angle_delta(observed_caked, visual_caked)
     geometry_delta_source = "observed_minus_sim_visual" if delta is not None else "<unavailable>"
     direct_point = direct_result.get("point") if isinstance(direct_result, Mapping) else None
-    direct_status = direct_result.get("status") if isinstance(direct_result, Mapping) else "<unavailable>"
+    direct_status = (
+        direct_result.get("status") if isinstance(direct_result, Mapping) else "<unavailable>"
+    )
     row = {
         "event": event,
         "branch": branch,
@@ -19573,12 +20019,18 @@ def _diag_direct_detector_origin_checks(context, callbacks, entries, visual_map)
         branch = _diag_source_branch(entry)
         if branch is None:
             continue
-        raw_display = _diag_finite_pair(entry, (("raw_x", "raw_y"), ("detector_seed_col", "detector_seed_row"), ("x", "y")))
+        raw_display = _diag_finite_pair(
+            entry, (("raw_x", "raw_y"), ("detector_seed_col", "detector_seed_row"), ("x", "y"))
+        )
         raw_native = _diag_display_to_native(context, raw_display)
         geometry_native, _geometry_native_source = _diag_observed_detector_native(entry)
         sim_native = visual_map.get(branch, {}).get("detector_native")
         targets = (
-            ("raw_detector_native_px", raw_native, _diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),))),
+            (
+                "raw_detector_native_px",
+                raw_native,
+                _diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),)),
+            ),
             ("geometry_detector_native_px", geometry_native, _diag_observed_caked(entry)[0]),
             ("sim_visual_detector_native_px", sim_native, visual_map.get(branch, {}).get("caked")),
         )
@@ -19622,7 +20074,9 @@ def _diag_direct_detector_origin_checks(context, callbacks, entries, visual_map)
 
 
 def _diag_print_frozen_visual_branch_map(session, visual_map, event_name):
-    branch_map = _diag_branch_map(session.get("group_entries", []) if isinstance(session, Mapping) else [])
+    branch_map = _diag_branch_map(
+        session.get("group_entries", []) if isinstance(session, Mapping) else []
+    )
     print("\npending_visual_branch_map")
     print("branch | exists | sim_visual_caked_deg | sim_visual_source_event")
     for branch in (0, 1):
@@ -19687,7 +20141,9 @@ def _diag_conclusion(failures):
     return min(failures, key=lambda item: order.get(item["conclusion"], 99))
 
 
-def _diag_entry_table_line(entry, picker_keys, overlay_keys, source_keys, display_w, display_h, native_w, native_h):
+def _diag_entry_table_line(
+    entry, picker_keys, overlay_keys, source_keys, display_w, display_h, native_w, native_h
+):
     display = _diag_detector_display_point(entry)
     native = _diag_detector_native_point(entry)
     identity = _diag_source_identity(entry)
@@ -19702,7 +20158,10 @@ def _diag_entry_table_line(entry, picker_keys, overlay_keys, source_keys, displa
             str(entry.get("branch_id", "<none>")),
             _diag_point_text(display, "no_detector_display_px"),
             _diag_point_text(native, "no_detector_native_px"),
-            str(_diag_inside(display, display_w, display_h) and _diag_inside(native, native_w, native_h)),
+            str(
+                _diag_inside(display, display_w, display_h)
+                and _diag_inside(native, native_w, native_h)
+            ),
             str(identity in picker_keys),
             str(identity in overlay_keys),
             str(entry.get("diagnostic_source", entry.get("source_label", "<none>"))),
@@ -19850,9 +20309,7 @@ def test_qr_sim_peak_caked_blank_image_is_not_refined() -> None:
     assert refined["sim_visual_deg"] == refined["sim_nominal_caked_deg"]
 
 
-def test_refined_qr_cache_rebuilds_simulated_lookup_and_redraw_uses_refined_peak() -> (
-    None
-):
+def test_refined_qr_cache_rebuilds_simulated_lookup_and_redraw_uses_refined_peak() -> None:
     image = np.zeros((24, 24), dtype=float)
     image[6, 8] = 25.0
     candidate = {
@@ -19887,12 +20344,14 @@ def test_refined_qr_cache_rebuilds_simulated_lookup_and_redraw_uses_refined_peak
             row / 10.0,
         ),
     )
-    assert refined_cache["active_simulated_peaks"][0][
+    assert refined_cache["active_simulated_peaks"][0]["sim_refined_detector_display_px"] == (
+        8.0,
+        6.0,
+    )
+    assert (
         "sim_refined_detector_display_px"
-    ] == (8.0, 6.0)
-    assert "sim_refined_detector_display_px" not in refined_cache["simulated_lookup"][
-        _source_key(candidate)
-    ]
+        not in refined_cache["simulated_lookup"][_source_key(candidate)]
+    )
 
     rebuilt_cache = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
         refined_cache,
@@ -19948,9 +20407,7 @@ def test_refined_qr_cache_rebuilds_caked_projection_lookup_from_refined_rows() -
     projection_key = tuple(candidate.get(field) for field in _CROSS_VIEW_ID_FIELDS)
     cache_data = {
         "caked_qr_projection_entries": [dict(candidate)],
-        "caked_qr_projection_grouped_candidates": {
-            candidate["q_group_key"]: [dict(candidate)]
-        },
+        "caked_qr_projection_grouped_candidates": {candidate["q_group_key"]: [dict(candidate)]},
         "caked_qr_projection_lookup": {projection_key: dict(candidate)},
     }
 
@@ -19964,9 +20421,9 @@ def test_refined_qr_cache_rebuilds_caked_projection_lookup_from_refined_rows() -
         refined_cache["caked_qr_projection_entries"][0]["sim_refined_caked_deg"],
         (7.0, 4.0),
     )
-    assert "sim_refined_caked_deg" not in refined_cache["caked_qr_projection_lookup"][
-        projection_key
-    ]
+    assert (
+        "sim_refined_caked_deg" not in refined_cache["caked_qr_projection_lookup"][projection_key]
+    )
 
     rebuilt_cache = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
         refined_cache,
@@ -19998,9 +20455,7 @@ def test_refined_qr_cache_rebuilds_caked_projection_lookup_from_refined_rows() -
     )
 
     assert np.allclose(saved_pairs[0]["sim_display"], (7.0, 4.0))
-    assert (
-        saved_pairs[0]["caked_qr_projection_lookup_stale_unrefined_rebuilt"] is True
-    )
+    assert saved_pairs[0]["caked_qr_projection_lookup_stale_unrefined_rebuilt"] is True
 
 
 def test_detector_picker_row_uses_refined_sim_detector_px_and_matching_native() -> None:
@@ -20081,9 +20536,7 @@ def test_detector_picker_dedupe_uses_refined_sim_detector_px() -> None:
         "detector_picker_source": "fresh_source_rows",
     }
 
-    deduped = mg._geometry_manual_detector_picker_dedupe_rows(
-        [nominal_entry, refined_entry]
-    )
+    deduped = mg._geometry_manual_detector_picker_dedupe_rows([nominal_entry, refined_entry])
 
     assert len(deduped) == 2
     assert deduped[0]["detector_picker_source"] == "manual_saved_pair"
@@ -20342,9 +20795,7 @@ def test_qr_picker_detector_pixel_positions(tmp_path) -> None:
         and _diag_inside(_diag_detector_native_point(row), native_w, native_h)
     ]
     source_rows = [
-        row
-        for row in rows["collapsed_source_rows"]
-        if _diag_q_group_key(row) is not None
+        row for row in rows["collapsed_source_rows"] if _diag_q_group_key(row) is not None
     ]
     picker_keys = {_diag_source_identity(row) for row in picker_rows}
     overlay_keys = {_diag_source_identity(row) for row in overlay_rows}
@@ -20843,10 +21294,7 @@ def test_live_preview_and_place_without_session_run_id_stay_unattributed(tmp_pat
     )
     assert preview["manual_geometry_run_id"] == mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID
     assert f"manual_geometry_run_id={active_run_id}" not in preview["message"]
-    assert (
-        f"manual_geometry_run_id={mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID}"
-        in preview["message"]
-    )
+    assert f"manual_geometry_run_id={mg.MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID}" in preview["message"]
 
     _next_session, entries, place_state = _diag_live_place(
         legacy_session,
@@ -21258,7 +21706,9 @@ def test_minus_1_0_10_live_source_ledger(tmp_path) -> None:
         print(f"{key}={conclusion[key]}")
     print(f"detector_native_to_caked_direct_success={direct_success}")
     print(f"frozen_visual_branch_1_exists={branch1_frozen_exists}")
-    print(f"detector_select_status={detector_select_statuses[-1] if detector_select_statuses else '<none>'}")
+    print(
+        f"detector_select_status={detector_select_statuses[-1] if detector_select_statuses else '<none>'}"
+    )
 
     assert ledger_rows
     assert preview_checks
@@ -21319,7 +21769,9 @@ def test_minus_1_0_10_live_caked_visual_source_ledger(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(
         runtime_session,
         "_set_geometry_manual_pick_session",
-        lambda value: setattr(manual_state, "pick_session", dict(value)) or manual_state.pick_session,
+        lambda value: (
+            setattr(manual_state, "pick_session", dict(value)) or manual_state.pick_session
+        ),
     )
     monkeypatch.setattr(runtime_session.simulation_runtime_state, "profile_cache", profile_cache)
     monkeypatch.setattr(
@@ -21947,10 +22399,7 @@ def test_detector_to_caked_projection_does_not_print_caked_angles_as_detector_px
     text = out.getvalue()
     print("\ndetector_to_caked_projection_does_not_print_caked_angles_as_detector_px")
     print(text.strip())
-    assert (
-        "geometry_detector_display_px=<unavailable reason=no detector back-projection>"
-        in text
-    )
+    assert "geometry_detector_display_px=<unavailable reason=no detector back-projection>" in text
     bad_values = (
         "(42.351, -42.250)",
         "(36.209, -117.751)",
@@ -22058,8 +22507,7 @@ def test_headless_replay_uses_same_caked_picker_builder_as_live(
         print("headless_replay_bypasses_live_caked_candidate_builder=no")
     print(f"headless_replay_builder_calls={len(calls)}")
     print(
-        "headless_replay_caked_picker_candidate_count="
-        f"{len(_diag_flatten_grouped(caked_grouped))}"
+        f"headless_replay_caked_picker_candidate_count={len(_diag_flatten_grouped(caked_grouped))}"
     )
     print(f"headless_replay_selected_builder_row_count={len(replay_entries)}")
 
@@ -22232,7 +22680,9 @@ def _diag_headless_detector_picker_resolution(context, picker_rows, target_by_br
                 within=within,
                 q_group=_diag_q_group_key(selected),
                 hkl=_diag_hkl(selected),
-                table=selected.get("source_table_index") if isinstance(selected, Mapping) else "<none>",
+                table=selected.get("source_table_index")
+                if isinstance(selected, Mapping)
+                else "<none>",
                 row=selected.get("source_row_index") if isinstance(selected, Mapping) else "<none>",
                 source_branch=(
                     selected.get("source_branch_index")
@@ -22278,7 +22728,9 @@ def _diag_print_projection_block(title, entries, visual_map, run_id, *, emitter,
                 hkl=_diag_hkl(entry),
                 display=_diag_point_text(displayed := observed_display, _display_source),
                 native=_diag_point_text(observed_native, _native_source),
-                raw_caked=_diag_point_text(_diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),))),
+                raw_caked=_diag_point_text(
+                    _diag_finite_pair(entry, (("raw_caked_x", "raw_caked_y"),))
+                ),
                 geometry_caked=_diag_point_text(observed_caked),
                 sim_caked=_diag_point_text(visual.get("caked")),
                 stamp=_diag_cmd_stamp(
@@ -22604,9 +23056,7 @@ def test_minus_1_0_10_detector_to_caked_trace_waits_for_caked_ready(
         == "manual-snapshot"
     )
     assert (
-        runtime_session.pending_detector_to_caked_manual_trace[
-            "trace_deferred_until_caked_ready"
-        ]
+        runtime_session.pending_detector_to_caked_manual_trace["trace_deferred_until_caked_ready"]
         is True
     )
     entry["source_branch_index"] = 99
@@ -22614,9 +23064,7 @@ def test_minus_1_0_10_detector_to_caked_trace_waits_for_caked_ready(
     entry["geometry_detector_native_px"] = (991.0, 991.0)
     entry["sim_visual_detector_native_px"] = (992.0, 992.0)
     states.append({"callback_available": True, "caked_projection_ready": True})
-    flushed = runtime_session._emit_or_defer_detector_to_caked_manual_trace(
-        "unit_after_ready"
-    )
+    flushed = runtime_session._emit_or_defer_detector_to_caked_manual_trace("unit_after_ready")
     after = capsys.readouterr().out
     print("\ndetector_to_caked_deferred_trace")
     print(after.strip())
@@ -22667,7 +23115,9 @@ def test_minus_1_0_10_detector_to_caked_trace_drops_stale_background(
     assert capsys.readouterr().out == ""
     background_indexes.append(1)
     states.append({"callback_available": True, "caked_projection_ready": True})
-    assert runtime_session._emit_or_defer_detector_to_caked_manual_trace("unit_after_ready") is False
+    assert (
+        runtime_session._emit_or_defer_detector_to_caked_manual_trace("unit_after_ready") is False
+    )
     assert capsys.readouterr().out == ""
     assert runtime_session.pending_detector_to_caked_manual_trace is None
 
@@ -22873,8 +23323,7 @@ def _diag_point_consistency_rung_status(rows, rung):
     return [
         row
         for row in rows
-        if int(row.get("rung", -1)) == int(rung)
-        and str(row.get("status")) != "PASS"
+        if int(row.get("rung", -1)) == int(rung) and str(row.get("status")) != "PASS"
     ]
 
 
@@ -22922,12 +23371,11 @@ def _diag_detector_to_caked_deferral_trace_result():
     states = [{"callback_available": False, "caked_projection_ready": False}]
     try:
         runtime_session._detector_to_caked_manual_trace_saved_entries = lambda: [dict(entry)]
-        runtime_session._native_detector_coords_to_caked_display_coords = (
-            lambda col, row: (float(col) / 10.0, float(row) / 10.0)
+        runtime_session._native_detector_coords_to_caked_display_coords = lambda col, row: (
+            float(col) / 10.0,
+            float(row) / 10.0,
         )
-        runtime_session._detector_to_caked_manual_trace_projection_state = (
-            lambda: dict(states[-1])
-        )
+        runtime_session._detector_to_caked_manual_trace_projection_state = lambda: dict(states[-1])
         runtime_session._detector_to_caked_manual_trace_background_index = lambda: 0
         runtime_session.pending_detector_to_caked_manual_trace = None
         with contextlib.redirect_stdout(io.StringIO()) as before_out:
@@ -23113,8 +23561,7 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
             and sim_d2n is not None
             and np.allclose(geometry_d2n, geometry_native, atol=1.0e-6, rtol=0.0)
             and np.allclose(sim_d2n, sim_native, atol=1.0e-6, rtol=0.0)
-            and entry.get("sim_visual_detector_native_source")
-            == "display_to_native_callback"
+            and entry.get("sim_visual_detector_native_source") == "display_to_native_callback"
             and not copied_display
         )
         _diag_add_point_consistency_rung(
@@ -23169,7 +23616,10 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
         geometry_caked = direct_results["geometry"]["caked"]
         expected = expected_geometry_caked[branch]
         ok = bool(
-            all(item["status"] == "ok" and item["caked"] is not None for item in direct_results.values())
+            all(
+                item["status"] == "ok" and item["caked"] is not None
+                for item in direct_results.values()
+            )
             and np.allclose(geometry_caked, expected, atol=0.75, rtol=0.0)
         )
         _diag_add_point_consistency_rung(
@@ -23233,7 +23683,10 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
             expected_source="saved detector-origin pair",
             actual_source="geometry manual pair entry",
             expected_value=required_pair_fields,
-            actual_value={field: mg._geometry_manual_tuple_point(entry, field) for field in required_pair_fields},
+            actual_value={
+                field: mg._geometry_manual_tuple_point(entry, field)
+                for field in required_pair_fields
+            },
             suggested_fix_target="ra_sim/gui/manual_geometry.py:geometry_manual_pair_entry_from_candidate",
             failure_reason="detector_origin_saved_pair_lost_coordinate_field",
         )
@@ -23387,7 +23840,10 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
                 "phi_deg": point[1],
             }
         )
-        if detector_display is not None or detector_source != "<unavailable reason=no detector back-projection>":
+        if (
+            detector_display is not None
+            or detector_source != "<unavailable reason=no detector back-projection>"
+        ):
             synthetic_bad.append((point, detector_display, detector_source))
     _diag_add_point_consistency_rung(
         rows,
@@ -23411,9 +23867,7 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
         caked_geometry = _diag_observed_caked(caked_saved[branch])[0]
         delta = _diag_angle_delta(detector_geometry, caked_geometry)
         ok = bool(
-            delta is not None
-            and abs(float(delta[0])) <= 0.25
-            and abs(float(delta[1])) <= 0.5
+            delta is not None and abs(float(delta[0])) <= 0.25 and abs(float(delta[1])) <= 0.5
         )
         _diag_add_point_consistency_rung(
             rows,
@@ -23455,7 +23909,8 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
         prediction_source = str(row.get("fit_prediction_source"))
         observed_match = bool(
             row.get("observed_visual_to_fit_observed_match") == "yes"
-            and float(row.get("fit_observed_minus_observed_refined_detector_delta_px", np.inf)) <= 1.0
+            and float(row.get("fit_observed_minus_observed_refined_detector_delta_px", np.inf))
+            <= 1.0
         )
         caked_delta = row.get("fit_observed_minus_observed_refined_caked_delta_deg")
         try:
@@ -24013,8 +24468,7 @@ def test_minus_1_0_10_live_cmd_log_validator(tmp_path) -> None:
     }
     caked_saved_by_branch = _diag_branch_map(caked_saved)
     caked_assignment_sources = {
-        str(caked_saved_by_branch[branch].get("assignment_distance_source"))
-        for branch in (0, 1)
+        str(caked_saved_by_branch[branch].get("assignment_distance_source")) for branch in (0, 1)
     }
     print(f"current_run_bad_77_80_lines={'yes' if current_bad_hits else 'no'}")
     print(f"current_run_unmarked_manual_lines={'yes' if unmarked_lines else 'no'}")
@@ -24044,7 +24498,9 @@ def test_minus_1_0_10_live_cmd_log_validator(tmp_path) -> None:
                     str(caked_previews[branch].get("status_distance_source")),
                     _diag_float_text(caked_previews[branch].get("status_distance_value")),
                     str(caked_saved_by_branch[branch].get("assignment_distance_source")),
-                    _diag_float_text(caked_saved_by_branch[branch].get("assignment_distance_to_sim")),
+                    _diag_float_text(
+                        caked_saved_by_branch[branch].get("assignment_distance_to_sim")
+                    ),
                 )
             )
         )
@@ -24434,9 +24890,9 @@ def _diag_fit_handoff_dataset(tmp_path):
         current_background_index=0,
         image_size=image_size,
         display_rotate_k=int(kwargs.get("display_rotate_k", hgf.DISPLAY_ROTATE_K)),
-        geometry_manual_pairs_for_index=lambda idx: [dict(entry) for entry in saved_entries]
-        if int(idx) == 0
-        else [],
+        geometry_manual_pairs_for_index=lambda idx: (
+            [dict(entry) for entry in saved_entries] if int(idx) == 0 else []
+        ),
         load_background_by_index=lambda _idx: (native_background, display_background),
         apply_background_backend_orientation=lambda image: image,
         geometry_manual_simulated_peaks_for_params=lambda *_args, **_kwargs: [
@@ -24481,9 +24937,9 @@ def _diag_fit_handoff_dataset(tmp_path):
         geometry_manual_last_simulation_diagnostics=callbacks.last_simulation_diagnostics,
         geometry_manual_match_config=lambda: {},
         pick_uses_caked_space=lambda: False,
-        geometry_manual_caked_view_for_index=lambda idx: _diag_caked_view_payload(context)
-        if int(idx) == 0
-        else None,
+        geometry_manual_caked_view_for_index=lambda idx: (
+            _diag_caked_view_payload(context) if int(idx) == 0 else None
+        ),
         geometry_manual_refresh_pair_entry=callbacks.refresh_entry_geometry,
     )
     dataset = gf.build_geometry_manual_fit_dataset(
@@ -24611,15 +25067,11 @@ def _diag_filter_minus_1_0_10_dataset(dataset):
         if any(_diag_entry_is_minus_1_0_10_branch(entry) for entry in entries):
             keep_indices.append(index)
     for key, entries in pair_lists.items():
-        filtered[key] = [
-            dict(entries[index]) for index in keep_indices if index < len(entries)
-        ]
+        filtered[key] = [dict(entries[index]) for index in keep_indices if index < len(entries)]
     filtered["pair_count"] = int(len(keep_indices))
     for key in ("source_rows_for_trace", "source_rows", "simulated_peaks"):
         entries = [
-            dict(entry)
-            for entry in dataset.get(key, ()) or ()
-            if isinstance(entry, Mapping)
+            dict(entry) for entry in dataset.get(key, ()) or () if isinstance(entry, Mapping)
         ]
         if entries:
             filtered[key] = entries
@@ -24828,9 +25280,7 @@ def _diag_build_minus_1_0_10_fit_request(
         use_shared_theta_offset=False,
     )
     runtime_cfg = gf.build_geometry_fit_runtime_config(
-        defaults.fit_config.get("geometry", {})
-        if isinstance(defaults.fit_config, Mapping)
-        else {},
+        defaults.fit_config.get("geometry", {}) if isinstance(defaults.fit_config, Mapping) else {},
         params,
         {},
         domains,
@@ -24964,7 +25414,7 @@ def _diag_result_target_predictions(result):
                 float(raw.get("measured_two_theta_deg", np.nan)),
                 float(raw.get("measured_phi_deg", np.nan)),
             ),
-            }
+        }
     return predictions
 
 
@@ -24981,9 +25431,9 @@ def _diag_after_records_from_fit_result(baseline_records, result):
             predicted_detector_native=prediction["predicted_detector_native"],
             predicted_caked=prediction["predicted_caked"],
         )
-        assert after_records[branch]["observed_detector_native"] == before[
-            "observed_detector_native"
-        ]
+        assert (
+            after_records[branch]["observed_detector_native"] == before["observed_detector_native"]
+        )
         assert after_records[branch]["observed_caked"] == before["observed_caked"]
     return after_records
 
@@ -25237,8 +25687,7 @@ def _diag_print_handoff_optimizer_prediction_table(rows_by_branch, optimizer_row
             (("simulated_native_col", "simulated_native_row"),),
         )
         projection_identity = (
-            f"{optimizer.get('fit_space_projector_kind')}:"
-            f"{optimizer.get('cake_bundle_signature')}"
+            f"{optimizer.get('fit_space_projector_kind')}:{optimizer.get('cake_bundle_signature')}"
         )
         print(
             f"{branch} | "
@@ -25273,7 +25722,9 @@ def _diag_print_saved_sim_native_diagnostics(dataset, rows_by_branch, optimizer_
             "display_to_native_saved_sim_detector_display_px",
         )
         caked_from_saved_native = _diag_row_pair(row, "caked_from_saved_native")
-        if not (np.isfinite(caked_from_saved_native[0]) and np.isfinite(caked_from_saved_native[1])):
+        if not (
+            np.isfinite(caked_from_saved_native[0]) and np.isfinite(caked_from_saved_native[1])
+        ):
             caked_from_saved_native = _diag_project_native_for_test(dataset, saved_native)
         caked_from_display_to_native = _diag_row_pair(row, "caked_from_display_to_native")
         if not (
@@ -25355,7 +25806,9 @@ def _diag_pick_fit_failure_reason(
 
 def _diag_recompute_fit_audit_rows(context, dataset, params=None):
     if params is None:
-        params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+        params = dict(
+            _diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"])
+        )
     rows = gf.build_geometry_fit_qr_handoff_audit_rows(
         dataset,
         base_fit_params=dict(params),
@@ -25494,9 +25947,9 @@ def test_minus_1_0_10_fit_step_reduces_qr_residual(tmp_path) -> None:
         assert _diag_is_locked_manual_qr_prediction_source(row["fit_prediction_source"])
         assert "cache_fresh_row" not in str(row.get("fit_prediction_source", ""))
         assert row["fit_observed_caked_deg"] is not row["fit_prediction_caked_deg"]
-        assert row["fit_observed_detector_native_px"] is not row[
-            "fit_prediction_detector_native_px"
-        ]
+        assert (
+            row["fit_observed_detector_native_px"] is not row["fit_prediction_detector_native_px"]
+        )
         assert not np.allclose(
             _diag_float_pair(row["fit_observed_caked_deg"]),
             _diag_float_pair(row["fit_prediction_caked_deg"]),
@@ -25538,9 +25991,10 @@ def test_minus_1_0_10_fit_step_reduces_qr_residual(tmp_path) -> None:
                 predicted_caked=predicted_caked,
             )
             assert after_records[branch]["observed_caked"] == before["observed_caked"]
-            assert after_records[branch]["observed_detector_native"] == before[
-                "observed_detector_native"
-            ]
+            assert (
+                after_records[branch]["observed_detector_native"]
+                == before["observed_detector_native"]
+            )
     else:
         after_records = {branch: dict(record) for branch, record in before_records.items()}
         repeated_rows = _diag_recompute_fit_audit_rows(context, dataset)
@@ -25589,9 +26043,7 @@ def test_minus_1_0_10_fit_step_reduces_qr_residual(tmp_path) -> None:
 
     optimizer_cfg = request.refinement_config.get("optimizer", {})
     optimizer_method = str(
-        optimizer_cfg.get("method")
-        or optimizer_cfg.get("least_squares_method")
-        or "least_squares"
+        optimizer_cfg.get("method") or optimizer_cfg.get("least_squares_method") or "least_squares"
     )
     print("[ra-sim] (-1,0,10) Qr/Qz fit-step diagnostic")
     _diag_print_residual_table("baseline_residual_table", before_records)
@@ -25611,17 +26063,14 @@ def test_minus_1_0_10_fit_step_reduces_qr_residual(tmp_path) -> None:
     print(f"manual_caked_residual_row_count={q_residual_count}")
     print(f"residual_norm_before={before_total_norm:.9f}")
     print(f"residual_norm_after={after_total_norm:.9f}")
-    print(
-        "qr_residual_reduced="
-        f"{str(after_total_norm < before_total_norm - 1.0e-9).lower()}"
-    )
+    print(f"qr_residual_reduced={str(after_total_norm < before_total_norm - 1.0e-9).lower()}")
     if first_reason is not None:
         print(f"first_failing_reason={first_reason}")
 
     if result_success and target_predictions_available:
-        assert (
-            after_total_norm <= before_total_norm + 1.0e-9
-        ), "fitter silently reported success while residual norm increased"
+        assert after_total_norm <= before_total_norm + 1.0e-9, (
+            "fitter silently reported success while residual norm increased"
+        )
 
 
 def test_minus_1_0_10_residual_definition_consistent_between_cmd_and_fit(
@@ -25673,10 +26122,7 @@ def test_minus_1_0_10_residual_definition_consistent_between_cmd_and_fit(
             "residual_sign_convention",
             "objective_space",
         ):
-            expected = (
-                f"{field}="
-                f"{gf._geometry_fit_audit_value_text(row.get(field))}"
-            )
+            expected = f"{field}={gf._geometry_fit_audit_value_text(row.get(field))}"
             assert any(expected in line for line in audit_lines), (branch, expected)
 
 
@@ -25779,10 +26225,7 @@ def test_minus_1_0_10_accepted_fit_step_recomputes_from_accepted_params(
     except AssertionError:
         after_records = None
     if after_records is None:
-        print(
-            "fit_not_testable_reason="
-            "prediction_branch_source_switched"
-        )
+        print("fit_not_testable_reason=prediction_branch_source_switched")
     else:
         _diag_print_fit_step_table(baseline_records, after_records)
     assert int(getattr(result, "nfev", 0) or 0) > 0
@@ -25968,12 +26411,8 @@ def test_minus_1_0_10_optimizer_residual_vector_matches_audit(tmp_path) -> None:
         theta_component = by_branch_component[(branch, "delta_two_theta_deg")]
         phi_component = by_branch_component[(branch, "wrapped_delta_phi_deg")]
         expected = audit_record["residual_caked"]
-        assert _diag_is_locked_manual_qr_prediction_source(
-            theta_component["predicted_source"]
-        )
-        assert _diag_is_locked_manual_qr_prediction_source(
-            phi_component["predicted_source"]
-        )
+        assert _diag_is_locked_manual_qr_prediction_source(theta_component["predicted_source"])
+        assert _diag_is_locked_manual_qr_prediction_source(phi_component["predicted_source"])
         assert theta_component["coordinate_space"] == "caked_deg"
         assert phi_component["coordinate_space"] == "caked_deg"
         assert theta_component["units"] == "deg"
@@ -26022,9 +26461,7 @@ def test_minus_1_0_10_qr_only_objective_does_not_accept_worse_solution(
     success = bool(getattr(result, "success", False))
     nfev = int(getattr(result, "nfev", 0) or 0)
     trace = _diag_objective_trace(result)
-    rejected_trial_norm = (
-        _diag_qr_norm_from_objective_record(trace[-1]) if trace else float("nan")
-    )
+    rejected_trial_norm = _diag_qr_norm_from_objective_record(trace[-1]) if trace else float("nan")
     after_records = None
     accepted_norm = float("nan")
     accepted_predictions_available = False
@@ -26070,11 +26507,7 @@ def test_minus_1_0_10_qr_only_objective_does_not_accept_worse_solution(
 
 
 def _diag_param_delta_text(var_names, delta):
-    return {
-        str(name): float(delta[idx])
-        for idx, name in enumerate(var_names)
-        if idx < len(delta)
-    }
+    return {str(name): float(delta[idx]) for idx, name in enumerate(var_names) if idx < len(delta)}
 
 
 def _diag_branch_identity_tuple(row):
@@ -26324,9 +26757,7 @@ def test_minus_1_0_10_qr_only_bounded_micro_step(tmp_path) -> None:
     except AssertionError:
         after_unavailable_reason = "nonfinite_or_missing_target_prediction"
         after_norm = _diag_qr_norm_from_objective_record(trace[-1]) if trace else float("nan")
-    optimizer_before_norm = (
-        _diag_qr_norm_from_objective_record(trace[0]) if trace else float("nan")
-    )
+    optimizer_before_norm = _diag_qr_norm_from_objective_record(trace[0]) if trace else float("nan")
     comparison_before_norm = (
         optimizer_before_norm if np.isfinite(optimizer_before_norm) else baseline_norm
     )
@@ -26398,8 +26829,7 @@ def test_minus_1_0_10_qr_residual_phi_wrap_continuity(tmp_path) -> None:
             identity_stable = set(trial_rows) == set(baseline_identity)
             if identity_stable:
                 identity_stable = all(
-                    _diag_branch_identity_tuple(trial_rows[branch])
-                    == baseline_identity[branch]
+                    _diag_branch_identity_tuple(trial_rows[branch]) == baseline_identity[branch]
                     for branch in baseline_identity
                 )
             phi_deltas = {}
@@ -26451,12 +26881,10 @@ def test_minus_1_0_10_qr_only_solver_inputs_are_scaled(tmp_path) -> None:
     x0 = [float(fit_run["before_params"][name]) for name in var_names]
     x_scale = [float(parameter_entries.get(name, {}).get("scale", np.nan)) for name in var_names]
     lower_bounds = [
-        float(parameter_entries.get(name, {}).get("lower_bound", np.nan))
-        for name in var_names
+        float(parameter_entries.get(name, {}).get("lower_bound", np.nan)) for name in var_names
     ]
     upper_bounds = [
-        float(parameter_entries.get(name, {}).get("upper_bound", np.nan))
-        for name in var_names
+        float(parameter_entries.get(name, {}).get("upper_bound", np.nan)) for name in var_names
     ]
     jacobian = getattr(result, "jac", None)
     first_bad = _diag_first_bad_qr_eval(trace, baseline_norm)
@@ -26475,8 +26903,7 @@ def test_minus_1_0_10_qr_only_solver_inputs_are_scaled(tmp_path) -> None:
             scaling_suspect = bool(raw_delta_norm > 1.0e-15 and scaled_delta_norm < 1.0e-3)
             print(f"first_bad_scaled_delta_norm={scaled_delta_norm:.12f}")
     unbounded = any(
-        not (np.isfinite(lo) and np.isfinite(hi))
-        for lo, hi in zip(lower_bounds, upper_bounds)
+        not (np.isfinite(lo) and np.isfinite(hi)) for lo, hi in zip(lower_bounds, upper_bounds)
     )
     scaling_suspect = bool(scaling_suspect or unbounded)
     optimizer_cfg = request.refinement_config.get("optimizer", {})
@@ -26496,8 +26923,7 @@ def test_minus_1_0_10_qr_only_solver_inputs_are_scaled(tmp_path) -> None:
     print("gtol=default(1e-8)")
     print(f"max_nfev={max(20, int(optimizer_cfg.get('max_nfev', 120)))}")
     print(
-        "optimizer_baseline_prediction_mismatch="
-        f"{'yes' if baseline_prediction_mismatch else 'no'}"
+        f"optimizer_baseline_prediction_mismatch={'yes' if baseline_prediction_mismatch else 'no'}"
     )
     print(f"optimizer_scaling_suspect={'yes' if scaling_suspect else 'no'}")
     assert x0
@@ -26544,7 +26970,9 @@ def _diag_locked_correspondence_key(row):
 
 def _diag_prediction_source_text(row):
     source = str(row.get("fit_prediction_source", row.get("predicted_source", "")) or "")
-    reason = str(row.get("resolution_reason", row.get("correspondence_resolution_reason", "")) or "")
+    reason = str(
+        row.get("resolution_reason", row.get("correspondence_resolution_reason", "")) or ""
+    )
     subreason = str(row.get("resolution_subreason", "") or "")
     return source, reason, subreason
 
@@ -26704,9 +27132,7 @@ def _diag_candidate_row(
         "caked": caked_pair,
         "matches_visual": bool(np.allclose(caked_pair, visual_caked, atol=1.0e-6, rtol=0.0)),
         "matches_handoff": bool(np.allclose(caked_pair, handoff_caked, atol=1.0e-6, rtol=0.0)),
-        "matches_optimizer": bool(
-            np.allclose(caked_pair, optimizer_caked, atol=1.0e-6, rtol=0.0)
-        ),
+        "matches_optimizer": bool(np.allclose(caked_pair, optimizer_caked, atol=1.0e-6, rtol=0.0)),
     }
 
 
@@ -26906,11 +27332,7 @@ def _diag_solver_x0_bundle(context, dataset):
     assert dry_trace
     assert solver_trace
     solver_record = next(
-        (
-            record
-            for record in solver_trace
-            if str(record.get("source", "")) == "pixel_cost_fn"
-        ),
+        (record for record in solver_trace if str(record.get("source", "")) == "pixel_cost_fn"),
         solver_trace[0],
     )
     return {
@@ -26983,13 +27405,9 @@ def test_minus_1_0_10_solver_x0_matches_handoff_and_dry_run(tmp_path) -> None:
             print("first_failure=solver_callback_x0_prediction_mismatch")
             print(f"first_bad_branch={branch}")
             print(
-                "expected_source="
-                f"{_diag_prediction_source_text(handoff_rows.get(branch, {}))[0]}"
+                f"expected_source={_diag_prediction_source_text(handoff_rows.get(branch, {}))[0]}"
             )
-            print(
-                "actual_source="
-                f"{_diag_prediction_source_text(solver_rows.get(branch, {}))[0]}"
-            )
+            print(f"actual_source={_diag_prediction_source_text(solver_rows.get(branch, {}))[0]}")
             break
     if first_bad is None and not (
         np.allclose(handoff_vec, dry_vec, atol=1.0e-9, rtol=0.0)
@@ -27115,9 +27533,8 @@ def test_minus_1_0_10_solver_small_perturbations_keep_same_prediction_source(
             delta_plus = _diag_caked_delta(plus_pred, baseline_pred)
             delta_minus = _diag_caked_delta(minus_pred, baseline_pred)
             derivative = (
-                (np.asarray(plus_pred, dtype=float) - np.asarray(minus_pred, dtype=float))
-                / (2.0 * epsilon)
-            )
+                np.asarray(plus_pred, dtype=float) - np.asarray(minus_pred, dtype=float)
+            ) / (2.0 * epsilon)
             baseline_id = _diag_source_identity_key(baseline_row)
             plus_id = _diag_source_identity_key(plus_row)
             minus_id = _diag_source_identity_key(minus_row)
@@ -27193,10 +27610,7 @@ def test_minus_1_0_10_x0_params_reconstruct_exact_baseline(tmp_path) -> None:
         dtype=float,
     ).reshape(-1)
     reconstructed = {name: float(x0[idx]) for idx, name in enumerate(var_names)}
-    diffs = {
-        name: float(reconstructed[name] - baseline_params[name])
-        for name in var_names
-    }
+    diffs = {name: float(reconstructed[name] - baseline_params[name]) for name in var_names}
     print(f"baseline_params={baseline_params}")
     print(f"x0={x0.tolist()}")
     print(f"reconstructed_params_from_x0={reconstructed}")
@@ -27286,9 +27700,10 @@ def test_minus_1_0_10_fit_prediction_identity_stable_during_step(tmp_path) -> No
                 row.get("branch_id"),
             )
             assert identity == expected_by_branch[branch], "prediction_branch_source_switched"
-            assert _diag_is_locked_manual_qr_prediction_source(
-                row["predicted_source"]
-            ) or row["predicted_source"] == "rejected:prediction_branch_source_switched"
+            assert (
+                _diag_is_locked_manual_qr_prediction_source(row["predicted_source"])
+                or row["predicted_source"] == "rejected:prediction_branch_source_switched"
+            )
             if row["predicted_source"] == "rejected:prediction_branch_source_switched":
                 assert row.get("resolution_reason") == "prediction_branch_source_switched"
 
@@ -27408,15 +27823,11 @@ def _diag_filter_qr_fit_groups_dataset(dataset):
         if any(_diag_entry_is_qr_fit_group_branch(entry) for entry in entries):
             keep_indices.append(index)
     for key, entries in pair_lists.items():
-        filtered[key] = [
-            dict(entries[index]) for index in keep_indices if index < len(entries)
-        ]
+        filtered[key] = [dict(entries[index]) for index in keep_indices if index < len(entries)]
     filtered["pair_count"] = int(len(keep_indices))
     for key in ("source_rows_for_trace", "source_rows", "simulated_peaks"):
         entries = [
-            dict(entry)
-            for entry in dataset.get(key, ()) or ()
-            if isinstance(entry, Mapping)
+            dict(entry) for entry in dataset.get(key, ()) or () if isinstance(entry, Mapping)
         ]
         if entries:
             filtered[key] = entries
@@ -27557,11 +27968,7 @@ def _diag_full_fit_after_resolver_bundle(context, dataset):
 
 
 def _diag_qr_fit_expected_keys():
-    return {
-        (hkl, branch)
-        for _group_key, hkl in _QR_FIT_GROUP_SPECS
-        for branch in (0, 1)
-    }
+    return {(hkl, branch) for _group_key, hkl in _QR_FIT_GROUP_SPECS for branch in (0, 1)}
 
 
 def _diag_qr_fit_branch_identity_stable(records):
@@ -27571,9 +27978,7 @@ def _diag_qr_fit_branch_identity_stable(records):
     expected_keys = _diag_qr_fit_expected_keys()
     if set(expected) != expected_keys:
         return False
-    expected_identity = {
-        key: _diag_source_identity_key(row) for key, row in expected.items()
-    }
+    expected_identity = {key: _diag_source_identity_key(row) for key, row in expected.items()}
     for record in records:
         rows = _diag_qr_fit_rows_by_key(record)
         if set(rows) != expected_keys:
@@ -27601,10 +28006,7 @@ def _diag_print_full_fit_decomposition(before, after, fit_run):
     prior_before = float(before.get("prior_residual_norm", np.nan))
     prior_after = float(after.get("prior_residual_norm", np.nan))
     weights = sorted(
-        {
-            float(component.get("weight", np.nan))
-            for component in _diag_qr_fit_components(before)
-        }
+        {float(component.get("weight", np.nan)) for component in _diag_qr_fit_components(before)}
     )
     print("full_geometry_fit_qr_contribution_after_resolver_fix")
     print(f"full_objective_norm_before={total_before:.9f}")
@@ -27996,9 +28398,7 @@ def test_qr_fit_phi_objective_weight_present(tmp_path) -> None:
     record = _diag_objective_trace(baseline["result"])[0]
     components = _diag_qr_fit_components(record)
     print("qr_fit_phi_objective_weight_present")
-    print(
-        "group | branch | component | residual_unweighted | weight | residual_weighted"
-    )
+    print("group | branch | component | residual_unweighted | weight | residual_weighted")
     phi_components = []
     theta_components = []
     zero_weight_phi = []
@@ -28201,15 +28601,11 @@ def _diag_filter_new4_exact_dataset(dataset, *, include_003):
         if any(_diag_new4_entry_allowed(entry, include_003=include_003) for entry in entries):
             keep_indices.append(index)
     for key, entries in pair_lists.items():
-        filtered[key] = [
-            dict(entries[index]) for index in keep_indices if index < len(entries)
-        ]
+        filtered[key] = [dict(entries[index]) for index in keep_indices if index < len(entries)]
     filtered["pair_count"] = int(len(keep_indices))
     for key in ("source_rows_for_trace", "source_rows", "simulated_peaks"):
         entries = [
-            dict(entry)
-            for entry in dataset.get(key, ()) or ()
-            if isinstance(entry, Mapping)
+            dict(entry) for entry in dataset.get(key, ()) or () if isinstance(entry, Mapping)
         ]
         if entries:
             filtered[key] = entries
@@ -28622,9 +29018,8 @@ def _diag_run_new4_finite_sweep_mode(context, dataset, *, include_003):
                 include_003=include_003,
             )
             expected_keys = set(_diag_new4_expected_inventory(include_003=include_003))
-            if (
-                set(trial_preview_rows) != expected_keys
-                or len(trial_preview_components) != 2 * len(expected_keys)
+            if set(trial_preview_rows) != expected_keys or len(trial_preview_components) != 2 * len(
+                expected_keys
             ):
                 reasons = sorted(
                     {
@@ -29011,10 +29406,7 @@ def _diag_new4_print_refinement_table(title, rows):
 
 
 _NEW4_CAKED_SNAPSHOT_ARTIFACT_DIR = (
-    Path(__file__).resolve().parents[1]
-    / "artifacts"
-    / "geometry_fit_caked_snapshots"
-    / "new4"
+    Path(__file__).resolve().parents[1] / "artifacts" / "geometry_fit_caked_snapshots" / "new4"
 )
 _NEW4_CAKED_SNAPSHOT_FIGURES = (
     "00_background_observed_full.png",
@@ -29067,17 +29459,13 @@ def _diag_new4_hkl_text(value):
 
 
 def _diag_new4_branch_label(row):
-    return (
-        f"{_diag_new4_hkl_text(row.get('hkl'))} "
-        f"b{int(row.get('source_branch_index'))}"
-    )
+    return f"{_diag_new4_hkl_text(row.get('hkl'))} b{int(row.get('source_branch_index'))}"
 
 
 def _diag_new4_record_key_text(key):
     q_group, hkl, table, row, branch, peak = key
     return (
-        f"{q_group}|{_diag_new4_hkl_text(hkl)}|"
-        f"table={table}|row={row}|branch={branch}|peak={peak}"
+        f"{q_group}|{_diag_new4_hkl_text(hkl)}|table={table}|row={row}|branch={branch}|peak={peak}"
     )
 
 
@@ -29118,7 +29506,9 @@ def _diag_new4_local_params_for_request(request, params_overrides=None):
 
 
 def _diag_new4_theta_for_request(request, dataset_ctx, local_params):
-    theta_base = float(getattr(dataset_ctx, "theta_initial", local_params.get("theta_initial", 0.0)))
+    theta_base = float(
+        getattr(dataset_ctx, "theta_initial", local_params.get("theta_initial", 0.0))
+    )
     if "theta_offset" in list(getattr(request, "var_names", ()) or ()):
         try:
             return float(theta_base + float(local_params.get("theta_offset", 0.0)))
@@ -29217,7 +29607,9 @@ def _diag_new4_prediction_motion(before_rows, after_rows):
 
 def _diag_new4_choose_snapshot_trial(context, dataset, baseline_run, baseline_record):
     include_003 = False
-    base_params = dict(_diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"]))
+    base_params = dict(
+        _diag_runtime_value(context["projection_kwargs"]["current_geometry_fit_params"])
+    )
     baseline_rows = _diag_new4_point_rows(baseline_record, include_003=include_003)
     name = "zb"
     trial_value = -0.002
@@ -29334,7 +29726,9 @@ def _diag_new4_plot_overlay(ax, rows, *, title):
     return max(residual_norms, default=0.0)
 
 
-def _diag_new4_save_figure(path, *, title, image, radial_axis, azimuth_axis, background, rows=None, plot_kind="points"):
+def _diag_new4_save_figure(
+    path, *, title, image, radial_axis, azimuth_axis, background, rows=None, plot_kind="points"
+):
     import matplotlib
 
     matplotlib.use("Agg", force=True)
@@ -29383,7 +29777,9 @@ def _diag_new4_save_figure(path, *, title, image, radial_axis, azimuth_axis, bac
         ax.set_title(title, fontsize=9)
     fig.colorbar(im, ax=ax, shrink=0.82)
     fig.tight_layout()
-    fig.savefig(path, metadata={"background_vmin": "0", "background_vmax": "3000"} if background else None)
+    fig.savefig(
+        path, metadata={"background_vmin": "0", "background_vmax": "3000"} if background else None
+    )
     plt.close(fig)
 
 
@@ -29406,7 +29802,9 @@ def _diag_new4_focus_limits(*row_sets):
     return (x_min - x_margin, x_max + x_margin), (y_min - y_margin, y_max + y_margin)
 
 
-def _diag_new4_save_focus_figure(path, *, title, image, radial_axis, azimuth_axis, rows, xlim, ylim):
+def _diag_new4_save_focus_figure(
+    path, *, title, image, radial_axis, azimuth_axis, rows, xlim, ylim
+):
     import matplotlib
 
     matplotlib.use("Agg", force=True)
@@ -29464,12 +29862,8 @@ def _diag_new4_snapshot_record(key, x0_row, trial_row):
         "source_table_index": x0_row.get("source_table_index"),
         "source_row_index": x0_row.get("source_row_index"),
         "observed_caked_x0": list(_diag_row_pair(x0_row, "observed_caked_deg")),
-        "predicted_nominal_caked_x0": list(
-            _diag_row_pair(x0_row, "predicted_nominal_caked_deg")
-        ),
-        "predicted_refined_caked_x0": list(
-            _diag_row_pair(x0_row, "predicted_refined_caked_deg")
-        ),
+        "predicted_nominal_caked_x0": list(_diag_row_pair(x0_row, "predicted_nominal_caked_deg")),
+        "predicted_refined_caked_x0": list(_diag_row_pair(x0_row, "predicted_refined_caked_deg")),
         "residual_x0": list(x0_residual),
         "nominal_residual_x0": list(x0_nominal_residual),
         "observed_caked_trial": list(_diag_row_pair(trial_row, "observed_caked_deg")),
@@ -29494,12 +29888,8 @@ def _diag_new4_snapshot_record(key, x0_row, trial_row):
         "observed_source": x0_row.get("observed_source"),
         "predicted_source_x0": x0_row.get("predicted_source"),
         "predicted_source_trial": trial_row.get("predicted_source"),
-        "fit_prediction_resolver_function_x0": x0_row.get(
-            "fit_prediction_resolver_function"
-        ),
-        "fit_prediction_resolver_function_trial": trial_row.get(
-            "fit_prediction_resolver_function"
-        ),
+        "fit_prediction_resolver_function_x0": x0_row.get("fit_prediction_resolver_function"),
+        "fit_prediction_resolver_function_trial": trial_row.get("fit_prediction_resolver_function"),
         "resolution_reason_x0": x0_row.get("resolution_reason"),
         "resolution_reason_trial": trial_row.get("resolution_reason"),
         "source_provenance": {
@@ -29742,11 +30132,15 @@ def _diag_new4_native_to_fit_caked(dataset, native_point, *, base_fit_params=Non
 
 
 def _diag_new4_manual_selection_origin(saved_entry):
-    token = str(
-        saved_entry.get("manual_background_input_origin", "")
-        or saved_entry.get("selection_origin", "")
-        or ""
-    ).strip().lower()
+    token = (
+        str(
+            saved_entry.get("manual_background_input_origin", "")
+            or saved_entry.get("selection_origin", "")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if token in {"detector", "caked"}:
         return token
     if _diag_finite_pair(saved_entry, (("raw_caked_x", "raw_caked_y"),)) is not None:
@@ -29806,8 +30200,12 @@ def _diag_new4_manual_audit_record(
         release_caked = _diag_new4_native_to_caked(callbacks, release_native)
         release_source = "native_detector_coords_to_caked_display_coords"
 
-    saved_manual_refined_caked, saved_manual_refined_caked_source = _diag_observed_caked(saved_entry)
-    manual_refined_native, manual_refined_native_source = _diag_observed_detector_native(saved_entry)
+    saved_manual_refined_caked, saved_manual_refined_caked_source = _diag_observed_caked(
+        saved_entry
+    )
+    manual_refined_native, manual_refined_native_source = _diag_observed_detector_native(
+        saved_entry
+    )
     manual_refined_caked = _diag_new4_native_to_fit_caked(
         dataset,
         manual_refined_native,
@@ -29820,7 +30218,9 @@ def _diag_new4_manual_audit_record(
     if manual_refined_caked is None:
         manual_refined_caked = saved_manual_refined_caked
         manual_refined_caked_source = saved_manual_refined_caked_source
-    manual_refined_display, manual_refined_display_source = _diag_observed_detector_display(saved_entry)
+    manual_refined_display, manual_refined_display_source = _diag_observed_detector_display(
+        saved_entry
+    )
     if manual_refined_display is None:
         manual_refined_display = _diag_new4_native_to_display(callbacks, manual_refined_native)
         manual_refined_display_source = "native_detector_coords_to_detector_display_coords"
@@ -30020,10 +30420,7 @@ def _diag_new4_record_point(rec, point_type, *, space="caked"):
 
 
 def _diag_new4_audit_label(rec):
-    return (
-        f"{_diag_new4_hkl_text(rec.get('hkl'))} "
-        f"b{int(rec.get('source_branch_index'))}"
-    )
+    return f"{_diag_new4_hkl_text(rec.get('hkl'))} b{int(rec.get('source_branch_index'))}"
 
 
 def _diag_new4_audit_branch_key(rec):
@@ -30047,7 +30444,9 @@ def _diag_new4_artist_offsets(collection):
     return [[float(row[0]), float(row[1])] for row in offsets]
 
 
-def _diag_new4_plot_audit_points(ax, records, point_type, *, space, color, marker, label, size=28, annotate=True):
+def _diag_new4_plot_audit_points(
+    ax, records, point_type, *, space, color, marker, label, size=28, annotate=True
+):
     xs = []
     ys = []
     branch_keys = []
@@ -30088,7 +30487,19 @@ def _diag_new4_plot_audit_points(ax, records, point_type, *, space, color, marke
     }
 
 
-def _diag_new4_save_manual_audit_caked_figure(path, *, title, image, radial_axis, azimuth_axis, records, mode, xlim=None, ylim=None, capture=False):
+def _diag_new4_save_manual_audit_caked_figure(
+    path,
+    *,
+    title,
+    image,
+    radial_axis,
+    azimuth_axis,
+    records,
+    mode,
+    xlim=None,
+    ylim=None,
+    capture=False,
+):
     import matplotlib
 
     matplotlib.use("Agg", force=True)
@@ -30136,26 +30547,31 @@ def _diag_new4_save_manual_audit_caked_figure(path, *, title, image, radial_axis
                 ],
             }
         )
+
     if mode == "release":
-        _capture_scatter(_diag_new4_plot_audit_points(
-            ax,
-            records,
-            "manual_release_saved_caked",
-            space="caked",
-            color="yellow",
-            marker="x",
-            label="saved manual release caked",
-        ))
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "manual_release_saved_caked",
+                space="caked",
+                color="yellow",
+                marker="x",
+                label="saved manual release caked",
+            )
+        )
     elif mode == "refined":
-        _capture_scatter(_diag_new4_plot_audit_points(
-            ax,
-            records,
-            "manual_saved_caked",
-            space="caked",
-            color="cyan",
-            marker="o",
-            label="saved manual caked",
-        ))
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "manual_saved_caked",
+                space="caked",
+                color="cyan",
+                marker="o",
+                label="saved manual caked",
+            )
+        )
     elif mode == "release_to_refined":
         for rec in records:
             release = _diag_new4_record_point(rec, "manual_release_saved_caked", space="caked")
@@ -30194,9 +30610,40 @@ def _diag_new4_save_manual_audit_caked_figure(path, *, title, image, radial_axis
                     refined,
                     observed,
                 )
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "manual_release_saved_caked", space="caked", color="yellow", marker="x", label="saved manual release caked"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "manual_saved_caked", space="caked", color="cyan", marker="o", label="saved manual caked"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "fit_observed", space="caked", color="magenta", marker="s", label="fit observed x0", annotate=False))
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "manual_release_saved_caked",
+                space="caked",
+                color="yellow",
+                marker="x",
+                label="saved manual release caked",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "manual_saved_caked",
+                space="caked",
+                color="cyan",
+                marker="o",
+                label="saved manual caked",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "fit_observed",
+                space="caked",
+                color="magenta",
+                marker="s",
+                label="fit observed x0",
+                annotate=False,
+            )
+        )
     elif mode == "observed_vs_predicted":
         for rec in records:
             observed = _diag_new4_record_point(rec, "fit_observed", space="caked")
@@ -30231,10 +30678,50 @@ def _diag_new4_save_manual_audit_caked_figure(path, *, title, image, radial_axis
                 color="white",
                 fontsize=5,
             )
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "manual_saved_caked", space="caked", color="cyan", marker="o", label="saved manual caked"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "fit_observed", space="caked", color="magenta", marker="s", label="fit observed x0"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "sim_nominal_x0", space="caked", color="orange", marker="^", label="sim nominal x0"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "sim_refined_x0", space="caked", color="lime", marker="x", label="sim refined x0"))
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "manual_saved_caked",
+                space="caked",
+                color="cyan",
+                marker="o",
+                label="saved manual caked",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "fit_observed",
+                space="caked",
+                color="magenta",
+                marker="s",
+                label="fit observed x0",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "sim_nominal_x0",
+                space="caked",
+                color="orange",
+                marker="^",
+                label="sim nominal x0",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "sim_refined_x0",
+                space="caked",
+                color="lime",
+                marker="x",
+                label="sim refined x0",
+            )
+        )
     elif mode == "manual_all":
         for rec in records:
             release = _diag_new4_record_point(rec, "manual_release_saved_caked", space="caked")
@@ -30242,7 +30729,9 @@ def _diag_new4_save_manual_audit_caked_figure(path, *, title, image, radial_axis
             observed = _diag_new4_record_point(rec, "fit_observed", space="caked")
             sim_refined = _diag_new4_record_point(rec, "sim_refined_x0", space="caked")
             if release is not None and refined is not None:
-                line = ax.plot([release[0], refined[0]], [release[1], refined[1]], color="white", linewidth=0.8)[0]
+                line = ax.plot(
+                    [release[0], refined[0]], [release[1], refined[1]], color="white", linewidth=0.8
+                )[0]
                 _capture_line(
                     rec,
                     line,
@@ -30252,7 +30741,13 @@ def _diag_new4_save_manual_audit_caked_figure(path, *, title, image, radial_axis
                     refined,
                 )
             if observed is not None and sim_refined is not None:
-                line = ax.plot([observed[0], sim_refined[0]], [observed[1], sim_refined[1]], color="lime", linewidth=0.8, linestyle="--")[0]
+                line = ax.plot(
+                    [observed[0], sim_refined[0]],
+                    [observed[1], sim_refined[1]],
+                    color="lime",
+                    linewidth=0.8,
+                    linestyle="--",
+                )[0]
                 _capture_line(
                     rec,
                     line,
@@ -30261,12 +30756,72 @@ def _diag_new4_save_manual_audit_caked_figure(path, *, title, image, radial_axis
                     observed,
                     sim_refined,
                 )
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "manual_release_saved_caked", space="caked", color="yellow", marker="x", label="saved manual release caked"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "manual_saved_caked", space="caked", color="cyan", marker="o", label="saved manual caked"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "fit_observed", space="caked", color="magenta", marker="s", label="fit observed x0"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "sim_saved_caked", space="caked", color="dodgerblue", marker="D", label="sim saved visual"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "sim_nominal_x0", space="caked", color="orange", marker="^", label="sim nominal x0"))
-        _capture_scatter(_diag_new4_plot_audit_points(ax, records, "sim_refined_x0", space="caked", color="lime", marker="x", label="sim refined x0"))
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "manual_release_saved_caked",
+                space="caked",
+                color="yellow",
+                marker="x",
+                label="saved manual release caked",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "manual_saved_caked",
+                space="caked",
+                color="cyan",
+                marker="o",
+                label="saved manual caked",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "fit_observed",
+                space="caked",
+                color="magenta",
+                marker="s",
+                label="fit observed x0",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "sim_saved_caked",
+                space="caked",
+                color="dodgerblue",
+                marker="D",
+                label="sim saved visual",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "sim_nominal_x0",
+                space="caked",
+                color="orange",
+                marker="^",
+                label="sim nominal x0",
+            )
+        )
+        _capture_scatter(
+            _diag_new4_plot_audit_points(
+                ax,
+                records,
+                "sim_refined_x0",
+                space="caked",
+                color="lime",
+                marker="x",
+                label="sim refined x0",
+            )
+        )
     else:
         raise AssertionError(mode)
     if xlim is not None:
@@ -30307,7 +30862,9 @@ def _diag_new4_save_manual_audit_detector_figure(path, *, title, image, records)
         aspect="equal",
     )
     for rec in records:
-        release = _diag_new4_record_point(rec, "manual_release_saved_caked", space="detector_native")
+        release = _diag_new4_record_point(
+            rec, "manual_release_saved_caked", space="detector_native"
+        )
         refined = _diag_new4_record_point(rec, "manual_saved_caked", space="detector_native")
         if release is not None and refined is not None:
             ax.plot(
@@ -30371,7 +30928,9 @@ def _diag_new4_manual_audit_limits(records, *, target_q_group=None, margin=1.0):
     return (x_min - x_margin, x_max + x_margin), (y_min - y_margin, y_max + y_margin)
 
 
-def _diag_new4_save_manual_audit_zoom_grid(path, *, title, image, radial_axis, azimuth_axis, records, capture=False):
+def _diag_new4_save_manual_audit_zoom_grid(
+    path, *, title, image, radial_axis, azimuth_axis, records, capture=False
+):
     import matplotlib
 
     matplotlib.use("Agg", force=True)
@@ -30424,14 +30983,67 @@ def _diag_new4_save_manual_audit_zoom_grid(path, *, title, image, radial_axis, a
             y_margin = max(float(y_max - y_min) * 0.6, 1.6)
             ax.set_xlim(max(extent[0], x_min - x_margin), min(extent[1], x_max + x_margin))
             ax.set_ylim(max(extent[2], y_min - y_margin), min(extent[3], y_max + y_margin))
-        panel_capture["scatters"].append(_diag_new4_plot_audit_points(ax, [rec], "manual_saved_caked", space="caked", color="cyan", marker="o", label="saved manual caked", size=18, annotate=False))
-        panel_capture["scatters"].append(_diag_new4_plot_audit_points(ax, [rec], "fit_observed", space="caked", color="magenta", marker="s", label="fit observed x0", size=18, annotate=False))
-        panel_capture["scatters"].append(_diag_new4_plot_audit_points(ax, [rec], "sim_saved_caked", space="caked", color="dodgerblue", marker="D", label="sim saved visual", size=18, annotate=False))
-        panel_capture["scatters"].append(_diag_new4_plot_audit_points(ax, [rec], "sim_refined_x0", space="caked", color="lime", marker="x", label="sim refined x0", size=18, annotate=False))
+        panel_capture["scatters"].append(
+            _diag_new4_plot_audit_points(
+                ax,
+                [rec],
+                "manual_saved_caked",
+                space="caked",
+                color="cyan",
+                marker="o",
+                label="saved manual caked",
+                size=18,
+                annotate=False,
+            )
+        )
+        panel_capture["scatters"].append(
+            _diag_new4_plot_audit_points(
+                ax,
+                [rec],
+                "fit_observed",
+                space="caked",
+                color="magenta",
+                marker="s",
+                label="fit observed x0",
+                size=18,
+                annotate=False,
+            )
+        )
+        panel_capture["scatters"].append(
+            _diag_new4_plot_audit_points(
+                ax,
+                [rec],
+                "sim_saved_caked",
+                space="caked",
+                color="dodgerblue",
+                marker="D",
+                label="sim saved visual",
+                size=18,
+                annotate=False,
+            )
+        )
+        panel_capture["scatters"].append(
+            _diag_new4_plot_audit_points(
+                ax,
+                [rec],
+                "sim_refined_x0",
+                space="caked",
+                color="lime",
+                marker="x",
+                label="sim refined x0",
+                size=18,
+                annotate=False,
+            )
+        )
         observed = _diag_new4_record_point(rec, "fit_observed", space="caked")
         sim_refined = _diag_new4_record_point(rec, "sim_refined_x0", space="caked")
         if observed is not None and sim_refined is not None:
-            line = ax.plot([observed[0], sim_refined[0]], [observed[1], sim_refined[1]], color="white", linewidth=0.6)[0]
+            line = ax.plot(
+                [observed[0], sim_refined[0]],
+                [observed[1], sim_refined[1]],
+                color="white",
+                linewidth=0.6,
+            )[0]
             panel_capture["connectors"].append(
                 {
                     "branch_key": _diag_new4_jsonable(_diag_new4_audit_branch_key(rec)),
@@ -30461,7 +31073,7 @@ def _diag_new4_save_manual_audit_zoom_grid(path, *, title, image, radial_axis, a
         panel_capture["xlim"] = [float(value) for value in ax.get_xlim()]
         panel_capture["ylim"] = [float(value) for value in ax.get_ylim()]
         capture_data["panels"].append(panel_capture)
-    for ax in flat_axes[len(records):]:
+    for ax in flat_axes[len(records) :]:
         ax.axis("off")
     handles, labels = flat_axes[0].get_legend_handles_labels()
     if handles:
@@ -30529,9 +31141,15 @@ def _diag_new4_write_manual_audit_csv(path, records):
                         "detector_native_y": "" if native is None else native[1],
                         "caked_2theta": "" if caked is None else caked[0],
                         "caked_phi": "" if caked is None else caked[1],
-                        "residual_2theta": rec["residual_2theta"] if point_type == "sim_refined_x0" else "",
-                        "residual_phi_wrapped": rec["residual_phi_wrapped"] if point_type == "sim_refined_x0" else "",
-                        "residual_norm": rec["residual_norm"] if point_type == "sim_refined_x0" else "",
+                        "residual_2theta": rec["residual_2theta"]
+                        if point_type == "sim_refined_x0"
+                        else "",
+                        "residual_phi_wrapped": rec["residual_phi_wrapped"]
+                        if point_type == "sim_refined_x0"
+                        else "",
+                        "residual_norm": rec["residual_norm"]
+                        if point_type == "sim_refined_x0"
+                        else "",
                     }
                 )
 
@@ -30574,14 +31192,14 @@ def _diag_new4_key_id(branch_key):
 
 def _diag_new4_target_audit_records(records):
     return [
-        rec
-        for rec in records
-        if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY)
+        rec for rec in records if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY)
     ]
 
 
 def _diag_new4_target_audit_by_branch(records):
-    return {int(rec["source_branch_index"]): rec for rec in _diag_new4_target_audit_records(records)}
+    return {
+        int(rec["source_branch_index"]): rec for rec in _diag_new4_target_audit_records(records)
+    }
 
 
 def _diag_new4_capture_scatter(capture, point_type, branch_key):
@@ -30608,7 +31226,10 @@ def _diag_new4_capture_connector(capture, branch_key, start_type, end_type):
     for connector in capture.get("connectors", ()):
         if _diag_new4_key_id(connector.get("branch_key")) != target:
             continue
-        if connector.get("start_point_type") == start_type and connector.get("end_point_type") == end_type:
+        if (
+            connector.get("start_point_type") == start_type
+            and connector.get("end_point_type") == end_type
+        ):
             return connector
     return None
 
@@ -30949,9 +31570,7 @@ def _diag_new4_classify_anchor_divergence(row):
     dynamic_native = np.asarray(row["dynamic_nominal_native_px"], dtype=float)
     native_delta = dynamic_native - saved_native
     native_dist = (
-        float(np.linalg.norm(native_delta))
-        if np.all(np.isfinite(native_delta))
-        else float("inf")
+        float(np.linalg.norm(native_delta)) if np.all(np.isfinite(native_delta)) else float("inf")
     )
     saved_projection_delta = row["saved_native_projected_minus_saved_caked_delta"]
     nominal_delta = row["dynamic_nominal_minus_saved_refined_sim_caked_delta"]
@@ -30962,9 +31581,7 @@ def _diag_new4_classify_anchor_divergence(row):
         return "B. caked_projection_mismatch"
     if not _diag_new4_anchor_delta_ok(saved_projection_delta):
         return "D. saved_state_anchor_inconsistent"
-    if _diag_new4_anchor_delta_ok(nominal_delta) and not _diag_new4_anchor_delta_ok(
-        refined_delta
-    ):
+    if _diag_new4_anchor_delta_ok(nominal_delta) and not _diag_new4_anchor_delta_ok(refined_delta):
         return "C. caked_refinement_jumps_to_wrong_peak"
     return "unknown"
 
@@ -31318,9 +31935,14 @@ def _diag_new4_print_branch_residual_table(title, before, after, *, include_003)
         "q_group | hkl | branch | observed | refined_before | refined_after | "
         "residual_before | residual_after"
     )
-    for key, observed, pred_before, pred_after, residual_before, residual_after in (
-        _diag_new4_residual_rows(before, after, include_003=include_003)
-    ):
+    for (
+        key,
+        observed,
+        pred_before,
+        pred_after,
+        residual_before,
+        residual_after,
+    ) in _diag_new4_residual_rows(before, after, include_003=include_003):
         q_group, hkl, _table, _row, branch, _peak = key
         print(
             f"{q_group} | {hkl} | {branch} | {_diag_fmt_pair(observed)} | "
@@ -31472,10 +32094,7 @@ def test_new4_export_representative_caked_fit_snapshots(tmp_path) -> None:
 
     _diag_new4_save_figure(
         artifact_dir / "00_background_observed_full.png",
-        title=(
-            f"state={_QR_PICKER_DIAG_STATE_PATH} bg=0 Mode A "
-            f"branches={len(x0_rows)}"
-        ),
+        title=(f"state={_QR_PICKER_DIAG_STATE_PATH} bg=0 Mode A branches={len(x0_rows)}"),
         image=background_caked,
         radial_axis=background_radial,
         azimuth_axis=background_azimuth,
@@ -31485,10 +32104,7 @@ def test_new4_export_representative_caked_fit_snapshots(tmp_path) -> None:
     )
     _diag_new4_save_figure(
         artifact_dir / "01_simulation_x0_predicted_full.png",
-        title=(
-            f"x0/baseline branches={len(x0_rows)} "
-            "refinement=nominal+refined shared locked Qr"
-        ),
+        title=(f"x0/baseline branches={len(x0_rows)} refinement=nominal+refined shared locked Qr"),
         image=x0_sim["caked_image"],
         radial_axis=x0_sim["radial_axis"],
         azimuth_axis=x0_sim["azimuth_axis"],
@@ -31552,12 +32168,8 @@ def test_new4_export_representative_caked_fit_snapshots(tmp_path) -> None:
     )
 
     _diag_new4_write_snapshot_points_csv(csv_path, records)
-    max_x0_residual = max(
-        float(np.hypot(*rec["residual_x0"])) for rec in records
-    )
-    max_trial_residual = max(
-        float(np.hypot(*rec["residual_trial"])) for rec in records
-    )
+    max_x0_residual = max(float(np.hypot(*rec["residual_x0"])) for rec in records)
+    max_trial_residual = max(float(np.hypot(*rec["residual_trial"])) for rec in records)
     figure_files = list(_NEW4_CAKED_SNAPSHOT_FIGURES)
     manifest = {
         "state_path": str(_QR_PICKER_DIAG_STATE_PATH),
@@ -31732,9 +32344,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         margin=1.0,
     )
     focus_records = [
-        rec
-        for rec in records
-        if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY)
+        rec for rec in records if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY)
     ]
     _diag_new4_save_manual_audit_caked_figure(
         artifact_dir / "05_focus_q_group_primary_1_10_manual_x0.png",
@@ -31849,9 +32459,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         assert "sim_refined_caked_deg" not in rec
         assert "sim_nominal_caked_deg" not in rec
     if not manual_refined_matches_fit:
-        assert all(
-            rec.get("manual_fitspace_to_fit_observed_caked") is not None for rec in records
-        )
+        assert all(rec.get("manual_fitspace_to_fit_observed_caked") is not None for rec in records)
 
     top_d2theta = _diag_new4_manual_audit_top(records, "residual_2theta")
     top_dphi = _diag_new4_manual_audit_top(records, "residual_phi_wrapped")
@@ -31863,18 +32471,9 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     print("background_vmax=3000")
     print(f"branch_count={len(records)}")
     print(f"component_count={len(x0_components)}")
-    print(
-        "largest_release_to_refined_shift="
-        f"{max(release_shift_norms, default=0.0):.9f}"
-    )
-    print(
-        "largest_refined_to_observed_shift="
-        f"{max(refined_to_observed_norms, default=0.0):.9f}"
-    )
-    print(
-        "largest_manual_saved_to_fitspace_shift="
-        f"{max(saved_to_fitspace_norms, default=0.0):.9f}"
-    )
+    print(f"largest_release_to_refined_shift={max(release_shift_norms, default=0.0):.9f}")
+    print(f"largest_refined_to_observed_shift={max(refined_to_observed_norms, default=0.0):.9f}")
+    print(f"largest_manual_saved_to_fitspace_shift={max(saved_to_fitspace_norms, default=0.0):.9f}")
     print(
         "largest_observed_to_sim_refined_d2theta="
         f"{manifest['largest_observed_to_sim_refined_d2theta']:.9f}"
@@ -31883,10 +32482,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         "largest_observed_to_sim_refined_dphi="
         f"{manifest['largest_observed_to_sim_refined_dphi']:.9f}"
     )
-    print(
-        "manual_fitspace_matches_fit_observed="
-        f"{_diag_yes_no(manual_refined_matches_fit)}"
-    )
+    print(f"manual_fitspace_matches_fit_observed={_diag_yes_no(manual_refined_matches_fit)}")
     print("plotted_points_match_objective_inputs=yes")
     print("top_abs_d2theta")
     for rec in top_d2theta:
@@ -32056,9 +32652,7 @@ def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> N
     fitter_params = dict(baseline_run["request"].params)
     first_row = next(iter(x0_rows.values()))
     fitter_signature = {
-        "observed_caked_projection_signature": first_row.get(
-            "observed_caked_projection_signature"
-        ),
+        "observed_caked_projection_signature": first_row.get("observed_caked_projection_signature"),
         "observed_caked_bundle_signature": first_row.get("observed_caked_bundle_signature"),
     }
 
@@ -32087,9 +32681,7 @@ def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> N
             fitter_differs = True
         if not _diag_new4_projection_within_tol(gui_delta):
             saved_gui_stale = True
-        if not (
-            abs(abs(float(theta_added_delta[0])) - abs(float(row["theta_initial"]))) <= 0.25
-        ):
+        if not (abs(abs(float(theta_added_delta[0])) - abs(float(row["theta_initial"]))) <= 0.25):
             theta_added_matches_bug = False
         print(
             f"{_diag_new4_hkl_text(rec['hkl'])} | "
@@ -32105,10 +32697,7 @@ def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> N
         if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY):
             target_rows.append(row)
 
-    print(
-        "fitspace_projection_differs_from_saved_gui_caked="
-        f"{_diag_yes_no(fitter_differs)}"
-    )
+    print(f"fitspace_projection_differs_from_saved_gui_caked={_diag_yes_no(fitter_differs)}")
     print(f"saved_display_caked_stale={_diag_yes_no(saved_gui_stale)}")
     print("gui_display_and_fitter_x0_expected_same=yes")
     print("target_projection_comparison")
@@ -32203,8 +32792,7 @@ def _diag_new4_refinement_policy_label(rows):
         return "explicit_fallback"
     if all(
         row.get("sim_refinement_status") == "refined"
-        and "locked_mosaic_representative"
-        in str(row.get("sim_refinement_caked_image_source", ""))
+        and "locked_mosaic_representative" in str(row.get("sim_refinement_caked_image_source", ""))
         for row in rows.values()
     ):
         return "locked_mosaic_high_density_refined"
@@ -32314,8 +32902,7 @@ def test_new4_post_theta_fix_dynamic_baseline_matches_saved_sim_anchor(tmp_path)
         elif not refined_ok:
             classification = "caked_refinement_jump"
             exact_reason = (
-                "dynamic nominal matches saved anchor; refined center differs after "
-                f"{image_source}"
+                f"dynamic nominal matches saved anchor; refined center differs after {image_source}"
             )
         if classification != "matches_saved_sim_anchor":
             failures.append((key, classification))
@@ -32529,10 +33116,7 @@ def test_new4_post_theta_fix_solver_objective_decomposition(tmp_path) -> None:
     print(f"parameter_changes={_diag_new4_param_change_text(fit_run)}")
     print(f"branch_identity_stable={_diag_yes_no(bool(stats['stable']))}")
     print(f"refinement_policy={_diag_new4_refinement_policy_label(before_rows)}")
-    print(
-        "qr_residual_sacrificed_to_other_terms="
-        f"{_diag_yes_no(total_improved and qr_worsened)}"
-    )
+    print(f"qr_residual_sacrificed_to_other_terms={_diag_yes_no(total_improved and qr_worsened)}")
     assert len(before_rows) == 14
     assert len(before_components) == 28
     assert len(after_components) == 28
@@ -32575,10 +33159,7 @@ def test_new4_saved_caked_vs_fitspace_caked_projection_delta(tmp_path) -> None:
             f"{_diag_fmt_pair(row['fitspace'])} | "
             f"{float(row['delta'][0]):.9f} | {float(row['delta'][1]):.9f} | {status}"
         )
-    print(
-        "fitspace_projection_differs_from_saved_gui_caked="
-        f"{_diag_yes_no(fitspace_differs)}"
-    )
+    print(f"fitspace_projection_differs_from_saved_gui_caked={_diag_yes_no(fitspace_differs)}")
     print(f"saved_display_caked_stale={_diag_yes_no(saved_gui_stale)}")
     if saved_gui_stale:
         classification = "C. saved_display_caked_stale"
@@ -32632,9 +33213,7 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
     background_radial = np.asarray(caked_view["radial_axis"], dtype=float)
     background_azimuth = np.asarray(caked_view["azimuth_axis"], dtype=float)
     focus_records = [
-        rec
-        for rec in records
-        if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY)
+        rec for rec in records if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY)
     ]
     focus_xlim, focus_ylim = _diag_new4_manual_audit_limits(
         records,
@@ -32895,10 +33474,7 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
     print("figure05_06_fit_observed_identical=yes")
     print("figure05_06_sim_refined_identical=yes")
     print("connector_endpoints_match_objective_residuals=yes")
-    print(
-        "saved_manual_differs_from_fitspace="
-        f"{_diag_yes_no(saved_manual_differs_from_fitspace)}"
-    )
+    print(f"saved_manual_differs_from_fitspace={_diag_yes_no(saved_manual_differs_from_fitspace)}")
     classification = "G. no_data_mismatch_found_visual_perception_only"
     print(classification)
 
@@ -32937,9 +33513,7 @@ def test_new4_locked_mosaic_representative_used_each_iteration(tmp_path) -> None
             "locked_qr_fit_key",
         ):
             assert after.get(field) == before.get(field), field
-        assert after.get("resolved_best_sample_index") == before.get(
-            "resolved_best_sample_index"
-        )
+        assert after.get("resolved_best_sample_index") == before.get("resolved_best_sample_index")
         assert str(after.get("predicted_source", "")).startswith(
             "dynamic_trial_simulation:locked_manual_qr_fit_prediction"
         )
@@ -32985,9 +33559,7 @@ def test_new4_caked_refinement_rejects_zero_intensity_argmax() -> None:
     assert int(result.get("local_nonzero_count", -1)) == 0
     assert result.get("subpixel_refinement_status") != "integer_bin_argmax"
     assert not bool(result.get("refined_bin_center_only", False))
-    assert manual_result.get("sim_refinement_status") == (
-        "unavailable_zero_intensity_window"
-    )
+    assert manual_result.get("sim_refinement_status") == ("unavailable_zero_intensity_window")
 
 
 @pytest.mark.slow
@@ -33026,9 +33598,7 @@ def test_new4_objective_uses_subpixel_or_explicit_nominal_fallback(tmp_path) -> 
         fallback = bool(row.get("sim_refinement_fallback_used", False))
         if fallback:
             fallback_count += 1
-            assert row.get("sim_refinement_status") == (
-                "nominal_fallback_no_valid_refinement"
-            )
+            assert row.get("sim_refinement_status") == ("nominal_fallback_no_valid_refinement")
         else:
             assert row.get("sim_refinement_status") == "refined"
             assert row.get("sim_refinement_subpixel") == "yes"
@@ -33161,13 +33731,11 @@ def test_new4_sim_trial_caked_recomputed_from_detector_sim(tmp_path) -> None:
     context, _dataset, baseline_run, baseline_record, baseline_rows, _components = (
         _diag_new4_pipeline_baseline(tmp_path, include_003=include_003)
     )
-    name, trial_label, trial_value, _trial_run, trial_record, metrics = (
-        _diag_new4_best_sim_trial(
-            context,
-            baseline_run,
-            baseline_record,
-            include_003=include_003,
-        )
+    name, trial_label, trial_value, _trial_run, trial_record, metrics = _diag_new4_best_sim_trial(
+        context,
+        baseline_run,
+        baseline_record,
+        include_003=include_003,
     )
     trial_rows = _diag_new4_point_rows(trial_record, include_003=include_003)
     print("sim_trial_caked_recomputed_from_detector_sim")
@@ -33183,9 +33751,8 @@ def test_new4_sim_trial_caked_recomputed_from_detector_sim(tmp_path) -> None:
     for key in sorted(baseline_rows, key=repr):
         before_row = baseline_rows[key]
         after_row = trial_rows[key]
-        detector_sig_changed = (
-            before_row.get("detector_simulation_signature")
-            != after_row.get("detector_simulation_signature")
+        detector_sig_changed = before_row.get("detector_simulation_signature") != after_row.get(
+            "detector_simulation_signature"
         )
         nominal_detector_delta = tuple(
             np.asarray(_diag_row_pair(after_row, "sim_nominal_detector_px"))
@@ -33482,10 +34049,7 @@ def test_new4_dynamic_baseline_matches_saved_refined_sim_centers(tmp_path) -> No
         print("first_failure=dynamic_baseline_prediction_does_not_match_saved_sim_anchor")
         print(f"first_bad_branch={key}")
         print(f"first_bad_field={field}")
-        print(
-            "expected_saved_sim="
-            f"{_diag_fmt_pair(row['saved_refined_sim_caked_deg'])}"
-        )
+        print(f"expected_saved_sim={_diag_fmt_pair(row['saved_refined_sim_caked_deg'])}")
         actual = (
             row["dynamic_nominal_caked_deg"]
             if field == "dynamic_nominal_caked_deg"
@@ -33561,9 +34125,7 @@ def _diag_poison_new4_first_anchor(dataset):
     )
     for field in pair_fields:
         entries = [
-            dict(entry)
-            for entry in poisoned.get(field, ()) or ()
-            if isinstance(entry, Mapping)
+            dict(entry) for entry in poisoned.get(field, ()) or () if isinstance(entry, Mapping)
         ]
         for entry in entries:
             if _diag_new4_inventory_key(entry) != target_key:
@@ -33689,7 +34251,9 @@ def test_new4_objective_callback_uses_same_pipeline_as_handoff(tmp_path) -> None
     dry_rows = _diag_new4_point_rows(dry_record, include_003=include_003)
     solver_rows = _diag_new4_point_rows(solver_record, include_003=include_003)
     print("handoff_vs_objective_vs_solver_x0_table")
-    print("q_group | hkl | branch | A_nom_det | B_nom_det | C_nom_det | A_refined | B_refined | C_refined")
+    print(
+        "q_group | hkl | branch | A_nom_det | B_nom_det | C_nom_det | A_refined | B_refined | C_refined"
+    )
     mismatch = False
     for key in sorted(handoff_rows, key=repr):
         a = handoff_rows[key]
@@ -33882,7 +34446,9 @@ def test_new4_first_image_dynamic_identity_resolves_all_mode_a_branches(tmp_path
     assert len(rows) == 14
     assert len(components) == 28
     assert all(row.get("match_status") == "matched" for row in rows.values())
-    assert all(row.get("resolution_reason") == "locked_fit_qr_branch_key_resolved" for row in rows.values())
+    assert all(
+        row.get("resolution_reason") == "locked_fit_qr_branch_key_resolved" for row in rows.values()
+    )
     assert _diag_new4_branch_identity_stable([record], include_003=False)
 
 
@@ -34054,9 +34620,7 @@ def test_minus_1_0_10_fitter_objective_matches_residual_audit(tmp_path) -> None:
             assert component["coordinate_space"] == "caked_deg"
             assert component["units"] == "deg"
             assert component["observed_source"] == "background/manual"
-            assert _diag_is_locked_manual_qr_prediction_source(
-                component["predicted_source"]
-            )
+            assert _diag_is_locked_manual_qr_prediction_source(component["predicted_source"])
             assert np.isclose(
                 float(component["unweighted_value"]),
                 float(audit_record["residual_caked"][axis_index]),
@@ -34167,9 +34731,7 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
         entry["fit_prediction_detector_display_px"] = handoff_row[
             "fit_prediction_detector_display_px"
         ]
-        entry["sim_visual_detector_display_px"] = handoff_row[
-            "fit_prediction_detector_display_px"
-        ]
+        entry["sim_visual_detector_display_px"] = handoff_row["fit_prediction_detector_display_px"]
         entry["fit_prediction_detector_native_px"] = handoff_row[
             "fit_prediction_detector_native_px"
         ]
@@ -34248,9 +34810,7 @@ def test_minus_1_0_10_optimizer_rejects_noncanonical_saved_sim_native(
             atol=1.0e-6,
             rtol=0.0,
         )
-        assert row.get("saved_sim_detector_native_rejected_reason") == (
-            "display_native_mismatch"
-        )
+        assert row.get("saved_sim_detector_native_rejected_reason") == ("display_native_mismatch")
         assert np.allclose(
             _diag_row_pair(row, "caked_from_display_to_native"),
             handoff_prediction,
@@ -34524,21 +35084,14 @@ def test_qr_residual_objective_units_are_not_mixed_unweighted(tmp_path) -> None:
         )
         assert vector.shape == weighted.shape
         assert np.allclose(vector, weighted, atol=1.0e-9, rtol=0.0)
-        offset_source = str(
-            diag.get("provider_local_saved_sim_fit_space_offset_source", "") or ""
-        )
+        offset_source = str(diag.get("provider_local_saved_sim_fit_space_offset_source", "") or "")
         if offset_source:
             assert offset_source != "first_eval_unprimed"
             if diag.get("provider_local_saved_sim_fit_space_reference_aligned"):
-                assert (
-                    diag.get("provider_local_saved_sim_fit_space_offset_baseline_primed")
-                    is True
-                )
+                assert diag.get("provider_local_saved_sim_fit_space_offset_baseline_primed") is True
             else:
                 assert (
-                    diag.get(
-                        "provider_local_saved_sim_fit_space_offset_unavailable_reason"
-                    )
+                    diag.get("provider_local_saved_sim_fit_space_offset_unavailable_reason")
                     == "baseline_offset_not_primed"
                 )
 
@@ -34584,10 +35137,13 @@ def test_minus_1_0_10_sim_refined_caked_uses_real_projection(tmp_path) -> None:
             float(display_back[1]),
         )
         assert native_back is not None
-        assert np.hypot(
-            float(native_back[0]) - float(native[0]),
-            float(native_back[1]) - float(native[1]),
-        ) <= 2.0
+        assert (
+            np.hypot(
+                float(native_back[0]) - float(native[0]),
+                float(native_back[1]) - float(native[1]),
+            )
+            <= 2.0
+        )
 
 
 def test_minus_1_0_10_fit_prediction_source_is_explicit(tmp_path) -> None:

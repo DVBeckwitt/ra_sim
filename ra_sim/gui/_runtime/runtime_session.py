@@ -7465,6 +7465,127 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
     )
 
 
+def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
+    """Build detector-mode Qr caked sidecar coordinates without changing view."""
+
+    if _current_app_shell_view_mode() != "detector":
+        return False
+    get_cache = globals().get("_get_geometry_manual_pick_cache")
+    if not callable(get_cache):
+        return False
+
+    try:
+        background_index = int(background_runtime_state.current_background_index)
+    except Exception:
+        background_index = 0
+
+    native_background = None
+    display_background = None
+    try:
+        native_background = _get_current_background_native()
+    except Exception:
+        native_background = None
+    try:
+        display_background = _current_geometry_manual_pick_background_image()
+    except Exception:
+        display_background = None
+    try:
+        detector_shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+    except Exception:
+        detector_shape = None
+    if detector_shape is None:
+        detector_shape = _geometry_fit_detector_shape_2d(
+            simulation_runtime_state.ai_cache.get("detector_shape")
+        )
+    unscaled_image = getattr(simulation_runtime_state, "unscaled_image", None)
+    if detector_shape is None and unscaled_image is not None:
+        detector_shape = _geometry_fit_detector_shape_2d(
+            np.asarray(unscaled_image).shape[:2]
+        )
+
+    ai_value = simulation_runtime_state.ai_cache.get("ai")
+    caked_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+        background_index,
+        detector_shape=detector_shape,
+        ai=ai_value,
+        analysis_preview_bins=getattr(simulation_runtime_state, "analysis_preview_bins", None),
+        allow_generated_payload=True,
+    )
+    if not isinstance(caked_payload, Mapping):
+        return False
+
+    try:
+        params_for_payload = dict(_current_geometry_fit_params() or {})
+    except Exception:
+        params_for_payload = {}
+    try:
+        hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            caked_payload,
+            detector_shape=detector_shape,
+            params=params_for_payload,
+            require_background=False,
+        )
+    except Exception:
+        hydrated_payload = caked_payload
+    if isinstance(hydrated_payload, Mapping):
+        caked_payload = dict(hydrated_payload)
+
+    transform_bundle = caked_payload.get("transform_bundle")
+    if isinstance(transform_bundle, CakeTransformBundle):
+        _set_live_caked_transform_bundle(transform_bundle)
+    try:
+        simulation_runtime_state.last_caked_radial_values = np.asarray(
+            caked_payload.get("radial_axis"),
+            dtype=np.float64,
+        )
+        simulation_runtime_state.last_caked_azimuth_values = np.asarray(
+            caked_payload.get("azimuth_axis"),
+            dtype=np.float64,
+        )
+    except Exception:
+        pass
+
+    caked_signature = _geometry_fit_targeted_projection_view_signature(
+        background_index,
+        mode_override="caked",
+        caked_payload=caked_payload,
+        detector_shape=detector_shape,
+        ai=ai_value,
+        analysis_preview_bins=getattr(simulation_runtime_state, "analysis_preview_bins", None),
+    )
+
+    def _project_rows_to_hidden_caked_view(
+        rows: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        return _geometry_manual_project_peaks_for_background(
+            background_index,
+            rows,
+            mode_override="caked",
+            caked_payload=caked_payload,
+            background_native=native_background,
+            background_display=display_background,
+        )
+
+    cache_data = get_cache(
+        param_set=dict(_current_geometry_fit_params()),
+        prefer_cache=True,
+        background_index=background_index,
+        background_image=display_background,
+        build_caked_projection_sidecar=True,
+        caked_projection_signature_override=caked_signature,
+        project_peaks_to_caked_view=_project_rows_to_hidden_caked_view,
+    )
+
+    return bool(
+        isinstance(cache_data, Mapping)
+        and (
+            cache_data.get("caked_qr_projection_grouped_candidates")
+            or cache_data.get("caked_qr_projection_lookup")
+            or cache_data.get("caked_qr_projection_entries")
+        )
+    )
+
+
 def _geometry_fit_caked_view_for_index(
     index: int,
 ) -> dict[str, object] | None:
@@ -22293,6 +22414,27 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         flag_state["scale_factor_user_override"]
     )
 
+    geometry_snapshot = (
+        snapshot.get("geometry", {}) if isinstance(snapshot.get("geometry"), Mapping) else {}
+    )
+    manual_backfill_count = (
+        gui_manual_geometry.geometry_manual_pairs_rows_missing_caked_backfill_count(
+            geometry_snapshot.get("manual_pairs", [])
+        )
+        if isinstance(geometry_snapshot, Mapping)
+        else 0
+    )
+    if manual_backfill_count > 0:
+        try:
+            _ensure_geometry_fit_caked_view(force_refresh=True)
+        except Exception as exc:
+            warnings.append(f"manual placement caked backfill: {exc}")
+        else:
+            if _current_live_caked_transform_bundle() is None:
+                warnings.append(
+                    "manual placement caked backfill: caked projector unavailable"
+                )
+
     def _timed_geometry_manual_pairs_snapshot(*args, **kwargs):
         with _saved_state_timing_span("saved_state.geometry_manual_pairs_restore"):
             return _apply_geometry_manual_pairs_snapshot(*args, **kwargs)
@@ -22302,7 +22444,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             return _replace_gui_state_peak_cache(*args, **kwargs)
 
     geometry_state = gui_state_io.apply_gui_state_geometry(
-        snapshot.get("geometry", {}),
+        geometry_snapshot,
         q_group_state=geometry_q_group_state,
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
@@ -22317,7 +22459,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     )
     warnings.extend(list(geometry_state["warnings"]))
     gui_state_io.apply_geometry_state_background_view_compatibility(
-        snapshot.get("geometry", {}),
+        geometry_snapshot,
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         show_caked_2d_var=analysis_view_controls_view_state.show_caked_2d_var,
         show_1d_var=analysis_view_controls_view_state.show_1d_var,
@@ -25907,6 +26049,7 @@ def _initialize_runtime_controls_block_39() -> None:
         file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
         asksaveasfilename=filedialog.asksaveasfilename,
         askopenfilename=filedialog.askopenfilename,
+        warm_detector_mode_qr_caked_cache=_warm_detector_mode_qr_caked_coordinate_cache,
     )
     geometry_q_group_runtime = geometry_q_group_workflow.runtime
     geometry_q_group_runtime_bindings_factory = geometry_q_group_workflow.bindings_factory

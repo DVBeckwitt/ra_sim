@@ -33,6 +33,7 @@
 
 - **Fitting and optimization**
   - Added a mixed-update geometry-fitter cache regression suite covering unsafe mixed fast-path fallbacks, stale worker result handling, deferred q-group refresh, projection handoff validity, and objective-cache reject reasons.
+  - Warmed detector-native and detector-display coordinates immediately for caked manual Qr/Qz picks, so saved caked selections no longer require a detector-view toggle before fitting or replay.
   - Added a repeatable geometry-fitter cache regression gate script with local and strict modes, fast cache/handoff/objective coverage, workflow-slice validation, slow-geometry strict coverage, and optional New4 artifact handling.
   - Added a fast end-to-end QR selector to geometry-fitter handoff scenario covering fast-path invalidation sequencing, point-provider parity, projection-cache invalidation, and objective-cache reuse/reject behavior without requiring New4 artifacts.
   - Hardened geometry-objective cache signatures so center-only reuse is gated by unchanged physics, dataset, point-provider, QR branch identity, source-row identity, manual selection, refined peak, objective mode, and active fit-parameter signatures.
@@ -51,6 +52,8 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
+  - Fixed full GUI-state import so legacy manual placements with detector pixels but missing caked `2theta,phi` anchors rebuild those anchors from the exact caked projection before geometry figures or fits consume them.
+  - Warmed caked Qr/Qz projection cache data immediately after detector-mode Qr/Qz selector changes, so manual picking can use caked sim/background coordinates without first switching to caked view.
   - Added a GUI control and saved-state flag for hiding or showing the simulation overlay independently from the background image.
   - Changed selected-Qr rod Qz controls to default to `0..5` and clamp slider bounds to the positive caked-Qz candidate range.
   - Reorganized Match-tab peak tools so `Drag Move Placed Peaks` stays visible beside the manual pick control, removed the auto-search radius slider from the peak tool row, and renamed the point-removal toggle to `Click Remove Placed Peaks`.

@@ -99,6 +99,7 @@ class GeometryQGroupRuntimeBindings:
     file_dialog_dir: object | None = None
     asksaveasfilename: Callable[..., object] | None = None
     askopenfilename: Callable[..., object] | None = None
+    warm_detector_mode_qr_caked_cache: Callable[[], object] | None = None
 
 
 @dataclass(frozen=True)
@@ -5666,6 +5667,7 @@ def make_runtime_geometry_q_group_bindings_factory(
     file_dialog_dir_factory: object | None = None,
     asksaveasfilename: Callable[..., object] | None = None,
     askopenfilename: Callable[..., object] | None = None,
+    warm_detector_mode_qr_caked_cache: Callable[[], object] | None = None,
 ) -> Callable[[], GeometryQGroupRuntimeBindings]:
     """Return a zero-arg factory for live geometry Q-group runtime bindings."""
 
@@ -5719,6 +5721,7 @@ def make_runtime_geometry_q_group_bindings_factory(
             file_dialog_dir=_resolve_runtime_value(file_dialog_dir_factory),
             asksaveasfilename=asksaveasfilename,
             askopenfilename=askopenfilename,
+            warm_detector_mode_qr_caked_cache=warm_detector_mode_qr_caked_cache,
         )
 
     return _build_bindings
@@ -5760,6 +5763,7 @@ def on_runtime_geometry_q_group_checkbox_changed(
         live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
         refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
         set_status_text=bindings.set_status_text,
+        warm_detector_mode_qr_caked_cache=bindings.warm_detector_mode_qr_caked_cache,
     )
 
 
@@ -5799,6 +5803,7 @@ def set_all_geometry_q_groups_enabled_runtime(
         live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
         refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
         set_status_text=bindings.set_status_text,
+        warm_detector_mode_qr_caked_cache=bindings.warm_detector_mode_qr_caked_cache,
     )
 
 
@@ -5877,6 +5882,7 @@ def load_geometry_q_group_selection_runtime(
             bindings.refresh_live_geometry_preview_quiet or bindings.refresh_live_geometry_preview
         ),
         set_status_text=bindings.set_status_text,
+        warm_detector_mode_qr_caked_cache=bindings.warm_detector_mode_qr_caked_cache,
     )
 
 
@@ -6173,6 +6179,7 @@ def apply_geometry_q_group_checkbox_change_with_side_effects(
     live_geometry_preview_enabled: Callable[[], bool],
     refresh_live_geometry_preview: Callable[[], None],
     set_status_text: Callable[[str], None] | None = None,
+    warm_detector_mode_qr_caked_cache: Callable[[], object] | None = None,
 ) -> bool:
     """Apply one checkbox toggle and the dependent live-preview/status effects."""
 
@@ -6196,7 +6203,28 @@ def apply_geometry_q_group_checkbox_change_with_side_effects(
             set_status_text,
             f"{action} one Qr/Qz group.",
         )
+    _warm_detector_mode_qr_caked_cache(
+        warm_detector_mode_qr_caked_cache,
+        set_status_text=set_status_text,
+    )
     return True
+
+
+def _warm_detector_mode_qr_caked_cache(
+    callback: Callable[[], object] | None,
+    *,
+    set_status_text: Callable[[str], None] | None = None,
+) -> bool:
+    if not callable(callback):
+        return False
+    try:
+        return bool(callback())
+    except Exception as exc:
+        _set_status_text(
+            set_status_text,
+            f"Qr/Qz caked cache warm failed: {exc}",
+        )
+        return False
 
 
 def set_all_geometry_q_groups_enabled_with_side_effects(
@@ -6210,6 +6238,7 @@ def set_all_geometry_q_groups_enabled_with_side_effects(
     live_geometry_preview_enabled: Callable[[], bool],
     refresh_live_geometry_preview: Callable[[], None],
     set_status_text: Callable[[str], None] | None = None,
+    warm_detector_mode_qr_caked_cache: Callable[[], object] | None = None,
 ) -> bool:
     """Apply a bulk include/exclude action and the dependent side effects."""
 
@@ -6236,6 +6265,10 @@ def set_all_geometry_q_groups_enabled_with_side_effects(
             set_status_text,
             f"{action} {count} Qr/Qz groups.",
         )
+    _warm_detector_mode_qr_caked_cache(
+        warm_detector_mode_qr_caked_cache,
+        set_status_text=set_status_text,
+    )
     return True
 
 
@@ -6329,6 +6362,7 @@ def load_geometry_q_group_selection_with_dialog(
     refresh_live_geometry_preview: Callable[[], None],
     set_status_text: Callable[[str], None] | None = None,
     load_payload: Callable[[str], object] | None = None,
+    warm_detector_mode_qr_caked_cache: Callable[[], object] | None = None,
 ) -> bool:
     """Import selector rows through an open-file dialog and apply them."""
 
@@ -6370,6 +6404,10 @@ def load_geometry_q_group_selection_with_dialog(
     refresh_geometry_q_group_window()
     if live_geometry_preview_enabled():
         refresh_live_geometry_preview()
+    _warm_detector_mode_qr_caked_cache(
+        warm_detector_mode_qr_caked_cache,
+        set_status_text=set_status_text,
+    )
 
     _set_status_text(
         set_status_text,

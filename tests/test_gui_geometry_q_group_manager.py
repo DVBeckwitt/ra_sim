@@ -4641,6 +4641,43 @@ def test_geometry_q_group_manager_checkbox_side_effects_update_status() -> None:
     ]
 
 
+def test_geometry_q_group_checkbox_side_effects_warm_caked_cache_without_view_toggle() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    preview_state = state.GeometryPreviewState()
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[_entry(key1, peak_count=1, total_intensity=1.0)]
+    )
+    view_mode = {"value": "detector"}
+    events = []
+
+    changed = geometry_q_group_manager.apply_geometry_q_group_checkbox_change_with_side_effects(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        group_key=key1,
+        row_var=_FakeVar(False),
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        update_geometry_q_group_window_status=lambda: events.append("status"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: events.append("refresh_live"),
+        set_status_text=lambda text: events.append(text),
+        warm_detector_mode_qr_caked_cache=lambda: events.append(
+            f"warm:{view_mode['value']}"
+        )
+        or True,
+    )
+
+    assert changed is True
+    assert view_mode["value"] == "detector"
+    assert events == [
+        "invalidate",
+        "label",
+        "status",
+        "Disabled one Qr/Qz group.",
+        "warm:detector",
+    ]
+
+
 def test_geometry_q_group_manager_bulk_enable_side_effects_cover_empty_and_live_refresh() -> None:
     preview_state = state.GeometryPreviewState()
     empty_state = state.GeometryQGroupState()
@@ -4689,6 +4726,36 @@ def test_geometry_q_group_manager_bulk_enable_side_effects_cover_empty_and_live_
     assert q_group_state.disabled_qr_sets == {("primary", 1), ("secondary", 2)}
     assert preview_state.excluded_q_groups == set()
     assert events == ["invalidate", "label", "refresh", "live"]
+
+
+def test_geometry_q_group_bulk_side_effects_warm_caked_cache() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[_entry(key1, peak_count=2, total_intensity=10.0)]
+    )
+    events = []
+
+    changed = geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=q_group_state,
+        enabled=False,
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        refresh_geometry_q_group_window=lambda: events.append("refresh"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: events.append("live"),
+        set_status_text=lambda text: events.append(text),
+        warm_detector_mode_qr_caked_cache=lambda: events.append("warm") or True,
+    )
+
+    assert changed is True
+    assert events == [
+        "invalidate",
+        "label",
+        "refresh",
+        "Disabled 1 Qr/Qz groups.",
+        "warm",
+    ]
 
 
 def test_geometry_q_group_manager_request_update_side_effects_marks_refresh() -> None:
