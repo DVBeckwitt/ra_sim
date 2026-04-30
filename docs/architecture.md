@@ -9,6 +9,7 @@ See also:
 - [docs index](index.md)
 - [Architecture decisions](adr/index.md)
 - [GUI workflow](gui-workflow.md)
+- [hBN fitter guide](hbn-fitter.md)
 - [Debug and cache guide](debug-and-cache.md)
 - [Canonical reference code map](simulation_and_fitting.md#code-map)
 
@@ -24,7 +25,7 @@ See also:
 - `ra_sim/io/`: OSC readers, file parsing, GUI state persistence
 - `ra_sim/config/`: config loading, models, and validation
 - `ra_sim/utils/`: optics helpers, stacking-fault support, parallel helpers, generic utilities
-- `ra_sim/hbn.py` and `ra_sim/hbn_geometry.py`: hBN calibrant workflow and geometry conversion helpers
+- `ra_sim/hbn.py`, `ra_sim/hbn_geometry.py`, and `ra_sim/hbn_fitter/`: hBN calibrant workflow, geometry conversion helpers, click snapping, ellipse refinement, and bundle export
 - `tests/`: regression coverage for config, simulation, fitting, CLI, and GUI helpers
 
 ## System Shape
@@ -52,12 +53,13 @@ Typical flow:
 - Shared fitting worker/cache plumbing: `ra_sim/fitting/optimization_runtime.py`
 - GUI interactions and workflow controls: `ra_sim/gui/`
 - GUI cache inventory/reset helpers: `ra_sim/gui/_runtime/live_cache_helpers.py`
-- hBN calibrant workflow: `ra_sim/hbn.py`, `ra_sim/hbn_geometry.py`, `ra_sim/hbn_fitter/`
+- hBN calibrant workflow: `ra_sim/hbn.py`, `ra_sim/hbn_geometry.py`, `ra_sim/hbn_fitter/`; use [hbn-fitter.md](hbn-fitter.md) before changing click snapping, coordinate frames, or NPZ export
 
 ## Docs Strategy
 
 - Use this page for package routing and edit targeting.
 - Use [Architecture decisions](adr/index.md) for stable design boundaries.
 - Use [gui-workflow.md](gui-workflow.md) for operator flow.
+- Use [hbn-fitter.md](hbn-fitter.md) for the hBN calibrant GUI script, snap-to-ring behavior, and NPZ bundle contracts.
 - Use [debug-and-cache.md](debug-and-cache.md) for debug/log behavior.
 - Use [simulation_and_fitting.md](simulation_and_fitting.md) when you need exact defaults, equations, or function-level mapping.

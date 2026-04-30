@@ -231,6 +231,7 @@ still failing. Full fitter validation is not claimed.
 | Fast primary rasterizer | refactor | - | none | p2 | 2026-04-22 | [fast-primary-rasterizer.md](archive/fast-primary-rasterizer.md) |
 | GUI runtime selective update fast paths | optimization | - | none | p2 | 2026-04-28 | [gui-runtime-selective-update-fast-paths.md](archive/gui-runtime-selective-update-fast-paths.md) |
 | GUI sampling events link | feature | - | none | p2 | 2026-04-28 | [gui-sampling-events-link.md](archive/gui-sampling-events-link.md) |
+| hBN fitter documentation | feature | Codex | none | p2 | 2026-04-30 | [hbn-fitter-documentation.md](archive/hbn-fitter-documentation.md) |
 | Lazy best-sample and Qr selection hardening | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [lazy-best-sample-and-qr-selection-hardening.md](archive/lazy-best-sample-and-qr-selection-hardening.md) |
 | Main figure right-drag pan regression | bug | - | none | p2 | 2026-04-29 | [main-figure-right-drag-pan.md](archive/main-figure-right-drag-pan.md) |
 | Match peak tools layout | bug | - | none | p2 | 2026-04-30 | [match-peak-tools-layout.md](archive/match-peak-tools-layout.md) |

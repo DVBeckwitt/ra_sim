@@ -15,6 +15,7 @@ you need implementation-level detail.
 - [tracking/index.md](tracking/index.md): live work notes for substantial recoveries, investigations, and planned efforts
 - [testing-and-validation.md](testing-and-validation.md): test, validation, timing, benchmark, fixture, and automation index
 - [gui-workflow.md](gui-workflow.md): operator workflow through calibrant, GUI, and refinement stages
+- [hbn-fitter.md](hbn-fitter.md): script-level guide for the hBN calibrant fitter, click snapping, ellipse refinement, and tilt export
 - [architecture.md](architecture.md): package layout, major subsystems, and where to edit
 - [release-versioning.md](release-versioning.md): package version source of truth and the 1.0 release sequence
 - [adr/index.md](adr/index.md): accepted architecture decision records
@@ -29,6 +30,7 @@ If you need to:
 - change simulation/fitting code: read [architecture.md](architecture.md) and then the code map in [simulation_and_fitting.md](simulation_and_fitting.md#code-map)
 - understand stable architecture decisions: read [adr/index.md](adr/index.md)
 - understand operator flow: read [gui-workflow.md](gui-workflow.md)
+- edit or explain the hBN calibrant fitter: read [hbn-fitter.md](hbn-fitter.md)
 - check release version policy: read [release-versioning.md](release-versioning.md)
 - inspect live recovery work or substantial investigations: start with [tracking/index.md](tracking/index.md)
 - inspect the current fitter project order: start with [tracking/index.md](tracking/index.md)

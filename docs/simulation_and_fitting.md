@@ -2755,6 +2755,10 @@ reprojection, which is the geometry signal the calibrant actually provides.
 
 The hBN fitter in [`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py) is a separate calibration workflow. It is built around manually selected ring points, optional snap-to-ring refinement, robust ellipse fitting, and projective tilt correction.
 
+For the script-level maintainer guide, including current full-resolution GUI
+coordinate handling, click snapping flow, bundle schema, and safe-change
+invariants, see [`hbn-fitter.md`](hbn-fitter.md).
+
 Important live defaults from [`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py):
 
 - `DEFAULT_REFINE_ITERS = 5`

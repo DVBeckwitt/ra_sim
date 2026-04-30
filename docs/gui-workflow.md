@@ -10,12 +10,13 @@ See also:
 - [Architecture guide](architecture.md)
 - [Troubleshooting guide](troubleshooting.md)
 - [Canonical GUI workflow section](simulation_and_fitting.md#gui-workflow-and-views)
+- [hBN fitter guide](hbn-fitter.md)
 
 ## Main Work Areas
 
 - Simulation view: primary detector-space workspace for global geometric agreement
 - Integration views: radial, azimuthal, and caked diagnostics after the detector pattern is roughly aligned
-- Calibrant view: hBN ellipse-fitting workflow used to estimate beam center and detector tilt
+- Calibrant view: hBN ellipse-fitting workflow used to estimate beam center and detector tilt; see the [hBN fitter guide](hbn-fitter.md) for click snapping, coordinate frames, and bundle export details
 - Parameters panel: controls for geometry, mosaic, structure factor, stacking fault, occupancy, beam, and fit settings
 
 ## Typical Workflow
