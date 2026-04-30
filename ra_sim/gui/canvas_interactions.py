@@ -42,6 +42,13 @@ class CanvasInteractionBindings:
     begin_live_interaction: Callable[[], None] | None = None
     touch_live_interaction: Callable[[], None] | None = None
     end_live_interaction: Callable[[], None] | None = None
+    beam_center_pick_armed: Callable[[], bool] | None = None
+    beam_center_pick_session_active: Callable[[], bool] | None = None
+    set_beam_center_pick_mode: Callable[..., None] | None = None
+    start_beam_center_pick_at: Callable[..., object] | None = None
+    update_beam_center_pick_preview: Callable[..., object] | None = None
+    commit_beam_center_pick_at: Callable[..., object] | None = None
+    cancel_beam_center_pick: Callable[..., object] | None = None
     preview_view_limits: Callable[[tuple[float, float], tuple[float, float]], bool] | None = None
     commit_preview_view: Callable[[], bool] | None = None
     clear_preview_view: Callable[[], bool] | None = None
@@ -94,6 +101,14 @@ def _touch_live_interaction(bindings: CanvasInteractionBindings) -> None:
 def _end_live_interaction(bindings: CanvasInteractionBindings) -> None:
     if callable(bindings.end_live_interaction):
         bindings.end_live_interaction()
+
+
+def _beam_center_pick_armed(bindings: CanvasInteractionBindings) -> bool:
+    return bool(_resolve_runtime_value(bindings.beam_center_pick_armed))
+
+
+def _beam_center_pick_session_active(bindings: CanvasInteractionBindings) -> bool:
+    return bool(_resolve_runtime_value(bindings.beam_center_pick_session_active))
 
 
 def _preview_view_key() -> str:
@@ -918,6 +933,14 @@ def handle_runtime_canvas_click(
     """Handle one runtime canvas click across manual-pick, preview, and HKL modes."""
 
     if _is_right_button_event(event):
+        if _beam_center_pick_armed(bindings):
+            setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
+            _set_mode(
+                bindings.set_beam_center_pick_mode,
+                False,
+                "Beam center picking canceled.",
+            )
+            return True
         if bool(bindings.peak_selection_state.hkl_pick_armed):
             setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
             setter = getattr(bindings.peak_selection_callbacks, "set_hkl_pick_mode", None)
@@ -953,6 +976,9 @@ def handle_runtime_canvas_click(
 
     if not _is_left_button_event(event):
         return False
+
+    if _beam_center_pick_armed(bindings):
+        return _manual_pick_click_coords(bindings, event) is not None
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
         manual_pick_coords = _manual_pick_click_coords(bindings, event)
@@ -1035,6 +1061,26 @@ def handle_runtime_canvas_press(
         if started:
             _begin_live_interaction(bindings)
         return started
+
+    if _beam_center_pick_armed(bindings):
+        if not _is_left_button_event(event):
+            return False
+        pick_coords = _manual_pick_click_coords(bindings, event)
+        if pick_coords is None:
+            return False
+        anchor_fraction_x, anchor_fraction_y = _event_axis_anchor_fractions(
+            bindings.axis,
+            event,
+        )
+        starter = bindings.start_beam_center_pick_at
+        if callable(starter):
+            starter(
+                float(pick_coords[0]),
+                float(pick_coords[1]),
+                anchor_fraction_x=anchor_fraction_x,
+                anchor_fraction_y=anchor_fraction_y,
+            )
+        return True
 
     if _start_manual_drag_move(bindings, event):
         return True
@@ -1139,6 +1185,15 @@ def handle_runtime_canvas_motion(
     if _manual_drag_move_active(bindings):
         return _update_manual_drag_move(bindings, event)
 
+    if _beam_center_pick_armed(bindings):
+        pick_coords = _manual_pick_click_coords(bindings, event)
+        if pick_coords is None:
+            return _beam_center_pick_session_active(bindings)
+        updater = bindings.update_beam_center_pick_preview
+        if callable(updater):
+            updater(float(pick_coords[0]), float(pick_coords[1]))
+        return True
+
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
         bindings.manual_pick_session_active()
     ):
@@ -1178,6 +1233,22 @@ def handle_runtime_canvas_release(
 
     if _manual_drag_move_active(bindings):
         return _finish_manual_drag_move(bindings, event)
+
+    if _beam_center_pick_armed(bindings):
+        if _beam_center_pick_session_active(bindings):
+            pick_coords = _manual_pick_click_coords(bindings, event)
+            if pick_coords is not None:
+                committer = bindings.commit_beam_center_pick_at
+                if callable(committer):
+                    committer(float(pick_coords[0]), float(pick_coords[1]))
+            else:
+                canceler = bindings.cancel_beam_center_pick
+                if callable(canceler):
+                    canceler(
+                        "Beam center placement canceled: release inside the image to set it."
+                    )
+            return True
+        return _manual_pick_click_coords(bindings, event) is not None
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed):
         if bool(bindings.manual_pick_session_active()):
@@ -1330,6 +1401,13 @@ def make_runtime_canvas_interaction_bindings_factory(
     begin_live_interaction_factory: object | None = None,
     touch_live_interaction_factory: object | None = None,
     end_live_interaction_factory: object | None = None,
+    beam_center_pick_armed_factory: object | None = None,
+    beam_center_pick_session_active: Callable[[], bool] | None = None,
+    set_beam_center_pick_mode: Callable[..., None] | None = None,
+    start_beam_center_pick_at: Callable[..., object] | None = None,
+    update_beam_center_pick_preview: Callable[..., object] | None = None,
+    commit_beam_center_pick_at: Callable[..., object] | None = None,
+    cancel_beam_center_pick: Callable[..., object] | None = None,
     preview_view_limits_factory: object | None = None,
     commit_preview_view_factory: object | None = None,
     clear_preview_view_factory: object | None = None,
@@ -1366,6 +1444,15 @@ def make_runtime_canvas_interaction_bindings_factory(
             begin_live_interaction=_resolve_runtime_value(begin_live_interaction_factory),
             touch_live_interaction=_resolve_runtime_value(touch_live_interaction_factory),
             end_live_interaction=_resolve_runtime_value(end_live_interaction_factory),
+            beam_center_pick_armed=_resolve_runtime_value(
+                beam_center_pick_armed_factory
+            ),
+            beam_center_pick_session_active=beam_center_pick_session_active,
+            set_beam_center_pick_mode=set_beam_center_pick_mode,
+            start_beam_center_pick_at=start_beam_center_pick_at,
+            update_beam_center_pick_preview=update_beam_center_pick_preview,
+            commit_beam_center_pick_at=commit_beam_center_pick_at,
+            cancel_beam_center_pick=cancel_beam_center_pick,
             preview_view_limits=_resolve_runtime_value(preview_view_limits_factory),
             commit_preview_view=_resolve_runtime_value(commit_preview_view_factory),
             clear_preview_view=_resolve_runtime_value(clear_preview_view_factory),
@@ -1420,6 +1507,8 @@ def _manual_click_remove_enabled(bindings: CanvasInteractionBindings) -> bool:
 
 
 def _manual_click_remove_available(bindings: CanvasInteractionBindings) -> bool:
+    if _beam_center_pick_armed(bindings):
+        return False
     if bool(getattr(bindings.geometry_runtime_state, "manual_pick_armed", False)):
         return False
     if bool(getattr(bindings.geometry_preview_state, "exclude_armed", False)):

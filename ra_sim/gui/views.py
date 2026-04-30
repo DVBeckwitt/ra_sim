@@ -3809,6 +3809,8 @@ def create_beam_mosaic_parameter_sliders(
     values: dict[str, float],
     on_standard_update: Callable[[], None],
     on_mosaic_update: Callable[[], None],
+    on_pick_beam_center: Callable[[], None] | None = None,
+    beam_center_pick_text: str = "Pick Beam Center",
 ) -> None:
     """Create the main beam/geometry/mosaic parameter sliders."""
 
@@ -4043,6 +4045,17 @@ def create_beam_mosaic_parameter_sliders(
     )
 
     beam_center_slider_max = max(3000.0, float(image_size))
+    if callable(on_pick_beam_center):
+        view_state.beam_center_pick_button_var = tk.StringVar(
+            value=str(beam_center_pick_text)
+        )
+        view_state.beam_center_pick_button = ttk.Button(
+            beam_parent,
+            textvariable=view_state.beam_center_pick_button_var,
+            command=on_pick_beam_center,
+        )
+        view_state.beam_center_pick_button.pack(fill=tk.X, padx=5, pady=(0, 2))
+
     _standard(
         "center_x",
         "Beam Center Row",

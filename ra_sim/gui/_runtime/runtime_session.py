@@ -7279,6 +7279,426 @@ def _apply_geometry_manual_pick_zoom(
     )
 
 
+def _beam_center_pick_label() -> str:
+    """Return the Setup beam-center picker button label."""
+    if bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False)):
+        return "Cancel Beam Center Pick"
+    return "Pick Beam Center"
+
+
+def _set_beam_center_pick_status(text: object) -> None:
+    """Write beam-center picking status to the setup status area when available."""
+    status_text = str(text)
+    for label_name in ("progress_label", "progress_label_geometry"):
+        label = globals().get(label_name)
+        config = getattr(label, "config", None)
+        if callable(config):
+            try:
+                config(text=status_text)
+                return
+            except Exception:
+                pass
+
+
+def _update_beam_center_pick_button_label() -> None:
+    """Refresh the Setup beam-center picker button text."""
+    button_var = getattr(
+        beam_mosaic_parameter_sliders_view_state,
+        "beam_center_pick_button_var",
+        None,
+    )
+    setter = getattr(button_var, "set", None)
+    if callable(setter):
+        try:
+            setter(_beam_center_pick_label())
+        except Exception:
+            pass
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
+
+
+def _set_beam_center_pick_cursor(enabled: bool) -> None:
+    """Set or clear the crosshair cursor while picking a beam center."""
+    try:
+        widget = canvas.get_tk_widget()
+    except Exception:
+        widget = None
+    configure = getattr(widget, "configure", None)
+    if callable(configure):
+        try:
+            configure(cursor="crosshair" if enabled else "")
+        except Exception:
+            pass
+
+
+def _current_beam_center_pick_background_image() -> np.ndarray | None:
+    """Return the detector/background image used for beam-center picking."""
+    try:
+        display_background = _current_geometry_manual_pick_background_image()
+    except Exception:
+        display_background = None
+    if display_background is None:
+        display_background = getattr(background_runtime_state, "current_background_display", None)
+    if display_background is None:
+        return None
+    try:
+        background_array = np.asarray(display_background, dtype=float)
+    except Exception:
+        return None
+    if background_array.ndim != 2 or background_array.size <= 0:
+        return None
+    return background_array
+
+
+def _beam_center_pick_session_active() -> bool:
+    """Return whether a beam-center press/zoom placement session is active."""
+    session = getattr(geometry_runtime_state, "beam_center_pick_session", None)
+    return bool(
+        getattr(geometry_runtime_state, "beam_center_pick_armed", False)
+        and isinstance(session, dict)
+        and bool(session.get("active", False))
+    )
+
+
+def _restore_beam_center_pick_view(*, redraw: bool = True) -> None:
+    """Restore the detector axis view saved before beam-center zoom."""
+    session = getattr(geometry_runtime_state, "beam_center_pick_session", None)
+    if not isinstance(session, dict):
+        return
+    gui_manual_geometry.restore_geometry_manual_pick_view(
+        session,
+        axis=ax,
+        canvas=canvas,
+        redraw=redraw,
+    )
+
+
+def _beam_center_preview_due(col: float, row: float) -> bool:
+    """Throttle beam-center preview updates with the manual-pick constants."""
+    session = getattr(geometry_runtime_state, "beam_center_pick_session", None)
+    if not isinstance(session, dict):
+        return False
+    now = float(perf_counter())
+    last_t = float(session.get("preview_last_t", 0.0) or 0.0)
+    last_xy = session.get("preview_last_xy")
+    due = False
+    if not (isinstance(last_xy, tuple) and len(last_xy) >= 2):
+        due = True
+    else:
+        dx = float(col) - float(last_xy[0])
+        dy = float(row) - float(last_xy[1])
+        if (dx * dx + dy * dy) >= float(GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX) ** 2:
+            due = True
+    if not due and (now - last_t) >= float(GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S):
+        due = True
+    if not due:
+        return False
+    session["preview_last_t"] = float(now)
+    session["preview_last_xy"] = (float(col), float(row))
+    return True
+
+
+def _apply_beam_center_pick_zoom(
+    col: float,
+    row: float,
+    *,
+    anchor_fraction_x: float = 0.5,
+    anchor_fraction_y: float = 0.5,
+) -> bool:
+    """Zoom to the same local detector window used by manual placement."""
+    session = getattr(geometry_runtime_state, "beam_center_pick_session", None)
+    display_background = _current_beam_center_pick_background_image()
+    if not isinstance(session, dict) or display_background is None:
+        return False
+    try:
+        current_xlim = tuple(float(v) for v in ax.get_xlim())
+    except Exception:
+        current_xlim = (0.0, 1.0)
+    try:
+        current_ylim = tuple(float(v) for v in ax.get_ylim())
+    except Exception:
+        current_ylim = (0.0, 1.0)
+    x_sign = 1.0 if len(current_xlim) < 2 or current_xlim[1] >= current_xlim[0] else -1.0
+    y_sign = 1.0 if len(current_ylim) < 2 or current_ylim[1] >= current_ylim[0] else -1.0
+    height = max(1.0, float(display_background.shape[0]))
+    width = max(1.0, float(display_background.shape[1]))
+    x_span = x_sign * min(float(GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX), width)
+    y_span = y_sign * min(float(GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX), height)
+    x_min, x_max = _geometry_manual_anchor_axis_limits(
+        float(col),
+        float(x_span),
+        float(anchor_fraction_x),
+        0.0,
+        float(width),
+    )
+    y_min, y_max = _geometry_manual_anchor_axis_limits(
+        float(row),
+        float(y_span),
+        float(anchor_fraction_y),
+        0.0,
+        float(height),
+    )
+    if not bool(session.get("zoom_active", False)):
+        session["saved_xlim"] = tuple(float(v) for v in ax.get_xlim())
+        session["saved_ylim"] = tuple(float(v) for v in ax.get_ylim())
+    session["zoom_active"] = True
+    session["zoom_center"] = (float(col), float(row))
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    try:
+        canvas.draw_idle()
+    except Exception:
+        _request_overlay_canvas_redraw()
+    return True
+
+
+def _update_beam_center_pick_preview(
+    col: float,
+    row: float,
+    *,
+    force: bool = False,
+) -> bool:
+    """Show raw->refined beam-center preview using manual Qr/Qz refinement."""
+    if not _beam_center_pick_session_active():
+        return False
+    if not force and not _beam_center_preview_due(float(col), float(row)):
+        return True
+    display_background = _current_beam_center_pick_background_image()
+    if display_background is None:
+        return False
+    try:
+        cache_data = _get_geometry_manual_pick_cache(
+            param_set=_current_geometry_fit_params(),
+            prefer_cache=True,
+            background_index=int(background_runtime_state.current_background_index),
+            background_image=display_background,
+        )
+    except Exception:
+        cache_data = {}
+    if not isinstance(cache_data, dict):
+        cache_data = {}
+    refined_col, refined_row = _geometry_manual_refine_preview_point(
+        None,
+        float(col),
+        float(row),
+        display_background=display_background,
+        cache_data=cache_data,
+        force_detector_space=True,
+    )
+    delta_px = _geometry_manual_position_error_px(
+        float(col),
+        float(row),
+        float(refined_col),
+        float(refined_row),
+    )
+    sigma_px = _geometry_manual_position_sigma_px(delta_px)
+    preview_color = gui_manual_geometry.geometry_manual_preview_color(float(sigma_px))
+    _show_geometry_manual_preview(
+        float(col),
+        float(row),
+        float(refined_col),
+        float(refined_row),
+        delta_px=float(delta_px),
+        sigma_px=float(sigma_px),
+        preview_color=preview_color,
+    )
+    session = geometry_runtime_state.beam_center_pick_session
+    session["raw_col"] = float(col)
+    session["raw_row"] = float(row)
+    session["refined_col"] = float(refined_col)
+    session["refined_row"] = float(refined_row)
+    session["placement_error_px"] = float(delta_px)
+    session["sigma_px"] = float(sigma_px)
+    _set_beam_center_pick_status(
+        "Beam center preview: "
+        f"raw=({float(col):.2f}, {float(row):.2f}) -> "
+        f"refined=({float(refined_col):.2f}, {float(refined_row):.2f}), "
+        f"error={float(delta_px):.2f} px."
+    )
+    return True
+
+
+def _ensure_slider_includes_value(slider_widget: object, value: float, pad: float = 0.1) -> bool:
+    """Expand a slider range to include one value."""
+    try:
+        lo = float(slider_widget.cget("from"))
+        hi = float(slider_widget.cget("to"))
+    except Exception:
+        return False
+    if lo > hi:
+        lo, hi = hi, lo
+    val = float(value)
+    new_lo = lo
+    new_hi = hi
+    if val < lo:
+        new_lo = val - float(pad)
+    if val > hi:
+        new_hi = val + float(pad)
+    if math.isclose(new_lo, lo, rel_tol=0.0, abs_tol=1e-12) and math.isclose(
+        new_hi,
+        hi,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        return False
+    try:
+        slider_widget.configure(from_=new_lo, to=new_hi)
+    except Exception:
+        return False
+    return True
+
+
+def _commit_beam_center_pick_at(col: float, row: float) -> bool:
+    """Commit refined display coords as native detector row/col beam center."""
+    if not _beam_center_pick_session_active():
+        return False
+    if not _update_beam_center_pick_preview(float(col), float(row), force=True):
+        return False
+    session = geometry_runtime_state.beam_center_pick_session
+    refined_col = float(session.get("refined_col", col))
+    refined_row = float(session.get("refined_row", row))
+    try:
+        native_point = _background_display_to_native_detector_coords(
+            float(refined_col),
+            float(refined_row),
+        )
+    except Exception:
+        native_point = None
+    if not (
+        isinstance(native_point, tuple)
+        and len(native_point) >= 2
+        and native_point[0] is not None
+        and native_point[1] is not None
+        and np.isfinite(float(native_point[0]))
+        and np.isfinite(float(native_point[1]))
+    ):
+        _set_beam_center_pick_status("Beam center pick failed: could not map to detector coords.")
+        return False
+    native_col = float(native_point[0])
+    native_row = float(native_point[1])
+    _ensure_slider_includes_value(center_x_scale, native_row, pad=5.0)
+    _ensure_slider_includes_value(center_y_scale, native_col, pad=5.0)
+    center_x_var.set(float(native_row))
+    center_y_var.set(float(native_col))
+    _restore_beam_center_pick_view(redraw=False)
+    _clear_geometry_manual_preview_artists(redraw=False)
+    geometry_runtime_state.beam_center_pick_armed = False
+    geometry_runtime_state.beam_center_pick_session = {}
+    _set_beam_center_pick_cursor(False)
+    _update_beam_center_pick_button_label()
+    _sync_center_marker(redraw=False)
+    _clear_geometry_fit_dataset_cache()
+    _invalidate_simulation_cache()
+    schedule_update()
+    _set_beam_center_pick_status(
+        f"Beam center set to row={native_row:.2f}, col={native_col:.2f} px "
+        f"from background {int(background_runtime_state.current_background_index) + 1}."
+    )
+    return True
+
+
+def _cancel_beam_center_pick(message: str | None = None) -> bool:
+    """Cancel beam-center picking and restore the pre-zoom detector view."""
+    was_active = bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False))
+    _restore_beam_center_pick_view(redraw=False)
+    _clear_geometry_manual_preview_artists(redraw=False)
+    geometry_runtime_state.beam_center_pick_armed = False
+    geometry_runtime_state.beam_center_pick_session = {}
+    _set_beam_center_pick_cursor(False)
+    _update_beam_center_pick_button_label()
+    if message:
+        _set_beam_center_pick_status(message)
+    if was_active:
+        _request_overlay_canvas_redraw()
+    return was_active
+
+
+def _start_beam_center_pick_at(
+    col: float,
+    row: float,
+    *,
+    anchor_fraction_x: float = 0.5,
+    anchor_fraction_y: float = 0.5,
+) -> bool:
+    """Start one beam-center placement at a detector/background point."""
+    if not bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False)):
+        return False
+    display_background = _current_beam_center_pick_background_image()
+    if display_background is None:
+        _set_beam_center_pick_status("Beam center pick needs a loaded background image.")
+        return False
+    geometry_runtime_state.beam_center_pick_session = {
+        "active": True,
+        "background_index": int(background_runtime_state.current_background_index),
+        "preview_last_t": 0.0,
+        "preview_last_xy": None,
+        "zoom_active": False,
+    }
+    _apply_beam_center_pick_zoom(
+        float(col),
+        float(row),
+        anchor_fraction_x=anchor_fraction_x,
+        anchor_fraction_y=anchor_fraction_y,
+    )
+    _update_beam_center_pick_preview(float(col), float(row), force=True)
+    return True
+
+
+def _set_beam_center_pick_mode(
+    enabled: bool,
+    message: str | None = None,
+) -> bool:
+    """Arm or cancel beam-center picking from the background detector image."""
+    enabled_flag = bool(enabled)
+    if not enabled_flag:
+        return _cancel_beam_center_pick(message or "Beam center picking stopped.")
+
+    display_background = _current_beam_center_pick_background_image()
+    if display_background is None:
+        _set_beam_center_pick_status("Beam center pick needs a loaded background image.")
+        return False
+
+    if _resolved_primary_analysis_display_mode() != "detector":
+        _set_persistent_view_mode("detector")
+
+    if not bool(background_runtime_state.visible):
+        toggler = globals().get("toggle_background")
+        if callable(toggler):
+            try:
+                toggler()
+            except Exception:
+                background_runtime_state.visible = True
+                _sync_background_runtime_state()
+        else:
+            background_runtime_state.visible = True
+            _sync_background_runtime_state()
+
+    _set_geometry_manual_pick_mode(False, message="Manual geometry picking paused.")
+    _set_hkl_pick_mode_with_mode_banner(False, message="HKL image-pick paused.")
+    _set_geometry_preview_exclude_mode(False, message="Preview exclusion paused.")
+    set_analysis = globals().get("_set_analysis_peak_pick_mode")
+    if callable(set_analysis):
+        set_analysis(False, message="Analysis peak picking paused.")
+
+    geometry_runtime_state.beam_center_pick_armed = True
+    geometry_runtime_state.beam_center_pick_session = {}
+    _set_beam_center_pick_cursor(True)
+    _update_beam_center_pick_button_label()
+    _set_beam_center_pick_status(
+        message
+        or "Beam center picking armed. Press, drag to preview, release to set center."
+    )
+    return True
+
+
+def _toggle_beam_center_pick_mode() -> bool:
+    """Toggle beam-center picking from the Setup button."""
+    return _set_beam_center_pick_mode(
+        not bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False))
+    )
+
+
 def _refresh_geometry_manual_pick_session() -> dict[str, object]:
     """Refresh the active manual Qr/Qz pick session against the latest simulation."""
 
@@ -10231,6 +10651,12 @@ def _initialize_runtime_controls_block_09() -> None:
                 )
             ),
             on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
+                    _set_beam_center_pick_mode(
+                        False,
+                        message="Beam center picking paused.",
+                    )
+                    if bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False))
+                    else None,
             n2=n2,
             process_peaks_parallel=_process_peaks_parallel_safe_prefer_python_runner,
             tcl_error_types=(tk.TclError,),
@@ -10423,10 +10849,21 @@ def _initialize_runtime_controls_block_10() -> None:
             geometry_fit_history_state=geometry_fit_history_state,
             manual_pick_armed=lambda: bool(geometry_runtime_state.manual_pick_armed),
             set_manual_pick_armed=(
-                lambda enabled: setattr(
-                    geometry_runtime_state,
-                    "manual_pick_armed",
-                    bool(enabled),
+                lambda enabled: (
+                    (
+                        _set_beam_center_pick_mode(
+                            False,
+                            message="Beam center picking paused.",
+                        )
+                        if bool(enabled)
+                        and bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False))
+                        else None
+                    ),
+                    setattr(
+                        geometry_runtime_state,
+                        "manual_pick_armed",
+                        bool(enabled),
+                    ),
                 )
             ),
             current_background_index=(
@@ -11002,6 +11439,15 @@ def _initialize_runtime_controls_block_15() -> None:
             preview_view_limits_factory=lambda: _preview_legacy_main_matplotlib_view_limits,
             commit_preview_view_factory=lambda: _commit_legacy_main_matplotlib_preview_view,
             clear_preview_view_factory=lambda: (
+            beam_center_pick_armed_factory=(
+                lambda: bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False))
+            ),
+            beam_center_pick_session_active=_beam_center_pick_session_active,
+            set_beam_center_pick_mode=_set_beam_center_pick_mode,
+            start_beam_center_pick_at=_start_beam_center_pick_at,
+            update_beam_center_pick_preview=_update_beam_center_pick_preview,
+            commit_beam_center_pick_at=_commit_beam_center_pick_at,
+            cancel_beam_center_pick=_cancel_beam_center_pick,
                 lambda: _clear_legacy_main_matplotlib_preview_view(redraw=True)
             ),
         )
@@ -14778,7 +15224,10 @@ def _refresh_interaction_mode_banner() -> None:
         title = "Manual geometry picking armed"
         detail = "Click a simulated Qr group on the image to start pairing it to measured peaks."
 
-    if bool(_geometry_manual_pick_session_active(require_current_background=False)):
+    if bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False)):
+        title = "Beam center picking active"
+        detail = "Press a background-image spot, preview the refined peak, then release."
+    elif bool(_geometry_manual_pick_session_active(require_current_background=False)):
         title = "Manual peak placement active"
         detail = "Click the measured peak location for the selected simulated group."
     elif bool(getattr(analysis_peak_selection_state, "pick_armed", False)):
@@ -32574,6 +33023,8 @@ def _fit_selected_analysis_peaks() -> None:
         for peak_index, (peak_entry, display_entry) in enumerate(
             zip(selected_peaks, display_entries, strict=False),
             start=1,
+        if bool(getattr(geometry_runtime_state, "beam_center_pick_armed", False)):
+            _set_beam_center_pick_mode(False, message="Beam center picking paused.")
         )
     ]
     model_label_resolver = getattr(
@@ -34098,6 +34549,8 @@ def _geometry_fit_live_update_manual_peak_cache(
     def _source_key(record: Mapping[str, object]) -> tuple[object, ...] | None:
         if not isinstance(record, Mapping):
             return None
+        on_pick_beam_center=_toggle_beam_center_pick_mode,
+        beam_center_pick_text=_beam_center_pick_label(),
         return _geometry_manual_candidate_source_key(dict(record))
 
     def _dataset_index(record: Mapping[str, object]) -> int:

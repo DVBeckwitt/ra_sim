@@ -29,6 +29,7 @@ downstream of green mosaic fitting.
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
+| Beam center background pick | feature | - | none | p1 | 2026-04-30 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
@@ -50,6 +51,15 @@ remain primary, caked sim/background entries and lookups are cached for replay,
 and focused sidecar/Qr selector/import-safe tests pass. Broader workflow
 validation is still blocked by pre-existing local failures and formatting
 drift in the dirty worktree.
+
+Beam center background pick status note:
+`Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the
+loaded detector/background image, switches out of caked/q-space views, shows the
+background if hidden, previews the same local refinement used by manual Qr/Qz
+placement, and commits native detector `center_x = row`, `center_y = col` on
+release. Targeted canvas/view/helper/import-safe/state tests pass. Full
+`ra_sim.dev check` remains blocked by existing formatter/test drift in the dirty
+worktree, tracked in the feature note.
 
 Weighted-event representative status note:
 `Weighted-event representative cache carry-through` is implemented on fast

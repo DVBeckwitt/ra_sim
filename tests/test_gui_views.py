@@ -2051,10 +2051,14 @@ def test_beam_mosaic_parameter_sliders_store_refs_and_callbacks(monkeypatch) -> 
         return var, slider
 
     monkeypatch.setattr(views, "create_slider", _fake_create_slider)
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
     view_state = state.BeamMosaicParameterSlidersViewState()
     standard_calls = []
     mosaic_calls = []
+    pick_calls = []
 
     views.create_beam_mosaic_parameter_sliders(
         geometry_parent="geometry",
@@ -2091,6 +2095,8 @@ def test_beam_mosaic_parameter_sliders_store_refs_and_callbacks(monkeypatch) -> 
         },
         on_standard_update=lambda: standard_calls.append("standard"),
         on_mosaic_update=lambda: mosaic_calls.append("mosaic"),
+        on_pick_beam_center=lambda: pick_calls.append("pick"),
+        beam_center_pick_text="Pick Beam Center",
     )
 
     assert view_state.theta_initial_var.get() == 5.0
@@ -2111,6 +2117,11 @@ def test_beam_mosaic_parameter_sliders_store_refs_and_callbacks(monkeypatch) -> 
     assert created[15]["kwargs"]["range_expand_pad"] == 0.5
     assert created[19]["max"] == 3000.0
     assert created[21]["max"] == 3000.0
+    assert view_state.beam_center_pick_button_var.get() == "Pick Beam Center"
+    assert view_state.beam_center_pick_button is _FakeButton.created[-1]
+    assert view_state.beam_center_pick_button.kwargs["command"] is not None
+    view_state.beam_center_pick_button.kwargs["command"]()
+    assert pick_calls == ["pick"]
     assert created[0]["update_callback"] is not None
     assert created[16]["update_callback"] is not None
     created[0]["update_callback"]()

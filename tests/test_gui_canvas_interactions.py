@@ -129,6 +129,13 @@ def _basic_canvas_bindings(
     commit_preview_view=None,
     analysis_peak_state=None,
     analysis_peak_callbacks=None,
+    beam_center_pick_armed=None,
+    beam_center_pick_session_active=None,
+    set_beam_center_pick_mode=None,
+    start_beam_center_pick_at=None,
+    update_beam_center_pick_preview=None,
+    commit_beam_center_pick_at=None,
+    cancel_beam_center_pick=None,
 ):
     return canvas_interactions.CanvasInteractionBindings(
         axis=axis,
@@ -165,6 +172,13 @@ def _basic_canvas_bindings(
         begin_live_interaction=begin_live_interaction,
         touch_live_interaction=touch_live_interaction,
         end_live_interaction=end_live_interaction,
+        beam_center_pick_armed=beam_center_pick_armed,
+        beam_center_pick_session_active=beam_center_pick_session_active,
+        set_beam_center_pick_mode=set_beam_center_pick_mode,
+        start_beam_center_pick_at=start_beam_center_pick_at,
+        update_beam_center_pick_preview=update_beam_center_pick_preview,
+        commit_beam_center_pick_at=commit_beam_center_pick_at,
+        cancel_beam_center_pick=cancel_beam_center_pick,
         preview_view_limits=preview_view_limits,
         commit_preview_view=commit_preview_view,
     )
@@ -258,6 +272,13 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
         preview_view_limits_factory=build_preview,
         commit_preview_view_factory=build_commit,
         clear_preview_view_factory=build_clear,
+        beam_center_pick_armed_factory=lambda: True,
+        beam_center_pick_session_active=lambda: False,
+        set_beam_center_pick_mode=lambda *_args, **_kwargs: None,
+        start_beam_center_pick_at=lambda *_args, **_kwargs: None,
+        update_beam_center_pick_preview=lambda *_args, **_kwargs: None,
+        commit_beam_center_pick_at=lambda *_args, **_kwargs: None,
+        cancel_beam_center_pick=lambda *_args, **_kwargs: None,
     )
 
     assert factory()["axis"] == "axis"
@@ -271,6 +292,94 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
     assert calls[0]["preview_view_limits"] is not calls[1]["preview_view_limits"]
     assert calls[0]["commit_preview_view"] is not calls[1]["commit_preview_view"]
     assert calls[0]["clear_preview_view"] is not calls[1]["clear_preview_view"]
+    assert calls[0]["beam_center_pick_armed"] is True
+    assert callable(calls[0]["beam_center_pick_session_active"])
+    assert callable(calls[0]["set_beam_center_pick_mode"])
+    assert callable(calls[0]["start_beam_center_pick_at"])
+    assert callable(calls[0]["update_beam_center_pick_preview"])
+    assert callable(calls[0]["commit_beam_center_pick_at"])
+    assert callable(calls[0]["cancel_beam_center_pick"])
+
+
+def test_beam_center_pick_press_motion_release_uses_priority_canvas_route() -> None:
+    axis = _FakeAxis()
+    geometry_runtime = state.GeometryRuntimeState()
+    geometry_runtime.manual_pick_armed = True
+    peak_state = state.PeakSelectionState()
+    peak_state.hkl_pick_armed = True
+    drag_callbacks = _DragCallbacks()
+    calls = []
+    session_active = {"value": False}
+
+    def _start(col, row, **kwargs):
+        session_active["value"] = True
+        calls.append(("start", float(col), float(row), dict(kwargs)))
+        return True
+
+    bindings = _basic_canvas_bindings(
+        axis=axis,
+        geometry_runtime_state=geometry_runtime,
+        peak_selection_state=peak_state,
+        integration_range_drag_callbacks=drag_callbacks,
+        manual_pick_session_active=lambda: True,
+        beam_center_pick_armed=lambda: True,
+        beam_center_pick_session_active=lambda: bool(session_active["value"]),
+        start_beam_center_pick_at=_start,
+        update_beam_center_pick_preview=(
+            lambda col, row: calls.append(("preview", float(col), float(row)))
+        ),
+        commit_beam_center_pick_at=(
+            lambda col, row: calls.append(("commit", float(col), float(row)))
+        ),
+    )
+
+    press = _FakeEvent(button=1, inaxes=axis, xdata=20.0, ydata=30.0, x=110.0, y=70.0)
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, press) is True
+    assert calls[0][0:3] == ("start", 20.0, 30.0)
+    assert calls[0][3]["anchor_fraction_x"] == pytest.approx(0.5)
+    assert calls[0][3]["anchor_fraction_y"] == pytest.approx(0.5)
+
+    motion = _FakeEvent(button=1, inaxes=axis, xdata=21.0, ydata=31.0)
+    assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion) is True
+    assert calls[1] == ("preview", 21.0, 31.0)
+
+    release = _FakeEvent(button=1, inaxes=axis, xdata=22.0, ydata=32.0)
+    assert canvas_interactions.handle_runtime_canvas_release(bindings, release) is True
+    assert calls[2] == ("commit", 22.0, 32.0)
+    assert drag_callbacks.calls == []
+
+
+def test_beam_center_pick_right_click_cancels_before_other_modes() -> None:
+    axis = _FakeAxis()
+    geometry_runtime = state.GeometryRuntimeState()
+    geometry_runtime.manual_pick_armed = True
+    peak_state = state.PeakSelectionState()
+    peak_state.hkl_pick_armed = True
+    peak_callbacks = _PeakCallbacks()
+    calls = []
+    bindings = _basic_canvas_bindings(
+        axis=axis,
+        geometry_runtime_state=geometry_runtime,
+        peak_selection_state=peak_state,
+        peak_selection_callbacks=peak_callbacks,
+        beam_center_pick_armed=lambda: True,
+        set_beam_center_pick_mode=(
+            lambda enabled, message=None: calls.append(
+                ("beam", bool(enabled), message)
+            )
+        ),
+        set_geometry_manual_pick_mode=(
+            lambda enabled, message=None: calls.append(
+                ("manual", bool(enabled), message)
+            )
+        ),
+    )
+
+    event = _FakeEvent(button=3, inaxes=axis, xdata=10.0, ydata=11.0)
+    assert canvas_interactions.handle_runtime_canvas_click(bindings, event) is True
+    assert calls == [("beam", False, "Beam center picking canceled.")]
+    assert peak_callbacks.calls == []
+    assert getattr(geometry_runtime, "_suppress_pan_press_once") is True
 
 
 def test_canvas_click_routes_cancel_manual_preview_and_hkl_paths() -> None:

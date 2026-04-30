@@ -325,6 +325,8 @@ class BeamMosaicParameterSlidersViewState:
     eta_scale: Any = None
     center_x_var: Any = None
     center_x_scale: Any = None
+    beam_center_pick_button_var: Any = None
+    beam_center_pick_button: Any = None
     bandwidth_percent_var: Any = None
     bandwidth_percent_scale: Any = None
     center_y_var: Any = None
@@ -976,6 +978,8 @@ class GeometryRuntimeState:
     manual_preview_artists: list[Any] = field(default_factory=list)
     qr_cylinder_overlay_artists: list[Any] = field(default_factory=list)
     qr_cylinder_overlay_cache: dict[str, object] = field(
+    beam_center_pick_armed: bool = False
+    beam_center_pick_session: dict[str, object] = field(default_factory=dict)
         default_factory=lambda: {
             "signature": None,
             "paths": [],
