@@ -438,6 +438,81 @@ def test_caked_point_to_detector_pixel_uses_display_axis_lut_centroid(
     )
 
 
+def test_real_lut_detector_flatten_order_is_row_major_for_caked_projection() -> None:
+    detector_shape = (12, 14)
+    image = np.zeros(detector_shape, dtype=np.float32)
+    integrator = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.075,
+        poni1=6.0e-4,
+        poni2=7.0e-4,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+    )
+    result = integrator.integrate2d(
+        image,
+        npt_rad=32,
+        npt_azim=72,
+        unit="2th_deg",
+        workers=1,
+    )
+    radial_axis = np.asarray(result.radial, dtype=np.float64)
+    raw_azimuth_axis = np.asarray(result.azimuthal, dtype=np.float64)
+    lut = integrator._cached_cake_lut(
+        detector_shape,
+        radial_axis,
+        raw_azimuth_axis,
+        exact_cake.DetectorCakeGeometry(
+            pixel_size_m=float(integrator.geometry.pixel_size_m),
+            distance_m=float(integrator.geometry.distance_m),
+            center_row_px=float(integrator.geometry.center_row_px),
+            center_col_px=float(integrator.geometry.center_col_px),
+        ),
+        engine="auto",
+        workers=1,
+    )
+    assert lut is not None
+
+    row = 3
+    col = 10
+    detector_flat = row * detector_shape[1] + col
+    one_hot = np.zeros(detector_shape[0] * detector_shape[1], dtype=np.float32)
+    one_hot[detector_flat] = 1.0
+    caked_weight = np.asarray(lut.matrix @ one_hot, dtype=np.float64).reshape(-1)
+    assert np.any(caked_weight > 0.0)
+
+    radial_idx = np.arange(radial_axis.size, dtype=np.int64)
+    azimuth_idx = np.arange(raw_azimuth_axis.size, dtype=np.int64)
+    grid_az, grid_rad = np.meshgrid(azimuth_idx, radial_idx, indexing="ij")
+    weights_2d = caked_weight.reshape(raw_azimuth_axis.size, radial_axis.size)
+    total = float(np.sum(weights_2d))
+    radial_mean = float(np.sum(radial_axis[grid_rad] * weights_2d) / total)
+    raw_angles = np.deg2rad(raw_azimuth_axis[grid_az])
+    raw_mean = float(
+        np.rad2deg(
+            np.arctan2(
+                np.sum(np.sin(raw_angles) * weights_2d),
+                np.sum(np.cos(raw_angles) * weights_2d),
+            )
+        )
+    )
+    gui_mean = float(exact_cake_portable.raw_phi_to_gui_phi(raw_mean))
+
+    recovered_tth, recovered_phi = exact_cake_portable.detector_pixel_to_caked_bin(
+        exact_cake_portable.CakeTransformBundle(
+            detector_shape=detector_shape,
+            radial_deg=radial_axis,
+            raw_azimuth_deg=raw_azimuth_axis,
+            gui_azimuth_deg=exact_cake_portable.raw_phi_to_gui_phi(raw_azimuth_axis),
+            lut=lut,
+        ),
+        float(col),
+        float(row),
+    )
+
+    assert recovered_tth == pytest.approx(radial_mean, abs=1.0e-8)
+    assert recovered_phi == pytest.approx(gui_mean, abs=1.0e-8)
+
+
 def test_resolve_cake_transform_bundle_reuses_matching_bundle() -> None:
     bundle = _make_transform_bundle(
         detector_shape=(3, 4),

@@ -855,6 +855,50 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
     ]
 
 
+def test_background_controls_include_optional_simulation_toggle() -> None:
+    simulation_toggle_calls: list[str] = []
+    button_calls: list[tuple[str, object, object]] = []
+    workspace_view_state = SimpleNamespace(
+        workspace_actions_frame="actions-frame",
+        workspace_backgrounds_frame="backgrounds-frame",
+    )
+    background_callbacks = SimpleNamespace(
+        refresh_status=lambda: "",
+        refresh_backend_status=lambda: "",
+        toggle_visibility=lambda: True,
+        switch_background="switch-background",
+        browse_files="browse-files",
+        rotate_backend_minus_90="rotate--90",
+        rotate_backend_plus_90="rotate-90",
+        flip_backend_x="flip-x",
+        flip_backend_y="flip-y",
+        reset_backend_orientation="reset",
+    )
+    bundle = bootstrap.build_runtime_background_controls_bootstrap(
+        views_module=SimpleNamespace(
+            populate_stacked_button_group=lambda parent, button_specs: button_calls.append(
+                ("buttons", parent, list(button_specs))
+            ),
+            create_background_file_controls=lambda **_kwargs: None,
+            create_background_backend_debug_controls=lambda **_kwargs: None,
+        ),
+        workspace_view_state=workspace_view_state,
+        background_backend_debug_view_state="backend-view",
+        background_callbacks=background_callbacks,
+        toggle_simulation_overlay=lambda: simulation_toggle_calls.append("toggle-sim") or False,
+    )
+
+    bundle.create_workspace_controls()
+
+    assert [label for label, _command in button_calls[0][2]] == [
+        "Toggle Background",
+        "Toggle Simulation",
+        "Switch Background",
+    ]
+    assert button_calls[0][2][1][1]() is False
+    assert simulation_toggle_calls == ["toggle-sim"]
+
+
 def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     monkeypatch,
 ) -> None:
@@ -1326,6 +1370,41 @@ def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_callbacks()
     ]
 
 
+def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_add_all() -> None:
+    view_calls: list[dict[str, object]] = []
+    events: list[str] = []
+
+    bundle = bootstrap.build_runtime_geometry_tool_action_controls_bootstrap(
+        views_module=SimpleNamespace(
+            create_geometry_tool_action_controls=lambda **kwargs: view_calls.append(kwargs)
+        ),
+        view_state="geometry-view",
+        on_toggle_manual_pick=lambda: events.append("toggle-pick"),
+        on_refine_manual_pairs=lambda: events.append("refine"),
+        on_undo_manual_placement=lambda: events.append("undo-placement"),
+        on_export_manual_pairs=lambda: events.append("export"),
+        on_import_manual_pairs=lambda: events.append("import"),
+        on_toggle_preview_exclude=lambda: events.append("preview"),
+        on_clear_manual_pairs=lambda: events.append("clear"),
+        on_add_all_qr_set_peaks=lambda: events.append("add-all"),
+        on_remove_qr_set_peaks=lambda: events.append("remove"),
+        auto_refine_radius_value=48.0,
+        on_auto_refine_radius_changed=lambda value: events.append(f"radius:{value:.0f}"),
+        manual_drag_move_enabled=True,
+        on_manual_drag_move_changed=lambda value: events.append(f"drag:{bool(value)}"),
+    )
+
+    bundle.create_controls(parent="parent-frame")
+    view_calls[0]["on_add_all_qr_set_peaks"]()
+    view_calls[0]["on_remove_qr_set_peaks"]()
+    view_calls[0]["on_auto_refine_radius_changed"](72.0)
+    view_calls[0]["on_manual_drag_move_changed"](False)
+
+    assert view_calls[0]["auto_refine_radius_value"] == 48.0
+    assert view_calls[0]["manual_drag_move_enabled"] is True
+    assert events == ["add-all", "remove", "radius:72", "drag:False"]
+
+
 def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
     monkeypatch,
 ) -> None:
@@ -1451,9 +1530,10 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
                 "phi_min": -15.0,
                 "phi_max": 15.0,
                 "integrate_selected_qr_rod": False,
+                "mirror_selected_qr_phi": False,
                 "selected_qr_rod_key": "",
-                "qz_min": -1.0,
-                "qz_max": 1.0,
+                "qz_min": 0.0,
+                "qz_max": 5.0,
                 "delta_qr": 0.25,
             },
         ),
@@ -1471,7 +1551,6 @@ def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_
             },
         ),
     ]
-
 
 def test_build_runtime_bragg_qr_workflow_bootstrap_composes_pruning_and_manager(
     monkeypatch,

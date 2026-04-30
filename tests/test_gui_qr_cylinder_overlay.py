@@ -7,6 +7,7 @@ import yaml
 
 from ra_sim.config import loader
 from ra_sim.gui import qr_cylinder_overlay
+from ra_sim.simulation import exact_cake_portable
 
 
 def _overlay_config(*, render_in_caked_space: bool) -> qr_cylinder_overlay.QrCylinderOverlayRenderConfig:
@@ -71,6 +72,48 @@ def _caked_projection_context(
         "radial_axis": np.array([1.0, 2.0, 3.0], dtype=float),
         "azimuth_axis": np.array([-10.0, 0.0, 10.0], dtype=float),
         "raw_azimuth_axis": np.array([-100.0, -90.0, -80.0], dtype=float),
+        "transform_bundle": bundle,
+    }
+
+
+def _detector_backed_projection_context(
+    *,
+    detector_shape: tuple[int, int] = (2, 3),
+    radial_axis: np.ndarray | None = None,
+    azimuth_axis: np.ndarray | None = None,
+    matrix: np.ndarray | None = None,
+) -> dict[str, object]:
+    radial = (
+        np.asarray(radial_axis, dtype=float)
+        if radial_axis is not None
+        else np.asarray([1.0, 2.0, 3.0], dtype=float)
+    )
+    azimuth = (
+        np.asarray(azimuth_axis, dtype=float)
+        if azimuth_axis is not None
+        else np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    )
+    raw_azimuth = np.asarray(
+        exact_cake_portable.gui_phi_to_raw_phi(azimuth),
+        dtype=float,
+    )
+    if matrix is None:
+        matrix = np.zeros((azimuth.size * radial.size, detector_shape[0] * detector_shape[1]))
+    bundle = qr_cylinder_overlay.CakeTransformBundle(
+        detector_shape=detector_shape,
+        radial_deg=radial,
+        raw_azimuth_deg=raw_azimuth,
+        gui_azimuth_deg=np.asarray(
+            exact_cake_portable.raw_phi_to_gui_phi(raw_azimuth),
+            dtype=float,
+        ),
+        lut=SimpleNamespace(matrix=np.asarray(matrix, dtype=np.float32)),
+    )
+    return {
+        "detector_shape": detector_shape,
+        "radial_axis": radial,
+        "azimuth_axis": azimuth,
+        "raw_azimuth_axis": raw_azimuth,
         "transform_bundle": bundle,
     }
 
@@ -563,6 +606,351 @@ def test_build_qr_cylinder_caked_band_masks_keeps_finite_points_around_isolated_
     assert np.all(mask[:, 2])
 
 
+def test_caked_phi_window_mask_supports_disjoint_high_abs_phi_windows() -> None:
+    phi_values = np.asarray([-90.0, -84.0, -78.0, -73.0, 0.0, 73.0, 78.0, 84.0, 90.0])
+    mask = qr_cylinder_overlay.caked_phi_window_mask(
+        phi_values,
+        ((-85.0, -72.5), (72.5, 85.0)),
+    )
+
+    assert phi_values[mask].tolist() == [-84.0, -78.0, -73.0, 73.0, 78.0, 84.0]
+    assert qr_cylinder_overlay.normalize_caked_phi_windows(
+        phi_min=-180.0,
+        phi_max=180.0,
+    ) == ((-180.0, 180.0),)
+    assert np.all(
+        qr_cylinder_overlay.caked_phi_window_mask(
+            np.asarray([-180.0, -90.0, 0.0, 90.0, 180.0], dtype=float),
+            ((-180.0, 180.0),),
+        )
+    )
+    assert qr_cylinder_overlay.mirrored_abs_phi_windows(-85.0, -72.5) == (
+        (-85.0, -72.5),
+        (72.5, 85.0),
+    )
+
+
+def test_build_selected_qr_rod_qz_caked_mask_signature_tracks_phi_windows() -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    common_kwargs = dict(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=np.asarray([-80.0, 0.0, 80.0], dtype=float),
+        delta_qr=0.05,
+        qz_min=-1.0,
+        qz_max=1.0,
+    )
+
+    legacy = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask_signature(
+        **common_kwargs,
+        phi_min=-85.0,
+        phi_max=85.0,
+    )
+    mirrored = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask_signature(
+        **common_kwargs,
+        phi_windows=((-85.0, -72.5), (72.5, 85.0)),
+    )
+
+    assert legacy is not None
+    assert mirrored is not None
+    assert legacy != mirrored
+    assert ((-85.0, -72.5), (72.5, 85.0)) in mirrored
+    assert (
+        qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask_signature(
+            **common_kwargs,
+            phi_windows=(),
+        )
+        is None
+    )
+
+
+def test_detector_backed_selected_qr_mask_includes_negative_high_phi_region(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    matrix = np.zeros((azimuth_axis.size * radial_axis.size, 6), dtype=np.float32)
+    matrix[0 * radial_axis.size + 1, 1] = 1.0
+    projection_context = _detector_backed_projection_context(
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        matrix=matrix,
+    )
+    qr_map = np.zeros((2, 3), dtype=float)
+    qz_map = np.full((2, 3), 10.0, dtype=float)
+    valid = np.zeros((2, 3), dtype=bool)
+    qr_map[0, 1] = 0.25
+    qz_map[0, 1] = 0.0
+    valid[0, 1] = True
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "detector_qr_qz_maps_for_projection",
+        lambda **_kwargs: (qr_map, qz_map, valid),
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=0.01,
+        qz_min=-0.1,
+        qz_max=0.1,
+        phi_windows=((-85.0, -72.5),),
+        project_traces=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("detector-backed mask must be primary")
+        ),
+    )
+
+    assert result is not None
+    mask = np.asarray(result["mask"], dtype=bool)
+    assert mask[0, 1]
+    assert not np.any(mask[1])
+    assert not np.any(mask[2])
+
+
+def test_detector_backed_selected_qr_mask_excludes_zero_phi_for_high_abs_phi_window(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    matrix = np.zeros((azimuth_axis.size * radial_axis.size, 6), dtype=np.float32)
+    matrix[0 * radial_axis.size + 1, 1] = 1.0
+    matrix[1 * radial_axis.size + 1, 2] = 1.0
+    matrix[2 * radial_axis.size + 1, 4] = 1.0
+    projection_context = _detector_backed_projection_context(
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        matrix=matrix,
+    )
+    qr_map = np.full((2, 3), 0.25, dtype=float)
+    qz_map = np.zeros((2, 3), dtype=float)
+    valid = np.ones((2, 3), dtype=bool)
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "detector_qr_qz_maps_for_projection",
+        lambda **_kwargs: (qr_map, qz_map, valid),
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=0.01,
+        qz_min=-0.1,
+        qz_max=0.1,
+        phi_windows=((-85.0, -72.5), (72.5, 85.0)),
+        project_traces=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("detector-backed mask must be primary")
+        ),
+    )
+
+    assert result is not None
+    mask = np.asarray(result["mask"], dtype=bool)
+    assert mask[0, 1]
+    assert mask[2, 1]
+    assert not np.any(mask[1])
+
+
+def test_detector_backed_selected_qr_mask_does_not_need_center_trace_samples(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    matrix = np.zeros((azimuth_axis.size * radial_axis.size, 6), dtype=np.float32)
+    matrix[0 * radial_axis.size + 1, 1] = 1.0
+    projection_context = _detector_backed_projection_context(
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        matrix=matrix,
+    )
+    qr_map = np.zeros((2, 3), dtype=float)
+    qz_map = np.zeros((2, 3), dtype=float)
+    valid = np.zeros((2, 3), dtype=bool)
+    qr_map[0, 1] = 0.25
+    valid[0, 1] = True
+    trace_calls: list[object] = []
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "detector_qr_qz_maps_for_projection",
+        lambda **_kwargs: (qr_map, qz_map, valid),
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=0.01,
+        qz_min=-0.1,
+        qz_max=0.1,
+        phi_windows=((-85.0, -72.5),),
+        project_traces=lambda **kwargs: trace_calls.append(kwargs) or [],
+    )
+
+    assert result is not None
+    assert np.asarray(result["mask"], dtype=bool)[0, 1]
+    assert trace_calls == []
+
+
+def test_detector_backed_selected_qr_all_false_mask_does_not_fallback(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    matrix = np.zeros((azimuth_axis.size * radial_axis.size, 6), dtype=np.float32)
+    matrix[0 * radial_axis.size + 1, 1] = 1.0
+    projection_context = _detector_backed_projection_context(
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        matrix=matrix,
+    )
+    qr_map = np.full((2, 3), 9.0, dtype=float)
+    qz_map = np.zeros((2, 3), dtype=float)
+    valid = np.ones((2, 3), dtype=bool)
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "detector_qr_qz_maps_for_projection",
+        lambda **_kwargs: (qr_map, qz_map, valid),
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=0.01,
+        qz_min=-0.1,
+        qz_max=0.1,
+        phi_windows=((-85.0, -72.5),),
+        project_traces=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("all-false detector mask must not fallback")
+        ),
+    )
+
+    assert result is not None
+    assert not np.any(np.asarray(result["mask"], dtype=bool))
+
+
+def test_real_lut_detector_backed_selected_qr_mask_includes_negative_high_phi() -> None:
+    config = qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
+        render_in_caked_space=True,
+        image_size=64,
+        display_rotate_k=0,
+        center_col=32.0,
+        center_row=32.0,
+        distance_cor_to_detector=0.075,
+        gamma_deg=0.0,
+        Gamma_deg=0.0,
+        chi_deg=0.0,
+        psi_deg=0.0,
+        psi_z_deg=0.0,
+        zs=0.0,
+        zb=0.0,
+        theta_initial_deg=6.0,
+        cor_angle_deg=0.0,
+        pixel_size_m=1.0e-4,
+        wavelength=1.0,
+        n2=1.0 + 0.0j,
+    )
+    detector_shape = (64, 64)
+    radial_axis, raw_azimuth_axis = exact_cake_portable.build_angle_axes(
+        npt_rad=90,
+        npt_azim=180,
+        tth_min_deg=0.0,
+        tth_max_deg=90.0,
+    )
+    ai = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=float(config.distance_cor_to_detector),
+        poni1=float(config.center_row) * float(config.pixel_size_m),
+        poni2=float(config.center_col) * float(config.pixel_size_m),
+        pixel1=float(config.pixel_size_m),
+        pixel2=float(config.pixel_size_m),
+    )
+    bundle = exact_cake_portable.build_cake_transform_bundle(
+        ai,
+        detector_shape,
+        radial_axis,
+        raw_azimuth_axis,
+        workers=1,
+    )
+    assert bundle is not None
+    gui_axis = np.asarray(
+        exact_cake_portable.raw_phi_to_gui_phi(raw_azimuth_axis),
+        dtype=float,
+    )
+    azimuth_axis = gui_axis[np.argsort(gui_axis, kind="stable")]
+    projection_context = {
+        "detector_shape": detector_shape,
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "transform_bundle": bundle,
+    }
+    q_maps = qr_cylinder_overlay.detector_qr_qz_maps_for_projection(
+        config=config,
+        detector_shape=detector_shape,
+    )
+    assert q_maps is not None
+    qr_map, qz_map, valid_q = q_maps
+    rows, cols = np.indices(detector_shape)
+    _two_theta, gui_phi = exact_cake_portable.detector_points_to_angles(
+        cols,
+        rows,
+        exact_cake_portable.PortableGeometry(
+            pixel_size_m=float(config.pixel_size_m),
+            distance_m=float(config.distance_cor_to_detector),
+            center_row_px=float(config.center_row),
+            center_col_px=float(config.center_col),
+        ),
+    )
+    gui_phi = np.asarray(gui_phi, dtype=float).reshape(detector_shape)
+    candidates = (
+        valid_q
+        & np.isfinite(qr_map)
+        & np.isfinite(qz_map)
+        & (gui_phi >= -85.0)
+        & (gui_phi <= -72.5)
+    )
+    assert np.any(candidates)
+    row, col = np.argwhere(candidates)[0]
+    qr0 = float(qr_map[row, col])
+    qz0 = float(qz_map[row, col])
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": qr0},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=max(abs(qr0) * 1.0e-8, 1.0e-8),
+        qz_min=qz0 - 1.0e-8,
+        qz_max=qz0 + 1.0e-8,
+        phi_windows=((-85.0, -72.5),),
+        project_traces=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("real LUT detector path should be primary")
+        ),
+    )
+
+    assert result is not None
+    mask = np.asarray(result["mask"], dtype=bool)
+    high_phi_rows = (azimuth_axis >= -85.0) & (azimuth_axis <= -72.5)
+    assert np.any(mask[high_phi_rows])
+    assert not np.any(mask[(azimuth_axis > -72.5) & (azimuth_axis < 72.5)])
+
+
 def test_build_selected_qr_rod_qz_caked_mask_delta_qr_changes_sparse_trace_shape(
     monkeypatch,
 ) -> None:
@@ -638,6 +1026,408 @@ def test_build_selected_qr_rod_qz_caked_mask_delta_qr_changes_sparse_trace_shape
     assert not np.any(narrow["mask"][:, 4])
     assert np.all(wide["mask"][:, 0])
     assert np.all(wide["mask"][:, 4])
+
+
+def test_build_selected_qr_rod_qz_caked_mask_supports_disjoint_phi_windows(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    qr0 = 0.25
+    phi_values = np.asarray([-84.0, -78.0, -73.0, 0.0, 73.0, 78.0, 84.0], dtype=float)
+    seen_phi_samples: list[int] = []
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        seen_phi_samples.append(int(phi_samples))
+        qr_value = float(qr_value)
+        if qr_value < qr0:
+            code = 1.0
+        elif qr_value > qr0:
+            code = 3.0
+        else:
+            code = 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.full(phi_values.shape, code, dtype=float),
+                detector_row=np.arange(phi_values.size, dtype=float),
+                qz=np.zeros(phi_values.shape, dtype=float),
+                valid_mask=np.ones(phi_values.shape, dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        return (
+            np.full(phi_values.shape, float(code), dtype=float),
+            phi_values.copy(),
+        )
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": qr0},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=phi_values,
+        delta_qr=0.05,
+        qz_min=-1.0,
+        qz_max=1.0,
+        phi_windows=((-85.0, -72.5), (72.5, 85.0)),
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    assert seen_phi_samples
+    assert min(seen_phi_samples) >= qr_cylinder_overlay._SELECTED_QR_ROD_MASK_MIN_PHI_SAMPLES
+    mask = result["mask"]
+    selected_rows = phi_values[np.any(mask, axis=1)]
+    assert selected_rows.tolist() == [-84.0, -78.0, -73.0, 73.0, 78.0, 84.0]
+    assert not np.any(mask[3])
+
+
+def test_build_selected_qr_rod_qz_caked_mask_fills_short_high_phi_fragments(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    qr0 = 0.25
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        qr_value = float(qr_value)
+        if qr_value < qr0:
+            code = 1.0
+        elif qr_value > qr0:
+            code = 3.0
+        else:
+            code = 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.asarray([code, code, code], dtype=float),
+                detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                qz=np.asarray([2.0, 0.0, 2.0], dtype=float),
+                valid_mask=np.asarray([True, True, True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        return (
+            np.full(3, float(code), dtype=float),
+            np.asarray([0.0, 80.0, 0.0], dtype=float),
+        )
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": qr0},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 1.5, 2.0, 2.5, 3.0], dtype=float),
+        azimuth_axis=np.asarray([0.0, 80.0], dtype=float),
+        delta_qr=0.05,
+        qz_min=-1.0,
+        qz_max=1.0,
+        phi_windows=((72.5, 85.0),),
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    mask = result["mask"]
+    assert not np.any(mask[0])
+    assert np.all(mask[1])
+
+
+def test_build_selected_qr_rod_qz_caked_mask_fills_when_boundary_phi_is_nonfinite(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    qr0 = 0.25
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        qr_value = float(qr_value)
+        if qr_value < qr0:
+            code = 1.0
+        elif qr_value > qr0:
+            code = 3.0
+        else:
+            code = 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.asarray([code], dtype=float),
+                detector_row=np.asarray([0.0], dtype=float),
+                qz=np.asarray([0.0], dtype=float),
+                valid_mask=np.asarray([True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        return (
+            np.asarray([float(code)], dtype=float),
+            np.asarray([80.0 if code == 2 else np.nan], dtype=float),
+        )
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": qr0},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=np.asarray([0.0, 80.0], dtype=float),
+        delta_qr=0.05,
+        qz_min=-1.0,
+        qz_max=1.0,
+        phi_windows=((72.5, 85.0),),
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    mask = result["mask"]
+    assert not np.any(mask[0])
+    assert np.all(mask[1])
+
+
+def test_build_selected_qr_rod_qz_caked_mask_interpolates_boundary_tth_gaps(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    qr0 = 0.25
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        qr_value = float(qr_value)
+        if qr_value < qr0:
+            code = 1.0
+        elif qr_value > qr0:
+            code = 3.0
+        else:
+            code = 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.full(3, code, dtype=float),
+                detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                qz=np.zeros(3, dtype=float),
+                valid_mask=np.asarray([True, True, True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        if code == 2:
+            return (
+                np.asarray([2.0, 2.0, 2.0], dtype=float),
+                np.asarray([78.0, 80.0, 82.0], dtype=float),
+            )
+        return (
+            np.asarray([float(code), np.nan, float(code)], dtype=float),
+            np.asarray([78.0, np.nan, 82.0], dtype=float),
+        )
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": qr0},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=np.asarray([78.0, 80.0, 82.0], dtype=float),
+        delta_qr=0.05,
+        qz_min=-1.0,
+        qz_max=1.0,
+        phi_windows=((72.5, 85.0),),
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    assert np.all(result["mask"][1])
+
+
+def test_build_selected_qr_rod_qz_caked_mask_interpolates_center_high_phi_gap(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    qr0 = 0.25
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        qr_value = float(qr_value)
+        if qr_value < qr0:
+            code = 1.0
+        elif qr_value > qr0:
+            code = 3.0
+        else:
+            code = 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.full(3, code, dtype=float),
+                detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                qz=np.zeros(3, dtype=float),
+                valid_mask=np.asarray([True, True, True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        if code == 2:
+            return (
+                np.asarray([2.0, np.nan, 2.0], dtype=float),
+                np.asarray([-70.0, np.nan, -88.0], dtype=float),
+            )
+        return (
+            np.asarray([float(code), np.nan, float(code)], dtype=float),
+            np.asarray([-70.0, np.nan, -88.0], dtype=float),
+        )
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": qr0},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=np.asarray([-88.0, -79.0, -70.0], dtype=float),
+        delta_qr=0.05,
+        qz_min=-1.0,
+        qz_max=1.0,
+        phi_windows=((-85.0, -72.5),),
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    mask = result["mask"]
+    assert not np.any(mask[0])
+    assert np.all(mask[1])
+    assert not np.any(mask[2])
+
+
+def test_build_selected_qr_rod_qz_caked_mask_does_not_fill_across_phi_seam(
+    monkeypatch,
+) -> None:
+    config = _overlay_config(render_in_caked_space=True)
+    projection_context = _caked_projection_context()
+    qr0 = 0.25
+
+    def _project_traces(*, qr_value, geometry, wavelength, n2, phi_samples):
+        qr_value = float(qr_value)
+        if qr_value < qr0:
+            code = 1.0
+        elif qr_value > qr0:
+            code = 3.0
+        else:
+            code = 2.0
+        return [
+            SimpleNamespace(
+                branch_sign=1,
+                detector_col=np.asarray([code, code + 0.1, code + 0.2], dtype=float),
+                detector_row=np.asarray([0.0, 1.0, 2.0], dtype=float),
+                qz=np.asarray([0.0, 0.0, 0.0], dtype=float),
+                valid_mask=np.asarray([True, True, True], dtype=bool),
+            )
+        ]
+
+    def _interpolate_trace_to_caked_coords(
+        *,
+        detector_cols,
+        detector_rows,
+        valid_mask,
+        projection_context,
+        two_theta_limits,
+    ):
+        code = int(np.floor(np.asarray(detector_cols, dtype=float)[0]))
+        two_theta = {1: 1.0, 2: 2.0, 3: 3.0}[code]
+        return (
+            np.asarray([two_theta, two_theta, two_theta], dtype=float),
+            np.asarray([178.0, 179.0, -179.0], dtype=float),
+        )
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "interpolate_trace_to_caked_coords",
+        _interpolate_trace_to_caked_coords,
+    )
+
+    result = qr_cylinder_overlay.build_selected_qr_rod_qz_caked_mask(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": qr0},
+        config=config,
+        projection_context=projection_context,
+        radial_axis=np.asarray([1.0, 2.0, 3.0], dtype=float),
+        azimuth_axis=np.asarray([-179.0, 0.0, 179.0], dtype=float),
+        delta_qr=0.05,
+        qz_min=-1.0,
+        qz_max=1.0,
+        phi_min=-180.0,
+        phi_max=180.0,
+        project_traces=_project_traces,
+    )
+
+    assert result is not None
+    mask = result["mask"]
+    assert mask[0].any()
+    assert mask[2].any()
+    assert not np.any(mask[1])
 
 
 def test_build_selected_qr_rod_qz_caked_mask_uses_projected_qz_window(

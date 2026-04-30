@@ -52,6 +52,7 @@ RAW_SOURCE_PEAK_READ_ALLOWLIST = {
     GUI_SOURCE_ROOT / "_runtime" / "runtime_session.py",
     GUI_SOURCE_ROOT / "analysis_peak_tools.py",
     GUI_SOURCE_ROOT / "geometry_fit.py",
+    GUI_SOURCE_ROOT / "geometry_q_group_manager.py",
     GUI_SOURCE_ROOT / "manual_geometry.py",
 }
 TRUST_FIELD_ASSIGNMENT_ALLOWLIST = {
@@ -943,6 +944,24 @@ def test_runtime_session_uses_lazy_structure_model_and_cif_reader_helpers() -> N
     block_05 = source[block_05_start:block_05_end]
     assert "cf2, blk2 = _read_cif_block(cif_file2)" in block_05
     assert "CifFile.ReadCif" not in block_05
+
+
+def test_primary_cif_import_forces_full_runtime_invalidation() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index("def _apply_primary_cif_path(raw_path):")
+    block_end = source.index("def _apply_secondary_cif_path(raw_path):", block_start)
+    block = source[block_start:block_end]
+
+    rebuild_index = block.index("_rebuild_diffraction_inputs(")
+    full_invalidation_index = block.index("_invalidate_for_update_action(")
+    schedule_index = block.index("_invalidate_and_schedule_update()")
+
+    assert "trigger_update=False" in block
+    assert "UpdateAction.FULL_SIMULATION" in block
+    assert "physics_signature_changed=True" in block
+    assert "hit_table_signature_changed=True" in block
+    assert "q_group_content_signature_changed=True" in block
+    assert rebuild_index < full_invalidation_index < schedule_index
 
 
 def test_runtime_impl_prompts_from_root_only_before_full_runtime_bootstrap() -> None:
@@ -3673,7 +3692,7 @@ def test_runtime_impl_keeps_manual_pick_cache_restores_cache_only() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert (
-        'allow_source_snapshot_rebuild = bool(lookup_context == "geometry_fit_dataset")' in source
+        'lookup_context == "geometry_fit_dataset" or allow_manual_pick_rebuild' in source
     )
     assert "if allow_source_snapshot_rebuild:" in source
 
@@ -3787,6 +3806,64 @@ def test_runtime_impl_threads_primary_raster_source_signature_into_projection() 
     assert "source, extent, origin, source_signature" in source
     assert "_primary_raster_source_payload(artist)" in source
     assert "source_signature=source_signature," in source
+
+
+def test_runtime_session_toggle_simulation_overlay_updates_artist(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Artist:
+        def __init__(self) -> None:
+            self.visible = True
+
+        def set_visible(self, value: object) -> None:
+            self.visible = bool(value)
+
+    progress_messages: list[str] = []
+    redraw_calls: list[dict[str, object]] = []
+    artist = _Artist()
+    runtime_state = SimpleNamespace(
+        simulation_overlay_visible=True,
+        unscaled_image=np.ones((2, 2), dtype=float),
+        stored_sim_image=None,
+    )
+
+    monkeypatch.setattr(runtime_session, "image_display", artist, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label",
+        SimpleNamespace(config=lambda **kwargs: progress_messages.append(kwargs["text"])),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **kwargs: redraw_calls.append(dict(kwargs)),
+        raising=False,
+    )
+
+    assert runtime_session.toggle_simulation_overlay_visibility() is False
+    assert runtime_state.simulation_overlay_visible is False
+    assert artist.visible is False
+    assert runtime_session._timing_display_has_simulation_image() is False
+
+    assert runtime_session.toggle_simulation_overlay_visibility() is True
+    assert runtime_state.simulation_overlay_visible is True
+    assert artist.visible is True
+    assert runtime_session._timing_display_has_simulation_image() is True
+    assert progress_messages == [
+        "Simulation overlay hidden.",
+        "Simulation overlay shown.",
+    ]
+    assert redraw_calls == [
+        {"force_matplotlib": False},
+        {"force_matplotlib": False},
+    ]
 
 
 def test_runtime_impl_preserves_no_redraw_preview_cancel_contract_for_overlay_restore() -> None:
@@ -5803,7 +5880,7 @@ def test_manual_rebuild_source_snapshot_is_row_content_aware_and_reusable(
     monkeypatch.setattr(
         runtime_session,
         "_geometry_fit_targeted_projection_view_signature",
-        lambda _idx: {"mode": "detector", "detector_shape": [64, 64]},
+        lambda _idx, **_kwargs: {"mode": "detector", "detector_shape": [64, 64]},
         raising=False,
     )
     monkeypatch.setattr(
@@ -16578,6 +16655,7 @@ def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_t
             [_geometry_fit_worker_live_row()],
             [],
             [],
+            [],
         ),
         raising=False,
     )
@@ -16600,7 +16678,7 @@ def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_t
         if str(event.get("kind")) == "source_cache_logged_intersection_cache_miss"
     )
 
-    assert dataset_calls == [0]
+    assert dataset_calls == []
     assert miss_payload["status"] == "params_mismatch"
     assert miss_payload["expected_signature_digest"]
     assert miss_payload["actual_signature_digest"] == "logged-digest"
@@ -17598,6 +17676,7 @@ def test_noncurrent_caked_sync_rebuild_injects_generated_projection_payload(
             [dict(_geometry_fit_worker_live_row(), background_index=1)],
             [],
             [],
+            [],
         ),
         raising=False,
     )
@@ -17991,6 +18070,7 @@ def test_second_unchanged_preflight_reuses_targeted_projected_cache(monkeypatch)
             [_geometry_fit_worker_live_row()],
             [],
             [],
+            [],
         ),
         raising=False,
     )
@@ -18137,6 +18217,7 @@ def test_targeted_projected_cache_miss_reprojects_when_view_changes(monkeypatch)
             [_geometry_fit_worker_live_row()],
             [],
             [],
+            [],
         ),
         raising=False,
     )
@@ -18222,6 +18303,7 @@ def test_targeted_projected_cache_miss_reprojects_when_view_changes(monkeypatch)
             second_build_calls.append(1)
             or (
                 [_geometry_fit_worker_live_row()],
+                [],
                 [],
                 [],
             )
@@ -18321,6 +18403,7 @@ def test_same_mode_changed_projection_signature_forces_cache_miss(
             [_geometry_fit_worker_live_row()],
             [],
             [],
+            [],
         ),
         raising=False,
     )
@@ -18377,6 +18460,7 @@ def test_same_mode_changed_projection_signature_forces_cache_miss(
         "_geometry_manual_build_source_rows_from_hit_tables",
         lambda *_args, **_kwargs: (
             second_build_calls.append(1) or [_geometry_fit_worker_live_row()],
+            [],
             [],
             [],
         ),
@@ -19418,6 +19502,7 @@ def test_runtime_impl_reset_to_defaults_resets_selected_qr_rod_controls() -> Non
     block = source[block_start:block_end]
 
     assert "integrate_selected_qr_rod_var.set(False)" in block
+    assert "mirror_selected_qr_phi_var.set(False)" in block
     assert 'selected_qr_rod_key_var.set("")' in block
     assert "qz_extent = _current_caked_qz_extent()" in block
     assert "delta_qr_var.set(0.25)" in block
@@ -19483,6 +19568,7 @@ def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
             phi_min_value=-12.0,
             phi_max_value=18.0,
             integrate_selected_qr_rod_value=True,
+            mirror_selected_qr_phi_value=False,
             selected_qr_rod_key_value="phase-a|1",
             qz_min_value=-0.5,
             qz_max_value=1.5,
@@ -19496,6 +19582,7 @@ def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
         "phi_min_var",
         "phi_max_var",
         "integrate_selected_qr_rod_var",
+        "mirror_selected_qr_phi_var",
         "selected_qr_rod_key_var",
         "qz_min_var",
         "qz_max_var",
@@ -19518,6 +19605,7 @@ def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
         "phi_min": -12.0,
         "phi_max": 18.0,
         "integrate_selected_qr_rod": True,
+        "mirror_selected_qr_phi": False,
         "selected_qr_rod_key": "phase-a|1",
         "qz_min": -0.5,
         "qz_max": 1.5,
@@ -19538,7 +19626,10 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
         runtime_session,
         "integration_range_controls_view_state",
         SimpleNamespace(
+            phi_min_value=72.5,
+            phi_max_value=85.0,
             integrate_selected_qr_rod_value=True,
+            mirror_selected_qr_phi_value=True,
             selected_qr_rod_key_value=encoded_key,
             qz_min_value=-1.0,
             qz_max_value=1.0,
@@ -19621,6 +19712,7 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
             round(float(kwargs["qz_max"]), 10),
             round(float(kwargs["phi_min"]), 10),
             round(float(kwargs["phi_max"]), 10),
+            kwargs["phi_windows"],
             round(float(kwargs["config"].gamma_deg), 10),
         )
 
@@ -19641,7 +19733,10 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
         ),
     )
     for name in (
+        "phi_min_var",
+        "phi_max_var",
         "integrate_selected_qr_rod_var",
+        "mirror_selected_qr_phi_var",
         "selected_qr_rod_key_var",
         "qz_min_var",
         "qz_max_var",
@@ -19658,6 +19753,7 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
     assert len(signature_calls) >= 3
     assert cached is result
     assert result["selected_qr_rod_key"] == encoded_key
+    assert mask_calls[0]["phi_windows"] == ((-85.0, -72.5), (72.5, 85.0))
     np.testing.assert_array_equal(
         result["mask"],
         np.asarray([[True, True], [True, False]], dtype=bool),
@@ -19738,6 +19834,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_disables_non_caked_
             self.configure(**kwargs)
 
     integrate_widget = _Widget()
+    mirror_widget = _Widget()
     combobox = _Widget()
     qz_min_slider = _Widget()
     qz_min_entry = _Widget()
@@ -19761,6 +19858,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_disables_non_caked_
             integrate_selected_qr_rod_var=integrate_var,
             integrate_selected_qr_rod_value=True,
             integrate_selected_qr_rod_checkbutton=integrate_widget,
+            mirror_selected_qr_phi_checkbutton=mirror_widget,
             selected_qr_rod_combobox=combobox,
             selected_qr_rod_display_var=_Var(""),
             selected_qr_rod_key_var=_Var(""),
@@ -19800,6 +19898,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_disables_non_caked_
     monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: False)
     runtime_session._sync_selected_qr_rod_controls_state()
     assert integrate_widget.state_value == "disabled"
+    assert mirror_widget.state_value == "disabled"
     assert combobox.state_value == "disabled"
     assert qz_min_slider.state_value == "disabled"
     assert delta_entry.state_value == "disabled"
@@ -19810,6 +19909,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_disables_non_caked_
     monkeypatch.setattr(runtime_session, "_active_caked_primary_view", lambda: True)
     runtime_session._sync_selected_qr_rod_controls_state()
     assert integrate_widget.state_value == "normal"
+    assert mirror_widget.state_value == "disabled"
     assert combobox.state_value == "disabled"
     assert qz_min_slider.state_value == "disabled"
     assert delta_entry.state_value == "disabled"
@@ -19818,12 +19918,15 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_disables_non_caked_
         runtime_session.integration_range_controls_view_state.selected_qr_rod_key_var.get()
         == encoded_key
     )
-    assert qz_min_slider.bounds == {"from": -0.5, "to": 1.5}
-    assert qz_max_slider.bounds == {"from": -0.5, "to": 1.5}
+    assert qz_min_slider.bounds == {"from": 0.0, "to": 1.5}
+    assert qz_max_slider.bounds == {"from": 0.0, "to": 1.5}
+    assert runtime_session.integration_range_controls_view_state.qz_min_var.get() == 0.0
+    assert runtime_session.integration_range_controls_view_state.qz_max_var.get() == 1.5
 
     integrate_var.set(True)
     runtime_session._sync_selected_qr_rod_controls_state()
     assert combobox.state_value == "normal"
+    assert mirror_widget.state_value == "normal"
     assert qz_min_slider.state_value == "normal"
     assert delta_entry.state_value == "normal"
     assert tth_min_slider.state_value == "disabled"

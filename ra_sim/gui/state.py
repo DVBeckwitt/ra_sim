@@ -470,6 +470,16 @@ class GeometryToolActionsViewState:
     redo_geometry_fit_button: Any = None
     geometry_manual_pick_button_var: Any = None
     geometry_manual_pick_button: Any = None
+    geometry_manual_click_remove_var: Any = None
+    geometry_manual_click_remove_checkbutton: Any = None
+    geometry_manual_add_all_button: Any = None
+    geometry_manual_remove_qr_set_button: Any = None
+    geometry_manual_auto_search_radius_var: Any = None
+    geometry_manual_auto_search_radius_label: Any = None
+    geometry_manual_auto_search_radius_value_label: Any = None
+    geometry_manual_auto_search_radius_slider: Any = None
+    geometry_manual_drag_move_var: Any = None
+    geometry_manual_drag_move_checkbutton: Any = None
     geometry_manual_refine_button: Any = None
     geometry_manual_undo_button: Any = None
     geometry_manual_export_button: Any = None
@@ -622,6 +632,9 @@ class IntegrationRangeControlsViewState:
     integrate_selected_qr_rod_value: bool = False
     integrate_selected_qr_rod_var: Any = None
     integrate_selected_qr_rod_checkbutton: Any = None
+    mirror_selected_qr_phi_value: bool = False
+    mirror_selected_qr_phi_var: Any = None
+    mirror_selected_qr_phi_checkbutton: Any = None
     selected_qr_rod_container: Any = None
     selected_qr_rod_key_value: str = ""
     selected_qr_rod_key_var: Any = None
@@ -631,7 +644,7 @@ class IntegrationRangeControlsViewState:
     selected_qr_rod_options: list[str] = field(default_factory=list)
     selected_qr_rod_option_labels: dict[str, str] = field(default_factory=dict)
     selected_qr_rod_key_by_label: dict[str, str] = field(default_factory=dict)
-    qz_min_value: float = -1.0
+    qz_min_value: float = 0.0
     qz_min_container: Any = None
     qz_min_var: Any = None
     qz_min_label_var: Any = None
@@ -639,7 +652,7 @@ class IntegrationRangeControlsViewState:
     qz_min_slider: Any = None
     qz_min_entry_var: Any = None
     qz_min_entry: Any = None
-    qz_max_value: float = 1.0
+    qz_max_value: float = 5.0
     qz_max_container: Any = None
     qz_max_var: Any = None
     qz_max_label_var: Any = None
@@ -904,6 +917,8 @@ class BackgroundRuntimeState:
     background_subtraction_result: dict[str, object] | None = None
     background_subtraction_signature: object = None
     background_subtraction_cache: dict[object, object] = field(default_factory=dict)
+    background_subtraction_fit_display_signature: object = None
+    background_subtraction_fit_display: np.ndarray | None = None
     background_subtraction_preview_after_id: Any = None
 
 
@@ -946,6 +961,9 @@ class GeometryRuntimeState:
     """Long-lived geometry interaction and overlay-artist runtime state."""
 
     manual_pick_armed: bool = False
+    manual_click_remove_enabled: bool = False
+    manual_drag_move_enabled: bool = False
+    manual_auto_refine_search_radius_px: float = 24.0
     manual_pick_cache_signature: object = None
     manual_pick_cache_data: dict[str, object] = field(default_factory=dict)
     pick_artists: list[Any] = field(default_factory=list)
@@ -971,6 +989,7 @@ class SimulationRuntimeState:
     """Long-lived simulation/update caches that used to live in runtime globals."""
 
     num_samples: int = 1
+    simulation_overlay_visible: bool = True
     simulation_epoch: int = 0
     caked_limits_user_override: bool = False
     profile_cache: dict[object, object] = field(default_factory=dict)

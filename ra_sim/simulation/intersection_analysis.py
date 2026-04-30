@@ -946,6 +946,120 @@ def project_qr_cylinder_to_detector(
     return traces
 
 
+def detector_points_to_sample_qr_qz(
+    *,
+    detector_col: object,
+    detector_row: object,
+    geometry: IntersectionGeometry,
+    wavelength: float,
+    n2: complex,
+    beam_x: float = 0.0,
+    beam_y: float = 0.0,
+    dtheta: float = 0.0,
+    dphi: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(qr_abs, qz, valid_mask)`` for native detector coordinates.
+
+    This is the inverse of the single-beam detector projection used by
+    :func:`project_qr_cylinder_to_detector`, including the same sample frame and
+    refraction convention.
+    """
+
+    try:
+        col_values, row_values = np.broadcast_arrays(
+            np.asarray(detector_col, dtype=np.float64),
+            np.asarray(detector_row, dtype=np.float64),
+        )
+    except Exception:
+        col_values = np.asarray(detector_col, dtype=np.float64)
+        qr_empty = np.full(col_values.shape, np.nan, dtype=np.float64)
+        return qr_empty, qr_empty.copy(), np.zeros(col_values.shape, dtype=bool)
+
+    qr_abs = np.full(col_values.shape, np.nan, dtype=np.float64)
+    qz = np.full(col_values.shape, np.nan, dtype=np.float64)
+    valid = np.zeros(col_values.shape, dtype=bool)
+    if col_values.size <= 0:
+        return qr_abs, qz, valid
+
+    try:
+        beam_ctx = _build_single_beam_context(
+            geometry=geometry,
+            beam_x=float(beam_x),
+            beam_y=float(beam_y),
+            dtheta=float(dtheta),
+            dphi=float(dphi),
+            wavelength=float(wavelength),
+            n2=n2,
+        )
+    except Exception:
+        return qr_abs, qz, valid
+
+    pixel_size = float(geometry.pixel_size_m)
+    n2_real = float(np.real(n2))
+    if (
+        not np.isfinite(pixel_size)
+        or pixel_size <= 0.0
+        or not np.isfinite(n2_real)
+        or abs(n2_real) <= 1.0e-14
+    ):
+        return qr_abs, qz, valid
+
+    flat_cols = np.asarray(col_values, dtype=np.float64).reshape(-1)
+    flat_rows = np.asarray(row_values, dtype=np.float64).reshape(-1)
+    finite_input = np.isfinite(flat_cols) & np.isfinite(flat_rows)
+    if not np.any(finite_input):
+        return qr_abs, qz, valid
+
+    x_det = (flat_cols[finite_input] - float(geometry.center_col)) * pixel_size
+    y_det = (float(geometry.center_row) - flat_rows[finite_input]) * pixel_size
+    detector_points = (
+        np.asarray(beam_ctx.detector_pos, dtype=np.float64)[None, :]
+        + x_det[:, None] * np.asarray(beam_ctx.e1_det, dtype=np.float64)[None, :]
+        + y_det[:, None] * np.asarray(beam_ctx.e2_det, dtype=np.float64)[None, :]
+    )
+    outgoing = detector_points - np.asarray(beam_ctx.i_plane, dtype=np.float64)[None, :]
+    outgoing_norm = np.linalg.norm(outgoing, axis=1)
+    good_ray = np.isfinite(outgoing_norm) & (outgoing_norm > 1.0e-14)
+    if not np.any(good_ray):
+        return qr_abs, qz, valid
+
+    finite_indices = np.flatnonzero(finite_input)
+    good_indices = finite_indices[good_ray]
+    u_f_lab = outgoing[good_ray] / outgoing_norm[good_ray, None]
+    kf_sample = (
+        u_f_lab @ np.asarray(beam_ctx.r_sample, dtype=np.float64)
+    ) * float(beam_ctx.k_scat)
+
+    kf_x = np.asarray(kf_sample[:, 0], dtype=np.float64)
+    kf_y = np.asarray(kf_sample[:, 1], dtype=np.float64)
+    kf_z = np.asarray(kf_sample[:, 2], dtype=np.float64)
+    theta_t = np.arctan2(kf_z, np.hypot(kf_x, kf_y))
+    phi_f = np.arctan2(kf_x, kf_y)
+
+    theta_prime = np.sign(theta_t) * np.arccos(
+        np.clip(np.cos(np.abs(theta_t)) / n2_real, -1.0, 1.0)
+    )
+    k_tx_prime = float(beam_ctx.k_scat) * np.cos(theta_prime) * np.sin(phi_f)
+    k_ty_prime = float(beam_ctx.k_scat) * np.cos(theta_prime) * np.cos(phi_f)
+    k_tz_prime = float(beam_ctx.k_scat) * np.sin(theta_prime)
+
+    qx = k_tx_prime - float(beam_ctx.k_x_scat)
+    qy = k_ty_prime - float(beam_ctx.k_y_scat)
+    qz_values = k_tz_prime - float(beam_ctx.re_k_z)
+    qr_values = np.hypot(qx, qy)
+    good_q = np.isfinite(qr_values) & np.isfinite(qz_values)
+    if not np.any(good_q):
+        return qr_abs, qz, valid
+
+    qr_flat = qr_abs.reshape(-1)
+    qz_flat = qz.reshape(-1)
+    valid_flat = valid.reshape(-1)
+    qr_flat[good_indices[good_q]] = qr_values[good_q]
+    qz_flat[good_indices[good_q]] = qz_values[good_q]
+    valid_flat[good_indices[good_q]] = True
+    return qr_abs, qz, valid
+
+
 def analyze_reflection_intersection(
     *,
     h: int,

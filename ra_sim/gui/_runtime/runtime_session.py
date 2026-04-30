@@ -155,6 +155,7 @@ from ra_sim.simulation.intersection_cache_schema import (
     coerce_float64_table,
     empty_caked_cache_table,
     extract_cached_caked_angles,
+    extract_hit_row_provenance,
     is_intersection_cache_table,
 )
 from ra_sim.simulation.diffraction_debug import (
@@ -757,7 +758,41 @@ def _timing_display_fingerprint() -> dict[str, object]:
     return _timing_array_fingerprint(source)
 
 
+def _simulation_overlay_visible() -> bool:
+    return bool(getattr(simulation_runtime_state, "simulation_overlay_visible", True))
+
+
+def _sync_simulation_overlay_artist_visibility() -> bool:
+    visible = _simulation_overlay_visible()
+    artist = globals().get("image_display")
+    set_visible = getattr(artist, "set_visible", None)
+    if callable(set_visible):
+        try:
+            set_visible(bool(visible))
+        except Exception:
+            pass
+    return bool(visible)
+
+
+def toggle_simulation_overlay_visibility() -> bool:
+    """Toggle display of the simulation raster overlay without changing fit inputs."""
+
+    simulation_runtime_state.simulation_overlay_visible = not _simulation_overlay_visible()
+    visible = _sync_simulation_overlay_artist_visibility()
+    try:
+        progress_label.config(text=f"Simulation overlay {'shown' if visible else 'hidden'}.")
+    except Exception:
+        pass
+    try:
+        _request_main_canvas_redraw(force_matplotlib=False)
+    except Exception:
+        pass
+    return bool(visible)
+
+
 def _timing_display_has_simulation_image() -> bool:
+    if not _simulation_overlay_visible():
+        return False
     for source in (
         getattr(simulation_runtime_state, "unscaled_image", None),
         getattr(simulation_runtime_state, "stored_sim_image", None),
@@ -2957,6 +2992,8 @@ def _background_subtraction_signature() -> tuple[object, ...]:
 def _invalidate_background_subtraction_cache() -> None:
     background_runtime_state.background_subtraction_result = None
     background_runtime_state.background_subtraction_signature = None
+    background_runtime_state.background_subtraction_fit_display_signature = None
+    background_runtime_state.background_subtraction_fit_display = None
     background_runtime_state.background_subtraction_cache.clear()
     simulation_runtime_state.last_res2_background = None
     simulation_runtime_state.normalization_scale_cache["sig"] = None
@@ -3174,6 +3211,61 @@ def _background_subtraction_backend_array_to_display(array: object) -> np.ndarra
     if bool(background_runtime_state.backend_flip_y):
         native_like = np.flip(native_like, axis=0)
     return np.rot90(native_like, int(DISPLAY_ROTATE_K))
+
+
+def _current_background_display_for_matching() -> np.ndarray | None:
+    """Return raw or corrected detector-display background for peak matching."""
+
+    raw_display = _get_current_background_display()
+    config = _current_background_subtraction_config()
+    if raw_display is None or not (config.enabled and config.apply_to_fit):
+        return raw_display
+    raw_backend = _get_current_background_backend()
+    if raw_backend is None:
+        return raw_display
+    result = _fit_current_background_subtraction_model(force=False)
+    if not isinstance(result, Mapping):
+        return raw_display
+    corrected = result.get("corrected")
+    try:
+        corrected_array = np.asarray(corrected, dtype=np.float64)
+    except Exception:
+        corrected_array = None
+    if not (
+        isinstance(corrected_array, np.ndarray)
+        and corrected_array.shape == np.asarray(raw_backend).shape
+    ):
+        return raw_display
+    display_signature = (
+        "background_subtraction_fit_display",
+        background_runtime_state.background_subtraction_signature,
+        id(corrected),
+        tuple(int(v) for v in np.asarray(raw_display).shape),
+        str(np.asarray(raw_display).dtype),
+        int(DISPLAY_ROTATE_K),
+        int(background_runtime_state.backend_rotation_k) % 4,
+        bool(background_runtime_state.backend_flip_x),
+        bool(background_runtime_state.backend_flip_y),
+    )
+    cached_display = background_runtime_state.background_subtraction_fit_display
+    if (
+        display_signature
+        == background_runtime_state.background_subtraction_fit_display_signature
+        and isinstance(cached_display, np.ndarray)
+        and cached_display.shape == np.asarray(raw_display).shape
+    ):
+        return cached_display
+    display_array = _background_subtraction_backend_array_to_display(corrected_array)
+    if (
+        isinstance(display_array, np.ndarray)
+        and display_array.shape == np.asarray(raw_display).shape
+    ):
+        background_runtime_state.background_subtraction_fit_display_signature = (
+            display_signature
+        )
+        background_runtime_state.background_subtraction_fit_display = display_array
+        return display_array
+    return raw_display
 
 
 def _current_background_display_for_mode() -> np.ndarray | None:
@@ -4248,6 +4340,7 @@ def _initialize_runtime_plot_block_01() -> None:
         zorder=1,
         origin="upper",
     )
+    _sync_simulation_overlay_artist_visibility()
 
     background_display = ax.imshow(
         gui_display_projection.downsample_raster_for_display(
@@ -4740,6 +4833,7 @@ def _initialize_runtime_plot_block_04() -> None:
     geometry_q_group_state = app_state.geometry_q_groups
     geometry_manual_state = app_state.manual_geometry
     geometry_runtime_state.manual_pick_armed = False
+    geometry_runtime_state.manual_drag_move_enabled = False
     geometry_runtime_state.manual_pick_cache_signature = None
     geometry_runtime_state.manual_pick_cache_data = {}
     _set_runtime_canvas(matplotlib_canvas)
@@ -5730,6 +5824,45 @@ def _refine_geometry_manual_pair_entry_from_cache(
     return updated_entry
 
 
+def _refine_geometry_manual_auto_seed_candidate(
+    candidate: dict[str, object] | None,
+    *,
+    use_caked_space: bool,
+    auto_refine_search_radius_px: object | None = None,
+    **_kwargs,
+) -> dict[str, object] | None:
+    """Refine the simulated candidate before using it as an automatic pick seed."""
+
+    if not isinstance(candidate, dict):
+        return None
+    search_radius = _geometry_manual_auto_refine_search_radius_px(
+        auto_refine_search_radius_px
+    )
+    try:
+        refined_candidate = gui_manual_geometry.geometry_manual_refine_qr_sim_peak_for_view(
+            candidate,
+            view_mode="caked" if bool(use_caked_space) else "detector",
+            detector_simulation_image=simulation_runtime_state.unscaled_image,
+            caked_simulation_image=simulation_runtime_state.last_caked_image_unscaled,
+            radial_axis=simulation_runtime_state.last_caked_radial_values,
+            azimuth_axis=simulation_runtime_state.last_caked_azimuth_values,
+            detector_display_to_native_coords=_background_display_to_native_detector_coords,
+            native_detector_coords_to_caked_display_coords=(
+                _native_detector_coords_to_caked_display_coords
+            ),
+            caked_angles_to_detector_display_coords=_caked_angles_to_background_display_coords,
+            refine_caked_peak_center_fn=_geometry_manual_auto_refine_caked_peak_center_fn(
+                search_radius
+            ),
+            search_radius_px=max(1, int(round(float(search_radius)))),
+        )
+    except Exception:
+        refined_candidate = None
+    if isinstance(refined_candidate, Mapping):
+        return dict(refined_candidate)
+    return dict(candidate)
+
+
 def _refine_current_geometry_manual_pairs() -> None:
     """Refine current saved manual-pair simulation points onto local simulation maxima."""
 
@@ -5959,6 +6092,189 @@ def _refine_current_geometry_manual_pairs() -> None:
         text=(
             f"Refined {refined_count} Qr/Qz simulation points on background {background_index + 1} "
             f"({moved_count} moved, {skipped_count} skipped)."
+        )
+    )
+
+
+def _add_all_current_geometry_q_group_peaks() -> None:
+    """Auto-place all enabled Qr/Qz set peaks for the current background."""
+
+    background_index = int(background_runtime_state.current_background_index)
+    display_background = _current_geometry_manual_pick_background_image()
+    auto_search_radius = _geometry_manual_auto_refine_search_radius_px()
+    if gui_manual_geometry.geometry_manual_pick_session_active(
+        geometry_manual_state.pick_session,
+        current_background_index=background_index,
+    ):
+        progress_label_geometry.config(
+            text="Finish the active Qr/Qz placement before auto-adding Qr set peaks."
+        )
+        return
+
+    try:
+        listed_entries = [
+            dict(entry)
+            for entry in (_listed_geometry_q_group_entries() or ())
+            if isinstance(entry, Mapping)
+        ]
+    except Exception:
+        listed_entries = []
+    selected_entries = None
+    if listed_entries:
+        selected_entries = gui_controllers.filter_enabled_q_group_rows(
+            listed_entries,
+            geometry_q_group_state,
+        )
+        if not selected_entries:
+            progress_label_geometry.config(
+                text="No enabled Qr/Qz groups are selected for automatic placement."
+            )
+            return
+
+    def _get_auto_place_cache(**kwargs: object) -> dict[str, object]:
+        cache_data = _get_geometry_manual_pick_cache(
+            param_set=dict(_current_geometry_fit_params()),
+            prefer_cache=True,
+            **kwargs,
+        )
+        adjusted_cache = gui_manual_geometry.geometry_manual_cache_with_auto_refine_search_radius(
+            cache_data,
+            search_radius_px=auto_search_radius,
+        )
+        background_for_context = kwargs.get("background_image", display_background)
+        match_cfg = (
+            dict(adjusted_cache.get("match_config", {}))
+            if isinstance(adjusted_cache.get("match_config"), Mapping)
+            else {}
+        )
+        if background_for_context is not None and match_cfg:
+            try:
+                resolved_cfg, background_context = _auto_match_background_context(
+                    background_for_context,
+                    match_cfg,
+                )
+            except Exception:
+                resolved_cfg = dict(match_cfg)
+                background_context = adjusted_cache.get("background_context")
+            adjusted_cache["match_config"] = dict(resolved_cfg)
+            adjusted_cache["background_context"] = background_context
+        return adjusted_cache
+
+    result = gui_manual_geometry.geometry_manual_auto_add_q_group_peaks(
+        current_background_index=background_index,
+        display_background=display_background,
+        get_cache_data=_get_auto_place_cache,
+        pairs_for_index=_geometry_manual_pairs_for_index,
+        set_pairs_for_index_fn=_set_geometry_manual_pairs_for_index,
+        set_pick_session_fn=_set_geometry_manual_pick_session,
+        clear_preview_artists_fn=_clear_geometry_manual_preview_artists,
+        restore_view_fn=_restore_geometry_manual_pick_view,
+        render_current_pairs_fn=_render_current_geometry_manual_pairs,
+        update_button_label_fn=_update_geometry_manual_pick_button_label,
+        refine_preview_point=_geometry_manual_refine_preview_point,
+        selected_q_group_entries=selected_entries,
+        format_q_group_line=_format_geometry_q_group_line,
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
+        push_undo_state_fn=_push_geometry_manual_undo_state,
+        use_caked_space=_geometry_manual_pick_uses_caked_space(),
+        caked_angles_to_background_display_coords=_caked_angles_to_background_display_coords,
+        background_display_to_native_detector_coords=(
+            _background_display_to_native_detector_coords
+        ),
+        native_detector_coords_to_caked_display_coords=(
+            _native_detector_coords_to_caked_display_coords
+        ),
+        radial_axis=np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float),
+        azimuth_axis=np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float),
+        caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+        caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+        nearest_candidate_to_point_fn=_geometry_manual_nearest_candidate_to_point,
+        position_error_px=_geometry_manual_position_error_px,
+        position_sigma_px=_geometry_manual_position_sigma_px,
+        refine_saved_pair_entry_fn=(
+            lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
+                entry,
+                source_entry=candidate,
+            )
+        ),
+        refine_sim_candidate_fn=_refine_geometry_manual_auto_seed_candidate,
+        auto_refine_search_radius_px=auto_search_radius,
+        profile_cache=simulation_runtime_state.profile_cache,
+    )
+    if int(result.get("placed_count", 0) or 0) > 0:
+        _clear_geometry_fit_dataset_cache()
+        _refresh_background_status()
+
+
+def _remove_current_geometry_q_group_peaks() -> None:
+    """Remove saved manual placements for the enabled Qr/Qz set rows."""
+
+    background_index = int(background_runtime_state.current_background_index)
+    if gui_manual_geometry.geometry_manual_pick_session_active(
+        geometry_manual_state.pick_session,
+        current_background_index=background_index,
+    ):
+        progress_label_geometry.config(
+            text="Finish the active Qr/Qz placement before removing Qr set peaks."
+        )
+        return
+
+    try:
+        listed_entries = [
+            dict(entry)
+            for entry in (_listed_geometry_q_group_entries() or ())
+            if isinstance(entry, Mapping)
+        ]
+    except Exception:
+        listed_entries = []
+    if not listed_entries:
+        progress_label_geometry.config(
+            text="No listed Qr/Qz groups are available to remove. Update or select Qr sets first."
+        )
+        return
+    selected_entries = gui_controllers.filter_enabled_q_group_rows(
+        listed_entries,
+        geometry_q_group_state,
+    )
+    if not selected_entries:
+        progress_label_geometry.config(
+            text="No enabled Qr/Qz groups are selected for removal."
+        )
+        return
+
+    current_entries = [
+        dict(entry) for entry in _geometry_manual_pairs_for_index(background_index)
+    ]
+    if not current_entries:
+        progress_label_geometry.config(
+            text="No saved Qr/Qz placements exist for the current background image."
+        )
+        return
+
+    kept_entries, removed_count, removed_keys = (
+        gui_manual_geometry.geometry_manual_remove_q_group_peak_entries(
+            current_entries,
+            selected_q_group_entries=selected_entries,
+        )
+    )
+    if removed_count <= 0:
+        progress_label_geometry.config(
+            text="No saved placements matched the enabled Qr/Qz groups for this background."
+        )
+        return
+
+    _push_geometry_manual_undo_state()
+    _set_geometry_manual_pairs_for_index(background_index, kept_entries)
+    _set_geometry_manual_pick_session({})
+    _clear_geometry_fit_dataset_cache()
+    _clear_geometry_manual_preview_artists(redraw=False)
+    _render_current_geometry_manual_pairs(update_status=False)
+    _update_geometry_manual_pick_button_label()
+    _refresh_background_status()
+    progress_label_geometry.config(
+        text=(
+            f"Removed {removed_count} manual Qr/Qz peak placements across "
+            f"{len(removed_keys)} enabled groups on background {background_index + 1}."
         )
     )
 
@@ -6715,6 +7031,9 @@ def _geometry_manual_refine_preview_point(
             ),
             caked_axis_to_image_index_fn=_caked_axis_to_image_index,
             caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+            refine_caked_peak_center_fn=_geometry_manual_caked_peak_center_fn_for_cache(
+                cache_data
+            ),
         )
         if isinstance(resolved_pick, Mapping):
             try:
@@ -6809,7 +7128,9 @@ def _geometry_manual_refine_preview_point(
                         ),
                         caked_axis_to_image_index_fn=_caked_axis_to_image_index,
                         caked_image_index_to_axis_fn=_caked_image_index_to_axis,
-                        refine_caked_peak_center_fn=_refine_caked_peak_center,
+                        refine_caked_peak_center_fn=(
+                            _geometry_manual_caked_peak_center_fn_for_cache(cache_data)
+                        ),
                     )
                 )
                 if isinstance(refined_detector_pick, Mapping):
@@ -6839,7 +7160,7 @@ def _geometry_manual_refine_preview_point(
         peak_maximum_near_in_image_fn=_peak_maximum_near_in_image,
         caked_axis_to_image_index_fn=_caked_axis_to_image_index,
         caked_image_index_to_axis_fn=_caked_image_index_to_axis,
-        refine_caked_peak_center_fn=_refine_caked_peak_center,
+        refine_caked_peak_center_fn=_geometry_manual_caked_peak_center_fn_for_cache(cache_data),
     )
 
 
@@ -6991,7 +7312,9 @@ def _match_geometry_manual_group_to_background(
 ) -> dict[tuple[object, ...], tuple[float, float]]:
     """Return refined measured peak centers for one clicked symmetric Qr/Qz group."""
     background_local = (
-        _get_current_background_display() if background_image is None else background_image
+        _current_background_display_for_matching()
+        if background_image is None
+        else background_image
     )
     return gui_manual_geometry.match_geometry_manual_group_to_background(
         candidate_entries,
@@ -8153,6 +8476,28 @@ def _current_caked_qz_extent() -> tuple[float, float] | None:
     return float(np.min(valid_qz)), float(np.max(valid_qz))
 
 
+def _qz_slider_bounds_from_extent(
+    qz_extent: tuple[float, float] | None,
+) -> tuple[float, float]:
+    qz_lower = 0.0
+    qz_upper = 5.0
+    if qz_extent is not None:
+        try:
+            candidate_max = max(float(qz_extent[0]), float(qz_extent[1]))
+        except Exception:
+            candidate_max = qz_upper
+        if np.isfinite(candidate_max) and candidate_max > qz_lower:
+            qz_upper = float(candidate_max)
+    return qz_lower, qz_upper
+
+
+def _default_qz_values_for_extent(
+    qz_extent: tuple[float, float] | None,
+) -> tuple[float, float]:
+    qz_lower, qz_upper = _qz_slider_bounds_from_extent(qz_extent)
+    return qz_lower, min(5.0, qz_upper)
+
+
 def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     if not _active_caked_primary_view():
         return None
@@ -8172,6 +8517,15 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     if delta_qr <= 0.0:
         return None
     qz_lo, qz_hi = sorted((qz_min, qz_max))
+    if bool(roi_values.get("mirror_selected_qr_phi", False)):
+        phi_windows = gui_qr_cylinder_overlay.mirrored_abs_phi_windows(phi_min, phi_max)
+    else:
+        phi_windows = gui_qr_cylinder_overlay.normalize_caked_phi_windows(
+            phi_min=phi_min,
+            phi_max=phi_max,
+        )
+    if phi_windows is None:
+        return None
 
     entries = _analysis_selected_qr_rod_entries()
     selected_entry = _current_selected_qr_rod_entry(entries)
@@ -8214,6 +8568,7 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
         qz_max=qz_hi,
         phi_min=phi_min,
         phi_max=phi_max,
+        phi_windows=phi_windows,
     )
     encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
     if signature is None:
@@ -8231,6 +8586,7 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
             qz_max=qz_hi,
             phi_min=phi_min,
             phi_max=phi_max,
+            phi_windows=phi_windows,
         )
         if not isinstance(mask_result, Mapping):
             return None
@@ -8457,6 +8813,101 @@ def _refine_caked_peak_center(
     )
 
 
+def _geometry_manual_auto_refine_search_radius_px(value: object | None = None) -> float:
+    """Return the current auto-placement refinement search radius in pixels."""
+
+    if value is None:
+        runtime_state = globals().get("geometry_runtime_state")
+        value = getattr(
+            runtime_state,
+            "manual_auto_refine_search_radius_px",
+            gui_manual_geometry.DEFAULT_AUTO_REFINE_SEARCH_RADIUS_PX,
+        )
+    return gui_manual_geometry.geometry_manual_normalize_auto_refine_search_radius_px(value)
+
+
+def _set_geometry_manual_auto_refine_search_radius_px(value: object) -> None:
+    """Store the Match-tab auto-placement refinement search radius."""
+
+    runtime_state = globals().get("geometry_runtime_state")
+    if runtime_state is not None:
+        runtime_state.manual_auto_refine_search_radius_px = (
+            _geometry_manual_auto_refine_search_radius_px(value)
+        )
+
+
+def _geometry_manual_drag_move_enabled() -> bool:
+    """Return whether placed manual background points can be moved by dragging."""
+
+    runtime_state = globals().get("geometry_runtime_state")
+    return bool(getattr(runtime_state, "manual_drag_move_enabled", False))
+
+
+def _set_geometry_manual_drag_move_enabled(value: object) -> None:
+    """Store the Match-tab drag-move toggle for manual background points."""
+
+    runtime_state = globals().get("geometry_runtime_state")
+    if runtime_state is not None:
+        runtime_state.manual_drag_move_enabled = bool(value)
+    message = (
+        "Drag-move placed background peaks enabled."
+        if bool(value)
+        else "Drag-move placed background peaks disabled."
+    )
+    try:
+        progress_label_geometry.config(text=message)
+    except Exception:
+        pass
+
+
+def _geometry_manual_auto_refine_caked_peak_center_fn(
+    search_radius_px: object,
+) -> Callable[..., tuple[float, float]]:
+    """Return a caked refiner widened by the auto-placement search radius."""
+
+    def _refine(
+        image: np.ndarray | None,
+        radial_axis: Sequence[float] | None,
+        azimuth_axis: Sequence[float] | None,
+        two_theta_deg: float,
+        phi_deg: float,
+    ) -> tuple[float, float]:
+        tth_window_deg, phi_window_deg = (
+            gui_manual_geometry.geometry_manual_caked_search_windows_for_radius(
+                search_radius_px,
+                radial_axis=radial_axis,
+                azimuth_axis=azimuth_axis,
+                default_tth_window_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
+                default_phi_window_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
+            )
+        )
+        return _refine_caked_peak_center(
+            image,
+            radial_axis,
+            azimuth_axis,
+            two_theta_deg,
+            phi_deg,
+            tth_window_deg=float(tth_window_deg),
+            phi_window_deg=float(phi_window_deg),
+        )
+
+    return _refine
+
+
+def _geometry_manual_caked_peak_center_fn_for_cache(
+    cache_data: Mapping[str, object] | None,
+) -> Callable[..., tuple[float, float]]:
+    """Use widened caked windows only for auto-placement cache payloads."""
+
+    if isinstance(cache_data, Mapping) and cache_data.get(
+        "manual_auto_refine_search_radius_px"
+    ) is not None:
+        return _geometry_manual_auto_refine_caked_peak_center_fn(
+            cache_data.get("manual_auto_refine_search_radius_px")
+        )
+    return _refine_caked_peak_center
+
+
 def _initialize_runtime_controls_block_04() -> None:
     global \
         geometry_manual_projection_workflow, \
@@ -8493,7 +8944,7 @@ def _initialize_runtime_controls_block_04() -> None:
             ),
             last_caked_radial_values=(lambda: simulation_runtime_state.last_caked_radial_values),
             last_caked_azimuth_values=(lambda: simulation_runtime_state.last_caked_azimuth_values),
-            current_background_display=_get_current_background_display,
+            current_background_display=_current_background_display_for_matching,
             current_background_native=_get_current_background_native,
             ai=lambda: simulation_runtime_state.ai_cache.get("ai"),
             center=lambda: [float(center_x_var.get()), float(center_y_var.get())],
@@ -9153,7 +9604,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
 
     qz_extent = _current_caked_qz_extent()
     if qz_extent is not None:
-        qz_lo, qz_hi = sorted((float(qz_extent[0]), float(qz_extent[1])))
+        qz_lo, qz_hi = _qz_slider_bounds_from_extent(qz_extent)
         gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
             range_view_state,
             "qz_min",
@@ -9208,6 +9659,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
     )
     rod_widgets = (
         getattr(range_view_state, "selected_qr_rod_combobox", None),
+        getattr(range_view_state, "mirror_selected_qr_phi_checkbutton", None),
         getattr(range_view_state, "qz_min_slider", None),
         getattr(range_view_state, "qz_min_entry", None),
         getattr(range_view_state, "qz_max_slider", None),
@@ -10777,6 +11229,8 @@ def _detector_display_raster_source_signature() -> object | None:
 
 
 def _current_detector_artist_source_signature() -> object | None:
+    if not _simulation_overlay_visible():
+        return None
     return _primary_raster_source_payload(globals().get("image_display"))[3]
 
 
@@ -11585,6 +12039,7 @@ def apply_scale_factor_to_existing_results(
                 background_display.set_visible(True)
             else:
                 background_display.set_visible(False)
+        _sync_simulation_overlay_artist_visibility()
         if update_canvas:
             _request_main_canvas_redraw(force_matplotlib=False)
         if update_chi_square:
@@ -11756,6 +12211,7 @@ def apply_scale_factor_to_existing_results(
     else:
         background_display.set_visible(False)
 
+    _sync_simulation_overlay_artist_visibility()
     colorbar_main.update_normal(image_display)
     caked_colorbar.update_normal(image_display)
 
@@ -11922,6 +12378,7 @@ def _initialize_runtime_controls_block_23() -> None:
         tth_max_var, \
         phi_min_var, \
         phi_max_var, \
+        mirror_selected_qr_phi_var, \
         tth_min_slider, \
         tth_max_slider, \
         phi_min_slider, \
@@ -11932,6 +12389,7 @@ def _initialize_runtime_controls_block_23() -> None:
     tth_max_var = None
     phi_min_var = None
     phi_max_var = None
+    mirror_selected_qr_phi_var = None
     tth_min_slider = None
     tth_max_slider = None
     phi_min_slider = None
@@ -17530,6 +17988,7 @@ def _apply_primary_figure_display_from_cached_results(
             background_display.set_visible(False)
         _sync_primary_raster_geometry(view_mode="detector")
 
+    _sync_simulation_overlay_artist_visibility()
     gui_main_figure_chrome.apply_main_figure_axes_chrome(
         ax,
         axes_visible=bool(analysis_space_display_available),
@@ -20576,6 +21035,7 @@ def _initialize_runtime_controls_block_32() -> None:
         views_module=gui_views,
         workspace_view_state=workspace_panels_view_state,
         background_backend_debug_view_state=background_backend_debug_view_state,
+        toggle_simulation_overlay=toggle_simulation_overlay_visibility,
         background_state=background_runtime_state,
         image_size=image_size,
         display_rotate_k=DISPLAY_ROTATE_K,
@@ -20726,16 +21186,15 @@ def reset_to_defaults():
     phi_min_var.set(-15.0)
     phi_max_var.set(15.0)
     integrate_selected_qr_rod_var.set(False)
+    mirror_selected_qr_phi_var.set(False)
     selected_qr_rod_key_var.set("")
     qz_extent = _current_caked_qz_extent()
-    if qz_extent is None:
-        qz_lo, qz_hi = -1.0, 1.0
-    else:
-        qz_lo, qz_hi = sorted((float(qz_extent[0]), float(qz_extent[1])))
+    qz_lo, qz_hi = _default_qz_values_for_extent(qz_extent)
     qz_min_var.set(qz_lo)
     qz_max_var.set(qz_hi)
     delta_qr_var.set(0.25)
     integration_range_controls_view_state.integrate_selected_qr_rod_value = False
+    integration_range_controls_view_state.mirror_selected_qr_phi_value = False
     integration_range_controls_view_state.selected_qr_rod_key_value = ""
     integration_range_controls_view_state.qz_min_value = float(qz_lo)
     integration_range_controls_view_state.qz_max_value = float(qz_hi)
@@ -21272,6 +21731,9 @@ def _gui_state_variable_items() -> dict[str, object]:
             "integrate_selected_qr_rod_var": (
                 integration_range_controls_view_state.integrate_selected_qr_rod_var
             ),
+            "mirror_selected_qr_phi_var": (
+                integration_range_controls_view_state.mirror_selected_qr_phi_var
+            ),
             "selected_qr_rod_key_var": (
                 integration_range_controls_view_state.selected_qr_rod_key_var
             ),
@@ -21546,6 +22008,11 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         osc_files=background_runtime_state.osc_files,
         current_background_index=background_runtime_state.current_background_index,
         background_visible=background_runtime_state.visible,
+        simulation_overlay_visible=getattr(
+            simulation_runtime_state,
+            "simulation_overlay_visible",
+            True,
+        ),
         background_backend_rotation_k=background_runtime_state.backend_rotation_k,
         background_backend_flip_x=background_runtime_state.backend_flip_x,
         background_backend_flip_y=background_runtime_state.backend_flip_y,
@@ -21673,6 +22140,9 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         snapshot.get("flags", {}),
         current_flags={
             "background_visible": background_runtime_state.visible,
+            "simulation_overlay_visible": (
+                getattr(simulation_runtime_state, "simulation_overlay_visible", True)
+            ),
             "background_backend_rotation_k": background_runtime_state.backend_rotation_k,
             "background_backend_flip_x": background_runtime_state.backend_flip_x,
             "background_backend_flip_y": background_runtime_state.backend_flip_y,
@@ -21685,8 +22155,13 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             "scale_factor_user_override": (display_controls_state.scale_factor_user_override),
         },
         toggle_background=toggle_background,
+        toggle_simulation_overlay=toggle_simulation_overlay_visibility,
     )
     background_runtime_state.visible = bool(flag_state["background_visible"])
+    simulation_runtime_state.simulation_overlay_visible = bool(
+        flag_state["simulation_overlay_visible"]
+    )
+    _sync_simulation_overlay_artist_visibility()
     background_runtime_state.backend_rotation_k = int(flag_state["background_backend_rotation_k"])
     background_runtime_state.backend_flip_x = bool(flag_state["background_backend_flip_x"])
     background_runtime_state.backend_flip_y = bool(flag_state["background_backend_flip_y"])
@@ -23417,6 +23892,49 @@ def _geometry_fit_filter_hit_tables_for_required_branch_groups(
         }
 
     required_hkls = {tuple(key[0]) for key in required_keys}
+    required_group_identities = {
+        tuple(key[2])
+        for key in required_keys
+        if isinstance(key, (tuple, list)) and len(key) >= 3 and key[2] is not None
+    }
+
+    def _row_q_group_identity(
+        hkl: tuple[int, int, int],
+    ) -> tuple[object, ...] | None:
+        try:
+            q_group_key, _qr_val, _qz_val = (
+                gui_geometry_q_group_manager.reflection_q_group_metadata(
+                    hkl,
+                    source_label="primary",
+                    allow_nominal_hkl_indices=True,
+                )
+            )
+        except Exception:
+            return None
+        if q_group_key is None:
+            return None
+        try:
+            return tuple(q_group_key)
+        except Exception:
+            return None
+
+    def _matching_required_keys_for_table(
+        hkl: tuple[int, int, int],
+    ) -> list[tuple[tuple[int, int, int], int | None, object | None]]:
+        exact_matches = [key for key in required_keys if tuple(key[0]) == tuple(hkl)]
+        if exact_matches:
+            return exact_matches
+        q_group_key = _row_q_group_identity(hkl)
+        if q_group_key is None or q_group_key not in required_group_identities:
+            return []
+        return [
+            key
+            for key in required_keys
+            if isinstance(key, (tuple, list))
+            and len(key) >= 3
+            and key[2] is not None
+            and tuple(key[2]) == q_group_key
+        ]
     filtered_tables: list[object] = []
     considered_count = 0
     expanded_count = 0
@@ -23449,12 +23967,10 @@ def _geometry_fit_filter_hit_tables_for_required_branch_groups(
             )
         except Exception:
             continue
-        if table_hkl not in required_hkls:
-            continue
-        considered_count += 1
-        matching_keys = [key for key in required_keys if tuple(key[0]) == tuple(table_hkl)]
+        matching_keys = _matching_required_keys_for_table(table_hkl)
         if not matching_keys:
             continue
+        considered_count += 1
         allowed_branches = {int(key[1]) for key in matching_keys if key[1] is not None}
         if not allowed_branches:
             filtered_tables.append(arr.copy())
@@ -23814,6 +24330,12 @@ def _commit_geometry_manual_source_row_rebuild_result(
         projected_peak_count=int(len(projected_rows)),
         rebuild_source=str(rebuild_result.rebuild_source or "unknown"),
     )
+    if lookup_context == "geometry_fit_trial_source_rows":
+        if projected_rows:
+            return projected_rows
+        if strict_projection_return:
+            return []
+        return stored_rows
     if projected_rows:
         return projected_rows
     if not is_current_background and str(
@@ -23903,6 +24425,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
         | None = None,
         required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
         preflight_mode: str = "full",
+        consumer: str | None = None,
     ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
         table_list = list(source_tables or ())
         if not table_list:
@@ -23911,19 +24434,215 @@ def _geometry_manual_rebuild_source_rows_for_background(
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)
-        if str(preflight_mode or "full") == "manual_geometry_targeted":
+        if (
+            str(preflight_mode or "full") == "manual_geometry_targeted"
+            and str(consumer or lookup_context) != "geometry_fit_trial_source_rows"
+        ):
             hit_tables_local, _filter_diag = (
                 _geometry_fit_filter_hit_tables_for_required_branch_groups(
                     hit_tables_local,
                     required_branch_group_keys=required_branch_group_keys,
                 )
             )
-        return _geometry_manual_build_source_rows_from_hit_tables(
-            hit_tables_local,
-            image_size_value=int(image_size),
-            params_local=params_local,
-            allow_nominal_hkl_indices=True,
+        source_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices = (
+            _geometry_manual_build_source_rows_from_hit_tables(
+                hit_tables_local,
+                image_size_value=int(image_size),
+                params_local=params_local,
+                allow_nominal_hkl_indices=True,
+            )
         )
+        if str(consumer or lookup_context) == "geometry_fit_trial_source_rows":
+            source_rows, supplemental_diag = _supplement_trial_source_rows_from_hit_tables(
+                hit_tables_local,
+                existing_rows=source_rows,
+                required_branch_group_keys=required_branch_group_keys,
+                params_local=params_local,
+                image_size_value=int(image_size),
+            )
+            try:
+                setattr(
+                    _build_source_rows_for_rebuild,
+                    "last_trial_supplemental_diag",
+                    supplemental_diag,
+                )
+            except Exception:
+                pass
+        return source_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices
+
+    def _supplement_trial_source_rows_from_hit_tables(
+        hit_tables: Sequence[object] | None,
+        *,
+        existing_rows: Sequence[Mapping[str, object]] | None,
+        required_branch_group_keys: Sequence[tuple[tuple[int, int, int], int | None, object | None]]
+        | None,
+        params_local: Mapping[str, object],
+        image_size_value: int,
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        rows = [dict(row) for row in (existing_rows or ()) if isinstance(row, Mapping)]
+        diag = {
+            "input_row_count": int(len(rows)),
+            "supplemental_row_count": 0,
+            "hit_row_count": 0,
+            "q_group_match_count": 0,
+            "branch_match_count": 0,
+            "duplicate_row_count": 0,
+            "q_group_counts": {},
+        }
+        required_keys = [
+            key
+            for key in (required_branch_group_keys or ())
+            if isinstance(key, (tuple, list)) and len(key) >= 3 and key[2] is not None
+        ]
+        if not required_keys:
+            return rows, diag
+        required_group_identities = {tuple(key[2]) for key in required_keys}
+        existing_identity_keys: set[tuple[object, ...]] = set()
+        for row in rows:
+            try:
+                row_hkl = tuple(
+                    int(v)
+                    for v in (
+                        row.get("normalized_hkl")
+                        or row.get("hkl")
+                        or row.get("source_hkl")
+                        or ()
+                    )[:3]
+                )
+            except Exception:
+                row_hkl = ()
+            try:
+                row_branch = int(row.get("source_branch_index"))
+            except Exception:
+                row_branch = -1
+            existing_identity_keys.add(
+                (
+                    tuple(row.get("q_group_key") or ()),
+                    row_hkl,
+                    row_branch,
+                    row.get("source_table_index"),
+                    row.get("source_row_index"),
+                    row.get("source_peak_index"),
+                )
+            )
+
+        try:
+            primary_a = float(params_local.get("a", np.nan))
+        except Exception:
+            primary_a = float("nan")
+        try:
+            primary_c = float(params_local.get("c", np.nan))
+        except Exception:
+            primary_c = float("nan")
+
+        for table_position, table in enumerate(hit_tables or ()):
+            hit_rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(table)
+            if not hit_rows:
+                continue
+            for row_position, hit_row in enumerate(hit_rows):
+                diag["hit_row_count"] = int(diag["hit_row_count"]) + 1
+                try:
+                    intensity, xpix, ypix, phi_deg, h_val, k_val, l_val = hit_row[:7]
+                    hkl = (
+                        int(np.rint(float(h_val))),
+                        int(np.rint(float(k_val))),
+                        int(np.rint(float(l_val))),
+                    )
+                    native_col = float(xpix)
+                    native_row = float(ypix)
+                    phi_value = float(phi_deg)
+                except Exception:
+                    continue
+                q_group_key, qr_val, qz_val = (
+                    gui_geometry_q_group_manager.reflection_q_group_metadata(
+                        hkl,
+                        source_label="primary",
+                        a_value=primary_a,
+                        c_value=primary_c,
+                        allow_nominal_hkl_indices=True,
+                    )
+                )
+                if q_group_key is None or tuple(q_group_key) not in required_group_identities:
+                    continue
+                diag["q_group_match_count"] = int(diag["q_group_match_count"]) + 1
+                q_label = json.dumps(tuple(q_group_key), sort_keys=True)
+                q_counts = diag["q_group_counts"]
+                if isinstance(q_counts, dict):
+                    q_counts[q_label] = int(q_counts.get(q_label, 0)) + 1
+                branch_index = source_branch_index_from_phi_deg(phi_value)
+                matching_required_keys = [
+                    key
+                    for key in required_keys
+                    if tuple(key[2]) == tuple(q_group_key)
+                    and (key[1] is None or branch_index == int(key[1]))
+                ]
+                if not matching_required_keys:
+                    continue
+                diag["branch_match_count"] = int(diag["branch_match_count"]) + 1
+                source_table_index, source_row_index, best_sample_index = (
+                    extract_hit_row_provenance(hit_row)
+                )
+                if source_table_index is None:
+                    source_table_index = int(table_position)
+                if source_row_index is None:
+                    source_row_index = int(row_position)
+                source_peak_index = int(branch_index) if branch_index in {0, 1} else None
+                identity_key = (
+                    tuple(q_group_key),
+                    hkl,
+                    int(branch_index) if branch_index in {0, 1} else -1,
+                    int(source_table_index),
+                    int(source_row_index),
+                    source_peak_index,
+                )
+                if identity_key in existing_identity_keys:
+                    diag["duplicate_row_count"] = int(diag["duplicate_row_count"]) + 1
+                    continue
+                try:
+                    display_col, display_row = _native_sim_to_display_coords(
+                        native_col,
+                        native_row,
+                        (int(image_size_value), int(image_size_value)),
+                    )
+                except Exception:
+                    display_col, display_row = native_col, native_row
+                supplemental = {
+                    "hkl": hkl,
+                    "normalized_hkl": hkl,
+                    "native_col": float(native_col),
+                    "native_row": float(native_row),
+                    "coordinate_frame": "simulation_native",
+                    "sim_col": float(display_col),
+                    "sim_row": float(display_row),
+                    "sim_col_raw": float(display_col),
+                    "sim_row_raw": float(display_row),
+                    "display_col": float(display_col),
+                    "display_row": float(display_row),
+                    "detector_display_source": "native_sim_to_display",
+                    "weight": max(0.0, float(abs(float(intensity)))),
+                    "source_label": "primary",
+                    "source_table_index": int(source_table_index),
+                    "source_row_index": int(source_row_index),
+                    "hkl_raw": (float(h_val), float(k_val), float(l_val)),
+                    "phi": float(phi_value),
+                    "av": float(primary_a),
+                    "cv": float(primary_c),
+                    "qr": float(qr_val),
+                    "qz": float(qz_val),
+                    "q_group_key": tuple(q_group_key),
+                    "row_origin": "geometry_fit_trial_hit_inventory_row",
+                    "geometry_fit_trial_hit_inventory_row": True,
+                }
+                if branch_index in {0, 1}:
+                    supplemental["source_branch_index"] = int(branch_index)
+                    supplemental["source_peak_index"] = int(branch_index)
+                if best_sample_index is not None:
+                    supplemental["best_sample_index"] = int(best_sample_index)
+                rows.append(supplemental)
+                existing_identity_keys.add(identity_key)
+                diag["supplemental_row_count"] = int(diag["supplemental_row_count"]) + 1
+        diag["output_row_count"] = int(len(rows))
+        return rows, diag
 
     def _build_geometry_fit_live_rows_payload_from_cache() -> (
         dict[str, object] | list[dict[str, object]]
@@ -29218,6 +29937,12 @@ def _initialize_runtime_controls_block_41() -> None:
             view_state=geometry_tool_actions_view_state,
             on_toggle_manual_pick=_toggle_geometry_manual_pick_mode,
             on_refine_manual_pairs=_refine_current_geometry_manual_pairs,
+            on_add_all_qr_set_peaks=_add_all_current_geometry_q_group_peaks,
+            on_remove_qr_set_peaks=_remove_current_geometry_q_group_peaks,
+            auto_refine_radius_value=_geometry_manual_auto_refine_search_radius_px(),
+            on_auto_refine_radius_changed=_set_geometry_manual_auto_refine_search_radius_px,
+            manual_drag_move_enabled=_geometry_manual_drag_move_enabled(),
+            on_manual_drag_move_changed=_set_geometry_manual_drag_move_enabled,
             on_undo_manual_placement=_undo_last_geometry_manual_placement,
             on_export_manual_pairs=_export_geometry_manual_pairs,
             on_import_manual_pairs=_import_geometry_manual_pairs,
@@ -29544,8 +30269,8 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         ("tth_max", 80.0),
         ("phi_min", -15.0),
         ("phi_max", 15.0),
-        ("qz_min", -1.0),
-        ("qz_max", 1.0),
+        ("qz_min", 0.0),
+        ("qz_max", 5.0),
         ("delta_qr", 0.25),
     )
     for key, fallback in numeric_specs:
@@ -29567,6 +30292,13 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         gui_integration_range_drag._safe_var_set(  # noqa: SLF001
             getattr(view_state, "integrate_selected_qr_rod_var", None),
             integrate_value,
+        )
+    if "mirror_selected_qr_phi" in snapshot:
+        mirror_value = bool(snapshot.get("mirror_selected_qr_phi"))
+        setattr(view_state, "mirror_selected_qr_phi_value", mirror_value)
+        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+            getattr(view_state, "mirror_selected_qr_phi_var", None),
+            mirror_value,
         )
     if "selected_qr_rod_key" in snapshot:
         selected_key = str(snapshot.get("selected_qr_rod_key", ""))
@@ -29613,6 +30345,10 @@ def _current_analysis_roi_values() -> dict[str, object]:
                 globals().get("integrate_selected_qr_rod_var"),
                 _read_analysis_cached_bool_value("integrate_selected_qr_rod_value", False),
             ),
+            "mirror_selected_qr_phi": _read_analysis_bool_value(
+                globals().get("mirror_selected_qr_phi_var"),
+                _read_analysis_cached_bool_value("mirror_selected_qr_phi_value", False),
+            ),
             "selected_qr_rod_key": str(
                 gui_integration_range_drag._safe_var_get(  # noqa: SLF001
                     globals().get("selected_qr_rod_key_var")
@@ -29625,11 +30361,11 @@ def _current_analysis_roi_values() -> dict[str, object]:
             ),
             "qz_min": _read_analysis_range_value(
                 globals().get("qz_min_var"),
-                _read_analysis_cached_range_value("qz_min_value", -1.0),
+                _read_analysis_cached_range_value("qz_min_value", 0.0),
             ),
             "qz_max": _read_analysis_range_value(
                 globals().get("qz_max_var"),
-                _read_analysis_cached_range_value("qz_max_value", 1.0),
+                _read_analysis_cached_range_value("qz_max_value", 5.0),
             ),
             "delta_qr": _read_analysis_range_value(
                 globals().get("delta_qr_var"),
@@ -30975,7 +31711,7 @@ def _render_analysis_integration_range_controls(
     range_values: Mapping[str, object] | None = None,
 ) -> None:
     global tth_min_var, tth_max_var, phi_min_var, phi_max_var
-    global integrate_selected_qr_rod_var, selected_qr_rod_key_var
+    global integrate_selected_qr_rod_var, mirror_selected_qr_phi_var, selected_qr_rod_key_var
     global qz_min_var, qz_max_var, delta_qr_var
     global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
 
@@ -30995,10 +31731,11 @@ def _render_analysis_integration_range_controls(
         phi_min=float(values.get("phi_min", -15.0)),
         phi_max=float(values.get("phi_max", 15.0)),
         integrate_selected_qr_rod=bool(values.get("integrate_selected_qr_rod", False)),
+        mirror_selected_qr_phi=bool(values.get("mirror_selected_qr_phi", False)),
         selected_qr_rod_key=str(values.get("selected_qr_rod_key", "")),
         selected_qr_rod_options=_selected_qr_rod_option_pairs(_analysis_selected_qr_rod_entries()),
-        qz_min=float(values.get("qz_min", -1.0)),
-        qz_max=float(values.get("qz_max", 1.0)),
+        qz_min=float(values.get("qz_min", 0.0)),
+        qz_max=float(values.get("qz_max", 5.0)),
         delta_qr=float(values.get("delta_qr", 0.25)),
         schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
         disable_peak_pick=lambda: _set_analysis_peak_pick_mode(False),
@@ -31012,6 +31749,7 @@ def _render_analysis_integration_range_controls(
     integrate_selected_qr_rod_var = (
         integration_range_controls_view_state.integrate_selected_qr_rod_var
     )
+    mirror_selected_qr_phi_var = integration_range_controls_view_state.mirror_selected_qr_phi_var
     selected_qr_rod_key_var = integration_range_controls_view_state.selected_qr_rod_key_var
     qz_min_var = integration_range_controls_view_state.qz_min_var
     qz_max_var = integration_range_controls_view_state.qz_max_var
@@ -32778,6 +33516,12 @@ def _initialize_runtime_controls_block_48() -> None:
                 "label": "Toggle Background",
                 "control_type": "button",
                 "command": toggle_background,
+            },
+            {
+                "key": "toggle_simulation_overlay",
+                "label": "Toggle Simulation",
+                "control_type": "button",
+                "command": toggle_simulation_overlay_visibility,
             },
             {
                 "key": "switch_background",
@@ -34990,6 +35734,7 @@ def _run_async_geometry_fit_worker_job(
         | None = None,
         required_manual_fit_targets: Sequence[Mapping[str, object]] | None = None,
         preflight_mode: str = "full",
+        consumer: str | None = None,
     ) -> tuple[list[dict[str, object]], list[tuple[float, float, str]], list[object]]:
         table_list = list(source_tables or ())
         if not table_list:
@@ -34998,7 +35743,10 @@ def _run_async_geometry_fit_worker_job(
             hit_tables_local = intersection_cache_to_hit_tables(table_list)
         else:
             hit_tables_local = _copy_hit_tables(table_list)
-        if str(preflight_mode or "full") == "manual_geometry_targeted":
+        if (
+            str(preflight_mode or "full") == "manual_geometry_targeted"
+            and str(consumer or "") != "geometry_fit_trial_source_rows"
+        ):
             hit_tables_local, _filter_diag = (
                 _geometry_fit_filter_hit_tables_for_required_branch_groups(
                     hit_tables_local,
@@ -35030,14 +35778,31 @@ def _run_async_geometry_fit_worker_job(
         if isinstance(param_set, Mapping):
             params_local.update(dict(param_set))
 
-        requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
+        base_requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
             int(background_idx)
         )
-        requested_signature_summary = dict(
+        base_requested_signature_summary = dict(
             job_data.get("requested_signature_summaries", {}) or {}
         ).get(int(background_idx))
-        if requested_signature_summary is None:
+        if base_requested_signature_summary is None:
+            base_requested_signature_summary = _live_cache_signature_summary(
+                base_requested_signature
+            )
+        if isinstance(param_set, Mapping):
+            requested_signature = (
+                "geometry_fit_worker_trial_source_rows",
+                int(background_idx),
+                gui_geometry_fit._geometry_fit_digest_payload(
+                    gui_geometry_fit._geometry_fit_cache_jsonable(params_local)
+                ),
+                gui_geometry_fit._geometry_fit_digest_payload(
+                    gui_geometry_fit._geometry_fit_cache_jsonable(base_requested_signature)
+                ),
+            )
             requested_signature_summary = _live_cache_signature_summary(requested_signature)
+        else:
+            requested_signature = base_requested_signature
+            requested_signature_summary = base_requested_signature_summary
         background_label = dict(job_data.get("background_labels", {}) or {}).get(
             int(background_idx),
             f"background {int(background_idx) + 1}",
@@ -35220,6 +35985,7 @@ def _run_async_geometry_fit_worker_job(
                 lambda source_tables, **kwargs: _build_source_rows_for_rebuild(
                     source_tables,
                     params_local=params_local,
+                    consumer=str(consumer or "geometry_fit_preflight_cache"),
                     **kwargs,
                 )
             ),
@@ -37271,13 +38037,20 @@ def _apply_primary_cif_path(raw_path):
             reload_plan.av,
             reload_plan.cv,
             force=True,
-            trigger_update=True,
+            trigger_update=False,
         )
         a_var.set(av)
         c_var.set(cv)
         n2 = _current_nominal_n2(_current_primary_cif_path())
         simulation_runtime_state.profile_cache.pop("_optics_signature", None)
-        _invalidate_simulation_cache()
+        _invalidate_for_update_action(
+            UpdateAction.FULL_SIMULATION,
+            physics_signature_changed=True,
+            hit_table_signature_changed=True,
+            q_group_content_signature_changed=True,
+            detector_geometry_changed=True,
+        )
+        _invalidate_and_schedule_update()
         progress_label.config(text=f"Loaded CIF: {Path(_current_primary_cif_path()).name}")
         _refresh_session_summary_panel()
     except Exception as exc:

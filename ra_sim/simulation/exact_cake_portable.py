@@ -1203,6 +1203,86 @@ def caked_point_to_detector_pixel(
     )
 
 
+def caked_points_to_detector_pixels(
+    ai: FastAzimuthalIntegrator | None,
+    detector_shape: tuple[int, ...] | list[int],
+    radial_deg: np.ndarray | list[float] | tuple[float, ...] | None,
+    gui_phi_deg: np.ndarray | list[float] | tuple[float, ...] | None,
+    two_theta_deg: object,
+    phi_deg: object,
+    *,
+    transform_bundle: CakeTransformBundle | None = None,
+    engine: str = "auto",
+    workers: int | str | None = "auto",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Continuously invert displayed caked points through one resolved LUT bundle."""
+
+    try:
+        two_theta_values, phi_values = np.broadcast_arrays(
+            np.asarray(two_theta_deg, dtype=np.float64),
+            np.asarray(phi_deg, dtype=np.float64),
+        )
+    except Exception:
+        two_theta_values = np.asarray(two_theta_deg, dtype=np.float64)
+        cols_empty = np.full(two_theta_values.shape, np.nan, dtype=np.float64)
+        return cols_empty, cols_empty.copy(), np.zeros(two_theta_values.shape, dtype=bool)
+
+    cols = np.full(two_theta_values.shape, np.nan, dtype=np.float64)
+    rows = np.full(two_theta_values.shape, np.nan, dtype=np.float64)
+    valid = np.zeros(two_theta_values.shape, dtype=bool)
+    if two_theta_values.size <= 0:
+        return cols, rows, valid
+
+    bundle = resolve_cake_transform_bundle(
+        ai,
+        detector_shape,
+        radial_deg,
+        gui_azimuth_deg=gui_phi_deg,
+        transform_bundle=transform_bundle,
+        engine=engine,
+        workers=workers,
+    )
+    if not isinstance(bundle, CakeTransformBundle):
+        return cols, rows, valid
+    matrix = getattr(bundle.lut, "matrix", None)
+    if matrix is None:
+        return cols, rows, valid
+
+    flat_tth = np.asarray(two_theta_values, dtype=np.float64).reshape(-1)
+    flat_phi = np.asarray(phi_values, dtype=np.float64).reshape(-1)
+    flat_cols = cols.reshape(-1)
+    flat_rows = rows.reshape(-1)
+    flat_valid = valid.reshape(-1)
+
+    finite = np.isfinite(flat_tth) & np.isfinite(flat_phi)
+    for idx in np.flatnonzero(finite):
+        raw_phi_deg = float(gui_phi_to_raw_phi(float(flat_phi[idx])))
+        bin_weights = _bilinear_cake_bin_weights(
+            bundle.radial_deg,
+            bundle.raw_azimuth_deg,
+            float(flat_tth[idx]),
+            raw_phi_deg,
+        )
+        if len(bin_weights) <= 0:
+            continue
+        col, row = _detector_pixel_centroid_from_cake_bin_weights(
+            bundle.detector_shape,
+            matrix,
+            bin_weights,
+        )
+        if (
+            col is None
+            or row is None
+            or not np.isfinite(float(col))
+            or not np.isfinite(float(row))
+        ):
+            continue
+        flat_cols[idx] = float(col)
+        flat_rows[idx] = float(row)
+        flat_valid[idx] = True
+    return cols, rows, valid
+
+
 def detector_two_theta_max_deg(
     image_shape: tuple[int, int],
     geometry: PortableGeometry,
@@ -1630,6 +1710,7 @@ __all__ = [
     "build_cake_transform_bundle_from_result",
     "cake_transform_bundle_lut_t",
     "caked_point_to_detector_pixel",
+    "caked_points_to_detector_pixels",
     "build_geometry",
     "convert_image_to_angle_space",
     "detector_pixel_to_caked_bin",

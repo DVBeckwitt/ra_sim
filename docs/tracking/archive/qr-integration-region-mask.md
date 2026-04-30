@@ -9,48 +9,50 @@ Last updated: 2026-04-29
 
 ## Summary
 
-Selected-Qr rod caked integration masks could drop the filled ROI when the
-projected Qr boundary traces contained isolated nonfinite caked samples, such
-as the +/-90 degree caked azimuth singularity. The finite samples on either
-side were split into one-point runs, so polygon rasterization did not fill the
-surrounding Qz/Qr slice. Changing the QR half-width could update only sparse
-boundary points instead of changing the displayed mask shape.
+Selected-Qr rod caked integration masks could still miss real high-`|phi|`
+signal after trace gap interpolation and span-fill repairs, especially around
+`phi = -72..-85` degrees. The caked image and exact-cake LUT had detector
+contributors there, but the forward-projected analytic Qr center trace could
+drop out before any fill logic could classify the bin.
 
 ## Current state
 
-Resolved. `ra_sim/gui/qr_cylinder_overlay.py` now builds paired finite trace
-runs with a one-sample bridge for isolated nonfinite bins, while still splitting
-at wrapped-phi seams and non-bridgeable selection gaps. Caked polygon
-rasterization filters nonfinite trace samples before constructing the path, so a
-single bad boundary point no longer poisons the ROI. Boundary grid points are
-included in the mask fill to keep sparse caked grids from dropping valid edge
-rows or columns.
+Resolved. Selected-Qr rod caked masks now use detector pixels and the
+exact-cake LUT as the primary source of truth. The mask path builds cached
+detector Qr/Qz maps with the same geometry/refraction convention as the Qr
+cylinder projection, selects detector pixels by `Qr0 +/- delta_Qr` and Qz
+bounds, splats them into caked bins with the normalized detector-to-caked LUT,
+then applies the selected caked phi windows. If the LUT/Q-map path is usable,
+its result is returned even when all bins are false; trace rasterization is now
+fallback only when LUT context or Q-map construction is unavailable.
 
-Both selected-Qr Qz ROI masks and active Qr cylinder caked band masks use the
-same run-bridging behavior. Wrapped-phi seams remain real discontinuities and
-are not filled across.
+Selected-Qr drag Qz bounds now use the LUT transpose from dragged caked bins
+back to contributing detector pixels, then filter those detector pixels by Qr
+and valid Qz. This avoids using a single inverse caked-bin centroid for an
+aggregate bin. The old projected-sample drag helper remains fallback only.
+
+The selected-Qr rod Qz controls now default to `0..5`. Runtime slider bounds use
+`0` as the lower Qz limit and the largest positive Qz candidate from the
+current caked 2theta extent as the upper limit.
 
 ## Next actions
 
-- None for this bug. Reopen only if a selected-Qr caked ROI vanishes around an
-  isolated nonfinite trace sample or QR half-width changes no longer change the
-  filled caked mask shape.
-- Separate repo health item: `python -m ra_sim.dev check` still stops on
-  unrelated formatting issues outside the QR overlay files.
+- None for this bug. Reopen if selected-Qr rod ROI loses caked bins that have
+  exact-cake detector contributors satisfying Qr/Qz, or if selected-Qr drag Qz
+  bounds depend on finite projected trace samples again.
 
 ## Validation
 
-- 2026-04-29: `python -S -m py_compile ra_sim/gui/qr_cylinder_overlay.py tests/test_gui_qr_cylinder_overlay.py`
+- 2026-04-29: `python -m pytest tests/test_gui_qr_cylinder_overlay.py tests/test_gui_integration_range_drag.py tests/test_intersection_analysis.py tests/test_exact_cake_portable.py -ra`
+  passed, `127 passed`.
+- 2026-04-29: `python -m ruff check ra_sim/gui/qr_cylinder_overlay.py ra_sim/gui/integration_range_drag.py ra_sim/simulation/intersection_analysis.py ra_sim/simulation/exact_cake_portable.py tests/test_gui_qr_cylinder_overlay.py tests/test_gui_integration_range_drag.py tests/test_intersection_analysis.py tests/test_exact_cake_portable.py`
   passed.
-- 2026-04-29: `python -m ruff check ra_sim/gui/qr_cylinder_overlay.py tests/test_gui_qr_cylinder_overlay.py`
+- 2026-04-29: `python -S -m py_compile ra_sim/gui/qr_cylinder_overlay.py ra_sim/gui/integration_range_drag.py ra_sim/simulation/intersection_analysis.py ra_sim/simulation/exact_cake_portable.py`
   passed.
-- 2026-04-29: `python -m pytest tests/test_gui_qr_cylinder_overlay.py -ra`
-  passed, `19 passed`.
-- 2026-04-29: `python -m ra_sim.dev check` failed on unrelated formatting
-  issues in `ra_sim/fitting/optimization.py`,
-  `ra_sim/gui/_runtime/primary_cache_helpers.py`,
-  `ra_sim/gui/_runtime/runtime_session.py`,
-  `tests/test_gui_runtime_primary_cache.py`, and `tests/test_timing.py`.
+- 2026-04-29: `python -m pytest tests/test_gui_integration_range_drag.py tests/test_gui_bootstrap.py tests/test_gui_runtime_import_safe.py -ra`
+  passed, `401 passed`.
+- 2026-04-29: `python -m pytest tests/test_gui_views.py::test_create_integration_range_controls_store_vars_bindings_and_commands -ra`
+  passed, `1 passed`.
 
 ## Links
 

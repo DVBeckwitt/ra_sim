@@ -1252,6 +1252,7 @@ def build_runtime_background_controls_bootstrap(
     workspace_view_state: Any,
     background_backend_debug_view_state: Any,
     background_callbacks: Any,
+    toggle_simulation_overlay: Callable[[], bool] | None = None,
 ) -> BackgroundControlsRuntimeBootstrap:
     """Build the background control clusters through shared view helpers."""
 
@@ -1274,15 +1275,18 @@ def build_runtime_background_controls_bootstrap(
         return False
 
     def _create_workspace_controls() -> None:
+        button_specs = [
+            ("Toggle Background", _toggle_visibility),
+            (
+                "Switch Background",
+                background_callbacks.switch_background,
+            ),
+        ]
+        if callable(toggle_simulation_overlay):
+            button_specs.insert(1, ("Toggle Simulation", toggle_simulation_overlay))
         views_module.populate_stacked_button_group(
             workspace_view_state.workspace_actions_frame,
-            [
-                ("Toggle Background", _toggle_visibility),
-                (
-                    "Switch Background",
-                    background_callbacks.switch_background,
-                ),
-            ],
+            button_specs,
         )
         views_module.create_background_file_controls(
             parent=workspace_view_state.workspace_backgrounds_frame,
@@ -1325,21 +1329,40 @@ def build_runtime_geometry_tool_action_controls_bootstrap(
     on_import_manual_pairs: Callable[[], None],
     on_toggle_preview_exclude: Callable[[], None],
     on_clear_manual_pairs: Callable[[], None],
+    on_add_all_qr_set_peaks: Callable[[], None] | None = None,
+    on_remove_qr_set_peaks: Callable[[], None] | None = None,
+    auto_refine_radius_value: float | None = None,
+    on_auto_refine_radius_changed: Callable[[float], None] | None = None,
+    manual_drag_move_enabled: bool | None = None,
+    on_manual_drag_move_changed: Callable[[bool], None] | None = None,
 ) -> GeometryToolActionsRuntimeBootstrap:
     """Build the geometry tool action control wiring through shared views."""
 
     def _create_controls(parent: Any) -> None:
-        views_module.create_geometry_tool_action_controls(
-            parent=parent,
-            view_state=view_state,
-            on_toggle_manual_pick=on_toggle_manual_pick,
-            on_refine_manual_pairs=on_refine_manual_pairs,
-            on_undo_manual_placement=on_undo_manual_placement,
-            on_export_manual_pairs=on_export_manual_pairs,
-            on_import_manual_pairs=on_import_manual_pairs,
-            on_toggle_preview_exclude=on_toggle_preview_exclude,
-            on_clear_manual_pairs=on_clear_manual_pairs,
-        )
+        kwargs = {
+            "parent": parent,
+            "view_state": view_state,
+            "on_toggle_manual_pick": on_toggle_manual_pick,
+            "on_refine_manual_pairs": on_refine_manual_pairs,
+            "on_undo_manual_placement": on_undo_manual_placement,
+            "on_export_manual_pairs": on_export_manual_pairs,
+            "on_import_manual_pairs": on_import_manual_pairs,
+            "on_toggle_preview_exclude": on_toggle_preview_exclude,
+            "on_clear_manual_pairs": on_clear_manual_pairs,
+        }
+        if on_add_all_qr_set_peaks is not None:
+            kwargs["on_add_all_qr_set_peaks"] = on_add_all_qr_set_peaks
+        if on_remove_qr_set_peaks is not None:
+            kwargs["on_remove_qr_set_peaks"] = on_remove_qr_set_peaks
+        if auto_refine_radius_value is not None:
+            kwargs["auto_refine_radius_value"] = auto_refine_radius_value
+        if on_auto_refine_radius_changed is not None:
+            kwargs["on_auto_refine_radius_changed"] = on_auto_refine_radius_changed
+        if manual_drag_move_enabled is not None:
+            kwargs["manual_drag_move_enabled"] = bool(manual_drag_move_enabled)
+        if on_manual_drag_move_changed is not None:
+            kwargs["on_manual_drag_move_changed"] = on_manual_drag_move_changed
+        views_module.create_geometry_tool_action_controls(**kwargs)
 
     return GeometryToolActionsRuntimeBootstrap(create_controls=_create_controls)
 
@@ -1440,9 +1463,10 @@ def build_runtime_integration_range_update_bootstrap(
         "phi_min": -15.0,
         "phi_max": 15.0,
         "integrate_selected_qr_rod": False,
+        "mirror_selected_qr_phi": False,
         "selected_qr_rod_key": "",
-        "qz_min": -1.0,
-        "qz_max": 1.0,
+        "qz_min": 0.0,
+        "qz_max": 5.0,
         "delta_qr": 0.25,
     }
     if range_defaults:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,8 +26,8 @@ _DEFAULT_TTH_MIN = 0.0
 _DEFAULT_TTH_MAX = 80.0
 _DEFAULT_PHI_MIN = -15.0
 _DEFAULT_PHI_MAX = 15.0
-_DEFAULT_QZ_MIN = -1.0
-_DEFAULT_QZ_MAX = 1.0
+_DEFAULT_QZ_MIN = 0.0
+_DEFAULT_QZ_MAX = 5.0
 _DEFAULT_DELTA_QR = 0.25
 _TTH_SLIDER_BOUNDS = (0.0, 90.0)
 _PHI_SLIDER_BOUNDS = (-180.0, 180.0)
@@ -1105,6 +1105,7 @@ def qz_bounds_from_caked_drag_for_qr_rod(
     y1,
     phi_min: float | None = None,
     phi_max: float | None = None,
+    phi_windows: Sequence[tuple[object, object]] | None = None,
 ) -> tuple[float, float] | None:
     """Return Qz bounds selected by a caked drag across projected Qr-rod samples."""
 
@@ -1125,19 +1126,29 @@ def qz_bounds_from_caked_drag_for_qr_rod(
     if not all(np.isfinite(value) for value in (x_lo, x_hi, y_lo, y_hi)):
         return None
 
-    phi_window = np.ones(phi.shape, dtype=bool)
-    if phi_min is not None and phi_max is not None:
-        try:
-            phi_lo = float(phi_min)
-            phi_hi = float(phi_max)
-        except Exception:
+    if phi_windows is not None:
+        normalized_phi_windows = gui_qr_cylinder_overlay.normalize_caked_phi_windows(
+            phi_windows=phi_windows,
+        )
+        if normalized_phi_windows is None:
             return None
-        if not (np.isfinite(phi_lo) and np.isfinite(phi_hi)):
+        phi_window = gui_qr_cylinder_overlay.caked_phi_window_mask(
+            phi,
+            normalized_phi_windows,
+        )
+    elif phi_min is not None and phi_max is not None:
+        normalized_phi_windows = gui_qr_cylinder_overlay.normalize_caked_phi_windows(
+            phi_min=phi_min,
+            phi_max=phi_max,
+        )
+        if normalized_phi_windows is None:
             return None
-        if phi_hi >= phi_lo:
-            phi_window = (phi >= phi_lo) & (phi <= phi_hi)
-        else:
-            phi_window = (phi >= phi_lo) | (phi <= phi_hi)
+        phi_window = gui_qr_cylinder_overlay.caked_phi_window_mask(
+            phi,
+            normalized_phi_windows,
+        )
+    else:
+        phi_window = np.ones(phi.shape, dtype=bool)
 
     selected = (
         np.isfinite(two_theta)
@@ -1152,6 +1163,145 @@ def qz_bounds_from_caked_drag_for_qr_rod(
     if not np.any(selected):
         return None
     selected_qz = qz[selected]
+    return float(np.min(selected_qz)), float(np.max(selected_qz))
+
+
+def qz_bounds_from_caked_drag_for_qr_rod_bins(
+    *,
+    selected_entry: Mapping[str, object],
+    config: gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig,
+    projection_context: Mapping[str, object] | None,
+    radial_axis: object,
+    azimuth_axis: object,
+    delta_qr: float,
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+    phi_windows: Sequence[tuple[object, object]] | None = None,
+) -> tuple[float, float] | None:
+    """Return Qz bounds selected by caked bins using LUT-transpose detector support."""
+
+    try:
+        qr0 = float(selected_entry["qr"])
+        delta_qr_value = float(delta_qr)
+        radial_values = np.asarray(radial_axis, dtype=float).reshape(-1)
+        azimuth_values = np.asarray(azimuth_axis, dtype=float).reshape(-1)
+        x_lo, x_hi = sorted((float(x0), float(x1)))
+        y_lo, y_hi = sorted((float(y0), float(y1)))
+    except Exception:
+        return None
+    if (
+        not np.isfinite(qr0)
+        or qr0 < 0.0
+        or not np.isfinite(delta_qr_value)
+        or delta_qr_value <= 0.0
+        or radial_values.size <= 0
+        or azimuth_values.size <= 0
+        or not all(np.isfinite(value) for value in (x_lo, x_hi, y_lo, y_hi))
+        or not np.all(np.isfinite(radial_values))
+        or not np.all(np.isfinite(azimuth_values))
+    ):
+        return None
+
+    if phi_windows is not None:
+        normalized_phi_windows = gui_qr_cylinder_overlay.normalize_caked_phi_windows(
+            phi_windows=phi_windows,
+        )
+        if normalized_phi_windows is None:
+            return None
+        phi_window_mask = gui_qr_cylinder_overlay.caked_phi_window_mask(
+            azimuth_values,
+            normalized_phi_windows,
+        )
+    else:
+        phi_window_mask = np.ones(azimuth_values.shape, dtype=bool)
+
+    radial_mask = (radial_values >= x_lo) & (radial_values <= x_hi)
+    phi_drag_mask = (azimuth_values >= y_lo) & (azimuth_values <= y_hi)
+    azimuth_mask = phi_drag_mask & phi_window_mask
+    if not np.any(radial_mask) or not np.any(azimuth_mask):
+        return None
+
+    resolved_projection = gui_qr_cylinder_overlay._resolve_caked_projection_context(  # noqa: SLF001
+        projection_context,
+    )
+    if resolved_projection is None:
+        return None
+    detector_shape = tuple(int(v) for v in resolved_projection["detector_shape"])
+    bundle = resolved_projection["transform_bundle"]
+    lut_orientation = gui_qr_cylinder_overlay._resolve_detector_to_caked_lut(  # noqa: SLF001
+        bundle,
+        detector_shape=detector_shape,
+        n_radial=int(radial_values.size),
+        n_azimuth=int(azimuth_values.size),
+    )
+    if lut_orientation is None:
+        return None
+    _detector_to_caked, caked_to_detector, _lut_signature = lut_orientation
+
+    display_dragged = np.asarray(
+        np.outer(azimuth_mask, radial_mask),
+        dtype=np.float32,
+    )
+    raw_to_gui = np.asarray(
+        resolved_projection["raw_to_gui_row_permutation"],
+        dtype=np.int64,
+    ).reshape(-1)
+    if raw_to_gui.size != azimuth_values.size:
+        return None
+    raw_dragged = np.zeros_like(display_dragged, dtype=np.float32)
+    raw_dragged[raw_to_gui, :] = display_dragged
+
+    detector_size = int(detector_shape[0]) * int(detector_shape[1])
+    detector_weight = gui_qr_cylinder_overlay._matrix_vector_product(  # noqa: SLF001
+        caked_to_detector,
+        raw_dragged.reshape(-1),
+        expected_size=detector_size,
+    )
+    if detector_weight is None:
+        return None
+    finite_weight = detector_weight[np.isfinite(detector_weight)]
+    if finite_weight.size <= 0:
+        return None
+    max_weight = float(np.max(finite_weight))
+    if not np.isfinite(max_weight) or max_weight <= 0.0:
+        return None
+    weight_threshold = max(
+        gui_qr_cylinder_overlay._SELECTED_QR_ROD_LUT_ABS_EPS,  # noqa: SLF001
+        gui_qr_cylinder_overlay._SELECTED_QR_ROD_LUT_REL_EPS * max_weight,  # noqa: SLF001
+    )
+    detector_support = (detector_weight > weight_threshold).reshape(detector_shape)
+    if not np.any(detector_support):
+        return None
+
+    q_maps = gui_qr_cylinder_overlay.detector_qr_qz_maps_for_projection(
+        config=config,
+        detector_shape=detector_shape,
+    )
+    if q_maps is None:
+        return None
+    qr_map, qz_map, valid_q = q_maps
+    if (
+        qr_map.shape != detector_shape
+        or qz_map.shape != detector_shape
+        or valid_q.shape != detector_shape
+    ):
+        return None
+
+    qr_lo = max(0.0, qr0 - delta_qr_value)
+    qr_hi = qr0 + delta_qr_value
+    selected = (
+        detector_support
+        & np.asarray(valid_q, dtype=bool)
+        & np.isfinite(qr_map)
+        & np.isfinite(qz_map)
+        & (qr_map >= qr_lo)
+        & (qr_map <= qr_hi)
+    )
+    if not np.any(selected):
+        return None
+    selected_qz = np.asarray(qz_map, dtype=float)[selected]
     return float(np.min(selected_qz)), float(np.max(selected_qz))
 
 
@@ -1181,6 +1331,26 @@ def _projected_qr_rod_samples_from_context(
     )
 
 
+def _runtime_selected_qr_phi_windows(
+    view_state: object,
+) -> tuple[tuple[float, float], ...] | None:
+    phi_min = _get_runtime_range_value(view_state, "phi_min", _DEFAULT_PHI_MIN)
+    phi_max = _get_runtime_range_value(view_state, "phi_max", _DEFAULT_PHI_MAX)
+    mirror = _runtime_range_boolean(
+        view_state,
+        "integrate_selected_qr_rod",
+        False,
+    ) and _runtime_range_boolean(view_state, "mirror_selected_qr_phi", False)
+
+    if mirror:
+        return gui_qr_cylinder_overlay.mirrored_abs_phi_windows(phi_min, phi_max)
+
+    return gui_qr_cylinder_overlay.normalize_caked_phi_windows(
+        phi_min=phi_min,
+        phi_max=phi_max,
+    )
+
+
 def update_runtime_qr_rod_drag_preview(bindings: IntegrationRangeDragBindings) -> bool:
     """Refresh the selected-Qr rod drag preview as a temporary Q-space mask."""
 
@@ -1202,6 +1372,9 @@ def update_runtime_qr_rod_drag_preview(bindings: IntegrationRangeDragBindings) -
     delta_qr = _get_runtime_range_value(view_state, "delta_qr", _DEFAULT_DELTA_QR)
     phi_min = _get_runtime_range_value(view_state, "phi_min", _DEFAULT_PHI_MIN)
     phi_max = _get_runtime_range_value(view_state, "phi_max", _DEFAULT_PHI_MAX)
+    phi_windows = _runtime_selected_qr_phi_windows(view_state)
+    if phi_windows is None:
+        return False
     try:
         selected_entry = context["selected_entry"]
         config = context["config"]
@@ -1211,23 +1384,37 @@ def update_runtime_qr_rod_drag_preview(bindings: IntegrationRangeDragBindings) -
     except Exception:
         return False
 
-    projected_samples = _projected_qr_rod_samples_from_context(context)
-    if projected_samples is None:
-        bindings.integration_region_overlay.set_visible(False)
-        bindings.integration_region_rect.set_visible(False)
-        bindings.drag_select_rect.set_visible(False)
-        _draw_idle(bindings)
-        return False
-
-    qz_bounds = qz_bounds_from_caked_drag_for_qr_rod(
-        projected_samples,
+    qz_bounds = qz_bounds_from_caked_drag_for_qr_rod_bins(
+        selected_entry=selected_entry,
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=delta_qr,
         x0=drag_state.x0,
-        y0=drag_state.y0,
         x1=drag_state.x1,
+        y0=drag_state.y0,
         y1=drag_state.y1,
-        phi_min=phi_min,
-        phi_max=phi_max,
+        phi_windows=phi_windows,
     )
+    if qz_bounds is None:
+        projected_samples = _projected_qr_rod_samples_from_context(context)
+        if projected_samples is None:
+            bindings.integration_region_overlay.set_visible(False)
+            bindings.integration_region_rect.set_visible(False)
+            bindings.drag_select_rect.set_visible(False)
+            _draw_idle(bindings)
+            return False
+        qz_bounds = qz_bounds_from_caked_drag_for_qr_rod(
+            projected_samples,
+            x0=drag_state.x0,
+            y0=drag_state.y0,
+            x1=drag_state.x1,
+            y1=drag_state.y1,
+            phi_min=phi_min,
+            phi_max=phi_max,
+            phi_windows=phi_windows,
+        )
     if qz_bounds is None:
         bindings.integration_region_overlay.set_visible(False)
         bindings.integration_region_rect.set_visible(False)
@@ -1247,6 +1434,7 @@ def update_runtime_qr_rod_drag_preview(bindings: IntegrationRangeDragBindings) -
             qz_max=qz_hi,
             phi_min=phi_min,
             phi_max=phi_max,
+            phi_windows=phi_windows,
             delta_qr=delta_qr,
         )
     except Exception:
@@ -1729,7 +1917,6 @@ def handle_runtime_integration_drag_release(
             and None not in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1)
         ):
             try:
-                projected_samples = _projected_qr_rod_samples_from_context(context)
                 phi_min = _get_runtime_range_value(
                     bindings.range_view_state,
                     "phi_min",
@@ -1740,15 +1927,37 @@ def handle_runtime_integration_drag_release(
                     "phi_max",
                     _DEFAULT_PHI_MAX,
                 )
-                qz_bounds = qz_bounds_from_caked_drag_for_qr_rod(
-                    projected_samples,
-                    x0=drag_state.x0,
-                    y0=drag_state.y0,
-                    x1=drag_state.x1,
-                    y1=drag_state.y1,
-                    phi_min=phi_min,
-                    phi_max=phi_max,
+                phi_windows = _runtime_selected_qr_phi_windows(bindings.range_view_state)
+                delta_qr = _get_runtime_range_value(
+                    bindings.range_view_state,
+                    "delta_qr",
+                    _DEFAULT_DELTA_QR,
                 )
+                qz_bounds = qz_bounds_from_caked_drag_for_qr_rod_bins(
+                    selected_entry=context["selected_entry"],
+                    config=context["config"],
+                    projection_context=context["projection_context"],
+                    radial_axis=context["radial_axis"],
+                    azimuth_axis=context["azimuth_axis"],
+                    delta_qr=delta_qr,
+                    x0=drag_state.x0,
+                    x1=drag_state.x1,
+                    y0=drag_state.y0,
+                    y1=drag_state.y1,
+                    phi_windows=phi_windows,
+                )
+                if qz_bounds is None:
+                    projected_samples = _projected_qr_rod_samples_from_context(context)
+                    qz_bounds = qz_bounds_from_caked_drag_for_qr_rod(
+                        projected_samples,
+                        x0=drag_state.x0,
+                        y0=drag_state.y0,
+                        x1=drag_state.x1,
+                        y1=drag_state.y1,
+                        phi_min=phi_min,
+                        phi_max=phi_max,
+                        phi_windows=phi_windows,
+                    )
             except Exception:
                 qz_bounds = None
 
@@ -2078,6 +2287,7 @@ def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
 
     for widget_name in (
         "selected_qr_rod_combobox",
+        "mirror_selected_qr_phi_checkbutton",
         "qz_min_slider",
         "qz_min_entry",
         "qz_max_slider",
@@ -2205,6 +2415,20 @@ def _toggle_runtime_integrate_selected_qr_rod(
     _refresh_runtime_region_visuals(refresh_region_visuals)
 
 
+def _toggle_runtime_mirror_selected_qr_phi(
+    *,
+    view_state: object,
+    show_1d_var: object,
+    schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None = None,
+) -> None:
+    _activate_runtime_1d_analysis(show_1d_var)
+    _sync_runtime_selected_qr_rod_mode_state(view_state)
+    if callable(schedule_range_update):
+        schedule_range_update()
+    _refresh_runtime_region_visuals(refresh_region_visuals)
+
+
 def _select_runtime_selected_qr_rod(
     *,
     view_state: object,
@@ -2234,6 +2458,7 @@ def create_runtime_integration_range_controls(
     phi_min: float,
     phi_max: float,
     integrate_selected_qr_rod: bool = False,
+    mirror_selected_qr_phi: bool = False,
     selected_qr_rod_key: str = "",
     selected_qr_rod_options: list[tuple[str, str]] | None = None,
     qz_min: float = _DEFAULT_QZ_MIN,
@@ -2253,6 +2478,11 @@ def create_runtime_integration_range_controls(
     _safe_var_set(
         getattr(view_state, "integrate_selected_qr_rod_var", None),
         bool(integrate_selected_qr_rod),
+    )
+    setattr(view_state, "mirror_selected_qr_phi_value", bool(mirror_selected_qr_phi))
+    _safe_var_set(
+        getattr(view_state, "mirror_selected_qr_phi_var", None),
+        bool(mirror_selected_qr_phi),
     )
     _set_runtime_string_value(view_state, "selected_qr_rod_key", str(selected_qr_rod_key))
     _set_runtime_range_value(view_state, "qz_min", float(qz_min))
@@ -2317,6 +2547,7 @@ def create_runtime_integration_range_controls(
             refresh_region_visuals=refresh_region_visuals,
         ),
         integrate_selected_qr_rod=bool(integrate_selected_qr_rod),
+        mirror_selected_qr_phi=bool(mirror_selected_qr_phi),
         selected_qr_rod_key=str(selected_qr_rod_key),
         selected_qr_rod_options=list(selected_qr_rod_options or ()),
         on_toggle_integrate_selected_qr_rod=lambda: _toggle_runtime_integrate_selected_qr_rod(
@@ -2324,6 +2555,12 @@ def create_runtime_integration_range_controls(
             show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
             disable_peak_pick=disable_peak_pick,
+            refresh_region_visuals=refresh_region_visuals,
+        ),
+        on_toggle_mirror_selected_qr_phi=lambda: _toggle_runtime_mirror_selected_qr_phi(
+            view_state=view_state,
+            show_1d_var=show_1d_var,
+            schedule_range_update=schedule_range_update,
             refresh_region_visuals=refresh_region_visuals,
         ),
         on_selected_qr_rod_changed=lambda value: _select_runtime_selected_qr_rod(
@@ -2361,6 +2598,7 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "phi_min_var", None),
         getattr(view_state, "phi_max_var", None),
         getattr(view_state, "integrate_selected_qr_rod_var", None),
+        getattr(view_state, "mirror_selected_qr_phi_var", None),
         getattr(view_state, "selected_qr_rod_key_var", None),
         getattr(view_state, "selected_qr_rod_display_var", None),
         getattr(view_state, "qz_min_var", None),
@@ -2371,6 +2609,7 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "phi_min_slider", None),
         getattr(view_state, "phi_max_slider", None),
         getattr(view_state, "selected_qr_rod_combobox", None),
+        getattr(view_state, "mirror_selected_qr_phi_checkbutton", None),
         getattr(view_state, "qz_min_slider", None),
         getattr(view_state, "qz_max_slider", None),
         getattr(view_state, "delta_qr_slider", None),

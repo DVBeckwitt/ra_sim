@@ -3,9 +3,73 @@ import numpy as np
 from types import SimpleNamespace
 
 from ra_sim.gui import integration_range_drag, state
+from ra_sim.simulation import exact_cake_portable
 
 
 SOURCE_PATH = Path(integration_range_drag.__file__)
+
+
+def _qr_drag_config() -> integration_range_drag.gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig:
+    return integration_range_drag.gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
+        render_in_caked_space=True,
+        image_size=64,
+        display_rotate_k=0,
+        center_col=10.0,
+        center_row=11.0,
+        distance_cor_to_detector=123.0,
+        gamma_deg=0.0,
+        Gamma_deg=0.0,
+        chi_deg=0.0,
+        psi_deg=0.0,
+        psi_z_deg=0.0,
+        zs=0.0,
+        zb=0.0,
+        theta_initial_deg=6.0,
+        cor_angle_deg=0.0,
+        pixel_size_m=1.0e-4,
+        wavelength=1.0,
+        n2=1.0 + 0.0j,
+    )
+
+
+def _qr_drag_projection_context(
+    *,
+    matrix: np.ndarray,
+    detector_shape: tuple[int, int] = (2, 3),
+    radial_axis: np.ndarray | None = None,
+    azimuth_axis: np.ndarray | None = None,
+) -> dict[str, object]:
+    radial = (
+        np.asarray(radial_axis, dtype=float)
+        if radial_axis is not None
+        else np.asarray([1.0, 2.0, 3.0], dtype=float)
+    )
+    azimuth = (
+        np.asarray(azimuth_axis, dtype=float)
+        if azimuth_axis is not None
+        else np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    )
+    raw_azimuth = np.asarray(
+        exact_cake_portable.gui_phi_to_raw_phi(azimuth),
+        dtype=float,
+    )
+    bundle = integration_range_drag.gui_qr_cylinder_overlay.CakeTransformBundle(
+        detector_shape=detector_shape,
+        radial_deg=radial,
+        raw_azimuth_deg=raw_azimuth,
+        gui_azimuth_deg=np.asarray(
+            exact_cake_portable.raw_phi_to_gui_phi(raw_azimuth),
+            dtype=float,
+        ),
+        lut=SimpleNamespace(matrix=np.asarray(matrix, dtype=np.float32)),
+    )
+    return {
+        "detector_shape": detector_shape,
+        "radial_axis": radial,
+        "azimuth_axis": azimuth,
+        "raw_azimuth_axis": raw_azimuth,
+        "transform_bundle": bundle,
+    }
 
 
 def test_drag_module_removes_fast_viewer_overlay_state() -> None:
@@ -417,6 +481,9 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].integrate_selected_qr_rod_var = _FakeVar(
             kwargs["integrate_selected_qr_rod"]
         )
+        kwargs["view_state"].mirror_selected_qr_phi_var = _FakeVar(
+            kwargs["mirror_selected_qr_phi"]
+        )
         kwargs["view_state"].selected_qr_rod_key_var = _FakeVar(kwargs["selected_qr_rod_key"])
         kwargs["view_state"].selected_qr_rod_display_var = _FakeVar("")
         kwargs["view_state"].selected_qr_rod_option_labels = {
@@ -437,6 +504,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].phi_min_slider = _FakeSlider(-15.0, 15.0)
         kwargs["view_state"].phi_max_slider = _FakeSlider(-15.0, 15.0)
         kwargs["view_state"].selected_qr_rod_combobox = _FakeEntry(state="disabled")
+        kwargs["view_state"].mirror_selected_qr_phi_checkbutton = _FakeEntry(state="disabled")
         kwargs["view_state"].qz_min_slider = _FakeSlider(-2.0, 2.0)
         kwargs["view_state"].qz_max_slider = _FakeSlider(-2.0, 2.0)
         kwargs["view_state"].delta_qr_slider = _FakeSlider(0.0, 1.0)
@@ -464,12 +532,14 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.tth_min_label_var.get() == "0.0"
     assert view_state.tth_max_entry_var.get() == "60.0000"
     assert view_state.phi_min_entry_var.get() == "-15.0000"
-    assert view_state.qz_min_label_var.get() == "-1.0000"
-    assert view_state.qz_max_entry_var.get() == "1.0000"
+    assert view_state.qz_min_label_var.get() == "0.0000"
+    assert view_state.qz_max_entry_var.get() == "5.0000"
     assert view_state.delta_qr_label_var.get() == "0.2500"
     assert view_state.delta_qr_entry_var.get() == "0.2500"
     assert view_state.selected_qr_rod_display_var.get() == "phase-a m=1 | Qr=1.2500 A^-1"
     assert view_state.selected_qr_rod_combobox.state == "disabled"
+    assert view_state.mirror_selected_qr_phi_var.get() is False
+    assert view_state.mirror_selected_qr_phi_checkbutton.state == "disabled"
     assert view_state.qz_min_slider.state == "disabled"
     assert view_state.qz_max_entry.state == "disabled"
     assert view_state.delta_qr_slider.state == "disabled"
@@ -500,6 +570,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     callback_refs["on_toggle_integrate_selected_qr_rod"]()
     assert show_1d_var.get() is True
     assert view_state.selected_qr_rod_combobox.state == "normal"
+    assert view_state.mirror_selected_qr_phi_checkbutton.state == "normal"
     assert view_state.qz_min_slider.state == "normal"
     assert view_state.qz_max_entry.state == "normal"
     assert view_state.delta_qr_slider.state == "normal"
@@ -508,6 +579,12 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.phi_max_slider.state == "normal"
     assert refresh_calls == ["refresh", "refresh"]
     assert disable_peak_pick_calls == ["disable"]
+
+    show_1d_var.set(False)
+    view_state.mirror_selected_qr_phi_var.set(True)
+    callback_refs["on_toggle_mirror_selected_qr_phi"]()
+    assert show_1d_var.get() is True
+    assert refresh_calls == ["refresh", "refresh", "refresh"]
 
     show_1d_var.set(False)
     view_state.integrate_selected_qr_rod_var.set(False)
@@ -525,7 +602,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert show_1d_var.get() is True
     assert view_state.phi_max_label_var.get() == "15.0"
     assert view_state.phi_max_entry_var.get() == "15.0000"
-    assert refresh_calls == ["refresh", "refresh", "refresh", "refresh"]
+    assert refresh_calls == ["refresh", "refresh", "refresh", "refresh", "refresh"]
 
     show_1d_var.set(False)
     view_state.delta_qr_entry_var.set("9.0")
@@ -542,8 +619,18 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     callback_refs["on_selected_qr_rod_changed"]("phase-a m=1 | Qr=1.2500 A^-1")
     assert view_state.selected_qr_rod_key_var.get() == "phase-a|1"
     assert show_1d_var.get() is True
-    assert schedule_calls == ["range", "range", "range", "range", "range", "range", "range"]
+    assert schedule_calls == [
+        "range",
+        "range",
+        "range",
+        "range",
+        "range",
+        "range",
+        "range",
+        "range",
+    ]
     assert refresh_calls == [
+        "refresh",
         "refresh",
         "refresh",
         "refresh",
@@ -1808,6 +1895,149 @@ def test_qz_bounds_from_caked_drag_for_qr_rod_uses_projected_trace_samples() -> 
         )
         is None
     )
+
+
+def test_qz_bounds_from_caked_drag_for_qr_rod_supports_phi_windows() -> None:
+    projected_samples = {
+        "two_theta": np.asarray([2.0, 2.0, 2.0], dtype=float),
+        "phi": np.asarray([-80.0, 0.0, 80.0], dtype=float),
+        "qz": np.asarray([-1.0, 0.0, 1.0], dtype=float),
+    }
+    phi_windows = ((-85.0, -72.5), (72.5, 85.0))
+
+    assert (
+        integration_range_drag.qz_bounds_from_caked_drag_for_qr_rod(
+            projected_samples,
+            x0=1.5,
+            y0=-5.0,
+            x1=2.5,
+            y1=5.0,
+            phi_windows=phi_windows,
+        )
+        is None
+    )
+    assert integration_range_drag.qz_bounds_from_caked_drag_for_qr_rod(
+        projected_samples,
+        x0=1.5,
+        y0=75.0,
+        x1=2.5,
+        y1=85.0,
+        phi_windows=phi_windows,
+    ) == (1.0, 1.0)
+    assert integration_range_drag.qz_bounds_from_caked_drag_for_qr_rod(
+        projected_samples,
+        x0=1.5,
+        y0=-85.0,
+        x1=2.5,
+        y1=-75.0,
+        phi_windows=phi_windows,
+    ) == (-1.0, -1.0)
+
+
+def test_qz_bounds_from_caked_drag_for_qr_rod_bins_uses_lut_transpose(
+    monkeypatch,
+) -> None:
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    matrix = np.zeros((azimuth_axis.size * radial_axis.size, 6), dtype=np.float32)
+    matrix[0 * radial_axis.size + 1, 1] = 1.0
+    matrix[2 * radial_axis.size + 1, 4] = 1.0
+    projection_context = _qr_drag_projection_context(
+        matrix=matrix,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+    )
+    qr_map = np.zeros((2, 3), dtype=float)
+    qz_map = np.full((2, 3), 99.0, dtype=float)
+    valid = np.zeros((2, 3), dtype=bool)
+    qr_map[0, 1] = 0.25
+    qz_map[0, 1] = -1.5
+    valid[0, 1] = True
+    qr_map[1, 1] = 0.25
+    qz_map[1, 1] = 1.5
+    valid[1, 1] = True
+    monkeypatch.setattr(
+        integration_range_drag.gui_qr_cylinder_overlay,
+        "detector_qr_qz_maps_for_projection",
+        lambda **_kwargs: (qr_map, qz_map, valid),
+    )
+
+    assert integration_range_drag.qz_bounds_from_caked_drag_for_qr_rod_bins(
+        selected_entry={"key": "rod-1", "source": "primary", "m": 1, "qr": 0.25},
+        config=_qr_drag_config(),
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=0.01,
+        x0=1.5,
+        x1=2.5,
+        y0=-85.0,
+        y1=-72.5,
+        phi_windows=((-85.0, -72.5), (72.5, 85.0)),
+    ) == (-1.5, -1.5)
+
+
+def test_update_runtime_qr_rod_drag_preview_passes_mirrored_phi_windows(monkeypatch) -> None:
+    axis = _FakeAxis(xlim=(0.0, 4.0), ylim=(-90.0, 90.0))
+    drag_state = state.IntegrationRangeDragState(
+        active=True,
+        mode="caked_qr_rod",
+        x0=1.5,
+        y0=75.0,
+        x1=2.5,
+        y1=85.0,
+    )
+    view_state = _range_view_state()
+    view_state.phi_min_var.set(72.5)
+    view_state.phi_max_var.set(85.0)
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    view_state.mirror_selected_qr_phi_var = _FakeVar(True)
+    view_state.delta_qr_var = _FakeVar(0.3)
+    radial_axis = np.asarray([1.0, 2.0, 3.0], dtype=float)
+    azimuth_axis = np.asarray([-80.0, 0.0, 80.0], dtype=float)
+    captured_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        integration_range_drag.gui_qr_cylinder_overlay,
+        "build_selected_qr_rod_qz_caked_mask",
+        lambda **kwargs: captured_calls.append(dict(kwargs))
+        or {
+            "mask": np.ones((azimuth_axis.size, radial_axis.size), dtype=bool),
+            "signature": ("preview", kwargs["phi_windows"]),
+        },
+    )
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=axis,
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: True,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        caked_qr_rod_drag_context_factory=lambda: {
+            "selected_entry": {"key": ("phase-a", 1), "qr": 1.25},
+            "config": object(),
+            "projection_context": {"ctx": True},
+            "projected_samples": {
+                "two_theta": np.asarray([2.0], dtype=float),
+                "phi": np.asarray([80.0], dtype=float),
+                "qz": np.asarray([0.5], dtype=float),
+            },
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+        },
+    )
+
+    assert integration_range_drag.update_runtime_qr_rod_drag_preview(bindings) is True
+    assert captured_calls
+    assert captured_calls[0]["phi_windows"] == ((-85.0, -72.5), (72.5, 85.0))
 
 
 def test_selected_qr_rod_caked_drag_updates_only_qz_bounds(monkeypatch) -> None:
