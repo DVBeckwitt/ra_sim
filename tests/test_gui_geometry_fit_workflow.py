@@ -4924,6 +4924,12 @@ def test_new4_ladder_expected_timing_ids_include_feature_rungs() -> None:
 
     assert ladder._expected_rung_ids_for_run("combined") == ("0", "1", "2", "6")
     assert ladder._expected_rung_ids_for_run("selected") == ("0", "1", "2", "6")
+    assert ladder._expected_rung_ids_for_run("pairs") == ("0", "1", "2", "3", "3B", "4")
+    assert ladder._expected_rung_ids_for_run(
+        "pairs",
+        one_param_summary=Path("rung_03_one_param_summary.json"),
+        caked_point_reprojection_report=Path("rung_03b_caked_point_reprojection.json"),
+    ) == ("0", "1", "2", "4")
     assert ladder._expected_rung_ids_for_run("feature") == ("0", "1", "2", "6", "7")
     assert ladder._expected_rung_ids_for_run("features") == ("0", "1", "2", "6", "7")
     assert ladder._expected_rung_ids_for_run(
@@ -6129,6 +6135,38 @@ def test_new4_ladder_one_param_rung_uses_candidate_param_names(monkeypatch) -> N
     assert request.candidate_param_names == ["gamma"]
 
 
+def test_new4_ladder_point_only_projection_flag_is_solver_local() -> None:
+    ladder = _load_new4_ladder_module()
+    request = ladder.build_solver_request(
+        _minimal_new4_ladder_context(ladder),
+        ["center_x"],
+        max_nfev=20,
+    )
+
+    flag = ladder.PRIVATE_QR_FIT_POINT_ONLY_FLAG
+    assert flag not in request.refinement_config.get("solver", {})
+    assert flag not in request.refinement_config.get("optimizer", {})
+    handoff = ladder._request_handoff_summary(request)
+    assert flag not in json.dumps(handoff, sort_keys=True)
+    assert ladder._rung_uses_point_only_projection(rung=1, active_names=["center_x"]) is False
+    assert ladder._rung_uses_point_only_projection(rung=2, active_names=["center_x"]) is False
+    assert ladder._rung_uses_point_only_projection(rung=3, active_names=[]) is False
+    assert ladder._rung_uses_point_only_projection(rung=3, active_names=["center_x"]) is True
+    assert (
+        ladder._rung_uses_point_only_projection(
+            rung=4,
+            active_names=["center_x", "gamma"],
+        )
+        is True
+    )
+
+    private_cfg = ladder._refinement_config_with_private_point_only_projection(
+        request.refinement_config,
+    )
+    assert private_cfg["solver"][flag] is True
+    assert private_cfg["optimizer"][flag] is True
+
+
 def test_new4_ladder_gamma_Gamma_bounds_are_plus_minus_90_degrees() -> None:
     ladder = _load_new4_ladder_module()
     request = ladder.build_solver_request(
@@ -6342,6 +6380,39 @@ def test_new4_ladder_pair_rung_accepts_bounded_solver_status_when_contract_passe
     assert finalized["pass"] is True
     assert finalized["failure_reason"] is None
     assert finalized["pair_guard_failures"] == []
+
+
+def test_new4_ladder_pair_rung_uses_zero_step_when_only_metric_regresses(
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+
+    finalized = ladder._finalize_pair_report(
+        _green_pair_report(
+            ["chi", "cor_angle"],
+            status="failed",
+            after_rms_px=9.5,
+            after_max_error_px=25.0,
+        ),
+        pair_name="chi_cor_angle",
+        pair=["chi", "cor_angle"],
+        state_path=state_path,
+        state_hash_before=state_hash,
+        timeout_seconds=120.0,
+        base_parameter_values={"chi": 1.0, "cor_angle": 2.0},
+    )
+
+    assert finalized["status"] == "ok"
+    assert finalized["pass"] is True
+    assert finalized["failure_reason"] is None
+    assert finalized["pair_guard_failures"] == []
+    assert finalized["metric_neutral_fallback_applied"] is True
+    assert finalized["after_max_error_px"] == finalized["before_max_error_px"]
+    assert finalized["parameter_after"] == {"chi": 1.0, "cor_angle": 2.0}
+    assert finalized["parameter_delta"] == {"chi": 0.0, "cor_angle": 0.0}
 
 
 def test_new4_ladder_pair_rung_skips_params_not_allowed_by_singletons(
@@ -7053,6 +7124,45 @@ def _green_block_report(
     return payload
 
 
+def test_new4_ladder_block_rung_uses_zero_step_when_only_metric_regresses(
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    block = ["chi", "cor_angle", "theta_initial"]
+
+    finalized = ladder._finalize_block_report(
+        _green_block_report(
+            block,
+            status="failed",
+            after_rms_px=9.5,
+            after_max_error_px=25.0,
+        ),
+        block_name="chi_cor_angle_theta_initial",
+        block=block,
+        state_path=state_path,
+        state_hash_before=state_hash,
+        timeout_seconds=120.0,
+        base_parameter_values={"chi": 1.0, "cor_angle": 2.0, "theta_initial": 3.0},
+        provider_after={"provider_guard_ok": True, "classification": "point_provider_parity_ok"},
+        caked_point_reprojection_guard_ok=True,
+    )
+
+    assert finalized["status"] == "ok"
+    assert finalized["pass"] is True
+    assert finalized["failure_reason"] is None
+    assert finalized["block_guard_failures"] == []
+    assert finalized["metric_neutral_fallback_applied"] is True
+    assert finalized["after_max_error_px"] == finalized["before_max_error_px"]
+    assert finalized["parameter_delta"] == {
+        "chi": 0.0,
+        "cor_angle": 0.0,
+        "theta_initial": 0.0,
+    }
+
+
 def _green_combined_report(
     active_names,
     *,
@@ -7610,10 +7720,15 @@ def test_new4_ladder_block_rung_runs_dependency_backed_blocks_not_a_c(
         ["corto_detector", "theta_initial", "cor_angle"],
         ["chi", "cor_angle", "theta_initial"],
         ["corto_detector", "theta_initial", "zs", "zb"],
-        ["a", "c", "psi_z"],
+        ["a", "psi_z"],
     ]
     assert ["a", "c"] not in attempted
     assert not (run_dir / "rung_05_block_a_c.json").exists()
+    fixed_lattice_report = json.loads(
+        (run_dir / "rung_05_block_a_c_psi_z.json").read_text(encoding="utf-8")
+    )
+    assert fixed_lattice_report["fixed_params"] == ["c"]
+    assert fixed_lattice_report["fixed_param_policy"] == "rung2_inactive_fixed"
     assert len(set(seen_hashes)) == 1
     assert first_report["candidate_param_names"] == [
         "corto_detector",
@@ -7785,7 +7900,7 @@ def test_new4_ladder_block_default_builds_same_run_evidence(
 
     assert calls == ["one_param", "caked", "pairs"]
     assert result["status"] == "ok"
-    assert attempted[-1] == ["a", "c", "psi_z"]
+    assert attempted[-1] == ["a", "psi_z"]
     assert (tmp_path / "default_blocks" / "rung_05_block_summary.json").exists()
 
 
@@ -7948,7 +8063,7 @@ def test_new4_ladder_fresh_blocks_nonusable_a_runs_unrelated_blocks(
     assert "one_param_diagnosis:a_diagnosis_not_usable" in result["local_usability_failures"]
     assert result["fatal_evidence_failures"] == []
     assert result["failed_blocks"] == []
-    assert result["skipped_blocks"] == [{"block_name": "a_c_psi_z", "block": ["a", "c", "psi_z"]}]
+    assert result["skipped_blocks"] == [{"block_name": "a_c_psi_z", "block": ["a", "psi_z"]}]
 
 
 def test_new4_ladder_block_missing_dependency_skips_not_fails(
@@ -8523,7 +8638,7 @@ def test_new4_ladder_block_timeout_writes_partial_json(
     assert block_report["status"] == "timeout"
     assert block_report["failure_reason"] == "timeout"
     assert block_report["last_nfev"] == 2
-    assert result["timed_out_blocks"] == [{"block_name": "a_c_psi_z", "block": ["a", "c", "psi_z"]}]
+    assert result["timed_out_blocks"] == [{"block_name": "a_c_psi_z", "block": ["a", "psi_z"]}]
     assert result["failure_reason"] == "no_block_solve_passed"
 
 
@@ -8608,7 +8723,7 @@ def test_new4_ladder_block_dirty_timeout_aborts_remaining(
     ]
     assert {(item["block_name"], tuple(item["block"])) for item in result["skipped_blocks"]} >= {
         ("chi_cor_angle_theta_initial", ("chi", "cor_angle", "theta_initial")),
-        ("a_c_psi_z", ("a", "c", "psi_z")),
+        ("a_c_psi_z", ("a", "psi_z")),
     }
 
 
@@ -15750,6 +15865,16 @@ def test_new4_ladder_solver_rung_resets_stale_heartbeat_trace(
     assert "residual_eval_trace" not in heartbeat
 
 
+def test_new4_ladder_jsonable_breaks_recursive_payload() -> None:
+    ladder = _load_new4_ladder_module()
+    payload: dict[str, object] = {"status": "ok"}
+    payload["self"] = payload
+
+    converted = ladder._jsonable(payload)
+
+    assert converted == {"status": "ok", "self": "<recursive>"}
+
+
 def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> None:
     ladder = _load_new4_ladder_module()
     state_path = tmp_path / "new4.json"
@@ -15920,6 +16045,108 @@ def test_new4_ladder_timeout_writes_partial_report(monkeypatch, tmp_path) -> Non
     assert written["optimizer_nfev"] == 2
     assert written["last_fixed_source_resolved_count"] == 7
     assert written["last_dynamic_qr_row_count"] == 7
+
+
+def test_new4_ladder_retries_subprocess_crash_before_heartbeat(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    output_path = tmp_path / "rung_05_block.json"
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        def __init__(self, cmd, **_kwargs):
+            self.cmd = list(cmd)
+            self.index = len(calls)
+            calls.append(self.cmd)
+            self.returncode = 3221225477 if self.index == 0 else 0
+
+        def communicate(self, timeout=None):
+            if self.index == 1:
+                out = Path(self.cmd[self.cmd.index("--output-json") + 1])
+                ladder._write_json(out, {"status": "ok", "pass": True})
+            return "", ""
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(ladder.subprocess, "Popen", FakeProcess)
+
+    report = ladder._run_solver_rung_with_timeout(
+        state_path=state_path,
+        background_index=0,
+        active_names=["corto_detector", "theta_initial", "cor_angle"],
+        output_path=output_path,
+        max_nfev=20,
+        timeout_seconds=1.0,
+        rung=5,
+        rung_name="block_corto_detector_theta_initial_cor_angle",
+        use_subprocess=True,
+    )
+
+    assert len(calls) == 2
+    assert report["status"] == "ok"
+    assert report["retry_count"] == 1
+    assert report["retry_reason"] == "subprocess_crash_before_heartbeat"
+    assert report["first_child_exit_code"] == 3221225477
+    assert report["first_heartbeat_written"] is False
+    assert report["first_partial_report_written"] is False
+    assert report["child_exit_code"] == 0
+
+
+def test_new4_ladder_does_not_retry_subprocess_crash_after_heartbeat(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {}}\n', encoding="utf-8")
+    output_path = tmp_path / "rung_05_block.json"
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 3221225477
+
+        def __init__(self, cmd, **_kwargs):
+            self.cmd = list(cmd)
+            calls.append(self.cmd)
+
+        def communicate(self, timeout=None):
+            heartbeat = Path(self.cmd[self.cmd.index("--heartbeat-json") + 1])
+            ladder._heartbeat_write(heartbeat, {"status": "running"})
+            return "", ""
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(ladder.subprocess, "Popen", FakeProcess)
+
+    report = ladder._run_solver_rung_with_timeout(
+        state_path=state_path,
+        background_index=0,
+        active_names=["corto_detector", "theta_initial", "cor_angle"],
+        output_path=output_path,
+        max_nfev=20,
+        timeout_seconds=1.0,
+        rung=5,
+        rung_name="block_corto_detector_theta_initial_cor_angle",
+        use_subprocess=True,
+    )
+
+    assert len(calls) == 1
+    assert report["status"] == "error"
+    assert report["retry_count"] == 0
+    assert report["heartbeat_written"] is True
+    assert "retry_reason" not in report
 
 
 def test_new4_ladder_warm_solver_passes_context_to_worker(
@@ -33164,14 +33391,17 @@ def _run_stub_caked_point_reprojection(tmp_path, **context_kwargs):
 
 def test_caked_point_reprojection_recomputes_when_theta_changes(tmp_path) -> None:
     report, projector_calls, _module = _run_stub_caked_point_reprojection(tmp_path)
+    report_path = tmp_path / "new4_run" / _module.REPORT_NAME
+    file_report = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert report["status"] == "pass"
+    assert file_report["status"] == report["status"]
+    assert file_report["point_only_reprojection_called"] is True
     assert report["point_only_reprojection_called"] is True
     assert len(projector_calls) == 3
     assert all(call["input_frame"] == "native_detector" for call in projector_calls)
     assert report["theta_projector_signature_changed"] is True
-    assert report["any_theta_point_shifted"] is True
-    assert report["theta_two_theta_changed"] is True
+    assert report["theta_point_shift_required"] is False
     assert report["all_theta_reprojected_points_finite"] is True
     assert report["exact_projector_available"] is True
     assert report["all_exact_projector_used"] is True

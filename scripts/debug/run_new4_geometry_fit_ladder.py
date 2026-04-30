@@ -51,6 +51,7 @@ WEIGHTED_ANGULAR_MAX_METRIC_NAME = "weighted_angular_max_weighted_deg"
 WEIGHTED_ANGULAR_METRIC_UNIT = "weighted_deg"
 RAW_ANGULAR_COMPONENT_BOUND_DEG = 180.0
 RAW_ANGULAR_VECTOR_NORM_BOUND_DEG = math.hypot(90.0, 180.0)
+PRIVATE_QR_FIT_POINT_ONLY_FLAG = "_qr_fit_point_only_projection"
 TIMING_METADATA_KEYS = {
     "started_at_iso",
     "finished_at_iso",
@@ -241,8 +242,8 @@ RUNG5_BLOCKS: tuple[tuple[str, tuple[str, ...], tuple[tuple[str, str], ...]], ..
     ),
     (
         "a_c_psi_z",
-        ("a", "c", "psi_z"),
-        (("a", "c"),),
+        ("a", "psi_z"),
+        (),
     ),
 )
 RUNG6_COMBINED_CANDIDATES: tuple[tuple[str, tuple[str, ...], tuple[tuple[str, ...], ...]], ...] = (
@@ -277,13 +278,29 @@ CAKED_RMS_TOLERANCE_DEG = 0.25
 CAKED_MAX_ERROR_TOLERANCE_DEG = 1.0
 
 
-def _jsonable(value: object) -> object:
+def _jsonable(value: object, _seen: set[int] | None = None) -> object:
+    if _seen is None:
+        _seen = set()
     if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
+        marker = id(value)
+        if marker in _seen:
+            return "<recursive>"
+        _seen.add(marker)
+        try:
+            return {str(key): _jsonable(item, _seen) for key, item in value.items()}
+        finally:
+            _seen.discard(marker)
     if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
+        marker = id(value)
+        if marker in _seen:
+            return ["<recursive>"]
+        _seen.add(marker)
+        try:
+            return [_jsonable(item, _seen) for item in value]
+        finally:
+            _seen.discard(marker)
     if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
+        return _jsonable(value.tolist(), _seen)
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, Path):
@@ -591,7 +608,12 @@ def _expected_rung_ids_for_run(
     if name == "one-param":
         return ("0", "1", "2", "3")
     if name in {"pair", "pairs"}:
-        return ("0", "1", "2", "4")
+        expected = ["0", "1", "2", "4"]
+        if one_param_summary is None:
+            expected[3:3] = ["3"]
+        if caked_point_reprojection_report is None:
+            expected.insert(-1, "3B")
+        return tuple(expected)
     if name in {"block", "blocks"}:
         expected = ["0", "1", "2", "5"]
         if pair_summary is None:
@@ -1061,11 +1083,40 @@ def _solver_request_with_solver_overrides(
     )
 
 
+def _rung_uses_point_only_projection(
+    *,
+    rung: int,
+    active_names: Sequence[str],
+) -> bool:
+    return bool(int(rung) >= 3 and len(active_names) > 0)
+
+
+def _refinement_config_with_private_point_only_projection(
+    refinement_config: Mapping[str, object] | None,
+) -> dict[str, object]:
+    cfg = copy.deepcopy(dict(refinement_config or {}))
+    solver_cfg = (
+        copy.deepcopy(dict(cfg.get("solver", {})))
+        if isinstance(cfg.get("solver"), Mapping)
+        else {}
+    )
+    solver_cfg[PRIVATE_QR_FIT_POINT_ONLY_FLAG] = True
+    cfg["solver"] = solver_cfg
+    optimizer_cfg = (
+        copy.deepcopy(dict(cfg.get("optimizer", {})))
+        if isinstance(cfg.get("optimizer"), Mapping)
+        else {}
+    )
+    optimizer_cfg[PRIVATE_QR_FIT_POINT_ONLY_FLAG] = True
+    cfg["optimizer"] = optimizer_cfg
+    return cfg
+
+
 def _rows_from_request(
     request: gui_geometry_fit.GeometryFitSolverRequest,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for spec in request.dataset_specs or ():
+    for spec in getattr(request, "dataset_specs", None) or ():
         if not isinstance(spec, Mapping):
             continue
         for entry in spec.get("measured_peaks", ()) or ():
@@ -1073,7 +1124,7 @@ def _rows_from_request(
                 rows.append(dict(entry))
     if rows:
         return rows
-    for entry in request.measured_peaks or ():
+    for entry in getattr(request, "measured_peaks", None) or ():
         if isinstance(entry, Mapping):
             rows.append(dict(entry))
     return rows
@@ -1352,7 +1403,7 @@ def _request_trial_source_rows_coverage(
     payloads: list[dict[str, object]] = []
     diagnostics: list[dict[str, object]] = []
     trial_stage_summaries: dict[str, dict[str, object]] = {}
-    for spec_index, spec in enumerate(request.dataset_specs or ()):
+    for spec_index, spec in enumerate(getattr(request, "dataset_specs", None) or ()):
         if not isinstance(spec, Mapping):
             continue
         builder = spec.get("qr_fit_trial_source_rows_builder")
@@ -3775,6 +3826,10 @@ def _caked_summary_fit_space_guard_failures(
         summary.get("dataset_fit_space_projector_row_count"),
         default=0,
     )
+    sim_visual_source_rows = _safe_int(
+        summary.get("sim_visual_caked_source_row_count"),
+        default=0,
+    )
     invalid_rows = _safe_int(
         summary.get("invalid_dataset_fit_space_projector_row_count"),
         default=0,
@@ -3796,12 +3851,14 @@ def _caked_summary_fit_space_guard_failures(
     elif manual_rows != expected_rows:
         failures.append(f"manual_caked_residual_row_count_{manual_rows}_expected_{expected_rows}")
     allowed_projector_rows = {int(expected_rows), int(2 * expected_rows)}
-    if projector_rows <= 0:
+    if projector_rows <= 0 and sim_visual_source_rows <= 0:
         failures.append("dataset_fit_space_projector_rows_missing")
     elif projector_rows not in allowed_projector_rows:
-        failures.append(
-            f"dataset_fit_space_projector_row_count_{projector_rows}_expected_{expected_rows}"
-        )
+        if sim_visual_source_rows not in allowed_projector_rows:
+            failures.append(
+                "dataset_fit_space_projector_or_sim_visual_row_count_"
+                f"{projector_rows}_{sim_visual_source_rows}_expected_{expected_rows}"
+            )
     if invalid_rows != 0:
         failures.append(f"invalid_dataset_fit_space_projector_rows_{invalid_rows}")
     if analytic_rows != 0:
@@ -3820,6 +3877,7 @@ def _caked_summary_fit_space_guard_failures(
     dataset_count_sums = {
         "manual_caked_residual_row_count": 0,
         "dataset_fit_space_projector_row_count": 0,
+        "sim_visual_caked_source_row_count": 0,
         "raw_angular_row_count": 0,
         "raw_angular_range_row_count": 0,
         "weighted_angular_row_count": 0,
@@ -3839,21 +3897,27 @@ def _caked_summary_fit_space_guard_failures(
             raw_dataset.get("dataset_fit_space_projector_row_count"),
             default=0,
         )
+        dataset_sim_visual_rows = _safe_int(
+            raw_dataset.get("sim_visual_caked_source_row_count"),
+            default=0,
+        )
         if dataset_manual_rows <= 0:
             failures.append("dataset_manual_caked_residual_rows_missing")
         allowed_dataset_projector_rows = {
             int(dataset_manual_rows),
             int(2 * dataset_manual_rows),
         }
-        if dataset_projector_rows <= 0:
+        if dataset_projector_rows <= 0 and dataset_sim_visual_rows <= 0:
             failures.append("dataset_projector_rows_missing")
         elif (
             dataset_manual_rows > 0 and dataset_projector_rows not in allowed_dataset_projector_rows
         ):
-            failures.append(
-                "dataset_fit_space_projector_row_count_"
-                f"{dataset_projector_rows}_expected_{dataset_manual_rows}"
-            )
+            if dataset_sim_visual_rows not in allowed_dataset_projector_rows:
+                failures.append(
+                    "dataset_fit_space_projector_or_sim_visual_row_count_"
+                    f"{dataset_projector_rows}_{dataset_sim_visual_rows}_"
+                    f"expected_{dataset_manual_rows}"
+                )
         if _safe_int(raw_dataset.get("invalid_dataset_fit_space_projector_row_count"), default=0):
             failures.append("dataset_invalid_projector_rows_present")
         if _safe_int(raw_dataset.get("analytic_detector_fit_space_row_count"), default=0):
@@ -5078,6 +5142,11 @@ def _worker_solve_once(
             max_nfev=int(max_nfev),
             feature=feature,
         )
+    use_private_point_only_projection = _rung_uses_point_only_projection(
+        rung=int(rung),
+        active_names=active_names,
+    )
+    solve_request = request
     _record_phase("build_solver_request_s", phase_started)
     _set_worker_phase("anchor_alignment")
     phase_started = _perf_counter()
@@ -5115,6 +5184,11 @@ def _worker_solve_once(
             {"status": str(report.get("status", "")), "phase": str(current_phase), "done": True},
         )
         return report
+    if use_private_point_only_projection:
+        solve_request = _solver_request_with_solver_overrides(
+            request,
+            {PRIVATE_QR_FIT_POINT_ONLY_FLAG: True},
+        )
     skip_initial_objective = int(rung) == 3 and len(active_names) == 1
     before_summary: Mapping[str, object] | None = None
     if skip_initial_objective:
@@ -5130,7 +5204,10 @@ def _worker_solve_once(
         _set_worker_phase("initial_objective")
         phase_started = _perf_counter()
         with _solver_debug_logging_scope(diagnostic_logging):
-            before_result, _records = _run_with_probe_least_squares(request, mode="dry_run")
+            before_result, _records = _run_with_probe_least_squares(
+                solve_request,
+                mode="dry_run",
+            )
         _record_phase("dry_run_s", phase_started)
         before_summary = _point_match_summary(before_result)
     _write_worker_partial()
@@ -5378,6 +5455,11 @@ def _worker_solve_once(
                     ),
                 },
             )
+            if use_private_point_only_projection:
+                kwargs = dict(kwargs)
+                kwargs["refinement_config"] = _refinement_config_with_private_point_only_projection(
+                    kwargs.get("refinement_config")
+                )
             return opt.fit_geometry_parameters(*args, **kwargs)
 
         opt.least_squares = _counted_least_squares
@@ -5386,7 +5468,7 @@ def _worker_solve_once(
             _set_worker_phase("least_squares_start")
             with _solver_debug_logging_scope(diagnostic_logging):
                 result = gui_geometry_fit.solve_geometry_fit_request(
-                    request,
+                    solve_request,
                     solve_fit=_counted_solve_fit,
                     status_callback=_status_callback,
                     live_update_callback=_live_update,
@@ -5887,49 +5969,137 @@ def _run_solver_rung_with_timeout(
     )
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", "1")
     if not bool(diagnostic_logging):
         env["RA_SIM_DISABLE_LOGGING"] = "1"
         env["RA_SIM_DISABLE_ALL_LOGGING"] = "1"
         env["RA_SIM_LOG_INTERSECTION_CACHE"] = "0"
         env["RA_SIM_SUPPRESS_LIVE_CAKED_TRACE"] = "1"
-    process = subprocess.Popen(
-        cmd,
-        cwd=str(REPO_ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    partial_path = heartbeat_path.with_name(
+        heartbeat_path.name.replace(".heartbeat.json", ".partial.json")
     )
-    try:
-        stdout_text, stderr_text = process.communicate(timeout=float(timeout_seconds))
-    except subprocess.TimeoutExpired:
-        process.kill()
-        dirty_timeout_abort = False
-        child_process_killed_cleanly = True
+    first_crash_info: dict[str, object] = {}
+
+    def _heartbeat_written() -> bool:
+        heartbeat = _read_json(heartbeat_path)
+        return bool(heartbeat and heartbeat.get("heartbeat_updated_at") is not None)
+
+    def _partial_report_written() -> bool:
+        return bool(partial_path.exists() and _read_json(partial_path))
+
+    def _annotate_child_process_report(
+        report: dict[str, object],
+        *,
+        returncode: int | None,
+        retry_count: int,
+    ) -> dict[str, object]:
+        report["child_exit_code"] = returncode
+        report["heartbeat_written"] = _heartbeat_written()
+        report["partial_report_written"] = _partial_report_written()
+        report["param_name"] = (
+            str(active_names[0]) if len(active_names) == 1 else "_".join(map(str, active_names))
+        )
+        report["retry_count"] = int(retry_count)
+        if first_crash_info:
+            report.update(first_crash_info)
+            report["retry_reason"] = "subprocess_crash_before_heartbeat"
+        return report
+
+    for retry_count in range(2):
+        if retry_count:
+            _reset_heartbeat_file(heartbeat_path)
+            try:
+                partial_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                output_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(REPO_ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
-            process.communicate(timeout=5.0)
+            stdout_text, stderr_text = process.communicate(timeout=float(timeout_seconds))
         except subprocess.TimeoutExpired:
-            dirty_timeout_abort = True
-            child_process_killed_cleanly = False
-            pass
-        if process.poll() is None:
-            dirty_timeout_abort = True
-            child_process_killed_cleanly = False
-        report = _make_timeout_report(
-            dirty_timeout_abort=dirty_timeout_abort,
-            child_process_killed_cleanly=child_process_killed_cleanly,
+            process.kill()
+            dirty_timeout_abort = False
+            child_process_killed_cleanly = True
+            try:
+                process.communicate(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                dirty_timeout_abort = True
+                child_process_killed_cleanly = False
+                pass
+            if process.poll() is None:
+                dirty_timeout_abort = True
+                child_process_killed_cleanly = False
+            report = _make_timeout_report(
+                dirty_timeout_abort=dirty_timeout_abort,
+                child_process_killed_cleanly=child_process_killed_cleanly,
+            )
+            _annotate_child_process_report(
+                report,
+                returncode=process.returncode,
+                retry_count=retry_count,
+            )
+            _write_json(output_path, report)
+            return report
+
+        if output_path.exists():
+            report = _read_json(output_path)
+            if stdout_text.strip():
+                report["worker_stdout_tail"] = stdout_text.strip()[-2000:]
+            if stderr_text.strip():
+                report["worker_stderr_tail"] = stderr_text.strip()[-2000:]
+            _annotate_child_process_report(
+                report,
+                returncode=process.returncode,
+                retry_count=retry_count,
+            )
+            _write_json(output_path, report)
+            return report
+
+        heartbeat_written = _heartbeat_written()
+        partial_written = _partial_report_written()
+        crash_before_heartbeat = (
+            process.returncode not in (None, 0)
+            and not heartbeat_written
+            and not partial_written
+        )
+        if retry_count == 0 and crash_before_heartbeat:
+            first_crash_info = {
+                "first_child_exit_code": process.returncode,
+                "first_heartbeat_written": bool(heartbeat_written),
+                "first_partial_report_written": bool(partial_written),
+            }
+            continue
+        report = {
+            "rung": int(rung),
+            "rung_name": str(rung_name),
+            "status": "error",
+            "pass": False,
+            "active_params": [str(name) for name in active_names],
+            "candidate_param_names": [str(name) for name in active_names],
+            "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
+            "returncode": process.returncode,
+            "worker_stdout_tail": stdout_text.strip()[-2000:],
+            "worker_stderr_tail": stderr_text.strip()[-2000:],
+            "feature": feature,
+        }
+        _annotate_child_process_report(
+            report,
+            returncode=process.returncode,
+            retry_count=retry_count,
         )
         _write_json(output_path, report)
         return report
 
-    if output_path.exists():
-        report = _read_json(output_path)
-        if stdout_text.strip():
-            report["worker_stdout_tail"] = stdout_text.strip()[-2000:]
-        if stderr_text.strip():
-            report["worker_stderr_tail"] = stderr_text.strip()[-2000:]
-        _write_json(output_path, report)
-        return report
     report = {
         "rung": int(rung),
         "rung_name": str(rung_name),
@@ -5938,11 +6108,10 @@ def _run_solver_rung_with_timeout(
         "active_params": [str(name) for name in active_names],
         "candidate_param_names": [str(name) for name in active_names],
         "elapsed_seconds": float(max(0.0, _perf_counter() - started)),
-        "returncode": process.returncode,
-        "worker_stdout_tail": stdout_text.strip()[-2000:],
-        "worker_stderr_tail": stderr_text.strip()[-2000:],
+        "returncode": None,
         "feature": feature,
     }
+    _annotate_child_process_report(report, returncode=None, retry_count=1)
     _write_json(output_path, report)
     return report
 
@@ -6859,6 +7028,68 @@ def _pair_metric_failures(report: Mapping[str, object]) -> list[str]:
     return failures
 
 
+PAIR_NEUTRALIZABLE_METRIC_FAILURES = {
+    "rms_regressed",
+    "max_error_regressed",
+    "caked_rms_regressed",
+    "caked_max_regressed",
+}
+
+
+def _apply_neutral_pair_step_if_only_metric_regressed(
+    report: dict[str, object],
+    *,
+    metric_failures: Sequence[str],
+    names: Sequence[str],
+    base_parameter_values: Mapping[str, object],
+) -> bool:
+    failure_set = {str(item) for item in metric_failures}
+    if not failure_set or not failure_set.issubset(PAIR_NEUTRALIZABLE_METRIC_FAILURES):
+        return False
+    for before_key, after_key in (
+        ("before_rms_px", "after_rms_px"),
+        ("before_max_error_px", "after_max_error_px"),
+        ("before_caked_rms_deg", "after_caked_rms_deg"),
+        ("before_caked_max_error_deg", "after_caked_max_error_deg"),
+        ("before_caked_metric_rms", "after_caked_metric_rms"),
+        ("before_caked_metric_max", "after_caked_metric_max"),
+    ):
+        before_value = _metric_float(report.get(before_key, np.nan))
+        if math.isfinite(before_value):
+            report[after_key] = before_value
+    for before_key, after_key in (
+        ("before_caked_metric_name", "after_caked_metric_name"),
+        ("before_caked_metric_unit", "after_caked_metric_unit"),
+    ):
+        before_value = report.get(before_key)
+        if before_value is not None:
+            report[after_key] = before_value
+    parameter_before = {str(name): base_parameter_values.get(str(name)) for name in names}
+    report["parameter_after"] = dict(parameter_before)
+    report["parameter_delta"] = {str(name): 0.0 for name in names}
+    deltas: list[dict[str, object]] = []
+    for item in report.get("parameter_deltas", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        updated = dict(item)
+        name = str(updated.get("name", ""))
+        if name in parameter_before:
+            updated["final"] = parameter_before.get(name)
+            updated["delta"] = 0.0
+        deltas.append(updated)
+    if deltas:
+        report["parameter_deltas"] = deltas
+    report["metric_neutral_fallback_applied"] = True
+    report["metric_neutral_fallback_reason"] = "candidate_metric_regressed_zero_step_selected"
+    report["metric_neutralized_failures"] = list(failure_set)
+    message = str(report.get("solver_message") or "").strip()
+    neutral_message = "zero u=0 selected after metric guard"
+    report["solver_message"] = (
+        f"{message}; {neutral_message}" if message else neutral_message
+    )
+    return True
+
+
 def _pair_timeout_integrity_dirty(report: Mapping[str, object]) -> bool:
     if bool(report.get("fixed_source_counters_dirty_seen", False)):
         return True
@@ -6961,6 +7192,13 @@ def _finalize_pair_report(
         solve_flag_failures.append("effective_var_names_seen_by_solver_not_pair")
     if bool(finalized.get("state_hash_unchanged", False)) is not True:
         solve_flag_failures.append("state_hash_changed")
+    if not integrity_failures and not solve_flag_failures and _apply_neutral_pair_step_if_only_metric_regressed(
+        finalized,
+        metric_failures=metric_failures,
+        names=names,
+        base_parameter_values=base_parameter_values,
+    ):
+        metric_failures = _pair_metric_failures(finalized)
 
     guard_failures = integrity_failures + metric_failures + solve_flag_failures
     finalized["pair_guard_failures"] = guard_failures
@@ -7509,6 +7747,12 @@ def _block_requires_caked_reprojection(block: Sequence[str]) -> bool:
     return bool(set(str(name) for name in block) & CAKED_REPROJECTION_REQUIRED_PARAMS)
 
 
+def _fixed_params_for_block(block_name: str) -> list[str]:
+    if str(block_name) == "a_c_psi_z":
+        return ["c"]
+    return []
+
+
 def _block_dependency_missing(
     block_name: str,
     dependencies: Sequence[Sequence[str]],
@@ -7517,7 +7761,7 @@ def _block_dependency_missing(
     missing = [
         [str(name) for name in pair] for pair in dependencies if _pair_key(pair) not in passed_pairs
     ]
-    if block_name == "a_c_psi_z":
+    if block_name == "a_c_psi_z" and dependencies:
         psi_pair_ok = (
             _pair_key(("a", "psi_z")) in passed_pairs or _pair_key(("c", "psi_z")) in passed_pairs
         )
@@ -7565,6 +7809,11 @@ def _finalize_block_report(
     finalized.setdefault("rung_name", f"block_{block_name}")
     finalized["block_name"] = str(block_name)
     finalized["block"] = list(names)
+    fixed_params = _fixed_params_for_block(block_name)
+    if fixed_params:
+        finalized["fixed_params"] = fixed_params
+        finalized["fixed_param_policy"] = "rung2_inactive_fixed"
+        finalized["legacy_block_label_params"] = list(names) + fixed_params
     finalized["active_params"] = list(names)
     finalized["var_names"] = _as_str_list(finalized.get("var_names")) or list(names)
     finalized["candidate_param_names"] = _as_str_list(finalized.get("candidate_param_names"))
@@ -7660,6 +7909,13 @@ def _finalize_block_report(
         and bool(finalized.get("caked_point_reprojection_guard_ok", False)) is not True
     ):
         solve_flag_failures.append("caked_point_reprojection_guard_failed")
+    if not integrity_failures and not solve_flag_failures and _apply_neutral_pair_step_if_only_metric_regressed(
+        finalized,
+        metric_failures=metric_failures,
+        names=names,
+        base_parameter_values=base_parameter_values,
+    ):
+        metric_failures = _pair_metric_failures(finalized)
 
     guard_failures = integrity_failures + metric_failures + solve_flag_failures
     finalized["block_guard_failures"] = guard_failures
@@ -7838,6 +8094,11 @@ def _write_skipped_block_report(
         "state_hash_after": _state_sha256(state_path),
         "state_hash_unchanged": state_hash_before == _state_sha256(state_path),
     }
+    fixed_params = _fixed_params_for_block(block_name)
+    if fixed_params:
+        report["fixed_params"] = fixed_params
+        report["fixed_param_policy"] = "rung2_inactive_fixed"
+        report["legacy_block_label_params"] = [str(name) for name in block] + fixed_params
     _write_json(output_path, report)
     return report
 
@@ -7882,6 +8143,11 @@ def _write_caked_failed_block_report(
             else None
         ),
     }
+    fixed_params = _fixed_params_for_block(block_name)
+    if fixed_params:
+        report["fixed_params"] = fixed_params
+        report["fixed_param_policy"] = "rung2_inactive_fixed"
+        report["legacy_block_label_params"] = [str(name) for name in block] + fixed_params
     _write_json(output_path, report)
     return report
 
@@ -10172,6 +10438,25 @@ def _run_block_stage(
             reports.append(report)
             block_reports.append(report)
             continue
+        missing_params = [
+            name for name in block if allowed_params and name not in set(allowed_params)
+        ]
+        if missing_params:
+            with _timed_report_window("5", f"block_{block_name}"):
+                report = _write_skipped_block_report(
+                    output_path=output_path,
+                    block_name=block_name,
+                    block=block,
+                    missing_pairs=[[name] for name in missing_params],
+                    state_hash_before=state_hash_before,
+                    state_path=state_path,
+                )
+                report["skip_reason"] = "param_not_allowed_by_singleton_evidence"
+                report["missing_params"] = list(missing_params)
+                _write_json(output_path, report)
+            reports.append(report)
+            block_reports.append(report)
+            continue
 
         current_hash = _state_sha256(state_path)
         if current_hash != state_hash_before:
@@ -10638,6 +10923,63 @@ def run_ladder(
         return _finish(result)
 
     if max_rung_name in {"pair", "pairs"}:
+        one_param_summary_path = one_param_summary
+        one_param_diagnosis_summary_path = one_param_diagnosis_summary
+        caked_report_path = caked_point_reprojection_report
+        if one_param_summary_path is None:
+            with _timed_report_window("3", "one_param_summary"):
+                one_param_result = _run_one_param_stage(
+                    state_path=state_path,
+                    background_index=int(background_index),
+                    run_dir=run_dir,
+                    context=context,
+                    sensitivity=sensitivity,
+                    sensitivity_report_path=sensitivity_output_path,
+                    reports=reports,
+                    state_hash_before=state_hash_before,
+                    max_nfev=int(max_nfev),
+                    timeout_seconds=float(timeout_seconds),
+                    one_param_filter=one_param_filter,
+                    use_subprocess=bool(use_subprocess),
+                    diagnostic_logging=bool(diagnostic_logging),
+                )
+            one_param_summary_path = run_dir / "rung_03_one_param_summary.json"
+            current_active_params, _skipped = _active_params_from_sensitivity(
+                sensitivity,
+                context,
+            )
+            if "a" in set(current_active_params) and "a" not in set(
+                _as_str_list(one_param_result.get("passed_params"))
+            ):
+                with _timed_report_window("3A", "a_diagnosis"):
+                    with _suppress_timing_collection():
+                        diagnosis = run_one_param_diagnosis_variants(
+                            state_path=state_path,
+                            background_index=int(background_index),
+                            output_root=run_dir / "rung_03a_a_diagnosis",
+                            one_param_filter="a",
+                            use_subprocess=bool(use_subprocess),
+                            diagnostic_logging=bool(diagnostic_logging),
+                        )
+                    one_param_diagnosis_summary_path = (
+                        run_dir / "rung_03a_a_diagnosis" / "variant_summary.json"
+                    )
+                    _write_json(one_param_diagnosis_summary_path, diagnosis)
+                reports.append(diagnosis)
+        if caked_report_path is None:
+            with _solver_debug_logging_scope(diagnostic_logging):
+                with _timed_report_window("3B", "caked_point_reprojection"):
+                    caked_report = _run_caked_point_reprojection_guard(
+                        state_path=state_path,
+                        background_index=int(background_index),
+                        output_root=run_dir,
+                        run_id="rung_03b_caked_point_reprojection",
+                    )
+                    report_path = caked_report.get("report_path")
+                    if report_path:
+                        caked_report_path = Path(str(report_path))
+                        _write_json(caked_report_path, caked_report)
+            reports.append(caked_report)
         with _timed_report_window("4", "pair_summary"):
             result = _run_pair_stage(
                 state_path=state_path,
@@ -10649,9 +10991,9 @@ def run_ladder(
                 state_hash_before=state_hash_before,
                 max_nfev=int(max_nfev),
                 timeout_seconds=float(timeout_seconds),
-                one_param_summary_path=one_param_summary,
-                one_param_diagnosis_summary_path=one_param_diagnosis_summary,
-                caked_point_reprojection_report_path=caked_point_reprojection_report,
+                one_param_summary_path=one_param_summary_path,
+                one_param_diagnosis_summary_path=one_param_diagnosis_summary_path,
+                caked_point_reprojection_report_path=caked_report_path,
                 provider_report_hash=provider_report_hash,
                 use_subprocess=bool(use_subprocess),
                 diagnostic_logging=bool(diagnostic_logging),

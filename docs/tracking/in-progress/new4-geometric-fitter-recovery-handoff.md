@@ -5,10 +5,60 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-29
+Last updated: 2026-04-30
 
 ## Current status
 
+- 2026-04-30 New4 caked Qr fit checkpoint: coordinate contract is fixed and
+  validated through Rung 5. Manual caked Qr targets now use fixed cached
+  `(2theta, phi)` anchors in degrees, even when an exact caked projector is
+  available. Trial simulated sources are recomputed dynamically from
+  `sim_visual_caked_deg`, and caked Qr residuals are `source - target` with
+  wrapped phi.
+- Bug/error fixed: `_measured_fit_space_anchor()` no longer reprojects manual
+  caked Qr targets through changing trial geometry. This closes the moving
+  measured-target failure class where stale visual/detector aliases could leak
+  into the fit path.
+- Feature/status: `scripts/debug/visualize_new4_qr_fit_coordinates.py` now emits
+  machine-checkable JSON plus a PNG overlay. Base, `center_x`, and
+  `theta_initial` visualizer gates pass: optimizer measured anchors match cached
+  targets, optimizer sources match dynamic rows, targets stay fixed under
+  perturbation, and sources move when expected.
+- Feature/status: private runtime-only point projection is used for solver rungs
+  at and after Rung 3. It is not a public CLI/config flag, is not persisted, and
+  Rung 1/Rung 2 still use the normal validation path. Full caked image/refinement
+  work is skipped only on this solver path while strict q-group/HKL/branch and
+  dynamic `sim_visual_caked_deg` checks remain active.
+- Bug/error fixed: transient Windows child crashes before heartbeat now receive
+  one narrow subprocess retry. Normal solver failures, timeouts, dirty
+  fixed-source failures, non-finite residuals, and post-heartbeat crashes are not
+  retried into a pass. Reports record child exit code, heartbeat/partial status,
+  parameter/block name, and retry count.
+- Bug/error fixed: ladder JSON writing now guards recursive payloads so the
+  parent process cannot crash while writing large block summaries.
+- Rung 3 status: green at
+  `artifacts/geometry_fit_ladder/new4_full_validation/20260430_112053/`.
+  Summary: Rung 0 pass; Rung 1 pass with 7/7 dynamic Qr rows and anchor mismatch
+  0; Rung 2 pass with 12 active parameters, `c` fixed/excluded, and 0 near-zero;
+  Rung 3 one-param pass with 12/12 solves, 0 failed, 0 dirty timeout.
+- Rung 3A/3B status: Rung 3A `a` variants have no unresolved regression. Rung
+  3B caked point reprojection passes with 7 points, native-detector projection
+  input, exact caked bundle projector, and no stale aliases.
+- Rung 4 status: green at
+  `artifacts/geometry_fit_ladder/new4_full_validation/20260430_133237/`.
+  Required pairs pass: `chi_cor_angle`, `theta_initial_cor_angle`,
+  `corto_detector_theta_initial`, and `zs_zb`. `a_c` is skipped because `c` is
+  fixed by the new Rung 2 contract.
+- Rung 5 status: green at
+  `artifacts/geometry_fit_ladder/new4_full_validation/20260430_152300/`.
+  Required blocks pass: `corto_detector_theta_initial_cor_angle`,
+  `chi_cor_angle_theta_initial`, `corto_detector_theta_initial_zs_zb`, and
+  `a_c_psi_z`. The legacy `a_c_psi_z` block label now solves only `a, psi_z`
+  and records `c` as fixed with `fixed_param_policy = rung2_inactive_fixed`.
+- Remaining work: Rung 6 combined, Rung 7 features, explicit/default headless
+  `fit-geometry`, and the final focused + dev-check test set are not run yet.
+  Generated ladder and visualizer artifacts remain local validation output and
+  should not be committed.
 - 2026-04-29 strict full-validation checkpoint: Rung 0/provider parity remains
   green on the restored historical 7-pair fixture. The active state is
   `artifacts/geometry_fit_gui_states/new4.json`, preserved hash

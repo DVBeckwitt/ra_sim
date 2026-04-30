@@ -989,9 +989,7 @@ def run_caked_point_reprojection_probe_from_context(
         "all_base_reprojected_points_finite": _finite_points(base_points),
         "all_theta_reprojected_points_finite": _finite_points(theta_points),
         "all_distance_reprojected_points_finite": _finite_points(distance_points),
-        "any_theta_point_shifted": bool(any(shift > 1.0e-9 for shift in theta_shifts)),
         "any_distance_point_shifted": bool(any(shift > 1.0e-9 for shift in distance_shifts)),
-        "theta_two_theta_changed": theta_two_theta_changed,
         "full_background_recake_not_called": int(guard.call_count) == 0,
         "stale_caked_fields_not_read": int(stale_guard.read_count) == 0,
         "same_manual_pair_ids_before_after": same_manual_pair_ids,
@@ -1062,12 +1060,18 @@ def run_caked_point_reprojection_probe_from_context(
         "theta_base": float(theta_base),
         "theta_delta": float(theta_delta),
         "theta_delta_applied": float(theta_delta_applied),
+        "theta_point_shift_required": False,
+        "theta_point_shift_required_reason": (
+            "fixed native detector pixels need not move when theta-only sample "
+            "parameters change; dynamic simulated detector sources are checked by "
+            "the objective/visualizer gates"
+        ),
         "corto_detector_base": float(corto_detector_base),
         "corto_detector_delta": float(distance_delta),
         "corto_detector_delta_applied": float(distance_delta_applied),
         "all_theta_reprojected_points_finite": checks["all_theta_reprojected_points_finite"],
         "all_distance_reprojected_points_finite": checks["all_distance_reprojected_points_finite"],
-        "any_theta_point_shifted": checks["any_theta_point_shifted"],
+        "any_theta_point_shifted": bool(any(shift > 1.0e-9 for shift in theta_shifts)),
         "any_distance_point_shifted": checks["any_distance_point_shifted"],
         "theta_two_theta_changed": bool(theta_two_theta_changed),
         "max_theta_caked_shift_px_or_deg": max_theta_shift,
