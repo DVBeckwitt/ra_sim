@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: none
 Priority: p2
-Last updated: 2026-04-29
+Last updated: 2026-04-30
 
 ## Summary
 
@@ -31,9 +31,24 @@ back to contributing detector pixels, then filter those detector pixels by Qr
 and valid Qz. This avoids using a single inverse caked-bin centroid for an
 aggregate bin. The old projected-sample drag helper remains fallback only.
 
+Selected-Qr rod 1D profiles now use detector-space numeric integration instead
+of the caked display mask. The runtime selects detector pixels by Qr band, Qz
+bin, valid detector Q map, finite intensity, and signed/mirrored GUI phi window,
+then histograms intensity by Qz. The caked selected-Qr mask remains the overlay
+and drag-preview source only.
+
 The selected-Qr rod Qz controls now default to `0..5`. Runtime slider bounds use
 `0` as the lower Qz limit and the largest positive Qz candidate from the
 current caked 2theta extent as the upper limit.
+
+## Bug/error/feature status
+
+- Bug: fixed. Selected-Qr rod numeric 1D profiles no longer integrate caked bins
+  through the display mask; they classify detector pixels by Qr/Qz/phi first.
+- Error: no known selected-Qr rod detector-integration errors remain after the
+  focused GUI/runtime validation below.
+- Feature: complete for this workflow. Existing rod intensity mode, mirrored phi
+  controls, caked overlay, and caked Qz drag behavior are preserved.
 
 ## Next actions
 
@@ -53,6 +68,12 @@ current caked 2theta extent as the upper limit.
   passed, `401 passed`.
 - 2026-04-29: `python -m pytest tests/test_gui_views.py::test_create_integration_range_controls_store_vars_bindings_and_commands -ra`
   passed, `1 passed`.
+- 2026-04-30: `python -m pytest tests/test_gui_qr_cylinder_overlay.py tests/test_gui_integration_range_drag.py tests/test_gui_runtime_import_safe.py -ra`
+  passed, `414 passed`.
+- 2026-04-30: `python -m ruff check ra_sim/gui/qr_cylinder_overlay.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_qr_cylinder_overlay.py tests/test_gui_runtime_import_safe.py`
+  passed.
+- 2026-04-30: `python -m py_compile ra_sim/gui/qr_cylinder_overlay.py ra_sim/gui/_runtime/runtime_session.py`
+  passed.
 
 ## Links
 

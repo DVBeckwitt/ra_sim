@@ -79,6 +79,7 @@
   - Parallelized the post-placement geometry refinement pass for auto-added Qr/Qz peaks with a bounded CPU worker pool.
   - Added selected-Qr rod `Mirror +/-phi band` integration so caked high-azimuth lobes can be selected as a symmetric `|phi|` band without filling the central phi rows.
   - Fixed selected-Qr rod caked integration masks so valid high-`|phi|` bins are selected from detector Qr/Qz pixels through the exact-cake LUT instead of depending on finite forward-projected Qr trace samples; selected-Qr drag Qz bounds now use the LUT transpose from dragged caked bins back to detector contributors.
+  - Fixed selected-Qr rod 1D profiles to integrate detector pixels by Qr/Qz/phi before Qz binning, leaving the caked rod mask as a display overlay instead of using it as the numeric integration mask.
   - Hardened GUI detector-center remap cache handling so exact remaps retain QR/Qz identity, invalidate stale manual/caked/q-space projection caches, report projection and handoff trace state, and fall back to full simulation for missing secondary exact caches or center-plus-physics changes.
   - Fixed manual geometry refresh so detector-coordinate truth is not replaced by stale caked fields and refreshed caked coordinates update raw caked fields.
   - Hardened GUI runtime prune reuse/fill QR selector cache handling so explicit QR/Qz masks persist, stale source-row snapshots are not retained across incompatible hit-table identity, and runtime traces report selector retention/deferred refresh/fitter handoff validity.

@@ -9138,6 +9138,16 @@ def _default_qz_values_for_extent(
     return qz_lower, min(5.0, qz_upper)
 
 
+def _selected_qr_rod_detector_mode_requested() -> bool:
+    if not _active_caked_primary_view():
+        return False
+    try:
+        roi_values = _current_analysis_roi_values()
+    except Exception:
+        return False
+    return bool(roi_values.get("integrate_selected_qr_rod", False))
+
+
 def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     if not _active_caked_primary_view():
         return None
@@ -9239,8 +9249,140 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
             "selected_qr_rod_key": encoded_key,
             "mask": mask,
             "signature": signature,
+            "qz_min": qz_lo,
+            "qz_max": qz_hi,
         }
     return cache.get("result")
+
+
+def _current_selected_qr_rod_detector_integration_context() -> dict[str, object] | None:
+    if not _selected_qr_rod_detector_mode_requested():
+        return None
+
+    roi_values = _current_analysis_roi_values()
+    try:
+        delta_qr = float(roi_values.get("delta_qr", 0.0))
+        qz_min = float(roi_values.get("qz_min", 0.0))
+        qz_max = float(roi_values.get("qz_max", 0.0))
+        phi_min = float(roi_values.get("phi_min", -180.0))
+        phi_max = float(roi_values.get("phi_max", 180.0))
+    except Exception:
+        return None
+    if not np.isfinite(delta_qr) or delta_qr <= 0.0:
+        return None
+    qz_lo, qz_hi = sorted((qz_min, qz_max))
+    if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
+        return None
+    if bool(roi_values.get("mirror_selected_qr_phi", False)):
+        phi_windows = gui_qr_cylinder_overlay.mirrored_abs_phi_windows(phi_min, phi_max)
+    else:
+        phi_windows = gui_qr_cylinder_overlay.normalize_caked_phi_windows(
+            phi_min=phi_min,
+            phi_max=phi_max,
+        )
+    if phi_windows is None:
+        return None
+
+    entries = _analysis_selected_qr_rod_entries()
+    selected_entry = _current_selected_qr_rod_entry(entries)
+    if selected_entry is None:
+        return None
+    try:
+        qr_center = float(selected_entry["qr"])
+    except Exception:
+        return None
+    if not np.isfinite(qr_center):
+        return None
+
+    radial_axis = np.asarray(
+        simulation_runtime_state.last_caked_radial_values,
+        dtype=float,
+    ).reshape(-1)
+    radial_axis = radial_axis[(radial_axis >= 0.0) & (radial_axis <= 90.0)]
+    if radial_axis.size <= 0:
+        return None
+    qz_edges = np.linspace(qz_lo, qz_hi, int(radial_axis.size) + 1, dtype=np.float64)
+
+    detector_image = getattr(simulation_runtime_state, "unscaled_image", None)
+    try:
+        detector_array = np.asarray(detector_image, dtype=float)
+    except Exception:
+        return None
+    if detector_array.ndim != 2:
+        return None
+    detector_shape = tuple(int(v) for v in detector_array.shape[:2])
+    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return None
+
+    config_factory = globals().get("qr_cylinder_overlay_render_config_factory")
+    if not callable(config_factory):
+        return None
+    try:
+        config = config_factory()
+    except Exception:
+        return None
+    if not isinstance(config, gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig):
+        return None
+
+    q_maps = gui_qr_cylinder_overlay.detector_qr_qz_maps_for_projection(
+        config=config,
+        detector_shape=detector_shape,
+    )
+    if q_maps is None:
+        return None
+    qr_map, qz_map, valid_q = q_maps
+    if (
+        np.asarray(qr_map).shape != detector_shape
+        or np.asarray(qz_map).shape != detector_shape
+        or np.asarray(valid_q).shape != detector_shape
+    ):
+        return None
+
+    ai_cache = getattr(simulation_runtime_state, "ai_cache", {}) or {}
+    ai = ai_cache.get("ai") if isinstance(ai_cache, Mapping) else None
+    _two_theta, raw_phi = _detector_angular_maps_for_shape(ai, detector_shape)
+    detector_phi_deg = None
+    if raw_phi is not None:
+        try:
+            detector_phi_deg = np.asarray(raw_phi_to_gui_phi(raw_phi), dtype=np.float64)
+        except Exception:
+            detector_phi_deg = None
+        if detector_phi_deg is not None and detector_phi_deg.shape != detector_shape:
+            detector_phi_deg = None
+    if detector_phi_deg is None and not gui_qr_cylinder_overlay._phi_windows_cover_full_range(
+        phi_windows
+    ):
+        return None
+
+    encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+    return {
+        "selected_entry": dict(selected_entry),
+        "selected_qr_rod_key": encoded_key,
+        "qr_center": qr_center,
+        "delta_qr": delta_qr,
+        "qz_edges": qz_edges,
+        "qz_min": qz_lo,
+        "qz_max": qz_hi,
+        "phi_min": phi_min,
+        "phi_max": phi_max,
+        "phi_windows": phi_windows,
+        "qr_map": qr_map,
+        "qz_map": qz_map,
+        "valid_q": valid_q,
+        "detector_phi_deg": detector_phi_deg,
+        "detector_shape": detector_shape,
+        "signature": (
+            "selected_qr_rod_detector_qz_profile",
+            encoded_key,
+            round(float(qr_center), 10),
+            round(float(delta_qr), 10),
+            round(float(qz_lo), 10),
+            round(float(qz_hi), 10),
+            tuple((round(float(lo), 10), round(float(hi), 10)) for lo, hi in phi_windows),
+            detector_shape,
+            int(radial_axis.size),
+        ),
+    }
 
 
 def _current_selected_qr_rod_drag_context() -> dict[str, object] | None:

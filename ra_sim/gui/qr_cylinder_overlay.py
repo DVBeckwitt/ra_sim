@@ -366,6 +366,128 @@ def caked_phi_window_mask(
     return selected
 
 
+def _phi_windows_cover_full_range(
+    phi_windows: Sequence[tuple[object, object]],
+) -> bool:
+    normalized_windows = normalize_caked_phi_windows(phi_windows=phi_windows)
+    if normalized_windows is None:
+        return False
+    for lo, hi in normalized_windows:
+        if hi >= lo and (hi - lo) >= 360.0:
+            return True
+        if lo <= -180.0 and hi >= 180.0:
+            return True
+    return False
+
+
+def integrate_detector_qr_rod_qz_profile(
+    *,
+    detector_image: object,
+    qr_map: object,
+    qz_map: object,
+    qz_edges: object,
+    qr_center: object,
+    delta_qr: object,
+    valid_q: object = None,
+    detector_phi_deg: object = None,
+    phi_min: object = -180.0,
+    phi_max: object = 180.0,
+    phi_windows: Sequence[tuple[object, object]] | None = None,
+) -> dict[str, np.ndarray] | None:
+    """Integrate selected-Qr rod intensity directly from detector pixels."""
+
+    try:
+        image = np.asarray(detector_image, dtype=np.float64)
+        qr_values = np.asarray(qr_map, dtype=np.float64)
+        qz_values = np.asarray(qz_map, dtype=np.float64)
+        edges = np.asarray(qz_edges, dtype=np.float64).reshape(-1)
+        qr0 = float(qr_center)
+        delta = float(delta_qr)
+    except Exception:
+        return None
+    if (
+        image.ndim != 2
+        or qr_values.shape != image.shape
+        or qz_values.shape != image.shape
+        or edges.size < 2
+        or not np.all(np.isfinite(edges))
+        or not np.all(np.diff(edges) > 0.0)
+        or not np.isfinite(qr0)
+        or not np.isfinite(delta)
+        or delta <= 0.0
+    ):
+        return None
+
+    if valid_q is None:
+        valid = np.ones(image.shape, dtype=bool)
+    else:
+        try:
+            valid = np.asarray(valid_q, dtype=bool)
+        except Exception:
+            return None
+        if valid.shape != image.shape:
+            return None
+
+    normalized_phi_windows = normalize_caked_phi_windows(
+        phi_min=phi_min,
+        phi_max=phi_max,
+        phi_windows=phi_windows,
+    )
+    if normalized_phi_windows is None:
+        return None
+    if detector_phi_deg is None:
+        if _phi_windows_cover_full_range(normalized_phi_windows):
+            phi_mask = np.ones(image.shape, dtype=bool)
+        else:
+            return None
+    else:
+        try:
+            detector_phi = np.asarray(detector_phi_deg, dtype=np.float64)
+        except Exception:
+            return None
+        if detector_phi.shape != image.shape:
+            return None
+        phi_mask = caked_phi_window_mask(detector_phi, normalized_phi_windows)
+        if phi_mask.shape != image.shape:
+            return None
+
+    selected = (
+        valid
+        & phi_mask
+        & np.isfinite(image)
+        & np.isfinite(qr_values)
+        & np.isfinite(qz_values)
+        & (qr_values >= qr0 - delta)
+        & (qr_values <= qr0 + delta)
+        & (qz_values >= edges[0])
+        & (qz_values <= edges[-1])
+    )
+    selected_qz = qz_values[selected]
+    selected_intensity = image[selected]
+
+    pixel_count = np.histogram(selected_qz, bins=edges)[0].astype(np.int64, copy=False)
+    intensity_sum = np.histogram(
+        selected_qz,
+        bins=edges,
+        weights=selected_intensity,
+    )[0].astype(np.float64, copy=False)
+    intensity_mean = np.divide(
+        intensity_sum,
+        pixel_count,
+        out=np.full(intensity_sum.shape, np.nan, dtype=np.float64),
+        where=pixel_count > 0,
+    )
+
+    return {
+        "qz_min": edges[:-1].copy(),
+        "qz_max": edges[1:].copy(),
+        "qz_center": ((edges[:-1] + edges[1:]) * 0.5).astype(np.float64, copy=False),
+        "pixel_count": pixel_count,
+        "intensity_sum": intensity_sum,
+        "intensity_mean": intensity_mean,
+    }
+
+
 def _overlay_enabled(bindings: QrCylinderOverlayRuntimeBindings) -> bool:
     return bool(_resolve_runtime_value(bindings.overlay_enabled_factory))
 

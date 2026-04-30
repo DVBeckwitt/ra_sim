@@ -630,6 +630,168 @@ def test_caked_phi_window_mask_supports_disjoint_high_abs_phi_windows() -> None:
     )
 
 
+def _synthetic_detector_qr_rod_inputs() -> dict[str, np.ndarray]:
+    return {
+        "detector_image": np.asarray(
+            [
+                [10.0, 20.0, 30.0],
+                [40.0, 50.0, 60.0],
+            ],
+            dtype=float,
+        ),
+        "qr_map": np.asarray(
+            [
+                [1.00, 1.00, 1.20],
+                [1.00, 1.00, 1.00],
+            ],
+            dtype=float,
+        ),
+        "qz_map": np.asarray(
+            [
+                [0.25, 1.25, 1.25],
+                [0.25, 1.25, 2.25],
+            ],
+            dtype=float,
+        ),
+        "detector_phi_deg": np.asarray(
+            [
+                [-45.0, -45.0, -45.0],
+                [45.0, -45.0, -45.0],
+            ],
+            dtype=float,
+        ),
+        "valid_q": np.ones((2, 3), dtype=bool),
+        "qz_edges": np.asarray([0.0, 1.0, 2.0, 3.0], dtype=float),
+    }
+
+
+def test_integrate_detector_qr_rod_qz_profile_bins_detector_pixels_by_qz() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.0,
+        delta_qr=0.05,
+        phi_windows=((-90.0, 0.0),),
+    )
+
+    assert profile is not None
+    np.testing.assert_allclose(profile["qz_center"], np.asarray([0.5, 1.5, 2.5]))
+    np.testing.assert_array_equal(profile["pixel_count"], np.asarray([1, 2, 1]))
+    np.testing.assert_allclose(profile["intensity_sum"], np.asarray([10.0, 70.0, 60.0]))
+    np.testing.assert_allclose(profile["intensity_mean"], np.asarray([10.0, 35.0, 60.0]))
+
+
+def test_integrate_detector_qr_rod_qz_profile_respects_signed_phi_windows() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.0,
+        delta_qr=0.05,
+        phi_windows=((0.0, 90.0),),
+    )
+
+    assert profile is not None
+    np.testing.assert_array_equal(profile["pixel_count"], np.asarray([1, 0, 0]))
+    np.testing.assert_allclose(profile["intensity_sum"], np.asarray([40.0, 0.0, 0.0]))
+    assert np.isnan(profile["intensity_mean"][1])
+    assert np.isnan(profile["intensity_mean"][2])
+
+
+def test_integrate_detector_qr_rod_qz_profile_respects_mirrored_phi_windows() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.0,
+        delta_qr=0.05,
+        phi_windows=qr_cylinder_overlay.mirrored_abs_phi_windows(40.0, 50.0),
+    )
+
+    assert profile is not None
+    np.testing.assert_array_equal(profile["pixel_count"], np.asarray([2, 2, 1]))
+    np.testing.assert_allclose(profile["intensity_sum"], np.asarray([50.0, 70.0, 60.0]))
+    np.testing.assert_allclose(profile["intensity_mean"], np.asarray([25.0, 35.0, 60.0]))
+
+
+def test_integrate_detector_qr_rod_qz_profile_rejects_nonmonotonic_qz_edges() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+    inputs["qz_edges"] = np.asarray([0.0, 2.0, 1.0], dtype=float)
+
+    assert (
+        qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+            **inputs,
+            qr_center=1.0,
+            delta_qr=0.05,
+            phi_windows=((-90.0, 0.0),),
+        )
+        is None
+    )
+
+
+def test_integrate_detector_qr_rod_qz_profile_requires_phi_map_for_nonfull_phi_window() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+    inputs["detector_phi_deg"] = None
+
+    assert (
+        qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+            **inputs,
+            qr_center=1.0,
+            delta_qr=0.05,
+            phi_windows=((-90.0, 0.0),),
+        )
+        is None
+    )
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.0,
+        delta_qr=0.05,
+        phi_windows=((-180.0, 180.0),),
+    )
+    assert profile is not None
+
+
+def test_integrate_detector_qr_rod_qz_profile_ignores_pixels_outside_qr_band() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.3,
+        delta_qr=0.05,
+        phi_windows=((-180.0, 180.0),),
+    )
+
+    assert profile is not None
+    np.testing.assert_array_equal(profile["pixel_count"], np.asarray([0, 0, 0]))
+    np.testing.assert_allclose(profile["intensity_sum"], np.asarray([0.0, 0.0, 0.0]))
+    assert np.all(np.isnan(profile["intensity_mean"]))
+
+
+def test_integrate_detector_qr_rod_qz_profile_ignores_invalid_q_pixels() -> None:
+    inputs = _synthetic_detector_qr_rod_inputs()
+    inputs["valid_q"] = np.asarray(
+        [
+            [True, True, True],
+            [True, True, False],
+        ],
+        dtype=bool,
+    )
+
+    profile = qr_cylinder_overlay.integrate_detector_qr_rod_qz_profile(
+        **inputs,
+        qr_center=1.0,
+        delta_qr=0.05,
+        phi_windows=((-90.0, 0.0),),
+    )
+
+    assert profile is not None
+    np.testing.assert_array_equal(profile["pixel_count"], np.asarray([1, 2, 0]))
+    np.testing.assert_allclose(profile["intensity_sum"], np.asarray([10.0, 70.0, 0.0]))
+    np.testing.assert_allclose(profile["intensity_mean"][:2], np.asarray([10.0, 35.0]))
+    assert np.isnan(profile["intensity_mean"][2])
+
+
 def test_build_selected_qr_rod_qz_caked_mask_signature_tracks_phi_windows() -> None:
     config = _overlay_config(render_in_caked_space=True)
     projection_context = _caked_projection_context()
