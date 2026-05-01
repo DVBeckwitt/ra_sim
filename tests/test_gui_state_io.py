@@ -329,6 +329,59 @@ def test_collect_snapshot_persists_6h_qr_reference_toggle(tmp_path) -> None:
     assert loaded["variables"]["geometry_include_6h_qr_reference_var"] is True
 
 
+def test_generated_disordered_checkbox_persists_through_state_io(tmp_path) -> None:
+    class _FakeTkVar:
+        def __init__(self, value) -> None:
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value) -> None:
+            self.value = value
+
+    source_var = _FakeTkVar(False)
+    target_var = _FakeTkVar(True)
+    snapshot = state_io.collect_full_gui_state_snapshot(
+        global_items={
+            "geometry_include_generated_disordered_qr_var": source_var,
+        },
+        tk_variable_type=_FakeTkVar,
+        occ_vars=[],
+        atom_site_fract_vars=[],
+        geometry_q_group_rows=[],
+        geometry_disabled_qr_sets=[],
+        geometry_disabled_qz_sections=[],
+        geometry_manual_pairs=[],
+        geometry_peak_records=[],
+        selected_hkl_target=None,
+        primary_cif_path="primary.cif",
+        secondary_cif_path=None,
+        osc_files=[],
+        current_background_index=0,
+        background_visible=True,
+        background_backend_rotation_k=0,
+        background_backend_flip_x=False,
+        background_backend_flip_y=False,
+        background_limits_user_override=False,
+        simulation_limits_user_override=False,
+        scale_factor_user_override=False,
+    )
+
+    file_path = tmp_path / "generated_disordered_toggle_state.json"
+    save_gui_state_file(file_path, snapshot)
+    loaded = load_gui_state_file(file_path)["state"]
+    warnings = state_io.apply_gui_state_variables(
+        loaded["variables"],
+        global_items={"geometry_include_generated_disordered_qr_var": target_var},
+        tk_variable_type=_FakeTkVar,
+    )
+
+    assert warnings == []
+    assert loaded["variables"]["geometry_include_generated_disordered_qr_var"] is False
+    assert target_var.get() is False
+
+
 def test_build_geometry_placements_payload_normalizes_nested_values(tmp_path):
     payload = build_geometry_placements_payload(
         {

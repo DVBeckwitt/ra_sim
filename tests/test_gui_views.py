@@ -2435,6 +2435,11 @@ def test_stacking_parameter_panels_and_slider_refs_are_stored(monkeypatch) -> No
     assert view_state.w1_var.get() == 20.0
     assert view_state.p2_var.get() == 0.40
     assert view_state.w2_var.get() == 70.0
+    assert view_state.geometry_include_6h_qr_reference_var.get() is False
+    assert view_state.geometry_include_generated_disordered_qr_var.get() is True
+    assert view_state.geometry_include_generated_disordered_qr_checkbutton.kwargs["text"] == (
+        "Include generated disordered-phase Qr refs"
+    )
     assert view_state.p0_scale is created[0]["slider"]
     assert view_state.w0_scale is created[1]["slider"]
     assert view_state.p1_scale is created[2]["slider"]

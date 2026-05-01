@@ -1960,6 +1960,7 @@ def audited_full_order_source_reflection_index_groups(
     hit_table_groups: Sequence[Sequence[object] | None] | None,
     *,
     owner: str,
+    start_index: int = 0,
 ) -> list[list[int]]:
     """Return sequential full-order reflection ids for one or more table groups."""
 
@@ -1967,7 +1968,7 @@ def audited_full_order_source_reflection_index_groups(
     if not groups:
         return []
 
-    next_start_index = 0
+    next_start_index = int(start_index)
     reflection_index_groups: list[list[int]] = []
     for group_index, hit_tables in enumerate(groups):
         indices = audited_full_order_source_reflection_indices(

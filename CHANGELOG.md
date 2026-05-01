@@ -39,6 +39,9 @@
   - Fixed `Pick Beam Center` to drive the visible Beam Center Row/Col slider widgets directly so their entry boxes refresh after a pick.
   - Changed Refine tab panels to start collapsed by default, including geometry, beam, lattice, CIF, and ordered-structure sections.
   - Backfilled legacy manual Qr/Qz pairs that have detector/background pixels but no saved caked `(2theta, phi)` anchors before headless geometry-fit preparation, and carried the repaired `manual_pairs` into the returned saved-state snapshot.
+  - Fixed generated disordered-phase Qr/Qz references so nonzero disordered stacking weights invalidate live picker caches, schedule disordered hit-table collection even when primary hit tables are reusable, and preserve `source_label="disordered_phase"` in pickable Qr/Qz groups.
+  - Added live runtime trace diagnostics for generated disordered-phase Qr/Qz references, including source counts, skip reasons, collection counts, and published group/peak counts.
+  - Added an explicit `Include generated disordered-phase Qr refs` GUI toggle, enabled by default and independent from the packaged 6H reference toggle.
   - Added trial caked axes-only payload support so refined geometry probes can recompute dynamic Qr/Qz source rows without rasterizing a full caked image.
   - Added New4 ladder worker phase/partial-report telemetry, residual-evaluation timing, cache-rebuild counters, and timeout diagnostics; singleton solve rungs can skip the duplicate initial dry-run objective and use the first solver evaluation instead.
   - Added a mixed-update geometry-fitter cache regression suite covering unsafe mixed fast-path fallbacks, stale worker result handling, deferred q-group refresh, projection handoff validity, and objective-cache reject reasons.

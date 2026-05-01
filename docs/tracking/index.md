@@ -32,6 +32,7 @@ downstream of green mosaic fitting.
 | Beam center background pick | feature | - | none | p1 | 2026-04-30 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
 | 6H Qr reference SF picking | feature/bug | - | none | p1 | 2026-04-30 | [6h-qr-reference-sf-picking.md](in-progress/6h-qr-reference-sf-picking.md) |
+| Generated disordered Qr live path | bug/feature | - | none | p1 | 2026-05-01 | [generated-disordered-qr-live-path.md](in-progress/generated-disordered-qr-live-path.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
@@ -85,6 +86,19 @@ defaulting off. Focused 6H compile, duplicate-merge, detector-fallback,
 runtime-gate, state-IO, and ruff checks pass. Wider manual-geometry validation
 is still red in existing caked-view candidate/reverse-LUT expectations, so the
 feature remains in progress until those broader failures are triaged.
+
+Generated disordered Qr live path status note:
+The user-reported primary-only live picker reuse is fixed. With nonzero
+generated-disordered stacking weight, the live runtime evaluates the active-CIF
+generated inventory, schedules hit-table-only disordered collection when rows
+are missing or stale, publishes stored `disordered_phase` rows into the active
+Qr/Qz picker cache, and exposes `Include generated disordered-phase Qr refs`
+as a saved checkbox defaulting on. The path logs enable/skip decisions,
+inventory paths, collection counts, published group/peak counts, and final
+source counts. Focused user-report, live-refresh, inventory, scheduling,
+current-refresh, UI enable, q-group cache, hit-table, logging, compile, and
+targeted ruff checks pass. Full `ra_sim.dev check` is still blocked by existing
+`ra_sim/fitting/optimization.py` formatting drift.
 
 Weighted-event representative status note:
 `Weighted-event representative cache carry-through` is implemented on fast

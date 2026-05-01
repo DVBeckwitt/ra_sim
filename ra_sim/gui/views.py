@@ -4852,6 +4852,7 @@ def create_stacking_probability_sliders(
     values: dict[str, float],
     on_update: Callable[..., None],
     on_toggle_6h_qr_reference: Callable[..., None] | None = None,
+    on_toggle_generated_disordered_qr_reference: Callable[..., None] | None = None,
 ) -> None:
     """Create the stacking probability/weight sliders and store refs."""
 
@@ -4924,13 +4925,25 @@ def create_stacking_probability_sliders(
     include_6h_var = tk.BooleanVar(value=False)
     include_6h_checkbutton = ttk.Checkbutton(
         parent,
-        text="Include 6H Qr refs",
+        text="Include packaged 6H Qr refs",
         variable=include_6h_var,
         command=on_toggle_6h_qr_reference,
     )
     include_6h_checkbutton.pack(anchor=tk.W, padx=5, pady=(4, 2))
     view_state.geometry_include_6h_qr_reference_var = include_6h_var
     view_state.geometry_include_6h_qr_reference_checkbutton = include_6h_checkbutton
+    include_generated_disordered_var = tk.BooleanVar(value=True)
+    include_generated_disordered_checkbutton = ttk.Checkbutton(
+        parent,
+        text="Include generated disordered-phase Qr refs",
+        variable=include_generated_disordered_var,
+        command=on_toggle_generated_disordered_qr_reference,
+    )
+    include_generated_disordered_checkbutton.pack(anchor=tk.W, padx=5, pady=(0, 2))
+    view_state.geometry_include_generated_disordered_qr_var = include_generated_disordered_var
+    view_state.geometry_include_generated_disordered_qr_checkbutton = (
+        include_generated_disordered_checkbutton
+    )
 
 
 def rebuild_occupancy_controls(

@@ -17015,10 +17015,22 @@ def _hit_table_state_present_for_run_sides(
     *,
     run_primary: bool,
     run_secondary: bool,
+    run_sixh_reference: bool = False,
+    run_disordered_phase: bool = False,
 ) -> bool:
     if bool(run_primary) and simulation_runtime_state.stored_primary_max_positions is None:
         return False
     if bool(run_secondary) and simulation_runtime_state.stored_secondary_max_positions is None:
+        return False
+    if (
+        bool(run_sixh_reference)
+        and getattr(simulation_runtime_state, "stored_sixh_reference_max_positions", None) is None
+    ):
+        return False
+    if (
+        bool(run_disordered_phase)
+        and getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None) is None
+    ):
         return False
     return True
 
@@ -17117,12 +17129,16 @@ def _cached_hit_tables_reusable(
     *,
     run_primary: bool,
     run_secondary: bool,
+    run_sixh_reference: bool = False,
+    run_disordered_phase: bool = False,
 ) -> bool:
     if requested_signature != simulation_runtime_state.stored_hit_table_signature:
         return False
     return _hit_table_state_present_for_run_sides(
         run_primary=run_primary,
         run_secondary=run_secondary,
+        run_sixh_reference=run_sixh_reference,
+        run_disordered_phase=run_disordered_phase,
     )
 
 
@@ -17172,6 +17188,317 @@ PBII_6H_QR_REFERENCE_SOURCE_LABEL = "pbii_6h_ref"
 DISORDERED_PHASE_QR_SOURCE_LABEL = DISORDERED_PHASE_SOURCE_LABEL
 DISORDERED_PHASE_QR_DISPLAY_LABEL = DISORDERED_PHASE_DISPLAY_LABEL
 DISORDERED_PHASE_QR_GENERATOR_VERSION = "ra_sim.pbi2_ht_shift_cif.v1"
+_QR_QZ_SOURCE_LOG_ORDER = (
+    "primary",
+    DISORDERED_PHASE_SOURCE_LABEL,
+    "secondary",
+    PBII_6H_QR_REFERENCE_SOURCE_LABEL,
+)
+
+
+@dataclass(frozen=True)
+class DisorderedPhaseQrEnableStatus:
+    enabled: bool
+    reason: str
+    stacking_disorder_enabled: bool
+    nonzero_disordered_weight: bool
+    active_primary_cif_path: str | None
+
+
+def _qr_qz_log_source_label(source_label: object) -> str:
+    try:
+        return gui_controllers.normalize_bragg_qr_source_label(
+            str(source_label) if source_label not in (None, "") else "primary"
+        )
+    except Exception:
+        return "primary"
+
+
+def _qr_qz_source_counts_from_entries(
+    listed_entries: Sequence[Mapping[str, object]] | None,
+) -> tuple[dict[str, int], dict[str, int]]:
+    group_counts: dict[str, int] = {}
+    peak_counts: dict[str, int] = {}
+    for entry in listed_entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        source_labels = entry.get("source_labels")
+        if isinstance(source_labels, Sequence) and not isinstance(
+            source_labels,
+            (str, bytes, bytearray),
+        ):
+            labels = list(source_labels) or [entry.get("source_label", "primary")]
+        else:
+            labels = [entry.get("source_label", "primary")]
+        try:
+            peak_count = int(entry.get("peak_count", 0) or 0)
+        except Exception:
+            peak_count = 0
+        for raw_label in labels:
+            label = _qr_qz_log_source_label(raw_label)
+            group_counts[label] = int(group_counts.get(label, 0)) + 1
+            peak_counts[label] = int(peak_counts.get(label, 0)) + int(peak_count)
+    return group_counts, peak_counts
+
+
+def _format_qr_qz_source_counts(source_counts: Mapping[str, int]) -> str:
+    labels = [
+        label for label in _QR_QZ_SOURCE_LOG_ORDER if int(source_counts.get(label, 0) or 0) > 0
+    ]
+    labels.extend(
+        sorted(
+            str(label)
+            for label, count in source_counts.items()
+            if str(label) not in labels and int(count or 0) > 0
+        )
+    )
+    if not labels:
+        return "none=0"
+    return ", ".join(f"{label}={int(source_counts.get(label, 0) or 0)}" for label in labels)
+
+
+def _format_qr_qz_group_update_log_message(
+    listed_entries: Sequence[Mapping[str, object]] | None,
+) -> str:
+    entries = list(listed_entries or ())
+    peak_count = 0
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            peak_count += int(entry.get("peak_count", 0) or 0)
+        except Exception:
+            pass
+    source_counts, _peak_counts = _qr_qz_source_counts_from_entries(entries)
+    return (
+        f"Updated listed Qr/Qz peaks: {len(entries)} groups, {int(peak_count)} peaks; "
+        f"sources: {_format_qr_qz_source_counts(source_counts)}"
+    )
+
+
+def _log_disordered_qr_refs(message: str, **fields: object) -> None:
+    payload: dict[str, object] = {
+        "message": str(message),
+        "update_id": getattr(simulation_runtime_state, "current_update_trace_id", None),
+        "stage": getattr(simulation_runtime_state, "current_update_trace_stage", None),
+        "update_phase": getattr(simulation_runtime_state, "update_phase", None),
+    }
+    payload.update(fields)
+    _append_runtime_update_trace("disordered_qr_refs", **payload)
+
+
+def _log_disordered_qr_refs_skipped(reason: str, **fields: object) -> None:
+    _log_disordered_qr_refs(f"Disordered Qr refs skipped: {reason}", skip_reason=reason, **fields)
+
+
+def _log_disordered_qr_enable_status(status: DisorderedPhaseQrEnableStatus) -> None:
+    fields = {
+        "enabled": bool(status.enabled),
+        "status_reason": str(status.reason),
+        "stacking_disorder_enabled": bool(status.stacking_disorder_enabled),
+        "nonzero_disordered_weight": bool(status.nonzero_disordered_weight),
+        "active_primary_cif_path": status.active_primary_cif_path,
+    }
+    if status.enabled:
+        _log_disordered_qr_refs("Disordered Qr refs enabled: true", **fields)
+    else:
+        _log_disordered_qr_refs_skipped(str(status.reason), **fields)
+
+
+def _disordered_phase_inventory_payload_available(payload: Mapping[str, object] | None) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    miller_arr = np.asarray(payload.get("miller", ()), dtype=np.float64)
+    intensities_arr = np.asarray(payload.get("intensities", ()), dtype=np.float64).reshape(-1)
+    try:
+        a_val = float(payload.get("a", float("nan")))
+        c_val = float(payload.get("c", float("nan")))
+    except Exception:
+        a_val = float("nan")
+        c_val = float("nan")
+    return bool(
+        miller_arr.ndim == 2
+        and miller_arr.shape[0] > 0
+        and intensities_arr.size > 0
+        and np.isfinite(a_val)
+        and a_val > 0.0
+        and np.isfinite(c_val)
+        and c_val > 0.0
+        and payload.get("cif_path") not in (None, "")
+    )
+
+
+def _log_disordered_qr_inventory_status(
+    payload: Mapping[str, object] | None,
+    *,
+    active_primary_cif_path: str | None,
+) -> bool:
+    _log_disordered_qr_refs(
+        f"Disordered Qr refs inventory: source_cif={active_primary_cif_path}",
+        source_cif=active_primary_cif_path,
+    )
+    generated_cif = None
+    if isinstance(payload, Mapping):
+        generated_cif = payload.get("cif_path")
+    _log_disordered_qr_refs(
+        f"Disordered Qr refs inventory: generated_cif={generated_cif}",
+        generated_cif=generated_cif,
+    )
+    if not isinstance(payload, Mapping):
+        _log_disordered_qr_refs_skipped("inventory unavailable")
+        return False
+    available = _disordered_phase_inventory_payload_available(payload)
+    if not available:
+        _log_disordered_qr_refs_skipped("inventory unavailable")
+    return bool(available)
+
+
+def _log_disordered_qr_published_counts(
+    hit_tables: Sequence[object],
+    *,
+    peak_table_lattice: Sequence[object],
+    primary_a: float,
+    primary_c: float,
+) -> tuple[int, int]:
+    try:
+        q_group_entries = gui_geometry_q_group_manager.build_geometry_q_group_entries(
+            hit_tables,
+            peak_table_lattice=peak_table_lattice,
+            primary_a=float(primary_a),
+            primary_c=float(primary_c),
+            allow_nominal_hkl_indices=True,
+        )
+        _source_counts, peak_counts = _qr_qz_source_counts_from_entries(q_group_entries)
+        peak_count = int(peak_counts.get(DISORDERED_PHASE_SOURCE_LABEL, 0) or 0)
+        group_count = int(len(q_group_entries))
+    except Exception:
+        peak_count = 0
+        group_count = 0
+    _log_disordered_qr_refs(
+        f"Disordered Qr refs published: groups={group_count} peaks={peak_count}",
+        groups=group_count,
+        peaks=peak_count,
+    )
+    return group_count, peak_count
+
+
+def _disordered_phase_lattice_entries_for_rows(row_count: int) -> list[object]:
+    row_count = max(0, int(row_count))
+    stored_lattice = getattr(
+        simulation_runtime_state,
+        "stored_disordered_phase_peak_table_lattice",
+        None,
+    )
+    if isinstance(stored_lattice, Sequence) and not isinstance(stored_lattice, (str, bytes)):
+        lattice_entries = list(stored_lattice)
+        if len(lattice_entries) == row_count:
+            return lattice_entries
+    disordered_payload = _geometry_disordered_phase_inventory_payload(log_status=False)
+    return [
+        (
+            float(disordered_payload.get("a", float("nan"))),
+            float(disordered_payload.get("c", float("nan"))),
+            DISORDERED_PHASE_SOURCE_LABEL,
+            DISORDERED_PHASE_DISPLAY_LABEL,
+            "disordered",
+        )
+        for _ in range(row_count)
+    ]
+
+
+def _current_q_group_cache_has_disordered_phase_rows() -> bool:
+    lattice_entries = getattr(simulation_runtime_state, "stored_peak_table_lattice", None)
+    if not isinstance(lattice_entries, Sequence) or isinstance(lattice_entries, (str, bytes)):
+        return False
+    for entry in lattice_entries:
+        if isinstance(entry, Mapping):
+            if entry.get("source_label") == DISORDERED_PHASE_SOURCE_LABEL:
+                return True
+            continue
+        if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes)):
+            if any(str(part) == DISORDERED_PHASE_SOURCE_LABEL for part in entry):
+                return True
+    return False
+
+
+def _publish_stored_disordered_phase_rows_to_current_q_groups(
+    status: DisorderedPhaseQrEnableStatus,
+    *,
+    primary_a: float,
+    primary_c: float,
+) -> bool:
+    if not status.enabled:
+        return False
+    stored_rows = getattr(
+        simulation_runtime_state,
+        "stored_disordered_phase_max_positions",
+        None,
+    )
+    if stored_rows is None:
+        _log_disordered_qr_refs_skipped("no stored disordered hit tables")
+        return False
+    disordered_rows = list(stored_rows)
+    disordered_lattice = _disordered_phase_lattice_entries_for_rows(len(disordered_rows))
+    if not _current_q_group_cache_has_disordered_phase_rows():
+        active_rows = list(
+            getattr(simulation_runtime_state, "stored_max_positions_local", None) or []
+        )
+        active_lattice = list(
+            getattr(simulation_runtime_state, "stored_peak_table_lattice", None) or []
+        )
+        active_indices_raw = getattr(
+            simulation_runtime_state,
+            "stored_source_reflection_indices_local",
+            None,
+        )
+        disordered_indices_raw = getattr(
+            simulation_runtime_state,
+            "stored_disordered_phase_source_reflection_indices",
+            None,
+        )
+        active_indices: list[object] | None = None
+        if (
+            isinstance(active_indices_raw, Sequence)
+            and not isinstance(active_indices_raw, (str, bytes))
+            and len(active_indices_raw) == len(active_rows)
+            and isinstance(disordered_indices_raw, Sequence)
+            and not isinstance(disordered_indices_raw, (str, bytes))
+            and len(disordered_indices_raw) == len(disordered_rows)
+        ):
+            active_indices = [*list(active_indices_raw), *list(disordered_indices_raw)]
+        active_rows.extend(disordered_rows)
+        active_lattice.extend(disordered_lattice)
+        simulation_runtime_state.stored_max_positions_local = list(active_rows)
+        simulation_runtime_state.stored_peak_table_lattice = list(active_lattice)
+        simulation_runtime_state.stored_source_reflection_indices_local = active_indices
+        simulation_runtime_state.stored_q_group_content_signature = (
+            gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+                active_rows
+            )
+        )
+    _log_disordered_qr_published_counts(
+        disordered_rows,
+        peak_table_lattice=disordered_lattice,
+        primary_a=float(primary_a),
+        primary_c=float(primary_c),
+    )
+    return True
+
+
+def _evaluate_live_disordered_qr_inventory_if_enabled(
+    status: DisorderedPhaseQrEnableStatus,
+) -> dict[str, object] | None:
+    if not status.enabled:
+        return None
+    try:
+        payload = _geometry_disordered_phase_inventory_payload(log_status=False)
+    except Exception:
+        payload = None
+    _log_disordered_qr_inventory_status(
+        payload,
+        active_primary_cif_path=status.active_primary_cif_path,
+    )
+    return dict(payload) if isinstance(payload, Mapping) else None
 
 
 def _geometry_include_6h_qr_reference_checked() -> bool:
@@ -17302,6 +17629,14 @@ def _runtime_var_float(name: str, fallback: float = 0.0) -> float:
     return value if np.isfinite(value) else float(fallback)
 
 
+def _geometry_disordered_phase_raw_weight_values() -> tuple[float, float, float]:
+    return (
+        _runtime_var_float("w0_var", float(defaults.get("w0", 1.0))),
+        _runtime_var_float("w1_var", float(defaults.get("w1", 0.0))),
+        _runtime_var_float("w2_var", float(defaults.get("w2", 0.0))),
+    )
+
+
 def _geometry_disordered_phase_stack_values() -> tuple[
     tuple[float, float, float],
     tuple[float, float, float],
@@ -17311,20 +17646,96 @@ def _geometry_disordered_phase_stack_values() -> tuple[
         _runtime_var_float("p1_var", float(defaults.get("p1", 0.0))),
         _runtime_var_float("p2_var", float(defaults.get("p2", 0.0))),
     )
-    raw_weights = [
-        _runtime_var_float("w0_var", float(defaults.get("w0", 1.0))),
-        _runtime_var_float("w1_var", float(defaults.get("w1", 0.0))),
-        _runtime_var_float("w2_var", float(defaults.get("w2", 0.0))),
-    ]
+    raw_weights = list(_geometry_disordered_phase_raw_weight_values())
     weights = tuple(
         float(value) for value in gui_controllers.normalize_stacking_weight_values(raw_weights)
     )
     return p_values, weights
 
 
+def _geometry_generated_disordered_qr_reference_checked() -> bool:
+    var = globals().get("geometry_include_generated_disordered_qr_var")
+    if var is None:
+        view_state = globals().get("stacking_parameter_controls_view_state")
+        var = getattr(view_state, "geometry_include_generated_disordered_qr_var", None)
+    if var is None:
+        var = globals().get("geometry_include_disordered_phase_qr_reference_var")
+    if var is None:
+        view_state = globals().get("stacking_parameter_controls_view_state")
+        var = getattr(view_state, "geometry_include_disordered_phase_qr_reference_var", None)
+    if var is None:
+        return True
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return bool(var)
+    try:
+        return bool(getter())
+    except Exception:
+        return False
+
+
+def _geometry_active_primary_cif_path_for_disordered_phase() -> str | None:
+    try:
+        active_primary_cif = _active_primary_cif_path()
+    except Exception:
+        return None
+    if active_primary_cif in (None, ""):
+        return None
+    try:
+        return str(Path(str(active_primary_cif)).resolve())
+    except Exception:
+        return str(active_primary_cif) if str(active_primary_cif).strip() else None
+
+
+def _geometry_disordered_phase_qr_enable_status() -> DisorderedPhaseQrEnableStatus:
+    raw_weights = _geometry_disordered_phase_raw_weight_values()
+    stacking_disorder_enabled = any(abs(float(weight)) > 1.0e-12 for weight in raw_weights)
+    nonzero_disordered_weight = any(abs(float(raw_weights[index])) > 1.0e-12 for index in (1, 2))
+    active_primary_cif_path = _geometry_active_primary_cif_path_for_disordered_phase()
+
+    if not _geometry_generated_disordered_qr_reference_checked():
+        return DisorderedPhaseQrEnableStatus(
+            enabled=False,
+            reason="checkbox disabled",
+            stacking_disorder_enabled=bool(stacking_disorder_enabled),
+            nonzero_disordered_weight=bool(nonzero_disordered_weight),
+            active_primary_cif_path=active_primary_cif_path,
+        )
+    if not bool(stacking_disorder_enabled):
+        return DisorderedPhaseQrEnableStatus(
+            enabled=False,
+            reason="stacking disorder disabled",
+            stacking_disorder_enabled=False,
+            nonzero_disordered_weight=bool(nonzero_disordered_weight),
+            active_primary_cif_path=active_primary_cif_path,
+        )
+    if not bool(nonzero_disordered_weight):
+        return DisorderedPhaseQrEnableStatus(
+            enabled=False,
+            reason="zero disordered weight",
+            stacking_disorder_enabled=True,
+            nonzero_disordered_weight=False,
+            active_primary_cif_path=active_primary_cif_path,
+        )
+    if active_primary_cif_path is None:
+        return DisorderedPhaseQrEnableStatus(
+            enabled=False,
+            reason="no active primary CIF",
+            stacking_disorder_enabled=True,
+            nonzero_disordered_weight=True,
+            active_primary_cif_path=None,
+        )
+    return DisorderedPhaseQrEnableStatus(
+        enabled=True,
+        reason="enabled",
+        stacking_disorder_enabled=True,
+        nonzero_disordered_weight=True,
+        active_primary_cif_path=active_primary_cif_path,
+    )
+
+
 def _geometry_disordered_phase_qr_enabled() -> bool:
-    _p_values, weights = _geometry_disordered_phase_stack_values()
-    return bool(abs(float(weights[1])) > 1.0e-12 or abs(float(weights[2])) > 1.0e-12)
+    return _geometry_disordered_phase_qr_enable_status().enabled
 
 
 def _file_sha256_or_mtime_signature(path: str | Path | None) -> tuple[str, object] | None:
@@ -17390,15 +17801,12 @@ def _clear_disordered_phase_runtime_tables(*, clear_inventory: bool = False) -> 
 
 
 def _geometry_disordered_phase_source_signature() -> tuple[object, ...]:
-    enabled = bool(_geometry_disordered_phase_qr_enabled())
-    if not enabled:
+    status = _geometry_disordered_phase_qr_enable_status()
+    if not status.enabled:
         return ("disordered_phase_qr_reference", False)
 
     p_values, weights = _geometry_disordered_phase_stack_values()
-    try:
-        active_path = str(Path(str(_active_primary_cif_path())).resolve())
-    except Exception:
-        active_path = None
+    active_path = status.active_primary_cif_path
     try:
         lambda_value = float(lambda_)
     except Exception:
@@ -17442,9 +17850,12 @@ def _geometry_disordered_phase_source_signature() -> tuple[object, ...]:
     )
 
 
-def _geometry_disordered_phase_inventory_payload() -> dict[str, object]:
+def _geometry_disordered_phase_inventory_payload(*, log_status: bool = True) -> dict[str, object]:
     signature = _geometry_disordered_phase_source_signature()
     if len(signature) < 2 or not bool(signature[1]):
+        status = _geometry_disordered_phase_qr_enable_status()
+        if log_status:
+            _log_disordered_qr_refs_skipped(status.reason)
         _clear_disordered_phase_runtime_tables(clear_inventory=True)
         return {
             "signature": signature,
@@ -17457,6 +17868,8 @@ def _geometry_disordered_phase_inventory_payload() -> dict[str, object]:
             "cif_path": None,
         }
 
+    if log_status:
+        _log_disordered_qr_refs("Disordered Qr refs enabled: true", enabled=True)
     cached = getattr(simulation_runtime_state, "disordered_phase_inventory_cache", None)
     if isinstance(cached, Mapping) and cached.get("signature") == signature:
         cached_path = cached.get("cif_path")
@@ -17478,8 +17891,10 @@ def _geometry_disordered_phase_inventory_payload() -> dict[str, object]:
         _clear_disordered_phase_runtime_tables(clear_inventory=False)
 
     active_primary_cif_path = signature[2] if len(signature) > 2 else None
+    skip_reason = None
     try:
         if active_primary_cif_path is None:
+            skip_reason = "missing active primary CIF"
             raise FileNotFoundError("active primary CIF path is unavailable")
         generated = generate_pbii_ht_shifted_cif(
             source_cif=active_primary_cif_path,
@@ -17508,6 +17923,21 @@ def _geometry_disordered_phase_inventory_payload() -> dict[str, object]:
         c_disordered = float("nan")
         cif_path_text = None
         simulation_runtime_state.generated_disordered_phase_cif_path = None
+
+    if skip_reason is None:
+        available = bool(
+            np.asarray(miller_arr, dtype=np.float64).ndim == 2
+            and np.asarray(miller_arr, dtype=np.float64).shape[0] > 0
+            and np.asarray(intensities_arr, dtype=np.float64).reshape(-1).size > 0
+            and np.isfinite(float(a_disordered))
+            and float(a_disordered) > 0.0
+            and np.isfinite(float(c_disordered))
+            and float(c_disordered) > 0.0
+        )
+        if not available:
+            skip_reason = "inventory unavailable"
+    if skip_reason is not None:
+        _log_disordered_qr_refs_skipped(skip_reason)
 
     payload = {
         "signature": signature,
@@ -17562,7 +17992,18 @@ def _publish_combined_simulation_state(
         )
     else:
         active_display_sides = _normalized_active_peak_row_sides(active_peak_row_sides)
-    include_primary_peak_rows = "primary" in active_display_sides
+    include_disordered_phase_peak_rows = bool(
+        _geometry_disordered_phase_qr_enabled()
+        and getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None)
+        is not None
+    )
+    include_primary_peak_rows = bool(
+        "primary" in active_display_sides
+        or (
+            include_disordered_phase_peak_rows
+            and simulation_runtime_state.stored_primary_max_positions is not None
+        )
+    )
     include_secondary_peak_rows = "secondary" in active_display_sides
 
     img1 = (
@@ -17642,12 +18083,7 @@ def _publish_combined_simulation_state(
 
     disordered_phase_max_positions_local: list[object] = []
     disordered_phase_peak_table_lattice_local: list[object] = []
-    if (
-        include_primary_peak_rows
-        and _geometry_disordered_phase_qr_enabled()
-        and getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None)
-        is not None
-    ):
+    if include_disordered_phase_peak_rows:
         disordered_phase_max_positions_local = list(
             simulation_runtime_state.stored_disordered_phase_max_positions
         )
@@ -17696,9 +18132,7 @@ def _publish_combined_simulation_state(
                 for _ in sixh_reference_max_positions_local
             ]
         )
-    if len(disordered_phase_peak_table_lattice_local) == len(
-        disordered_phase_max_positions_local
-    ):
+    if len(disordered_phase_peak_table_lattice_local) == len(disordered_phase_max_positions_local):
         peak_table_lattice_local.extend(disordered_phase_peak_table_lattice_local)
     else:
         disordered_payload = _geometry_disordered_phase_inventory_payload()
@@ -17728,6 +18162,18 @@ def _publish_combined_simulation_state(
         else None
     )
     simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
+    if include_disordered_phase_peak_rows:
+        disordered_lattice_for_log = (
+            peak_table_lattice_local[-len(disordered_phase_max_positions_local) :]
+            if disordered_phase_max_positions_local
+            else []
+        )
+        _log_disordered_qr_published_counts(
+            disordered_phase_max_positions_local,
+            peak_table_lattice=disordered_lattice_for_log,
+            primary_a=float(primary_a_value),
+            primary_c=float(primary_c_value),
+        )
 
     current_hit_table_signature = getattr(
         simulation_runtime_state,
@@ -19446,6 +19892,11 @@ def _run_disordered_phase_hit_table_collection(
     run_one: Callable[..., object],
 ) -> dict[str, object]:
     if not _disordered_phase_job_inventory_available(job):
+        _log_disordered_qr_refs_skipped(
+            "inventory unavailable",
+            update_id=job.get("timing_update_id"),
+            job_kind=job.get("job_kind"),
+        )
         return _empty_disordered_phase_hit_table_result()
 
     (
@@ -19467,6 +19918,12 @@ def _run_disordered_phase_hit_table_collection(
         accumulate_image=False,
     )
     peak_tables = _copy_hit_tables(raw_hit_tables)
+    _log_disordered_qr_refs(
+        f"Disordered Qr refs collected: hit_tables={len(peak_tables)}",
+        update_id=job.get("timing_update_id"),
+        job_kind=job.get("job_kind"),
+        hit_tables=len(peak_tables),
+    )
     return {
         "disordered_phase_max_positions": list(peak_tables),
         "disordered_phase_peak_table_lattice": [
@@ -20674,9 +21131,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         result.get("disordered_phase_hit_table_state_refreshed", False)
     )
     if disordered_phase_refreshed:
-        disordered_phase_tables = _copy_hit_tables(
-            result.get("disordered_phase_max_positions", [])
-        )
+        disordered_phase_tables = _copy_hit_tables(result.get("disordered_phase_max_positions", []))
         simulation_runtime_state.stored_disordered_phase_max_positions = list(
             disordered_phase_tables
         )
@@ -20711,7 +21166,17 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         primary_raw_rows_fresh=primary_raw_rows_fresh,
         secondary_raw_rows_fresh=secondary_raw_rows_fresh,
     )
-    if active_peak_rows_fresh:
+    all_required_hit_table_rows_present = bool(
+        _hit_table_state_present_for_run_sides(
+            run_primary=run_primary,
+            run_secondary=run_secondary,
+            run_sixh_reference=_geometry_6h_qr_reference_enabled(),
+            run_disordered_phase=_geometry_disordered_phase_qr_enabled(),
+        )
+    )
+    if active_peak_rows_fresh or (
+        bool(result.get("collected_hit_tables", False)) and all_required_hit_table_rows_present
+    ):
         simulation_runtime_state.stored_hit_table_signature = result.get("hit_table_signature")
     else:
         _clear_live_peak_record_cache_after_restore_miss()
@@ -22886,6 +23351,14 @@ def do_update():
             primary_source_signature,
         )
     sixh_qr_reference_signature = _geometry_6h_qr_reference_source_signature()
+    disordered_phase_qr_reference_signature = _geometry_disordered_phase_source_signature()
+    sixh_reference_hit_tables_required = bool(
+        len(sixh_qr_reference_signature) >= 2 and bool(sixh_qr_reference_signature[1])
+    )
+    disordered_phase_hit_tables_required = bool(
+        len(disordered_phase_qr_reference_signature) >= 2
+        and bool(disordered_phase_qr_reference_signature[1])
+    )
 
     def _simulation_signature_base(
         *,
@@ -22926,6 +23399,7 @@ def do_update():
             primary_source_signature=primary_source_signature,
             secondary_source_signature=secondary_source_signature,
             sixh_qr_reference_signature=sixh_qr_reference_signature,
+            disordered_phase_qr_reference_signature=disordered_phase_qr_reference_signature,
             secondary_a=secondary_a,
             secondary_c=secondary_c,
         )
@@ -22968,6 +23442,10 @@ def do_update():
             ),
             secondary_source_signature=secondary_source_signature,
             sixh_qr_reference_signature=("pbii_6h_qr_reference", False),
+            disordered_phase_qr_reference_signature=(
+                "disordered_phase_qr_reference",
+                False,
+            ),
             secondary_a=secondary_a,
             secondary_c=secondary_c,
         ) + (round(float(corto_det_up), 9),)
@@ -22990,6 +23468,8 @@ def do_update():
             requested_hit_table_sig,
             run_primary=primary_run_available,
             run_secondary=secondary_run_available,
+            run_sixh_reference=sixh_reference_hit_tables_required,
+            run_disordered_phase=disordered_phase_hit_tables_required,
         )
     )
     _set_update_trace_stage("simulation_signature")
@@ -23023,6 +23503,31 @@ def do_update():
         "stored_hit_table_signature",
         None,
     )
+    disordered_phase_status_for_job = _geometry_disordered_phase_qr_enable_status()
+    disordered_phase_payload_for_job: Mapping[str, object] | None = None
+    if disordered_phase_status_for_job.enabled:
+        try:
+            disordered_phase_payload_for_job = _geometry_disordered_phase_inventory_payload(
+                log_status=False
+            )
+        except Exception:
+            disordered_phase_payload_for_job = None
+    disordered_phase_available_for_job = bool(
+        disordered_phase_status_for_job.enabled
+        and _disordered_phase_inventory_payload_available(disordered_phase_payload_for_job)
+    )
+    disordered_phase_signature_is_stale = bool(
+        disordered_phase_status_for_job.enabled
+        and requested_hit_table_sig != current_hit_table_signature
+    )
+    needs_disordered_tables = bool(
+        disordered_phase_status_for_job.enabled
+        and disordered_phase_available_for_job
+        and (
+            getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None) is None
+            or disordered_phase_signature_is_stale
+        )
+    )
     selection_cache_current = bool(
         active_selection_sides
         and _table_row_count(getattr(simulation_runtime_state, "stored_intersection_cache", None))
@@ -23036,7 +23541,9 @@ def do_update():
         selection_peak_cache_needed and active_selection_sides and not selection_cache_current
     )
     collect_hit_tables_for_job = bool(
-        (collect_hit_tables_requested and not hit_tables_reusable) or selection_cache_refresh_needed
+        (collect_hit_tables_requested and not hit_tables_reusable)
+        or selection_cache_refresh_needed
+        or needs_disordered_tables
     )
     build_intersection_cache_for_job = bool(selection_cache_refresh_needed)
     pre_update_row_content_signature = getattr(
@@ -23154,6 +23661,7 @@ def do_update():
             ),
             bool(_runtime_array_has_rows(getattr(simulation_runtime_state, "sim_miller2_all", ()))),
             sixh_qr_reference_signature,
+            disordered_phase_qr_reference_signature,
         ),
         physics_sig=(
             round(float(gamma_updated), 9),
@@ -23629,6 +24137,8 @@ def do_update():
             if _hit_table_state_present_for_run_sides(
                 run_primary=primary_run_available,
                 run_secondary=secondary_run_available,
+                run_sixh_reference=sixh_reference_hit_tables_required,
+                run_disordered_phase=disordered_phase_hit_tables_required,
             ):
                 simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
             simulation_runtime_state.primary_filter_signature = primary_requested_filter_signature
@@ -23716,7 +24226,11 @@ def do_update():
             and sixh_reference_miller.shape[0] > 0
             and sixh_reference_intensities.size > 0
         )
-        disordered_phase_payload = _geometry_disordered_phase_inventory_payload()
+        disordered_phase_payload = (
+            dict(disordered_phase_payload_for_job)
+            if isinstance(disordered_phase_payload_for_job, Mapping)
+            else _geometry_disordered_phase_inventory_payload()
+        )
         disordered_phase_miller = np.asarray(
             disordered_phase_payload.get("miller", ()),
             dtype=np.float64,
@@ -23726,7 +24240,7 @@ def do_update():
             dtype=np.float64,
         ).reshape(-1)
         disordered_phase_available = bool(
-            _geometry_disordered_phase_qr_enabled()
+            disordered_phase_status_for_job.enabled
             and disordered_phase_miller.ndim == 2
             and disordered_phase_miller.shape[0] > 0
             and disordered_phase_intensities.size > 0
@@ -23768,8 +24282,11 @@ def do_update():
         collect_sixh_reference_hit_tables = bool(
             collect_hit_tables_enabled and sixh_reference_available and run_primary_job
         )
+        existing_disordered_collection_reason = bool(collect_hit_tables_enabled)
         collect_disordered_phase_hit_tables = bool(
-            collect_hit_tables_enabled and disordered_phase_available and run_primary_job
+            collect_hit_tables_enabled
+            and disordered_phase_available
+            and (needs_disordered_tables or existing_disordered_collection_reason)
         )
         build_primary_intersection_cache = bool(
             build_intersection_cache_enabled and collect_primary_hit_tables
@@ -24054,6 +24571,8 @@ def do_update():
         if _hit_table_state_present_for_run_sides(
             run_primary=primary_run_available,
             run_secondary=secondary_run_available,
+            run_sixh_reference=sixh_reference_hit_tables_required,
+            run_disordered_phase=disordered_phase_hit_tables_required,
         ):
             simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
         else:
@@ -24231,6 +24750,8 @@ def do_update():
             if _hit_table_state_present_for_run_sides(
                 run_primary=primary_run_available,
                 run_secondary=secondary_run_available,
+                run_sixh_reference=sixh_reference_hit_tables_required,
+                run_disordered_phase=disordered_phase_hit_tables_required,
             ):
                 simulation_runtime_state.stored_hit_table_signature = requested_hit_table_sig
             simulation_runtime_state.last_sim_signature = new_sim_image_sig
@@ -24646,6 +25167,14 @@ def do_update():
             # fmt: on
         q_group_bindings_factory = globals().get("geometry_q_group_runtime_bindings_factory")
         if callable(q_group_bindings_factory):
+            disordered_qr_status = _geometry_disordered_phase_qr_enable_status()
+            _log_disordered_qr_enable_status(disordered_qr_status)
+            _evaluate_live_disordered_qr_inventory_if_enabled(disordered_qr_status)
+            _publish_stored_disordered_phase_rows_to_current_q_groups(
+                disordered_qr_status,
+                primary_a=float(a_updated),
+                primary_c=float(c_updated),
+            )
             listed_entries = (
                 gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
                     q_group_bindings_factory()
@@ -27693,6 +28222,7 @@ def _geometry_source_snapshot_signature_from_params(
     secondary_a: float,
     secondary_c: float,
     sixh_qr_reference_signature=None,
+    disordered_phase_qr_reference_signature=None,
 ):
     params = dict(param_set or {})
 
@@ -27743,6 +28273,7 @@ def _geometry_source_snapshot_signature_from_params(
         primary_source_signature,
         secondary_source_signature,
         sixh_qr_reference_signature,
+        disordered_phase_qr_reference_signature,
         round(_geometry_source_signature_numeric(secondary_a), 6),
         round(_geometry_source_signature_numeric(secondary_c), 6),
     )
@@ -27837,6 +28368,7 @@ def _geometry_source_snapshot_signature_for_background(
         primary_source_signature=primary_source_signature,
         secondary_source_signature=secondary_source_signature,
         sixh_qr_reference_signature=_geometry_6h_qr_reference_source_signature(),
+        disordered_phase_qr_reference_signature=_geometry_disordered_phase_source_signature(),
         secondary_a=secondary_a,
         secondary_c=secondary_c,
     )
@@ -42283,6 +42815,14 @@ def _on_geometry_include_6h_qr_reference_toggle(*_args) -> None:
     _invalidate_and_schedule_update()
 
 
+def _on_geometry_include_generated_disordered_qr_toggle(*_args) -> None:
+    _clear_disordered_phase_runtime_tables(clear_inventory=True)
+    _invalidate_geometry_manual_pick_cache()
+    _invalidate_geometry_q_group_entries_cache_only()
+    gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
+    _invalidate_and_schedule_update()
+
+
 def _sync_finite_controls():
     enabled = bool(
         finite_stack_controls_view_state.finite_stack_var is not None
@@ -42574,7 +43114,9 @@ def _initialize_runtime_controls_block_54() -> None:
         w0_var, \
         p1_var, \
         w1_var, \
-        geometry_include_6h_qr_reference_var
+        geometry_include_6h_qr_reference_var, \
+        geometry_include_generated_disordered_qr_var, \
+        geometry_include_disordered_phase_qr_reference_var
     global p2_var, w2_var
 
     gui_views.create_ordered_structure_fit_panel(
@@ -42632,6 +43174,9 @@ def _initialize_runtime_controls_block_54() -> None:
         },
         on_update=update_occupancies,
         on_toggle_6h_qr_reference=_on_geometry_include_6h_qr_reference_toggle,
+        on_toggle_generated_disordered_qr_reference=(
+            _on_geometry_include_generated_disordered_qr_toggle
+        ),
     )
     p0_var = stacking_parameter_controls_view_state.p0_var
     w0_var = stacking_parameter_controls_view_state.w0_var
@@ -42641,6 +43186,12 @@ def _initialize_runtime_controls_block_54() -> None:
     w2_var = stacking_parameter_controls_view_state.w2_var
     geometry_include_6h_qr_reference_var = (
         stacking_parameter_controls_view_state.geometry_include_6h_qr_reference_var
+    )
+    geometry_include_generated_disordered_qr_var = (
+        stacking_parameter_controls_view_state.geometry_include_generated_disordered_qr_var
+    )
+    geometry_include_disordered_phase_qr_reference_var = (
+        geometry_include_generated_disordered_qr_var
     )
 
 

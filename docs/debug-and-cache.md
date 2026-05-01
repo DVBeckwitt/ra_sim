@@ -132,8 +132,16 @@ caked-view cache. Detector/caked view switches must not invalidate or filter
 the Qr/Qz group universe. CIF, unit-cell, or simulation-hit-table changes do
 invalidate it.
 
-Optional PbI2 6H reference Qr/Qz groups are opt-in structural rows, not live
-display artifacts. When `Include 6H Qr refs` is enabled and `w1` is nonzero,
+Generated disordered-phase Qr/Qz groups are structural rows, not live display
+artifacts. When `Include generated disordered-phase Qr refs` is enabled and a
+nonzero disordered stacking component is active, the runtime generates the
+HT-shifted disordered CIF from the active PbI2 CIF, builds hit-table rows with
+`accumulate_image=False`, tags them as `disordered_phase`, includes that source
+signature in picker-cache validity checks, and publishes them into the active
+Qr/Qz picker cache during current-simulation refreshes.
+
+Optional PbI2 6H reference Qr/Qz groups are opt-in legacy structural rows, not
+live display artifacts. When `Include packaged 6H Qr refs` is enabled and `w1` is nonzero,
 the runtime loads the packaged `ra_sim.config/materials/PbI2_6H.cif`, builds
 6H hit-table rows with the current wavelength/window/HKL limits, and tags them
 as `pbii_6h_ref`. The q-group and manual-pick signatures include the toggle,

@@ -417,6 +417,8 @@ class StackingParameterControlsViewState:
     w2_scale: Any = None
     geometry_include_6h_qr_reference_var: Any = None
     geometry_include_6h_qr_reference_checkbutton: Any = None
+    geometry_include_generated_disordered_qr_var: Any = None
+    geometry_include_generated_disordered_qr_checkbutton: Any = None
     occupancy_frame: Any = None
     occ_slider_frame: Any = None
     occ_entry_frame: Any = None
