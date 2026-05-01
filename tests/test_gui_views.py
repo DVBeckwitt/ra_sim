@@ -2365,6 +2365,8 @@ def test_stacking_parameter_panels_and_slider_refs_are_stored(monkeypatch) -> No
 
     monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
     monkeypatch.setattr(views, "create_slider", _fake_create_slider)
 
     view_state = state.StackingParameterControlsViewState()
@@ -2765,8 +2767,7 @@ def test_geometry_tool_action_controls_can_add_all_qr_set_button(monkeypatch) ->
 
     assert view_state.geometry_manual_background_qr_button is not None
     assert (
-        view_state.geometry_manual_background_qr_button.kwargs["text"]
-        == "Place Background Qr Set"
+        view_state.geometry_manual_background_qr_button.kwargs["text"] == "Place Background Qr Set"
     )
     assert view_state.geometry_manual_add_all_button is not None
     assert view_state.geometry_manual_add_all_button.kwargs["text"] == "Add All Qr Set Peaks"
@@ -3100,7 +3101,11 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
         caked_intensity_mode="density",
         rod_profile_intensity_mode="density",
         selected_qr_rod_key="phase-a|1",
-        selected_qr_rod_options=[("phase-a|1", "phase-a m=1 | Qr=1.2500 A^-1")],
+        selected_qr_rod_keys=["phase-a|2", "phase-a|1"],
+        selected_qr_rod_options=[
+            ("phase-a|1", "phase-a m=1 | Qr=1.2500 A^-1"),
+            ("phase-a|2", "phase-a m=2 | Qr=1.5000 A^-1"),
+        ],
         on_toggle_integrate_selected_qr_rod=lambda: toggle_calls.append("toggle"),
         on_toggle_mirror_selected_qr_phi=lambda: toggle_calls.append("mirror"),
         on_toggle_include_selected_qr_rod_shape=lambda: toggle_calls.append("shape"),
@@ -3136,6 +3141,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.caked_intensity_mode_var.get() == "density"
     assert view_state.rod_profile_intensity_mode_var.get() == "density"
     assert view_state.selected_qr_rod_key_var.get() == "phase-a|1"
+    assert view_state.selected_qr_rod_keys == ["phase-a|1", "phase-a|2"]
     assert view_state.selected_qr_rod_display_var.get() == "phase-a m=1 | Qr=1.2500 A^-1"
     assert view_state.qz_min_var.get() == -0.75
     assert view_state.qz_max_var.get() == 1.25
@@ -3211,8 +3217,22 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.qz_max_slider.cget("to") == 1.25
     assert view_state.delta_qr_slider.cget("from") == 0.0
     assert view_state.delta_qr_slider.cget("to") == 1.0
-    assert any(label.text == "Qr half-width (A^-1):" for label in _FakeLabel.created)
+    assert any(label.text == "Delta Qr width (A^-1):" for label in _FakeLabel.created)
     assert view_state.selected_qr_rod_combobox.state == "readonly"
+    assert view_state.selected_qr_rod_listbox is None
+    assert isinstance(view_state.selected_qr_rod_checkbox_container, _FakeFrame)
+    assert list(view_state.selected_qr_rod_checkbox_vars) == ["phase-a|1", "phase-a|2"]
+    assert [
+        view_state.selected_qr_rod_checkbuttons[key].kwargs["text"]
+        for key in ("phase-a|1", "phase-a|2")
+    ] == [
+        "phase-a m=1 | Qr=1.2500 A^-1",
+        "phase-a m=2 | Qr=1.5000 A^-1",
+    ]
+    assert [
+        view_state.selected_qr_rod_checkbuttons[key].state
+        for key in ("phase-a|1", "phase-a|2")
+    ] == [views.tk.DISABLED, views.tk.DISABLED]
     assert view_state.qz_min_slider.state == "disabled"
     assert view_state.delta_qr_entry.state == "disabled"
     assert "<ButtonRelease-1>" in view_state.tth_min_slider.bindings
@@ -3238,6 +3258,9 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     view_state.selected_qr_rod_display_var.set("phase-a m=1 | Qr=1.2500 A^-1")
     view_state.selected_qr_rod_combobox.bindings["<<ComboboxSelected>>"](None)
     assert slider_calls[-1] == ("rod-select", "phase-a m=1 | Qr=1.2500 A^-1")
+    view_state.selected_qr_rod_checkbox_vars["phase-a|1"].set(False)
+    view_state.selected_qr_rod_checkbuttons["phase-a|1"].command()
+    assert slider_calls[-1] == ("rod-select", ["phase-a|2"])
 
     view_state.tth_min_entry.bindings["<Return>"](None)
     view_state.phi_max_entry.bindings["<FocusOut>"](None)

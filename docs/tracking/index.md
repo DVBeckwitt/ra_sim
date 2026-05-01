@@ -225,6 +225,7 @@ still failing. Full fitter validation is not claimed.
 | Analyze overlay hardening | bug | - | none | p2 | 2026-04-20 | [analyze-overlay-hardening.md](archive/analyze-overlay-hardening.md) |
 | Analyze peak-fit table and ROI scale | bug/feature | - | none | p2 | 2026-04-30 | [analyze-peak-fit-table-roi-scale.md](archive/analyze-peak-fit-table-roi-scale.md) |
 | Background peak-fit diagnostics | bug/feature | - | none | p2 | 2026-04-30 | [background-peak-fit-diagnostics.md](archive/background-peak-fit-diagnostics.md) |
+| Detector Selected-Qr Rod ROI | bug/feature | - | none | p1 | 2026-05-01 | [detector-selected-qr-rod-roi.md](archive/detector-selected-qr-rod-roi.md) |
 | Detector-oracle caked Qr/background picks | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-23 | [detector-oracle-caked-background-picks.md](archive/detector-oracle-caked-background-picks.md) |
 | Fast primary rasterizer | refactor | - | none | p2 | 2026-04-22 | [fast-primary-rasterizer.md](archive/fast-primary-rasterizer.md) |
 | GUI runtime selective update fast paths | optimization | - | none | p2 | 2026-04-28 | [gui-runtime-selective-update-fast-paths.md](archive/gui-runtime-selective-update-fast-paths.md) |

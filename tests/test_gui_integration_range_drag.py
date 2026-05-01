@@ -509,6 +509,14 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].selected_qr_rod_key_by_label = {
             str(label): str(key) for key, label in kwargs["selected_qr_rod_options"]
         }
+        kwargs["view_state"].selected_qr_rod_checkbox_container = object()
+        kwargs["view_state"].selected_qr_rod_checkbox_vars = {
+            str(key): _FakeVar(False) for key, _label in kwargs["selected_qr_rod_options"]
+        }
+        kwargs["view_state"].selected_qr_rod_checkbuttons = {
+            str(key): _FakeEntry(state="disabled")
+            for key, _label in kwargs["selected_qr_rod_options"]
+        }
         kwargs["view_state"].tth_min_entry_var = _FakeVar("")
         kwargs["view_state"].tth_max_entry_var = _FakeVar("")
         kwargs["view_state"].phi_min_entry_var = _FakeVar("")
@@ -596,6 +604,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.selected_qr_rod_combobox.state == "normal"
     assert view_state.mirror_selected_qr_phi_checkbutton.state == "normal"
     assert view_state.rod_profile_intensity_mode_buttons["density"].state == "normal"
+    assert view_state.rod_profile_intensity_mode_var.get() == "density"
     assert view_state.qz_min_slider.state == "normal"
     assert view_state.qz_max_entry.state == "normal"
     assert view_state.delta_qr_slider.state == "normal"
@@ -681,6 +690,148 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     trace_callback()
     assert view_state.phi_min_label_var.get() == "-7.2"
     assert view_state.phi_min_entry_var.get() == "-7.2500"
+
+
+def test_selected_qr_rod_toggle_applies_phi_defaults_only_when_not_custom() -> None:
+    schedule_calls = []
+    refresh_calls = []
+    disable_calls = []
+    view_state = state.IntegrationRangeControlsViewState(
+        phi_min_var=_FakeVar(-15.0),
+        phi_max_var=_FakeVar(15.0),
+        phi_min_label_var=_FakeVar(""),
+        phi_max_label_var=_FakeVar(""),
+        phi_min_entry_var=_FakeVar(""),
+        phi_max_entry_var=_FakeVar(""),
+        phi_min_slider=_FakeSlider(-180.0, 180.0),
+        phi_max_slider=_FakeSlider(-180.0, 180.0),
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        integrate_selected_qr_rod_value=False,
+        selected_qr_rod_phi_customized=False,
+    )
+    show_1d_var = _FakeVar(False)
+
+    integration_range_drag._toggle_runtime_integrate_selected_qr_rod(
+        view_state=view_state,
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(True),
+        disable_peak_pick=lambda: disable_calls.append(True),
+        refresh_region_visuals=lambda: refresh_calls.append(True),
+    )
+
+    assert view_state.phi_min_var.get() == -90.0
+    assert view_state.phi_max_var.get() == 90.0
+    assert view_state.phi_min_entry_var.get() == "-90.0000"
+    assert view_state.phi_max_entry_var.get() == "90.0000"
+    assert schedule_calls == [True]
+    assert refresh_calls == [True]
+    assert disable_calls == [True]
+
+    view_state.integrate_selected_qr_rod_value = False
+    view_state.integrate_selected_qr_rod_var.set(True)
+    view_state.phi_min_var.set(-15.0)
+    view_state.phi_max_var.set(15.0)
+    view_state.selected_qr_rod_phi_customized = True
+
+    integration_range_drag._toggle_runtime_integrate_selected_qr_rod(
+        view_state=view_state,
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(True),
+    )
+
+    assert view_state.phi_min_var.get() == -15.0
+    assert view_state.phi_max_var.get() == 15.0
+
+
+def test_selected_qr_rod_toggle_detector_default_raw_sum_when_fresh() -> None:
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        integrate_selected_qr_rod_value=False,
+        rod_profile_intensity_mode_var=_FakeVar("density"),
+        selected_qr_rod_default_intensity_mode="raw_sum",
+        rod_profile_intensity_mode_customized=False,
+        phi_min_var=_FakeVar(-15.0),
+        phi_max_var=_FakeVar(15.0),
+    )
+    show_1d_var = _FakeVar(False)
+
+    integration_range_drag._toggle_runtime_integrate_selected_qr_rod(
+        view_state=view_state,
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: None,
+    )
+
+    assert view_state.rod_profile_intensity_mode_var.get() == "raw_sum"
+    assert view_state.rod_profile_intensity_mode_value == "raw_sum"
+    assert show_1d_var.get() is True
+
+
+def test_selected_qr_rod_toggle_caked_default_keeps_density_when_fresh() -> None:
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        integrate_selected_qr_rod_value=False,
+        rod_profile_intensity_mode_var=_FakeVar("density"),
+        selected_qr_rod_default_intensity_mode="density",
+        rod_profile_intensity_mode_customized=False,
+        phi_min_var=_FakeVar(-15.0),
+        phi_max_var=_FakeVar(15.0),
+    )
+
+    integration_range_drag._toggle_runtime_integrate_selected_qr_rod(
+        view_state=view_state,
+        show_1d_var=_FakeVar(False),
+        schedule_range_update=lambda: None,
+    )
+
+    assert view_state.rod_profile_intensity_mode_var.get() == "density"
+
+
+def test_selected_qr_rod_toggle_preserves_custom_intensity_mode() -> None:
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        integrate_selected_qr_rod_value=False,
+        rod_profile_intensity_mode_var=_FakeVar("density"),
+        selected_qr_rod_default_intensity_mode="raw_sum",
+        rod_profile_intensity_mode_customized=True,
+        phi_min_var=_FakeVar(-15.0),
+        phi_max_var=_FakeVar(15.0),
+    )
+
+    integration_range_drag._toggle_runtime_integrate_selected_qr_rod(
+        view_state=view_state,
+        show_1d_var=_FakeVar(False),
+        schedule_range_update=lambda: None,
+    )
+
+    assert view_state.rod_profile_intensity_mode_var.get() == "density"
+
+
+def test_select_runtime_selected_qr_rod_empty_selection_promotes_first_option() -> None:
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        selected_qr_rod_options=["rod-1", "rod-2"],
+        selected_qr_rod_key_var=_FakeVar(""),
+        selected_qr_rod_display_var=_FakeVar(""),
+        selected_qr_rod_option_labels={"rod-1": "Rod 1", "rod-2": "Rod 2"},
+        selected_qr_rod_checkbox_vars={
+            "rod-1": _FakeVar(False),
+            "rod-2": _FakeVar(False),
+        },
+    )
+    schedule_calls = []
+
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=[],
+        show_1d_var=_FakeVar(False),
+        schedule_range_update=lambda: schedule_calls.append(True),
+    )
+
+    assert view_state.selected_qr_rod_keys_value == ["rod-1"]
+    assert view_state.selected_qr_rod_key_var.get() == "rod-1"
+    assert view_state.selected_qr_rod_checkbox_vars["rod-1"].get() is True
+    assert view_state.selected_qr_rod_checkbox_vars["rod-2"].get() is False
+    assert schedule_calls == [True]
 
 
 def test_integration_range_drag_bindings_default_custom_mask_factory_is_none() -> None:

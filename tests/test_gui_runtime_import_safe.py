@@ -3691,9 +3691,7 @@ def test_runtime_impl_uses_geometry_manual_state_name_for_manual_pairs() -> None
 def test_runtime_impl_keeps_manual_pick_cache_restores_cache_only() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    assert (
-        'lookup_context == "geometry_fit_dataset" or allow_manual_pick_rebuild' in source
-    )
+    assert 'lookup_context == "geometry_fit_dataset" or allow_manual_pick_rebuild' in source
     assert "if allow_source_snapshot_rebuild:" in source
 
 
@@ -12008,12 +12006,15 @@ def test_apply_primary_figure_display_from_cached_results_scales_cached_backgrou
 
     assert target_mode == view_mode
     assert len(stored_sources) == 2
+    expected_payload_signature = (
+        (payload_signature, "density") if view_mode == "caked" else payload_signature
+    )
     assert stored_sources[0][0] == "primary"
     np.testing.assert_array_equal(stored_sources[0][1], expected_primary)
-    assert stored_sources[0][2] == (view_mode, "primary", payload_signature, scale)
+    assert stored_sources[0][2] == (view_mode, "primary", expected_payload_signature, scale)
     assert stored_sources[1][0] == "background"
     np.testing.assert_array_equal(stored_sources[1][1], expected_background)
-    assert stored_sources[1][2] == (view_mode, "background", payload_signature, scale)
+    assert stored_sources[1][2] == (view_mode, "background", expected_payload_signature, scale)
     if view_mode == "caked":
         assert len(preview_calls) == 1
         np.testing.assert_array_equal(
@@ -13187,9 +13188,12 @@ def test_apply_scale_factor_to_existing_results_uses_semantic_analysis_source_si
         update_chi_square=False,
     )
 
+    expected_payload_signature = (
+        (payload_signature, "density") if view_mode == "caked" else payload_signature
+    )
     assert stored_signatures == [
-        ("primary", (view_mode, "primary", payload_signature, scale)),
-        ("background", (view_mode, "background", payload_signature, scale)),
+        ("primary", (view_mode, "primary", expected_payload_signature, scale)),
+        ("background", (view_mode, "background", expected_payload_signature, scale)),
     ]
 
 
@@ -17401,10 +17405,6 @@ def test_noncurrent_caked_projection_without_payload_fails_closed(
     assert resolve_calls[0]["allow_generated_payload"] is True
 
 
-def test_current_caked_projection_skips_legacy_projector_and_hydrates_exact_bundle(
-    monkeypatch,
-) -> None:
-    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 def test_manual_pick_caked_projection_missing_payload_fails_open(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     resolve_calls: list[dict[str, object]] = []
@@ -17526,6 +17526,10 @@ def test_manual_pick_detector_override_bypasses_current_caked_projector(
     assert rows[0]["background_index"] == 0
 
 
+def test_current_caked_projection_skips_legacy_projector_and_hydrates_exact_bundle(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     payload = _geometry_fit_worker_caked_payload(
         runtime_session,
         background_value=1.0,
@@ -18789,10 +18793,6 @@ def test_manual_pick_cache_source_rows_rebuild_allowed_for_manual_pick_cache(
     assert returned_rows[0]["q_group_key"] == ("q_group", "primary", 1, 10)
 
 
-def test_manual_pick_cache_source_rows_rebuilds_when_snapshot_projection_empty(
-    monkeypatch,
-) -> None:
-    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 def test_manual_pick_cache_caked_view_uses_detector_rows_when_projector_missing(
     monkeypatch,
 ) -> None:
@@ -19059,6 +19059,41 @@ def test_geometry_source_snapshot_signature_tracks_sf_picker_inventory(
     assert key_signature != p_signature
 
 
+def test_runtime_6h_qr_reference_gate_requires_toggle_and_w1(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    include_var = _Var(False)
+    w1_var = _Var(100.0)
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_include_6h_qr_reference_var",
+        include_var,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "w1_var", w1_var, raising=False)
+
+    assert runtime_session._geometry_6h_qr_reference_enabled() is False
+
+    include_var.value = True
+    w1_var.value = 0.0
+    assert runtime_session._geometry_6h_qr_reference_enabled() is False
+
+    w1_var.value = 5.0
+    assert runtime_session._geometry_6h_qr_reference_enabled() is True
+    assert runtime_session._geometry_6h_qr_reference_source_signature()[1] is True
+
+
+def test_manual_pick_cache_source_rows_rebuilds_when_snapshot_projection_empty(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
     runtime_session.background_runtime_state.current_background_index = 0
     simulation_state.stored_max_positions_local = [np.zeros((1, 7), dtype=np.float64)]
@@ -19865,13 +19900,14 @@ def test_runtime_impl_moves_analysis_view_options_and_auto_match_to_quick_contro
             )
         ]
     )
+    assert "def _selected_qr_rod_caked_mask_payload_for_entry(" in source
     assert (
         "def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:" in source
     )
     payload_start = source.index(
-        "def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:"
+        "def _selected_qr_rod_caked_mask_payload_for_entry("
     )
-    payload_end = source.index("def _current_selected_qr_rod_drag_context()", payload_start)
+    payload_end = source.index("def _current_selected_qr_rod_detector_support_inputs", payload_start)
     payload_block = source[payload_start:payload_end]
     assert "build_selected_qr_rod_qz_caked_mask(" in payload_block
     assert "q_space_rect_mask_for_qr_centers" not in payload_block
@@ -19940,9 +19976,7 @@ def test_runtime_impl_gui_state_import_prepares_caked_view_before_manual_restore
     block_end = source.index("def _export_full_gui_state() -> None:", block_start)
     block = source[block_start:block_end]
 
-    detect_index = block.index(
-        "geometry_manual_pairs_rows_missing_caked_backfill_count("
-    )
+    detect_index = block.index("geometry_manual_pairs_rows_missing_caked_backfill_count(")
     ensure_index = block.index("_ensure_geometry_fit_caked_view(force_refresh=True)")
     restore_index = block.index("gui_state_io.apply_gui_state_geometry(")
 
@@ -20021,10 +20055,145 @@ def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
         "caked_intensity_mode": "raw_sum",
         "rod_profile_intensity_mode": "raw_sum",
         "selected_qr_rod_key": "phase-a|1",
+        "selected_qr_rod_keys": ["phase-a|1"],
         "qz_min": -0.5,
         "qz_max": 1.5,
         "delta_qr": 0.03125,
+        "delta_qr_width_mode": "full_width",
     }
+
+
+def test_runtime_session_legacy_selected_qr_rod_key_migrates_to_key_list(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value="") -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    view_state = SimpleNamespace(
+        tth_min_value=0.0,
+        tth_max_value=80.0,
+        phi_min_value=-15.0,
+        phi_max_value=15.0,
+        integrate_selected_qr_rod_value=False,
+        mirror_selected_qr_phi_value=False,
+        include_selected_qr_rod_shape_value=False,
+        caked_intensity_mode_value="density",
+        rod_profile_intensity_mode_value="density",
+        selected_qr_rod_key_value="",
+        selected_qr_rod_key_var=_Var(""),
+        selected_qr_rod_display_var=_Var(""),
+        selected_qr_rod_options=[],
+        qz_min_value=0.0,
+        qz_max_value=5.0,
+        delta_qr_value=0.25,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        view_state,
+        raising=False,
+    )
+    for name in (
+        "tth_min_var",
+        "tth_max_var",
+        "phi_min_var",
+        "phi_max_var",
+        "integrate_selected_qr_rod_var",
+        "mirror_selected_qr_phi_var",
+        "include_selected_qr_rod_shape_var",
+        "caked_intensity_mode_var",
+        "rod_profile_intensity_mode_var",
+        "selected_qr_rod_key_var",
+        "qz_min_var",
+        "qz_max_var",
+        "delta_qr_var",
+    ):
+        monkeypatch.setitem(runtime_session.__dict__, name, None)
+
+    runtime_session._apply_analysis_range_snapshot({"selected_qr_rod_key": "phase-a|1"})
+
+    assert view_state.selected_qr_rod_key_value == "phase-a|1"
+    assert view_state.selected_qr_rod_keys_value == ["phase-a|1"]
+    assert runtime_session._current_analysis_roi_values()["selected_qr_rod_keys"] == [
+        "phase-a|1"
+    ]
+
+
+def test_runtime_session_legacy_delta_qr_half_width_loads_as_full_width(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value=0.0) -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    view_state = SimpleNamespace(
+        delta_qr_value=0.25,
+        delta_qr_var=_Var(0.25),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        view_state,
+        raising=False,
+    )
+
+    runtime_session._apply_analysis_range_snapshot({"delta_qr": 0.10})
+
+    assert view_state.delta_qr_value == 0.20
+    assert view_state.delta_qr_var.get() == 0.20
+    assert view_state.delta_qr_width_mode_value == "full_width"
+
+
+def test_runtime_session_full_width_delta_qr_loads_unchanged(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value=0.0) -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    view_state = SimpleNamespace(
+        delta_qr_value=0.25,
+        delta_qr_var=_Var(0.25),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        view_state,
+        raising=False,
+    )
+
+    runtime_session._apply_analysis_range_snapshot(
+        {"delta_qr": 0.20, "delta_qr_width_mode": "full_width"}
+    )
+
+    assert view_state.delta_qr_value == 0.20
+    assert view_state.delta_qr_var.get() == 0.20
+    assert view_state.delta_qr_width_mode_value == "full_width"
 
 
 def test_runtime_session_caked_profiles_from_sum_fields_supports_raw_sum_mode() -> None:
@@ -20526,6 +20695,7 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_uses_cached_
     assert len(signature_calls) >= 3
     assert cached is result
     assert result["selected_qr_rod_key"] == encoded_key
+    assert mask_calls[0]["delta_qr"] == 0.015625
     assert mask_calls[0]["phi_windows"] == ((-85.0, -72.5), (72.5, 85.0))
     np.testing.assert_array_equal(
         result["mask"],
@@ -20648,6 +20818,7 @@ def test_runtime_session_selected_qr_rod_detector_context_tracks_shape_signature
     changed_context = runtime_session._current_selected_qr_rod_detector_integration_context()
 
     assert disabled_context is not None
+    assert disabled_context["delta_qr"] == 0.025
     assert disabled_context["shape_mask"] is None
     assert disabled_context["shape_available"] is False
     assert enabled_context is not None
@@ -20761,7 +20932,7 @@ def test_runtime_selected_qr_rod_detector_mask_payload_returns_detector_mask(
         payload["mask"],
         np.asarray([[True, True, False], [True, True, False]], dtype=bool),
     )
-    assert payload["signature"][0] == "selected_qr_rod_detector_mask"
+    assert payload["signature"][0] == "selected_qr_rod_detector_mask_union"
 
 
 def test_runtime_selected_qr_rod_detector_mask_payload_none_in_q_space(
@@ -20865,150 +21036,21 @@ def test_runtime_session_current_selected_qr_rod_caked_mask_payload_returns_none
     assert build_calls == []
 
 
-def test_runtime_session_selected_qr_rod_1d_uses_detector_qz_profile(
-    monkeypatch,
-) -> None:
-    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    sim_image = np.asarray([[1.0, 2.0]], dtype=float)
-    bg_image = np.asarray([[10.0, 20.0]], dtype=float)
-    context = {
-        "qz_edges": np.asarray([0.0, 1.0, 2.0], dtype=float),
-        "qr_center": 1.0,
-        "delta_qr": 0.05,
-        "qr_map": np.ones((1, 2), dtype=float),
-        "qz_map": np.asarray([[0.5, 1.5]], dtype=float),
-        "valid_q": np.ones((1, 2), dtype=bool),
-        "detector_phi_deg": np.zeros((1, 2), dtype=float),
-        "phi_windows": ((-180.0, 180.0),),
-        "shape_mask": np.asarray([[False, True]], dtype=bool),
-        "signature": ("rod", "detector"),
-    }
-    integration_calls: list[np.ndarray] = []
-
-    class _Line:
-        def __init__(self) -> None:
-            self.data = None
-
-        def set_data(self, x, y) -> None:
-            self.data = (np.asarray(x), np.asarray(y))
-
-    class _Axis:
-        def __init__(self) -> None:
-            self.xlabel = None
-            self.ylabel = None
-            self.title = None
-            self.visible = True
-
-        def set_xlabel(self, value) -> None:
-            self.xlabel = value
-
-        def set_ylabel(self, value) -> None:
-            self.ylabel = value
-
-        def set_title(self, value) -> None:
-            self.title = value
-
-        def set_yscale(self, _value) -> None:
-            pass
-
-        def set_visible(self, value) -> None:
-            self.visible = bool(value)
-
-        def get_visible(self) -> bool:
-            return self.visible
-
-        def relim(self) -> None:
-            pass
-
-        def autoscale_view(self, *args, **kwargs) -> None:
-            pass
-
-    def _integrate(**kwargs):
-        image = np.asarray(kwargs["detector_image"], dtype=float)
-        integration_calls.append(image.copy())
-        np.testing.assert_array_equal(kwargs["shape_mask"], context["shape_mask"])
-        scale = 1.0 if np.array_equal(image, sim_image) else 10.0
-        return {
-            "qz_center": np.asarray([0.5, 1.5], dtype=float),
-            "pixel_count": np.asarray([1, 2], dtype=np.int64),
-            "intensity_sum": np.asarray([2.0, 8.0], dtype=float) * scale,
-            "intensity_mean": np.asarray([2.0, 4.0], dtype=float) * scale,
-        }
-
-    monkeypatch.setattr(runtime_session, "_ensure_analysis_figure", lambda: None)
-    monkeypatch.setattr(
-        runtime_session,
-        "_clear_analysis_peak_fit_results",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
-    monkeypatch.setattr(runtime_session, "_current_selected_qr_rod_detector_integration_context", lambda: context)
-    monkeypatch.setattr(runtime_session, "_selected_qr_rod_detector_mode_requested", lambda: True)
-    monkeypatch.setattr(
-        runtime_session,
-        "_current_selected_qr_rod_caked_mask_payload",
-        lambda: (_ for _ in ()).throw(AssertionError("detector profile should run first")),
-    )
-    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "density")
-    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.5)
-    monkeypatch.setattr(runtime_session, "_current_background_backend_for_comparison", lambda: bg_image)
-    monkeypatch.setattr(
-        runtime_session.gui_qr_cylinder_overlay,
-        "integrate_detector_qr_rod_qz_profile",
-        _integrate,
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "_caked_profiles_from_sum_fields",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("selected-Qr rod numeric profile must not use caked bins")
-        ),
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "simulation_runtime_state",
-        SimpleNamespace(unscaled_image=sim_image, last_1d_integration_data={}),
-        raising=False,
-    )
-    monkeypatch.setattr(runtime_session, "line_1d_rad", _Line(), raising=False)
-    monkeypatch.setattr(runtime_session, "line_1d_rad_bg", _Line(), raising=False)
-    monkeypatch.setattr(runtime_session, "line_1d_az", _Line(), raising=False)
-    monkeypatch.setattr(runtime_session, "line_1d_az_bg", _Line(), raising=False)
-    monkeypatch.setattr(runtime_session, "ax_1d_radial", _Axis(), raising=False)
-    monkeypatch.setattr(runtime_session, "ax_1d_azim", _Axis(), raising=False)
-    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
-
-    runtime_session._update_1d_plots_from_caked(object(), object())
-
-    assert len(integration_calls) == 2
-    np.testing.assert_array_equal(integration_calls[0], sim_image)
-    np.testing.assert_array_equal(integration_calls[1], bg_image)
-    np.testing.assert_allclose(runtime_session.line_1d_rad.data[0], np.asarray([0.5, 1.5]))
-    np.testing.assert_allclose(runtime_session.line_1d_rad.data[1], np.asarray([3.0, 6.0]))
-    np.testing.assert_allclose(runtime_session.line_1d_rad_bg.data[1], np.asarray([20.0, 40.0]))
-    assert runtime_session.line_1d_az.data[0].size == 0
-    assert runtime_session.line_1d_az_bg.data[0].size == 0
-    assert runtime_session.simulation_runtime_state.last_1d_integration_data["x_axis_kind"] == "qz"
-    assert (
-        runtime_session.simulation_runtime_state.last_1d_integration_data["x_axis_label"]
-        == "Qz (A^-1)"
-    )
-    assert runtime_session.ax_1d_radial.xlabel == "Qz (A^-1)"
-    assert runtime_session.ax_1d_azim.get_visible() is False
-
-
-def test_runtime_session_selected_qr_rod_1d_falls_back_to_caked_mask_profile(
+def test_runtime_session_selected_qr_rod_1d_uses_caked_profiles_not_detector(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     sim_res2 = object()
     bg_res2 = object()
-    mask_payload = {
-        "mask": np.ones((2, 2), dtype=bool),
-        "qz_min": 0.0,
-        "qz_max": 2.0,
-        "signature": ("rod", "caked"),
+    payload = {
+        "selected_qr_rod_key": "rod-a",
+        "selected_entry": {"qr": 1.25},
+        "signature": ("rod", "a"),
+        "include_selected_qr_rod_shape": False,
+        "shape_available": False,
+        "shape_pixel_count": 0,
     }
+    detector_calls: list[dict[str, object]] = []
 
     class _Line:
         def __init__(self) -> None:
@@ -21023,6 +21065,20 @@ def test_runtime_session_selected_qr_rod_1d_falls_back_to_caked_mask_profile(
             self.ylabel = None
             self.title = None
             self.visible = True
+            self.lines: list[_Line] = []
+
+        def clear(self) -> None:
+            self.lines.clear()
+
+        def plot(self, x, y, *args, **kwargs):
+            del args, kwargs
+            line = _Line()
+            line.set_data(x, y)
+            self.lines.append(line)
+            return (line,)
+
+        def legend(self) -> None:
+            pass
 
         def set_xlabel(self, value) -> None:
             self.xlabel = value
@@ -21048,18 +21104,19 @@ def test_runtime_session_selected_qr_rod_1d_falls_back_to_caked_mask_profile(
         def autoscale_view(self, *args, **kwargs) -> None:
             pass
 
-    def _payload(res2):
-        image = (
-            np.asarray([[2.0, 4.0], [6.0, 8.0]], dtype=float)
-            if res2 is sim_res2
-            else np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=float)
-        )
+    def _profile(res2, mask_payload, mode):
+        assert mask_payload is payload
+        assert mode == "density"
+        values = [2.0, 4.0] if res2 is sim_res2 else [10.0, 20.0]
         return {
-            "image": image,
-            "radial": np.asarray([10.0, 20.0], dtype=float),
-            "azimuth": np.asarray([-90.0, 90.0], dtype=float),
+            "qz_center": np.asarray([0.5, 1.5], dtype=float),
+            "pixel_count": np.asarray([1, 1], dtype=np.int64),
+            "intensity_sum": np.asarray(values, dtype=float),
+            "intensity_mean": np.asarray(values, dtype=float),
+            "acceptance_sum": np.asarray([1.0, 1.0], dtype=float),
         }
 
+    axis = _Axis()
     monkeypatch.setattr(runtime_session, "_ensure_analysis_figure", lambda: None)
     monkeypatch.setattr(
         runtime_session,
@@ -21067,21 +21124,25 @@ def test_runtime_session_selected_qr_rod_1d_falls_back_to_caked_mask_profile(
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
-    monkeypatch.setattr(runtime_session, "_selected_qr_rod_detector_mode_requested", lambda: True)
-    monkeypatch.setattr(runtime_session, "_current_selected_qr_rod_caked_mask_payload", lambda: mask_payload)
-    monkeypatch.setattr(runtime_session, "_current_selected_qr_rod_detector_integration_context", lambda: None)
-    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "density")
-    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.5)
-    monkeypatch.setattr(runtime_session, "_caked_profile_payload_for_result", _payload)
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_mode_requested", lambda: True)
     monkeypatch.setattr(
         runtime_session,
-        "_caked_qz_map_for_profile_payload",
-        lambda _payload: np.asarray([[0.25, 1.25], [0.25, 1.25]], dtype=float),
+        "_current_selected_qr_rod_caked_mask_payloads_for_result",
+        lambda res2: [payload],
+    )
+    monkeypatch.setattr(runtime_session, "_set_1d_layout_for_selected_qr_rods", lambda count: [axis])
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_caked_profile_for_result", _profile)
+    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "density")
+    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.5)
+    monkeypatch.setattr(
+        runtime_session.gui_qr_cylinder_overlay,
+        "integrate_detector_qr_rod_qz_profile",
+        lambda **kwargs: detector_calls.append(dict(kwargs)),
     )
     monkeypatch.setattr(
         runtime_session,
         "simulation_runtime_state",
-        SimpleNamespace(unscaled_image=np.ones((2, 2)), last_1d_integration_data={}),
+        SimpleNamespace(last_1d_integration_data={}),
         raising=False,
     )
     monkeypatch.setattr(runtime_session, "line_1d_rad", _Line(), raising=False)
@@ -21094,14 +21155,230 @@ def test_runtime_session_selected_qr_rod_1d_falls_back_to_caked_mask_profile(
 
     runtime_session._update_1d_plots_from_caked(sim_res2, bg_res2)
 
+    assert detector_calls == []
     np.testing.assert_allclose(runtime_session.line_1d_rad.data[0], [0.5, 1.5])
-    np.testing.assert_allclose(runtime_session.line_1d_rad.data[1], [6.0, 9.0])
-    np.testing.assert_allclose(runtime_session.line_1d_rad_bg.data[1], [20.0, 30.0])
+    np.testing.assert_allclose(runtime_session.line_1d_rad.data[1], [3.0, 6.0])
+    np.testing.assert_allclose(runtime_session.line_1d_rad_bg.data[1], [10.0, 20.0])
     assert runtime_session.line_1d_az.data[0].size == 0
     assert runtime_session.line_1d_az_bg.data[0].size == 0
     assert runtime_session.simulation_runtime_state.last_1d_integration_data["x_axis_kind"] == "qz"
-    assert runtime_session.ax_1d_radial.xlabel == "Qz (A^-1)"
-    assert runtime_session.ax_1d_azim.get_visible() is False
+    assert (
+        runtime_session.simulation_runtime_state.last_1d_integration_data[
+            "primary_selected_qr_rod_key"
+        ]
+        == "rod-a"
+    )
+
+
+def test_runtime_session_selected_qr_rod_1d_uses_per_rod_caked_masks_not_union(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    sim_res2 = object()
+    payloads = [
+        {
+            "selected_qr_rod_key": "rod-a",
+            "selected_entry": {"qr": 1.1},
+            "signature": ("rod", "a"),
+        },
+        {
+            "selected_qr_rod_key": "rod-b",
+            "selected_entry": {"qr": 1.2},
+            "signature": ("rod", "b"),
+        },
+    ]
+    profile_payload_keys: list[str] = []
+
+    class _Line:
+        def __init__(self) -> None:
+            self.data = None
+
+        def set_data(self, x, y) -> None:
+            self.data = (np.asarray(x), np.asarray(y))
+
+    class _Axis:
+        def __init__(self) -> None:
+            self.lines: list[_Line] = []
+
+        def clear(self) -> None:
+            self.lines.clear()
+
+        def plot(self, x, y, *args, **kwargs):
+            del args, kwargs
+            line = _Line()
+            line.set_data(x, y)
+            self.lines.append(line)
+            return (line,)
+
+        def legend(self) -> None:
+            pass
+
+        def set_xlabel(self, _value) -> None:
+            pass
+
+        def set_ylabel(self, _value) -> None:
+            pass
+
+        def set_title(self, _value) -> None:
+            pass
+
+        def set_yscale(self, _value) -> None:
+            pass
+
+        def relim(self) -> None:
+            pass
+
+        def autoscale_view(self, *args, **kwargs) -> None:
+            pass
+
+    def _profile(res2, mask_payload, mode):
+        del res2, mode
+        key = str(mask_payload["selected_qr_rod_key"])
+        profile_payload_keys.append(key)
+        base = 1.0 if key == "rod-a" else 10.0
+        return {
+            "qz_center": np.asarray([0.5, 1.5], dtype=float),
+            "pixel_count": np.asarray([1, 1], dtype=np.int64),
+            "intensity_sum": np.asarray([base, base + 1.0], dtype=float),
+            "intensity_mean": np.asarray([base, base + 1.0], dtype=float),
+            "acceptance_sum": np.asarray([1.0, 1.0], dtype=float),
+        }
+
+    axes = [_Axis(), _Axis()]
+    monkeypatch.setattr(runtime_session, "_ensure_analysis_figure", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_analysis_peak_fit_results",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_mode_requested", lambda: True)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_selected_qr_rod_caked_mask_payloads_for_result",
+        lambda res2: payloads,
+    )
+    monkeypatch.setattr(runtime_session, "_set_1d_layout_for_selected_qr_rods", lambda count: axes)
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_caked_profile_for_result", _profile)
+    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "density")
+    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.0)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(last_1d_integration_data={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
+
+    runtime_session._update_1d_plots_from_caked(sim_res2, None)
+
+    assert profile_payload_keys == ["rod-a", "rod-b"]
+    np.testing.assert_allclose(axes[0].lines[0].data[1], [1.0, 2.0])
+    np.testing.assert_allclose(axes[1].lines[0].data[1], [10.0, 11.0])
+    assert list(
+        runtime_session.simulation_runtime_state.last_1d_integration_data[
+            "selected_qr_rod_profiles"
+        ]
+    ) == ["rod-a", "rod-b"]
+
+
+def test_runtime_session_selected_qr_rod_profiles_match_detector_and_caked_view(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    sim_res2 = object()
+    payload = {
+        "selected_qr_rod_key": "rod-a",
+        "selected_entry": {"qr": 1.25},
+        "signature": ("rod", "a"),
+    }
+
+    class _Line:
+        def __init__(self) -> None:
+            self.data = None
+
+        def set_data(self, x, y) -> None:
+            self.data = (np.asarray(x), np.asarray(y))
+
+    class _Axis:
+        def clear(self) -> None:
+            pass
+
+        def plot(self, x, y, *args, **kwargs):
+            del args, kwargs
+            line = _Line()
+            line.set_data(x, y)
+            return (line,)
+
+        def legend(self) -> None:
+            pass
+
+        def set_xlabel(self, _value) -> None:
+            pass
+
+        def set_ylabel(self, _value) -> None:
+            pass
+
+        def set_title(self, _value) -> None:
+            pass
+
+        def set_yscale(self, _value) -> None:
+            pass
+
+        def relim(self) -> None:
+            pass
+
+        def autoscale_view(self, *args, **kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(runtime_session, "_ensure_analysis_figure", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_analysis_peak_fit_results",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_analysis_roi_values",
+        lambda: {"integrate_selected_qr_rod": True},
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_selected_qr_rod_caked_mask_payloads_for_result",
+        lambda res2: [payload],
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_selected_qr_rod_caked_profile_for_result",
+        lambda res2, mask_payload, mode: {
+            "qz_center": np.asarray([0.5, 1.5], dtype=float),
+            "pixel_count": np.asarray([1, 1], dtype=np.int64),
+            "intensity_sum": np.asarray([2.0, 4.0], dtype=float),
+            "intensity_mean": np.asarray([2.0, 4.0], dtype=float),
+            "acceptance_sum": np.asarray([1.0, 1.0], dtype=float),
+        },
+    )
+    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "density")
+    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.0)
+    monkeypatch.setattr(runtime_session, "_set_1d_layout_for_selected_qr_rods", lambda count: [_Axis()])
+    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
+
+    profiles_by_view = {}
+    for mode in ("detector", "caked"):
+        monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda mode=mode: mode)
+        monkeypatch.setattr(
+            runtime_session,
+            "simulation_runtime_state",
+            SimpleNamespace(last_1d_integration_data={}),
+            raising=False,
+        )
+        runtime_session._update_1d_plots_from_caked(sim_res2, None)
+        profiles_by_view[mode] = runtime_session.simulation_runtime_state.last_1d_integration_data[
+            "selected_qr_rod_profiles"
+        ]["rod-a"]["sim"]
+
+    np.testing.assert_allclose(profiles_by_view["detector"], profiles_by_view["caked"])
 
 
 def test_runtime_session_caked_profiles_fall_back_when_sum_normalization_empty() -> None:
@@ -21278,61 +21555,40 @@ def test_runtime_session_caked_profiles_from_sum_fields_standard_update_restores
     assert runtime_session.ax_1d_azim.title == "Azimuthal Integration (φ)"
 
 
-def test_runtime_session_auto_match_selected_qr_rod_uses_detector_qz_profiles(
+def test_runtime_session_auto_match_selected_qr_rod_uses_primary_caked_profile(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    sim_image = np.asarray([[1.0, 2.0]], dtype=float)
-    bg_image = np.asarray([[10.0, 20.0]], dtype=float)
-    context = {
-        "qz_edges": np.asarray([0.0, 1.0, 2.0], dtype=float),
-        "qr_center": 1.0,
-        "delta_qr": 0.05,
-        "qr_map": np.ones((1, 2), dtype=float),
-        "qz_map": np.asarray([[0.5, 1.5]], dtype=float),
-        "valid_q": np.ones((1, 2), dtype=bool),
-        "detector_phi_deg": np.zeros((1, 2), dtype=float),
-        "phi_windows": ((-180.0, 180.0),),
-        "signature": ("rod", "detector"),
-    }
     scales: list[float] = []
     statuses: list[str] = []
+    detector_calls: list[dict[str, object]] = []
 
-    def _integrate(**kwargs):
-        image = np.asarray(kwargs["detector_image"], dtype=float)
-        if np.array_equal(image, sim_image):
-            sums = np.asarray([2.0, 4.0], dtype=float)
-        else:
-            sums = np.asarray([10.0, 20.0], dtype=float)
-        return {
-            "qz_center": np.asarray([0.5, 1.5], dtype=float),
-            "pixel_count": np.asarray([1, 1], dtype=np.int64),
-            "intensity_sum": sums,
-            "intensity_mean": sums,
-        }
-
-    monkeypatch.setattr(runtime_session, "_current_selected_qr_rod_detector_integration_context", lambda: context)
-    monkeypatch.setattr(runtime_session, "_selected_qr_rod_detector_mode_requested", lambda: True)
-    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "raw_sum")
-    monkeypatch.setattr(runtime_session, "_current_background_backend_for_comparison", lambda: bg_image)
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_mode_requested", lambda: True)
+    monkeypatch.setattr(runtime_session, "_current_background_backend_for_comparison", lambda: None)
     monkeypatch.setattr(
         runtime_session.gui_qr_cylinder_overlay,
         "integrate_detector_qr_rod_qz_profile",
-        _integrate,
-    )
-    monkeypatch.setattr(
-        runtime_session,
-        "_caked_profiles_from_sum_fields",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("selected-Qr rod auto-scale must not use caked bins")
-        ),
+        lambda **kwargs: detector_calls.append(dict(kwargs)),
     )
     monkeypatch.setattr(
         runtime_session,
         "simulation_runtime_state",
         SimpleNamespace(
-            unscaled_image=sim_image,
-            last_1d_integration_data={"simulated_2d_image": sim_image},
+            last_1d_integration_data={
+                "intensities_2theta_sim": None,
+                "intensities_2theta_bg": None,
+                "primary_selected_qr_rod_key": "rod-a",
+                "selected_qr_rod_profiles": {
+                    "rod-a": {
+                        "sim": np.asarray([2.0, 4.0], dtype=float),
+                        "bg": np.asarray([10.0, 20.0], dtype=float),
+                    },
+                    "rod-b": {
+                        "sim": np.asarray([100.0, 200.0], dtype=float),
+                        "bg": np.asarray([1.0, 2.0], dtype=float),
+                    },
+                },
+            },
         ),
         raising=False,
     )
@@ -21351,9 +21607,16 @@ def test_runtime_session_auto_match_selected_qr_rod_uses_detector_qz_profiles(
 
     runtime_session._auto_match_scale_factor_to_radial_peak()
 
+    assert detector_calls == []
     assert scales == [5.0]
     assert statuses and "Qz peak" in statuses[-1]
     assert runtime_session.simulation_runtime_state.last_1d_integration_data["x_axis_kind"] == "qz"
+    assert (
+        runtime_session.simulation_runtime_state.last_1d_integration_data[
+            "primary_selected_qr_rod_key"
+        ]
+        == "rod-a"
+    )
 
 
 def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_view(
@@ -21394,6 +21657,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
     mirror_widget = _Widget()
     include_shape_widget = _Widget()
     combobox = _Widget()
+    checkbox = _Widget()
     qz_min_slider = _Widget()
     qz_min_entry = _Widget()
     qz_max_slider = _Widget()
@@ -21419,6 +21683,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
             mirror_selected_qr_phi_checkbutton=mirror_widget,
             include_selected_qr_rod_shape_checkbutton=include_shape_widget,
             selected_qr_rod_combobox=combobox,
+            selected_qr_rod_checkbuttons={encoded_key: checkbox},
             selected_qr_rod_display_var=_Var(""),
             selected_qr_rod_key_var=_Var(""),
             qz_min_var=_Var(-2.0),
@@ -21461,6 +21726,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
     assert mirror_widget.state_value == "disabled"
     assert include_shape_widget.state_value == "disabled"
     assert combobox.state_value == "disabled"
+    assert checkbox.state_value == "disabled"
     assert qz_min_slider.state_value == "disabled"
     assert delta_entry.state_value == "disabled"
     assert tth_min_slider.state_value == "normal"
@@ -21473,6 +21739,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
     assert mirror_widget.state_value == "disabled"
     assert include_shape_widget.state_value == "disabled"
     assert combobox.state_value == "disabled"
+    assert checkbox.state_value == "disabled"
     assert qz_min_slider.state_value == "disabled"
     assert delta_entry.state_value == "disabled"
     assert tth_min_slider.state_value == "normal"
@@ -21489,6 +21756,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
     monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
     runtime_session._sync_selected_qr_rod_controls_state()
     assert combobox.state_value == "normal"
+    assert checkbox.state_value == "normal"
     assert mirror_widget.state_value == "normal"
     assert include_shape_widget.state_value == "normal"
     assert qz_min_slider.state_value == "normal"

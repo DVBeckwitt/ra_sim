@@ -68,6 +68,12 @@
 - **GUI and UX updates**
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
   - Fixed detector-view Selected-Qr rod ROI mode so it displays a detector-native Qr/Qz support mask, suppresses the legacy detector `2theta/phi` angular ROI while enabled, and sets Qz bounds from detector pixels during rod drags.
+  - Fixed Selected-Qr rod ROI profiles so detector view uses detector-native masks only for overlay/drag, while plotted Qz profiles always integrate from caked `2theta/phi` data.
+  - Added Selected-Qr rod multi-selection with union overlay/drag masks and vertically stacked per-rod Qz subplots; saved GUI state now records both `selected_qr_rod_keys` and legacy `selected_qr_rod_key`.
+  - Changed fresh Selected-Qr rod ROI phi defaults to `-90..90` without overwriting restored/custom phi windows.
+  - Changed detector-view Selected-Qr rod profile defaults to raw accumulated intensity while preserving restored/custom rod intensity modes and caked-view density defaults.
+  - Replaced modifier-key Selected-Qr rod multi-selection with explicit rod checkboxes; selected keys remain saved in displayed rod order.
+  - Changed the Selected-Qr rod `delta_Qr` control and saved `analysis_range.delta_qr` to mean full rod width, with legacy half-width saved states migrated on load and low-level mask builders still receiving half-width.
   - Added a Match-tab `Place Background Qr Set` control for saving background-only Qr reference peaks with local peak-top refinement and `2theta,phi` labels instead of HKL values.
   - Fixed `Pick Beam Center` conversion to use detector-extent beam-center coordinates instead of raw pixel-index inversion, avoiding a one-pixel frame error in the default rotated detector view.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.

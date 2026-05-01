@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: none
 Priority: p2
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 ## Summary
 
@@ -31,19 +31,25 @@ back to contributing detector pixels, then filter those detector pixels by Qr
 and valid Qz. This avoids using a single inverse caked-bin centroid for an
 aggregate bin. The old projected-sample drag helper remains fallback only.
 
-Selected-Qr rod 1D profiles now use detector-space numeric integration instead
-of the caked display mask. The runtime selects detector pixels by Qr band, Qz
-bin, valid detector Q map, finite intensity, and signed/mirrored GUI phi window,
-then histograms intensity by Qz. The caked selected-Qr mask remains the overlay
-and drag-preview source only.
+2026-05-01 correction: Selected-Qr rod 1D profiles no longer use detector-space
+numeric integration in runtime plotting or auto-match. Detector-native support
+is now overlay/drag only. Plotted Qz profiles are computed from per-rod caked
+`2theta/phi` data in both detector and caked views. Union masks are display/drag
+support only and are not integrated as combined profiles.
 
 The selected-Qr rod Qz controls now default to `0..5`. Runtime slider bounds use
 `0` as the lower Qz limit and the largest positive Qz candidate from the
 current caked 2theta extent as the upper limit.
 
-Selected-Qr rod mode now hides the standard azimuthal 1D subplot and expands the
-Qz rod profile to occupy the analysis figure. Normal caked radial/azimuthal
-integration restores the two-panel layout when selected-Qr rod mode is disabled.
+Selected-Qr rod mode now plots one stacked Qz subplot per selected rod. Normal
+caked radial/azimuthal integration restores the standard layout when
+selected-Qr rod mode is disabled.
+
+Selected-Qr rod mode also has an optional `Include rod shape` control. When it
+is enabled, detector-backed caked masks and detector-space Qz profiles include
+the selected Qr/Qz group's detector support mask in addition to the numeric
+`Qr0 +/- delta_Qr` band. The shape mask participates in cache signatures so
+stale rod masks are not reused across selected-shape changes.
 
 The GUI startup TypeError from passing `listed_q_group_keys_for_picker` into the
 manual-geometry cache bootstrap is fixed by adding the matching callback
@@ -51,16 +57,18 @@ parameter to the manual-geometry cache callback factory.
 
 ## Bug/error/feature status
 
-- Bug: fixed. Selected-Qr rod numeric 1D profiles no longer integrate caked bins
-  through the display mask; they classify detector pixels by Qr/Qz/phi first.
-- Error: no known selected-Qr rod detector-integration errors remain after the
-  focused GUI/runtime validation below.
+- Bug: superseded by the 2026-05-01 Selected-Qr rod split. Runtime numeric 1D
+  profiles now use per-rod caked masks/profiles, while detector masks are
+  visual/drag support only.
+- Error: no known selected-Qr rod detector-integration runtime path remains for
+  plotting or auto-match after the focused GUI/runtime validation below.
 - Error: fixed. GUI startup no longer fails with
   `make_runtime_geometry_manual_cache_callbacks() got an unexpected keyword
   argument 'listed_q_group_keys_for_picker'`.
 - Feature: complete for this workflow. Existing rod intensity mode, mirrored phi
-  controls, caked overlay, caked Qz drag behavior, and standard caked
-  radial/azimuthal integration behavior are preserved.
+  controls, optional rod-shape support, caked overlay, caked Qz drag behavior,
+  checkbox multi-rod selection, and standard caked radial/azimuthal integration
+  behavior are preserved.
 
 ## Next actions
 
@@ -92,10 +100,17 @@ parameter to the manual-geometry cache callback factory.
   passed, `6 passed, 332 deselected`.
 - 2026-04-30: `python -m compileall ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/manual_geometry.py tests/test_gui_runtime_import_safe.py`
   passed.
+- 2026-04-30: `python -m pytest tests/test_gui_qr_cylinder_overlay.py tests/test_gui_integration_range_drag.py tests/test_gui_runtime_import_safe.py -k "selected_qr_rod or refresh_integration" -ra`
+  passed, `27 passed, 399 deselected`.
+- 2026-04-30: `python -m ruff check ra_sim/gui/bootstrap.py ra_sim/gui/integration_range_drag.py ra_sim/gui/qr_cylinder_overlay.py ra_sim/gui/state.py ra_sim/gui/views.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_runtime_import_safe.py`
+  passed.
 - 2026-04-30: `python -m pytest tests/test_gui_runtime_import_safe.py -q -x`
   currently stops outside this selected-Qr/caked startup patch at
   `test_geometry_source_snapshot_signature_tracks_sf_picker_inventory`, where
   that test expects a runtime `current_sf_prune_bias` monkeypatch target.
+- 2026-05-01: `python -m pytest tests/test_gui_qr_cylinder_overlay.py tests/test_gui_integration_range_drag.py tests/test_gui_runtime_import_safe.py tests/test_gui_views.py tests/test_gui_state_io.py -ra`
+  passed, `523 passed`.
+- 2026-05-01: `python -m compileall ra_sim tests` passed.
 
 ## Links
 

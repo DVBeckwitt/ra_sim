@@ -1467,12 +1467,15 @@ def build_runtime_integration_range_update_bootstrap(
         "phi_max": 15.0,
         "integrate_selected_qr_rod": False,
         "mirror_selected_qr_phi": False,
+        "include_selected_qr_rod_shape": False,
         "caked_intensity_mode": "density",
         "rod_profile_intensity_mode": "density",
         "selected_qr_rod_key": "",
+        "selected_qr_rod_keys": [],
         "qz_min": 0.0,
         "qz_max": 5.0,
         "delta_qr": 0.1,
+        "delta_qr_width_mode": "full_width",
     }
     if range_defaults:
         normalized_range_defaults.update(range_defaults)

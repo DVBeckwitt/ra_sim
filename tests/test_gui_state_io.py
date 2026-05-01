@@ -78,9 +78,11 @@ def test_save_and_load_gui_state_file_round_trip_preserves_selected_qr_rod_analy
                 "caked_intensity_mode": "raw_sum",
                 "rod_profile_intensity_mode": "raw_sum",
                 "selected_qr_rod_key": "phase-a|1",
+                "selected_qr_rod_keys": ["phase-a|1", "phase-a|2"],
                 "qz_min": -0.5,
                 "qz_max": 1.5,
                 "delta_qr": 0.03125,
+                "delta_qr_width_mode": "full_width",
             }
         },
     )
@@ -97,9 +99,11 @@ def test_save_and_load_gui_state_file_round_trip_preserves_selected_qr_rod_analy
         "caked_intensity_mode": "raw_sum",
         "rod_profile_intensity_mode": "raw_sum",
         "selected_qr_rod_key": "phase-a|1",
+        "selected_qr_rod_keys": ["phase-a|1", "phase-a|2"],
         "qz_min": -0.5,
         "qz_max": 1.5,
         "delta_qr": 0.03125,
+        "delta_qr_width_mode": "full_width",
     }
 
 
@@ -268,6 +272,47 @@ def test_saved_state_without_background_subtraction_fields_still_loads(tmp_path)
 
     assert loaded["variables"]["gamma_var"] == 1.25
     assert all(not str(name).startswith("background_subtraction_") for name in loaded["variables"])
+
+
+def test_collect_snapshot_persists_6h_qr_reference_toggle(tmp_path) -> None:
+    class _FakeTkVar:
+        def __init__(self, value) -> None:
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    snapshot = state_io.collect_full_gui_state_snapshot(
+        global_items={
+            "geometry_include_6h_qr_reference_var": _FakeTkVar(True),
+        },
+        tk_variable_type=_FakeTkVar,
+        occ_vars=[],
+        atom_site_fract_vars=[],
+        geometry_q_group_rows=[],
+        geometry_disabled_qr_sets=[],
+        geometry_disabled_qz_sections=[],
+        geometry_manual_pairs=[],
+        geometry_peak_records=[],
+        selected_hkl_target=None,
+        primary_cif_path="primary.cif",
+        secondary_cif_path=None,
+        osc_files=[],
+        current_background_index=0,
+        background_visible=True,
+        background_backend_rotation_k=0,
+        background_backend_flip_x=False,
+        background_backend_flip_y=False,
+        background_limits_user_override=False,
+        simulation_limits_user_override=False,
+        scale_factor_user_override=False,
+    )
+
+    file_path = tmp_path / "sixh_toggle_state.json"
+    save_gui_state_file(file_path, snapshot)
+    loaded = load_gui_state_file(file_path)["state"]
+
+    assert loaded["variables"]["geometry_include_6h_qr_reference_var"] is True
 
 
 def test_build_geometry_placements_payload_normalizes_nested_values(tmp_path):

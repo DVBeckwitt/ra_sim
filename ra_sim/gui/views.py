@@ -3006,35 +3006,31 @@ def create_background_subtraction_controls(
         phi_blocks.frame,
         "Use for broad blocky φ residuals.",
     )
-    phi_block_theta_bin_width_deg_var, phi_block_theta_bin_width_deg_slider = (
-        _add_explained_slider(
-            parent=phi_blocks.frame,
-            label="Phi-block 2θ bin",
-            variable_key="phi_block_theta_bin_width_deg",
-            initial=0.75,
-            min_value=0.10,
-            max_value=5.00,
-            step=0.05,
-            explanation="Higher uses broader 2θ cells.",
-            low_text="Finer blocks.",
-            high_text="Coarser, safer blocks.",
-            tooltip="Bin width along 2θ for block residuals.",
-        )
+    phi_block_theta_bin_width_deg_var, phi_block_theta_bin_width_deg_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block 2θ bin",
+        variable_key="phi_block_theta_bin_width_deg",
+        initial=0.75,
+        min_value=0.10,
+        max_value=5.00,
+        step=0.05,
+        explanation="Higher uses broader 2θ cells.",
+        low_text="Finer blocks.",
+        high_text="Coarser, safer blocks.",
+        tooltip="Bin width along 2θ for block residuals.",
     )
-    phi_block_phi_bin_width_deg_var, phi_block_phi_bin_width_deg_slider = (
-        _add_explained_slider(
-            parent=phi_blocks.frame,
-            label="Phi-block phi bin",
-            variable_key="phi_block_phi_bin_width_deg",
-            initial=12.0,
-            min_value=2.0,
-            max_value=60.0,
-            step=1.0,
-            explanation="Higher uses broader φ sectors.",
-            low_text="Follows narrower module bands.",
-            high_text="Uses broader phi sectors.",
-            tooltip="Bin width along φ for block residuals.",
-        )
+    phi_block_phi_bin_width_deg_var, phi_block_phi_bin_width_deg_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block phi bin",
+        variable_key="phi_block_phi_bin_width_deg",
+        initial=12.0,
+        min_value=2.0,
+        max_value=60.0,
+        step=1.0,
+        explanation="Higher uses broader φ sectors.",
+        low_text="Follows narrower module bands.",
+        high_text="Uses broader phi sectors.",
+        tooltip="Bin width along φ for block residuals.",
     )
     phi_block_quantile_var, phi_block_quantile_slider = _add_explained_slider(
         parent=phi_blocks.frame,
@@ -3075,35 +3071,31 @@ def create_background_subtraction_controls(
         high_text="Avoids poorly supported cells.",
         tooltip="Cells below this support fraction are filled from neighbors.",
     )
-    phi_block_smooth_theta_bins_var, phi_block_smooth_theta_bins_slider = (
-        _add_explained_slider(
-            parent=phi_blocks.frame,
-            label="Phi-block 2θ smoothing",
-            variable_key="phi_block_smooth_theta_bins",
-            initial=0.75,
-            min_value=0.0,
-            max_value=5.0,
-            step=0.05,
-            explanation="Higher smooths blocks along 2θ.",
-            low_text="Sharper block edges.",
-            high_text="Smoother block grid.",
-            tooltip="Gaussian smoothing in coarse 2θ bins.",
-        )
+    phi_block_smooth_theta_bins_var, phi_block_smooth_theta_bins_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block 2θ smoothing",
+        variable_key="phi_block_smooth_theta_bins",
+        initial=0.75,
+        min_value=0.0,
+        max_value=5.0,
+        step=0.05,
+        explanation="Higher smooths blocks along 2θ.",
+        low_text="Sharper block edges.",
+        high_text="Smoother block grid.",
+        tooltip="Gaussian smoothing in coarse 2θ bins.",
     )
-    phi_block_smooth_phi_bins_var, phi_block_smooth_phi_bins_slider = (
-        _add_explained_slider(
-            parent=phi_blocks.frame,
-            label="Phi-block phi smoothing",
-            variable_key="phi_block_smooth_phi_bins",
-            initial=0.50,
-            min_value=0.0,
-            max_value=5.0,
-            step=0.05,
-            explanation="Higher smooths blocks along φ.",
-            low_text="Sharper sector edges.",
-            high_text="Smoother sector transitions.",
-            tooltip="Gaussian smoothing in coarse φ bins.",
-        )
+    phi_block_smooth_phi_bins_var, phi_block_smooth_phi_bins_slider = _add_explained_slider(
+        parent=phi_blocks.frame,
+        label="Phi-block phi smoothing",
+        variable_key="phi_block_smooth_phi_bins",
+        initial=0.50,
+        min_value=0.0,
+        max_value=5.0,
+        step=0.05,
+        explanation="Higher smooths blocks along φ.",
+        low_text="Sharper sector edges.",
+        high_text="Smoother sector transitions.",
+        tooltip="Gaussian smoothing in coarse φ bins.",
     )
     phi_block_outlier_sigma_var, phi_block_outlier_sigma_slider = _add_explained_slider(
         parent=phi_blocks.frame,
@@ -3249,9 +3241,7 @@ def create_background_subtraction_controls(
         for section, summary in (
             (
                 basic,
-                (
-                    f"strength {_var_float(scale_var, 1.0):.2f}"
-                ),
+                (f"strength {_var_float(scale_var, 1.0):.2f}"),
             ),
             (
                 radial,
@@ -4046,9 +4036,7 @@ def create_beam_mosaic_parameter_sliders(
 
     beam_center_slider_max = max(3000.0, float(image_size))
     if callable(on_pick_beam_center):
-        view_state.beam_center_pick_button_var = tk.StringVar(
-            value=str(beam_center_pick_text)
-        )
+        view_state.beam_center_pick_button_var = tk.StringVar(value=str(beam_center_pick_text))
         view_state.beam_center_pick_button = ttk.Button(
             beam_parent,
             textvariable=view_state.beam_center_pick_button_var,
@@ -4863,6 +4851,7 @@ def create_stacking_probability_sliders(
     view_state: StackingParameterControlsViewState,
     values: dict[str, float],
     on_update: Callable[..., None],
+    on_toggle_6h_qr_reference: Callable[..., None] | None = None,
 ) -> None:
     """Create the stacking probability/weight sliders and store refs."""
 
@@ -4932,6 +4921,16 @@ def create_stacking_probability_sliders(
         parent=parent,
         update_callback=on_update,
     )
+    include_6h_var = tk.BooleanVar(value=False)
+    include_6h_checkbutton = ttk.Checkbutton(
+        parent,
+        text="Include 6H Qr refs",
+        variable=include_6h_var,
+        command=on_toggle_6h_qr_reference,
+    )
+    include_6h_checkbutton.pack(anchor=tk.W, padx=5, pady=(4, 2))
+    view_state.geometry_include_6h_qr_reference_var = include_6h_var
+    view_state.geometry_include_6h_qr_reference_checkbutton = include_6h_checkbutton
 
 
 def rebuild_occupancy_controls(
@@ -5127,18 +5126,16 @@ def create_geometry_tool_action_controls(
         text="Drag Move Placed Peaks",
         variable=geometry_manual_drag_move_var,
         command=(
-            lambda: on_manual_drag_move_changed(
-                bool(geometry_manual_drag_move_var.get())
+            lambda: (
+                on_manual_drag_move_changed(bool(geometry_manual_drag_move_var.get()))
+                if callable(on_manual_drag_move_changed)
+                else None
             )
-            if callable(on_manual_drag_move_changed)
-            else None
         ),
     )
     geometry_manual_drag_move_checkbutton.pack(side=tk.LEFT, padx=5, pady=2)
 
-    geometry_manual_click_remove_var = tk.BooleanVar(
-        value=bool(manual_click_remove_enabled)
-    )
+    geometry_manual_click_remove_var = tk.BooleanVar(value=bool(manual_click_remove_enabled))
 
     def _set_click_remove() -> None:
         enabled = bool(geometry_manual_click_remove_var.get())
@@ -5241,9 +5238,7 @@ def create_geometry_tool_action_controls(
     view_state.geometry_manual_pick_button_var = geometry_manual_pick_button_var
     view_state.geometry_manual_pick_button = geometry_manual_pick_button
     view_state.geometry_manual_click_remove_var = geometry_manual_click_remove_var
-    view_state.geometry_manual_click_remove_checkbutton = (
-        geometry_manual_click_remove_checkbutton
-    )
+    view_state.geometry_manual_click_remove_checkbutton = geometry_manual_click_remove_checkbutton
     view_state.geometry_manual_background_qr_button = geometry_manual_background_qr_button
     view_state.geometry_manual_add_all_button = geometry_manual_add_all_button
     view_state.geometry_manual_remove_qr_set_button = geometry_manual_remove_qr_set_button
@@ -5252,9 +5247,7 @@ def create_geometry_tool_action_controls(
     view_state.geometry_manual_auto_search_radius_value_label = (
         geometry_manual_auto_search_radius_value_label
     )
-    view_state.geometry_manual_auto_search_radius_slider = (
-        geometry_manual_auto_search_radius_slider
-    )
+    view_state.geometry_manual_auto_search_radius_slider = geometry_manual_auto_search_radius_slider
     view_state.geometry_manual_drag_move_var = geometry_manual_drag_move_var
     view_state.geometry_manual_drag_move_checkbutton = geometry_manual_drag_move_checkbutton
     view_state.geometry_manual_refine_button = None
@@ -5665,6 +5658,7 @@ def create_integration_range_controls(
     caked_intensity_mode: str = "density",
     rod_profile_intensity_mode: str = "density",
     selected_qr_rod_key: str = "",
+    selected_qr_rod_keys: Sequence[str] | None = None,
     selected_qr_rod_options: Sequence[tuple[str, str]] | None = None,
     on_toggle_integrate_selected_qr_rod: Callable[[], None] | None = None,
     on_toggle_mirror_selected_qr_phi: Callable[[], None] | None = None,
@@ -5816,12 +5810,22 @@ def create_integration_range_controls(
     selected_qr_rod_label = ttk.Label(selected_qr_rod_container, text="Qr rod:")
     selected_qr_rod_label.pack(side=tk.LEFT, padx=5)
 
-    selected_qr_rod_key_var = tk.StringVar(value=str(selected_qr_rod_key))
-    selected_qr_rod_display_var = tk.StringVar(value="")
     option_pairs = list(selected_qr_rod_options or ())
     label_by_key = {str(key): str(label) for key, label in option_pairs}
+    key_by_index = [str(key) for key, _label in option_pairs]
     key_by_label = {str(label): str(key) for key, label in option_pairs}
-    selected_qr_rod_display_var.set(label_by_key.get(str(selected_qr_rod_key), ""))
+    raw_selected_keys = [str(key) for key in (selected_qr_rod_keys or ()) if str(key)]
+    if not raw_selected_keys and str(selected_qr_rod_key):
+        raw_selected_keys = [str(selected_qr_rod_key)]
+    selected_key_set = set(raw_selected_keys)
+    normalized_selected_keys = [key for key in key_by_index if key in selected_key_set]
+    for key in raw_selected_keys:
+        if key not in normalized_selected_keys and key not in key_by_index:
+            normalized_selected_keys.append(key)
+    primary_selected_key = normalized_selected_keys[0] if normalized_selected_keys else ""
+    selected_qr_rod_key_var = tk.StringVar(value=primary_selected_key)
+    selected_qr_rod_display_var = tk.StringVar(value="")
+    selected_qr_rod_display_var.set(label_by_key.get(primary_selected_key, ""))
     selected_qr_rod_combobox = ttk.Combobox(
         selected_qr_rod_container,
         textvariable=selected_qr_rod_display_var,
@@ -5840,15 +5844,131 @@ def create_integration_range_controls(
         ),
     )
 
+    selected_qr_rod_checkbox_container = ttk.Frame(rod_section_frame)
+    selected_qr_rod_checkbox_container.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 4))
+    selected_qr_rod_checkbox_vars: dict[str, object] = {}
+    selected_qr_rod_checkbuttons: dict[str, object] = {}
+
+    def _normalize_selected_qr_rod_keys_for_options(raw_keys: Sequence[object]) -> list[str]:
+        raw_key_list = [str(key) for key in raw_keys if str(key)]
+        raw_key_set = set(raw_key_list)
+        selected = [key for key in key_by_index if key in raw_key_set]
+        for key in raw_key_list:
+            if key not in selected and key not in key_by_index:
+                selected.append(key)
+        return selected
+
+    def _selected_qr_rod_checkbox_keys() -> list[str]:
+        selected: list[str] = []
+        for key in key_by_index:
+            var = selected_qr_rod_checkbox_vars.get(key)
+            if var is None:
+                continue
+            try:
+                checked = bool(var.get())
+            except Exception:
+                checked = False
+            if checked:
+                selected.append(key)
+        return selected
+
+    def _on_selected_qr_rod_checkbox_changed() -> None:
+        if callable(on_selected_qr_rod_changed):
+            on_selected_qr_rod_changed(_selected_qr_rod_checkbox_keys())
+
+    def _clear_selected_qr_rod_checkbox_widgets() -> None:
+        winfo_children = getattr(selected_qr_rod_checkbox_container, "winfo_children", None)
+        if not callable(winfo_children):
+            return
+        try:
+            children = list(winfo_children())
+        except Exception:
+            children = []
+        for child in children:
+            destroy = getattr(child, "destroy", None)
+            if callable(destroy):
+                try:
+                    destroy()
+                except Exception:
+                    pass
+
+    def _rebuild_selected_qr_rod_checkboxes(
+        options: Sequence[tuple[str, str]] | None = None,
+        selected_keys: Sequence[object] | None = None,
+        enabled: bool | None = None,
+    ) -> list[str]:
+        nonlocal option_pairs
+        nonlocal label_by_key
+        nonlocal key_by_index
+        nonlocal key_by_label
+        nonlocal normalized_selected_keys
+        nonlocal primary_selected_key
+        if options is not None:
+            option_pairs = [(str(key), str(label)) for key, label in options]
+            label_by_key = {str(key): str(label) for key, label in option_pairs}
+            key_by_index = [str(key) for key, _label in option_pairs]
+            key_by_label = {str(label): str(key) for key, label in option_pairs}
+        current_keys = (
+            list(selected_keys)
+            if selected_keys is not None
+            else _selected_qr_rod_checkbox_keys() or list(normalized_selected_keys)
+        )
+        normalized_selected_keys = _normalize_selected_qr_rod_keys_for_options(current_keys)
+        primary_selected_key = normalized_selected_keys[0] if normalized_selected_keys else ""
+        selected_qr_rod_checkbox_vars.clear()
+        selected_qr_rod_checkbuttons.clear()
+        _clear_selected_qr_rod_checkbox_widgets()
+        widget_state = (
+            tk.NORMAL
+            if bool(integrate_selected_qr_rod if enabled is None else enabled)
+            else tk.DISABLED
+        )
+        selected_key_set = set(normalized_selected_keys)
+        for key, label in option_pairs:
+            checkbox_var = tk.BooleanVar(value=key in selected_key_set)
+            checkbox = ttk.Checkbutton(
+                selected_qr_rod_checkbox_container,
+                text=str(label),
+                variable=checkbox_var,
+                command=_on_selected_qr_rod_checkbox_changed,
+                state=widget_state,
+            )
+            checkbox.pack(side=tk.TOP, anchor=tk.W)
+            selected_qr_rod_checkbox_vars[key] = checkbox_var
+            selected_qr_rod_checkbuttons[key] = checkbox
+        _safe_set = selected_qr_rod_key_var.set
+        try:
+            _safe_set(primary_selected_key)
+        except Exception:
+            pass
+        try:
+            selected_qr_rod_display_var.set(label_by_key.get(primary_selected_key, ""))
+        except Exception:
+            pass
+        view_state.selected_qr_rod_options = [str(key) for key, _label in option_pairs]
+        view_state.selected_qr_rod_keys = list(normalized_selected_keys)
+        view_state.selected_qr_rod_keys_value = list(normalized_selected_keys)
+        view_state.selected_qr_rod_key_by_index = list(key_by_index)
+        view_state.selected_qr_rod_label_by_key = dict(label_by_key)
+        view_state.selected_qr_rod_option_labels = dict(label_by_key)
+        view_state.selected_qr_rod_key_by_label = dict(key_by_label)
+        view_state.selected_qr_rod_checkbox_vars = dict(selected_qr_rod_checkbox_vars)
+        view_state.selected_qr_rod_checkbuttons = dict(selected_qr_rod_checkbuttons)
+        return list(normalized_selected_keys)
+
+    _rebuild_selected_qr_rod_checkboxes(
+        option_pairs,
+        normalized_selected_keys,
+        bool(integrate_selected_qr_rod),
+    )
+
     mirror_selected_qr_phi_var = tk.BooleanVar(value=bool(mirror_selected_qr_phi))
     mirror_selected_qr_phi_checkbutton = ttk.Checkbutton(
         rod_section_frame,
         text="Mirror ±φ band",
         variable=mirror_selected_qr_phi_var,
         command=(
-            on_toggle_mirror_selected_qr_phi
-            if callable(on_toggle_mirror_selected_qr_phi)
-            else None
+            on_toggle_mirror_selected_qr_phi if callable(on_toggle_mirror_selected_qr_phi) else None
         ),
         state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
     )
@@ -5966,7 +6086,7 @@ def create_integration_range_controls(
     _create_range_row(
         parent_frame=rod_section_frame,
         prefix="delta_qr",
-        label_text="Qr half-width (A^-1):",
+        label_text="Delta Qr width (A^-1):",
         initial_value=delta_qr,
         lower_bound=0.0,
         upper_bound=1.0,
@@ -6004,7 +6124,18 @@ def create_integration_range_controls(
     view_state.selected_qr_rod_display_var = selected_qr_rod_display_var
     view_state.selected_qr_rod_label = selected_qr_rod_label
     view_state.selected_qr_rod_combobox = selected_qr_rod_combobox
+    view_state.selected_qr_rod_listbox = None
+    view_state.selected_qr_rod_checkbox_container = selected_qr_rod_checkbox_container
+    view_state.selected_qr_rod_checkbox_vars = dict(selected_qr_rod_checkbox_vars)
+    view_state.selected_qr_rod_checkbuttons = dict(selected_qr_rod_checkbuttons)
+    view_state.selected_qr_rod_checkbox_options_updater = (
+        _rebuild_selected_qr_rod_checkboxes
+    )
     view_state.selected_qr_rod_options = [str(key) for key, _label in option_pairs]
+    view_state.selected_qr_rod_keys = list(normalized_selected_keys)
+    view_state.selected_qr_rod_keys_value = list(normalized_selected_keys)
+    view_state.selected_qr_rod_key_by_index = list(key_by_index)
+    view_state.selected_qr_rod_label_by_key = dict(label_by_key)
     view_state.selected_qr_rod_option_labels = dict(label_by_key)
     view_state.selected_qr_rod_key_by_label = dict(key_by_label)
 
@@ -7439,7 +7570,9 @@ def open_hbn_geometry_debug_window(
 _create_geometry_tool_action_controls_base = create_geometry_tool_action_controls
 
 
-def create_geometry_tool_action_controls(*args: object, **kwargs: object) -> GeometryToolActionsViewState:
+def create_geometry_tool_action_controls(
+    *args: object, **kwargs: object
+) -> GeometryToolActionsViewState:
     """Create geometry action controls."""
 
     return _create_geometry_tool_action_controls_base(*args, **kwargs)

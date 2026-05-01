@@ -414,6 +414,8 @@ class StackingParameterControlsViewState:
     p2_scale: Any = None
     w2_var: Any = None
     w2_scale: Any = None
+    geometry_include_6h_qr_reference_var: Any = None
+    geometry_include_6h_qr_reference_checkbutton: Any = None
     occupancy_frame: Any = None
     occ_slider_frame: Any = None
     occ_entry_frame: Any = None
@@ -651,15 +653,27 @@ class IntegrationRangeControlsViewState:
     rod_profile_intensity_mode_label: Any = None
     rod_profile_intensity_mode_frame: Any = None
     rod_profile_intensity_mode_buttons: dict[str, Any] = field(default_factory=dict)
+    rod_profile_intensity_mode_customized: bool = False
+    selected_qr_rod_default_intensity_mode: str = "density"
     selected_qr_rod_container: Any = None
     selected_qr_rod_key_value: str = ""
+    selected_qr_rod_keys_value: list[str] = field(default_factory=list)
     selected_qr_rod_key_var: Any = None
     selected_qr_rod_display_var: Any = None
     selected_qr_rod_label: Any = None
     selected_qr_rod_combobox: Any = None
+    selected_qr_rod_listbox: Any = None
+    selected_qr_rod_checkbox_container: Any = None
+    selected_qr_rod_checkbox_vars: dict[str, Any] = field(default_factory=dict)
+    selected_qr_rod_checkbuttons: dict[str, Any] = field(default_factory=dict)
+    selected_qr_rod_checkbox_options_updater: Any = None
     selected_qr_rod_options: list[str] = field(default_factory=list)
+    selected_qr_rod_keys: list[str] = field(default_factory=list)
+    selected_qr_rod_key_by_index: list[str] = field(default_factory=list)
+    selected_qr_rod_label_by_key: dict[str, str] = field(default_factory=dict)
     selected_qr_rod_option_labels: dict[str, str] = field(default_factory=dict)
     selected_qr_rod_key_by_label: dict[str, str] = field(default_factory=dict)
+    selected_qr_rod_phi_customized: bool = False
     qz_min_value: float = 0.0
     qz_min_container: Any = None
     qz_min_var: Any = None
@@ -677,6 +691,7 @@ class IntegrationRangeControlsViewState:
     qz_max_entry_var: Any = None
     qz_max_entry: Any = None
     delta_qr_value: float = 0.25
+    delta_qr_width_mode_value: str = "full_width"
     delta_qr_container: Any = None
     delta_qr_var: Any = None
     delta_qr_label_var: Any = None
@@ -982,13 +997,13 @@ class GeometryRuntimeState:
     manual_auto_refine_search_radius_px: float = 24.0
     manual_pick_cache_signature: object = None
     manual_pick_cache_data: dict[str, object] = field(default_factory=dict)
+    beam_center_pick_armed: bool = False
+    beam_center_pick_session: dict[str, object] = field(default_factory=dict)
     pick_artists: list[Any] = field(default_factory=list)
     preview_artists: list[Any] = field(default_factory=list)
     manual_preview_artists: list[Any] = field(default_factory=list)
     qr_cylinder_overlay_artists: list[Any] = field(default_factory=list)
     qr_cylinder_overlay_cache: dict[str, object] = field(
-    beam_center_pick_armed: bool = False
-    beam_center_pick_session: dict[str, object] = field(default_factory=dict)
         default_factory=lambda: {
             "signature": None,
             "paths": [],
@@ -1000,6 +1015,8 @@ class GeometryRuntimeState:
             "result": None,
         }
     )
+    selected_qr_rod_caked_payload_cache: dict[object, object] = field(default_factory=dict)
+    selected_qr_rod_detector_payload_cache: dict[object, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -1113,6 +1130,10 @@ class SimulationRuntimeState:
     stored_secondary_source_reflection_indices: list[int] | None = None
     stored_primary_peak_table_lattice: Any = None
     stored_secondary_peak_table_lattice: Any = None
+    stored_sixh_reference_max_positions: Any = None
+    stored_sixh_reference_source_reflection_indices: list[int] | None = None
+    stored_sixh_reference_peak_table_lattice: Any = None
+    sixh_qr_reference_inventory_cache: dict[str, object] | None = None
     stored_primary_intersection_cache: list[Any] | None = None
     stored_primary_intersection_cache_signature: object = None
     stored_secondary_intersection_cache: list[Any] | None = None
