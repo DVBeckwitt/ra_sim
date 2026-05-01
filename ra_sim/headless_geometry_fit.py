@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 import copy
 import json
 import math
+import os
 import time
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -1878,6 +1879,263 @@ _HEADLESS_GEOMETRY_FIT_LADDER_SEED_SEARCH = {
     "n_jitter": 2,
     "min_seed_separation_u": 0.5,
 }
+_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH = {
+    "prescore_top_k": 1,
+    "n_global": 4,
+    "n_jitter": 2,
+    "min_seed_separation_u": 0.5,
+    "_reuse_generation_for_prescore": True,
+}
+_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_MAX_NFEV = 60
+_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG = "_qr_fit_point_only_projection"
+_HEADLESS_GEOMETRY_FIT_PROGRESS_PHASES = frozenset(
+    {
+        "preflight",
+        "runtime_config_ready",
+        "solve_start",
+        "seed_prescore",
+        "selected_solve",
+        "final_validation",
+        "output_state_write",
+    }
+)
+
+
+def _headless_progress_jsonable(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        return _headless_progress_jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _headless_progress_jsonable(value.item())
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _headless_progress_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_headless_progress_jsonable(item) for item in value]
+    if isinstance(value, (str, bool)) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except Exception:
+            return str(value)
+        if math.isfinite(number):
+            return value
+        return str(value)
+    return str(value)
+
+
+def _headless_progress_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _headless_progress_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(number):
+        return None
+    return float(number)
+
+
+class _HeadlessGeometryFitProgressWriter:
+    """Private JSON sidecar for long headless geometry fits."""
+
+    def __init__(
+        self,
+        path: str | Path | None,
+        *,
+        active_vars: Sequence[object] | None = None,
+        seed_policy: object | None = None,
+    ) -> None:
+        self.path = Path(path).expanduser().resolve() if path is not None else None
+        self.started_at = time.monotonic()
+        self.data: dict[str, object] = {
+            "phase": "preflight",
+            "elapsed_s": 0.0,
+            "pid": int(os.getpid()),
+            "active_vars": [str(name) for name in (active_vars or ())],
+            "seed_policy": str(seed_policy) if seed_policy is not None else None,
+            "seed_count": 0,
+            "current_seed": None,
+            "selected_seed": None,
+            "request_build_s": None,
+            "initial_objective_s": None,
+            "least_squares_s": None,
+            "residual_eval_count": 0,
+            "mean_residual_eval_s": None,
+            "max_residual_eval_s": None,
+            "optimizer_nfev": None,
+            "optimizer_njev": None,
+            "manual_pick_cache_rebuild_count": 0,
+            "caked_projection_rebuild_count": 0,
+            "dynamic_source_coordinate_recompute_count": 0,
+            "fixed_source_resolved_count": 0,
+            "matched_pair_count": 0,
+            "missing_pair_count": 0,
+            "fallback_entry_count": 0,
+            "fallback_row_count": 0,
+            "fallback_pair_count": 0,
+            "point_only_projection_enabled": False,
+            "reuse_generation_for_prescore_enabled": False,
+        }
+
+    def update_static(
+        self,
+        *,
+        active_vars: Sequence[object] | None = None,
+        seed_policy: object | None = None,
+        runtime_cfg: Mapping[str, object] | None = None,
+        manual_caked_fixed_row_count: int | None = None,
+        bounded_budget_enabled: bool | None = None,
+    ) -> None:
+        updates: dict[str, object] = {}
+        if active_vars is not None:
+            updates["active_vars"] = [str(name) for name in active_vars]
+        if seed_policy is not None:
+            updates["seed_policy"] = str(seed_policy)
+        if manual_caked_fixed_row_count is not None:
+            updates["manual_caked_fixed_row_count"] = int(manual_caked_fixed_row_count)
+        if bounded_budget_enabled is not None:
+            updates["bounded_budget_enabled"] = bool(bounded_budget_enabled)
+        if isinstance(runtime_cfg, Mapping):
+            solver = runtime_cfg.get("solver")
+            optimizer = runtime_cfg.get("optimizer")
+            seed_search = runtime_cfg.get("seed_search")
+            solver_map = solver if isinstance(solver, Mapping) else {}
+            optimizer_map = optimizer if isinstance(optimizer, Mapping) else {}
+            seed_search_map = seed_search if isinstance(seed_search, Mapping) else {}
+            updates.update(
+                {
+                    "point_only_projection_enabled": bool(
+                        solver_map.get(_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG, False)
+                        or optimizer_map.get(_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG, False)
+                    ),
+                    "reuse_generation_for_prescore_enabled": bool(
+                        seed_search_map.get("_reuse_generation_for_prescore", False)
+                    ),
+                    "seed_prescore_top_k": seed_search_map.get("prescore_top_k"),
+                    "solver_max_nfev": solver_map.get("max_nfev"),
+                    "optimizer_max_nfev": optimizer_map.get("max_nfev"),
+                }
+            )
+        if updates:
+            self.write(str(self.data.get("phase", "preflight")), **updates)
+
+    def _merge_point_match_summary(self, summary: Mapping[str, object]) -> dict[str, object]:
+        updates: dict[str, object] = {}
+        for key in (
+            "fixed_source_resolved_count",
+            "matched_pair_count",
+            "missing_pair_count",
+            "fallback_entry_count",
+            "fallback_row_count",
+            "fallback_pair_count",
+            "dynamic_source_coordinate_recompute_count",
+        ):
+            if key in summary:
+                updates[key] = _headless_progress_int(summary.get(key), 0)
+        for key in (
+            "manual_pick_cache_rebuild_count",
+            "caked_projection_rebuild_count",
+        ):
+            if key in summary:
+                updates[key] = _headless_progress_int(summary.get(key), 0)
+        seed_trace = summary.get("seed_multistart_trace")
+        if isinstance(seed_trace, Mapping):
+            if "seed_count" in seed_trace:
+                updates["seed_count"] = _headless_progress_int(seed_trace.get("seed_count"), 0)
+            if "selected_seed_index" in seed_trace:
+                updates["selected_seed"] = seed_trace.get("selected_seed_index")
+            if "optimizer_nfev" in seed_trace:
+                updates["optimizer_nfev"] = seed_trace.get("optimizer_nfev")
+            if "optimizer_njev" in seed_trace:
+                updates["optimizer_njev"] = seed_trace.get("optimizer_njev")
+        return updates
+
+    def status(self, text: object) -> None:
+        try:
+            message = str(text).strip()
+        except Exception:
+            message = ""
+        if not message:
+            return
+        phase = str(self.data.get("phase", "preflight"))
+        if " prescore " in f" {message} " or "prescore total_seeds=" in message:
+            phase = "seed_prescore"
+        elif " eval=" in message or " seed " in message:
+            phase = "selected_solve"
+        self.write(phase, status_text=message)
+
+    def live_update(self, payload: Mapping[str, object]) -> None:
+        if not isinstance(payload, Mapping):
+            return
+        updates: dict[str, object] = {}
+        if "evaluation_count" in payload:
+            updates["residual_eval_count"] = _headless_progress_int(
+                payload.get("evaluation_count"), 0
+            )
+            updates["optimizer_nfev"] = updates["residual_eval_count"]
+        for source_key, dest_key in (
+            ("mean_residual_eval_s", "mean_residual_eval_s"),
+            ("max_residual_eval_s", "max_residual_eval_s"),
+            ("last_residual_eval_s", "last_residual_eval_s"),
+        ):
+            if source_key in payload:
+                updates[dest_key] = _headless_progress_float(payload.get(source_key))
+        summary = payload.get("point_match_summary")
+        if isinstance(summary, Mapping):
+            updates.update(self._merge_point_match_summary(summary))
+        updates["last_live_update"] = _headless_progress_jsonable(payload)
+        self.write("selected_solve", **updates)
+
+    def write(self, phase: str, **updates: object) -> None:
+        if self.path is None:
+            return
+        phase_name = str(phase or self.data.get("phase") or "preflight")
+        if phase_name not in _HEADLESS_GEOMETRY_FIT_PROGRESS_PHASES:
+            phase_name = str(self.data.get("phase") or "preflight")
+        self.data["phase"] = phase_name
+        self.data["elapsed_s"] = float(max(0.0, time.monotonic() - self.started_at))
+        self.data["pid"] = int(os.getpid())
+        self.data.update({str(key): value for key, value in updates.items()})
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self.path.with_name(f"{self.path.name}.tmp")
+            tmp_path.write_text(
+                json.dumps(_headless_progress_jsonable(self.data), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            tmp_path.replace(self.path)
+        except Exception:
+            pass
+
+
+def write_headless_geometry_fit_progress(
+    progress_path: str | Path | None,
+    phase: str,
+    **updates: object,
+) -> None:
+    writer = _HeadlessGeometryFitProgressWriter(progress_path)
+    existing: dict[str, object] = {}
+    if writer.path is not None and writer.path.exists():
+        try:
+            loaded = json.loads(writer.path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            existing = {}
+    writer.data.update(existing)
+    writer.write(phase, **updates)
+
+
+def _headless_runtime_solver_mapping(runtime_cfg: Mapping[str, object]) -> dict[str, object]:
+    solver_cfg = runtime_cfg.get("solver")
+    return dict(solver_cfg) if isinstance(solver_cfg, Mapping) else {}
 
 
 def normalize_headless_geometry_fit_seed_policy(seed_policy: object | None) -> str | None:
@@ -1916,6 +2174,217 @@ def _apply_headless_geometry_fit_seed_policy(
     runtime_cfg["seed_search"] = seed_search
 
 
+def _headless_geometry_runtime_is_saved_manual_caked_candidate(
+    runtime_cfg: Mapping[str, object],
+) -> bool:
+    if str(runtime_cfg.get("projection_view_mode", "")).strip().lower() != "caked":
+        return False
+    solver = _headless_runtime_solver_mapping(runtime_cfg)
+    return bool(
+        solver.get("manual_point_fit_mode", False)
+        and solver.get("dynamic_point_geometry_fit", False)
+    )
+
+
+def _headless_geometry_dataset_entries(prepared_run: object) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for dataset in (
+        getattr(prepared_run, "current_dataset", None),
+        *(getattr(prepared_run, "dataset_infos", None) or ()),
+    ):
+        if not isinstance(dataset, Mapping):
+            continue
+        for row_key in (
+            "measured_for_fit",
+            "initial_pairs_display",
+            "manual_point_pairs",
+            "provider_pairs",
+        ):
+            for entry in dataset.get(row_key, ()) or ():
+                if isinstance(entry, Mapping):
+                    entries.append(dict(entry))
+    return entries
+
+
+def _headless_geometry_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) -> bool:
+    source = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+    row_origin = str(entry.get("row_origin", "") or "").strip().lower()
+    target_source = str(
+        entry.get("target_anchor_source")
+        or entry.get("manual_target_anchor_source")
+        or entry.get("fit_target_anchor_source")
+        or ""
+    ).strip().lower()
+    sim_source = str(
+        entry.get("simulated_source")
+        or entry.get("sim_source")
+        or entry.get("source_coordinate_source")
+        or ""
+    ).strip().lower()
+    fixed_source = bool(
+        entry.get("optimizer_request_has_fixed_source", False)
+        or entry.get("fixed_source_resolved", False)
+        or source.startswith("provider_fixed_source")
+        or "fixed_source" in source
+        or entry.get("source_reflection_index") is not None
+        or entry.get("source_row_index") is not None
+        or entry.get("source_table_index") is not None
+    )
+    cached_target = bool(
+        "cached_fit_space_anchor" in target_source
+        or "cached_fit_space_anchor" in entry
+        or "cached_two_theta_deg" in entry
+        or "cached_phi_deg" in entry
+        or "background_two_theta_deg" in entry
+        or "background_phi_deg" in entry
+        or "caked_x" in entry
+        or "caked_y" in entry
+        or "raw_caked_x" in entry
+        or "raw_caked_y" in entry
+        or "manual_caked" in row_origin
+        or "fit_space" in row_origin
+    )
+    dynamic_sim = bool(
+        sim_source in {"", "sim_visual_caked_deg"}
+        or entry.get("sim_visual_caked_deg") is not None
+        or entry.get("sim_two_theta_deg") is not None
+        or entry.get("sim_phi_deg") is not None
+        or entry.get("q_group_key") is not None
+        or entry.get("hkl") is not None
+    )
+    return bool(fixed_source and cached_target and dynamic_sim)
+
+
+def _headless_geometry_fixed_manual_caked_qr_row_count(prepared_run: object) -> int:
+    return sum(
+        1
+        for entry in _headless_geometry_dataset_entries(prepared_run)
+        if _headless_geometry_entry_has_fixed_manual_caked_qr(entry)
+    )
+
+
+def _set_headless_caked_point_only_projection(runtime_cfg: dict[str, object]) -> None:
+    solver = _headless_runtime_solver_mapping(runtime_cfg)
+    solver[_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG] = True
+    runtime_cfg["solver"] = solver
+    optimizer_cfg = runtime_cfg.get("optimizer")
+    optimizer = dict(optimizer_cfg) if isinstance(optimizer_cfg, Mapping) else dict(solver)
+    optimizer[_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG] = True
+    runtime_cfg["optimizer"] = optimizer
+
+
+def _cap_headless_solver_nfev(runtime_cfg: dict[str, object], max_nfev: int) -> None:
+    for section_name in ("solver", "optimizer"):
+        section_cfg = runtime_cfg.get(section_name)
+        section = dict(section_cfg) if isinstance(section_cfg, Mapping) else {}
+        current_raw = section.get("max_nfev")
+        try:
+            current = int(current_raw)
+        except Exception:
+            current = int(max_nfev)
+        if current <= 0:
+            current = int(max_nfev)
+        section["max_nfev"] = min(int(current), int(max_nfev))
+        runtime_cfg[section_name] = section
+
+
+def _apply_headless_saved_manual_caked_lean_runtime(
+    runtime_cfg: dict[str, object],
+    *,
+    max_nfev: int,
+) -> None:
+    solver = _headless_runtime_solver_mapping(runtime_cfg)
+    solver["manual_point_fit_mode"] = True
+    solver["dynamic_point_geometry_fit"] = True
+    solver[_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG] = True
+    solver["max_nfev"] = int(max_nfev)
+    solver["min_max_nfev"] = 1
+    solver["loss"] = "linear"
+    solver["f_scale_px"] = 1.0
+    solver["weighted_matching"] = False
+    solver["use_measurement_uncertainty"] = False
+    solver["anisotropic_measurement_uncertainty"] = False
+    solver["q_group_line_constraints"] = False
+    solver["q_group_line_constraints_enabled"] = False
+    solver["_headless_accept_caked_angular_metric_without_pixel_threshold"] = True
+    solver["workers"] = solver.get("workers", "auto")
+    solver["parallel_mode"] = "off"
+    solver["worker_numba_threads"] = 0
+    runtime_cfg["solver"] = solver
+    runtime_cfg["optimizer"] = dict(solver)
+    runtime_cfg["projection_view_mode"] = "caked"
+    runtime_cfg["use_numba"] = bool(runtime_cfg.get("use_numba", False))
+    runtime_cfg["allow_unsafe_runtime"] = False
+    for feature_key in ("full_beam_polish", "ridge_refinement", "image_refinement"):
+        runtime_cfg.pop(feature_key, None)
+    discrete = (
+        dict(runtime_cfg.get("discrete_modes", {}))
+        if isinstance(runtime_cfg.get("discrete_modes"), Mapping)
+        else {}
+    )
+    discrete["enabled"] = False
+    runtime_cfg["discrete_modes"] = discrete
+    ident = (
+        dict(runtime_cfg.get("identifiability", {}))
+        if isinstance(runtime_cfg.get("identifiability"), Mapping)
+        else {}
+    )
+    ident["enabled"] = False
+    ident.pop("auto_freeze", None)
+    ident.pop("selective_thaw", None)
+    ident.pop("adaptive_regularization", None)
+    runtime_cfg["identifiability"] = ident
+
+
+def _enforce_headless_gamma_bounds(
+    runtime_cfg: dict[str, object],
+    active_var_names: Sequence[object],
+) -> None:
+    active_names = {str(name) for name in active_var_names}
+    gamma_names = [name for name in ("gamma", "Gamma") if name in active_names]
+    if not gamma_names:
+        return
+    bounds_cfg = runtime_cfg.get("bounds")
+    bounds = dict(bounds_cfg) if isinstance(bounds_cfg, Mapping) else {}
+    for name in gamma_names:
+        bounds[name] = [-90.0, 90.0]
+    runtime_cfg["bounds"] = bounds
+
+
+def _apply_headless_saved_manual_caked_budget(
+    runtime_cfg: dict[str, object],
+    *,
+    seed_policy: str | None,
+    prepared_run: object,
+    active_var_names: Sequence[object],
+    manual_pair_rows: Sequence[Mapping[str, object]] | None = None,
+) -> tuple[bool, int]:
+    prepared_row_count = _headless_geometry_fixed_manual_caked_qr_row_count(prepared_run)
+    manual_row_count = sum(
+        1
+        for entry in (manual_pair_rows or ())
+        if isinstance(entry, Mapping)
+        and _headless_geometry_entry_has_fixed_manual_caked_qr(entry)
+    )
+    row_count = max(int(prepared_row_count), int(manual_row_count))
+    _enforce_headless_gamma_bounds(runtime_cfg, active_var_names)
+    if seed_policy != HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
+        return False, int(row_count)
+    if row_count <= 0:
+        return False, int(row_count)
+    if not _headless_geometry_runtime_is_saved_manual_caked_candidate(runtime_cfg):
+        return False, int(row_count)
+    _apply_headless_saved_manual_caked_lean_runtime(
+        runtime_cfg,
+        max_nfev=_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_MAX_NFEV,
+    )
+    seed_search_cfg = runtime_cfg.get("seed_search")
+    seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
+    seed_search.update(_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH)
+    runtime_cfg["seed_search"] = seed_search
+    return True, int(row_count)
+
+
 def run_headless_geometry_fit(
     saved_state: dict[str, object],
     *,
@@ -1924,6 +2393,7 @@ def run_headless_geometry_fit(
     stamp: str | None = None,
     active_var_names: Sequence[object] | str | None = None,
     seed_policy: object | None = None,
+    progress_path: str | Path | None = None,
     weighted_event_workers: int | None = None,
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
@@ -1938,6 +2408,16 @@ def run_headless_geometry_fit(
         active_var_names
     )
     resolved_seed_policy = normalize_headless_geometry_fit_seed_policy(seed_policy)
+    progress_writer = _HeadlessGeometryFitProgressWriter(
+        progress_path,
+        active_vars=resolved_active_var_names,
+        seed_policy=resolved_seed_policy,
+    )
+    progress_writer.write(
+        "preflight",
+        state_path=Path(state_path),
+        downloads_dir=downloads_dir,
+    )
     weighted_event_worker_count = None
     if weighted_event_workers is not None:
         try:
@@ -2667,6 +3147,21 @@ def run_headless_geometry_fit(
         if current_idx in set(selected):
             return [current_idx]
         return [int(selected[0])] if selected else [current_idx]
+
+    def _headless_fixed_manual_caked_qr_pair_rows() -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        seen_background_indices: set[int] = set()
+        for background_idx in _geometry_fit_required_background_indices():
+            background_key = int(background_idx)
+            if background_key in seen_background_indices:
+                continue
+            seen_background_indices.add(background_key)
+            for entry in _pairs_for_index(background_key):
+                if not isinstance(entry, Mapping):
+                    continue
+                if _headless_geometry_entry_has_fixed_manual_caked_qr(entry):
+                    rows.append(dict(entry))
+        return rows
 
     def _ensure_geometry_fit_caked_view() -> None:
         previous_background_idx = int(background_state.current_background_index)
@@ -3625,7 +4120,7 @@ def run_headless_geometry_fit(
         geometry_manual_last_source_snapshot_diagnostics=_geometry_manual_last_source_snapshot_diagnostics,
         geometry_manual_last_simulation_diagnostics=simulation_callbacks.last_simulation_diagnostics,
         geometry_manual_match_config=lambda: (
-            gui_manual_geometry.current_geometry_manual_match_config(defaults.fit_config)
+            gui_manual_geometry.current_geometry_manual_match_config(headless_fit_config)
         ),
         pick_uses_caked_space=_manual_current_background_uses_caked_space,
         geometry_manual_caked_view_for_index=_geometry_fit_caked_view_for_index,
@@ -3665,12 +4160,30 @@ def run_headless_geometry_fit(
         if runtime_active_var_names is not None
         else list(value_callbacks.current_var_names())
     )
+    if "c" in {str(name) for name in var_names}:
+        var_names = [str(name) for name in var_names if str(name) != "c"]
+        if not var_names:
+            raise ValueError("Headless geometry fit has no active variables after excluding c.")
+    progress_writer.update_static(active_vars=var_names)
     preserve_live_theta = "theta_initial" not in var_names and "theta_offset" not in var_names
+    headless_fit_config = (
+        copy.deepcopy(defaults.fit_config) if isinstance(defaults.fit_config, dict) else {}
+    )
+    if "a" in {str(name) for name in var_names}:
+        geometry_cfg = headless_fit_config.get("geometry")
+        if not isinstance(geometry_cfg, dict):
+            geometry_cfg = {}
+            headless_fit_config["geometry"] = geometry_cfg
+        lattice_cfg = geometry_cfg.get("lattice_refinement")
+        if not isinstance(lattice_cfg, dict):
+            lattice_cfg = {}
+            geometry_cfg["lattice_refinement"] = lattice_cfg
+        lattice_cfg["enabled"] = True
 
     def _build_headless_runtime_config(_fit_params: Mapping[str, object]) -> dict[str, object]:
         base_runtime_cfg = copy.deepcopy(
-            defaults.fit_config.get("geometry", {})
-            if isinstance(defaults.fit_config, dict)
+            headless_fit_config.get("geometry", {})
+            if isinstance(headless_fit_config, dict)
             else {}
         )
         if not isinstance(base_runtime_cfg, dict):
@@ -3702,7 +4215,7 @@ def run_headless_geometry_fit(
         var_names=var_names,
         preserve_live_theta=preserve_live_theta,
         bindings=gui_geometry_fit.GeometryFitRuntimePreparationBindings(
-            fit_config=defaults.fit_config,
+            fit_config=headless_fit_config,
             theta_initial=theta_initial_var.get(),
             apply_geometry_fit_background_selection=_apply_geometry_fit_background_selection,
             current_geometry_fit_background_indices=_current_geometry_fit_background_indices,
@@ -3725,6 +4238,20 @@ def run_headless_geometry_fit(
         else {}
     )
     _apply_headless_geometry_fit_seed_policy(headless_geometry_cfg, resolved_seed_policy)
+    budget_enabled, manual_caked_fixed_row_count = (
+        _apply_headless_saved_manual_caked_budget(
+            headless_geometry_cfg,
+            seed_policy=resolved_seed_policy,
+            prepared_run=prepared_run,
+            active_var_names=var_names,
+            manual_pair_rows=_headless_fixed_manual_caked_qr_pair_rows(),
+        )
+    )
+    progress_writer.update_static(
+        runtime_cfg=headless_geometry_cfg,
+        manual_caked_fixed_row_count=manual_caked_fixed_row_count,
+        bounded_budget_enabled=budget_enabled,
+    )
     prepared_run = replace(
         prepared_run,
         start_log_sections=gui_geometry_fit.build_geometry_fit_start_log_sections(
@@ -3747,6 +4274,11 @@ def run_headless_geometry_fit(
         },
     )
     preparation = replace(preparation, prepared_run=prepared_run)
+    progress_writer.write(
+        "runtime_config_ready",
+        request_build_s=preflight_elapsed_s,
+        active_vars=var_names,
+    )
 
     setup = gui_geometry_fit.build_runtime_geometry_fit_execution_setup(
         prepared_run=prepared_run,
@@ -3771,8 +4303,8 @@ def run_headless_geometry_fit(
         draw_overlay_records=lambda _records, _marker_limit: None,
         draw_initial_pairs_overlay=lambda _pairs, _marker_limit: None,
         set_last_overlay_state=lambda _state: None,
-        set_progress_text=lambda _text: None,
-        cmd_line=lambda _text: None,
+        set_progress_text=progress_writer.status,
+        cmd_line=progress_writer.status,
         solver_inputs=gui_geometry_fit.GeometryFitRuntimeSolverInputs(
             miller=structure_state.miller,
             intensities=structure_state.intensities,
@@ -3790,7 +4322,9 @@ def run_headless_geometry_fit(
                 native_detector_coords_to_caked_display_coords=None,
             )
         ),
+        live_update_callback=progress_writer.live_update,
     )
+    progress_writer.write("solve_start")
     execution = gui_geometry_fit.execute_runtime_geometry_fit(
         prepared_run=prepared_run,
         var_names=var_names,
@@ -3802,6 +4336,20 @@ def run_headless_geometry_fit(
         raise RuntimeError(str(execution.error_text))
     if execution.apply_result is None:
         raise RuntimeError("Geometry fit finished without an apply result.")
+    solver_result = getattr(execution, "solver_result", None)
+    final_summary = getattr(solver_result, "point_match_summary", None)
+    final_progress: dict[str, object] = {
+        "accepted": bool(execution.apply_result.accepted),
+        "rejection_reason": execution.apply_result.rejection_reason,
+        "rms_px": execution.apply_result.rms,
+    }
+    if isinstance(final_summary, Mapping):
+        final_progress.update(progress_writer._merge_point_match_summary(final_summary))
+        final_progress["point_match_summary"] = copy.deepcopy(dict(final_summary))
+    if solver_result is not None:
+        final_progress["optimizer_nfev"] = getattr(solver_result, "nfev", None)
+        final_progress["optimizer_njev"] = getattr(solver_result, "njev", None)
+    progress_writer.write("final_validation", **final_progress)
 
     updated_state = _updated_state_snapshot(saved_state, defaults, var_store)
     if manual_caked_backfill_changed_count > 0:

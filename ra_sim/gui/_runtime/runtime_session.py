@@ -69,6 +69,11 @@ from ra_sim.utils.stacking_fault import (
     normalize_phase_delta_expression,
     validate_phase_delta_expression,
 )
+from ra_sim.utils.pbi2_ht_shift_cif import (
+    DISORDERED_PHASE_DISPLAY_LABEL,
+    DISORDERED_PHASE_SOURCE_LABEL,
+    generate_pbii_ht_shifted_cif,
+)
 
 from ra_sim.utils.calculations import (
     IndexofRefraction,
@@ -16218,6 +16223,9 @@ def _clear_live_peak_record_cache_after_restore_miss() -> None:
 
 
 PBII_6H_QR_REFERENCE_SOURCE_LABEL = "pbii_6h_ref"
+DISORDERED_PHASE_QR_SOURCE_LABEL = DISORDERED_PHASE_SOURCE_LABEL
+DISORDERED_PHASE_QR_DISPLAY_LABEL = DISORDERED_PHASE_DISPLAY_LABEL
+DISORDERED_PHASE_QR_GENERATOR_VERSION = "ra_sim.pbi2_ht_shift_cif.v1"
 
 
 def _geometry_include_6h_qr_reference_checked() -> bool:
@@ -16333,6 +16341,251 @@ def _geometry_6h_reference_inventory_payload() -> dict[str, object]:
     return payload
 
 
+def _disordered_phase_cif_cache_dir() -> Path:
+    return user_cache_root() / "generated_cifs" / DISORDERED_PHASE_SOURCE_LABEL
+
+
+def _runtime_var_float(name: str, fallback: float = 0.0) -> float:
+    var = globals().get(name)
+    getter = getattr(var, "get", None)
+    try:
+        value = getter() if callable(getter) else fallback
+        value = float(value)
+    except Exception:
+        value = float(fallback)
+    return value if np.isfinite(value) else float(fallback)
+
+
+def _geometry_disordered_phase_stack_values() -> tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+]:
+    p_values = (
+        _runtime_var_float("p0_var", float(defaults.get("p0", 0.0))),
+        _runtime_var_float("p1_var", float(defaults.get("p1", 0.0))),
+        _runtime_var_float("p2_var", float(defaults.get("p2", 0.0))),
+    )
+    raw_weights = [
+        _runtime_var_float("w0_var", float(defaults.get("w0", 1.0))),
+        _runtime_var_float("w1_var", float(defaults.get("w1", 0.0))),
+        _runtime_var_float("w2_var", float(defaults.get("w2", 0.0))),
+    ]
+    weights = tuple(
+        float(value) for value in gui_controllers.normalize_stacking_weight_values(raw_weights)
+    )
+    return p_values, weights
+
+
+def _geometry_disordered_phase_qr_enabled() -> bool:
+    _p_values, weights = _geometry_disordered_phase_stack_values()
+    return bool(abs(float(weights[1])) > 1.0e-12 or abs(float(weights[2])) > 1.0e-12)
+
+
+def _file_sha256_or_mtime_signature(path: str | Path | None) -> tuple[str, object] | None:
+    if path is None:
+        return None
+    file_path = Path(str(path))
+    try:
+        digest = hashlib.sha256()
+        with file_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return ("sha256", digest.hexdigest())
+    except Exception:
+        try:
+            stat = file_path.stat()
+        except Exception:
+            return None
+        return ("mtime_ns", int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _geometry_disordered_phase_cell_override_signature() -> tuple[object, object]:
+    values: list[object] = []
+    for name in ("a_var", "c_var"):
+        value = _runtime_var_float(name, float("nan"))
+        values.append(round(float(value), 9) if np.isfinite(value) else None)
+    return tuple(values)  # type: ignore[return-value]
+
+
+def _geometry_disordered_phase_atom_fractional_signature() -> object:
+    try:
+        return _atom_site_fractional_signature(_current_atom_site_fractional_values())
+    except Exception:
+        return None
+
+
+def _geometry_disordered_phase_occupancy_signature() -> tuple[object, ...]:
+    values: list[object] = []
+    try:
+        occupancy_vars = _occupancy_control_vars()
+    except Exception:
+        occupancy_vars = []
+    for occ_var in occupancy_vars or ():
+        getter = getattr(occ_var, "get", None)
+        try:
+            value = getter() if callable(getter) else occ_var
+            numeric = float(value)
+        except Exception:
+            values.append(None)
+            continue
+        values.append(round(float(numeric), 9) if np.isfinite(numeric) else None)
+    return tuple(values)
+
+
+def _clear_disordered_phase_runtime_tables(*, clear_inventory: bool = False) -> None:
+    simulation_runtime_state.stored_disordered_phase_max_positions = None
+    simulation_runtime_state.stored_disordered_phase_source_reflection_indices = None
+    simulation_runtime_state.stored_disordered_phase_peak_table_lattice = None
+    simulation_runtime_state.generated_disordered_phase_cif_path = None
+    if bool(clear_inventory):
+        simulation_runtime_state.disordered_phase_inventory_cache = None
+    _invalidate_geometry_q_group_entries_cache_only()
+    _invalidate_manual_pick_projection_cache_only()
+
+
+def _geometry_disordered_phase_source_signature() -> tuple[object, ...]:
+    enabled = bool(_geometry_disordered_phase_qr_enabled())
+    if not enabled:
+        return ("disordered_phase_qr_reference", False)
+
+    p_values, weights = _geometry_disordered_phase_stack_values()
+    try:
+        active_path = str(Path(str(_active_primary_cif_path())).resolve())
+    except Exception:
+        active_path = None
+    try:
+        lambda_value = float(lambda_)
+    except Exception:
+        lambda_value = float("nan")
+    try:
+        two_theta_signature = tuple(
+            round(float(value), 6) if np.isfinite(float(value)) else None
+            for value in tuple(two_theta_range)
+        )
+    except Exception:
+        two_theta_signature = ()
+    try:
+        mx_value = int(mx)
+    except Exception:
+        mx_value = 0
+    try:
+        threshold_value = float(intensity_threshold)
+    except Exception:
+        threshold_value = float("nan")
+
+    return (
+        "disordered_phase_qr_reference",
+        True,
+        active_path,
+        _file_sha256_or_mtime_signature(active_path),
+        True,
+        _geometry_disordered_phase_cell_override_signature(),
+        _geometry_disordered_phase_atom_fractional_signature(),
+        _geometry_disordered_phase_occupancy_signature(),
+        round(float(p_values[0]), 9),
+        round(float(p_values[1]), 9),
+        round(float(p_values[2]), 9),
+        round(float(weights[0]), 9),
+        round(float(weights[1]), 9),
+        round(float(weights[2]), 9),
+        int(mx_value),
+        round(float(lambda_value), 9) if np.isfinite(lambda_value) else None,
+        two_theta_signature,
+        round(float(threshold_value), 6) if np.isfinite(threshold_value) else None,
+        DISORDERED_PHASE_QR_GENERATOR_VERSION,
+    )
+
+
+def _geometry_disordered_phase_inventory_payload() -> dict[str, object]:
+    signature = _geometry_disordered_phase_source_signature()
+    if len(signature) < 2 or not bool(signature[1]):
+        _clear_disordered_phase_runtime_tables(clear_inventory=True)
+        return {
+            "signature": signature,
+            "miller": np.empty((0, 3), dtype=np.float64),
+            "intensities": np.empty((0,), dtype=np.float64),
+            "a": float("nan"),
+            "c": float("nan"),
+            "source_label": DISORDERED_PHASE_SOURCE_LABEL,
+            "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
+            "cif_path": None,
+        }
+
+    cached = getattr(simulation_runtime_state, "disordered_phase_inventory_cache", None)
+    if isinstance(cached, Mapping) and cached.get("signature") == signature:
+        cached_path = cached.get("cif_path")
+        simulation_runtime_state.generated_disordered_phase_cif_path = (
+            str(cached_path) if cached_path else None
+        )
+        return {
+            "signature": signature,
+            "miller": np.asarray(cached.get("miller", ()), dtype=np.float64).copy(),
+            "intensities": np.asarray(cached.get("intensities", ()), dtype=np.float64).copy(),
+            "a": float(cached.get("a", float("nan"))),
+            "c": float(cached.get("c", float("nan"))),
+            "source_label": DISORDERED_PHASE_SOURCE_LABEL,
+            "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
+            "cif_path": cached_path,
+        }
+
+    if isinstance(cached, Mapping) and cached.get("signature") != signature:
+        _clear_disordered_phase_runtime_tables(clear_inventory=False)
+
+    active_primary_cif_path = signature[2] if len(signature) > 2 else None
+    try:
+        if active_primary_cif_path is None:
+            raise FileNotFoundError("active primary CIF path is unavailable")
+        generated = generate_pbii_ht_shifted_cif(
+            source_cif=active_primary_cif_path,
+            output_dir=_disordered_phase_cif_cache_dir(),
+            mode="compact_6h",
+        )
+        simulation_runtime_state.generated_disordered_phase_cif_path = str(generated.cif_path)
+        lambda_value = float(lambda_)
+        energy_kev = 12.398419843320026 / lambda_value
+        miller_arr, intensities_arr, _deg, _details = miller_generator(
+            int(mx),
+            str(generated.cif_path),
+            [1.0],
+            lambda_value,
+            energy=energy_kev,
+            intensity_threshold=float(intensity_threshold),
+            two_theta_range=tuple(two_theta_range),
+        )
+        a_disordered = float(generated.a)
+        c_disordered = float(generated.c)
+        cif_path_text = str(generated.cif_path)
+    except Exception:
+        miller_arr = np.empty((0, 3), dtype=np.float64)
+        intensities_arr = np.empty((0,), dtype=np.float64)
+        a_disordered = float("nan")
+        c_disordered = float("nan")
+        cif_path_text = None
+        simulation_runtime_state.generated_disordered_phase_cif_path = None
+
+    payload = {
+        "signature": signature,
+        "miller": np.asarray(miller_arr, dtype=np.float64).copy(),
+        "intensities": np.asarray(intensities_arr, dtype=np.float64).reshape(-1).copy(),
+        "a": float(a_disordered),
+        "c": float(c_disordered),
+        "source_label": DISORDERED_PHASE_SOURCE_LABEL,
+        "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
+        "cif_path": cif_path_text,
+    }
+    simulation_runtime_state.disordered_phase_inventory_cache = {
+        "signature": signature,
+        "miller": np.asarray(payload["miller"], dtype=np.float64).copy(),
+        "intensities": np.asarray(payload["intensities"], dtype=np.float64).copy(),
+        "a": float(a_disordered),
+        "c": float(c_disordered),
+        "source_label": DISORDERED_PHASE_SOURCE_LABEL,
+        "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
+        "cif_path": cif_path_text,
+    }
+    return payload
+
+
 def _publish_combined_simulation_state(
     *,
     image_size_value: int,
@@ -16441,6 +16694,30 @@ def _publish_combined_simulation_state(
                 simulation_runtime_state.stored_sixh_reference_peak_table_lattice
             )
 
+    disordered_phase_max_positions_local: list[object] = []
+    disordered_phase_peak_table_lattice_local: list[object] = []
+    if (
+        include_primary_peak_rows
+        and _geometry_disordered_phase_qr_enabled()
+        and getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None)
+        is not None
+    ):
+        disordered_phase_max_positions_local = list(
+            simulation_runtime_state.stored_disordered_phase_max_positions
+        )
+        max_positions_local.extend(disordered_phase_max_positions_local)
+        stored_disordered_indices = getattr(
+            simulation_runtime_state,
+            "stored_disordered_phase_source_reflection_indices",
+            None,
+        )
+        if stored_disordered_indices is not None:
+            source_reflection_indices_local.extend(list(stored_disordered_indices))
+        if getattr(simulation_runtime_state, "stored_disordered_phase_peak_table_lattice", None):
+            disordered_phase_peak_table_lattice_local = list(
+                simulation_runtime_state.stored_disordered_phase_peak_table_lattice
+            )
+
     if len(primary_peak_table_lattice_local) == len(primary_max_positions_local):
         peak_table_lattice_local.extend(primary_peak_table_lattice_local)
     else:
@@ -16471,6 +16748,24 @@ def _publish_combined_simulation_state(
                     PBII_6H_QR_REFERENCE_SOURCE_LABEL,
                 )
                 for _ in sixh_reference_max_positions_local
+            ]
+        )
+    if len(disordered_phase_peak_table_lattice_local) == len(
+        disordered_phase_max_positions_local
+    ):
+        peak_table_lattice_local.extend(disordered_phase_peak_table_lattice_local)
+    else:
+        disordered_payload = _geometry_disordered_phase_inventory_payload()
+        peak_table_lattice_local.extend(
+            [
+                (
+                    float(disordered_payload.get("a", float("nan"))),
+                    float(disordered_payload.get("c", float("nan"))),
+                    DISORDERED_PHASE_SOURCE_LABEL,
+                    DISORDERED_PHASE_DISPLAY_LABEL,
+                    "disordered",
+                )
+                for _ in disordered_phase_max_positions_local
             ]
         )
 
@@ -18054,6 +18349,7 @@ def _build_preview_simulation_job(
     preview_job["collect_secondary_hit_tables"] = False
     preview_job["build_primary_intersection_cache"] = False
     preview_job["build_secondary_intersection_cache"] = False
+    preview_job["collect_disordered_phase_hit_tables"] = False
     preview_job["capture_primary_hit_tables_raw"] = False
     preview_job["capture_secondary_hit_tables_raw"] = False
     preview_job["active_peak_row_sides"] = ()
@@ -18172,6 +18468,73 @@ def _q_space_geometry_from_simulation_job(job: Mapping[str, object]) -> dict[str
         zs=job["zs"],
         zb=job["zb"],
     )
+
+
+def _empty_disordered_phase_hit_table_result() -> dict[str, object]:
+    return {
+        "disordered_phase_max_positions": [],
+        "disordered_phase_peak_table_lattice": [],
+        "disordered_phase_hit_table_state_refreshed": False,
+    }
+
+
+def _disordered_phase_job_inventory_available(job: Mapping[str, object]) -> bool:
+    if not bool(job.get("collect_disordered_phase_hit_tables", False)):
+        return False
+    data = np.asarray(job.get("disordered_phase_data", ()), dtype=np.float64)
+    intensities = np.asarray(job.get("disordered_phase_intensities", ()), dtype=np.float64)
+    if data.ndim != 2 or data.shape[0] <= 0 or data.shape[1] < 3:
+        return False
+    if intensities.reshape(-1).size <= 0:
+        return False
+    try:
+        a_val = float(job.get("disordered_phase_a", float("nan")))
+        c_val = float(job.get("disordered_phase_c", float("nan")))
+    except Exception:
+        return False
+    return bool(np.isfinite(a_val) and a_val > 0.0 and np.isfinite(c_val) and c_val > 0.0)
+
+
+def _run_disordered_phase_hit_table_collection(
+    job: Mapping[str, object],
+    run_one: Callable[..., object],
+) -> dict[str, object]:
+    if not _disordered_phase_job_inventory_available(job):
+        return _empty_disordered_phase_hit_table_result()
+
+    (
+        _image,
+        raw_hit_tables,
+        _intersection_cache,
+        _best_sample_indices,
+        _used_python_runner,
+        hit_table_state_refreshed,
+        _intersection_cache_built,
+    ) = run_one(
+        job["disordered_phase_data"],
+        job["disordered_phase_intensities"],
+        float(job["disordered_phase_a"]),
+        float(job["disordered_phase_c"]),
+        collect_hit_tables=True,
+        build_intersection_cache=False,
+        capture_raw_hit_tables=False,
+        accumulate_image=False,
+    )
+    peak_tables = _copy_hit_tables(raw_hit_tables)
+    return {
+        "disordered_phase_max_positions": list(peak_tables),
+        "disordered_phase_peak_table_lattice": [
+            (
+                float(job["disordered_phase_a"]),
+                float(job["disordered_phase_c"]),
+                DISORDERED_PHASE_SOURCE_LABEL,
+                DISORDERED_PHASE_DISPLAY_LABEL,
+                "disordered",
+            )
+            for _ in peak_tables
+        ],
+        "disordered_phase_hit_table_state_refreshed": bool(hit_table_state_refreshed),
+    }
 
 
 def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
@@ -18305,16 +18668,19 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "q_space_geometry": _q_space_geometry_from_simulation_job(job),
             "primary_hit_table_state_refreshed": False,
             "secondary_hit_table_state_refreshed": False,
+            "disordered_phase_hit_table_state_refreshed": False,
             "primary_raw_rows_fresh": False,
             "secondary_raw_rows_fresh": False,
             "primary_intersection_cache_built": False,
             "secondary_intersection_cache_built": False,
             "primary_max_positions": [],
             "secondary_max_positions": [],
+            "disordered_phase_max_positions": [],
             "primary_intersection_cache": [],
             "secondary_intersection_cache": [],
             "primary_peak_table_lattice": [],
             "secondary_peak_table_lattice": [],
+            "disordered_phase_peak_table_lattice": [],
             "primary_contribution_cache_signature": job.get("primary_contribution_cache_signature"),
             "primary_source_mode": job.get("primary_source_mode"),
             "primary_contribution_keys": list(job.get("primary_contribution_keys", [])),
@@ -18605,6 +18971,9 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         job.get("collect_secondary_hit_tables", job["collect_hit_tables"])
     )
     sixh_reference_collect_hit_tables = bool(job.get("collect_sixh_reference_hit_tables", False))
+    disordered_phase_collect_hit_tables = bool(
+        job.get("collect_disordered_phase_hit_tables", False)
+    )
     primary_build_intersection_cache = bool(job.get("build_primary_intersection_cache", False))
     secondary_build_intersection_cache = bool(job.get("build_secondary_intersection_cache", False))
     capture_primary_hit_tables_raw = bool(job.get("capture_primary_hit_tables_raw", False))
@@ -18615,6 +18984,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     raw_hit_tables1: list[object] = []
     raw_hit_tables2: list[object] = []
     raw_hit_tables_6h: list[object] = []
+    disordered_phase_hit_table_result = _empty_disordered_phase_hit_table_result()
     cache1: list[object] = []
     cache2: list[object] = []
     best_sample_indices1 = np.empty((0,), dtype=np.int64)
@@ -18624,6 +18994,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
     primary_hit_table_state_refreshed = False
     secondary_hit_table_state_refreshed = False
     sixh_reference_hit_table_state_refreshed = False
+    disordered_phase_hit_table_state_refreshed = False
     primary_intersection_cache_built = False
     secondary_intersection_cache_built = False
     primary_raw_rows_fresh = False
@@ -18690,6 +19061,18 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 accumulate_image=False,
             )
 
+        if disordered_phase_collect_hit_tables:
+            disordered_phase_hit_table_result = _run_disordered_phase_hit_table_collection(
+                job,
+                run_one,
+            )
+            disordered_phase_hit_table_state_refreshed = bool(
+                disordered_phase_hit_table_result.get(
+                    "disordered_phase_hit_table_state_refreshed",
+                    False,
+                )
+            )
+
         primary_peak_tables = _resolved_peak_table_payload(cache1, raw_hit_tables1)
         secondary_peak_tables = _resolved_peak_table_payload(cache2, raw_hit_tables2)
         sixh_reference_peak_tables = _copy_hit_tables(raw_hit_tables_6h)
@@ -18754,6 +19137,9 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 "sixh_reference_hit_table_state_refreshed": bool(
                     sixh_reference_hit_table_state_refreshed
                 ),
+                "disordered_phase_hit_table_state_refreshed": bool(
+                    disordered_phase_hit_table_state_refreshed
+                ),
                 "primary_raw_rows_fresh": bool(primary_raw_rows_fresh),
                 "secondary_raw_rows_fresh": bool(secondary_raw_rows_fresh),
                 "primary_intersection_cache_built": bool(primary_intersection_cache_built),
@@ -18793,6 +19179,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                 "primary_max_positions": list(primary_peak_tables),
                 "secondary_max_positions": list(secondary_peak_tables),
                 "sixh_reference_max_positions": list(sixh_reference_peak_tables),
+                "disordered_phase_max_positions": list(
+                    disordered_phase_hit_table_result.get(
+                        "disordered_phase_max_positions",
+                        [],
+                    )
+                ),
                 "primary_intersection_cache": _copy_intersection_cache_tables(cache1),
                 "secondary_intersection_cache": _copy_intersection_cache_tables(cache2),
                 "primary_peak_table_lattice": [
@@ -18811,6 +19203,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
                     )
                     for _ in range(sixh_reference_peak_table_count)
                 ],
+                "disordered_phase_peak_table_lattice": list(
+                    disordered_phase_hit_table_result.get(
+                        "disordered_phase_peak_table_lattice",
+                        [],
+                    )
+                ),
                 "projection_debug_log_path": projection_debug_log_path,
                 "numba_cache_compiled_artifacts_available": (
                     numba_cache_compiled_artifacts_available
@@ -19325,6 +19723,43 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         simulation_runtime_state.stored_sixh_reference_max_positions = None
         simulation_runtime_state.stored_sixh_reference_peak_table_lattice = None
         simulation_runtime_state.stored_sixh_reference_source_reflection_indices = None
+
+    disordered_phase_refreshed = bool(
+        result.get("disordered_phase_hit_table_state_refreshed", False)
+    )
+    if disordered_phase_refreshed:
+        disordered_phase_tables = _copy_hit_tables(
+            result.get("disordered_phase_max_positions", [])
+        )
+        simulation_runtime_state.stored_disordered_phase_max_positions = list(
+            disordered_phase_tables
+        )
+        simulation_runtime_state.stored_disordered_phase_peak_table_lattice = list(
+            result.get("disordered_phase_peak_table_lattice", [])
+        )
+        (simulation_runtime_state.stored_disordered_phase_source_reflection_indices,) = (
+            gui_geometry_q_group_manager.audited_full_order_source_reflection_index_groups(
+                (disordered_phase_tables,),
+                owner="runtime_session.store_disordered_phase_peak_tables",
+                start_index=int(len(primary_source_reflection_indices))
+                + int(len(secondary_source_reflection_indices))
+                + int(
+                    len(
+                        getattr(
+                            simulation_runtime_state,
+                            "stored_sixh_reference_source_reflection_indices",
+                            (),
+                        )
+                        or ()
+                    )
+                ),
+            )
+        )
+    elif not _geometry_disordered_phase_qr_enabled():
+        simulation_runtime_state.stored_disordered_phase_max_positions = None
+        simulation_runtime_state.stored_disordered_phase_peak_table_lattice = None
+        simulation_runtime_state.stored_disordered_phase_source_reflection_indices = None
+
     active_peak_rows_fresh = _active_peak_row_sides_have_fresh_raw_rows(
         active_peak_row_sides,
         primary_raw_rows_fresh=primary_raw_rows_fresh,
@@ -20752,6 +21187,11 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.stored_sixh_reference_source_reflection_indices = None
     simulation_runtime_state.stored_sixh_reference_peak_table_lattice = None
     simulation_runtime_state.sixh_qr_reference_inventory_cache = None
+    simulation_runtime_state.stored_disordered_phase_max_positions = None
+    simulation_runtime_state.stored_disordered_phase_source_reflection_indices = None
+    simulation_runtime_state.stored_disordered_phase_peak_table_lattice = None
+    simulation_runtime_state.disordered_phase_inventory_cache = None
+    simulation_runtime_state.generated_disordered_phase_cif_path = None
     simulation_runtime_state.stored_primary_intersection_cache = None
     simulation_runtime_state.stored_primary_intersection_cache_signature = None
     simulation_runtime_state.stored_secondary_intersection_cache = None
@@ -22329,6 +22769,21 @@ def do_update():
             and sixh_reference_miller.shape[0] > 0
             and sixh_reference_intensities.size > 0
         )
+        disordered_phase_payload = _geometry_disordered_phase_inventory_payload()
+        disordered_phase_miller = np.asarray(
+            disordered_phase_payload.get("miller", ()),
+            dtype=np.float64,
+        )
+        disordered_phase_intensities = np.asarray(
+            disordered_phase_payload.get("intensities", ()),
+            dtype=np.float64,
+        ).reshape(-1)
+        disordered_phase_available = bool(
+            _geometry_disordered_phase_qr_enabled()
+            and disordered_phase_miller.ndim == 2
+            and disordered_phase_miller.shape[0] > 0
+            and disordered_phase_intensities.size > 0
+        )
         run_primary_job = (
             len(selected_primary_data) > 0
             if isinstance(selected_primary_data, dict)
@@ -22365,6 +22820,9 @@ def do_update():
         )
         collect_sixh_reference_hit_tables = bool(
             collect_hit_tables_enabled and sixh_reference_available and run_primary_job
+        )
+        collect_disordered_phase_hit_tables = bool(
+            collect_hit_tables_enabled and disordered_phase_available and run_primary_job
         )
         build_primary_intersection_cache = bool(
             build_intersection_cache_enabled and collect_primary_hit_tables
@@ -22447,6 +22905,7 @@ def do_update():
             "collect_primary_hit_tables": collect_primary_hit_tables,
             "collect_secondary_hit_tables": collect_secondary_hit_tables,
             "collect_sixh_reference_hit_tables": collect_sixh_reference_hit_tables,
+            "collect_disordered_phase_hit_tables": collect_disordered_phase_hit_tables,
             "build_primary_intersection_cache": build_primary_intersection_cache,
             "build_secondary_intersection_cache": build_secondary_intersection_cache,
             "capture_primary_hit_tables_raw": capture_primary_raw,
@@ -22471,6 +22930,10 @@ def do_update():
             "sixh_reference_intensities": sixh_reference_intensities.copy(),
             "sixh_reference_a": float(sixh_reference_payload.get("a", float("nan"))),
             "sixh_reference_c": float(sixh_reference_payload.get("c", float("nan"))),
+            "disordered_phase_data": disordered_phase_miller.copy(),
+            "disordered_phase_intensities": disordered_phase_intensities.copy(),
+            "disordered_phase_a": float(disordered_phase_payload.get("a", float("nan"))),
+            "disordered_phase_c": float(disordered_phase_payload.get("c", float("nan"))),
             "run_primary": bool(run_primary_job),
             "run_secondary": bool(run_secondary_enabled),
             "a_primary": float(a_updated),

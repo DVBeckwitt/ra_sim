@@ -298,7 +298,11 @@ def pseudo_voigt_profile(
     fwhm: float,
     eta: float,
 ) -> np.ndarray:
-    """Return one pseudo-Voigt peak with FWHM and mixing fraction ``eta``."""
+    """Return one area-normalized pseudo-Voigt peak.
+
+    ``amplitude`` is the integrated peak area, and ``eta`` is the Lorentzian
+    area fraction.
+    """
 
     x_arr = np.asarray(x_values, dtype=float)
     return float(baseline) + float(amplitude) * _pseudo_voigt_unit_profile(
@@ -362,6 +366,32 @@ def _lorentzian_unit_profile(
     return np.asarray(1.0 / denom, dtype=float)
 
 
+def _gaussian_unit_area_profile(
+    x_values: Sequence[float] | np.ndarray,
+    *,
+    center: float,
+    fwhm: float,
+) -> np.ndarray:
+    """Return one baseline-free, unit-area Gaussian profile."""
+
+    fwhm_value = max(abs(float(fwhm)), 1.0e-9)
+    coefficient = 2.0 * math.sqrt(math.log(2.0)) / (math.sqrt(math.pi) * fwhm_value)
+    return coefficient * _gaussian_unit_profile(x_values, center=center, fwhm=fwhm_value)
+
+
+def _lorentzian_unit_area_profile(
+    x_values: Sequence[float] | np.ndarray,
+    *,
+    center: float,
+    fwhm: float,
+) -> np.ndarray:
+    """Return one baseline-free, unit-area Lorentzian profile."""
+
+    fwhm_value = max(abs(float(fwhm)), 1.0e-9)
+    coefficient = 2.0 / (math.pi * fwhm_value)
+    return coefficient * _lorentzian_unit_profile(x_values, center=center, fwhm=fwhm_value)
+
+
 def _pseudo_voigt_unit_profile(
     x_values: Sequence[float] | np.ndarray,
     *,
@@ -369,12 +399,43 @@ def _pseudo_voigt_unit_profile(
     fwhm: float,
     eta: float,
 ) -> np.ndarray:
-    """Return one baseline-free, unit-amplitude pseudo-Voigt profile."""
+    """Return one baseline-free, unit-area pseudo-Voigt profile."""
 
     eta_value = float(np.clip(float(eta), 0.0, 1.0))
-    gaussian = _gaussian_unit_profile(x_values, center=center, fwhm=fwhm)
-    lorentzian = _lorentzian_unit_profile(x_values, center=center, fwhm=fwhm)
+    gaussian = _gaussian_unit_area_profile(x_values, center=center, fwhm=fwhm)
+    lorentzian = _lorentzian_unit_area_profile(x_values, center=center, fwhm=fwhm)
     return np.asarray((1.0 - eta_value) * gaussian + eta_value * lorentzian, dtype=float)
+
+
+def _profile_unit_peak_height(
+    model: str,
+    *,
+    fwhm: float,
+    eta: float = 0.5,
+) -> float:
+    """Return model value at peak center for one unit-amplitude/unit-area peak."""
+
+    normalized_model = str(model or "").strip().lower()
+    if normalized_model != PROFILE_PSEUDO_VOIGT:
+        return 1.0
+    fwhm_value = max(abs(float(fwhm)), 1.0e-9)
+    eta_value = float(np.clip(float(eta), 0.0, 1.0))
+    gaussian_peak = 2.0 * math.sqrt(math.log(2.0)) / (math.sqrt(math.pi) * fwhm_value)
+    lorentzian_peak = 2.0 / (math.pi * fwhm_value)
+    return float((1.0 - eta_value) * gaussian_peak + eta_value * lorentzian_peak)
+
+
+def _profile_amplitude_from_peak_height(
+    model: str,
+    peak_height: float,
+    *,
+    fwhm: float,
+    eta: float = 0.5,
+) -> float:
+    """Convert desired peak height into the fitted amplitude parameter."""
+
+    unit_peak_height = max(_profile_unit_peak_height(model, fwhm=fwhm, eta=eta), 1.0e-12)
+    return float(max(float(peak_height), 1.0e-12) / unit_peak_height)
 
 
 def _profile_unit_values(
@@ -385,7 +446,7 @@ def _profile_unit_values(
     fwhm: float,
     eta: float = 0.5,
 ) -> np.ndarray:
-    """Return one baseline-free, unit-amplitude profile for the chosen family."""
+    """Return one baseline-free profile for the chosen family."""
 
     normalized_model = str(model or "").strip().lower()
     if normalized_model == PROFILE_GAUSSIAN:
@@ -727,7 +788,7 @@ def fit_composite_peak_profile(
 
         center0 = float(np.clip(float(selected_axis_value), center_lower, center_upper))
         sample_y = float(np.interp(center0, fit_axis_arr, fit_curve_arr))
-        amplitude0 = max(sample_y - baseline0, 0.05 * y_span, 1.0e-6)
+        peak_height0 = max(sample_y - baseline0, 0.05 * y_span, 1.0e-6)
         width_seed = max(
             4.0 * float(axis_step),
             min(
@@ -736,7 +797,25 @@ def fit_composite_peak_profile(
             ),
         )
         fwhm0 = float(np.clip(width_seed, min_fwhm, fwhm_max))
-        amplitude_upper = max(4.0 * y_span, 4.0 * amplitude0, 1.0e-6)
+        amplitude0 = _profile_amplitude_from_peak_height(
+            normalized_model,
+            peak_height0,
+            fwhm=fwhm0,
+            eta=0.5,
+        )
+        widest_lorentzian_area_scale = 1.0 / max(
+            _profile_unit_peak_height(
+                normalized_model,
+                fwhm=fwhm_max,
+                eta=1.0,
+            ),
+            1.0e-12,
+        )
+        amplitude_upper = max(
+            4.0 * y_span * widest_lorentzian_area_scale,
+            4.0 * amplitude0,
+            1.0e-6,
+        )
 
         initial.extend([amplitude0, center0, fwhm0])
         lower.extend([0.0, center_lower, min_fwhm])
@@ -889,7 +968,7 @@ def fit_peak_profile(
     y_max = float(np.max(y_window))
     y_span = max(y_max - y_min, 1.0e-6)
     baseline0 = float(np.percentile(y_window, 15.0))
-    amplitude0 = max(float(y_window[peak_index]) - baseline0, 0.25 * y_span, 1.0e-6)
+    peak_height0 = max(float(y_window[peak_index]) - baseline0, 0.25 * y_span, 1.0e-6)
     center0 = float(np.clip(float(x_window[peak_index]), lower_bound, upper_bound))
 
     unique_x = np.unique(np.asarray(x_window, dtype=float))
@@ -905,10 +984,29 @@ def fit_peak_profile(
     min_fwhm = max(step * 2.0, span / max(4.0 * float(x_window.size), 1.0), 1.0e-6)
     max_fwhm = max(min_fwhm * 4.0, min(max(span * 1.25, min_fwhm * 4.0), 2.0 * half_width))
     fwhm0 = float(np.clip(max(span / 4.0, min_fwhm * 1.5), min_fwhm, max_fwhm))
+    amplitude0 = _profile_amplitude_from_peak_height(
+        normalized_model,
+        peak_height0,
+        fwhm=fwhm0,
+        eta=0.5,
+    )
+    widest_lorentzian_area_scale = 1.0 / max(
+        _profile_unit_peak_height(
+            normalized_model,
+            fwhm=max_fwhm,
+            eta=1.0,
+        ),
+        1.0e-12,
+    )
 
     initial = [baseline0, amplitude0, center0, fwhm0]
     lower = [y_min - y_span, 0.0, lower_bound, min_fwhm]
-    upper = [y_max + y_span, max(4.0 * y_span, amplitude0 * 4.0), upper_bound, max_fwhm]
+    upper = [
+        y_max + y_span,
+        max(4.0 * y_span * widest_lorentzian_area_scale, amplitude0 * 4.0),
+        upper_bound,
+        max_fwhm,
+    ]
     if normalized_model == PROFILE_PSEUDO_VOIGT:
         initial.append(0.5)
         lower.append(0.0)

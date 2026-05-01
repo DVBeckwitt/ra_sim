@@ -75,6 +75,7 @@ ra-sim-dev = "ra_sim.dev:main"
 include = ["ra_sim*"]
 
 [tool.setuptools.package-data]
+"ra_sim.config" = ["materials/*.cif"]
 "ra_sim.gui.assets" = ["*.wav"]
 
 [tool.pytest.ini_options]

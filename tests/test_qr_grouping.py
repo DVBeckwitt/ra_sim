@@ -1,5 +1,6 @@
 import io
 from contextlib import redirect_stderr, redirect_stdout
+from importlib.resources import as_file, files
 import numpy as np
 from pathlib import Path
 import pytest
@@ -7,6 +8,7 @@ import pytest
 dif = pytest.importorskip("Dans_Diffraction")
 from ra_sim.utils.stacking_fault import (
     _F2,
+    _cell_a_c_from_cif,
     _cell_c_from_cif,
     _energy_kev_from_lambda,
     _sites_from_cif_with_factors,
@@ -14,7 +16,10 @@ from ra_sim.utils.stacking_fault import (
     ht_dict_to_qr_dict,
     qr_dict_to_arrays,
 )
+from ra_sim.gui import controllers as gui_controllers
+from ra_sim.gui import geometry_q_group_manager
 from ra_sim.simulation import diffraction
+from ra_sim.utils.diffraction_tools import miller_generator
 
 
 def combine_qr_dicts(caches, weights):
@@ -48,6 +53,84 @@ def combine_qr_dicts(caches, weights):
                     entry["I"] += w * data["I"]
                 # ``deg`` is unchanged – it depends only on symmetry, not weights
     return out
+
+
+def _numeric_qr_qz_keys(miller_array, *, a_value, c_value):
+    keys = set()
+    for hkl in np.asarray(miller_array, dtype=float):
+        _group_key, qr_val, qz_val = geometry_q_group_manager.reflection_q_group_metadata(
+            tuple(hkl[:3]),
+            source_label="primary",
+            a_value=a_value,
+            c_value=c_value,
+            allow_nominal_hkl_indices=True,
+        )
+        if np.isfinite(qr_val) and np.isfinite(qz_val):
+            keys.add((round(float(qr_val), 6), round(float(qz_val), 6)))
+    return keys
+
+
+def test_packaged_6h_reference_cif_adds_unique_qr_qz_groups():
+    cif_2h = Path("tests/Diffuse/PbI2_2H.cif")
+    with as_file(files("ra_sim.config").joinpath("materials/PbI2_6H.cif")) as cif_6h:
+        a_2h, c_2h = _cell_a_c_from_cif(str(cif_2h))
+        a_6h, c_6h = _cell_a_c_from_cif(str(cif_6h))
+        miller_2h, _intens_2h, _deg_2h, _details_2h = miller_generator(
+            4,
+            str(cif_2h),
+            [1.0],
+            1.5406,
+            two_theta_range=(0.0, 70.0),
+        )
+        miller_6h, _intens_6h, _deg_6h, _details_6h = miller_generator(
+            4,
+            str(cif_6h),
+            [1.0],
+            1.5406,
+            two_theta_range=(0.0, 70.0),
+        )
+
+    base_keys = _numeric_qr_qz_keys(miller_2h, a_value=a_2h, c_value=c_2h)
+    sixh_keys = _numeric_qr_qz_keys(miller_6h, a_value=a_6h, c_value=c_6h)
+
+    assert sixh_keys - base_keys
+
+
+def test_aux_qr_source_label_is_preserved_and_duplicate_qr_qz_rows_merge():
+    assert gui_controllers.normalize_bragg_qr_source_label("pbii_6h_ref") == "pbii_6h_ref"
+
+    primary_key = ("q_group", "primary", 1, 2)
+    aux_key = ("q_group", "pbii_6h_ref", 1, 2)
+    entries = geometry_q_group_manager.build_geometry_q_group_entries(
+        None,
+        peak_records=[
+            {
+                "q_group_key": primary_key,
+                "hkl": (1, 0, 2),
+                "source_label": "primary",
+                "qr": 1.23,
+                "qz": 4.56,
+                "weight": 2.0,
+            },
+            {
+                "q_group_key": aux_key,
+                "hkl": (0, 1, 2),
+                "source_label": "pbii_6h_ref",
+                "qr": 1.23 + 2.0e-7,
+                "qz": 4.56 - 2.0e-7,
+                "weight": 3.0,
+            },
+        ],
+        primary_a=4.557,
+        primary_c=6.979,
+        allow_nominal_hkl_indices=True,
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["key"] == primary_key
+    assert entries[0]["peak_count"] == 2
+    assert entries[0]["total_intensity"] == 5.0
+    assert "pbii_6h_ref" in entries[0]["source_label"]
 
 
 def test_qr_grouping_matches_manual_sum():

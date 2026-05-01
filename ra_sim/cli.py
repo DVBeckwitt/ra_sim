@@ -714,6 +714,7 @@ def run_headless_geometry_fit(
     run_mosaic_shape_fit: bool = False,
     active_var_names: Sequence[str] | str | None = None,
     seed_policy: str | None = None,
+    progress_path: str | Path | None = None,
     weighted_event_workers: int | None = None,
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
@@ -737,6 +738,7 @@ def run_headless_geometry_fit(
             "state_path": source_path,
             "downloads_dir": output_dir,
             "active_var_names": resolved_active_var_names,
+            "progress_path": progress_path,
         }
         if seed_policy is not None:
             shared_kwargs["seed_policy"] = seed_policy
@@ -2992,6 +2994,7 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
     input_path = _resolve_fit_geometry_input_path(args)
     output_path = _resolve_fit_geometry_output_path(args, input_path=input_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path = output_path.with_suffix(".progress.json")
     try:
         active_var_names = _normalize_fit_geometry_active_var_names(
             getattr(args, "active_vars", None)
@@ -3007,6 +3010,7 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
                 output_dir=output_path.parent,
                 active_var_names=active_var_names,
                 seed_policy=seed_policy,
+                progress_path=progress_path,
                 weighted_event_workers=getattr(args, "weighted_event_workers", None),
                 background_subtraction_mode=getattr(
                     args,
@@ -3029,6 +3033,14 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
             )
         )
         save_gui_state_file(output_path, state_result)
+        try:
+            _load_shared_headless_geometry_fit().write_headless_geometry_fit_progress(
+                progress_path,
+                "output_state_write",
+                output_state_path=output_path,
+            )
+        except Exception:
+            pass
         print(f"Wrote fitted GUI state to {output_path}")
         log_path = report.get("log_path")
         matched_peaks_path = report.get("matched_peaks_path")
@@ -3567,9 +3579,9 @@ def main(argv: list[str] | None = None) -> None:
         ap.print_help()
         return
 
-    start_run_bundle(
-        entrypoint=f"cli:{getattr(args, 'command', None) or argv[0]}",
-    )
+    command_name = str(getattr(args, "command", None) or argv[0])
+    if command_name != "fit-geometry":
+        start_run_bundle(entrypoint=f"cli:{command_name}")
     handler(args)
 
 

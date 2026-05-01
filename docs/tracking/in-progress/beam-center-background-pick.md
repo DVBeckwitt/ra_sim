@@ -56,18 +56,18 @@ refresh immediately.
 - The mode uses the current detector/background image. It switches back to
   detector view when needed, shows the background if hidden, and errors if no
   background is loaded.
-- Left press starts a local zoom window, motion previews the clicked display
-  point, and release commits that clicked location.
+- Left press starts a local zoom window, motion previews raw to refined point,
+  and release commits the refined location.
 - Right click cancels and restores the pre-pick view.
-- Commit maps the clicked detector-view display `(col,row)` through
+- Commit maps the refined detector-view display `(col,row)` through
   `beam_center_row_col_from_detector_display(...)`, an extent-based
   beam-center transform kept separate from pixel-index transforms, then writes
   the two mapped values into the visible GUI Beam Center Row/Col sliders in the
   pick path's required order.
 - Added shared display-rotation helpers so inverse display rotation uses the
   rotated display shape for non-square detector images.
-- The picker no longer uses local peak refinement. It keeps the same preview
-  markers, throttle constants, and zoom window size.
+- The picker reuses the manual Qr/Qz local refiner with detector-space forcing,
+  plus the same preview markers, throttle constants, and zoom window size.
 - Runtime state is transient only; saved-state schema is unchanged.
 - Added `beam_center_row_col_from_poni(...)` and used it from GUI runtime and
   headless geometry-fit defaults so both paths share the same native row/col
@@ -108,11 +108,12 @@ refresh immediately.
   `ra_sim/gui/views.py`, `tests/test_beam_center_pick_helpers.py`, and
   `tests/test_gui_canvas_interactions.py` passed.
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_beam_center_pick_helpers.py tests/test_gui_canvas_interactions.py tests/test_gui_views.py -q -s`
-  - 120 passed, 1 failed.
-  - The failing test is
+  - previously blocked by
     `tests/test_gui_views.py::test_stacking_parameter_panels_and_slider_refs_are_stored`
-    with Tk's `RuntimeError: Too early to create variable: no default root window`;
-    this is in the stacking-panel test path, not the beam-center picker path.
+    creating Tk variables without fake widget bindings.
+- `python -m pytest tests/test_gui_views.py::test_stacking_parameter_panels_and_slider_refs_are_stored -ra`
+  - 1 passed after adding the missing fake `Checkbutton` and `BooleanVar`
+    bindings in the test.
 - `python -m pytest tests/test_beam_center_pick_helpers.py -ra`
   - 12 passed, including PONI row/col defaults, exact clicked-point placement,
     headless default source checks, and no-refiner preview checks.
@@ -120,17 +121,6 @@ refresh immediately.
   - passed.
 - `git diff --check -- CHANGELOG.md ra_sim/gui/geometry_overlay.py ra_sim/gui/_runtime/runtime_session.py ra_sim/headless_geometry_fit.py tests/test_beam_center_pick_helpers.py`
   - passed.
-- `python -m pytest tests/test_beam_center_pick_helpers.py -ra`
-  - 14 passed, including the visible GUI column `3000 - display_col` guard
-    and direct slider-write source checks.
-- `python -m pytest tests/test_gui_canvas_interactions.py::test_beam_center_pick_press_motion_release_uses_priority_canvas_route -ra`
-  - 1 passed.
-- `python -m pytest tests/test_gui_runtime_import_safe.py::test_runtime_impl_refine_panels_start_collapsed tests/test_gui_runtime_import_safe.py::test_runtime_impl_keeps_simulation_panel_always_expanded -ra`
-  - 2 passed.
-- `python -m pytest tests/test_gui_views.py::test_primary_cif_controls_store_vars_and_bind_actions tests/test_gui_views.py::test_ordered_structure_fit_panel_helpers_build_and_rebuild_controls -ra`
-  - 2 passed.
-- Targeted `compileall` on touched runtime/view/test files passed.
-- Touched-file `git diff --check` passed with CRLF warnings only.
 - `python -m ra_sim.dev check`
   - blocked by pre-existing formatting drift in
     `ra_sim/fitting/optimization.py`; touched files pass the formatter gate.
@@ -145,12 +135,9 @@ geometry fit. Third click-placement bug is fixed by disabling beam-center
 auto-refine: the clicked display point is transformed directly as
 `row = height - display_col`, `col = display_row`. Fourth row/column commit
 bug is fixed by reversing the mapped values into the GUI slider fields during
-Pick Beam Center assignment. Fifth visible-entry bug is fixed by setting the
-Beam Center Row/Col slider widgets directly. Refine-tab default-collapse
-feature is implemented for the geometry, detector, beam, lattice, mosaic,
-Debye, CIF, stacking, and ordered-structure panels.
+Pick Beam Center assignment.
 
-Targeted beam-center tests, targeted refine-collapse tests, targeted compile,
-and touched-file diff checks are green. Full `python -m ra_sim.dev check` was
-not rerun after the focused fix. No saved-state, CLI, or artifact schema
-change. No package version bump.
+Targeted beam-center tests, targeted compile, the previously failing stacking
+panel view test, and touched-file diff checks are green. Full
+`python -m ra_sim.dev check` was not rerun after the focused fix. No
+saved-state, CLI, or artifact schema change. No package version bump.

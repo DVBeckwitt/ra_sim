@@ -19,7 +19,9 @@ intensity scale.
 - Fit rows include model, fit center, Gaussian FWHM, Lorentzian FWHM,
   Gaussian/Lorentzian mixture percent, and RMSE.
 - Pseudo-Voigt rows report the shared FWHM in both FWHM columns and show the
-  Gaussian/Lorentzian split from the fitted mixture value.
+  Gaussian/Lorentzian split from area-normalized Gaussian and Lorentzian
+  equations, so the Lorentzian percentage is an area fraction rather than a
+  height-weighted mix.
 - Standard integration-range refreshes skip the main caked raster repaint when
   the cached caked image and intensity mode are already current.
 - The 2theta and phi 1D integration plots still recompute from the selected ROI
@@ -28,7 +30,8 @@ intensity scale.
 ## Status
 
 - Feature status: complete.
-- Bug status: fixed for standard caked integration-region updates.
+- Bug status: fixed for standard caked integration-region updates and
+  pseudo-Voigt Lorentzian-percentage reporting.
 - Error status: no known runtime errors from the focused regression coverage.
 - Compatibility: no saved-state, CLI, config, or artifact schema changes.
 

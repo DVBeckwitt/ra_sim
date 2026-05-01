@@ -21,6 +21,7 @@ from ra_sim.utils.calculations import (
     source_branch_index_from_phi_deg,
 )
 from . import views as gui_views
+from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
 from . import mosaic_top_selection as gui_mosaic_top
 
@@ -851,16 +852,26 @@ def format_hkl_triplet(h: int, k: int, l: int) -> str:
     return f"({int(h)} {int(k)} {int(l)})"
 
 
+def _normalize_peak_source_label(value: object, *, default: str = "primary") -> str:
+    """Normalize one serialized peak-source label."""
+
+    return gui_controllers.normalize_bragg_qr_source_label(
+        str(value or default) if value is not None else default
+    )
+
+
 def source_miller_for_label(simulation_runtime_state, source_label: str | None) -> np.ndarray:
     """Return the active reflection table for one source label."""
 
-    label = str(source_label or "primary").lower()
+    label = _normalize_peak_source_label(source_label)
     if (
         label == "secondary"
         and isinstance(simulation_runtime_state.sim_miller2, np.ndarray)
         and simulation_runtime_state.sim_miller2.size
     ):
         return np.asarray(simulation_runtime_state.sim_miller2, dtype=float)
+    if label == gui_controllers.DISORDERED_PHASE_SOURCE_LABEL:
+        return np.empty((0, 3), dtype=float)
     if (
         isinstance(simulation_runtime_state.sim_miller1, np.ndarray)
         and simulation_runtime_state.sim_miller1.size
@@ -1317,8 +1328,7 @@ def _peak_overlay_cache_signature(cache_tables: object) -> tuple[int, int]:
 def _peak_overlay_source_label(value: object, *, default: str = "primary") -> str:
     """Normalize one serialized peak-source label."""
 
-    label = str(value or default).strip().lower()
-    return "secondary" if label == "secondary" else "primary"
+    return _normalize_peak_source_label(value, default=default)
 
 
 def _peak_overlay_source_defaults(

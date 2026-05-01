@@ -39,6 +39,10 @@ from ra_sim.utils.parallel import (
     default_reserved_cpu_worker_count,
     make_detached_thread_pool_executor,
 )
+from ra_sim.utils.pbi2_ht_shift_cif import (
+    DISORDERED_PHASE_DISPLAY_LABEL,
+    DISORDERED_PHASE_SOURCE_LABEL,
+)
 
 
 DEFAULT_POSITION_SIGMA_FLOOR_PX = 0.75
@@ -4994,6 +4998,7 @@ def _geometry_manual_include_tagged_q_group_candidate(
     normalized_key = _geometry_manual_real_q_group_key(group_key)
     if normalized_key is not None:
         tagged["q_group_key"] = normalized_key
+        tagged.setdefault("source_label", _geometry_manual_q_group_source_label(normalized_key))
     tagged_slot = _geometry_manual_q_group_physical_branch_slot(
         tagged,
         group_key=normalized_key,
@@ -5005,6 +5010,12 @@ def _geometry_manual_include_tagged_q_group_candidate(
     next_entries: list[dict[str, object]] = []
     for raw_entry in output:
         entry = dict(raw_entry)
+        if (
+            normalized_key is not None
+            and _geometry_manual_real_q_group_key(entry) != normalized_key
+        ):
+            next_entries.append(entry)
+            continue
         entry_slot = _geometry_manual_q_group_physical_branch_slot(
             entry,
             group_key=normalized_key,
@@ -5020,10 +5031,39 @@ def _geometry_manual_include_tagged_q_group_candidate(
     return next_entries
 
 
+def _geometry_manual_source_priority(source_label: object) -> int:
+    label = normalize_bragg_qr_source_label(str(source_label) if source_label is not None else None)
+    if label == "primary":
+        return 0
+    if label == DISORDERED_PHASE_SOURCE_LABEL:
+        return 1
+    if label == "secondary":
+        return 2
+    if label == "pbii_6h_ref":
+        return 3
+    return 9
+
+
 def _geometry_manual_real_q_group_key(value: object) -> tuple[object, ...] | None:
     if isinstance(value, Mapping):
-        value = value.get("q_group_key")
+        candidate = value.get("q_group_key")
+        value = candidate if candidate is not None else value.get("key")
+    normalized = gui_controllers.normalize_geometry_q_group_key(value)
+    if normalized is not None:
+        source_label, m_index, gz_index = normalized
+        return ("q_group", str(source_label), int(m_index), int(gz_index))
     return gui_mosaic_top.normalize_q_group_key(value)
+
+
+def _geometry_manual_q_group_source_label(value: object) -> str:
+    key = _geometry_manual_real_q_group_key(value)
+    if isinstance(key, tuple) and len(key) >= 4 and str(key[0]) == "q_group":
+        return normalize_bragg_qr_source_label(str(key[1]))
+    if isinstance(value, Mapping):
+        return normalize_bragg_qr_source_label(
+            str(value.get("source_label")) if value.get("source_label") is not None else None
+        )
+    return "primary"
 
 
 def _geometry_manual_q_group_entry_is_00l(
@@ -7560,6 +7600,10 @@ def geometry_manual_detector_picker_row(
 
     row = dict(entry)
     row["q_group_key"] = group_key
+    row.setdefault("source_label", _geometry_manual_q_group_source_label(group_key))
+    if row.get("source_label") == DISORDERED_PHASE_SOURCE_LABEL:
+        row.setdefault("phase_label", DISORDERED_PHASE_DISPLAY_LABEL)
+        row.setdefault("structure_role", "disordered")
     row["detector_display_px"] = (float(display_point[0]), float(display_point[1]))
     row["display_col"] = float(display_point[0])
     row["display_row"] = float(display_point[1])
@@ -7647,7 +7691,53 @@ def geometry_manual_detector_picker_candidates_from_rows(
                 )[1],
             )
         )
-    return candidate_rows, dict(grouped)
+    candidate_rows.sort(key=_geometry_manual_flattened_picker_sort_key)
+    return candidate_rows, dict(
+        sorted(
+            grouped.items(),
+            key=lambda item: _geometry_manual_group_sort_key(item[0], item[1]),
+        )
+    )
+
+
+def _geometry_manual_safe_float(value: object) -> float:
+    try:
+        numeric = float(value)
+    except Exception:
+        return float("inf")
+    return float(numeric) if np.isfinite(numeric) else float("inf")
+
+
+def _geometry_manual_flattened_picker_sort_key(entry: Mapping[str, object]) -> tuple[object, ...]:
+    return (
+        _geometry_manual_safe_float(
+            entry.get("distance_to_click", entry.get("distance", float("inf")))
+        ),
+        _geometry_manual_safe_float(entry.get("qr", float("inf"))),
+        _geometry_manual_safe_float(entry.get("qz", float("inf"))),
+        _geometry_manual_source_priority(entry.get("source_label")),
+        str(entry.get("source_label", "")),
+    )
+
+
+def _geometry_manual_group_sort_key(
+    group_key: object,
+    entries: Sequence[Mapping[str, object]] | None,
+) -> tuple[object, ...]:
+    first_entry = next((entry for entry in entries or () if isinstance(entry, Mapping)), {})
+    source_label = _geometry_manual_q_group_source_label(group_key)
+    return (
+        _geometry_manual_safe_float(
+            first_entry.get("distance_to_click", first_entry.get("distance", float("inf")))
+            if isinstance(first_entry, Mapping)
+            else float("inf")
+        ),
+        _geometry_manual_safe_float(first_entry.get("qr", float("inf"))),
+        _geometry_manual_safe_float(first_entry.get("qz", float("inf"))),
+        _geometry_manual_source_priority(source_label),
+        str(source_label),
+        tuple(group_key) if isinstance(group_key, tuple) else repr(group_key),
+    )
 
 
 def _geometry_manual_flatten_grouped_candidates(
@@ -7664,6 +7754,7 @@ def _geometry_manual_flatten_grouped_candidates(
                 entry = dict(raw_entry)
                 entry.setdefault("q_group_key", group_key)
                 rows.append(entry)
+    rows.sort(key=_geometry_manual_flattened_picker_sort_key)
     return rows
 
 
@@ -9243,9 +9334,7 @@ def build_geometry_manual_pick_cache(
         detector_picker_coverage_missing_before = _missing_listed_detector_picker_q_group_keys()
         if detector_picker_coverage_missing_before:
             detector_picker_coverage_rebuild_attempted = True
-            coverage_rows = _source_rows_from_background_provider(
-                "manual_pick_cache_coverage"
-            )
+            coverage_rows = _source_rows_from_background_provider("manual_pick_cache_coverage")
             if coverage_rows:
                 _coverage_detector_rows, coverage_grouped_candidates = (
                     geometry_manual_detector_picker_candidates_from_rows(
@@ -9260,15 +9349,13 @@ def build_geometry_manual_pick_cache(
                     if key is not None and entries
                 }
                 if not detector_picker_grouped_candidates or any(
-                    key in coverage_group_keys
-                    for key in detector_picker_coverage_missing_before
+                    key in coverage_group_keys for key in detector_picker_coverage_missing_before
                 ):
                     _apply_candidate_source(
                         coverage_rows,
                         action="rebuilt",
                         source=(
-                            "geometry_manual_source_rows_for_background"
-                            "(manual_pick_cache_coverage)"
+                            "geometry_manual_source_rows_for_background(manual_pick_cache_coverage)"
                         ),
                         provenance=[
                             "geometry_manual_source_rows_for_background",
@@ -9279,9 +9366,7 @@ def build_geometry_manual_pick_cache(
                         reproject=False,
                         stale_reason_override=stale_reason,
                     )
-            detector_picker_coverage_missing_after = (
-                _missing_listed_detector_picker_q_group_keys()
-            )
+            detector_picker_coverage_missing_after = _missing_listed_detector_picker_q_group_keys()
     if not simulated_peaks and stale_reason is None:
         stale_reason = (
             "source snapshot rows were unavailable; no reusable cached "
@@ -9369,9 +9454,7 @@ def build_geometry_manual_pick_cache(
     if listed_picker_q_group_keys:
         detector_picker_coverage_missing_after = _missing_listed_detector_picker_q_group_keys()
         cache_metadata["listed_q_group_key_count"] = int(len(listed_picker_q_group_keys))
-        cache_metadata["detector_picker_group_count"] = int(
-            len(detector_picker_grouped_candidates)
-        )
+        cache_metadata["detector_picker_group_count"] = int(len(detector_picker_grouped_candidates))
         cache_metadata["detector_picker_coverage_rebuild_attempted"] = bool(
             detector_picker_coverage_rebuild_attempted
         )
@@ -9385,9 +9468,7 @@ def build_geometry_manual_pick_cache(
             ]
     if detector_picker_reused_after_background_refresh:
         cache_metadata["detector_picker_reused_after_background_refresh"] = True
-    cache_metadata["caked_qr_projection_sidecar_requested"] = bool(
-        build_caked_projection_sidecar
-    )
+    cache_metadata["caked_qr_projection_sidecar_requested"] = bool(build_caked_projection_sidecar)
     cache_metadata["caked_qr_projection_entry_count"] = int(len(caked_qr_projection_entries))
     cache_metadata["caked_qr_projection_group_count"] = int(
         len(caked_qr_projection_grouped_candidates)
@@ -9503,7 +9584,7 @@ def geometry_manual_choose_group_at(
 
     best_group_key = None
     best_group_entries: list[dict[str, object]] = []
-    best_d2 = float("inf")
+    best_sort_key: tuple[object, ...] | None = None
     half_window = max(1.0, 0.5 * float(window_size_px))
     for group_key, candidate_entries in (grouped_candidates or {}).items():
         for candidate in candidate_entries or []:
@@ -9521,14 +9602,22 @@ def geometry_manual_choose_group_at(
             d2 = (float(current_point[0]) - float(col)) ** 2 + (
                 float(current_point[1]) - float(row)
             ) ** 2
-            if d2 < best_d2:
-                best_d2 = float(d2)
+            source_label = _geometry_manual_q_group_source_label(group_key)
+            candidate_sort_key = (
+                float(d2),
+                _geometry_manual_safe_float(candidate.get("qr", float("inf"))),
+                _geometry_manual_safe_float(candidate.get("qz", float("inf"))),
+                _geometry_manual_source_priority(source_label),
+                str(source_label),
+            )
+            if best_sort_key is None or candidate_sort_key < best_sort_key:
+                best_sort_key = candidate_sort_key
                 best_group_key = group_key
                 best_group_entries = [dict(entry) for entry in candidate_entries]
 
-    if best_group_key is None or not np.isfinite(best_d2):
+    if best_group_key is None or best_sort_key is None or not np.isfinite(float(best_sort_key[0])):
         return None, [], float("nan")
-    return best_group_key, best_group_entries, float(np.sqrt(best_d2))
+    return best_group_key, best_group_entries, float(np.sqrt(float(best_sort_key[0])))
 
 
 def geometry_manual_zoom_bounds(
@@ -17194,7 +17283,11 @@ def normalize_bragg_qr_source_label(source_label: str | None) -> str:
     """Normalize the serialized Qr-source label used in manual-geometry data."""
 
     label = str(source_label or "primary").strip().lower()
-    return "secondary" if label == "secondary" else "primary"
+    if label == "secondary":
+        return "secondary"
+    if label in gui_controllers.BRAGG_QR_AUX_SOURCE_LABELS:
+        return label
+    return "primary"
 
 
 def q_group_key_component(value: float) -> int | float:

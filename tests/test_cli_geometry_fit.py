@@ -196,6 +196,9 @@ def test_cmd_fit_geometry_loads_saved_state_runs_fit_and_saves(monkeypatch, tmp_
 
     assert events[0] == ("load", str(input_path))
     assert events[1][0] == "run"
+    assert events[1][1]["kwargs"]["progress_path"] == output_path.with_suffix(
+        ".progress.json"
+    )
     assert events[2] == ("save", str(output_path), {})
     assert saved_payload["path"] == str(output_path)
     assert saved_payload["state"]["geometry"]["fit_result"] == "ok"
@@ -407,10 +410,19 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
             "geometry": {"manual_pairs": [{"background_index": 0, "entries": []}]},
         },
     }
-    calls: list[tuple[object, object, object, object]] = []
+    calls: list[tuple[object, object, object, object, object]] = []
 
-    def _fake_shared_runner(state_arg, *, state_path, downloads_dir, active_var_names=None):
-        calls.append((state_arg, state_path, downloads_dir, active_var_names))
+    def _fake_shared_runner(
+        state_arg,
+        *,
+        state_path,
+        downloads_dir,
+        active_var_names=None,
+        progress_path=None,
+    ):
+        calls.append(
+            (state_arg, state_path, downloads_dir, active_var_names, progress_path)
+        )
         return SimpleNamespace(
             state={
                 "files": {"background_files": ["bg0.osc"]},
@@ -433,6 +445,7 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
         source_path=tmp_path / "state.json",
         output_dir=tmp_path / "artifacts",
         active_var_names=["corto_detector", "theta_initial"],
+        progress_path=tmp_path / "fit.progress.json",
     )
 
     assert calls == [
@@ -441,6 +454,7 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
             tmp_path / "state.json",
             tmp_path / "artifacts",
             ["corto_detector", "theta_initial"],
+            tmp_path / "fit.progress.json",
         )
     ]
     assert state_result["geometry"]["fit_result"] == "shared"

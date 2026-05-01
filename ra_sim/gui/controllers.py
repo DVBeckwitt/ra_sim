@@ -16,6 +16,9 @@ from ra_sim.utils.stacking_fault import (
     normalize_phase_delta_expression,
     validate_phase_delta_expression,
 )
+from ra_sim.utils.pbi2_ht_shift_cif import (
+    DISORDERED_PHASE_SOURCE_LABEL,
+)
 
 from .state import (
     AppState,
@@ -849,10 +852,18 @@ def solve_q_mode_flag_from_label(
     )
 
 
-def normalize_bragg_qr_source_label(source_label: str | None) -> str:
-    """Normalize one Bragg-Qr source label to ``primary`` or ``secondary``."""
+BRAGG_QR_AUX_SOURCE_LABELS = frozenset({"pbii_6h_ref", DISORDERED_PHASE_SOURCE_LABEL})
 
-    return "secondary" if str(source_label).strip().lower() == "secondary" else "primary"
+
+def normalize_bragg_qr_source_label(source_label: str | None) -> str:
+    """Normalize one Bragg-Qr source label."""
+
+    label = str(source_label or "primary").strip().lower()
+    if label == "secondary":
+        return "secondary"
+    if label in BRAGG_QR_AUX_SOURCE_LABELS:
+        return label
+    return "primary"
 
 
 def encode_bragg_qr_group_key(group_key: object) -> str:
@@ -2238,6 +2249,12 @@ def clone_geometry_q_group_entries(
             continue
         entry = dict(raw_entry)
         entry["hkl_preview"] = list(raw_entry.get("hkl_preview", []))
+        if isinstance(raw_entry.get("source_labels"), list):
+            entry["source_labels"] = list(raw_entry.get("source_labels", []))
+        if isinstance(raw_entry.get("phase_labels"), list):
+            entry["phase_labels"] = list(raw_entry.get("phase_labels", []))
+        if isinstance(raw_entry.get("structure_roles"), list):
+            entry["structure_roles"] = list(raw_entry.get("structure_roles", []))
         cloned.append(entry)
     return cloned
 

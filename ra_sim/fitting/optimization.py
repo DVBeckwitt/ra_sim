@@ -20393,6 +20393,10 @@ def fit_geometry_parameters(
     seed_min_separation_u = float(seed_search_cfg.get("min_seed_separation_u", 0.5))
     if not np.isfinite(seed_min_separation_u) or seed_min_separation_u < 0.0:
         seed_min_separation_u = 0.5
+    seed_reuse_generation_for_prescore = _config_bool(
+        seed_search_cfg.get("_reuse_generation_for_prescore", False),
+        False,
+    )
     trusted_prior_fraction_of_span = float(
         seed_search_cfg.get("trusted_prior_fraction_of_span", 0.15)
     )
@@ -20431,6 +20435,12 @@ def fit_geometry_parameters(
         solver_cfg.get("_qr_fit_point_only_projection", False)
         and manual_point_fit_mode
         and dynamic_point_geometry_fit
+    )
+    headless_accept_caked_angular_metric = bool(
+        solver_cfg.get(
+            "_headless_accept_caked_angular_metric_without_pixel_threshold",
+            False,
+        )
     )
     missing_pair_penalty_deg = float(solver_cfg.get("missing_pair_penalty_deg", 5.0))
     if not np.isfinite(missing_pair_penalty_deg) or missing_pair_penalty_deg < 0.0:
@@ -30368,6 +30378,7 @@ def fit_geometry_parameters(
             "selected": bool(selected) if selected is not None else False,
             "rejection_reason": None,
             "failure_reason": None,
+            "residual_vector": np.asarray(residual_arr, dtype=float).reshape(-1).tolist(),
         }
         if not clean:
             stage_record["rejection_reason"] = (
@@ -30715,21 +30726,39 @@ def fit_geometry_parameters(
                     x_values=seed_x,
                     u_values=seed_u,
                 )
-                seed_residual, seed_cost = _evaluate_cost_at_u(
-                    seed_u,
-                    specs=active_specs,
-                    include_priors=True,
-                )
+                if seed_reuse_generation_for_prescore:
+                    seed_residual = np.asarray(
+                        generation_stage.get("residual_vector", []),
+                        dtype=float,
+                    )
+                    seed_cost = float(generation_stage.get("cost", np.nan))
+                    prescore_stage = dict(generation_stage)
+                    prescore_stage["stage"] = "prescore"
+                    prescore_stage["cost"] = float(seed_cost)
+                    prescore_stage["rms"] = float(
+                        generation_stage.get("rms", _weighted_rms_px(seed_residual))
+                    )
+                    prescore_stage["weighted_rms_px"] = float(
+                        generation_stage.get("weighted_rms_px", prescore_stage["rms"])
+                    )
+                    seed_record.setdefault("stages", []).append(prescore_stage)
+                    _seed_trace_apply_stage_to_record(seed_record, prescore_stage)
+                else:
+                    seed_residual, seed_cost = _evaluate_cost_at_u(
+                        seed_u,
+                        specs=active_specs,
+                        include_priors=True,
+                    )
+                    prescore_stage = _seed_trace_stage_record(
+                        record=seed_record,
+                        stage="prescore",
+                        x_values=seed_x,
+                        u_values=seed_u,
+                        cost=float(seed_cost),
+                        rms=float(_weighted_rms_px(seed_residual)),
+                    )
                 prescore_record_count += 1
                 seed_multistart_trace["seeds_prescored"] = int(prescore_record_count)
-                prescore_stage = _seed_trace_stage_record(
-                    record=seed_record,
-                    stage="prescore",
-                    x_values=seed_x,
-                    u_values=seed_u,
-                    cost=float(seed_cost),
-                    rms=float(_weighted_rms_px(seed_residual)),
-                )
                 if not bool(generation_stage.get("clean", True)) or not bool(
                     prescore_stage.get("clean", True)
                 ):
@@ -32001,6 +32030,9 @@ def fit_geometry_parameters(
             point_match_summary["final_full_beam_rms_px"] = float(
                 point_match_summary.get("unweighted_peak_rms_px", np.nan)
             )
+            point_match_summary[
+                "_headless_accept_caked_angular_metric_without_pixel_threshold"
+            ] = bool(headless_accept_caked_angular_metric)
             seed_trace_summary = geometry_fit_debug_summary.get("seed_multistart_trace")
             if isinstance(seed_trace_summary, Mapping):
                 public_seed_trace = copy.deepcopy(seed_trace_summary)

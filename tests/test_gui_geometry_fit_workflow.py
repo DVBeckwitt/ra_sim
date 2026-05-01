@@ -17532,6 +17532,7 @@ def _run_headless_active_var_contract_capture(
     fit_geometry_cfg=None,
     use_shared_theta_offset=False,
     theta_offset_value=0.0,
+    fit_c_var=False,
 ):
     from ra_sim import headless_geometry_fit
 
@@ -17637,7 +17638,7 @@ def _run_headless_active_var_contract_capture(
             "fit_Gamma_var": True,
             "fit_dist_var": True,
             "fit_a_var": False,
-            "fit_c_var": False,
+            "fit_c_var": bool(fit_c_var),
             "fit_center_x_var": False,
             "fit_center_y_var": False,
         },
@@ -17777,6 +17778,7 @@ def _run_headless_active_var_contract_capture(
     def _fake_prepare_runtime_geometry_fit_run(*, params, var_names, preserve_live_theta, bindings):
         captured["prepare_var_names"] = list(var_names)
         captured["preserve_live_theta"] = bool(preserve_live_theta)
+        captured["prepare_fit_config"] = copy.deepcopy(bindings.fit_config)
         runtime_cfg = bindings.build_runtime_config(params)
         seed_search_cfg = runtime_cfg.get("seed_search")
         seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, dict) else {}
@@ -17879,10 +17881,28 @@ def test_headless_geometry_fit_without_override_keeps_saved_state_active_var_con
         "corto_detector",
     ]
     assert captured["execute_var_names"] == captured["prepare_var_names"]
+    assert "c" not in captured["prepare_var_names"]
     assert "candidate_param_names" not in captured["runtime_cfg"]
     assert saved_state == saved_state_before
     for name, value in saved_state_before["variables"].items():
         assert result.state["variables"][name] == value
+
+
+def test_headless_geometry_fit_default_active_vars_exclude_c_even_when_saved_flag_is_set(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=None,
+        fit_c_var=True,
+    )
+
+    assert result.accepted is True
+    assert "c" not in captured["prepare_var_names"]
+    assert "c" not in captured["execute_var_names"]
+    assert saved_state == saved_state_before
 
 
 def test_headless_geometry_fit_active_var_override_uses_ordered_contract_without_mutating_state(
@@ -17911,6 +17931,27 @@ def test_headless_geometry_fit_active_var_override_uses_ordered_contract_without
     assert saved_state == saved_state_before
     for name, value in saved_state_before["variables"].items():
         assert result.state["variables"][name] == value
+
+
+def test_headless_geometry_fit_explicit_a_enables_lattice_refinement_but_excludes_c(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    override_names = ["a", "psi_z", "c"]
+    saved_state, saved_state_before, captured, result = _run_headless_active_var_contract_capture(
+        monkeypatch,
+        tmp_path,
+        active_var_names=override_names,
+    )
+
+    assert result.accepted is True
+    assert captured["prepare_var_names"] == ["a", "psi_z"]
+    assert captured["execute_var_names"] == ["a", "psi_z"]
+    assert (
+        captured["prepare_fit_config"]["geometry"]["lattice_refinement"]["enabled"]
+        is True
+    )
+    assert saved_state == saved_state_before
 
 
 def test_headless_geometry_fit_active_var_override_shapes_runtime_config_for_special_names(
@@ -33998,6 +34039,170 @@ def test_headless_geometry_fit_ladder_seed_policy_overrides_lean_seed_config(
     assert captured["execute_var_names"] == override_names
     assert captured["execute_candidate_param_names"] == override_names
     assert saved_state == saved_state_before
+
+
+def test_headless_saved_manual_caked_ladder_budget_is_narrow() -> None:
+    from ra_sim import headless_geometry_fit
+
+    row = {
+        "fit_source_resolution_kind": "provider_fixed_source",
+        "optimizer_request_has_fixed_source": True,
+        "target_anchor_source": "cached_fit_space_anchor",
+        "simulated_source": "sim_visual_caked_deg",
+        "cached_two_theta_deg": 12.5,
+        "cached_phi_deg": -8.0,
+    }
+    prepared_run = SimpleNamespace(
+        current_dataset={"measured_for_fit": [row]},
+        dataset_infos=[],
+    )
+    runtime_cfg = {
+        "projection_view_mode": "caked",
+        "solver": {
+            "manual_point_fit_mode": True,
+            "dynamic_point_geometry_fit": True,
+            "max_nfev": 200,
+        },
+        "optimizer": {"max_nfev": 200},
+        "seed_search": {"prescore_top_k": 4, "n_global": 4, "n_jitter": 2},
+        "bounds": {"gamma": [-5.0, 5.0], "Gamma": [-5.0, 5.0]},
+    }
+
+    applied, row_count = headless_geometry_fit._apply_headless_saved_manual_caked_budget(
+        runtime_cfg,
+        seed_policy=headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+        prepared_run=prepared_run,
+        active_var_names=["gamma", "Gamma", "corto_detector"],
+    )
+
+    assert applied is True
+    assert row_count == 1
+    assert runtime_cfg["solver"]["_qr_fit_point_only_projection"] is True
+    assert runtime_cfg["optimizer"]["_qr_fit_point_only_projection"] is True
+    assert runtime_cfg["seed_search"]["prescore_top_k"] == 1
+    assert runtime_cfg["seed_search"]["_reuse_generation_for_prescore"] is True
+    assert runtime_cfg["solver"]["max_nfev"] == 60
+    assert runtime_cfg["optimizer"]["max_nfev"] == 60
+    assert runtime_cfg["solver"]["loss"] == "linear"
+    assert runtime_cfg["solver"]["weighted_matching"] is False
+    assert runtime_cfg["solver"]["q_group_line_constraints"] is False
+    assert (
+        runtime_cfg["solver"][
+            "_headless_accept_caked_angular_metric_without_pixel_threshold"
+        ]
+        is True
+    )
+    assert runtime_cfg["solver"]["parallel_mode"] == "off"
+    assert "full_beam_polish" not in runtime_cfg
+    assert runtime_cfg["discrete_modes"]["enabled"] is False
+    assert runtime_cfg["identifiability"]["enabled"] is False
+    assert runtime_cfg["bounds"]["gamma"] == [-90.0, 90.0]
+    assert runtime_cfg["bounds"]["Gamma"] == [-90.0, 90.0]
+
+
+def test_headless_saved_manual_caked_budget_requires_full_predicate() -> None:
+    from ra_sim import headless_geometry_fit
+
+    prepared_run = SimpleNamespace(
+        current_dataset={"measured_for_fit": []},
+        dataset_infos=[],
+    )
+    runtime_cfg = {
+        "projection_view_mode": "caked",
+        "solver": {
+            "manual_point_fit_mode": True,
+            "dynamic_point_geometry_fit": True,
+            "max_nfev": 200,
+        },
+        "optimizer": {"max_nfev": 200},
+        "seed_search": {"prescore_top_k": 4},
+        "bounds": {"gamma": [-5.0, 5.0]},
+    }
+
+    applied, row_count = headless_geometry_fit._apply_headless_saved_manual_caked_budget(
+        runtime_cfg,
+        seed_policy=headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+        prepared_run=prepared_run,
+        active_var_names=["gamma"],
+    )
+
+    assert applied is False
+    assert row_count == 0
+    assert "_qr_fit_point_only_projection" not in runtime_cfg["solver"]
+    assert "_reuse_generation_for_prescore" not in runtime_cfg["seed_search"]
+    assert runtime_cfg["seed_search"]["prescore_top_k"] == 4
+    assert runtime_cfg["solver"]["max_nfev"] == 200
+    assert runtime_cfg["bounds"]["gamma"] == [-90.0, 90.0]
+
+
+def test_headless_geometry_fit_progress_sidecar_tracks_solve_phases(tmp_path) -> None:
+    from ra_sim import headless_geometry_fit
+
+    progress_path = tmp_path / "fit.progress.json"
+    writer = headless_geometry_fit._HeadlessGeometryFitProgressWriter(
+        progress_path,
+        active_vars=["gamma"],
+        seed_policy="ladder-multistart",
+    )
+
+    writer.write("preflight")
+    assert json.loads(progress_path.read_text(encoding="utf-8"))["phase"] == "preflight"
+
+    writer.status("Geometry fit: mode identity prescore total_seeds=6 selected=1")
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["phase"] == "seed_prescore"
+    assert progress["status_text"].endswith("selected=1")
+
+    writer.live_update(
+        {
+            "evaluation_count": 3,
+            "mean_residual_eval_s": 0.1,
+            "max_residual_eval_s": 0.2,
+            "point_match_summary": {
+                "fixed_source_resolved_count": 7,
+                "matched_pair_count": 7,
+                "missing_pair_count": 0,
+                "fallback_entry_count": 0,
+                "caked_projection_rebuild_count": 0,
+                "manual_pick_cache_rebuild_count": 0,
+            },
+        }
+    )
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["phase"] == "selected_solve"
+    assert progress["residual_eval_count"] == 3
+    assert progress["fixed_source_resolved_count"] == 7
+    assert progress["caked_projection_rebuild_count"] == 0
+
+    headless_geometry_fit.write_headless_geometry_fit_progress(
+        progress_path,
+        "output_state_write",
+        output_state_path=tmp_path / "fit.json",
+    )
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["phase"] == "output_state_write"
+    assert progress["output_state_path"].endswith("fit.json")
+
+
+def test_headless_caked_angular_metric_acceptance_skips_pixel_thresholds() -> None:
+    result = SimpleNamespace(
+        success=False,
+        early_stop_reason="Stopped after requested point-only residual evaluation cap.",
+        point_match_summary={
+            "_headless_accept_caked_angular_metric_without_pixel_threshold": True,
+            "metric_unit": "deg",
+            "manual_caked_residual_row_count": 7,
+            "sim_visual_caked_source_row_count": 7,
+            "fixed_source_resolved_count": 7,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "fallback_entry_count": 0,
+            "fallback_row_count": 0,
+            "unweighted_peak_max_px": 2500.0,
+        },
+    )
+
+    assert geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=1200.0) == []
 
 
 def test_headless_geometry_fit_active_var_override_keeps_lean_seed_policy_by_default(

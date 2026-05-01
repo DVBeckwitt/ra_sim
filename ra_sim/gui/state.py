@@ -1134,6 +1134,11 @@ class SimulationRuntimeState:
     stored_sixh_reference_source_reflection_indices: list[int] | None = None
     stored_sixh_reference_peak_table_lattice: Any = None
     sixh_qr_reference_inventory_cache: dict[str, object] | None = None
+    stored_disordered_phase_max_positions: Any = None
+    stored_disordered_phase_source_reflection_indices: list[int] | None = None
+    stored_disordered_phase_peak_table_lattice: Any = None
+    disordered_phase_inventory_cache: dict[str, object] | None = None
+    generated_disordered_phase_cif_path: str | None = None
     stored_primary_intersection_cache: list[Any] | None = None
     stored_primary_intersection_cache_signature: object = None
     stored_secondary_intersection_cache: list[Any] | None = None

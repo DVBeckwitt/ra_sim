@@ -3,6 +3,29 @@ import numpy as np
 from ra_sim.gui import analysis_peak_tools
 
 
+def _area_normalized_pseudo_voigt(
+    x_values,
+    *,
+    baseline: float,
+    area: float,
+    center: float,
+    fwhm: float,
+    eta: float,
+):
+    x_arr = np.asarray(x_values, dtype=float)
+    fwhm_value = max(abs(float(fwhm)), 1.0e-12)
+    delta = x_arr - float(center)
+    gaussian = (
+        2.0
+        * np.sqrt(np.log(2.0))
+        / (np.sqrt(np.pi) * fwhm_value)
+        * np.exp(-4.0 * np.log(2.0) * (delta / fwhm_value) ** 2)
+    )
+    lorentzian = 2.0 / (np.pi * fwhm_value) / (1.0 + 4.0 * (delta / fwhm_value) ** 2)
+    eta_value = float(np.clip(float(eta), 0.0, 1.0))
+    return float(baseline) + float(area) * ((1.0 - eta_value) * gaussian + eta_value * lorentzian)
+
+
 def test_align_angle_to_axis_prefers_wrapped_axis_domain() -> None:
     axis = np.linspace(170.0, 190.0, 9)
 
@@ -110,8 +133,7 @@ def test_format_peak_fit_axis_summary_reports_best_success_from_mixed_results() 
     )
 
     assert (
-        summary
-        == "Radial: 2/3 fits; best P2 Pseudo-Voigt @ 18.2500 deg; "
+        summary == "Radial: 2/3 fits; best P2 Pseudo-Voigt @ 18.2500 deg; "
         "center 18.2000, FWHM 0.3400, RMSE 0.05"
     )
 
@@ -255,10 +277,10 @@ def test_fit_peak_profile_recovers_gaussian_center_and_fwhm() -> None:
 
 def test_fit_peak_profile_recovers_pseudo_voigt_eta() -> None:
     x_values = np.linspace(-5.0, 5.0, 500)
-    y_values = analysis_peak_tools.pseudo_voigt_profile(
+    y_values = _area_normalized_pseudo_voigt(
         x_values,
         baseline=1.2,
-        amplitude=5.0,
+        area=5.0,
         center=-0.4,
         fwhm=1.3,
         eta=0.65,
@@ -277,6 +299,37 @@ def test_fit_peak_profile_recovers_pseudo_voigt_eta() -> None:
     assert abs(float(fit["center"]) + 0.4) < 0.03
     assert abs(float(fit["fwhm"]) - 1.3) < 0.08
     assert abs(float(fit["eta"]) - 0.65) < 0.08
+
+
+def test_pseudo_voigt_profile_integrates_to_area_and_eta_is_lorentzian_fraction() -> None:
+    x_values = np.linspace(-250.0, 250.0, 50001)
+    fwhm = 1.4
+    eta = 0.7
+    gaussian = analysis_peak_tools._gaussian_unit_area_profile(
+        x_values,
+        center=0.0,
+        fwhm=fwhm,
+    )
+    lorentzian = analysis_peak_tools._lorentzian_unit_area_profile(
+        x_values,
+        center=0.0,
+        fwhm=fwhm,
+    )
+    mixed = analysis_peak_tools.pseudo_voigt_profile(
+        x_values,
+        baseline=0.0,
+        amplitude=6.5,
+        center=0.0,
+        fwhm=fwhm,
+        eta=eta,
+    )
+
+    assert abs(float(np.trapezoid(gaussian, x_values)) - 1.0) < 1.0e-6
+    assert abs(float(np.trapezoid(lorentzian, x_values)) - 1.0) < 0.004
+    assert abs(float(np.trapezoid(mixed, x_values)) - 6.5) < 0.02
+    assert float(np.trapezoid(eta * lorentzian, x_values)) > float(
+        np.trapezoid((1.0 - eta) * gaussian, x_values)
+    )
 
 
 def test_fit_composite_peak_profile_single_peak_uses_full_curve() -> None:
@@ -345,10 +398,10 @@ def test_fit_composite_peak_profile_two_gaussians_sums_components() -> None:
 
 def test_fit_composite_peak_profile_pseudo_voigt_returns_eta_and_full_curve() -> None:
     x_values = np.linspace(-4.0, 4.0, 480)
-    y_values = analysis_peak_tools.pseudo_voigt_profile(
+    y_values = _area_normalized_pseudo_voigt(
         x_values,
         baseline=0.9,
-        amplitude=4.2,
+        area=4.2,
         center=-0.6,
         fwhm=1.1,
         eta=0.72,
@@ -430,9 +483,7 @@ def test_fit_composite_peak_profile_handles_wrapped_selected_azimuth_window() ->
     fwhm = 4.8
 
     wrapped_delta = ((x_values - center + 180.0) % 360.0) - 180.0
-    y_values = baseline + amplitude * np.exp(
-        -4.0 * np.log(2.0) * (wrapped_delta / fwhm) ** 2
-    )
+    y_values = baseline + amplitude * np.exp(-4.0 * np.log(2.0) * (wrapped_delta / fwhm) ** 2)
 
     fit = analysis_peak_tools.fit_composite_peak_profile(
         x_values,
@@ -467,9 +518,7 @@ def test_fit_composite_peak_profile_reports_wrapped_center_on_selected_axis_doma
     fwhm = 4.8
 
     wrapped_delta = ((x_values - center + 180.0) % 360.0) - 180.0
-    y_values = baseline + amplitude * np.exp(
-        -4.0 * np.log(2.0) * (wrapped_delta / fwhm) ** 2
-    )
+    y_values = baseline + amplitude * np.exp(-4.0 * np.log(2.0) * (wrapped_delta / fwhm) ** 2)
 
     fit = analysis_peak_tools.fit_composite_peak_profile(
         x_values,

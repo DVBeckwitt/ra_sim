@@ -961,10 +961,11 @@ def _lean_runtime_config(
     if feature_name == "discrete_modes":
         cfg["discrete_modes"] = {"enabled": True}
     elif feature_name == "seed_multistart":
-        seed["prescore_top_k"] = 4
+        seed["prescore_top_k"] = 1
         seed["n_global"] = 4
         seed["n_jitter"] = 2
         seed["min_seed_separation_u"] = 0.5
+        seed["_reuse_generation_for_prescore"] = True
     elif feature_name == "full_beam_polish":
         cfg["full_beam_polish"] = {"enabled": True, "max_nfev": max(5, int(max_nfev))}
     elif feature_name == "identifiability_features":
@@ -5190,6 +5191,14 @@ def _worker_solve_once(
             {PRIVATE_QR_FIT_POINT_ONLY_FLAG: True},
         )
     skip_initial_objective = int(rung) == 3 and len(active_names) == 1
+    initial_objective_skip_reason = "rung3_one_param_uses_first_solver_eval"
+    feature_name_for_skip = str(feature or "").strip().lower()
+    if int(rung) == 7 and feature_name_for_skip == "seed_multistart":
+        skip_initial_objective = True
+        initial_objective_skip_reason = "rung7_seed_multistart_uses_first_solver_eval"
+    elif int(rung) == 7 and feature_name_for_skip == "identifiability_features":
+        skip_initial_objective = True
+        initial_objective_skip_reason = "rung7_identifiability_uses_first_solver_eval"
     before_summary: Mapping[str, object] | None = None
     if skip_initial_objective:
         phase_timing_s["dry_run_s"] = 0.0
@@ -5197,7 +5206,7 @@ def _worker_solve_once(
             heartbeat_path,
             {
                 "initial_objective_skipped": True,
-                "initial_objective_skip_reason": "rung3_one_param_uses_first_solver_eval",
+                "initial_objective_skip_reason": initial_objective_skip_reason,
             },
         )
     else:

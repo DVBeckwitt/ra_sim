@@ -29,6 +29,10 @@ from ra_sim.utils.calculations import (
     resolve_canonical_branch,
     source_branch_index_from_phi_deg,
 )
+from ra_sim.utils.pbi2_ht_shift_cif import (
+    DISORDERED_PHASE_DISPLAY_LABEL,
+    DISORDERED_PHASE_SOURCE_LABEL,
+)
 
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
@@ -861,6 +865,130 @@ def reflection_q_group_metadata(
     return key, float(qr_val), float(qz_val)
 
 
+QR_QZ_DUPLICATE_ATOL = 1.0e-6
+QR_QZ_DUPLICATE_RTOL = 1.0e-8
+
+
+def _qr_qz_duplicate_identity(
+    qr_value: object,
+    qz_value: object,
+    *,
+    atol: float = QR_QZ_DUPLICATE_ATOL,
+) -> tuple[int, int] | None:
+    try:
+        qr_val = float(qr_value)
+        qz_val = float(qz_value)
+    except Exception:
+        return None
+    if not (np.isfinite(qr_val) and np.isfinite(qz_val)):
+        return None
+    scale = max(float(atol), 1.0e-12)
+    return (int(round(qr_val / scale)), int(round(qz_val / scale)))
+
+
+def q_group_source_priority(source_label: object) -> int:
+    label = gui_controllers.normalize_bragg_qr_source_label(
+        str(source_label) if source_label is not None else "primary"
+    )
+    if label == "primary":
+        return 0
+    if label == DISORDERED_PHASE_SOURCE_LABEL:
+        return 1
+    if label == "secondary":
+        return 2
+    if label == "pbii_6h_ref":
+        return 3
+    return 9
+
+
+def _q_group_source_priority(source_label: object) -> int:
+    return q_group_source_priority(source_label)
+
+
+def _qr_qz_duplicate_group_key(
+    entry: Mapping[str, object],
+    identity: tuple[int, int],
+    *,
+    preserve_source_identity: bool,
+) -> tuple[object, ...]:
+    if preserve_source_identity:
+        source_label = gui_controllers.normalize_bragg_qr_source_label(
+            str(entry.get("source_label")) if entry.get("source_label") is not None else "primary"
+        )
+        return (source_label, identity)
+    return identity
+
+
+def canonicalize_qr_qz_duplicate_source_rows(
+    rows: Sequence[Mapping[str, object]] | None,
+    *,
+    atol: float = QR_QZ_DUPLICATE_ATOL,
+    preserve_source_identity: bool = False,
+) -> list[dict[str, object]]:
+    """Remap rows sharing one numeric Qr/Qz identity onto one picker key."""
+
+    normalized = [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
+    grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for entry in normalized:
+        identity = _qr_qz_duplicate_identity(
+            entry.get("qr", np.nan),
+            entry.get("qz", np.nan),
+            atol=atol,
+        )
+        if identity is not None:
+            identity_key = _qr_qz_duplicate_group_key(
+                entry,
+                identity,
+                preserve_source_identity=preserve_source_identity,
+            )
+            grouped.setdefault(identity_key, []).append(entry)
+
+    canonical_by_identity: dict[tuple[object, ...], tuple[object, ...]] = {}
+    for identity_key, entries in grouped.items():
+        ranked = sorted(
+            entries,
+            key=lambda entry: (
+                _q_group_source_priority(entry.get("source_label")),
+                str(entry.get("source_label", "")),
+            ),
+        )
+        raw_key = ranked[0].get("q_group_key")
+        if isinstance(raw_key, list):
+            raw_key = tuple(raw_key)
+        if isinstance(raw_key, tuple):
+            canonical_by_identity[identity_key] = raw_key
+
+    result: list[dict[str, object]] = []
+    for raw_entry in normalized:
+        entry = dict(raw_entry)
+        identity = _qr_qz_duplicate_identity(
+            entry.get("qr", np.nan),
+            entry.get("qz", np.nan),
+            atol=atol,
+        )
+        identity_key = (
+            _qr_qz_duplicate_group_key(
+                entry,
+                identity,
+                preserve_source_identity=preserve_source_identity,
+            )
+            if identity is not None
+            else None
+        )
+        canonical_key = (
+            canonical_by_identity.get(identity_key) if identity_key is not None else None
+        )
+        original_key = entry.get("q_group_key")
+        if isinstance(original_key, list):
+            original_key = tuple(original_key)
+        if canonical_key is not None:
+            if isinstance(original_key, tuple) and tuple(original_key) != tuple(canonical_key):
+                entry.setdefault("source_q_group_key", tuple(original_key))
+            entry["q_group_key"] = tuple(canonical_key)
+        result.append(entry)
+    return result
+
+
 def _simulated_peak_display_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
@@ -1075,12 +1203,107 @@ def build_geometry_q_group_entries(
         default_primary_c = float("nan")
 
     entries_by_key: dict[tuple[object, ...], dict[str, object]] = {}
+    entries_by_identity: dict[tuple[object, ...], tuple[object, ...]] = {}
+
+    def _source_metadata(
+        source_label: object,
+        *,
+        phase_label: object | None = None,
+        structure_role: object | None = None,
+    ) -> tuple[str | None, str | None]:
+        source_text = gui_controllers.normalize_bragg_qr_source_label(
+            str(source_label) if source_label is not None else "primary"
+        )
+        phase_text = str(phase_label) if phase_label not in (None, "") else None
+        role_text = str(structure_role) if structure_role not in (None, "") else None
+        if source_text == DISORDERED_PHASE_SOURCE_LABEL:
+            phase_text = phase_text or DISORDERED_PHASE_DISPLAY_LABEL
+            role_text = role_text or "disordered"
+        return phase_text, role_text
+
+    def _entry_for_group(
+        group_key: tuple[object, ...],
+        *,
+        source_label: object,
+        qr_val: object,
+        qz_val: object,
+        phase_label: object | None = None,
+        structure_role: object | None = None,
+    ) -> dict[str, object]:
+        identity = _qr_qz_duplicate_identity(qr_val, qz_val)
+        phase_text, role_text = _source_metadata(
+            source_label,
+            phase_label=phase_label,
+            structure_role=structure_role,
+        )
+        lookup_key = group_key
+        if identity is not None:
+            identity_key = (
+                gui_controllers.normalize_bragg_qr_source_label(str(source_label)),
+                identity,
+            )
+            existing_key = entries_by_identity.get(identity_key)
+            if existing_key is not None:
+                lookup_key = existing_key
+                existing = entries_by_key.get(existing_key)
+                if existing is not None and _q_group_source_priority(
+                    source_label
+                ) < _q_group_source_priority(existing.get("source_label")):
+                    entries_by_key.pop(existing_key, None)
+                    lookup_key = group_key
+                    existing["key"] = group_key
+                    existing["source_label"] = str(source_label)
+                    entries_by_key[group_key] = existing
+                    entries_by_identity[identity_key] = group_key
+            else:
+                entries_by_identity[identity_key] = group_key
+
+        entry = entries_by_key.get(lookup_key)
+        if entry is None:
+            entry = {
+                "key": lookup_key,
+                "source_label": str(source_label),
+                "source_labels": [str(source_label)],
+                "overlap_identity": identity,
+                "qr": float(qr_val),
+                "qz": float(qz_val),
+                "gz_index": int(lookup_key[3]),
+                "total_intensity": 0.0,
+                "peak_count": 0,
+                "hkl_preview": [],
+            }
+            if phase_text is not None:
+                entry["phase_label"] = phase_text
+            if role_text is not None:
+                entry["structure_role"] = role_text
+            entries_by_key[lookup_key] = entry
+        else:
+            labels = entry.setdefault("source_labels", [])
+            if isinstance(labels, list) and str(source_label) not in labels:
+                labels.append(str(source_label))
+                entry["source_label"] = "+".join(str(label) for label in labels)
+            if identity is not None and entry.get("overlap_identity") is None:
+                entry["overlap_identity"] = identity
+            if phase_text is not None:
+                phase_labels = entry.setdefault("phase_labels", [])
+                if isinstance(phase_labels, list) and phase_text not in phase_labels:
+                    phase_labels.append(phase_text)
+                entry.setdefault("phase_label", phase_text)
+            if role_text is not None:
+                roles = entry.setdefault("structure_roles", [])
+                if isinstance(roles, list) and role_text not in roles:
+                    roles.append(role_text)
+                entry.setdefault("structure_role", role_text)
+        return entry
+
     cached_peak_records = list(peak_records or [])
     if cached_peak_records:
         for raw_record in cached_peak_records:
             if not isinstance(raw_record, Mapping):
                 continue
             source_label = str(raw_record.get("source_label", "primary"))
+            phase_label = raw_record.get("phase_label")
+            structure_role = raw_record.get("structure_role")
             av_used = _coerce_float(raw_record.get("av", primary_a), default_primary_a)
             cv_used = _coerce_float(raw_record.get("cv", primary_c), default_primary_c)
             intensity = _coerce_float(
@@ -1127,20 +1350,15 @@ def build_geometry_q_group_entries(
                 if not np.isfinite(qz_val) and np.isfinite(cv_used) and cv_used > 0.0:
                     qz_val = (2.0 * np.pi / cv_used) * float(l_val)
 
-            entry = entries_by_key.get(group_key)
-            if entry is None:
-                entry = {
-                    "key": group_key,
-                    "source_label": str(source_label),
-                    "qr": float(qr_val),
-                    "qz": float(qz_val),
-                    "gz_index": int(group_key[3]),
-                    "total_intensity": 0.0,
-                    "peak_count": 0,
-                    "hkl_preview": [],
-                }
-                entries_by_key[group_key] = entry
-            elif not np.isfinite(_coerce_float(entry.get("qr", np.nan), np.nan)) and np.isfinite(
+            entry = _entry_for_group(
+                group_key,
+                source_label=source_label,
+                qr_val=qr_val,
+                qz_val=qz_val,
+                phase_label=phase_label,
+                structure_role=structure_role,
+            )
+            if not np.isfinite(_coerce_float(entry.get("qr", np.nan), np.nan)) and np.isfinite(
                 qr_val
             ):
                 entry["qr"] = float(qr_val)
@@ -1174,15 +1392,23 @@ def build_geometry_q_group_entries(
             av_used = default_primary_a
             cv_used = default_primary_c
             source_label = "primary"
+            phase_label = None
+            structure_role = None
             if table_idx < len(peak_table_lattice_local):
                 try:
                     av_used = float(peak_table_lattice_local[table_idx][0])
                     cv_used = float(peak_table_lattice_local[table_idx][1])
                     source_label = str(peak_table_lattice_local[table_idx][2])
+                    if len(peak_table_lattice_local[table_idx]) >= 4:
+                        phase_label = peak_table_lattice_local[table_idx][3]
+                    if len(peak_table_lattice_local[table_idx]) >= 5:
+                        structure_role = peak_table_lattice_local[table_idx][4]
                 except Exception:
                     av_used = default_primary_a
                     cv_used = default_primary_c
                     source_label = "primary"
+                    phase_label = None
+                    structure_role = None
 
             for row in rows:
                 intensity, _xpix, _ypix, _phi, h_val, k_val, l_val = row[:7]
@@ -1199,19 +1425,14 @@ def build_geometry_q_group_entries(
                 if group_key is None:
                     continue
 
-                entry = entries_by_key.get(group_key)
-                if entry is None:
-                    entry = {
-                        "key": group_key,
-                        "source_label": str(source_label),
-                        "qr": float(qr_val),
-                        "qz": float(qz_val),
-                        "gz_index": int(group_key[3]),
-                        "total_intensity": 0.0,
-                        "peak_count": 0,
-                        "hkl_preview": [],
-                    }
-                    entries_by_key[group_key] = entry
+                entry = _entry_for_group(
+                    group_key,
+                    source_label=source_label,
+                    qr_val=qr_val,
+                    qz_val=qz_val,
+                    phase_label=phase_label,
+                    structure_role=structure_role,
+                )
 
                 entry["total_intensity"] = float(entry["total_intensity"]) + float(abs(intensity))
                 entry["peak_count"] = int(entry["peak_count"]) + 1
@@ -1227,9 +1448,10 @@ def build_geometry_q_group_entries(
     entries = list(entries_by_key.values())
     entries.sort(
         key=lambda entry: (
-            str(entry.get("source_label", "")),
             _sort_value(entry.get("qr", np.nan)),
             _sort_value(entry.get("qz", np.nan)),
+            q_group_source_priority(entry.get("source_label")),
+            str(entry.get("source_label", "")),
         )
     )
     return entries
@@ -1414,6 +1636,10 @@ def build_geometry_fit_simulated_peaks(
             simulated_peaks.append(peak_record)
 
     _repair_mirrored_source_row_branches(simulated_peaks)
+    simulated_peaks = canonicalize_qr_qz_duplicate_source_rows(
+        simulated_peaks,
+        preserve_source_identity=True,
+    )
     simulated_peaks = [
         gui_mosaic_top.annotate_selection_metadata(
             entry,
@@ -1706,6 +1932,10 @@ def build_projected_geometry_fit_simulated_peaks(
             for entry in records
             if _runtime_peak_row_finite_point(entry, "caked_x", "caked_y") is not None
         ]
+    records = canonicalize_qr_qz_duplicate_source_rows(
+        records,
+        preserve_source_identity=True,
+    )
     return records
 
 
@@ -4276,24 +4506,27 @@ def build_geometry_q_group_export_rows(
                 hkl_preview.append([int(hkl_value[0]), int(hkl_value[1]), int(hkl_value[2])])
             except Exception:
                 continue
-        rows.append(
-            {
-                "key": serialized_key,
-                "included": bool(
-                    gui_controllers.effective_q_group_enabled_state(entry, q_group_state)
-                ),
-                "source_label": str(entry.get("source_label", "")),
-                "qr": geometry_q_group_float_for_json(entry.get("qr", np.nan)),
-                "qz": geometry_q_group_float_for_json(entry.get("qz", np.nan)),
-                "gz_index": int(entry.get("gz_index", serialized_key[3])),
-                "total_intensity": geometry_q_group_float_for_json(
-                    entry.get("total_intensity", np.nan)
-                ),
-                "peak_count": int(entry.get("peak_count", 0)),
-                "hkl_preview": hkl_preview,
-                "display_label": format_geometry_q_group_line(entry),
-            }
-        )
+        row = {
+            "key": serialized_key,
+            "included": bool(gui_controllers.effective_q_group_enabled_state(entry, q_group_state)),
+            "source_label": str(entry.get("source_label", "")),
+            "qr": geometry_q_group_float_for_json(entry.get("qr", np.nan)),
+            "qz": geometry_q_group_float_for_json(entry.get("qz", np.nan)),
+            "gz_index": int(entry.get("gz_index", serialized_key[3])),
+            "total_intensity": geometry_q_group_float_for_json(
+                entry.get("total_intensity", np.nan)
+            ),
+            "peak_count": int(entry.get("peak_count", 0)),
+            "hkl_preview": hkl_preview,
+            "display_label": format_geometry_q_group_line(entry),
+        }
+        for key in ("phase_label", "structure_role", "overlap_identity"):
+            if entry.get(key) is not None:
+                value = entry.get(key)
+                if isinstance(value, tuple):
+                    value = list(value)
+                row[key] = value
+        rows.append(row)
     return rows
 
 

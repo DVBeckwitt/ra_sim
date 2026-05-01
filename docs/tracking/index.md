@@ -31,6 +31,7 @@ downstream of green mosaic fitting.
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Beam center background pick | feature | - | none | p1 | 2026-04-30 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
+| 6H Qr reference SF picking | feature/bug | - | none | p1 | 2026-04-30 | [6h-qr-reference-sf-picking.md](in-progress/6h-qr-reference-sf-picking.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
@@ -61,9 +62,9 @@ detector `center_x = row`, `center_y = col` on release. The latest coordinate
 bug is fixed by converting the display point through the detector-extent
 beam-center transform:
 `display_col=1404`, `display_row=1453` now maps to `row=1596`, `col=1453`.
-Targeted beam-center/canvas tests, targeted compile, and focused click-mapping
-tests pass. Full `ra_sim.dev check` was not rerun after the focused fix; status
-remains tracked in the feature note.
+Targeted beam-center/canvas tests, targeted compile, and the previously failing
+stacking-panel view test pass. Full `ra_sim.dev check` was not rerun after the
+focused fix; status remains tracked in the feature note.
 
 Background Qr reference pick status note:
 `Place Background Qr Set` is implemented in the Match tab. The mode places a
@@ -74,6 +75,16 @@ notebooks, and marks it disabled for geometry solving. Targeted GUI wiring,
 manual placement serialization, geometry-fit filtering, runtime import, and
 targeted compile checks pass. Full `ra_sim.dev check` remains blocked by
 pre-existing formatting drift in `ra_sim/fitting/optimization.py`.
+
+6H Qr reference SF picking status note:
+`Include 6H Qr refs` is implemented as an opt-in stacking control. When enabled
+and `w1 > 0`, the GUI loads the packaged PbI2 6H CIF, adds `pbii_6h_ref`
+source rows to Qr/Qz selector inventory, merges duplicate numeric Qr/Qz groups
+before listing/picking, and saves the checkbox in GUI state with legacy states
+defaulting off. Focused 6H compile, duplicate-merge, detector-fallback,
+runtime-gate, state-IO, and ruff checks pass. Wider manual-geometry validation
+is still red in existing caked-view candidate/reverse-LUT expectations, so the
+feature remains in progress until those broader failures are triaged.
 
 Weighted-event representative status note:
 `Weighted-event representative cache carry-through` is implemented on fast

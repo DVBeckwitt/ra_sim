@@ -8033,9 +8033,7 @@ def test_build_geometry_manual_pick_cache_does_not_reuse_empty_detector_cache_wh
     assert cache_data["detector_picker_trace"]["reason_candidates_are_empty"] == ""
 
 
-def test_build_geometry_manual_pick_cache_rebuilds_detector_rows_for_listed_sf_groups() -> (
-    None
-):
+def test_build_geometry_manual_pick_cache_rebuilds_detector_rows_for_listed_sf_groups() -> None:
     base_key = ("q_group", "primary", 1, 0)
     sf_key = ("q_group", "primary", 3, 2)
     partial_rows = [
@@ -20895,6 +20893,78 @@ def test_caked_qr_picker_starts_sf_detector_fallback_group_with_variable_count()
         set_status_text=status_messages.append,
         listed_q_group_entries=lambda: [{"key": group_key}],
         format_q_group_line=lambda _entry: "selected SF group",
+        use_caked_space=True,
+        pick_search_window_px=20.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["target_count"] == 2
+    assert sessions[-1]["target_count"] == 2
+    assert "using detector-space Qr picking" in status_messages[-1]
+    assert "No simulated Qr/Qz groups are available" not in status_messages[-1]
+
+
+def test_caked_qr_picker_starts_6h_reference_detector_fallback_group() -> None:
+    group_key = ("q_group", "pbii_6h_ref", 4, 3)
+    detector_rows = [
+        {
+            "q_group_key": group_key,
+            "hkl": (-2, 0, 3),
+            "qr": 4.0,
+            "qz": 3.0,
+            "source_label": "pbii_6h_ref",
+            "source_reflection_index": 31,
+            "source_row_index": 1,
+            "best_sample_index": 6,
+            "display_col": 140.0,
+            "display_row": 150.0,
+            "native_col": 240.0,
+            "native_row": 250.0,
+        },
+        {
+            "q_group_key": group_key,
+            "hkl": (0, 2, 3),
+            "qr": 4.0,
+            "qz": 3.0,
+            "source_label": "pbii_6h_ref",
+            "source_reflection_index": 32,
+            "source_row_index": 2,
+            "best_sample_index": 7,
+            "display_col": 146.0,
+            "display_row": 151.0,
+            "native_col": 246.0,
+            "native_row": 251.0,
+        },
+    ]
+    cache_data = {
+        "detector_picker_rows": [dict(entry) for entry in detector_rows],
+        "detector_picker_grouped_candidates": {},
+        "caked_qr_projection_entries": [],
+        "caked_qr_projection_grouped_candidates": {},
+        "caked_qr_projection_lookup": {},
+    }
+    sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        140.0,
+        150.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((300, 300), dtype=float),
+        get_cache_data=lambda **_kwargs: cache_data,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected 6H group",
         use_caked_space=True,
         pick_search_window_px=20.0,
     )

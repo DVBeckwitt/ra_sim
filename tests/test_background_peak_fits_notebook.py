@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, nnls
 
 from scripts.diagnostics.run_all_background_peak_fits import _output_dir_for_state, _safe_run_name
 
@@ -35,7 +35,18 @@ def _notebook_functions(*names: str) -> dict[str, object]:
         )
     module = ast.Module(body=selected, type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace: dict[str, object] = {"np": np, "least_squares": least_squares}
+    namespace: dict[str, object] = {
+        "np": np,
+        "least_squares": least_squares,
+        "_rod_qz_nnls": nnls,
+        "ROD_QZ_TAIL_POWER_GRID": np.asarray([0.75, 1.0, 1.35, 2.0, 3.5, 7.0], dtype=np.float64),
+        "ROD_QZ_TAIL_WIDTH_SCALE_GRID": np.asarray([0.55, 0.80, 1.15, 1.70, 2.50], dtype=np.float64),
+        "ROD_QZ_TAIL_CENTER_SEARCH_BINS": 5.0,
+        "ROD_QZ_TAIL_MIN_HALFWIDTH_BINS": 0.55,
+        "ROD_QZ_TAIL_MAX_HALFWIDTH_FRACTION": 0.70,
+        "ROD_QZ_TAIL_MAX_AUTO_PEAKS": 10,
+        "ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE": 1.0e-5,
+    }
     exec(compile(module, str(NOTEBOOK_PATH), "exec"), namespace)
     return namespace
 
@@ -62,7 +73,7 @@ def test_background_peak_fits_notebook_uses_density_profiles() -> None:
     ):
         assert token in source
 
-    calls = re.findall(r"(?<!def )normalized_profile_pair\([^\)]*\)", source)
+    calls = re.findall(r"(?<!def )normalized_profile_payload\([^\)]*\)", source)
     assert calls
     assert not any("background_sum" in call or "fit_sum" in call for call in calls)
 
@@ -101,13 +112,13 @@ def test_background_peak_fits_notebook_uses_rotated_gaussian_peak_fits() -> None
         "if residual > 0.0:",
         "residual *= tail_overprediction_weight[idx]",
         '"fit_model": "rotated_gaussian_plane"',
-        "Fitted Gaussian peaks",
+        "Fitted tail-aware peak sum",
         "def fit_joint_qz_peak_sum",
         "def gaussian_sum_qz_model",
         "def add_joint_qz_fit_columns",
         '"joint_fit_density"',
         '"joint_fit_peak_count"',
-        "all projected branch-point peaks in a rod/branch are fit simultaneously",
+        "projected branch-point peaks in each rod/branch are fit together",
         "sub.get(\"joint_fit_density\", sub[\"fit_density\"])",
     ):
         assert token in source
@@ -121,6 +132,17 @@ def test_joint_qz_fit_keeps_close_peak_valley_low() -> None:
         "rolling_lower_envelope",
         "gaussian_sum_qz_model",
         "_unique_sorted_markers",
+        "_qz_grid_step",
+        "_nanfilled_profile",
+        "_smooth_qz_profile",
+        "_nearest_marker_spacing",
+        "_refine_centers_to_local_maxima",
+        "_fallback_markers_from_profile",
+        "_estimate_peak_hwhm",
+        "_pearson_vii_profile",
+        "_tail_aware_basis",
+        "_weighted_nonnegative_amplitudes",
+        "_aggregate_tail_components",
         "fit_joint_qz_peak_sum",
     )
     fit_joint_qz_peak_sum = namespace["fit_joint_qz_peak_sum"]
@@ -155,6 +177,20 @@ def test_background_peak_fits_notebook_has_fast_state_parameters() -> None:
         'print(f"run_name={STATE_RUN_NAME}")',
     ):
         assert token in source or token in NOTEBOOK_PATH.read_text(encoding="utf-8")
+
+
+def test_background_peak_fits_notebook_handles_background_reference_labels() -> None:
+    source = _notebook_source()
+
+    for token in (
+        "def _is_specular_roi_candidate(",
+        "abs(float(params[2])) <= float(phi_limit_deg)",
+        "if not specs:",
+        "skipped specular ROI examples: no fitted specular-like ROI entries were available",
+        "for m_value, q_group in q_group_by_m.items():",
+        "SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)",
+    ):
+        assert token in source
 
 
 def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:

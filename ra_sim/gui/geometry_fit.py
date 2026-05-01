@@ -9294,7 +9294,6 @@ def make_runtime_geometry_tool_action_callbacks(
     )
 
 
-
 def geometry_manual_pair_enabled_for_geometry_fit(entry: object) -> bool:
     """Return whether a saved manual pair should contribute to geometry solving."""
 
@@ -15464,9 +15463,7 @@ def geometry_manual_fit_space_by_background(
         else:
             pairs = ()
         pairs = [
-            entry
-            for entry in (pairs or ())
-            if geometry_manual_pair_enabled_for_geometry_fit(entry)
+            entry for entry in (pairs or ()) if geometry_manual_pair_enabled_for_geometry_fit(entry)
         ]
         pick_applies = bool(pick_uses_caked_space) and (
             len(indices) == 1
@@ -19906,21 +19903,73 @@ def build_geometry_fit_rejection_reason_lines(
     """Return human-readable rejection reasons for one geometry-fit result."""
 
     reasons: list[str] = []
+    point_match_summary = getattr(result, "point_match_summary", None)
+    headless_caked_angular_acceptance = False
+    if isinstance(point_match_summary, Mapping):
+        try:
+            manual_caked_rows = int(
+                point_match_summary.get("manual_caked_residual_row_count", 0) or 0
+            )
+            sim_caked_rows = int(
+                point_match_summary.get("sim_visual_caked_source_row_count", 0) or 0
+            )
+            fixed_source_rows = int(
+                point_match_summary.get("fixed_source_resolved_count", 0) or 0
+            )
+            matched_pair_count = int(
+                point_match_summary.get("matched_pair_count", 0) or 0
+            )
+            missing_pair_count = int(
+                point_match_summary.get("missing_pair_count", 0) or 0
+            )
+            fallback_entry_count = int(
+                point_match_summary.get("fallback_entry_count", 0) or 0
+            )
+            fallback_row_count = int(point_match_summary.get("fallback_row_count", 0) or 0)
+        except Exception:
+            manual_caked_rows = 0
+            sim_caked_rows = 0
+            fixed_source_rows = 0
+            matched_pair_count = 0
+            missing_pair_count = 0
+            fallback_entry_count = 0
+            fallback_row_count = 0
+        headless_caked_angular_acceptance = bool(
+            point_match_summary.get(
+                "_headless_accept_caked_angular_metric_without_pixel_threshold",
+                False,
+            )
+            and str(point_match_summary.get("metric_unit", "") or "").strip().lower() == "deg"
+            and manual_caked_rows > 0
+            and sim_caked_rows == manual_caked_rows
+            and fixed_source_rows == manual_caked_rows
+            and matched_pair_count == manual_caked_rows
+            and missing_pair_count == 0
+            and fallback_entry_count == 0
+            and fallback_row_count == 0
+        )
 
     early_stop_reason = getattr(result, "early_stop_reason", None)
     if not early_stop_reason:
         geometry_fit_progress = getattr(result, "geometry_fit_progress", None)
         if isinstance(geometry_fit_progress, Mapping):
             early_stop_reason = geometry_fit_progress.get("early_stop_reason")
-    if isinstance(early_stop_reason, str) and early_stop_reason.strip():
+    if (
+        isinstance(early_stop_reason, str)
+        and early_stop_reason.strip()
+        and not headless_caked_angular_acceptance
+    ):
         reasons.append(str(early_stop_reason).strip())
 
-    if not bool(getattr(result, "success", True)):
+    if not bool(getattr(result, "success", True)) and not headless_caked_angular_acceptance:
         reasons.append("Optimizer did not report success.")
 
     if not np.isfinite(rms):
         reasons.append("RMS residual is not finite.")
-    elif float(rms) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX:
+    elif (
+        float(rms) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX
+        and not headless_caked_angular_acceptance
+    ):
         reasons.append(
             "RMS residual {rms:.2f} px exceeds the acceptance limit of {limit:.2f} px.".format(
                 rms=float(rms),
@@ -19928,7 +19977,6 @@ def build_geometry_fit_rejection_reason_lines(
             )
         )
 
-    point_match_summary = getattr(result, "point_match_summary", None)
     matched_pair_count = 0
     has_matched_pair_count = False
     max_offset = float("nan")
@@ -19945,7 +19993,11 @@ def build_geometry_fit_rejection_reason_lines(
 
     if has_matched_pair_count and matched_pair_count <= 0:
         reasons.append("No matched peak pairs were available for the fitted solution.")
-    if np.isfinite(max_offset) and float(max_offset) > GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX:
+    if (
+        np.isfinite(max_offset)
+        and float(max_offset) > GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX
+        and not headless_caked_angular_acceptance
+    ):
         reasons.append(
             "Largest matched-peak offset {offset:.2f} px exceeds the acceptance "
             "limit of {limit:.2f} px.".format(

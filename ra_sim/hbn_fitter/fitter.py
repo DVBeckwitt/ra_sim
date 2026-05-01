@@ -596,6 +596,40 @@ def bilinear_sample(img, x, y):
     return v00 * (1 - dx) * (1 - dy) + v10 * dx * (1 - dy) + v01 * (1 - dx) * dy + v11 * dx * dy
 
 
+def bilinear_sample_many(img, x, y):
+    arr = np.asarray(img)
+    h, w = arr.shape
+    x_arr = np.asarray(x, dtype=float).reshape(-1)
+    y_arr = np.asarray(y, dtype=float).reshape(-1)
+    if x_arr.size != y_arr.size:
+        raise ValueError("x and y must have the same number of samples")
+    out = np.zeros(x_arr.shape, dtype=float)
+    valid = (x_arr >= 0.0) & (x_arr <= float(w - 1)) & (y_arr >= 0.0) & (y_arr <= float(h - 1))
+    if not np.any(valid):
+        return out
+
+    xv = x_arr[valid]
+    yv = y_arr[valid]
+    x0 = np.floor(xv).astype(np.intp)
+    y0 = np.floor(yv).astype(np.intp)
+    x1 = np.minimum(x0 + 1, w - 1)
+    y1 = np.minimum(y0 + 1, h - 1)
+    dx = xv - x0.astype(float)
+    dy = yv - y0.astype(float)
+
+    v00 = arr[y0, x0].astype(float, copy=False)
+    v10 = arr[y0, x1].astype(float, copy=False)
+    v01 = arr[y1, x0].astype(float, copy=False)
+    v11 = arr[y1, x1].astype(float, copy=False)
+    out[valid] = (
+        v00 * (1.0 - dx) * (1.0 - dy)
+        + v10 * dx * (1.0 - dy)
+        + v01 * (1.0 - dx) * dy
+        + v11 * dx * dy
+    )
+    return out
+
+
 def pseudo_voigt_1d(x, amp, x0, sigma, eta, baseline):
     sigma = np.maximum(np.abs(sigma), 1e-6)
     u = (x - x0) / sigma
@@ -627,27 +661,33 @@ def subpixel_quadratic_peak_1d(x_vals, y_vals, x_hint=None):
     if xx.size != 3 or yy.size != 3:
         return np.nan, np.nan, False
 
-    try:
-        p = np.polyfit(xx, yy, 2)
-    except Exception:
+    x0, x1, x2 = [float(v) for v in xx]
+    y0, y1, y2 = [float(v) for v in yy]
+    denom = (x0 - x1) * (x0 - x2) * (x1 - x2)
+    if not np.isfinite(denom) or abs(denom) < 1e-12:
         return np.nan, np.nan, False
 
-    a, b, c = [float(v) for v in p]
-    if not (np.isfinite(a) and np.isfinite(b) and np.isfinite(c)) or abs(a) < 1e-12 or a >= 0:
+    a = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / denom
+    b = (x2 * x2 * (y0 - y1) + x1 * x1 * (y2 - y0) + x0 * x0 * (y1 - y2)) / denom
+    if not (np.isfinite(a) and np.isfinite(b)) or abs(a) < 1e-12 or a >= 0:
         return float(xx[1]), float(yy[1]), False
 
     x_peak = float(-0.5 * b / a)
     x_lo = float(np.min(xx))
     x_hi = float(np.max(xx))
     x_peak = float(np.clip(x_peak, x_lo, x_hi))
-    y_peak = float(np.polyval(p, x_peak))
+
+    l0 = ((x_peak - x1) * (x_peak - x2)) / ((x0 - x1) * (x0 - x2))
+    l1 = ((x_peak - x0) * (x_peak - x2)) / ((x1 - x0) * (x1 - x2))
+    l2 = ((x_peak - x0) * (x_peak - x1)) / ((x2 - x0) * (x2 - x1))
+    y_peak = float(l0 * y0 + l1 * y1 + l2 * y2)
     if not (np.isfinite(x_peak) and np.isfinite(y_peak)):
         return np.nan, np.nan, False
     return x_peak, y_peak, True
 
 
 def subpixel_centroid_2d(img, x, y, half_window=DEFAULT_SUBPIXEL_PATCH_HALF):
-    arr = np.asarray(img, dtype=float)
+    arr = np.asarray(img)
     if arr.ndim != 2 or arr.size == 0:
         return float(x), float(y), False
 
@@ -658,7 +698,7 @@ def subpixel_centroid_2d(img, x, y, half_window=DEFAULT_SUBPIXEL_PATCH_HALF):
     if ix - hw < 0 or ix + hw >= w or iy - hw < 0 or iy + hw >= h:
         return float(x), float(y), False
 
-    patch = arr[iy - hw:iy + hw + 1, ix - hw:ix + hw + 1]
+    patch = np.asarray(arr[iy - hw:iy + hw + 1, ix - hw:ix + hw + 1], dtype=float)
     if patch.size == 0:
         return float(x), float(y), False
 
@@ -820,22 +860,26 @@ def snap_points_to_ring(
         ty = nx
 
         candidates = []
+        x_grid = px + along[None, :] * nx + across[:, None] * tx
+        y_grid = py + along[None, :] * ny + across[:, None] * ty
+        valid_grid = (
+            (x_grid >= 1.0)
+            & (x_grid <= float(w - 2))
+            & (y_grid >= 1.0)
+            & (y_grid <= float(h - 2))
+        )
+        sample_grid = np.zeros(x_grid.shape, dtype=float)
+        if np.any(valid_grid):
+            sample_grid[valid_grid] = bilinear_sample_many(img_log, x_grid[valid_grid], y_grid[valid_grid])
 
-        for v in across:
-            u_valid = []
-            y_valid = []
-            for u in along:
-                x = px + u * nx + v * tx
-                y = py + u * ny + v * ty
-                if x < 1 or x > w - 2 or y < 1 or y > h - 2:
-                    continue
-                u_valid.append(float(u))
-                y_valid.append(float(bilinear_sample(img_log, x, y)))
-
-            if len(u_valid) < DEFAULT_PV_MIN_SAMPLES:
+        for j, v in enumerate(across):
+            valid = valid_grid[j]
+            if int(np.count_nonzero(valid)) < DEFAULT_PV_MIN_SAMPLES:
                 continue
 
-            y_prof = np.asarray(y_valid, dtype=float)
+            u_valid = along[valid]
+            y_prof = sample_grid[j, valid]
+            y_valid = y_prof
             y_med = float(np.median(y_prof))
             y_mad = float(np.median(np.abs(y_prof - y_med)))
             y_sigma = max(1.4826 * y_mad, 1e-6)
@@ -2862,10 +2906,12 @@ class HBNFitterGUI:
         samples = []
         posts = []
         radii = []
-        for xs, ys, rr in seeds:
+        if seeds:
+            seed_xy = np.asarray([(float(xs), float(ys)) for xs, ys, _rr in seeds], dtype=float).reshape(-1, 2)
+            seed_r = np.asarray([float(rr) for _xs, _ys, rr in seeds], dtype=float).reshape(-1)
             snapped, meta = snap_points_to_ring(
                 img_log_full,
-                np.array([[float(xs), float(ys)]], dtype=float),
+                seed_xy,
                 params,
                 search_along=along_u,
                 search_across=across_u,
@@ -2874,12 +2920,13 @@ class HBNFitterGUI:
                 enforce_confidence=False,
                 return_meta=True,
             )
-            if snapped.shape[0] < 1 or not np.all(np.isfinite(snapped[0])):
-                continue
-            m0 = meta[0] if meta else {}
-            samples.append((float(snapped[0, 0]), float(snapped[0, 1])))
-            posts.append(float(m0.get("best_posterior", np.nan)))
-            radii.append(float(rr))
+            for idx, snap_xy in enumerate(np.asarray(snapped, dtype=float).reshape(-1, 2)):
+                if not np.all(np.isfinite(snap_xy)):
+                    continue
+                m0 = meta[idx] if idx < len(meta) else {}
+                samples.append((float(snap_xy[0]), float(snap_xy[1])))
+                posts.append(float(m0.get("best_posterior", np.nan)))
+                radii.append(float(seed_r[idx]) if idx < seed_r.size else np.nan)
 
         n = len(samples)
         base["snap_seed_count"] = int(n)
@@ -3248,10 +3295,9 @@ class HBNFitterGUI:
             f"Moved ring {ring_idx + 1}/{ring_total}, point {point_idx + 1}/{ring_n}. "
             f"placed=({x_snap:.1f},{y_snap:.1f}) px, {snap_detail}."
         )
-        self.refresh_plot()
         if restore_limits is not None:
             self._restore_view_limits(restore_limits)
-            self.canvas.draw_idle()
+        self.refresh_plot()
 
     def _set_precision_box(self, x_ds, y_ds, size_ds=DEFAULT_PRECISION_PICK_SIZE_DS):
         size_ds = max(float(size_ds), 2.0)
@@ -3422,10 +3468,9 @@ class HBNFitterGUI:
             f"Added point {point_idx}/{cap} to ring {ring_idx + 1}/{ring_total}. "
             f"placed=({x_snap:.1f},{y_snap:.1f}) px, {snap_detail}."
         )
-        self.refresh_plot()
         if restore_limits is not None:
             self._restore_view_limits(restore_limits)
-            self.canvas.draw_idle()
+        self.refresh_plot()
 
     def _on_file_path_changed(self, *_):
         self._schedule_auto_load(force=False)

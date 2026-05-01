@@ -83,6 +83,7 @@
   - Added an Analyze `Caked image intensity` control so full caked images and standard radial/azimuthal integrations can switch between support-normalized density and raw accumulated caked-bin signal, saved as `analysis_range.caked_intensity_mode`.
   - Fixed the Analyze caked intensity toggle so switching density/raw modes repaints the main caked figure raster instead of reusing stale projected pixels.
   - Changed Analyze peak-fit results from compact summary lines to a monospaced table showing Gaussian FWHM, Lorentzian FWHM, Gaussian/Lorentzian mix percent, center, and RMSE for radial and azimuthal fits.
+  - Fixed Analyze pseudo-Voigt peak fitting to use area-normalized Gaussian and Lorentzian equations, so the reported Lorentzian percentage reflects fitted Lorentzian area instead of a height-weighted mix.
   - Kept the Analyze main caked figure intensity scale fixed during integration-region changes while radial and azimuthal 1D plots still rescale to the selected region.
   - Added an Analyze selected-Qr rod `Rod profile intensity` control with density-first default and raw accumulated intensity opt-in, saved as `analysis_range.rod_profile_intensity_mode`.
   - Hid the standard azimuthal integration subplot while selected-Qr rod ROI profiles are active, leaving the Qz rod profile as the only 1D plot for that mode.
@@ -91,6 +92,7 @@
   - Changed the selected-Qr rod half-width default to `0.1 A^-1`.
   - Added an Analyze selected-Qr rod `Include rod shape` option, saved as `analysis_range.include_selected_qr_rod_shape`, so detector-space Qz profiles can include the selected rod hit-cloud footprint outside the numeric Qr band.
   - Fixed the selected-Qr rod ROI toggle so it remains selectable in detector view; only Q-space view disables it.
+  - Added an opt-in `Include 6H Qr refs` stacking control that loads the packaged PbI2 6H reference CIF when `w1` is nonzero, merges duplicate numeric Qr/Qz groups, and makes 6H-only groups available to manual Qr picking.
   - Reorganized Match-tab peak tools so `Drag Move Placed Peaks` stays visible beside the manual pick control, removed the auto-search radius slider from the peak tool row, and renamed the point-removal toggle to `Click Remove Placed Peaks`.
   - Made the Setup tab expose an expanded primary-CIF import control, with replacement CIF loads routed through full simulation, optics, picker, and analysis cache invalidation.
   - Added Match-tab `Add All Qr Set Peaks` and `Remove Qr Set Peaks` controls so enabled Qr/Qz selector groups can be auto-saved through the manual-pick refinement path or removed from the current background.
@@ -105,6 +107,7 @@
   - Added selected-Qr rod `Mirror +/-phi band` integration so caked high-azimuth lobes can be selected as a symmetric `|phi|` band without filling the central phi rows.
   - Fixed selected-Qr rod caked integration masks so valid high-`|phi|` bins are selected from detector Qr/Qz pixels through the exact-cake LUT instead of depending on finite forward-projected Qr trace samples; selected-Qr drag Qz bounds now use the LUT transpose from dragged caked bins back to detector contributors.
   - Fixed selected-Qr rod 1D profiles to integrate detector pixels by Qr/Qz/phi before Qz binning, leaving the caked rod mask as a display overlay instead of using it as the numeric integration mask.
+  - Added an optional selected-Qr rod shape mask so rod ROI masks and detector-backed Qz profiles can include detector support from the selected Qr/Qz group shape in addition to the numeric Qr band.
   - Hardened GUI detector-center remap cache handling so exact remaps retain QR/Qz identity, invalidate stale manual/caked/q-space projection caches, report projection and handoff trace state, and fall back to full simulation for missing secondary exact caches or center-plus-physics changes.
   - Fixed manual geometry refresh so detector-coordinate truth is not replaced by stale caked fields and refreshed caked coordinates update raw caked fields.
   - Hardened GUI runtime prune reuse/fill QR selector cache handling so explicit QR/Qz masks persist, stale source-row snapshots are not retained across incompatible hit-table identity, and runtime traces report selector retention/deferred refresh/fitter handoff validity.

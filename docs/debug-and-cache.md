@@ -132,6 +132,19 @@ caked-view cache. Detector/caked view switches must not invalidate or filter
 the Qr/Qz group universe. CIF, unit-cell, or simulation-hit-table changes do
 invalidate it.
 
+Optional PbI2 6H reference Qr/Qz groups are opt-in structural rows, not live
+display artifacts. When `Include 6H Qr refs` is enabled and `w1` is nonzero,
+the runtime loads the packaged `ra_sim.config/materials/PbI2_6H.cif`, builds
+6H hit-table rows with the current wavelength/window/HKL limits, and tags them
+as `pbii_6h_ref`. The q-group and manual-pick signatures include the toggle,
+`w1`, HKL limit, wavelength, 2theta window, and intensity threshold so stale
+picker rows are not reused across 6H-reference changes.
+
+Duplicate Qr/Qz identities from primary, secondary, stacking-fault, or 6H
+reference rows are merged numerically before listing and picking. The merge
+tolerance is `atol=1e-6`, `rtol=1e-8`; one selector key remains, intensity and
+candidate points are combined, and aux source aliases are kept for diagnostics.
+
 Resolved picker behavior depends on keeping structural simulation truth
 separate from current-view projection. Group membership comes from structural
 state; detector or caked coordinates are derived later for the active view.
