@@ -30582,6 +30582,8 @@ def _diag_new4_manual_audit_record(
     sim_nominal_display = _diag_row_pair(objective_row, "sim_nominal_detector_px")
     sim_nominal_native = _diag_row_pair(objective_row, "sim_nominal_native_px")
     sim_refined_caked = _diag_row_pair(objective_row, "predicted_refined_caked_deg")
+    objective_source_caked = _diag_row_pair(objective_row, "predicted_caked_deg")
+    objective_residual_caked = _diag_row_pair(objective_row, "residual_caked_deg")
     sim_refined_display = _diag_row_pair(objective_row, "predicted_detector_display_px")
     sim_refined_native = _diag_row_pair(objective_row, "predicted_detector_native_px")
     sim_saved_caked, sim_saved_caked_source = _diag_sim_visual_caked(saved_entry)
@@ -30645,6 +30647,10 @@ def _diag_new4_manual_audit_record(
         "manual_saved_caked_source": saved_manual_refined_caked_source,
         "manual_detector_native_reprojected_caked_deg": _diag_new4_pair_json(manual_refined_caked),
         "manual_detector_native_reprojected_source": manual_refined_caked_source,
+        "detector_native_reprojection_diagnostic_caked_deg": _diag_new4_pair_json(
+            manual_refined_caked
+        ),
+        "detector_native_reprojection_diagnostic_source": manual_refined_caked_source,
         "manual_detector_display_source": manual_refined_display_source,
         "manual_detector_native_source": manual_refined_native_source,
         "fit_observed_detector_display_px": _diag_new4_pair_json(fit_observed_display),
@@ -30652,6 +30658,15 @@ def _diag_new4_manual_audit_record(
         "fit_observed_caked_deg": _diag_new4_pair_json(fit_observed_caked),
         "fit_observed_source": objective_row.get("observed_source"),
         "fit_observed_fit_space_source": objective_row.get("observed_fit_space_source"),
+        "objective_target_caked_deg": _diag_new4_pair_json(fit_observed_caked),
+        "objective_target_authority": objective_row.get("observed_fit_space_source"),
+        "objective_source_caked_deg": _diag_new4_pair_json(objective_source_caked),
+        "objective_source_authority": "sim_visual_caked_deg",
+        "objective_residual_caked_deg": _diag_new4_pair_json(objective_residual_caked),
+        "objective_residual_units": "deg",
+        "objective_residual_frame": "caked_2theta_phi",
+        "objective_residual_sign_convention": "source_minus_target",
+        "objective_residual_phi_wrapped": True,
         "sim_saved_detector_display_px": _diag_new4_pair_json(sim_saved_display),
         "sim_saved_detector_native_px": _diag_new4_pair_json(sim_saved_native),
         "sim_saved_caked_deg": _diag_new4_pair_json(sim_saved_caked),
@@ -30680,6 +30695,9 @@ def _diag_new4_manual_audit_record(
         ),
         "detector_native_reprojection_to_cached_target_caked": _diag_new4_pair_json(
             detector_native_reprojected_to_cached_target
+        ),
+        "detector_native_reprojection_to_cached_target_diagnostic_caked_delta": (
+            _diag_new4_pair_json(detector_native_reprojected_to_cached_target)
         ),
         "observed_to_sim_nominal_caked": _diag_new4_pair_json(observed_to_nominal),
         "observed_to_sim_refined_caked": _diag_new4_pair_json(observed_to_refined),
@@ -31502,54 +31520,254 @@ def _diag_new4_write_manual_audit_csv(path, records):
                 )
 
 
-def _diag_new4_manual_audit_points_match_objective(rows, records):
+def _diag_new4_pairs_close(left, right, *, atol):
+    left_pair = _diag_new4_pair_or_none(left)
+    right_pair = _diag_new4_pair_or_none(right)
+    return bool(
+        left_pair is not None
+        and right_pair is not None
+        and np.allclose(left_pair, right_pair, atol=float(atol), rtol=0.0)
+    )
+
+
+def _diag_new4_manual_audit_coordinate_contract(rows, records):
     by_key = {rec["key"]: rec for rec in records}
+    gate_names = (
+        "manual_visual_resolves_to_cached_target",
+        "optimizer_target_equals_cached_target",
+        "optimizer_source_equals_dynamic_sim_visual",
+        "objective_residual_is_angular_source_minus_target_deg",
+    )
+    failures = {name: [] for name in gate_names}
+    detector_native_reprojection_mismatches = []
+
+    def _fail(name, rec, reason):
+        failures[name].append(
+            {
+                "key": rec.get("key"),
+                "branch_key": rec.get("branch_key"),
+                "reason": reason,
+            }
+        )
+
     for key, row in rows.items():
-        rec = by_key[_diag_new4_record_key_text(key)]
+        rec = by_key.get(_diag_new4_record_key_text(key))
+        if rec is None:
+            failures["optimizer_target_equals_cached_target"].append(
+                {
+                    "key": _diag_new4_record_key_text(key),
+                    "branch_key": None,
+                    "reason": "missing_manifest_record",
+                }
+            )
+            continue
+
+        target = rec.get("fit_observed_caked_deg")
+        manual_cached = rec.get("manual_saved_caked_deg")
+        objective_target = _diag_row_pair(row, "observed_caked_deg")
+        source = rec.get("sim_refined_x0_caked_deg")
+        dynamic_source = _diag_row_pair(row, "predicted_refined_caked_deg")
+        objective_source = _diag_row_pair(row, "predicted_caked_deg")
+        residual = rec.get("residual_caked_deg")
+        objective_residual = _diag_row_pair(row, "residual_caked_deg")
+        expected_residual = None
+        source_pair = _diag_new4_pair_or_none(source)
+        target_pair = _diag_new4_pair_or_none(target)
+        if source_pair is not None and target_pair is not None:
+            expected_residual = _diag_caked_delta(source_pair, target_pair)
+
+        if not _diag_new4_pairs_close(target, manual_cached, atol=1.0e-12):
+            _fail("manual_visual_resolves_to_cached_target", rec, "manual_cached_target_delta")
         if rec.get("fit_observed_fit_space_source") != "cached_fit_space_anchor":
-            return False
+            _fail("optimizer_target_equals_cached_target", rec, "target_source_not_cached_anchor")
+        if not _diag_new4_pairs_close(target, objective_target, atol=1.0e-12):
+            _fail("optimizer_target_equals_cached_target", rec, "objective_target_delta")
         if not bool(rec.get("predicted_source_rejects_stale_visual")):
-            return False
-        if not np.allclose(
-            rec["fit_observed_caked_deg"],
-            rec["manual_saved_caked_deg"],
-            atol=1.0e-12,
-            rtol=0.0,
+            _fail("optimizer_source_equals_dynamic_sim_visual", rec, "stale_visual_source")
+        if not _diag_new4_pairs_close(source, dynamic_source, atol=1.0e-12):
+            _fail("optimizer_source_equals_dynamic_sim_visual", rec, "dynamic_source_delta")
+        if not _diag_new4_pairs_close(source, objective_source, atol=1.0e-12):
+            _fail("optimizer_source_equals_dynamic_sim_visual", rec, "objective_source_delta")
+        if expected_residual is None:
+            _fail(
+                "objective_residual_is_angular_source_minus_target_deg",
+                rec,
+                "missing_source_or_target",
+            )
+        elif not _diag_new4_pairs_close(residual, expected_residual, atol=1.0e-12):
+            _fail(
+                "objective_residual_is_angular_source_minus_target_deg",
+                rec,
+                "manifest_residual_delta",
+            )
+        elif not _diag_new4_pairs_close(objective_residual, expected_residual, atol=1.0e-12):
+            _fail(
+                "objective_residual_is_angular_source_minus_target_deg",
+                rec,
+                "objective_residual_delta",
+            )
+        elif not (
+            np.isclose(float(rec["residual_2theta"]), expected_residual[0], atol=1.0e-12, rtol=0.0)
+            and np.isclose(
+                float(rec["residual_phi_wrapped"]),
+                expected_residual[1],
+                atol=1.0e-12,
+                rtol=0.0,
+            )
         ):
-            return False
-        if not np.allclose(
-            rec["fit_observed_caked_deg"],
-            _diag_row_pair(row, "observed_caked_deg"),
-            atol=1.0e-12,
-            rtol=0.0,
-        ):
-            return False
-        if not np.allclose(
-            rec["sim_refined_x0_caked_deg"],
-            _diag_row_pair(row, "predicted_refined_caked_deg"),
-            atol=1.0e-12,
-            rtol=0.0,
-        ):
-            return False
-        if not np.allclose(
-            rec["sim_refined_x0_caked_deg"],
-            _diag_row_pair(row, "predicted_caked_deg"),
-            atol=1.0e-12,
-            rtol=0.0,
-        ):
-            return False
-        if not np.allclose(
-            rec["sim_refined_x0_caked_deg"],
-            rec["fit_observed_caked_deg"],
-            atol=1.0e-9,
-            rtol=0.0,
-        ):
-            return False
-        if abs(float(rec["residual_2theta"])) > 1.0e-9:
-            return False
-        if abs(float(rec["residual_phi_wrapped"])) > 1.0e-9:
-            return False
-    return True
+            _fail(
+                "objective_residual_is_angular_source_minus_target_deg",
+                rec,
+                "residual_component_delta",
+            )
+
+        if not bool(rec.get("detector_native_reprojection_matches_cached_target")):
+            detector_native_reprojection_mismatches.append(
+                {
+                    "key": rec.get("key"),
+                    "branch_key": rec.get("branch_key"),
+                    "delta_caked_deg": rec.get(
+                        "detector_native_reprojection_to_cached_target_caked"
+                    ),
+                }
+            )
+
+    gates = {name: not failures[name] for name in gate_names}
+    contract_pass = all(gates.values())
+    return {
+        "pass": bool(contract_pass),
+        "coordinate_frame": "caked_2theta_phi",
+        "unit": "deg",
+        "target": "fixed_cached_caked_2theta_phi",
+        "source": "dynamic_sim_visual_caked_deg",
+        "residual": "source_minus_target_with_wrapped_phi",
+        "gates": gates,
+        "failure_counts": {name: len(failures[name]) for name in gate_names},
+        "failures": failures,
+        "detector_native_reprojection_is_diagnostic": True,
+        "detector_native_reprojection_mismatch_count": len(detector_native_reprojection_mismatches),
+        "detector_native_reprojection_mismatches": detector_native_reprojection_mismatches[:5],
+    }
+
+
+def _diag_new4_manual_audit_points_match_objective(rows, records):
+    return bool(_diag_new4_manual_audit_coordinate_contract(rows, records)["pass"])
+
+
+def _diag_new4_manual_point_audit_contract_fixture():
+    key = (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 42, 0, 0)
+    target = [40.85298785727099, -37.56585258715225]
+    source = [40.852987857270996, -37.56585258715222]
+    residual = list(_diag_caked_delta(source, target))
+    row = {
+        "observed_caked_deg": list(target),
+        "predicted_refined_caked_deg": list(source),
+        "predicted_caked_deg": list(source),
+        "residual_caked_deg": list(residual),
+    }
+    rec = {
+        "key": _diag_new4_record_key_text(key),
+        "branch_key": _diag_new4_jsonable(
+            (key[0], key[1], int(key[4]), int(key[5]), int(key[2]), int(key[3]))
+        ),
+        "manual_saved_caked_deg": list(target),
+        "fit_observed_caked_deg": list(target),
+        "fit_observed_fit_space_source": "cached_fit_space_anchor",
+        "objective_target_authority": "cached_fit_space_anchor",
+        "objective_source_authority": "sim_visual_caked_deg",
+        "objective_residual_units": "deg",
+        "objective_residual_sign_convention": "source_minus_target",
+        "objective_residual_phi_wrapped": True,
+        "sim_refined_x0_caked_deg": list(source),
+        "residual_caked_deg": list(residual),
+        "residual_2theta": float(residual[0]),
+        "residual_phi_wrapped": float(residual[1]),
+        "predicted_source_rejects_stale_visual": True,
+        "detector_native_reprojection_diagnostic_caked_deg": [
+            target[0] + 0.001362593234780718,
+            target[1] - 0.1470947527878934,
+        ],
+        "detector_native_reprojection_to_cached_target_diagnostic_caked_delta": [
+            -0.001362593234780718,
+            0.1470947527878934,
+        ],
+        "detector_native_reprojection_matches_cached_target": False,
+        "detector_native_reprojection_to_cached_target_caked": [
+            -0.001362593234780718,
+            0.1470947527878934,
+        ],
+    }
+    return {key: row}, [rec], key, row, rec
+
+
+def test_manual_point_audit_treats_detector_native_reprojection_as_diagnostic() -> None:
+    rows, records, _key, _row, rec = _diag_new4_manual_point_audit_contract_fixture()
+    contract = _diag_new4_manual_audit_coordinate_contract(rows, records)
+
+    assert contract["pass"] is True
+    assert contract["detector_native_reprojection_is_diagnostic"] is True
+    assert contract["detector_native_reprojection_mismatch_count"] == 1
+    assert rec["detector_native_reprojection_matches_cached_target"] is False
+
+
+def test_manual_point_audit_cached_target_is_objective_observed() -> None:
+    rows, records, _key, row, rec = _diag_new4_manual_point_audit_contract_fixture()
+    contract = _diag_new4_manual_audit_coordinate_contract(rows, records)
+    branch = int(rec["branch_key"][2])
+
+    _diag_new4_assert_pair_equal(
+        rec["manual_saved_caked_deg"],
+        rec["fit_observed_caked_deg"],
+        f"manual_saved_caked==fit_observed branch={branch}",
+    )
+    assert rec["fit_observed_fit_space_source"] == "cached_fit_space_anchor"
+    _diag_new4_assert_pair_equal(
+        rec["fit_observed_caked_deg"],
+        row["observed_caked_deg"],
+        f"fit_observed==objective_observed branch={branch}",
+    )
+    assert contract["gates"]["manual_visual_resolves_to_cached_target"] is True
+    assert contract["gates"]["optimizer_target_equals_cached_target"] is True
+
+
+def test_manual_point_audit_sim_refined_matches_fit_observed() -> None:
+    rows, records, _key, _row, rec = _diag_new4_manual_point_audit_contract_fixture()
+    contract = _diag_new4_manual_audit_coordinate_contract(rows, records)
+    branch = int(rec["branch_key"][2])
+
+    _diag_new4_assert_pair_equal(
+        rec["sim_refined_x0_caked_deg"],
+        rec["fit_observed_caked_deg"],
+        f"sim_refined_x0==fit_observed branch={branch}",
+    )
+    assert abs(float(rec["residual_2theta"])) <= 1.0e-9
+    assert abs(float(rec["residual_phi_wrapped"])) <= 1.0e-9
+    assert bool(rec["predicted_source_rejects_stale_visual"])
+    assert contract["gates"]["optimizer_source_equals_dynamic_sim_visual"] is True
+    assert contract["gates"]["objective_residual_is_angular_source_minus_target_deg"] is True
+
+
+def test_manual_point_audit_manifest_reports_coordinate_authorities() -> None:
+    rows, records, _key, _row, rec = _diag_new4_manual_point_audit_contract_fixture()
+    contract = _diag_new4_manual_audit_coordinate_contract(rows, records)
+    manifest = {
+        "coordinate_contract": contract,
+        "objective_target_source": "cached_fit_space_anchor",
+        "objective_prediction_source_authority": "sim_visual_caked_deg",
+        "objective_residual_contract": "source_minus_target_with_wrapped_phi",
+        "objective_residual_units": "deg",
+        "per_branch_records": records,
+    }
+
+    assert manifest["coordinate_contract"]["pass"] is True
+    assert manifest["coordinate_contract"]["target"] == "fixed_cached_caked_2theta_phi"
+    assert manifest["coordinate_contract"]["source"] == "dynamic_sim_visual_caked_deg"
+    assert manifest["objective_target_source"] == "cached_fit_space_anchor"
+    assert manifest["objective_prediction_source_authority"] == "sim_visual_caked_deg"
+    assert manifest["objective_residual_contract"] == "source_minus_target_with_wrapped_phi"
+    assert manifest["objective_residual_units"] == "deg"
+    assert rec["objective_target_authority"] == "cached_fit_space_anchor"
+    assert rec["objective_source_authority"] == "sim_visual_caked_deg"
 
 
 def _diag_new4_manual_audit_top(records, field, limit=3):
@@ -32630,7 +32848,8 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     )
     assert len(records) == 14
     assert len(x0_components) == 28
-    assert _diag_new4_manual_audit_points_match_objective(x0_rows, records)
+    coordinate_contract = _diag_new4_manual_audit_coordinate_contract(x0_rows, records)
+    assert coordinate_contract["pass"] is True
     assert all(bool(rec["predicted_source_rejects_stale_visual"]) for rec in records)
     records_by_key = {rec["key"]: rec for rec in records}
     for key, saved_entry in saved_rows.items():
@@ -32809,14 +33028,29 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         "figures": figure_files,
         "points_csv": csv_path.name,
         "per_branch_records": records,
+        "coordinate_contract": coordinate_contract,
         "cached_targets_match_manual_saved": bool(cached_targets_match_manual_saved),
+        "manual_visual_resolves_to_cached_target": bool(
+            coordinate_contract["gates"]["manual_visual_resolves_to_cached_target"]
+        ),
         "fit_observed_sources_are_cached_fit_space_anchor": bool(fit_observed_sources_are_cached),
+        "optimizer_target_equals_cached_target": bool(
+            coordinate_contract["gates"]["optimizer_target_equals_cached_target"]
+        ),
         "sim_refined_matches_fit_observed": bool(sim_refined_matches_fit_observed),
+        "optimizer_source_equals_dynamic_sim_visual": bool(
+            coordinate_contract["gates"]["optimizer_source_equals_dynamic_sim_visual"]
+        ),
         "residuals_near_zero": bool(residuals_near_zero),
+        "objective_residual_is_angular_source_minus_target_deg": bool(
+            coordinate_contract["gates"]["objective_residual_is_angular_source_minus_target_deg"]
+        ),
         "predicted_sources_reject_stale_visual": bool(predicted_sources_reject_stale_visual),
         "detector_native_reprojection_is_diagnostic": True,
         "objective_target_source": "cached_fit_space_anchor",
-        "objective_prediction_source_authority": "dynamic_simulated_source",
+        "objective_prediction_source_authority": "sim_visual_caked_deg",
+        "objective_residual_contract": "source_minus_target_with_wrapped_phi",
+        "objective_residual_units": "deg",
         "detector_native_reprojection_matches_cached_target": bool(
             detector_native_reprojection_matches_cached_target
         ),
@@ -32856,19 +33090,39 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     assert loaded_manifest["background_vmin"] == 0
     assert loaded_manifest["background_vmax"] == 3000
     assert loaded_manifest["plotted_points_match_objective_inputs"] is True
+    assert loaded_manifest["coordinate_contract"]["pass"] is True
+    assert loaded_manifest["coordinate_contract"]["target"] == "fixed_cached_caked_2theta_phi"
+    assert loaded_manifest["coordinate_contract"]["source"] == "dynamic_sim_visual_caked_deg"
+    assert (
+        loaded_manifest["coordinate_contract"]["residual"] == "source_minus_target_with_wrapped_phi"
+    )
+    assert loaded_manifest["coordinate_contract"]["unit"] == "deg"
+    assert all(bool(value) for value in loaded_manifest["coordinate_contract"]["gates"].values())
     assert loaded_manifest["cached_targets_match_manual_saved"] is True
+    assert loaded_manifest["manual_visual_resolves_to_cached_target"] is True
     assert loaded_manifest["fit_observed_sources_are_cached_fit_space_anchor"] is True
+    assert loaded_manifest["optimizer_target_equals_cached_target"] is True
     assert loaded_manifest["sim_refined_matches_fit_observed"] is True
+    assert loaded_manifest["optimizer_source_equals_dynamic_sim_visual"] is True
     assert loaded_manifest["residuals_near_zero"] is True
+    assert loaded_manifest["objective_residual_is_angular_source_minus_target_deg"] is True
     assert loaded_manifest["predicted_sources_reject_stale_visual"] is True
     assert loaded_manifest["detector_native_reprojection_is_diagnostic"] is True
     assert loaded_manifest["objective_target_source"] == "cached_fit_space_anchor"
-    assert loaded_manifest["objective_prediction_source_authority"] == "dynamic_simulated_source"
+    assert loaded_manifest["objective_prediction_source_authority"] == "sim_visual_caked_deg"
+    assert loaded_manifest["objective_residual_contract"] == "source_minus_target_with_wrapped_phi"
+    assert loaded_manifest["objective_residual_units"] == "deg"
     for rec in loaded_manifest["per_branch_records"]:
         assert "manual_saved_caked_deg" in rec
         assert "manual_detector_native_reprojected_caked_deg" in rec
+        assert "detector_native_reprojection_diagnostic_caked_deg" in rec
         assert "manual_fitspace_caked_deg" not in rec
         assert "fit_observed_caked_deg" in rec
+        assert rec["objective_target_authority"] == "cached_fit_space_anchor"
+        assert rec["objective_source_authority"] == "sim_visual_caked_deg"
+        assert rec["objective_residual_units"] == "deg"
+        assert rec["objective_residual_sign_convention"] == "source_minus_target"
+        assert rec["objective_residual_phi_wrapped"] is True
         assert "sim_saved_caked_deg" in rec
         assert "sim_nominal_x0_caked_deg" in rec
         assert "sim_refined_x0_caked_deg" in rec
@@ -32876,9 +33130,9 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         assert "sim_refined_caked_deg" not in rec
         assert "sim_nominal_caked_deg" not in rec
         _diag_new4_assert_pair_equal(
-            rec["fit_observed_caked_deg"],
             rec["manual_saved_caked_deg"],
-            "fit_observed==manual_saved_caked",
+            rec["fit_observed_caked_deg"],
+            f"manual_saved_caked==fit_observed branch={int(rec['source_branch_index'])}",
         )
         assert rec["fit_observed_fit_space_source"] == "cached_fit_space_anchor"
         _diag_new4_assert_pair_equal(
@@ -32929,6 +33183,9 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         "predicted_sources_reject_stale_visual="
         f"{_diag_yes_no(predicted_sources_reject_stale_visual)}"
     )
+    print(f"coordinate_contract_pass={_diag_yes_no(bool(coordinate_contract['pass']))}")
+    for name, ok in coordinate_contract["gates"].items():
+        print(f"coordinate_contract_gate_{name}={_diag_yes_no(bool(ok))}")
     print("plotted_points_match_objective_inputs=yes")
     print("top_abs_d2theta")
     for rec in top_d2theta:
@@ -33653,6 +33910,8 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
     assert set(target_records) == {0, 1}
     assert len(records) == 14
     assert len(x0_components) == 28
+    coordinate_contract = _diag_new4_manual_audit_coordinate_contract(x0_rows, records)
+    assert coordinate_contract["pass"] is True
 
     artifact_dir = _NEW4_MANUAL_AUDIT_DIR
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -33753,6 +34012,9 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
         )
     print(f"branch_order_consistent={_diag_yes_no(branch_order_consistent)}")
     print(f"observed_vs_predicted_uses={observed_vs_predicted_uses}")
+    print(f"coordinate_contract_pass={_diag_yes_no(bool(coordinate_contract['pass']))}")
+    for name, ok in coordinate_contract["gates"].items():
+        print(f"coordinate_contract_gate_{name}={_diag_yes_no(bool(ok))}")
     assert branch_order_consistent
     assert observed_vs_predicted_uses == objective_prediction_point_type
 
@@ -33787,9 +34049,9 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
             f"manifest observed==objective branch={branch}",
         )
         _diag_new4_assert_pair_equal(
-            rec["fit_observed_caked_deg"],
             rec["manual_saved_caked_deg"],
-            f"cached_target==manual_saved branch={branch}",
+            rec["fit_observed_caked_deg"],
+            f"manual_saved_caked==fit_observed branch={branch}",
         )
         _diag_new4_assert_pair_equal(
             rec["sim_refined_x0_caked_deg"],

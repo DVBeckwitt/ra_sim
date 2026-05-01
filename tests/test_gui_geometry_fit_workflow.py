@@ -33462,7 +33462,7 @@ def _run_stub_caked_point_reprojection(tmp_path, **context_kwargs):
     return report, projector_calls, module
 
 
-def test_new4_coordinate_objective_audit_schema_is_machine_checkable() -> None:
+def _new4_coordinate_audit_schema_rows():
     module = _load_new4_coordinate_audit_module()
     rows = []
     for index in range(7):
@@ -33488,6 +33488,10 @@ def test_new4_coordinate_objective_audit_schema_is_machine_checkable() -> None:
                 "fit_space_anchor_override": True,
                 "background_two_theta_deg": target[0],
                 "background_phi_deg": target[1],
+                "detector_native_reprojection_diagnostic_caked_deg": [
+                    target[0] + (0.25 if index == 0 else 0.0),
+                    target[1] + (0.5 if index == 0 else 0.0),
+                ],
             },
             measured_anchor=target,
             measured_reason="cached_fit_space_anchor",
@@ -33514,7 +33518,68 @@ def test_new4_coordinate_objective_audit_schema_is_machine_checkable() -> None:
             },
         )
         rows.append(row)
+    return module, rows
 
+
+def _new4_coordinate_audit_rows_with_source_offset(offset: tuple[float, float]):
+    module = _load_new4_coordinate_audit_module()
+    rows = []
+    for index in range(7):
+        q_group_key = ["q_group", "primary", index, index + 1]
+        hkl = [index, 0, index + 1]
+        branch_slot = index % 2
+        target = (20.0 + index, 40.0 + index)
+        source = (target[0] + float(offset[0]), target[1] + float(offset[1]))
+        fit_qr_branch_key = {
+            "q_group_key": q_group_key,
+            "hkl": hkl,
+            "physical_branch_slot": branch_slot,
+        }
+        objective_phi = opt._wrap_phi_deg(source[1] - target[1])
+        rows.append(
+            module._build_objective_audit_pair_row(
+                index=index,
+                entry={
+                    "pair_id": f"pair-{index}",
+                    "q_group_key": q_group_key,
+                    "normalized_hkl": hkl,
+                    "physical_branch_slot": branch_slot,
+                    "fit_qr_branch_key": fit_qr_branch_key,
+                    "fit_space_anchor_override": True,
+                    "background_two_theta_deg": target[0],
+                    "background_phi_deg": target[1],
+                    "detector_native_reprojection_diagnostic_caked_deg": list(target),
+                },
+                measured_anchor=target,
+                measured_reason="cached_fit_space_anchor",
+                measured_meta={"fit_space_source": "cached_fit_space_anchor"},
+                prediction={
+                    "available": True,
+                    "fit_qr_branch_key": fit_qr_branch_key,
+                    "dynamic_baseline_anchor_caked_deg": list(source),
+                    "dynamic_baseline_anchor_actual_source": "sim_visual_caked_deg",
+                    "dynamic_baseline_anchor_source_kind": "sim_visual_caked_deg",
+                    "dynamic_baseline_anchor_projection_frame": "caked_display",
+                    "dynamic_baseline_anchor_units": "deg",
+                    "dynamic_baseline_anchor_q_group_key": q_group_key,
+                    "dynamic_baseline_anchor_hkl": hkl,
+                    "dynamic_baseline_anchor_physical_branch_slot": branch_slot,
+                    "sim_refined_caked_deg": list(source),
+                    "sim_refinement_status": "point_only_dynamic_sim_visual_caked_deg",
+                },
+                objective_diag={
+                    "manual_pair_id": f"pair-{index}",
+                    "delta_two_theta_deg": source[0] - target[0],
+                    "wrapped_delta_phi_deg": objective_phi,
+                    "solver_residual_vector": [source[0] - target[0], objective_phi],
+                },
+            )
+        )
+    return module, rows
+
+
+def test_new4_coordinate_objective_audit_schema_is_machine_checkable() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
     checks = module._pair_checks(rows)
 
     assert all(not row["schema_missing_fields"] for row in rows)
@@ -33530,6 +33595,297 @@ def test_new4_coordinate_objective_audit_schema_is_machine_checkable() -> None:
     assert rows[0]["cached_target_source"] == "cached_fit_space_anchor"
     assert rows[0]["dynamic_source_source"] == "sim_visual_caked_deg"
     assert rows[0]["optimizer_source_source"] == "sim_visual_caked_deg"
+
+
+def test_coordinate_audit_json_schema_has_all_required_fields() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert len(rows) == 7
+    assert checks["objective_audit_pair_count_is_7"] is True
+    assert checks["objective_audit_schema_machine_checkable"] is True
+    for row in rows:
+        missing = [
+            field
+            for field in module.OBJECTIVE_AUDIT_REQUIRED_PAIR_FIELDS
+            if field not in row or row.get(field) is None
+        ]
+        assert not missing, (row["pair_id"], missing)
+
+
+def test_coordinate_audit_png_is_diagnostic_not_gate() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert checks["png_is_diagnostic_not_gate"] is True
+    assert "png_path" not in module.OBJECTIVE_AUDIT_REQUIRED_PAIR_FIELDS
+    assert checks["all_residual_contract_match"] is True
+
+
+def test_coordinate_audit_reports_detector_native_reprojection_as_diagnostic() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert checks["detector_native_reprojection_is_diagnostic"] is True
+    assert checks["detector_native_reprojection_diagnostic_available"] is True
+    assert rows[0]["detector_native_reprojection_matches_cached_target"] is False
+    assert rows[0]["detector_native_reprojection_delta_vs_cached_two_theta_deg"] == pytest.approx(
+        0.25
+    )
+    assert rows[0]["detector_native_reprojection_delta_vs_cached_phi_deg_wrapped"] == (
+        pytest.approx(0.5)
+    )
+    assert checks["optimizer_measured_target_equals_cached_target"] is True
+    assert checks["optimizer_source_equals_dynamic_source"] is True
+    assert checks["all_residual_contract_match"] is True
+
+
+def test_optimizer_source_uses_dynamic_sim_visual_caked_deg() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert checks["optimizer_source_uses_dynamic_sim_visual_caked_deg"] is True
+    assert checks["dynamic_source_source_is_sim_visual_caked_deg"] is True
+    assert checks["optimizer_source_source_is_sim_visual_caked_deg"] is True
+    assert checks["clicked_visual_candidate_source_count_is_zero"] is True
+    assert checks["saved_manual_source_count_is_zero"] is True
+    assert checks["detector_grouped_fallback_count_is_zero"] is True
+    for row in rows:
+        assert row["dynamic_source_source"] == "sim_visual_caked_deg"
+        assert row["optimizer_source_source"] == "sim_visual_caked_deg"
+        assert row["source_authority_match"] is True
+        assert abs(float(row["source_delta_vs_dynamic_two_theta_deg"])) <= 1.0e-6
+        assert abs(float(row["source_delta_vs_dynamic_phi_deg_wrapped"])) <= 1.0e-6
+
+
+def _coordinate_audit_perturbed_rows(source_shift: tuple[float, float]):
+    module, base_rows = _new4_coordinate_audit_schema_rows()
+    rows = copy.deepcopy(base_rows)
+    for row in rows:
+        source = row["optimizer_simulated_source_two_theta_phi"]
+        shifted = [
+            float(source[0]) + float(source_shift[0]),
+            float(source[1]) + float(source_shift[1]),
+        ]
+        row["optimizer_simulated_source_two_theta_phi"] = shifted
+        row["optimizer_source_two_theta_deg"] = shifted[0]
+        row["optimizer_source_phi_deg"] = shifted[1]
+    return module, base_rows, rows
+
+
+def test_optimizer_measured_target_uses_cached_fit_space_anchor() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert checks["optimizer_measured_target_equals_cached_target"] is True
+    assert all(row["optimizer_measured_source"] == "cached_fit_space_anchor" for row in rows)
+    assert all(abs(float(row["target_delta_vs_cached_two_theta_deg"])) <= 1.0e-6 for row in rows)
+    assert all(abs(float(row["target_delta_vs_cached_phi_deg_wrapped"])) <= 1.0e-6 for row in rows)
+
+
+def test_optimizer_measured_target_does_not_move_when_center_changes() -> None:
+    module, base_rows, rows = _coordinate_audit_perturbed_rows((0.25, 0.1))
+    checks = module._cross_checks(base_rows, rows, True)
+
+    assert checks["target_unchanged_under_perturbation"] is True
+    assert checks["source_moves_under_perturbation"] is True
+
+
+def test_optimizer_source_moves_when_center_x_changes() -> None:
+    module, base_rows, rows = _coordinate_audit_perturbed_rows((0.25, 0.1))
+    checks = module._cross_checks(base_rows, rows, True)
+
+    assert checks["source_moves_under_perturbation"] is True
+    assert checks["target_unchanged_under_perturbation"] is True
+
+
+def test_optimizer_measured_target_does_not_move_when_theta_changes() -> None:
+    module, base_rows, rows = _coordinate_audit_perturbed_rows((0.001, 0.0))
+    checks = module._cross_checks(base_rows, rows, True)
+
+    assert checks["target_unchanged_under_perturbation"] is True
+    assert checks["source_moves_under_perturbation"] is True
+
+
+def test_optimizer_source_moves_when_theta_initial_changes() -> None:
+    module, base_rows, rows = _coordinate_audit_perturbed_rows((0.001, 0.0))
+    checks = module._cross_checks(base_rows, rows, True)
+
+    assert checks["source_moves_under_perturbation"] is True
+    assert checks["target_unchanged_under_perturbation"] is True
+
+
+def test_optimizer_measured_target_does_not_move_when_gamma_Gamma_change() -> None:
+    module, base_rows, gamma_rows = _coordinate_audit_perturbed_rows((0.01, 0.002))
+    gamma_checks = module._cross_checks(base_rows, gamma_rows, True)
+    _module, _base_rows, Gamma_rows = _coordinate_audit_perturbed_rows((0.02, 0.004))
+    Gamma_checks = module._cross_checks(base_rows, Gamma_rows, True)
+
+    assert gamma_checks["target_unchanged_under_perturbation"] is True
+    assert gamma_checks["source_moves_under_perturbation"] is True
+    assert Gamma_checks["target_unchanged_under_perturbation"] is True
+    assert Gamma_checks["source_moves_under_perturbation"] is True
+
+
+def test_optimizer_source_moves_when_gamma_Gamma_change() -> None:
+    module, base_rows, gamma_rows = _coordinate_audit_perturbed_rows((0.01, 0.002))
+    gamma_checks = module._cross_checks(base_rows, gamma_rows, True)
+    _module, _base_rows, Gamma_rows = _coordinate_audit_perturbed_rows((0.02, 0.004))
+    Gamma_checks = module._cross_checks(base_rows, Gamma_rows, True)
+
+    assert gamma_checks["source_moves_under_perturbation"] is True
+    assert gamma_checks["target_unchanged_under_perturbation"] is True
+    assert Gamma_checks["source_moves_under_perturbation"] is True
+    assert Gamma_checks["target_unchanged_under_perturbation"] is True
+
+
+def test_objective_residual_is_two_theta_phi_degrees() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert checks["objective_residual_is_two_theta_phi_degrees"] is True
+    assert checks["residual_vector_machine_checkable"] is True
+    assert checks["pixel_residual_path_used"] is False
+    for row in rows:
+        assert row["objective_residual_units"] == "deg"
+        assert row["objective_residual_coordinate_space"] == "caked_deg"
+        assert row["objective_residual_two_theta_deg"] == pytest.approx(
+            row["objective_residual_expected_two_theta_deg"]
+        )
+        assert row["objective_residual_phi_deg"] == pytest.approx(
+            row["objective_residual_expected_phi_deg_wrapped"]
+        )
+
+
+def test_objective_residual_wraps_phi_delta() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+    row = rows[0]
+    raw_phi_delta = float(row["optimizer_source_phi_deg"]) - float(row["cached_target_phi_deg"])
+
+    assert abs(raw_phi_delta) > 180.0
+    assert row["objective_residual_expected_phi_deg_wrapped"] == pytest.approx(10.5)
+    assert row["objective_residual_phi_deg"] == pytest.approx(10.5)
+    assert checks["objective_residual_wraps_phi_delta"] is True
+
+
+def test_objective_residual_matches_source_minus_target() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert checks["objective_residual_matches_source_minus_target"] is True
+    assert checks["objective_residual_vector_indices_match_pair_order"] is True
+    assert checks["all_residual_contract_match"] is True
+    assert checks["residual_arrows_equal_plotted_source_target_deltas"] is True
+    assert checks["objective_residual_contract_error_max_two_theta_deg"] <= 1.0e-6
+    assert checks["objective_residual_contract_error_max_phi_deg_wrapped"] <= 1.0e-6
+    for index, row in enumerate(rows):
+        assert row["objective_residual_vector_two_theta_index"] == 2 * index
+        assert row["objective_residual_vector_phi_index"] == 2 * index + 1
+        assert row["objective_residual_vector_contract_match"] is True
+        assert row["objective_residual_vector_two_theta_deg"] == pytest.approx(
+            row["objective_residual_two_theta_deg"]
+        )
+        assert row["objective_residual_vector_phi_deg"] == pytest.approx(
+            row["objective_residual_phi_deg"]
+        )
+        assert row["residual_arrow_delta_two_theta_deg"] == pytest.approx(
+            row["objective_residual_two_theta_deg"]
+        )
+        assert row["residual_arrow_delta_phi_deg_wrapped"] == pytest.approx(
+            row["objective_residual_phi_deg"]
+        )
+        assert row["residual_arrow_matches_plotted_source_target_delta"] is True
+
+
+def test_objective_rejects_pixel_residual_for_manual_caked_qr_fit() -> None:
+    module, rows = _new4_coordinate_audit_schema_rows()
+    checks = module._pair_checks(rows)
+
+    assert checks["objective_rejects_pixel_residual_for_manual_caked_qr_fit"] is True
+    assert module._checks_pass(checks, perturb_applied=True) is True
+    for row in rows:
+        assert row["objective_residual_units"] == "deg"
+        assert row["objective_residual_coordinate_space"] == "caked_deg"
+        assert row["pixel_residual_used_for_objective"] is False
+
+
+def test_coordinate_audit_improvement_uses_nonzero_perturbed_start() -> None:
+    module, before_rows = _new4_coordinate_audit_rows_with_source_offset((2.0, 1.0))
+    _module, after_rows = _new4_coordinate_audit_rows_with_source_offset((0.25, 0.1))
+    summary = module._fit_improvement_summary(
+        before_rows,
+        after_rows,
+        perturb_info={"applied": True, "name": "center_x", "delta": 1.0},
+        active_vars=["center_x"],
+        point_match_summary={"fixed_source_resolved_count": 7},
+    )
+
+    assert summary["checks"]["coordinate_audit_improvement_uses_nonzero_perturbed_start"] is True
+    assert summary["perturb_start"]["name"] == "center_x"
+    assert summary["active_vars"] == ["center_x"]
+    assert summary["initial_raw_angular_rms_deg"] > 0.0
+
+
+def test_coordinate_audit_improvement_reduces_raw_angular_rms() -> None:
+    module, before_rows = _new4_coordinate_audit_rows_with_source_offset((2.0, 1.0))
+    _module, after_rows = _new4_coordinate_audit_rows_with_source_offset((0.25, 0.1))
+    summary = module._fit_improvement_summary(
+        before_rows,
+        after_rows,
+        perturb_info={"applied": True, "name": "center_x", "delta": 1.0},
+        active_vars=["center_x"],
+        point_match_summary={"fixed_source_resolved_count": 7},
+    )
+
+    assert summary["checks"]["coordinate_audit_improvement_reduces_raw_angular_rms"] is True
+    assert summary["checks"]["coordinate_audit_improvement_after_arrows_shorter"] is True
+    assert summary["initial_raw_angular_rms_deg"] > summary["final_raw_angular_rms_deg"]
+    assert summary["improvement_raw_angular_rms_deg"] > 0.0
+    assert summary["metric_unit"] == "deg"
+
+
+def test_coordinate_audit_improvement_keeps_target_fixed() -> None:
+    module, before_rows = _new4_coordinate_audit_rows_with_source_offset((2.0, 1.0))
+    _module, after_rows = _new4_coordinate_audit_rows_with_source_offset((0.25, 0.1))
+    summary = module._fit_improvement_summary(
+        before_rows,
+        after_rows,
+        perturb_info={"applied": True, "name": "center_x", "delta": 1.0},
+        active_vars=["center_x"],
+        point_match_summary={"fixed_source_resolved_count": 7},
+    )
+
+    assert summary["checks"]["coordinate_audit_improvement_keeps_target_fixed"] is True
+    assert summary["checks"]["coordinate_audit_improvement_source_before_after_differ"] is True
+    for pair in summary["improvement_pairs"]:
+        assert pair["target_fixed"] is True
+        assert pair["source_changed"] is True
+
+
+def test_coordinate_audit_improvement_preserves_fixed_source_counters() -> None:
+    module, before_rows = _new4_coordinate_audit_rows_with_source_offset((2.0, 1.0))
+    _module, after_rows = _new4_coordinate_audit_rows_with_source_offset((0.25, 0.1))
+    summary = module._fit_improvement_summary(
+        before_rows,
+        after_rows,
+        perturb_info={"applied": True, "name": "center_x", "delta": 1.0},
+        active_vars=["center_x"],
+        point_match_summary={
+            "fixed_source_resolved_count": 7,
+            "fallback_entry_count": 0,
+            "fallback_row_count": 0,
+            "fixed_source_resolution_fallback_count": 0,
+            "missing_fixed_source_count": 0,
+            "branch_mismatch_count": 0,
+            "missing_pair_count": 0,
+        },
+    )
+
+    assert summary["checks"]["coordinate_audit_improvement_preserves_fixed_source_counters"] is True
+    assert summary["checks"]["coordinate_audit_improvement_fallback_counters_zero"] is True
+    assert summary["fixed_source_counter_summary"]["fixed_source_counters_clean"] is True
+    assert summary["fixed_source_counter_summary"]["fallback_counters_zero"] is True
 
 
 def test_new4_coordinate_audit_cli_accepts_objective_step_flags(
