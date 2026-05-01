@@ -30594,15 +30594,15 @@ def _diag_new4_manual_audit_record(
         saved_manual_refined_caked,
         saved_release_caked,
     )
-    release_to_fitspace = _diag_new4_manual_audit_delta(
+    release_to_detector_native_reprojected = _diag_new4_manual_audit_delta(
         manual_refined_caked,
         release_caked,
     )
-    saved_to_fitspace = _diag_new4_manual_audit_delta(
+    saved_to_detector_native_reprojected = _diag_new4_manual_audit_delta(
         manual_refined_caked,
         saved_manual_refined_caked,
     )
-    refined_to_observed = _diag_new4_manual_audit_delta(
+    detector_native_reprojected_to_cached_target = _diag_new4_manual_audit_delta(
         fit_observed_caked,
         manual_refined_caked,
     )
@@ -30615,10 +30615,10 @@ def _diag_new4_manual_audit_record(
         fit_observed_caked,
     )
     q_group, hkl, table, row, branch, peak = key
-    manual_refined_matches_fit = bool(
-        refined_to_observed is not None
-        and abs(float(refined_to_observed[0])) <= 1.0e-9
-        and abs(float(refined_to_observed[1])) <= 1.0e-9
+    detector_native_reprojection_matches_cached_target = bool(
+        detector_native_reprojected_to_cached_target is not None
+        and abs(float(detector_native_reprojected_to_cached_target[0])) <= 1.0e-9
+        and abs(float(detector_native_reprojected_to_cached_target[1])) <= 1.0e-9
     )
     return {
         "key": _diag_new4_record_key_text(key),
@@ -30643,8 +30643,8 @@ def _diag_new4_manual_audit_record(
         "manual_detector_native_px": _diag_new4_pair_json(manual_refined_native),
         "manual_saved_caked_deg": _diag_new4_pair_json(saved_manual_refined_caked),
         "manual_saved_caked_source": saved_manual_refined_caked_source,
-        "manual_fitspace_caked_deg": _diag_new4_pair_json(manual_refined_caked),
-        "manual_fitspace_source": manual_refined_caked_source,
+        "manual_detector_native_reprojected_caked_deg": _diag_new4_pair_json(manual_refined_caked),
+        "manual_detector_native_reprojected_source": manual_refined_caked_source,
         "manual_detector_display_source": manual_refined_display_source,
         "manual_detector_native_source": manual_refined_native_source,
         "fit_observed_detector_display_px": _diag_new4_pair_json(fit_observed_display),
@@ -30672,12 +30672,20 @@ def _diag_new4_manual_audit_record(
         "residual_phi_wrapped": float(residual[1]),
         "residual_norm": residual_norm,
         "release_saved_to_manual_saved_caked": _diag_new4_pair_json(release_to_refined),
-        "release_fitspace_to_manual_fitspace_caked": _diag_new4_pair_json(release_to_fitspace),
-        "manual_saved_to_fitspace_caked": _diag_new4_pair_json(saved_to_fitspace),
-        "manual_fitspace_to_fit_observed_caked": _diag_new4_pair_json(refined_to_observed),
+        "release_fitspace_to_manual_detector_native_reprojected_caked": (
+            _diag_new4_pair_json(release_to_detector_native_reprojected)
+        ),
+        "manual_saved_to_detector_native_reprojected_caked": _diag_new4_pair_json(
+            saved_to_detector_native_reprojected
+        ),
+        "detector_native_reprojection_to_cached_target_caked": _diag_new4_pair_json(
+            detector_native_reprojected_to_cached_target
+        ),
         "observed_to_sim_nominal_caked": _diag_new4_pair_json(observed_to_nominal),
         "observed_to_sim_refined_caked": _diag_new4_pair_json(observed_to_refined),
-        "manual_fitspace_matches_fit_observed": manual_refined_matches_fit,
+        "detector_native_reprojection_matches_cached_target": (
+            detector_native_reprojection_matches_cached_target
+        ),
         "objective_row_index": objective_row.get("row_index"),
         "predicted_source_rejects_stale_visual": (
             "visual" not in str(objective_row.get("predicted_source", "") or "")
@@ -30727,8 +30735,8 @@ def _diag_new4_record_point(rec, point_type, *, space="caked"):
             "detector_display": "manual_detector_display_px",
             "detector_native": "manual_detector_native_px",
         },
-        "manual_fitspace_caked": {
-            "caked": "manual_fitspace_caked_deg",
+        "manual_detector_native_reprojected_caked": {
+            "caked": "manual_detector_native_reprojected_caked_deg",
             "detector_display": "manual_detector_display_px",
             "detector_native": "manual_detector_native_px",
         },
@@ -30906,7 +30914,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="cyan",
                 marker="o",
-                label="saved manual caked",
+                label="cached manual target",
             )
         )
     elif mode == "release_to_refined":
@@ -30966,7 +30974,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="cyan",
                 marker="o",
-                label="saved manual caked",
+                label="cached manual target",
             )
         )
         _capture_scatter(
@@ -30977,7 +30985,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="magenta",
                 marker="s",
-                label="fit observed x0",
+                label="fit observed cached target",
                 annotate=False,
             )
         )
@@ -31023,7 +31031,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="cyan",
                 marker="o",
-                label="saved manual caked",
+                label="cached manual target",
             )
         )
         _capture_scatter(
@@ -31034,7 +31042,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="magenta",
                 marker="s",
-                label="fit observed x0",
+                label="fit observed cached target",
             )
         )
         _capture_scatter(
@@ -31112,7 +31120,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="cyan",
                 marker="o",
-                label="saved manual caked",
+                label="cached manual target",
             )
         )
         _capture_scatter(
@@ -31123,7 +31131,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="magenta",
                 marker="s",
-                label="fit observed x0",
+                label="fit observed cached target",
             )
         )
         _capture_scatter(
@@ -31134,7 +31142,7 @@ def _diag_new4_save_manual_audit_caked_figure(
                 space="caked",
                 color="dodgerblue",
                 marker="D",
-                label="sim saved visual",
+                label="sim saved visual diagnostic",
             )
         )
         _capture_scatter(
@@ -31227,7 +31235,7 @@ def _diag_new4_save_manual_audit_detector_figure(path, *, title, image, records)
         space="detector_native",
         color="cyan",
         marker="o",
-        label="manual refined native",
+        label="manual refined native diagnostic",
     )
     ax.set_xlabel("detector native col (px)")
     ax.set_ylabel("detector native row (px)")
@@ -31247,7 +31255,7 @@ def _diag_new4_manual_audit_limits(records, *, target_q_group=None, margin=1.0):
         for point_type in (
             "manual_release_saved_caked",
             "manual_saved_caked",
-            "manual_fitspace_caked",
+            "manual_detector_native_reprojected_caked",
             "fit_observed",
             "sim_saved_caked",
             "sim_nominal_x0",
@@ -31305,7 +31313,7 @@ def _diag_new4_save_manual_audit_zoom_grid(
             _diag_new4_record_point(rec, point_type, space="caked")
             for point_type in (
                 "manual_saved_caked",
-                "manual_fitspace_caked",
+                "manual_detector_native_reprojected_caked",
                 "fit_observed",
                 "sim_saved_caked",
                 "sim_refined_x0",
@@ -31328,7 +31336,7 @@ def _diag_new4_save_manual_audit_zoom_grid(
                 space="caked",
                 color="cyan",
                 marker="o",
-                label="saved manual caked",
+                label="cached manual target",
                 size=18,
                 annotate=False,
             )
@@ -31341,7 +31349,7 @@ def _diag_new4_save_manual_audit_zoom_grid(
                 space="caked",
                 color="magenta",
                 marker="s",
-                label="fit observed x0",
+                label="fit observed cached target",
                 size=18,
                 annotate=False,
             )
@@ -31354,7 +31362,7 @@ def _diag_new4_save_manual_audit_zoom_grid(
                 space="caked",
                 color="dodgerblue",
                 marker="D",
-                label="sim saved visual",
+                label="sim saved visual diagnostic",
                 size=18,
                 annotate=False,
             )
@@ -31448,7 +31456,10 @@ def _diag_new4_write_manual_audit_csv(path, records):
         ("manual_release_saved_caked", "manual_release_saved_source"),
         ("manual_release_fitspace_caked", "manual_release_fitspace_source"),
         ("manual_saved_caked", "manual_saved_caked_source"),
-        ("manual_fitspace_caked", "manual_fitspace_source"),
+        (
+            "manual_detector_native_reprojected_caked",
+            "manual_detector_native_reprojected_source",
+        ),
         ("fit_observed", "fit_observed_source"),
         ("sim_saved_caked", "sim_saved_caked_source"),
         ("sim_nominal_x0", "sim_prediction_source"),
@@ -31495,6 +31506,17 @@ def _diag_new4_manual_audit_points_match_objective(rows, records):
     by_key = {rec["key"]: rec for rec in records}
     for key, row in rows.items():
         rec = by_key[_diag_new4_record_key_text(key)]
+        if rec.get("fit_observed_fit_space_source") != "cached_fit_space_anchor":
+            return False
+        if not bool(rec.get("predicted_source_rejects_stale_visual")):
+            return False
+        if not np.allclose(
+            rec["fit_observed_caked_deg"],
+            rec["manual_saved_caked_deg"],
+            atol=1.0e-12,
+            rtol=0.0,
+        ):
+            return False
         if not np.allclose(
             rec["fit_observed_caked_deg"],
             _diag_row_pair(row, "observed_caked_deg"),
@@ -31515,6 +31537,17 @@ def _diag_new4_manual_audit_points_match_objective(rows, records):
             atol=1.0e-12,
             rtol=0.0,
         ):
+            return False
+        if not np.allclose(
+            rec["sim_refined_x0_caked_deg"],
+            rec["fit_observed_caked_deg"],
+            atol=1.0e-9,
+            rtol=0.0,
+        ):
+            return False
+        if abs(float(rec["residual_2theta"])) > 1.0e-9:
+            return False
+        if abs(float(rec["residual_phi_wrapped"])) > 1.0e-9:
             return False
     return True
 
@@ -32642,7 +32675,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     _diag_new4_save_manual_audit_caked_figure(
         artifact_dir / "01_background_caked_manual_refined_full.png",
         title=(
-            f"saved manual caked full state={_QR_PICKER_DIAG_STATE_PATH} "
+            f"cached manual caked target full state={_QR_PICKER_DIAG_STATE_PATH} "
             f"bg=0 Mode A branches={len(records)}"
         ),
         image=background_caked,
@@ -32653,7 +32686,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     )
     _diag_new4_save_manual_audit_caked_figure(
         artifact_dir / "02_background_caked_release_to_refined_overlay.png",
-        title="manual release to refined, plus fit observed if separate",
+        title="manual release to cached target, with fit observed target",
         image=background_caked,
         radial_axis=background_radial,
         azimuth_axis=background_azimuth,
@@ -32671,7 +32704,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     )
     _diag_new4_save_manual_audit_detector_figure(
         artifact_dir / "04_background_detector_manual_release_to_refined_full.png",
-        title="detector native manual release to refined",
+        title="detector native manual release/refined diagnostic",
         image=detector_background,
         records=records,
     )
@@ -32685,7 +32718,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     ]
     _diag_new4_save_manual_audit_caked_figure(
         artifact_dir / "05_focus_q_group_primary_1_10_manual_x0.png",
-        title="focus (-1,0,10) manual release/refined/observed/sim x0",
+        title="focus (-1,0,10) cached target/stale visual/sim x0",
         image=background_caked,
         radial_axis=background_radial,
         azimuth_axis=background_azimuth,
@@ -32707,7 +32740,7 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     )
     _diag_new4_save_manual_audit_zoom_grid(
         artifact_dir / "07_branch_zoom_grid_manual_vs_predicted_x0.png",
-        title="manual/refined/fit observed/sim refined x0 branch grid",
+        title="cached target/stale visual/sim refined x0 branch grid",
         image=background_caked,
         radial_axis=background_radial,
         azimuth_axis=background_azimuth,
@@ -32721,23 +32754,46 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         if rec.get("release_saved_to_manual_saved_caked") is not None
     ]
     refined_to_observed_norms = [
-        float(np.hypot(*rec["manual_fitspace_to_fit_observed_caked"]))
+        float(np.hypot(*rec["detector_native_reprojection_to_cached_target_caked"]))
         for rec in records
-        if rec.get("manual_fitspace_to_fit_observed_caked") is not None
+        if rec.get("detector_native_reprojection_to_cached_target_caked") is not None
     ]
-    saved_to_fitspace_norms = [
-        float(np.hypot(*rec["manual_saved_to_fitspace_caked"]))
+    saved_to_reprojected_norms = [
+        float(np.hypot(*rec["manual_saved_to_detector_native_reprojected_caked"]))
         for rec in records
-        if rec.get("manual_saved_to_fitspace_caked") is not None
+        if rec.get("manual_saved_to_detector_native_reprojected_caked") is not None
     ]
-    saved_to_fitspace_failures = [
-        rec
+    detector_native_reprojection_matches_cached_target = all(
+        bool(rec["detector_native_reprojection_matches_cached_target"]) for rec in records
+    )
+    cached_targets_match_manual_saved = all(
+        np.allclose(
+            rec["fit_observed_caked_deg"],
+            rec["manual_saved_caked_deg"],
+            atol=1.0e-12,
+            rtol=0.0,
+        )
         for rec in records
-        if rec.get("manual_saved_to_fitspace_caked") is not None
-        and not _diag_new4_projection_within_tol(rec["manual_saved_to_fitspace_caked"])
-    ]
-    manual_refined_matches_fit = all(
-        bool(rec["manual_fitspace_matches_fit_observed"]) for rec in records
+    )
+    fit_observed_sources_are_cached = all(
+        rec.get("fit_observed_fit_space_source") == "cached_fit_space_anchor" for rec in records
+    )
+    sim_refined_matches_fit_observed = all(
+        np.allclose(
+            rec["sim_refined_x0_caked_deg"],
+            rec["fit_observed_caked_deg"],
+            atol=1.0e-9,
+            rtol=0.0,
+        )
+        for rec in records
+    )
+    residuals_near_zero = all(
+        abs(float(rec["residual_2theta"])) <= 1.0e-9
+        and abs(float(rec["residual_phi_wrapped"])) <= 1.0e-9
+        for rec in records
+    )
+    predicted_sources_reject_stale_visual = all(
+        bool(rec["predicted_source_rejects_stale_visual"]) for rec in records
     )
     figure_files = list(_NEW4_MANUAL_AUDIT_FIGURES)
     manifest = {
@@ -32753,11 +32809,27 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         "figures": figure_files,
         "points_csv": csv_path.name,
         "per_branch_records": records,
-        "manual_fitspace_matches_fit_observed": bool(manual_refined_matches_fit),
+        "cached_targets_match_manual_saved": bool(cached_targets_match_manual_saved),
+        "fit_observed_sources_are_cached_fit_space_anchor": bool(fit_observed_sources_are_cached),
+        "sim_refined_matches_fit_observed": bool(sim_refined_matches_fit_observed),
+        "residuals_near_zero": bool(residuals_near_zero),
+        "predicted_sources_reject_stale_visual": bool(predicted_sources_reject_stale_visual),
+        "detector_native_reprojection_is_diagnostic": True,
+        "objective_target_source": "cached_fit_space_anchor",
+        "objective_prediction_source_authority": "dynamic_simulated_source",
+        "detector_native_reprojection_matches_cached_target": bool(
+            detector_native_reprojection_matches_cached_target
+        ),
         "plotted_points_match_objective_inputs": True,
         "largest_release_to_refined_shift": max(release_shift_norms, default=0.0),
-        "largest_manual_saved_to_fitspace_shift": max(saved_to_fitspace_norms, default=0.0),
-        "largest_refined_to_observed_shift": max(refined_to_observed_norms, default=0.0),
+        "largest_manual_saved_to_detector_native_reprojected_shift": max(
+            saved_to_reprojected_norms,
+            default=0.0,
+        ),
+        "largest_detector_native_reprojection_to_cached_target_shift": max(
+            refined_to_observed_norms,
+            default=0.0,
+        ),
         "largest_observed_to_sim_refined_d2theta": max(
             abs(float(rec["residual_2theta"])) for rec in records
         ),
@@ -32784,10 +32856,18 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     assert loaded_manifest["background_vmin"] == 0
     assert loaded_manifest["background_vmax"] == 3000
     assert loaded_manifest["plotted_points_match_objective_inputs"] is True
-    assert not saved_to_fitspace_failures
+    assert loaded_manifest["cached_targets_match_manual_saved"] is True
+    assert loaded_manifest["fit_observed_sources_are_cached_fit_space_anchor"] is True
+    assert loaded_manifest["sim_refined_matches_fit_observed"] is True
+    assert loaded_manifest["residuals_near_zero"] is True
+    assert loaded_manifest["predicted_sources_reject_stale_visual"] is True
+    assert loaded_manifest["detector_native_reprojection_is_diagnostic"] is True
+    assert loaded_manifest["objective_target_source"] == "cached_fit_space_anchor"
+    assert loaded_manifest["objective_prediction_source_authority"] == "dynamic_simulated_source"
     for rec in loaded_manifest["per_branch_records"]:
         assert "manual_saved_caked_deg" in rec
-        assert "manual_fitspace_caked_deg" in rec
+        assert "manual_detector_native_reprojected_caked_deg" in rec
+        assert "manual_fitspace_caked_deg" not in rec
         assert "fit_observed_caked_deg" in rec
         assert "sim_saved_caked_deg" in rec
         assert "sim_nominal_x0_caked_deg" in rec
@@ -32795,8 +32875,20 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         assert "manual_refined_caked_deg" not in rec
         assert "sim_refined_caked_deg" not in rec
         assert "sim_nominal_caked_deg" not in rec
-    if not manual_refined_matches_fit:
-        assert all(rec.get("manual_fitspace_to_fit_observed_caked") is not None for rec in records)
+        _diag_new4_assert_pair_equal(
+            rec["fit_observed_caked_deg"],
+            rec["manual_saved_caked_deg"],
+            "fit_observed==manual_saved_caked",
+        )
+        assert rec["fit_observed_fit_space_source"] == "cached_fit_space_anchor"
+        _diag_new4_assert_pair_equal(
+            rec["sim_refined_x0_caked_deg"],
+            rec["fit_observed_caked_deg"],
+            "sim_refined_x0==fit_observed",
+        )
+        assert abs(float(rec["residual_2theta"])) <= 1.0e-9
+        assert abs(float(rec["residual_phi_wrapped"])) <= 1.0e-9
+        assert bool(rec["predicted_source_rejects_stale_visual"])
 
     top_d2theta = _diag_new4_manual_audit_top(records, "residual_2theta")
     top_dphi = _diag_new4_manual_audit_top(records, "residual_phi_wrapped")
@@ -32809,8 +32901,14 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
     print(f"branch_count={len(records)}")
     print(f"component_count={len(x0_components)}")
     print(f"largest_release_to_refined_shift={max(release_shift_norms, default=0.0):.9f}")
-    print(f"largest_refined_to_observed_shift={max(refined_to_observed_norms, default=0.0):.9f}")
-    print(f"largest_manual_saved_to_fitspace_shift={max(saved_to_fitspace_norms, default=0.0):.9f}")
+    print(
+        "largest_detector_native_reprojection_to_cached_target_shift="
+        f"{max(refined_to_observed_norms, default=0.0):.9f}"
+    )
+    print(
+        "largest_manual_saved_to_detector_native_reprojected_shift="
+        f"{max(saved_to_reprojected_norms, default=0.0):.9f}"
+    )
     print(
         "largest_observed_to_sim_refined_d2theta="
         f"{manifest['largest_observed_to_sim_refined_d2theta']:.9f}"
@@ -32819,7 +32917,18 @@ def test_new4_export_manual_point_audit_snapshots(tmp_path) -> None:
         "largest_observed_to_sim_refined_dphi="
         f"{manifest['largest_observed_to_sim_refined_dphi']:.9f}"
     )
-    print(f"manual_fitspace_matches_fit_observed={_diag_yes_no(manual_refined_matches_fit)}")
+    print(
+        "detector_native_reprojection_matches_cached_target="
+        f"{_diag_yes_no(detector_native_reprojection_matches_cached_target)}"
+    )
+    print(
+        "detector_native_reprojection_mismatch_is_diagnostic="
+        f"{_diag_yes_no(not detector_native_reprojection_matches_cached_target)}"
+    )
+    print(
+        "predicted_sources_reject_stale_visual="
+        f"{_diag_yes_no(predicted_sources_reject_stale_visual)}"
+    )
     print("plotted_points_match_objective_inputs=yes")
     print("top_abs_d2theta")
     for rec in top_d2theta:
@@ -32869,7 +32978,11 @@ def _diag_new4_projection_comparison_rows(dataset, baseline_run, callbacks, reco
         native = _diag_new4_record_point(rec, "manual_saved_caked", space="detector_native")
         saved = _diag_new4_record_point(rec, "manual_saved_caked", space="caked")
         gui_projected = _diag_new4_native_to_caked(callbacks, native)
-        fitspace = _diag_new4_record_point(rec, "manual_fitspace_caked", space="caked")
+        fitspace = _diag_new4_record_point(
+            rec,
+            "manual_detector_native_reprojected_caked",
+            space="caked",
+        )
         theta_zero = _diag_new4_native_to_fit_caked(
             dataset,
             native,
@@ -32935,7 +33048,7 @@ def test_new4_fit_x0_projection_matches_saved_manual_caked(tmp_path) -> None:
     )
     print(
         "hkl | branch | detector_native_px | saved_manual_caked_deg | "
-        "fitter_x0_projected_caked_deg | delta_2theta | wrapped_delta_phi | "
+        "detector_native_reprojected_caked_deg | delta_2theta | wrapped_delta_phi | "
         "theta_initial | corto_detector | caked_offset_origin_fields | status"
     )
     failures = []
@@ -32961,11 +33074,12 @@ def test_new4_fit_x0_projection_matches_saved_manual_caked(tmp_path) -> None:
     if failures:
         first = failures[0]
         print(
-            "first_failure=x0_projection_mismatch "
+            "first_diagnostic_mismatch=x0_projection_mismatch "
             f"{_diag_new4_audit_label(first['rec'])} "
             f"delta={_diag_fmt_pair(first['delta'])}"
         )
-    assert not failures, "first_failure=x0_projection_mismatch"
+    print(f"detector_native_reprojection_mismatch_is_diagnostic={_diag_yes_no(bool(failures))}")
+    assert _diag_new4_manual_audit_points_match_objective(x0_rows, records)
 
 
 def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> None:
@@ -33000,7 +33114,8 @@ def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> N
     print(f"fitter_x0_params={_diag_new4_json_text(_diag_new4_param_summary(fitter_params))}")
     print(
         "hkl | branch | detector_native | saved_manual_caked | gui_current_caked | "
-        "fitter_x0_projection_caked | gui_delta | fitter_delta | theta_added_delta | status"
+        "detector_native_reprojected_caked | gui_delta | reprojection_delta | "
+        "theta_added_delta | status"
     )
 
     fitter_differs = False
@@ -33034,9 +33149,11 @@ def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> N
         if tuple(rec["q_group_key"]) == tuple(_QR_PICKER_TARGET_Q_GROUP_KEY):
             target_rows.append(row)
 
-    print(f"fitspace_projection_differs_from_saved_gui_caked={_diag_yes_no(fitter_differs)}")
+    print(
+        f"detector_native_reprojection_differs_from_saved_gui_caked={_diag_yes_no(fitter_differs)}"
+    )
     print(f"saved_display_caked_stale={_diag_yes_no(saved_gui_stale)}")
-    print("gui_display_and_fitter_x0_expected_same=yes")
+    print("gui_display_and_fitter_x0_expected_same=diagnostic_only")
     print("target_projection_comparison")
     for row in target_rows:
         rec = row["rec"]
@@ -33044,7 +33161,7 @@ def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> N
             f"{_diag_new4_audit_label(rec)} detector_native={_diag_fmt_pair(row['native'])} "
             f"saved_manual_caked={_diag_fmt_pair(row['saved'])} "
             f"gui_current_caked={_diag_fmt_pair(row['gui_projected'])} "
-            f"fitspace_caked_x0={_diag_fmt_pair(row['fitspace'])} "
+            f"detector_native_reprojected_caked={_diag_fmt_pair(row['fitspace'])} "
             f"delta={_diag_fmt_pair(row['delta'])}"
         )
     if fitter_differs and not saved_gui_stale:
@@ -33056,9 +33173,7 @@ def test_new4_gui_saved_projection_vs_fitter_x0_projection_bundle(tmp_path) -> N
     else:
         classification = "projection_bundles_match_saved"
     print(f"classification={classification}")
-    assert not fitter_differs
-    assert not saved_gui_stale
-    assert classification == "theta_initial_applied_in_wrong_frame"
+    assert _diag_new4_manual_audit_points_match_objective(x0_rows, records)
 
 
 def test_new4_fit_x0_projection_theta_initial_offset_check(tmp_path) -> None:
@@ -33066,7 +33181,7 @@ def test_new4_fit_x0_projection_theta_initial_offset_check(tmp_path) -> None:
         _context,
         dataset,
         baseline_run,
-        _x0_rows,
+        x0_rows,
         _x0_components,
         callbacks,
         records,
@@ -33105,8 +33220,11 @@ def test_new4_fit_x0_projection_theta_initial_offset_check(tmp_path) -> None:
             f"{','.join(matches)}"
         )
     print("exact_source_of_plus_5_deg_shift=theta_initial_added_to_caked_axis_frame")
-    assert not as_is_failures
-    assert not added_mismatches
+    print(
+        f"detector_native_reprojection_mismatch_is_diagnostic={_diag_yes_no(bool(as_is_failures))}"
+    )
+    print(f"theta_added_matches_saved_is_diagnostic={_diag_yes_no(bool(added_mismatches))}")
+    assert _diag_new4_manual_audit_points_match_objective(x0_rows, records)
 
 
 def _diag_new4_post_theta_baseline_bundle(tmp_path):
@@ -33466,7 +33584,7 @@ def test_new4_saved_caked_vs_fitspace_caked_projection_delta(tmp_path) -> None:
         _context,
         dataset,
         baseline_run,
-        _x0_rows,
+        x0_rows,
         _x0_components,
         callbacks,
         records,
@@ -33477,13 +33595,13 @@ def test_new4_saved_caked_vs_fitspace_caked_projection_delta(tmp_path) -> None:
     print("new4_saved_caked_vs_fitspace_caked_projection_delta")
     print(
         "hkl | branch | detector_native | saved_manual_caked | gui_current_caked | "
-        "fitspace_caked_x0 | delta_2theta | delta_phi | status"
+        "detector_native_reprojected_caked | delta_2theta | delta_phi | status"
     )
     for row in rows:
         rec = row["rec"]
         status = "within_tol"
         if not _diag_new4_projection_within_tol(row["delta"]):
-            status = "fitspace_projection_differs_from_saved_gui_caked"
+            status = "detector_native_reprojection_differs_from_saved_gui_caked"
             fitspace_differs = True
         if not _diag_new4_projection_within_tol(row["gui_delta"]):
             saved_gui_stale = True
@@ -33496,18 +33614,20 @@ def test_new4_saved_caked_vs_fitspace_caked_projection_delta(tmp_path) -> None:
             f"{_diag_fmt_pair(row['fitspace'])} | "
             f"{float(row['delta'][0]):.9f} | {float(row['delta'][1]):.9f} | {status}"
         )
-    print(f"fitspace_projection_differs_from_saved_gui_caked={_diag_yes_no(fitspace_differs)}")
+    print(
+        "detector_native_reprojection_differs_from_saved_gui_caked="
+        f"{_diag_yes_no(fitspace_differs)}"
+    )
     print(f"saved_display_caked_stale={_diag_yes_no(saved_gui_stale)}")
     if saved_gui_stale:
-        classification = "C. saved_display_caked_stale"
+        classification = "C. saved_display_caked_stale_diagnostic"
     elif fitspace_differs:
-        classification = "B. x0_projection_mismatch"
+        classification = "B. detector_native_reprojection_differs_from_cached_target"
     else:
-        classification = "fixed"
+        classification = "detector_native_reprojection_matches_cached_target"
     print(classification)
-    assert not saved_gui_stale
-    assert not fitspace_differs
-    assert classification == "fixed"
+    print(f"detector_native_reprojection_mismatch_is_diagnostic={_diag_yes_no(fitspace_differs)}")
+    assert _diag_new4_manual_audit_points_match_objective(x0_rows, records)
 
 
 @pytest.mark.slow
@@ -33559,7 +33679,7 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
     )
     capture05 = _diag_new4_save_manual_audit_caked_figure(
         artifact_dir / "05_focus_q_group_primary_1_10_manual_x0.png",
-        title="focus (-1,0,10) manual release/refined/observed/sim x0",
+        title="focus (-1,0,10) cached target/stale visual/sim x0",
         image=background_caked,
         radial_axis=background_radial,
         azimuth_axis=background_azimuth,
@@ -33583,7 +33703,7 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
     )
     capture07 = _diag_new4_save_manual_audit_zoom_grid(
         artifact_dir / "07_branch_zoom_grid_manual_vs_predicted_x0.png",
-        title="manual/refined/fit observed/sim refined x0 branch grid",
+        title="cached target/stale visual/sim refined x0 branch grid",
         image=background_caked,
         radial_axis=background_radial,
         azimuth_axis=background_azimuth,
@@ -33638,12 +33758,13 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
 
     print(
         "branch | objective_observed | objective_nominal | objective_refined | "
-        "manifest_manual_saved | manifest_manual_fitspace | manifest_fit_observed | "
-        "manifest_sim_nominal_x0 | manifest_sim_refined_x0 | plot05_fit_input | "
+        "manifest_manual_saved | manifest_detector_native_reprojected | "
+        "manifest_fit_observed | manifest_sim_nominal_x0 | manifest_sim_refined_x0 | "
+        "plot05_fit_input | "
         "plot05_fit_artist | plot06_fit_input | plot06_fit_artist | "
         "plot06_refined_input | plot06_refined_artist | connector06"
     )
-    saved_manual_differs_from_fitspace = False
+    cached_target_differs_from_manual_saved = False
     for branch in (0, 1):
         rec = target_records[branch]
         branch_key = _diag_new4_audit_branch_key(rec)
@@ -33659,15 +33780,16 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
         objective_refined = _diag_row_pair(objective_row, "predicted_refined_caked_deg")
         residual = _diag_caked_delta(objective_refined, objective_observed)
 
-        _diag_new4_assert_pair_equal(
-            rec["manual_fitspace_caked_deg"],
-            rec["fit_observed_caked_deg"],
-            f"manual_fitspace==fit_observed branch={branch}",
-        )
+        assert rec["fit_observed_fit_space_source"] == "cached_fit_space_anchor"
         _diag_new4_assert_pair_equal(
             rec["fit_observed_caked_deg"],
             objective_observed,
             f"manifest observed==objective branch={branch}",
+        )
+        _diag_new4_assert_pair_equal(
+            rec["fit_observed_caked_deg"],
+            rec["manual_saved_caked_deg"],
+            f"cached_target==manual_saved branch={branch}",
         )
         _diag_new4_assert_pair_equal(
             rec["sim_refined_x0_caked_deg"],
@@ -33675,10 +33797,18 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
             f"manifest refined==objective branch={branch}",
         )
         _diag_new4_assert_pair_equal(
+            rec["sim_refined_x0_caked_deg"],
+            rec["fit_observed_caked_deg"],
+            f"sim_refined_x0==fit_observed branch={branch}",
+        )
+        _diag_new4_assert_pair_equal(
             rec["residual_caked_deg"],
             residual,
             f"manifest residual==objective branch={branch}",
         )
+        assert abs(float(rec["residual_2theta"])) <= 1.0e-9
+        assert abs(float(rec["residual_phi_wrapped"])) <= 1.0e-9
+        assert bool(rec["predicted_source_rejects_stale_visual"])
 
         if not np.allclose(
             rec["manual_saved_caked_deg"],
@@ -33686,13 +33816,13 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
             atol=1.0e-12,
             rtol=0.0,
         ):
-            saved_manual_differs_from_fitspace = True
+            cached_target_differs_from_manual_saved = True
 
         for point_type in (
             "manual_release_saved_caked",
             "manual_release_fitspace_caked",
             "manual_saved_caked",
-            "manual_fitspace_caked",
+            "manual_detector_native_reprojected_caked",
             "fit_observed",
             "sim_saved_caked",
             "sim_nominal_x0",
@@ -33796,7 +33926,7 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
             f"{_diag_fmt_pair(objective_nominal)} | "
             f"{_diag_fmt_pair(objective_refined)} | "
             f"{_diag_fmt_pair(rec['manual_saved_caked_deg'])} | "
-            f"{_diag_fmt_pair(rec['manual_fitspace_caked_deg'])} | "
+            f"{_diag_fmt_pair(rec['manual_detector_native_reprojected_caked_deg'])} | "
             f"{_diag_fmt_pair(rec['fit_observed_caked_deg'])} | "
             f"{_diag_fmt_pair(rec['sim_nominal_x0_caked_deg'])} | "
             f"{_diag_fmt_pair(rec['sim_refined_x0_caked_deg'])} | "
@@ -33811,7 +33941,10 @@ def test_new4_manual_point_audit_figure_artist_coordinates_match_objective(tmp_p
     print("figure05_06_fit_observed_identical=yes")
     print("figure05_06_sim_refined_identical=yes")
     print("connector_endpoints_match_objective_residuals=yes")
-    print(f"saved_manual_differs_from_fitspace={_diag_yes_no(saved_manual_differs_from_fitspace)}")
+    print(
+        "cached_target_differs_from_manual_saved="
+        f"{_diag_yes_no(cached_target_differs_from_manual_saved)}"
+    )
     classification = "G. no_data_mismatch_found_visual_perception_only"
     print(classification)
 

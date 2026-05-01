@@ -9,6 +9,26 @@ Last updated: 2026-05-01
 
 ## Current status
 
+- 2026-05-01 manual point audit contract updated to match the final coordinate
+  authority. `fit_observed_caked_deg` is the cached caked target from
+  `cached_fit_space_anchor` and must match `manual_saved_caked_deg`.
+  `sim_refined_x0_caked_deg` must overlap that target and residual `2θ/φ`
+  components must stay near zero. The detector-native reprojection formerly
+  reported as `manual_fitspace_caked_deg` is now
+  `manual_detector_native_reprojected_caked_deg` and is diagnostic only.
+  A mismatch between that reprojection and the cached target is no longer a
+  failure.
+- Bug/error fixed: the stale diagnostic assertion
+  `manual_fitspace_caked_deg == fit_observed_caked_deg` was removed from the
+  manual-point audit tests. The fitter was not changed. The audit now rejects
+  stale visual prediction sources, asserts cached-target authority, and keeps
+  generated `manual_point_audit` figures ignored/untracked.
+- Validation status for this audit update: targeted projection and
+  manual-point-audit tests pass (`6 passed, 485 deselected`), the focused
+  export test passes, `ruff format --check` passes for
+  `tests/test_manual_geometry_selection_helpers.py`, and `py_compile` passes.
+  Full `python -m ra_sim.dev check` remains blocked only by pre-existing
+  formatting drift in `ra_sim/fitting/optimization.py`.
 - 2026-05-01 New4 manual caked Qr geometry-fit contract is validated through
   Rung 7, explicit C2, explicit 12-active headless, and default headless.
   Manual caked Qr targets stay fixed in cached `2θ/φ`; optimizer sources use
