@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -663,6 +664,10 @@ class IntegrationRangeControlsViewState:
     selected_qr_rod_label: Any = None
     selected_qr_rod_combobox: Any = None
     selected_qr_rod_listbox: Any = None
+    selected_qr_rod_listbox_options_updater: Any = None
+    selected_qr_rod_option_signature: Any = None
+    selected_qr_rod_refresh_after_id: Any = None
+    selected_qr_rod_refresh_after_widget: Any = None
     selected_qr_rod_checkbox_container: Any = None
     selected_qr_rod_checkbox_vars: dict[str, Any] = field(default_factory=dict)
     selected_qr_rod_checkbuttons: dict[str, Any] = field(default_factory=dict)
@@ -699,6 +704,8 @@ class IntegrationRangeControlsViewState:
     delta_qr_slider: Any = None
     delta_qr_entry_var: Any = None
     delta_qr_entry: Any = None
+    delta_qr_cue_var: Any = None
+    delta_qr_cue_label: Any = None
 
 
 @dataclass
@@ -1017,6 +1024,19 @@ class GeometryRuntimeState:
     )
     selected_qr_rod_caked_payload_cache: dict[object, object] = field(default_factory=dict)
     selected_qr_rod_detector_payload_cache: dict[object, object] = field(default_factory=dict)
+    selected_qr_rod_detector_union_mask_cache: OrderedDict[object, object] = field(
+        default_factory=OrderedDict
+    )
+    selected_qr_rod_caked_union_mask_cache: OrderedDict[object, object] = field(
+        default_factory=OrderedDict
+    )
+    selected_qr_rod_profile_cache: OrderedDict[object, object] = field(default_factory=OrderedDict)
+    selected_qr_rod_shape_mask_index_cache: dict[str, object] = field(
+        default_factory=lambda: {
+            "signature": None,
+            "index": {},
+        }
+    )
 
 
 @dataclass

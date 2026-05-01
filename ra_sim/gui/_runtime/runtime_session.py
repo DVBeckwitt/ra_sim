@@ -19,6 +19,10 @@ DEFAULT_LINKED_EVENTS_PER_SAMPLE = 2
 MIN_EVENTS_PER_BEAM_PHASE = 1
 MAX_EVENTS_PER_BEAM_PHASE = 1000
 _SELECTED_QR_ROD_DETECTOR_PROFILE_BINS = 512
+SELECTED_QR_ROD_DETECTOR_UNION_MASK_CACHE_CAP = 32
+SELECTED_QR_ROD_CAKED_UNION_MASK_CACHE_CAP = 32
+SELECTED_QR_ROD_PROFILE_CACHE_CAP = 64
+_SELECTED_QR_ROD_DELTA_QR_WIDTH_BOUNDS = (0.001, 1.0)
 
 
 gui_bootstrap.early_main_bootstrap(__name__)
@@ -35,9 +39,10 @@ import hashlib
 import re
 import threading
 import traceback
-from collections import defaultdict, namedtuple
+from collections import OrderedDict, defaultdict, namedtuple
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import wraps
 from importlib.resources import as_file, files
 from pathlib import Path
 from time import perf_counter
@@ -54,6 +59,59 @@ from matplotlib.patches import Rectangle
 from matplotlib.transforms import Bbox
 
 from ra_sim.io.osc_reader import read_osc
+
+_QR_ROD_PROFILE_TIMINGS_MAX_RECORDS = 512
+_QR_ROD_PROFILE_TIMINGS: list[dict[str, object]] = []
+
+
+def clear_qr_rod_profile_timings() -> None:
+    """Clear retained selected-Qr rod profiling records."""
+
+    _QR_ROD_PROFILE_TIMINGS.clear()
+
+
+def _qr_rod_profiling_enabled() -> bool:
+    return str(os.environ.get("RA_SIM_PROFILE_QR_ROD", "")).strip() == "1"
+
+
+def _qr_rod_profile_start() -> float | None:
+    return perf_counter() if _qr_rod_profiling_enabled() else None
+
+
+def _qr_rod_profile_end(
+    stage: str,
+    start_time: float | None,
+    **metadata: object,
+) -> None:
+    if start_time is None or not _qr_rod_profiling_enabled():
+        return
+    try:
+        elapsed_ms = (perf_counter() - float(start_time)) * 1000.0
+    except Exception:
+        return
+    record = {"stage": str(stage), "elapsed_ms": float(elapsed_ms)}
+    if metadata:
+        record.update(metadata)
+    _QR_ROD_PROFILE_TIMINGS.append(record)
+    overflow = len(_QR_ROD_PROFILE_TIMINGS) - _QR_ROD_PROFILE_TIMINGS_MAX_RECORDS
+    if overflow > 0:
+        del _QR_ROD_PROFILE_TIMINGS[:overflow]
+
+
+def _qr_rod_profiled(stage: str):
+    def _decorate(func):
+        @wraps(func)
+        def _wrapped(*args, **kwargs):
+            start_time = _qr_rod_profile_start()
+            try:
+                return func(*args, **kwargs)
+            finally:
+                _qr_rod_profile_end(str(stage), start_time)
+
+        return _wrapped
+
+    return _decorate
+
 
 if not isinstance(globals().get("sampling_optics_controls_view_state"), SimpleNamespace):
     sampling_optics_controls_view_state = SimpleNamespace()
@@ -4409,7 +4467,7 @@ def _initialize_runtime_plot_block_01() -> None:
         ),
         cmap=highlight_cmap,
         vmin=0,
-        vmax=1,
+        vmax=7,
         origin="upper",
         zorder=4,
         interpolation="nearest",
@@ -9360,6 +9418,144 @@ def _selected_qr_rod_mode_requested() -> bool:
     return bool(roi_values.get("integrate_selected_qr_rod", False))
 
 
+def _selected_qr_rod_bounded_cache(
+    attr_name: str,
+) -> OrderedDict[object, object]:
+    cache = getattr(geometry_runtime_state, attr_name, None)
+    if not isinstance(cache, OrderedDict):
+        cache = OrderedDict(cache.items()) if isinstance(cache, Mapping) else OrderedDict()
+        try:
+            setattr(geometry_runtime_state, attr_name, cache)
+        except Exception:
+            return OrderedDict()
+    return cache
+
+
+def _selected_qr_rod_bounded_cache_get(
+    cache: OrderedDict[object, object],
+    signature: object,
+) -> object | None:
+    if signature not in cache:
+        return None
+    value = cache[signature]
+    try:
+        cache.move_to_end(signature)
+    except Exception:
+        pass
+    return value
+
+
+def _selected_qr_rod_bounded_cache_put(
+    cache: OrderedDict[object, object],
+    signature: object,
+    value: object,
+    *,
+    cap: int,
+) -> object:
+    cache[signature] = value
+    try:
+        cache.move_to_end(signature)
+    except Exception:
+        pass
+    while len(cache) > int(cap):
+        try:
+            cache.popitem(last=False)
+        except TypeError:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+    return value
+
+
+def _selected_qr_rod_clear_bounded_caches() -> None:
+    for attr_name in (
+        "selected_qr_rod_detector_union_mask_cache",
+        "selected_qr_rod_caked_union_mask_cache",
+        "selected_qr_rod_profile_cache",
+    ):
+        cache = getattr(geometry_runtime_state, attr_name, None)
+        if hasattr(cache, "clear") and callable(cache.clear):
+            cache.clear()
+        else:
+            try:
+                setattr(geometry_runtime_state, attr_name, OrderedDict())
+            except Exception:
+                pass
+
+
+def _selected_qr_rod_axis_signature(value: object) -> tuple[object, ...] | None:
+    try:
+        array = np.asarray(value, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if array.size <= 0:
+        return ("axis", 0)
+    finite = array[np.isfinite(array)]
+    try:
+        digest = hashlib.blake2b(
+            np.ascontiguousarray(array).view(np.uint8),
+            digest_size=16,
+        ).hexdigest()
+    except Exception:
+        digest = _timing_signature_digest(tuple(float(v) for v in array[:16]))
+    return (
+        "axis",
+        int(array.size),
+        float(array[0]),
+        float(array[-1]),
+        int(finite.size),
+        float(np.nanmin(finite)) if finite.size else None,
+        float(np.nanmax(finite)) if finite.size else None,
+        digest,
+    )
+
+
+def _selected_qr_rod_array_identity_signature(value: object) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    try:
+        array = np.asarray(value)
+    except Exception:
+        return ("object", id(value))
+    return (
+        "array_identity",
+        tuple(int(v) for v in array.shape),
+        str(array.dtype),
+        id(value),
+    )
+
+
+def _selected_qr_rod_union_mask_cache_signature(
+    kind: str,
+    payloads: Sequence[Mapping[str, object]],
+) -> tuple[object, ...] | None:
+    keys: list[str] = []
+    signatures: list[object] = []
+    mask_shape: tuple[int, ...] | None = None
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            return None
+        keys.append(str(payload.get("selected_qr_rod_key", "") or ""))
+        signatures.append(_timing_signature_digest(payload.get("signature")))
+        try:
+            shape = tuple(int(v) for v in np.asarray(payload.get("mask"), dtype=bool).shape)
+        except Exception:
+            return None
+        if len(shape) != 2:
+            return None
+        if mask_shape is None:
+            mask_shape = shape
+        elif shape != mask_shape:
+            return None
+    if mask_shape is None:
+        return None
+    return (
+        f"selected_qr_rod_{kind}_union_mask_cache",
+        tuple(keys),
+        tuple(signatures),
+        mask_shape,
+    )
+
+
 def _selected_qr_rod_shape_source_signature() -> tuple[object, ...]:
     hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
     try:
@@ -9399,6 +9595,10 @@ def _selected_qr_rod_shape_mask_signature(
     )
 
 
+_SELECTED_QR_ROD_SHAPE_PIXEL_ROUNDING_MODE = "rint"
+_SELECTED_QR_ROD_SHAPE_FILL_RADIUS = 1
+
+
 def _selected_qr_rod_lattice_defaults() -> tuple[float, float]:
     try:
         default_a = float(a_var.get())
@@ -9411,30 +9611,58 @@ def _selected_qr_rod_lattice_defaults() -> tuple[float, float]:
     return default_a, default_c
 
 
-def _selected_qr_rod_shape_mask_from_stored_hit_tables(
-    selected_entry: Mapping[str, object],
-    detector_shape: tuple[int, int],
-) -> dict[str, object]:
-    shape = tuple(int(v) for v in detector_shape)
-    result: dict[str, object] = {
+def _default_selected_qr_rod_shape_payload() -> dict[str, object]:
+    return {
         "mask": None,
         "available": False,
         "pixel_count": 0,
         "signature": ("selected_qr_rod_shape", False, _selected_qr_rod_shape_source_signature()),
     }
-    if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0:
-        return result
 
-    selected_parent_key = gui_controllers.qr_set_mask_key(selected_entry.get("key"))
-    if selected_parent_key is None:
-        return result
+
+def _selected_qr_rod_shape_mask_index_signature(
+    detector_shape: tuple[int, int],
+) -> tuple[object, ...] | None:
+    try:
+        shape = tuple(int(v) for v in detector_shape[:2])
+    except Exception:
+        return None
+    if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0:
+        return None
+    return (
+        "selected_qr_rod_shape_mask_index",
+        _timing_signature_digest(
+            getattr(simulation_runtime_state, "stored_hit_table_signature", None)
+        ),
+        shape,
+        _SELECTED_QR_ROD_SHAPE_PIXEL_ROUNDING_MODE,
+        int(_SELECTED_QR_ROD_SHAPE_FILL_RADIUS),
+    )
+
+
+def _selected_qr_rod_shape_fill_offsets() -> tuple[tuple[int, int], ...]:
+    radius = int(_SELECTED_QR_ROD_SHAPE_FILL_RADIUS)
+    return tuple(
+        (row_offset, col_offset)
+        for row_offset in range(-radius, radius + 1)
+        for col_offset in range(-radius, radius + 1)
+        if abs(int(row_offset)) + abs(int(col_offset)) <= radius
+    )
+
+
+def _build_selected_qr_rod_shape_mask_index(
+    detector_shape: tuple[int, int],
+) -> dict[str, np.ndarray]:
+    shape = tuple(int(v) for v in detector_shape)
+    if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0:
+        return {}
 
     hit_tables_raw = getattr(simulation_runtime_state, "stored_max_positions_local", None)
     if not isinstance(hit_tables_raw, (list, tuple)):
-        return result
+        return {}
     hit_tables = list(hit_tables_raw)
     if not hit_tables:
-        return result
+        return {}
 
     peak_table_lattice_raw = getattr(simulation_runtime_state, "stored_peak_table_lattice", None)
     peak_table_lattice = (
@@ -9444,7 +9672,8 @@ def _selected_qr_rod_shape_mask_from_stored_hit_tables(
     if len(peak_table_lattice) != len(hit_tables):
         peak_table_lattice = [(default_a, default_c, "primary") for _table in hit_tables]
 
-    mask = np.zeros(shape, dtype=bool)
+    index: dict[str, np.ndarray] = {}
+    fill_offsets = _selected_qr_rod_shape_fill_offsets()
     for table_idx, table in enumerate(hit_tables):
         rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(table)
         if not rows:
@@ -9487,33 +9716,119 @@ def _selected_qr_rod_shape_mask_from_stored_hit_tables(
             row_parent_key = gui_controllers.qr_set_mask_key(
                 gui_geometry_q_group_manager.geometry_q_group_key_from_entry(row_entry)
             )
-            if row_parent_key != selected_parent_key:
+            encoded_parent_key = gui_controllers.encode_bragg_qr_group_key(row_parent_key)
+            if not encoded_parent_key:
                 continue
+            mask = index.setdefault(encoded_parent_key, np.zeros(shape, dtype=bool))
 
             center_col = int(np.rint(col_value))
             center_row = int(np.rint(row_value))
-            for row_offset, col_offset in ((0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)):
+            for row_offset, col_offset in fill_offsets:
                 rr = center_row + row_offset
                 cc = center_col + col_offset
                 if 0 <= rr < shape[0] and 0 <= cc < shape[1]:
                     mask[rr, cc] = True
+    return index
 
-    pixel_count = int(np.count_nonzero(mask))
-    mask_signature = _selected_qr_rod_shape_mask_signature(mask, shape)
-    result.update(
-        {
-            "mask": mask if pixel_count > 0 else None,
-            "available": bool(pixel_count > 0),
-            "pixel_count": pixel_count,
-            "signature": (
-                "selected_qr_rod_shape",
-                bool(pixel_count > 0),
-                _selected_qr_rod_shape_source_signature(),
-                mask_signature,
-            ),
-        }
+
+def _current_selected_qr_rod_shape_mask_index(
+    detector_shape: tuple[int, int],
+) -> dict[str, np.ndarray]:
+    signature = _selected_qr_rod_shape_mask_index_signature(detector_shape)
+    if signature is None:
+        return {}
+    cache = getattr(geometry_runtime_state, "selected_qr_rod_shape_mask_index_cache", None)
+    if not isinstance(cache, dict):
+        cache = {"signature": None, "index": {}}
+        try:
+            setattr(geometry_runtime_state, "selected_qr_rod_shape_mask_index_cache", cache)
+        except Exception:
+            cache = {"signature": None, "index": {}}
+    if cache.get("signature") != signature:
+        cache["signature"] = signature
+        start_time = _qr_rod_profile_start()
+        try:
+            cache["index"] = _build_selected_qr_rod_shape_mask_index(detector_shape)
+        finally:
+            _qr_rod_profile_end(
+                "shape_mask_index_build",
+                start_time,
+                detector_shape=tuple(int(v) for v in detector_shape[:2]),
+            )
+    index = cache.get("index")
+    return index if isinstance(index, dict) else {}
+
+
+def _selected_qr_rod_shape_payload_from_index(
+    index: Mapping[str, object],
+    selected_key: object,
+    detector_shape: tuple[int, int],
+) -> dict[str, object]:
+    shape = tuple(int(v) for v in detector_shape)
+    encoded_key = str(selected_key or "")
+    mask = index.get(encoded_key) if isinstance(index, Mapping) else None
+    if mask is None:
+        return _default_selected_qr_rod_shape_payload()
+    mask_array = np.asarray(mask, dtype=bool)
+    if mask_array.shape != shape:
+        return _default_selected_qr_rod_shape_payload()
+    pixel_count = int(np.count_nonzero(mask_array))
+    mask_signature = _selected_qr_rod_shape_mask_signature(mask_array, shape)
+    return {
+        "mask": mask_array if pixel_count > 0 else None,
+        "available": bool(pixel_count > 0),
+        "pixel_count": pixel_count,
+        "signature": (
+            "selected_qr_rod_shape",
+            bool(pixel_count > 0),
+            _selected_qr_rod_shape_source_signature(),
+            mask_signature,
+        ),
+    }
+
+
+def _selected_qr_rod_shape_mask_lookup_from_stored_hit_tables(
+    selected_entries: Sequence[Mapping[str, object]],
+    selected_keys: Sequence[object],
+    detector_shape: tuple[int, int],
+) -> dict[str, dict[str, object]]:
+    shape = tuple(int(v) for v in detector_shape)
+    default_payload = _default_selected_qr_rod_shape_payload()
+    lookup: dict[str, dict[str, object]] = {
+        str(key): dict(default_payload) for key in selected_keys if str(key)
+    }
+    if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0:
+        return lookup
+    index = _current_selected_qr_rod_shape_mask_index(shape)
+    for selected_entry, selected_key in zip(selected_entries, selected_keys, strict=False):
+        encoded_key = str(
+            selected_key or gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+        )
+        if not encoded_key:
+            continue
+        selected_parent_key = gui_controllers.qr_set_mask_key(selected_entry.get("key"))
+        encoded_parent_key = gui_controllers.encode_bragg_qr_group_key(selected_parent_key)
+        if not encoded_parent_key:
+            continue
+        lookup[encoded_key] = _selected_qr_rod_shape_payload_from_index(
+            index,
+            encoded_parent_key,
+            shape,
+        )
+    return lookup
+
+
+def _selected_qr_rod_shape_mask_from_stored_hit_tables(
+    selected_entry: Mapping[str, object],
+    detector_shape: tuple[int, int],
+) -> dict[str, object]:
+    encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+    lookup = _selected_qr_rod_shape_mask_lookup_from_stored_hit_tables(
+        [selected_entry],
+        [encoded_key],
+        detector_shape,
     )
-    return result
+    return lookup.get(str(encoded_key), _default_selected_qr_rod_shape_payload())
 
 
 def _selected_qr_rod_caked_projection_context_for_payload(
@@ -9569,6 +9884,8 @@ def _selected_qr_rod_delta_qr_half_width_from_roi(
         return 0.0
     if not np.isfinite(delta_qr_width) or delta_qr_width <= 0.0:
         return 0.0
+    lo, hi = _SELECTED_QR_ROD_DELTA_QR_WIDTH_BOUNDS
+    delta_qr_width = min(max(delta_qr_width, min(lo, hi)), max(lo, hi))
     return float(delta_qr_width) * 0.5
 
 
@@ -9669,7 +9986,9 @@ def _selected_qr_rod_caked_mask_payload_for_entry(
         phi_windows=phi_windows,
         shape_mask=shape_mask,
     )
-    encoded_key = str(selected_key or gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key")))
+    encoded_key = str(
+        selected_key or gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+    )
     if base_signature is None:
         return None
     signature = (
@@ -9711,6 +10030,21 @@ def _selected_qr_rod_caked_mask_payload_for_entry(
     mask = np.asarray(mask_result.get("mask"), dtype=bool)
     if tuple(mask.shape) != (int(azimuth_axis.size), int(radial_axis.size)):
         return None
+    visual_payload = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_caked_visual_payload(
+        selected_entry=selected_entry,
+        config=config,
+        projection_context=projection_context,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        delta_qr=delta_qr,
+        qz_min=qz_lo,
+        qz_max=qz_hi,
+        phi_min=phi_min,
+        phi_max=phi_max,
+        phi_windows=phi_windows,
+        shape_mask=shape_mask,
+        mask_payload=mask_result,
+    )
     result = {
         "selected_entry": dict(selected_entry),
         "selected_qr_rod_key": encoded_key,
@@ -9723,6 +10057,13 @@ def _selected_qr_rod_caked_mask_payload_for_entry(
         "shape_pixel_count": int(shape_payload.get("pixel_count", 0) or 0),
         "shape_signature": shape_payload.get("signature") if include_shape else None,
     }
+    if isinstance(visual_payload, Mapping):
+        result["visual_payload"] = dict(visual_payload)
+        result["visual_overlay"] = np.asarray(
+            visual_payload.get("visual_overlay"),
+            dtype=np.float32,
+        )
+        result["visual_signature"] = visual_payload.get("signature")
     payload_cache[signature] = result
     return result
 
@@ -9752,6 +10093,68 @@ def _current_selected_qr_rod_caked_mask_payloads_for_result(
     return payloads
 
 
+def _selected_qr_rod_visual_payload_for_union(
+    payload: Mapping[str, object],
+    *,
+    primary: bool,
+) -> dict[str, object] | None:
+    visual_payload = payload.get("visual_payload")
+    if isinstance(visual_payload, Mapping):
+        styled_payload = gui_qr_cylinder_overlay.restyle_selected_qr_rod_band_visual_payload(
+            visual_payload,
+            primary=bool(primary),
+            signature=(
+                payload.get("selected_qr_rod_key"),
+                payload.get("visual_signature"),
+            ),
+        )
+        if isinstance(styled_payload, Mapping):
+            return styled_payload
+
+    if bool(primary):
+        try:
+            overlay = np.asarray(payload.get("visual_overlay"), dtype=np.float32)
+        except Exception:
+            return None
+        if overlay.ndim == 2 and np.any(overlay):
+            return {
+                "visual_overlay": overlay,
+                "signature": payload.get("visual_signature"),
+            }
+    return None
+
+
+def _compose_selected_qr_rod_union_visual(
+    payloads: Sequence[Mapping[str, object]],
+    *,
+    output_shape: tuple[int, int],
+) -> tuple[np.ndarray, list[object]]:
+    union_visual = np.zeros(tuple(int(value) for value in output_shape), dtype=np.float32)
+    visual_entries: list[tuple[int, np.ndarray, object]] = []
+    for index, payload in enumerate(payloads):
+        visual_payload = _selected_qr_rod_visual_payload_for_union(
+            payload,
+            primary=(index == 0),
+        )
+        if not isinstance(visual_payload, Mapping):
+            continue
+        try:
+            visual = np.asarray(visual_payload.get("visual_overlay"), dtype=np.float32)
+        except Exception:
+            continue
+        if visual.shape != union_visual.shape:
+            continue
+        visual_entries.append((int(index), visual, visual_payload.get("signature")))
+
+    for _index, visual, _signature in visual_entries[1:]:
+        visible = visual > 0.0
+        union_visual[visible] = visual[visible]
+    for _index, visual, _signature in visual_entries[:1]:
+        visible = visual > 0.0
+        union_visual[visible] = visual[visible]
+    return union_visual, [signature for _index, _visual, signature in visual_entries]
+
+
 def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     payloads = _current_selected_qr_rod_caked_mask_payloads_for_result()
     if not payloads:
@@ -9759,6 +10162,13 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
     first_mask = np.asarray(payloads[0].get("mask"), dtype=bool)
     if first_mask.ndim != 2:
         return None
+    cache_signature = _selected_qr_rod_union_mask_cache_signature("caked", payloads)
+    if cache_signature is None:
+        return None
+    cache = _selected_qr_rod_bounded_cache("selected_qr_rod_caked_union_mask_cache")
+    cached_payload = _selected_qr_rod_bounded_cache_get(cache, cache_signature)
+    if isinstance(cached_payload, dict):
+        return cached_payload
     union_mask = np.zeros_like(first_mask, dtype=bool)
     signatures: list[object] = []
     keys: list[str] = []
@@ -9769,6 +10179,10 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
         union_mask |= mask
         signatures.append(payload.get("signature"))
         keys.append(str(payload.get("selected_qr_rod_key", "")))
+    union_visual, visual_signatures = _compose_selected_qr_rod_union_visual(
+        payloads,
+        output_shape=tuple(int(value) for value in union_mask.shape),
+    )
     signature = (
         "selected_qr_rod_caked_mask_union",
         tuple(keys),
@@ -9776,22 +10190,32 @@ def _current_selected_qr_rod_caked_mask_payload() -> dict[str, object] | None:
         tuple(int(value) for value in union_mask.shape),
         int(np.count_nonzero(union_mask)),
     )
-    cache = geometry_runtime_state.qr_cylinder_band_cache
-    if cache.get("signature") != signature:
-        primary = dict(payloads[0])
-        primary.update(
-            {
-                "selected_entry": dict(payloads[0].get("selected_entry", {})),
-                "selected_qr_rod_key": keys[0] if keys else "",
-                "selected_qr_rod_keys": list(keys),
-                "mask": union_mask,
-                "signature": signature,
-                "per_rod_payloads": payloads,
-            }
+    primary = dict(payloads[0])
+    primary.update(
+        {
+            "selected_entry": dict(payloads[0].get("selected_entry", {})),
+            "selected_qr_rod_key": keys[0] if keys else "",
+            "selected_qr_rod_keys": list(keys),
+            "mask": union_mask,
+            "signature": signature,
+            "per_rod_payloads": payloads,
+        }
+    )
+    if np.any(union_visual):
+        primary["visual_overlay"] = union_visual
+        primary["visual_signature"] = (
+            "selected_qr_rod_caked_visual_union",
+            tuple(keys),
+            tuple(visual_signatures),
+            tuple(int(value) for value in union_visual.shape),
+            float(np.nanmax(union_visual)),
         )
-        cache["signature"] = signature
-        cache["result"] = primary
-    return cache.get("result")
+    return _selected_qr_rod_bounded_cache_put(
+        cache,
+        cache_signature,
+        primary,
+        cap=SELECTED_QR_ROD_CAKED_UNION_MASK_CACHE_CAP,
+    )
 
 
 def _selected_qr_rod_phi_windows_from_roi(
@@ -9810,12 +10234,29 @@ def _selected_qr_rod_phi_windows_from_roi(
     )
 
 
-def _current_selected_qr_rod_detector_support_inputs(
-    *,
-    require_qz_range: bool,
-    selected_entry: Mapping[str, object] | None = None,
-    selected_key: object | None = None,
-) -> dict[str, object] | None:
+def _current_selected_qr_rod_detector_entry_pairs(
+    entries: Sequence[Mapping[str, object]],
+    roi_values: Mapping[str, object],
+) -> tuple[list[str], list[dict[str, object]]]:
+    entries_list = [dict(entry) for entry in entries or ()]
+    selected_keys = _current_selected_qr_rod_keys_from_roi(roi_values)
+    paired_keys: list[str] = []
+    paired_entries: list[dict[str, object]] = []
+    for selected_key in selected_keys:
+        entry = _selected_qr_rod_entry_for_key(entries_list, selected_key)
+        if entry is None:
+            continue
+        paired_keys.append(str(selected_key))
+        paired_entries.append(dict(entry))
+    if paired_entries:
+        return paired_keys, paired_entries
+    if not entries_list:
+        return [], []
+    first_entry = dict(entries_list[0])
+    return [gui_controllers.encode_bragg_qr_group_key(first_entry.get("key"))], [first_entry]
+
+
+def _current_selected_qr_rod_detector_shared_inputs() -> dict[str, object] | None:
     if not _selected_qr_rod_detector_mode_requested():
         return None
     roi_values = _current_analysis_roi_values()
@@ -9823,34 +10264,23 @@ def _current_selected_qr_rod_detector_support_inputs(
         delta_qr = _selected_qr_rod_delta_qr_half_width_from_roi(roi_values)
         phi_min = float(roi_values.get("phi_min", -180.0))
         phi_max = float(roi_values.get("phi_max", 180.0))
+        qz_min = float(roi_values.get("qz_min", 0.0))
+        qz_max = float(roi_values.get("qz_max", 0.0))
     except Exception:
         return None
     if not np.isfinite(delta_qr) or delta_qr <= 0.0:
         return None
-    qz_lo = qz_hi = None
-    if require_qz_range:
-        try:
-            qz_min = float(roi_values.get("qz_min", 0.0))
-            qz_max = float(roi_values.get("qz_max", 0.0))
-        except Exception:
-            return None
-        qz_lo, qz_hi = sorted((qz_min, qz_max))
-        if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
-            return None
+    qz_lo, qz_hi = sorted((qz_min, qz_max))
+    qz_range_valid = bool(np.isfinite(qz_lo) and np.isfinite(qz_hi) and qz_hi > qz_lo)
     phi_windows = _selected_qr_rod_phi_windows_from_roi(roi_values)
     if phi_windows is None:
         return None
 
-    if selected_entry is None:
-        entries = _analysis_selected_qr_rod_entries()
-        selected_entry = _current_selected_qr_rod_entry(entries)
-    if selected_entry is None:
-        return None
-    try:
-        qr_center = float(selected_entry["qr"])
-    except Exception:
-        return None
-    if not np.isfinite(qr_center):
+    selected_keys, selected_entries = _current_selected_qr_rod_detector_entry_pairs(
+        _analysis_selected_qr_rod_entries(),
+        roi_values,
+    )
+    if not selected_entries:
         return None
 
     detector_shape = _current_detector_shape()
@@ -9866,9 +10296,12 @@ def _current_selected_qr_rod_detector_support_inputs(
         return None
     if not isinstance(config, gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig):
         return None
+    effective_config = gui_qr_cylinder_overlay._selected_qr_mask_projection_config(  # noqa: SLF001
+        config
+    )
 
     q_maps = gui_qr_cylinder_overlay.detector_qr_qz_maps_for_projection(
-        config=config,
+        config=effective_config,
         detector_shape=detector_shape,
     )
     if q_maps is None:
@@ -9897,70 +10330,145 @@ def _current_selected_qr_rod_detector_support_inputs(
     ):
         return None
 
+    include_shape = bool(roi_values.get("include_selected_qr_rod_shape", False))
+    shape_payloads_by_key = (
+        _selected_qr_rod_shape_mask_lookup_from_stored_hit_tables(
+            selected_entries,
+            selected_keys,
+            detector_shape,
+        )
+        if include_shape
+        else {key: _default_selected_qr_rod_shape_payload() for key in selected_keys}
+    )
+    shape_source_signature = _selected_qr_rod_shape_source_signature()
+    return {
+        "config": effective_config,
+        "detector_shape": detector_shape,
+        "qr_map": qr_map,
+        "qz_map": qz_map,
+        "valid_q": valid_q,
+        "detector_phi_deg": detector_phi_deg,
+        "phi_min": phi_min,
+        "phi_max": phi_max,
+        "phi_windows": phi_windows,
+        "qz_min": qz_lo,
+        "qz_max": qz_hi,
+        "qz_range_valid": qz_range_valid,
+        "delta_qr": delta_qr,
+        "selected_qr_rod_keys": list(selected_keys),
+        "selected_entries": [dict(entry) for entry in selected_entries],
+        "include_selected_qr_rod_shape": bool(include_shape),
+        "shape_payloads_by_key": shape_payloads_by_key,
+        "shape_source_signature": shape_source_signature,
+    }
+
+
+_current_selected_qr_rod_detector_shared_inputs = _qr_rod_profiled("detector_shared_input_build")(
+    _current_selected_qr_rod_detector_shared_inputs
+)
+
+
+def _selected_qr_rod_detector_support_inputs_from_shared(
+    shared_inputs: Mapping[str, object],
+    *,
+    require_qz_range: bool,
+    selected_entry: Mapping[str, object],
+    selected_key: object,
+) -> dict[str, object] | None:
+    try:
+        qr_center = float(selected_entry["qr"])
+    except Exception:
+        return None
+    if not np.isfinite(qr_center):
+        return None
+    if require_qz_range and not bool(shared_inputs.get("qz_range_valid", False)):
+        return None
+
     encoded_key = (
         str(selected_key)
         if selected_key is not None and str(selected_key)
         else gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
     )
-    include_shape = bool(roi_values.get("include_selected_qr_rod_shape", False))
-    shape_payload = {
-        "mask": None,
-        "available": False,
-        "pixel_count": 0,
-        "signature": ("selected_qr_rod_shape", False, None),
-    }
-    if include_shape:
-        shape_payload = _selected_qr_rod_shape_mask_from_stored_hit_tables(
-            selected_entry,
-            detector_shape,
-        )
-    shape_mask = shape_payload.get("mask") if include_shape else None
-    shape_source_signature = (
-        shape_payload.get("signature")
-        if include_shape
-        else _selected_qr_rod_shape_source_signature()
+    shape_payloads_by_key = shared_inputs.get("shape_payloads_by_key")
+    shape_payload = (
+        shape_payloads_by_key.get(encoded_key, _default_selected_qr_rod_shape_payload())
+        if isinstance(shape_payloads_by_key, Mapping)
+        else _default_selected_qr_rod_shape_payload()
     )
+    include_shape = bool(shared_inputs.get("include_selected_qr_rod_shape", False))
+    shape_mask = shape_payload.get("mask") if include_shape else None
+    qz_lo = shared_inputs.get("qz_min") if require_qz_range else None
+    qz_hi = shared_inputs.get("qz_max") if require_qz_range else None
     support_signature = gui_qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
         selected_entry=selected_entry,
-        config=config,
-        detector_shape=detector_shape,
-        delta_qr=delta_qr,
+        config=shared_inputs["config"],
+        detector_shape=shared_inputs["detector_shape"],
+        delta_qr=shared_inputs["delta_qr"],
         qz_min=qz_lo,
         qz_max=qz_hi,
-        phi_min=phi_min,
-        phi_max=phi_max,
-        phi_windows=phi_windows,
+        phi_min=shared_inputs.get("phi_min", -180.0),
+        phi_max=shared_inputs.get("phi_max", 180.0),
+        phi_windows=shared_inputs.get("phi_windows"),
         shape_mask=shape_mask,
         selected_qr_rod_key=encoded_key,
         include_shape=bool(include_shape),
-        shape_source_signature=shape_source_signature,
+        shape_source_signature=shared_inputs.get("shape_source_signature"),
     )
     if support_signature is None:
         return None
     return {
         "selected_entry": dict(selected_entry),
         "selected_qr_rod_key": encoded_key,
-        "config": config,
+        "config": shared_inputs["config"],
         "qr_center": qr_center,
-        "delta_qr": delta_qr,
+        "delta_qr": shared_inputs["delta_qr"],
         "qz_min": qz_lo,
         "qz_max": qz_hi,
-        "phi_min": phi_min,
-        "phi_max": phi_max,
-        "phi_windows": phi_windows,
-        "qr_map": qr_map,
-        "qz_map": qz_map,
-        "valid_q": valid_q,
-        "detector_phi_deg": detector_phi_deg,
-        "detector_shape": detector_shape,
+        "phi_min": shared_inputs.get("phi_min", -180.0),
+        "phi_max": shared_inputs.get("phi_max", 180.0),
+        "phi_windows": shared_inputs.get("phi_windows"),
+        "qr_map": shared_inputs["qr_map"],
+        "qz_map": shared_inputs["qz_map"],
+        "valid_q": shared_inputs["valid_q"],
+        "detector_phi_deg": shared_inputs.get("detector_phi_deg"),
+        "detector_shape": shared_inputs["detector_shape"],
         "shape_mask": shape_mask,
         "include_selected_qr_rod_shape": bool(include_shape),
         "shape_available": bool(shape_payload.get("available", False)),
         "shape_pixel_count": int(shape_payload.get("pixel_count", 0) or 0),
         "shape_signature": shape_payload.get("signature") if include_shape else None,
-        "shape_source_signature": shape_source_signature,
+        "shape_source_signature": shared_inputs.get("shape_source_signature"),
         "mask_signature": support_signature,
     }
+
+
+def _current_selected_qr_rod_detector_support_inputs(
+    *,
+    require_qz_range: bool,
+    selected_entry: Mapping[str, object] | None = None,
+    selected_key: object | None = None,
+) -> dict[str, object] | None:
+    shared_inputs = _current_selected_qr_rod_detector_shared_inputs()
+    if shared_inputs is None:
+        return None
+    selected_entries = list(shared_inputs.get("selected_entries") or [])
+    selected_keys = list(shared_inputs.get("selected_qr_rod_keys") or [])
+    if selected_entry is None:
+        if not selected_entries:
+            return None
+        selected_entry = selected_entries[0]
+    if selected_key is None:
+        selected_key = (
+            selected_keys[0]
+            if selected_keys
+            else gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+        )
+    return _selected_qr_rod_detector_support_inputs_from_shared(
+        shared_inputs,
+        require_qz_range=require_qz_range,
+        selected_entry=selected_entry,
+        selected_key=selected_key,
+    )
 
 
 def _current_selected_qr_rod_detector_mask_payload() -> dict[str, object] | None:
@@ -9970,6 +10478,13 @@ def _current_selected_qr_rod_detector_mask_payload() -> dict[str, object] | None
     first_mask = np.asarray(payloads[0].get("mask"), dtype=bool)
     if first_mask.ndim != 2:
         return None
+    cache_signature = _selected_qr_rod_union_mask_cache_signature("detector", payloads)
+    if cache_signature is None:
+        return None
+    cache = _selected_qr_rod_bounded_cache("selected_qr_rod_detector_union_mask_cache")
+    cached_payload = _selected_qr_rod_bounded_cache_get(cache, cache_signature)
+    if isinstance(cached_payload, dict):
+        return cached_payload
     union_mask = np.zeros_like(first_mask, dtype=bool)
     signatures: list[object] = []
     keys: list[str] = []
@@ -9980,6 +10495,10 @@ def _current_selected_qr_rod_detector_mask_payload() -> dict[str, object] | None
         union_mask |= mask
         signatures.append(payload.get("signature"))
         keys.append(str(payload.get("selected_qr_rod_key", "")))
+    union_visual, visual_signatures = _compose_selected_qr_rod_union_visual(
+        payloads,
+        output_shape=tuple(int(value) for value in union_mask.shape),
+    )
     signature = (
         "selected_qr_rod_detector_mask_union",
         tuple(keys),
@@ -9987,21 +10506,36 @@ def _current_selected_qr_rod_detector_mask_payload() -> dict[str, object] | None
         tuple(int(value) for value in union_mask.shape),
         int(np.count_nonzero(union_mask)),
     )
-    cache = geometry_runtime_state.qr_cylinder_band_cache
-    if cache.get("signature") != signature:
-        primary = dict(payloads[0])
-        primary.update(
-            {
-                "selected_qr_rod_key": keys[0] if keys else "",
-                "selected_qr_rod_keys": list(keys),
-                "mask": union_mask,
-                "signature": signature,
-                "per_rod_payloads": payloads,
-            }
+    primary = dict(payloads[0])
+    primary.update(
+        {
+            "selected_qr_rod_key": keys[0] if keys else "",
+            "selected_qr_rod_keys": list(keys),
+            "mask": union_mask,
+            "signature": signature,
+            "per_rod_payloads": payloads,
+        }
+    )
+    if np.any(union_visual):
+        primary["visual_overlay"] = union_visual
+        primary["visual_signature"] = (
+            "selected_qr_rod_detector_visual_union",
+            tuple(keys),
+            tuple(visual_signatures),
+            tuple(int(value) for value in union_visual.shape),
+            float(np.nanmax(union_visual)),
         )
-        cache["signature"] = signature
-        cache["result"] = primary
-    return cache.get("result")
+    return _selected_qr_rod_bounded_cache_put(
+        cache,
+        cache_signature,
+        primary,
+        cap=SELECTED_QR_ROD_DETECTOR_UNION_MASK_CACHE_CAP,
+    )
+
+
+_current_selected_qr_rod_detector_mask_payload = _qr_rod_profiled("detector_union_mask_build")(
+    _current_selected_qr_rod_detector_mask_payload
+)
 
 
 def _selected_qr_rod_detector_mask_payload_for_inputs(
@@ -10042,12 +10576,30 @@ def _selected_qr_rod_detector_mask_payload_for_inputs(
         selected_qr_rod_key=inputs.get("selected_qr_rod_key"),
         include_shape=bool(inputs.get("include_selected_qr_rod_shape", False)),
         shape_source_signature=inputs.get("shape_source_signature"),
+        qr_map=inputs.get("qr_map"),
+        qz_map=inputs.get("qz_map"),
+        valid_q=inputs.get("valid_q"),
     )
     if not isinstance(mask_result, Mapping):
         return None
     mask = np.asarray(mask_result.get("mask"), dtype=bool)
     if tuple(mask.shape) != tuple(int(v) for v in inputs["detector_shape"]):
         return None
+    visual_payload = gui_qr_cylinder_overlay.build_detector_selected_qr_rod_band_visual_payload(
+        qr_map=inputs.get("qr_map"),
+        qz_map=inputs.get("qz_map"),
+        valid_q=inputs.get("valid_q"),
+        qr_center=inputs.get("qr_center"),
+        delta_qr=inputs.get("delta_qr"),
+        qz_min=inputs.get("qz_min"),
+        qz_max=inputs.get("qz_max"),
+        detector_phi_deg=inputs.get("detector_phi_deg"),
+        phi_min=inputs.get("phi_min", -180.0),
+        phi_max=inputs.get("phi_max", 180.0),
+        phi_windows=inputs.get("phi_windows"),
+        shape_mask=inputs.get("shape_mask"),
+        signature=signature,
+    )
     result = {
         "selected_entry": dict(inputs["selected_entry"]),
         "selected_qr_rod_key": inputs.get("selected_qr_rod_key"),
@@ -10055,31 +10607,32 @@ def _selected_qr_rod_detector_mask_payload_for_inputs(
         "signature": signature,
         "qz_min": inputs.get("qz_min"),
         "qz_max": inputs.get("qz_max"),
-        "include_selected_qr_rod_shape": bool(
-            inputs.get("include_selected_qr_rod_shape", False)
-        ),
+        "include_selected_qr_rod_shape": bool(inputs.get("include_selected_qr_rod_shape", False)),
         "shape_available": bool(mask_result.get("shape_available", False)),
         "shape_pixel_count": int(mask_result.get("shape_pixel_count", 0) or 0),
         "shape_signature": inputs.get("shape_signature"),
     }
+    if isinstance(visual_payload, Mapping):
+        result["visual_payload"] = dict(visual_payload)
+        result["visual_overlay"] = np.asarray(
+            visual_payload.get("visual_overlay"),
+            dtype=np.float32,
+        )
+        result["visual_signature"] = visual_payload.get("signature")
     payload_cache[signature] = result
     return result
 
 
 def _current_selected_qr_rod_detector_mask_payloads() -> list[dict[str, object]]:
-    if not _selected_qr_rod_detector_mode_requested():
+    shared_inputs = _current_selected_qr_rod_detector_shared_inputs()
+    if shared_inputs is None:
         return []
-    entries = _analysis_selected_qr_rod_entries()
-    selected_entries = _current_selected_qr_rod_entries(entries)
-    selected_keys = _current_selected_qr_rod_keys_from_roi(_current_analysis_roi_values())
-    if not selected_keys:
-        selected_keys = [
-            gui_controllers.encode_bragg_qr_group_key(entry.get("key"))
-            for entry in selected_entries
-        ]
+    selected_entries = list(shared_inputs.get("selected_entries") or [])
+    selected_keys = list(shared_inputs.get("selected_qr_rod_keys") or [])
     payloads: list[dict[str, object]] = []
     for selected_entry, selected_key in zip(selected_entries, selected_keys, strict=False):
-        inputs = _current_selected_qr_rod_detector_support_inputs(
+        inputs = _selected_qr_rod_detector_support_inputs_from_shared(
+            shared_inputs,
             require_qz_range=True,
             selected_entry=selected_entry,
             selected_key=selected_key,
@@ -10115,19 +10668,17 @@ def _current_selected_qr_rod_detector_integration_context() -> dict[str, object]
 
 
 def _current_selected_qr_rod_detector_drag_context() -> dict[str, object] | None:
-    entries = _analysis_selected_qr_rod_entries()
-    selected_entries = _current_selected_qr_rod_entries(entries)
-    selected_keys = _current_selected_qr_rod_keys_from_roi(_current_analysis_roi_values())
-    if not selected_keys:
-        selected_keys = [
-            gui_controllers.encode_bragg_qr_group_key(entry.get("key"))
-            for entry in selected_entries
-        ]
+    shared_inputs = _current_selected_qr_rod_detector_shared_inputs()
+    if shared_inputs is None:
+        return None
+    selected_entries = list(shared_inputs.get("selected_entries") or [])
+    selected_keys = list(shared_inputs.get("selected_qr_rod_keys") or [])
     contexts: list[dict[str, object]] = []
     union_support = None
     signatures: list[object] = []
     for selected_entry, selected_key in zip(selected_entries, selected_keys, strict=False):
-        inputs = _current_selected_qr_rod_detector_support_inputs(
+        inputs = _selected_qr_rod_detector_support_inputs_from_shared(
+            shared_inputs,
             require_qz_range=False,
             selected_entry=selected_entry,
             selected_key=selected_key,
@@ -10179,9 +10730,7 @@ def _current_selected_qr_rod_detector_drag_context() -> dict[str, object] | None
     context = dict(contexts[0])
     context["per_rod_contexts"] = contexts
     context["union_support_mask"] = union_support
-    context["selected_qr_rod_keys"] = [
-        str(ctx.get("selected_qr_rod_key", "")) for ctx in contexts
-    ]
+    context["selected_qr_rod_keys"] = [str(ctx.get("selected_qr_rod_key", "")) for ctx in contexts]
     context["signature"] = (
         "selected_qr_rod_detector_drag_union",
         tuple(context["selected_qr_rod_keys"]),
@@ -11278,8 +11827,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
         getattr(range_view_state, "phi_max_entry", None),
     )
     rod_widgets = (
-        getattr(range_view_state, "selected_qr_rod_combobox", None),
-        *((getattr(range_view_state, "selected_qr_rod_checkbuttons", {}) or {}).values()),
+        getattr(range_view_state, "selected_qr_rod_listbox", None),
         getattr(range_view_state, "mirror_selected_qr_phi_checkbutton", None),
         getattr(range_view_state, "include_selected_qr_rod_shape_checkbutton", None),
         *((getattr(range_view_state, "rod_profile_intensity_mode_buttons", {}) or {}).values()),
@@ -12076,6 +12624,11 @@ def _invalidate_qr_cylinder_band_cache() -> None:
     geometry_runtime_state.qr_cylinder_band_cache = _empty_qr_cylinder_band_cache()
     geometry_runtime_state.selected_qr_rod_caked_payload_cache = {}
     geometry_runtime_state.selected_qr_rod_detector_payload_cache = {}
+    _selected_qr_rod_clear_bounded_caches()
+    geometry_runtime_state.selected_qr_rod_shape_mask_index_cache = {
+        "signature": None,
+        "index": {},
+    }
 
 
 def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:
@@ -12372,27 +12925,13 @@ def _initialize_runtime_controls_block_15() -> None:
                 else None
             ),
             set_integration_overlay_image_factory=lambda: _set_primary_integration_overlay_image,
-            caked_custom_mask_factory=lambda: (
-                (_current_selected_qr_rod_caked_mask_payload() or {}).get("mask")
+            caked_qr_rod_payload_factory=lambda: (
+                _current_selected_qr_rod_caked_mask_payload()
                 if callable(globals().get("_current_selected_qr_rod_caked_mask_payload", None))
                 else None
             ),
-            caked_custom_mask_signature_factory=lambda: (
-                (
-                    (_current_selected_qr_rod_caked_mask_payload() or {}).get("signature")
-                    if callable(globals().get("_current_selected_qr_rod_caked_mask_payload", None))
-                    else None
-                )
-                if getattr(geometry_runtime_state, "qr_cylinder_band_cache", None) is not None
-                else None
-            ),
-            detector_qr_rod_mask_factory=lambda: (
-                (_current_selected_qr_rod_detector_mask_payload() or {}).get("mask")
-                if callable(globals().get("_current_selected_qr_rod_detector_mask_payload", None))
-                else None
-            ),
-            detector_qr_rod_mask_signature_factory=lambda: (
-                (_current_selected_qr_rod_detector_mask_payload() or {}).get("signature")
+            detector_qr_rod_payload_factory=lambda: (
+                _current_selected_qr_rod_detector_mask_payload()
                 if callable(globals().get("_current_selected_qr_rod_detector_mask_payload", None))
                 else None
             ),
@@ -13479,9 +14018,9 @@ def _auto_match_scale_factor_to_radial_peak():
                             "primary_selected_qr_rod_key"
                         ] = primary_key
                         simulation_runtime_state.last_1d_integration_data["x_axis_kind"] = "qz"
-                        simulation_runtime_state.last_1d_integration_data[
-                            "x_axis_label"
-                        ] = "Qz (A^-1)"
+                        simulation_runtime_state.last_1d_integration_data["x_axis_label"] = (
+                            "Qz (A^-1)"
+                        )
             except Exception:
                 sim_curve = None
                 bg_curve = None
@@ -14133,6 +14672,11 @@ def _rebuild_standard_1d_axes() -> None:
     ax_1d_azim.set_ylabel("Intensity")
     ax_1d_azim.set_title("Azimuthal Integration (φ)")
     setattr(simulation_runtime_state, "analysis_1d_layout_mode", "standard")
+    setattr(simulation_runtime_state, "analysis_1d_plot_mode", "standard")
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_axes", [])
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_lines_by_key", {})
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_line_slots", [])
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_layout_count", 0)
     cache = getattr(simulation_runtime_state, "analysis_1d_layout_cache", None)
     if isinstance(cache, dict):
         cache.clear()
@@ -14243,6 +14787,9 @@ def _set_1d_layout_for_selected_qr_rod() -> None:
     if line_1d_az_bg is not None:
         line_1d_az_bg.set_data([], [])
     setattr(simulation_runtime_state, "analysis_1d_layout_mode", "selected_qr_rods")
+    setattr(simulation_runtime_state, "analysis_1d_plot_mode", "selected_qr_rods")
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_axes", [ax_1d_radial])
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_layout_count", 1)
 
 
 def _set_1d_layout_for_selected_qr_rods(count: int) -> list[object]:
@@ -14250,7 +14797,29 @@ def _set_1d_layout_for_selected_qr_rods(count: int) -> list[object]:
     global line_1d_rad, line_1d_rad_bg, line_1d_az, line_1d_az_bg
 
     count = int(max(1, count))
-    if count <= 1 or fig_1d is None:
+    if fig_1d is None:
+        _set_1d_layout_for_selected_qr_rod()
+        return [ax_1d_radial] if ax_1d_radial is not None else []
+    current_mode = getattr(
+        simulation_runtime_state,
+        "analysis_1d_plot_mode",
+        getattr(simulation_runtime_state, "analysis_1d_layout_mode", "standard"),
+    )
+    existing_axes = list(
+        getattr(simulation_runtime_state, "analysis_selected_qr_rod_axes", []) or []
+    )
+    existing_count = int(
+        getattr(simulation_runtime_state, "analysis_selected_qr_rod_layout_count", 0) or 0
+    )
+    if (
+        current_mode == "selected_qr_rods"
+        and existing_count == count
+        and len(existing_axes) == count
+    ):
+        return existing_axes
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_lines_by_key", {})
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_line_slots", [])
+    if count <= 1:
         _set_1d_layout_for_selected_qr_rod()
         return [ax_1d_radial] if ax_1d_radial is not None else []
     try:
@@ -14262,17 +14831,23 @@ def _set_1d_layout_for_selected_qr_rods(count: int) -> list[object]:
         return [ax_1d_radial] if ax_1d_radial is not None else []
     ax_1d_radial = axes[0]
     ax_1d_azim = axes[-1]
-    (line_1d_rad,) = ax_1d_radial.plot([], [], "b-", label="Simulated")
-    (line_1d_rad_bg,) = ax_1d_radial.plot([], [], "r--", label="Background")
-    (line_1d_az,) = ax_1d_radial.plot([], [], alpha=0.0)
-    (line_1d_az_bg,) = ax_1d_radial.plot([], [], alpha=0.0)
+    line_1d_rad = None
+    line_1d_rad_bg = None
+    line_1d_az = None
+    line_1d_az_bg = None
     setattr(simulation_runtime_state, "analysis_1d_layout_mode", "selected_qr_rods")
+    setattr(simulation_runtime_state, "analysis_1d_plot_mode", "selected_qr_rods")
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_axes", list(axes))
+    setattr(simulation_runtime_state, "analysis_selected_qr_rod_layout_count", count)
     _refresh_analysis_figure_interactions_for_axes(axes)
     return axes
 
 
 def _set_1d_layout_for_standard_profiles() -> None:
-    if getattr(simulation_runtime_state, "analysis_1d_layout_mode", "standard") == "selected_qr_rods":
+    if (
+        getattr(simulation_runtime_state, "analysis_1d_layout_mode", "standard")
+        == "selected_qr_rods"
+    ):
         _rebuild_standard_1d_axes()
     if ax_1d_radial is None or ax_1d_azim is None:
         return
@@ -14281,6 +14856,84 @@ def _set_1d_layout_for_standard_profiles() -> None:
     _set_axis_visible(ax_1d_azim, True)
     _set_axis_position(ax_1d_radial, cache.get("radial_position"))
     _set_axis_position(ax_1d_azim, cache.get("azimuth_position"))
+    setattr(simulation_runtime_state, "analysis_1d_plot_mode", "standard")
+
+
+def _selected_qr_rod_line_state() -> tuple[dict[str, dict[str, object]], list[dict[str, object]]]:
+    lines_by_key = getattr(
+        simulation_runtime_state,
+        "analysis_selected_qr_rod_lines_by_key",
+        None,
+    )
+    if not isinstance(lines_by_key, dict):
+        lines_by_key = {}
+        setattr(simulation_runtime_state, "analysis_selected_qr_rod_lines_by_key", lines_by_key)
+    line_slots = getattr(simulation_runtime_state, "analysis_selected_qr_rod_line_slots", None)
+    if not isinstance(line_slots, list):
+        line_slots = []
+        setattr(simulation_runtime_state, "analysis_selected_qr_rod_line_slots", line_slots)
+    return lines_by_key, line_slots
+
+
+def _selected_qr_rod_lines_for_axis(
+    axis: object,
+    *,
+    key: str,
+    slot_index: int,
+) -> dict[str, object] | None:
+    lines_by_key, line_slots = _selected_qr_rod_line_state()
+    while len(line_slots) <= int(slot_index):
+        line_slots.append({})
+    existing = lines_by_key.get(key)
+    if isinstance(existing, dict) and existing.get("axis") is axis:
+        line_slots[int(slot_index)] = existing
+        return existing
+
+    slot_record = line_slots[int(slot_index)]
+    if isinstance(slot_record, dict) and slot_record.get("axis") is axis:
+        old_key = str(slot_record.get("key", "") or "")
+        if old_key and lines_by_key.get(old_key) is slot_record:
+            lines_by_key.pop(old_key, None)
+        slot_record["key"] = key
+        lines_by_key[key] = slot_record
+        return slot_record
+
+    plot = getattr(axis, "plot", None)
+    if not callable(plot):
+        return None
+    try:
+        (sim_line,) = plot([], [], "b-", label="Simulated")
+        (bg_line,) = plot([], [], "r--", label="Background")
+        (hidden_sim_line,) = plot([], [], alpha=0.0)
+        (hidden_bg_line,) = plot([], [], alpha=0.0)
+    except Exception:
+        return None
+    record = {
+        "key": key,
+        "axis": axis,
+        "sim": sim_line,
+        "bg": bg_line,
+        "hidden_sim": hidden_sim_line,
+        "hidden_bg": hidden_bg_line,
+    }
+    line_slots[int(slot_index)] = record
+    lines_by_key[key] = record
+    return record
+
+
+def _clear_selected_qr_rod_line_state() -> None:
+    lines_by_key, line_slots = _selected_qr_rod_line_state()
+    for record in list(line_slots) + list(lines_by_key.values()):
+        if not isinstance(record, Mapping):
+            continue
+        for line_name in ("sim", "bg", "hidden_sim", "hidden_bg"):
+            line = record.get(line_name)
+            set_data = getattr(line, "set_data", None)
+            if callable(set_data):
+                try:
+                    set_data([], [])
+                except Exception:
+                    pass
 
 
 def _initialize_runtime_controls_block_23() -> None:
@@ -14935,50 +15588,291 @@ def _caked_qz_map_for_profile_payload(payload: Mapping[str, object]) -> np.ndarr
     return np.asarray(qz_map, dtype=np.float64)
 
 
-def _selected_qr_rod_caked_profile_for_result(
-    res2,
+def _selected_qr_rod_caked_projection_signature(
+    payload: Mapping[str, object],
+    *,
+    radial_axis: object,
+    azimuth_axis: object,
+    qz_map: object,
+    detector_shape: object,
+) -> tuple[object, ...]:
+    transform_bundle = payload.get("transform_bundle")
+    lut = getattr(transform_bundle, "lut", None) if transform_bundle is not None else None
+    return (
+        "selected_qr_rod_caked_projection",
+        _timing_signature_digest(payload.get("signature")),
+        tuple(int(v) for v in detector_shape) if detector_shape is not None else None,
+        id(transform_bundle) if transform_bundle is not None else None,
+        id(lut) if lut is not None else None,
+        _selected_qr_rod_axis_signature(radial_axis),
+        _selected_qr_rod_axis_signature(azimuth_axis),
+        _selected_qr_rod_array_identity_signature(qz_map),
+    )
+
+
+def _selected_qr_rod_profile_cache_signature(
+    shared: Mapping[str, object],
     mask_payload: Mapping[str, object],
-    mode: object,
-) -> dict[str, np.ndarray] | None:
+    selected_key: str,
+) -> tuple[object, ...] | None:
+    mask_signature = mask_payload.get("signature")
+    if isinstance(mask_signature, tuple) and mask_signature and "union" in str(mask_signature[0]):
+        return None
+    try:
+        mask_shape = tuple(int(v) for v in np.asarray(mask_payload.get("mask"), dtype=bool).shape)
+        delta_qr = float(shared.get("delta_qr"))
+        qz_min = float(shared.get("qz_min"))
+        qz_max = float(shared.get("qz_max"))
+    except Exception:
+        return None
+    return (
+        "selected_qr_rod_profile",
+        str(selected_key or ""),
+        _timing_signature_digest(mask_signature),
+        mask_shape,
+        _selected_qr_rod_array_identity_signature(shared.get("caked_image")),
+        _selected_qr_rod_array_identity_signature(shared.get("qz_map")),
+        _selected_qr_rod_axis_signature(shared.get("qz_edges")),
+        _selected_qr_rod_axis_signature(shared.get("radial_axis")),
+        _selected_qr_rod_axis_signature(shared.get("azimuth_axis")),
+        shared.get("caked_projection_signature"),
+        delta_qr,
+        qz_min,
+        qz_max,
+        tuple(shared.get("phi_windows") or ()),
+        bool(shared.get("include_selected_qr_rod_shape", False)),
+        _timing_signature_digest(shared.get("stored_hit_table_signature")),
+        _timing_signature_digest(mask_payload.get("shape_signature")),
+        _normalize_rod_profile_intensity_mode(shared.get("rod_profile_intensity_mode")),
+        _normalize_caked_intensity_mode(shared.get("caked_intensity_mode", "density")),
+        shared.get("result_identity"),
+        _selected_qr_rod_array_identity_signature(shared.get("signal_sum")),
+        _selected_qr_rod_array_identity_signature(shared.get("normalization_sum")),
+        _selected_qr_rod_array_identity_signature(shared.get("acceptance")),
+    )
+
+
+def _selected_qr_rod_profile_cache_copy(
+    profile: Mapping[str, object],
+) -> dict[str, np.ndarray]:
+    return {
+        "qz_center": np.asarray(profile["qz_center"], dtype=np.float64).copy(),
+        "pixel_count": np.asarray(profile["pixel_count"], dtype=np.int64).copy(),
+        "intensity_sum": np.asarray(profile["intensity_sum"], dtype=np.float64).copy(),
+        "intensity_mean": np.asarray(profile["intensity_mean"], dtype=np.float64).copy(),
+        "acceptance_sum": np.asarray(profile["acceptance_sum"], dtype=np.float64).copy(),
+    }
+
+
+def _selected_qr_rod_caked_shared_profile_inputs(res2) -> dict[str, object] | None:
     payload = _caked_profile_payload_for_result(res2)
     if payload is None:
         return None
     try:
         image = np.asarray(payload.get("image"), dtype=np.float64)
-        mask = np.asarray(mask_payload.get("mask"), dtype=bool)
-        qz_min = float(mask_payload.get("qz_min"))
-        qz_max = float(mask_payload.get("qz_max"))
+        radial_axis = np.asarray(payload.get("radial"), dtype=np.float64).reshape(-1)
+        azimuth_axis = np.asarray(payload.get("azimuth"), dtype=np.float64).reshape(-1)
     except Exception:
         return None
-    if image.ndim != 2 or mask.shape != image.shape:
+    if (
+        image.ndim != 2
+        or image.shape != (int(azimuth_axis.size), int(radial_axis.size))
+        or image.size <= 0
+    ):
+        return None
+
+    roi_values = _current_analysis_roi_values()
+    try:
+        delta_qr = _selected_qr_rod_delta_qr_half_width_from_roi(roi_values)
+        qz_min = float(roi_values.get("qz_min", 0.0))
+        qz_max = float(roi_values.get("qz_max", 0.0))
+    except Exception:
         return None
     qz_lo, qz_hi = sorted((qz_min, qz_max))
     if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
         return None
+    phi_windows = _selected_qr_rod_phi_windows_from_roi(roi_values)
+    if phi_windows is None:
+        return None
+
     qz_map = _caked_qz_map_for_profile_payload(payload)
     if qz_map is None or qz_map.shape != image.shape:
         return None
     qz_edges = np.linspace(qz_lo, qz_hi, int(image.shape[1]) + 1, dtype=np.float64)
+
     signal_sum = payload.get("sum_signal")
     normalization_sum = payload.get("sum_normalization")
     if (signal_sum is None) != (normalization_sum is None):
         signal_sum = None
         normalization_sum = None
+    if signal_sum is not None and normalization_sum is not None:
+        try:
+            signal_sum = np.asarray(signal_sum, dtype=np.float64)
+            normalization_sum = np.asarray(normalization_sum, dtype=np.float64)
+        except Exception:
+            signal_sum = None
+            normalization_sum = None
+        if (
+            signal_sum is not None
+            and normalization_sum is not None
+            and (signal_sum.shape != image.shape or normalization_sum.shape != image.shape)
+        ):
+            signal_sum = None
+            normalization_sum = None
+
+    acceptance = payload.get("count")
+    if acceptance is not None:
+        try:
+            acceptance = np.asarray(acceptance, dtype=np.float64)
+        except Exception:
+            acceptance = None
+        if acceptance is not None and acceptance.shape != image.shape:
+            acceptance = None
+
+    try:
+        projection_context = _selected_qr_rod_caked_projection_context_for_payload(payload)
+    except Exception:
+        projection_context = None
+    resolved_projection = None
+    detector_shape = None
+    if projection_context is not None:
+        try:
+            resolved_projection = gui_qr_cylinder_overlay._resolve_caked_projection_context(
+                projection_context
+            )
+        except Exception:
+            resolved_projection = None
+    if isinstance(resolved_projection, Mapping):
+        try:
+            detector_shape = tuple(int(v) for v in resolved_projection["detector_shape"][:2])
+        except Exception:
+            detector_shape = None
+    if detector_shape is None:
+        try:
+            detector_shape = tuple(int(v) for v in payload.get("detector_shape")[:2])
+        except Exception:
+            detector_shape = None
+
+    include_shape = bool(roi_values.get("include_selected_qr_rod_shape", False))
+    shape_mask_index = None
+    if include_shape and detector_shape is not None:
+        try:
+            shape_mask_index = _current_selected_qr_rod_shape_mask_index(detector_shape)
+        except Exception:
+            shape_mask_index = None
+
+    try:
+        selected_entries = _current_selected_qr_rod_entries(_analysis_selected_qr_rod_entries())
+    except Exception:
+        selected_entries = []
+    try:
+        selected_keys = _current_selected_qr_rod_keys_from_roi(roi_values)
+    except Exception:
+        selected_keys = []
+    if not selected_keys:
+        selected_keys = [
+            gui_controllers.encode_bragg_qr_group_key(entry.get("key"))
+            for entry in selected_entries
+        ]
+    caked_projection_signature = _selected_qr_rod_caked_projection_signature(
+        payload,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        qz_map=qz_map,
+        detector_shape=detector_shape,
+    )
+
+    return {
+        "payload": payload,
+        "result_identity": ("res2", id(res2), id(payload)),
+        "caked_image": image,
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "qz_map": np.asarray(qz_map, dtype=np.float64),
+        "qz_edges": qz_edges,
+        "phi_windows": phi_windows,
+        "delta_qr": delta_qr,
+        "qz_min": qz_lo,
+        "qz_max": qz_hi,
+        "rod_profile_intensity_mode": _current_rod_profile_intensity_mode(),
+        "caked_intensity_mode": _current_caked_intensity_mode(),
+        "signal_sum": signal_sum,
+        "normalization_sum": normalization_sum,
+        "acceptance": acceptance,
+        "projection_context": projection_context,
+        "resolved_projection_context": resolved_projection,
+        "caked_projection_signature": caked_projection_signature,
+        "detector_shape": detector_shape,
+        "selected_qr_rod_keys": list(selected_keys),
+        "selected_entries": [dict(entry) for entry in selected_entries],
+        "stored_hit_table_signature": _selected_qr_rod_shape_source_signature(),
+        "include_selected_qr_rod_shape": bool(include_shape),
+        "shape_mask_index": shape_mask_index,
+        "mask_payloads_by_key": {},
+    }
+
+
+_selected_qr_rod_caked_shared_profile_inputs = _qr_rod_profiled("caked_shared_input_build")(
+    _selected_qr_rod_caked_shared_profile_inputs
+)
+
+
+def _selected_qr_rod_caked_profile_from_shared_inputs(
+    shared: Mapping[str, object] | None,
+    selected_entry: Mapping[str, object],
+    selected_key: object,
+) -> dict[str, np.ndarray] | None:
+    if not isinstance(shared, Mapping):
+        return None
+    encoded_key = str(selected_key or "")
+    if not encoded_key and isinstance(selected_entry, Mapping):
+        encoded_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+    mask_payload = None
+    mask_payloads_by_key = shared.get("mask_payloads_by_key")
+    if isinstance(mask_payloads_by_key, Mapping):
+        mask_payload = mask_payloads_by_key.get(encoded_key)
+    if mask_payload is None and isinstance(selected_entry, Mapping) and "mask" in selected_entry:
+        mask_payload = selected_entry
+    if not isinstance(mask_payload, Mapping):
+        return None
+    mask_signature = mask_payload.get("signature")
+    if isinstance(mask_signature, tuple) and mask_signature and "union" in str(mask_signature[0]):
+        return None
+    try:
+        image = np.asarray(shared.get("caked_image"), dtype=np.float64)
+        qz_map = np.asarray(shared.get("qz_map"), dtype=np.float64)
+        qz_edges = np.asarray(shared.get("qz_edges"), dtype=np.float64)
+        mask = np.asarray(mask_payload.get("mask"), dtype=bool)
+    except Exception:
+        return None
+    if image.ndim != 2 or qz_map.shape != image.shape or mask.shape != image.shape:
+        return None
+    cache_signature = _selected_qr_rod_profile_cache_signature(
+        shared,
+        mask_payload,
+        encoded_key,
+    )
+    cache = _selected_qr_rod_bounded_cache("selected_qr_rod_profile_cache")
+    if cache_signature is not None:
+        cached_profile = _selected_qr_rod_bounded_cache_get(cache, cache_signature)
+        if isinstance(cached_profile, Mapping):
+            return _selected_qr_rod_profile_cache_copy(cached_profile)
     try:
         profile = qz_profile_from_caked_mask(
             image=image,
             qz_map=qz_map,
             qz_edges=qz_edges,
             mask=mask,
-            signal_sum=signal_sum,
-            normalization_sum=normalization_sum,
-            acceptance=payload.get("count"),
+            signal_sum=shared.get("signal_sum"),
+            normalization_sum=shared.get("normalization_sum"),
+            acceptance=shared.get("acceptance"),
         )
     except Exception:
         return None
     curve_key = (
         "background_weighted_sum"
-        if _normalize_rod_profile_intensity_mode(mode) == "raw_sum"
+        if _normalize_rod_profile_intensity_mode(shared.get("rod_profile_intensity_mode"))
+        == "raw_sum"
         else "background_density"
     )
     curve = _finite_profile_curve(profile.get(curve_key))
@@ -14986,13 +15880,51 @@ def _selected_qr_rod_caked_profile_for_result(
         curve = _finite_profile_curve(profile.get("background_sum"))
     if curve is None:
         return None
-    return {
+    result = {
         "qz_center": np.asarray(profile["qz_center"], dtype=np.float64),
         "pixel_count": np.asarray(profile["pixel_count"], dtype=np.int64),
         "intensity_sum": np.asarray(profile["background_weighted_sum"], dtype=np.float64),
         "intensity_mean": np.asarray(profile["background_density"], dtype=np.float64),
         "acceptance_sum": np.asarray(profile["acceptance_sum"], dtype=np.float64),
     }
+    if cache_signature is not None:
+        _selected_qr_rod_bounded_cache_put(
+            cache,
+            cache_signature,
+            _selected_qr_rod_profile_cache_copy(result),
+            cap=SELECTED_QR_ROD_PROFILE_CACHE_CAP,
+        )
+    return _selected_qr_rod_profile_cache_copy(result)
+
+
+_selected_qr_rod_caked_profile_from_shared_inputs = _qr_rod_profiled("per_rod_caked_profile_build")(
+    _selected_qr_rod_caked_profile_from_shared_inputs
+)
+
+
+def _selected_qr_rod_caked_profile_for_result(
+    res2,
+    mask_payload: Mapping[str, object],
+    mode: object,
+) -> dict[str, np.ndarray] | None:
+    shared = _selected_qr_rod_caked_shared_profile_inputs(res2)
+    if shared is None:
+        return None
+    selected_key = str(mask_payload.get("selected_qr_rod_key", "") or "")
+    if not selected_key:
+        selected_entry = mask_payload.get("selected_entry", {})
+        if isinstance(selected_entry, Mapping):
+            selected_key = gui_controllers.encode_bragg_qr_group_key(selected_entry.get("key"))
+    shared["rod_profile_intensity_mode"] = _normalize_rod_profile_intensity_mode(mode)
+    shared["mask_payloads_by_key"] = {selected_key: mask_payload}
+    selected_entry = mask_payload.get("selected_entry", {})
+    if not isinstance(selected_entry, Mapping):
+        selected_entry = {}
+    return _selected_qr_rod_caked_profile_from_shared_inputs(
+        shared,
+        selected_entry,
+        selected_key,
+    )
 
 
 def _detector_angular_maps_for_shape(ai, detector_shape):
@@ -15303,6 +16235,7 @@ def _set_1d_axes_for_selected_qr_rod_profile(y_label: str) -> None:
 
 
 def _clear_selected_qr_rod_detector_1d_plot() -> None:
+    _clear_selected_qr_rod_line_state()
     if line_1d_rad is not None:
         line_1d_rad.set_data([], [])
     if line_1d_rad_bg is not None:
@@ -15379,6 +16312,20 @@ def _update_1d_plots_from_selected_qr_rods_caked(
     scale = _get_scale_factor_value(default=1.0)
     selected_keys = [str(payload.get("selected_qr_rod_key", "") or "") for payload in rod_payloads]
     primary_key = selected_keys[0] if selected_keys else ""
+    mask_payloads_by_key = {
+        (selected_keys[idx] if selected_keys[idx] else f"rod-{idx + 1}"): payload
+        for idx, payload in enumerate(rod_payloads)
+    }
+    sim_shared = _selected_qr_rod_caked_shared_profile_inputs(sim_res2)
+    if isinstance(sim_shared, dict):
+        sim_shared["mask_payloads_by_key"] = mask_payloads_by_key
+        sim_shared["rod_profile_intensity_mode"] = rod_profile_intensity_mode
+    bg_shared = (
+        _selected_qr_rod_caked_shared_profile_inputs(bg_res2) if bg_res2 is not None else None
+    )
+    if isinstance(bg_shared, dict):
+        bg_shared["mask_payloads_by_key"] = mask_payloads_by_key
+        bg_shared["rod_profile_intensity_mode"] = rod_profile_intensity_mode
     profiles_by_key: dict[str, dict[str, object]] = {}
     primary_sim_profile = None
     primary_bg_profile = None
@@ -15388,24 +16335,26 @@ def _update_1d_plots_from_selected_qr_rods_caked(
     plotted_any = False
 
     for idx, (axis, payload) in enumerate(zip(axes, rod_payloads, strict=False)):
-        clear_axis = getattr(axis, "clear", None)
-        if callable(clear_axis):
-            clear_axis()
-
         key = str(payload.get("selected_qr_rod_key", "") or f"rod-{idx + 1}")
-        sim_profile = _selected_qr_rod_caked_profile_for_result(
-            sim_res2,
-            payload,
-            rod_profile_intensity_mode,
+        line_record = _selected_qr_rod_lines_for_axis(axis, key=key, slot_index=idx)
+        if not isinstance(line_record, Mapping):
+            return False
+        selected_entry = payload.get("selected_entry", {})
+        if not isinstance(selected_entry, Mapping):
+            selected_entry = {}
+        sim_profile = _selected_qr_rod_caked_profile_from_shared_inputs(
+            sim_shared,
+            selected_entry,
+            key,
         )
         sim_curve = _selected_qr_rod_profile_curve(sim_profile, rod_profile_intensity_mode)
         bg_profile = None
         bg_curve = None
         if bg_res2 is not None:
-            bg_profile = _selected_qr_rod_caked_profile_for_result(
-                bg_res2,
-                payload,
-                rod_profile_intensity_mode,
+            bg_profile = _selected_qr_rod_caked_profile_from_shared_inputs(
+                bg_shared,
+                selected_entry,
+                key,
             )
             bg_curve = _selected_qr_rod_profile_curve(bg_profile, rod_profile_intensity_mode)
 
@@ -15418,21 +16367,21 @@ def _update_1d_plots_from_selected_qr_rods_caked(
             axis.set_xlabel("")
 
         qz_center = None
-        sim_line = None
-        bg_line = None
+        sim_line = line_record.get("sim")
+        bg_line = line_record.get("bg")
         if sim_profile is not None and sim_curve is not None:
             qz_center = np.asarray(sim_profile["qz_center"], dtype=float)
-            (sim_line,) = axis.plot(qz_center, sim_curve * scale, "b-", label="Simulated")
+            sim_line.set_data(qz_center, sim_curve * scale)
             plotted_any = True
         else:
-            (sim_line,) = axis.plot([], [], "b-", label="Simulated")
+            sim_line.set_data([], [])
         if bg_profile is not None and bg_curve is not None:
             bg_qz_center = np.asarray(bg_profile["qz_center"], dtype=float)
-            (bg_line,) = axis.plot(bg_qz_center, bg_curve, "r--", label="Background")
+            bg_line.set_data(bg_qz_center, bg_curve)
             if qz_center is None:
                 qz_center = bg_qz_center
         else:
-            (bg_line,) = axis.plot([], [], "r--", label="Background")
+            bg_line.set_data([], [])
         axis.legend()
         axis.relim()
         axis.autoscale_view()
@@ -15449,12 +16398,8 @@ def _update_1d_plots_from_selected_qr_rods_caked(
                 "include_selected_qr_rod_shape": bool(
                     payload.get("include_selected_qr_rod_shape", False)
                 ),
-                "selected_qr_rod_shape_available": bool(
-                    payload.get("shape_available", False)
-                ),
-                "selected_qr_rod_shape_pixel_count": int(
-                    payload.get("shape_pixel_count", 0) or 0
-                ),
+                "selected_qr_rod_shape_available": bool(payload.get("shape_available", False)),
+                "selected_qr_rod_shape_pixel_count": int(payload.get("shape_pixel_count", 0) or 0),
             },
         }
         if idx == 0:
@@ -15465,8 +16410,8 @@ def _update_1d_plots_from_selected_qr_rods_caked(
             primary_qz = qz_center
             line_1d_rad = sim_line
             line_1d_rad_bg = bg_line
-            (line_1d_az,) = axis.plot([], [], alpha=0.0)
-            (line_1d_az_bg,) = axis.plot([], [], alpha=0.0)
+            line_1d_az = line_record.get("hidden_sim")
+            line_1d_az_bg = line_record.get("hidden_bg")
 
     if not plotted_any:
         return False
@@ -15479,17 +16424,13 @@ def _update_1d_plots_from_selected_qr_rods_caked(
             "selected_qr_rod_profiles": profiles_by_key,
             "radials_sim": primary_qz,
             "intensities_2theta_sim": (
-                None
-                if primary_sim_curve is None
-                else np.asarray(primary_sim_curve, dtype=float)
+                None if primary_sim_curve is None else np.asarray(primary_sim_curve, dtype=float)
             ),
             "azimuths_sim": None,
             "intensities_azimuth_sim": None,
             "radials_bg": primary_qz if primary_bg_curve is not None else None,
             "intensities_2theta_bg": (
-                None
-                if primary_bg_curve is None
-                else np.asarray(primary_bg_curve, dtype=float)
+                None if primary_bg_curve is None else np.asarray(primary_bg_curve, dtype=float)
             ),
             "azimuths_bg": None,
             "intensities_azimuth_bg": None,
@@ -15516,6 +16457,11 @@ def _update_1d_plots_from_selected_qr_rods_caked(
     if canvas_1d is not None:
         canvas_1d.draw_idle()
     return True
+
+
+_update_1d_plots_from_selected_qr_rods_caked = _qr_rod_profiled("selected_rod_plot_update")(
+    _update_1d_plots_from_selected_qr_rods_caked
+)
 
 
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
@@ -15552,6 +16498,12 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
     simulation_runtime_state.last_1d_integration_data["x_axis_label"] = "2θ (degrees)"
 
     scale = _get_scale_factor_value(default=1.0)
+    y_label = (
+        "Raw accumulated intensity"
+        if caked_intensity_mode == "raw_sum"
+        else "Intensity density (support-normalized)"
+    )
+    _set_1d_axes_for_standard_caked_profiles(y_label)
     line_1d_rad.set_data(rad_sim, i2t_sim * scale)
     line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
@@ -15580,12 +16532,6 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
 
     ax_1d_radial.set_yscale("linear")
     ax_1d_azim.set_yscale("linear")
-    y_label = (
-        "Raw accumulated intensity"
-        if caked_intensity_mode == "raw_sum"
-        else "Intensity density (support-normalized)"
-    )
-    _set_1d_axes_for_standard_caked_profiles(y_label)
     ax_1d_radial.relim()
     ax_1d_radial.autoscale_view()
     ax_1d_azim.relim()
@@ -20960,6 +21906,7 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
         )
     else:
         simulation_runtime_state.analysis_preview_bins = None
+    _invalidate_qr_cylinder_band_cache()
     simulation_runtime_state.last_res2_sim = result.get("sim_res2")
     simulation_runtime_state.last_res2_background = result.get("bg_res2")
 
@@ -34016,6 +34963,11 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
             numeric_value = float(fallback)
         if key == "delta_qr" and str(snapshot.get("delta_qr_width_mode", "")) != "full_width":
             numeric_value *= 2.0
+        if key == "delta_qr":
+            lo, hi = _SELECTED_QR_ROD_DELTA_QR_WIDTH_BOUNDS
+            if not np.isfinite(numeric_value):
+                numeric_value = float(fallback)
+            numeric_value = min(max(numeric_value, min(lo, hi)), max(lo, hi))
         setattr(view_state, f"{key}_value", numeric_value)
         gui_integration_range_drag._safe_var_set(  # noqa: SLF001
             getattr(view_state, f"{key}_var", None),
@@ -34172,6 +35124,14 @@ def _current_analysis_roi_values() -> dict[str, object]:
             "delta_qr_width_mode": "full_width",
         }
     )
+    lo, hi = _SELECTED_QR_ROD_DELTA_QR_WIDTH_BOUNDS
+    try:
+        delta_qr_width = float(range_values.get("delta_qr", 0.1))
+    except Exception:
+        delta_qr_width = 0.1
+    if not np.isfinite(delta_qr_width):
+        delta_qr_width = 0.1
+    range_values["delta_qr"] = min(max(delta_qr_width, min(lo, hi)), max(lo, hi))
     return range_values
 
 

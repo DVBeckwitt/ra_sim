@@ -5633,6 +5633,156 @@ def create_analysis_view_controls(
     view_state.check_log_display = check_log_display
 
 
+def _normalize_selected_qr_rod_keys_for_options(
+    option_keys: Sequence[str],
+    raw_keys: Sequence[object] | object | None,
+) -> list[str]:
+    if raw_keys is None:
+        raw_key_list: list[object] = []
+    elif isinstance(raw_keys, (str, bytes)):
+        raw_key_list = [raw_keys]
+    elif isinstance(raw_keys, Sequence):
+        raw_key_list = list(raw_keys)
+    else:
+        raw_key_list = [raw_keys]
+    normalized_raw: list[str] = []
+    for raw_key in raw_key_list:
+        key = str(raw_key or "")
+        if key and key not in normalized_raw:
+            normalized_raw.append(key)
+    if not option_keys:
+        return normalized_raw
+    selected_key_set = set(normalized_raw)
+    return [str(key) for key in option_keys if str(key) in selected_key_set]
+
+
+def _selected_qr_rod_keys_in_display_order(view_state: object) -> list[str]:
+    option_keys = [str(key) for key in getattr(view_state, "selected_qr_rod_options", []) or []]
+    listbox = getattr(view_state, "selected_qr_rod_listbox", None)
+    selected_indices: list[int] = []
+    curselection = getattr(listbox, "curselection", None)
+    if callable(curselection):
+        try:
+            selected_indices = [int(idx) for idx in curselection()]
+        except Exception:
+            selected_indices = []
+    elif hasattr(listbox, "selected"):
+        try:
+            selected_indices = [int(idx) for idx in getattr(listbox, "selected")]
+        except Exception:
+            selected_indices = []
+    selected: list[str] = []
+    for index in sorted(set(selected_indices)):
+        if 0 <= index < len(option_keys):
+            key = option_keys[index]
+            if key not in selected:
+                selected.append(key)
+    if selected:
+        return selected
+    return _normalize_selected_qr_rod_keys_for_options(
+        option_keys,
+        getattr(view_state, "selected_qr_rod_keys_value", None)
+        or getattr(view_state, "selected_qr_rod_keys", None),
+    )
+
+
+def _set_selected_qr_rod_listbox_options(
+    view_state: object,
+    options: Sequence[tuple[object, object]] | None,
+    selected_keys: Sequence[object] | object | None,
+    enabled: bool | None = None,
+) -> list[str]:
+    option_pairs = [(str(key), str(label)) for key, label in (options or ())]
+    option_keys = [key for key, _label in option_pairs]
+    option_labels = [label for _key, label in option_pairs]
+    label_by_key = dict(option_pairs)
+    key_by_label = {label: key for key, label in option_pairs}
+    option_signature = (tuple(option_keys), tuple(option_labels))
+    normalized_selected_keys = _normalize_selected_qr_rod_keys_for_options(
+        option_keys,
+        selected_keys,
+    )
+    primary_selected_key = normalized_selected_keys[0] if normalized_selected_keys else ""
+
+    setattr(view_state, "selected_qr_rod_options", list(option_keys))
+    setattr(view_state, "selected_qr_rod_keys", list(normalized_selected_keys))
+    setattr(view_state, "selected_qr_rod_keys_value", list(normalized_selected_keys))
+    setattr(view_state, "selected_qr_rod_key_by_index", list(option_keys))
+    setattr(view_state, "selected_qr_rod_label_by_key", dict(label_by_key))
+    setattr(view_state, "selected_qr_rod_option_labels", dict(label_by_key))
+    setattr(view_state, "selected_qr_rod_key_by_label", dict(key_by_label))
+
+    key_var = getattr(view_state, "selected_qr_rod_key_var", None)
+    if hasattr(key_var, "set"):
+        try:
+            key_var.set(primary_selected_key)
+        except Exception:
+            pass
+    display_var = getattr(view_state, "selected_qr_rod_display_var", None)
+    if hasattr(display_var, "set"):
+        try:
+            display_var.set(label_by_key.get(primary_selected_key, ""))
+        except Exception:
+            pass
+
+    listbox = getattr(view_state, "selected_qr_rod_listbox", None)
+    if listbox is None:
+        setattr(view_state, "selected_qr_rod_option_signature", option_signature)
+        return list(normalized_selected_keys)
+
+    if enabled is not None:
+        configure = getattr(listbox, "configure", None) or getattr(listbox, "config", None)
+        if callable(configure):
+            try:
+                configure(state=tk.NORMAL)
+            except Exception:
+                pass
+
+    if getattr(view_state, "selected_qr_rod_option_signature", None) != option_signature:
+        try:
+            listbox.delete(0, tk.END)
+            for label in option_labels:
+                listbox.insert(tk.END, label)
+        except Exception:
+            pass
+        setattr(view_state, "selected_qr_rod_option_signature", option_signature)
+
+    try:
+        listbox.selection_clear(0, tk.END)
+    except Exception:
+        try:
+            setattr(listbox, "selected", [])
+        except Exception:
+            pass
+
+    selected_key_set = set(normalized_selected_keys)
+    first_selected_index = None
+    for index, key in enumerate(option_keys):
+        if key not in selected_key_set:
+            continue
+        try:
+            listbox.selection_set(index)
+        except Exception:
+            pass
+        if first_selected_index is None:
+            first_selected_index = index
+    if first_selected_index is not None:
+        try:
+            listbox.see(first_selected_index)
+        except Exception:
+            pass
+
+    if enabled is not None:
+        configure = getattr(listbox, "configure", None) or getattr(listbox, "config", None)
+        if callable(configure):
+            try:
+                configure(state=(tk.NORMAL if enabled else tk.DISABLED))
+            except Exception:
+                pass
+
+    return list(normalized_selected_keys)
+
+
 def create_integration_range_controls(
     *,
     parent: tk.Misc,
@@ -5805,10 +5955,29 @@ def create_integration_range_controls(
         setattr(view_state, f"{prefix}_label", label)
         setattr(view_state, f"{prefix}_entry", entry)
 
+    _create_range_row(
+        parent_frame=rod_section_frame,
+        prefix="delta_qr",
+        label_text="Delta Qr width (A^-1):",
+        initial_value=delta_qr,
+        lower_bound=0.001,
+        upper_bound=1.0,
+        slider_command=on_delta_qr_changed,
+        label_format="{:.4f}",
+        entry_format="{:.4f}",
+        widget_state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
+    )
+    delta_qr_cue_var = tk.StringVar(value=f"ΔQr = {float(delta_qr):.4f} A^-1")
+    delta_qr_cue_label = ttk.Label(
+        rod_section_frame,
+        textvariable=delta_qr_cue_var,
+    )
+    delta_qr_cue_label.pack(side=tk.TOP, anchor=tk.W, padx=5, pady=(0, 2))
+
     selected_qr_rod_container = ttk.Frame(rod_section_frame)
     selected_qr_rod_container.pack(side=tk.TOP, fill=tk.X, pady=2)
-    selected_qr_rod_label = ttk.Label(selected_qr_rod_container, text="Qr rod:")
-    selected_qr_rod_label.pack(side=tk.LEFT, padx=5)
+    selected_qr_rod_label = ttk.Label(selected_qr_rod_container, text="Qr rods:")
+    selected_qr_rod_label.pack(side=tk.TOP, anchor=tk.W, padx=5)
 
     option_pairs = list(selected_qr_rod_options or ())
     label_by_key = {str(key): str(label) for key, label in option_pairs}
@@ -5819,147 +5988,41 @@ def create_integration_range_controls(
         raw_selected_keys = [str(selected_qr_rod_key)]
     selected_key_set = set(raw_selected_keys)
     normalized_selected_keys = [key for key in key_by_index if key in selected_key_set]
-    for key in raw_selected_keys:
-        if key not in normalized_selected_keys and key not in key_by_index:
-            normalized_selected_keys.append(key)
     primary_selected_key = normalized_selected_keys[0] if normalized_selected_keys else ""
     selected_qr_rod_key_var = tk.StringVar(value=primary_selected_key)
     selected_qr_rod_display_var = tk.StringVar(value="")
     selected_qr_rod_display_var.set(label_by_key.get(primary_selected_key, ""))
-    selected_qr_rod_combobox = ttk.Combobox(
+
+    selected_qr_rod_listbox = tk.Listbox(
         selected_qr_rod_container,
-        textvariable=selected_qr_rod_display_var,
-        values=[str(label) for _, label in option_pairs],
-        state=("readonly" if option_pairs else tk.DISABLED),
+        selectmode=tk.EXTENDED,
+        exportselection=False,
+        height=min(max(len(option_pairs), 3), 5),
+        state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
     )
-    selected_qr_rod_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-    selected_qr_rod_combobox.bind(
-        "<<ComboboxSelected>>",
-        (
-            lambda _event: (
-                on_selected_qr_rod_changed(selected_qr_rod_display_var.get())
-                if callable(on_selected_qr_rod_changed)
-                else None
-            )
+    selected_qr_rod_listbox.pack(side=tk.TOP, fill=tk.X, expand=True, padx=5, pady=(2, 4))
+    selected_qr_rod_listbox.bind(
+        "<<ListboxSelect>>",
+        lambda _event: (
+            on_selected_qr_rod_changed(_selected_qr_rod_keys_in_display_order(view_state))
+            if callable(on_selected_qr_rod_changed)
+            else None
         ),
     )
-
-    selected_qr_rod_checkbox_container = ttk.Frame(rod_section_frame)
-    selected_qr_rod_checkbox_container.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 4))
-    selected_qr_rod_checkbox_vars: dict[str, object] = {}
-    selected_qr_rod_checkbuttons: dict[str, object] = {}
-
-    def _normalize_selected_qr_rod_keys_for_options(raw_keys: Sequence[object]) -> list[str]:
-        raw_key_list = [str(key) for key in raw_keys if str(key)]
-        raw_key_set = set(raw_key_list)
-        selected = [key for key in key_by_index if key in raw_key_set]
-        for key in raw_key_list:
-            if key not in selected and key not in key_by_index:
-                selected.append(key)
-        return selected
-
-    def _selected_qr_rod_checkbox_keys() -> list[str]:
-        selected: list[str] = []
-        for key in key_by_index:
-            var = selected_qr_rod_checkbox_vars.get(key)
-            if var is None:
-                continue
-            try:
-                checked = bool(var.get())
-            except Exception:
-                checked = False
-            if checked:
-                selected.append(key)
-        return selected
-
-    def _on_selected_qr_rod_checkbox_changed() -> None:
-        if callable(on_selected_qr_rod_changed):
-            on_selected_qr_rod_changed(_selected_qr_rod_checkbox_keys())
-
-    def _clear_selected_qr_rod_checkbox_widgets() -> None:
-        winfo_children = getattr(selected_qr_rod_checkbox_container, "winfo_children", None)
-        if not callable(winfo_children):
-            return
-        try:
-            children = list(winfo_children())
-        except Exception:
-            children = []
-        for child in children:
-            destroy = getattr(child, "destroy", None)
-            if callable(destroy):
-                try:
-                    destroy()
-                except Exception:
-                    pass
-
-    def _rebuild_selected_qr_rod_checkboxes(
-        options: Sequence[tuple[str, str]] | None = None,
-        selected_keys: Sequence[object] | None = None,
-        enabled: bool | None = None,
-    ) -> list[str]:
-        nonlocal option_pairs
-        nonlocal label_by_key
-        nonlocal key_by_index
-        nonlocal key_by_label
-        nonlocal normalized_selected_keys
-        nonlocal primary_selected_key
-        if options is not None:
-            option_pairs = [(str(key), str(label)) for key, label in options]
-            label_by_key = {str(key): str(label) for key, label in option_pairs}
-            key_by_index = [str(key) for key, _label in option_pairs]
-            key_by_label = {str(label): str(key) for key, label in option_pairs}
-        current_keys = (
-            list(selected_keys)
-            if selected_keys is not None
-            else _selected_qr_rod_checkbox_keys() or list(normalized_selected_keys)
+    view_state.selected_qr_rod_listbox = selected_qr_rod_listbox
+    view_state.selected_qr_rod_listbox_options_updater = (
+        lambda options, selected_keys, enabled=None: _set_selected_qr_rod_listbox_options(
+            view_state,
+            options,
+            selected_keys,
+            enabled=enabled,
         )
-        normalized_selected_keys = _normalize_selected_qr_rod_keys_for_options(current_keys)
-        primary_selected_key = normalized_selected_keys[0] if normalized_selected_keys else ""
-        selected_qr_rod_checkbox_vars.clear()
-        selected_qr_rod_checkbuttons.clear()
-        _clear_selected_qr_rod_checkbox_widgets()
-        widget_state = (
-            tk.NORMAL
-            if bool(integrate_selected_qr_rod if enabled is None else enabled)
-            else tk.DISABLED
-        )
-        selected_key_set = set(normalized_selected_keys)
-        for key, label in option_pairs:
-            checkbox_var = tk.BooleanVar(value=key in selected_key_set)
-            checkbox = ttk.Checkbutton(
-                selected_qr_rod_checkbox_container,
-                text=str(label),
-                variable=checkbox_var,
-                command=_on_selected_qr_rod_checkbox_changed,
-                state=widget_state,
-            )
-            checkbox.pack(side=tk.TOP, anchor=tk.W)
-            selected_qr_rod_checkbox_vars[key] = checkbox_var
-            selected_qr_rod_checkbuttons[key] = checkbox
-        _safe_set = selected_qr_rod_key_var.set
-        try:
-            _safe_set(primary_selected_key)
-        except Exception:
-            pass
-        try:
-            selected_qr_rod_display_var.set(label_by_key.get(primary_selected_key, ""))
-        except Exception:
-            pass
-        view_state.selected_qr_rod_options = [str(key) for key, _label in option_pairs]
-        view_state.selected_qr_rod_keys = list(normalized_selected_keys)
-        view_state.selected_qr_rod_keys_value = list(normalized_selected_keys)
-        view_state.selected_qr_rod_key_by_index = list(key_by_index)
-        view_state.selected_qr_rod_label_by_key = dict(label_by_key)
-        view_state.selected_qr_rod_option_labels = dict(label_by_key)
-        view_state.selected_qr_rod_key_by_label = dict(key_by_label)
-        view_state.selected_qr_rod_checkbox_vars = dict(selected_qr_rod_checkbox_vars)
-        view_state.selected_qr_rod_checkbuttons = dict(selected_qr_rod_checkbuttons)
-        return list(normalized_selected_keys)
-
-    _rebuild_selected_qr_rod_checkboxes(
+    )
+    normalized_selected_keys = _set_selected_qr_rod_listbox_options(
+        view_state,
         option_pairs,
         normalized_selected_keys,
-        bool(integrate_selected_qr_rod),
+        enabled=bool(integrate_selected_qr_rod),
     )
 
     mirror_selected_qr_phi_var = tk.BooleanVar(value=bool(mirror_selected_qr_phi))
@@ -5979,9 +6042,7 @@ def create_integration_range_controls(
         pady=(0, 4),
     )
 
-    include_selected_qr_rod_shape_var = tk.BooleanVar(
-        value=bool(include_selected_qr_rod_shape)
-    )
+    include_selected_qr_rod_shape_var = tk.BooleanVar(value=bool(include_selected_qr_rod_shape))
     include_selected_qr_rod_shape_checkbutton = ttk.Checkbutton(
         rod_section_frame,
         text="Include rod shape",
@@ -6083,19 +6144,6 @@ def create_integration_range_controls(
         entry_format="{:.4f}",
         widget_state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
     )
-    _create_range_row(
-        parent_frame=rod_section_frame,
-        prefix="delta_qr",
-        label_text="Delta Qr width (A^-1):",
-        initial_value=delta_qr,
-        lower_bound=0.0,
-        upper_bound=1.0,
-        slider_command=on_delta_qr_changed,
-        label_format="{:.4f}",
-        entry_format="{:.4f}",
-        widget_state=(tk.NORMAL if integrate_selected_qr_rod else tk.DISABLED),
-    )
-
     view_state.frame = frame
     view_state.range_frame = range_frame
     view_state.rectangle_section_frame = rectangle_section_frame
@@ -6106,9 +6154,9 @@ def create_integration_range_controls(
     view_state.mirror_selected_qr_phi_checkbutton = mirror_selected_qr_phi_checkbutton
     view_state.include_selected_qr_rod_shape_value = include_selected_qr_rod_shape_var.get()
     view_state.include_selected_qr_rod_shape_var = include_selected_qr_rod_shape_var
-    view_state.include_selected_qr_rod_shape_checkbutton = (
-        include_selected_qr_rod_shape_checkbutton
-    )
+    view_state.include_selected_qr_rod_shape_checkbutton = include_selected_qr_rod_shape_checkbutton
+    view_state.delta_qr_cue_var = delta_qr_cue_var
+    view_state.delta_qr_cue_label = delta_qr_cue_label
     view_state.caked_intensity_mode_value = caked_intensity_mode_var.get()
     view_state.caked_intensity_mode_var = caked_intensity_mode_var
     view_state.caked_intensity_mode_label = caked_intensity_mode_label
@@ -6123,13 +6171,19 @@ def create_integration_range_controls(
     view_state.selected_qr_rod_key_var = selected_qr_rod_key_var
     view_state.selected_qr_rod_display_var = selected_qr_rod_display_var
     view_state.selected_qr_rod_label = selected_qr_rod_label
-    view_state.selected_qr_rod_combobox = selected_qr_rod_combobox
-    view_state.selected_qr_rod_listbox = None
-    view_state.selected_qr_rod_checkbox_container = selected_qr_rod_checkbox_container
-    view_state.selected_qr_rod_checkbox_vars = dict(selected_qr_rod_checkbox_vars)
-    view_state.selected_qr_rod_checkbuttons = dict(selected_qr_rod_checkbuttons)
-    view_state.selected_qr_rod_checkbox_options_updater = (
-        _rebuild_selected_qr_rod_checkboxes
+    view_state.selected_qr_rod_combobox = None
+    view_state.selected_qr_rod_listbox = selected_qr_rod_listbox
+    view_state.selected_qr_rod_checkbox_container = None
+    view_state.selected_qr_rod_checkbox_vars = {}
+    view_state.selected_qr_rod_checkbuttons = {}
+    view_state.selected_qr_rod_checkbox_options_updater = None
+    view_state.selected_qr_rod_listbox_options_updater = (
+        lambda options, selected_keys, enabled=None: _set_selected_qr_rod_listbox_options(
+            view_state,
+            options,
+            selected_keys,
+            enabled=enabled,
+        )
     )
     view_state.selected_qr_rod_options = [str(key) for key, _label in option_pairs]
     view_state.selected_qr_rod_keys = list(normalized_selected_keys)

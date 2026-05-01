@@ -9,7 +9,9 @@ from ra_sim.simulation import exact_cake_portable
 SOURCE_PATH = Path(integration_range_drag.__file__)
 
 
-def _qr_drag_config() -> integration_range_drag.gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig:
+def _qr_drag_config() -> (
+    integration_range_drag.gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig
+):
     return integration_range_drag.gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
         render_in_caked_space=True,
         image_size=64,
@@ -121,12 +123,43 @@ class _FakeEntry:
     def __init__(self, *, textvariable=None, state="normal"):
         self.textvariable = textvariable
         self.state = state
+        self.selected = []
+        self.seen_index = None
 
     def configure(self, **kwargs):
         self.state = kwargs.get("state", self.state)
 
     def config(self, **kwargs):
         self.configure(**kwargs)
+
+    def selection_clear(self, _start, _end):
+        self.selected = []
+
+    def selection_set(self, idx):
+        if int(idx) not in self.selected:
+            self.selected.append(int(idx))
+
+    def curselection(self):
+        return tuple(self.selected)
+
+    def see(self, idx):
+        self.seen_index = int(idx)
+
+
+class _FakeDebouncedListbox(_FakeEntry):
+    def __init__(self, root, *, state="normal"):
+        super().__init__(state=state)
+        self.root = root
+        self.exists = True
+
+    def after(self, delay, callback):
+        return self.root.after(delay, callback)
+
+    def after_cancel(self, token):
+        self.root.after_cancel(token)
+
+    def winfo_exists(self):
+        return bool(self.exists)
 
 
 class _FakeRect:
@@ -279,6 +312,12 @@ def test_create_integration_region_highlight_cmap_uses_bold_selection_color() ->
     assert colors == (
         (0.0, 0.0, 0.0, 0.0),
         integration_range_drag._SELECTED_REGION_OVERLAY_RGBA,
+        integration_range_drag._SELECTED_QR_ROD_BAND_FILL_RGBA,
+        integration_range_drag._SELECTED_QR_ROD_BAND_BOUNDARY_RGBA,
+        integration_range_drag._SELECTED_QR_ROD_CENTERLINE_RGBA,
+        integration_range_drag._SELECTED_QR_ROD_MUTED_BAND_FILL_RGBA,
+        integration_range_drag._SELECTED_QR_ROD_MUTED_BAND_BOUNDARY_RGBA,
+        integration_range_drag._SELECTED_QR_ROD_MUTED_CENTERLINE_RGBA,
     )
 
 
@@ -367,7 +406,7 @@ def test_integration_range_drag_binding_factory_builds_live_bindings(
         last_sim_res2_factory=lambda: "res2",
         draw_idle_factory=build_draw,
         set_status_text_factory=build_status,
-        caked_custom_mask_signature_factory=lambda: ("mask-sig", 1),
+        caked_qr_rod_payload_factory=lambda: {"signature": ("mask-sig", 1)},
         detector_geometry_signature_factory=lambda: ("geom-sig", 1),
         caked_qr_rod_drag_context_factory=lambda: {"qr": 1.25},
     )
@@ -381,7 +420,7 @@ def test_integration_range_drag_binding_factory_builds_live_bindings(
     assert callable(calls[0]["schedule_range_update"])
     assert callable(calls[0]["draw_idle"])
     assert callable(calls[0]["set_status_text"])
-    assert calls[0]["caked_custom_mask_signature_factory"]() == ("mask-sig", 1)
+    assert calls[0]["caked_qr_rod_payload_factory"]() == {"signature": ("mask-sig", 1)}
     assert calls[0]["detector_geometry_signature_factory"]() == ("geom-sig", 1)
     assert calls[0]["caked_qr_rod_drag_context_factory"]() == {"qr": 1.25}
     assert "update_integration_region_visuals" not in calls[0]
@@ -481,15 +520,11 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].integrate_selected_qr_rod_var = _FakeVar(
             kwargs["integrate_selected_qr_rod"]
         )
-        kwargs["view_state"].mirror_selected_qr_phi_var = _FakeVar(
-            kwargs["mirror_selected_qr_phi"]
-        )
+        kwargs["view_state"].mirror_selected_qr_phi_var = _FakeVar(kwargs["mirror_selected_qr_phi"])
         kwargs["view_state"].include_selected_qr_rod_shape_var = _FakeVar(
             kwargs["include_selected_qr_rod_shape"]
         )
-        kwargs["view_state"].caked_intensity_mode_var = _FakeVar(
-            kwargs["caked_intensity_mode"]
-        )
+        kwargs["view_state"].caked_intensity_mode_var = _FakeVar(kwargs["caked_intensity_mode"])
         kwargs["view_state"].caked_intensity_mode_buttons = {
             "density": _FakeEntry(state="normal"),
             "raw_sum": _FakeEntry(state="normal"),
@@ -509,14 +544,9 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].selected_qr_rod_key_by_label = {
             str(label): str(key) for key, label in kwargs["selected_qr_rod_options"]
         }
-        kwargs["view_state"].selected_qr_rod_checkbox_container = object()
-        kwargs["view_state"].selected_qr_rod_checkbox_vars = {
-            str(key): _FakeVar(False) for key, _label in kwargs["selected_qr_rod_options"]
-        }
-        kwargs["view_state"].selected_qr_rod_checkbuttons = {
-            str(key): _FakeEntry(state="disabled")
-            for key, _label in kwargs["selected_qr_rod_options"]
-        }
+        kwargs["view_state"].selected_qr_rod_listbox = _FakeEntry(state="disabled")
+        kwargs["view_state"].selected_qr_rod_checkbox_vars = {}
+        kwargs["view_state"].selected_qr_rod_checkbuttons = {}
         kwargs["view_state"].tth_min_entry_var = _FakeVar("")
         kwargs["view_state"].tth_max_entry_var = _FakeVar("")
         kwargs["view_state"].phi_min_entry_var = _FakeVar("")
@@ -524,18 +554,18 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         kwargs["view_state"].qz_min_entry_var = _FakeVar("")
         kwargs["view_state"].qz_max_entry_var = _FakeVar("")
         kwargs["view_state"].delta_qr_entry_var = _FakeVar("")
+        kwargs["view_state"].delta_qr_cue_var = _FakeVar("")
         kwargs["view_state"].tth_min_slider = _FakeSlider(0.0, 60.0)
         kwargs["view_state"].tth_max_slider = _FakeSlider(0.0, 60.0)
         kwargs["view_state"].phi_min_slider = _FakeSlider(-15.0, 15.0)
         kwargs["view_state"].phi_max_slider = _FakeSlider(-15.0, 15.0)
-        kwargs["view_state"].selected_qr_rod_combobox = _FakeEntry(state="disabled")
         kwargs["view_state"].mirror_selected_qr_phi_checkbutton = _FakeEntry(state="disabled")
         kwargs["view_state"].include_selected_qr_rod_shape_checkbutton = _FakeEntry(
             state="disabled"
         )
         kwargs["view_state"].qz_min_slider = _FakeSlider(-2.0, 2.0)
         kwargs["view_state"].qz_max_slider = _FakeSlider(-2.0, 2.0)
-        kwargs["view_state"].delta_qr_slider = _FakeSlider(0.0, 1.0)
+        kwargs["view_state"].delta_qr_slider = _FakeSlider(0.001, 1.0)
         kwargs["view_state"].qz_min_entry = _FakeEntry(state="disabled")
         kwargs["view_state"].qz_max_entry = _FakeEntry(state="disabled")
         kwargs["view_state"].delta_qr_entry = _FakeEntry(state="disabled")
@@ -564,8 +594,9 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert view_state.qz_max_entry_var.get() == "5.0000"
     assert view_state.delta_qr_label_var.get() == "0.2500"
     assert view_state.delta_qr_entry_var.get() == "0.2500"
+    assert view_state.delta_qr_cue_var.get() == "ΔQr = 0.2500 A^-1"
     assert view_state.selected_qr_rod_display_var.get() == "phase-a m=1 | Qr=1.2500 A^-1"
-    assert view_state.selected_qr_rod_combobox.state == "disabled"
+    assert view_state.selected_qr_rod_listbox.state == "disabled"
     assert view_state.mirror_selected_qr_phi_var.get() is False
     assert view_state.mirror_selected_qr_phi_checkbutton.state == "disabled"
     assert view_state.caked_intensity_mode_var.get() == "density"
@@ -595,13 +626,14 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert show_1d_var.get() is True
     assert view_state.delta_qr_label_var.get() == "0.1250"
     assert view_state.delta_qr_entry_var.get() == "0.1250"
+    assert view_state.delta_qr_cue_var.get() == "ΔQr = 0.1250 A^-1"
     assert refresh_calls == ["refresh"]
 
     show_1d_var.set(False)
     view_state.integrate_selected_qr_rod_var.set(True)
     callback_refs["on_toggle_integrate_selected_qr_rod"]()
     assert show_1d_var.get() is True
-    assert view_state.selected_qr_rod_combobox.state == "normal"
+    assert view_state.selected_qr_rod_listbox.state == "normal"
     assert view_state.mirror_selected_qr_phi_checkbutton.state == "normal"
     assert view_state.rod_profile_intensity_mode_buttons["density"].state == "normal"
     assert view_state.rod_profile_intensity_mode_var.get() == "density"
@@ -659,6 +691,19 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     assert show_1d_var.get() is True
     assert view_state.delta_qr_label_var.get() == "1.0000"
     assert view_state.delta_qr_entry_var.get() == "1.0000"
+    assert view_state.delta_qr_cue_var.get() == "ΔQr = 1.0000 A^-1"
+    show_1d_var.set(False)
+    view_state.delta_qr_entry_var.set("0.0")
+    callback_refs["on_apply_entry"](
+        view_state.delta_qr_entry_var,
+        view_state.delta_qr_var,
+        view_state.delta_qr_slider,
+    )
+    assert view_state.delta_qr_var.get() == 0.001
+    assert show_1d_var.get() is True
+    assert view_state.delta_qr_label_var.get() == "0.0010"
+    assert view_state.delta_qr_entry_var.get() == "0.0010"
+    assert view_state.delta_qr_cue_var.get() == "ΔQr = 0.0010 A^-1"
     show_1d_var.set(False)
     callback_refs["on_selected_qr_rod_changed"]("phase-a m=1 | Qr=1.2500 A^-1")
     assert view_state.selected_qr_rod_key_var.get() == "phase-a|1"
@@ -674,8 +719,10 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         "range",
         "range",
         "range",
+        "range",
     ]
     assert refresh_calls == [
+        "refresh",
         "refresh",
         "refresh",
         "refresh",
@@ -813,10 +860,7 @@ def test_select_runtime_selected_qr_rod_empty_selection_promotes_first_option() 
         selected_qr_rod_key_var=_FakeVar(""),
         selected_qr_rod_display_var=_FakeVar(""),
         selected_qr_rod_option_labels={"rod-1": "Rod 1", "rod-2": "Rod 2"},
-        selected_qr_rod_checkbox_vars={
-            "rod-1": _FakeVar(False),
-            "rod-2": _FakeVar(False),
-        },
+        selected_qr_rod_listbox=_FakeEntry(),
     )
     schedule_calls = []
 
@@ -829,12 +873,286 @@ def test_select_runtime_selected_qr_rod_empty_selection_promotes_first_option() 
 
     assert view_state.selected_qr_rod_keys_value == ["rod-1"]
     assert view_state.selected_qr_rod_key_var.get() == "rod-1"
-    assert view_state.selected_qr_rod_checkbox_vars["rod-1"].get() is True
-    assert view_state.selected_qr_rod_checkbox_vars["rod-2"].get() is False
+    assert view_state.selected_qr_rod_listbox.selected == [0]
     assert schedule_calls == [True]
 
 
-def test_integration_range_drag_bindings_default_custom_mask_factory_is_none() -> None:
+def test_select_runtime_selected_qr_rod_debounces_expensive_refresh() -> None:
+    root = _FakeRoot()
+    listbox = _FakeDebouncedListbox(root)
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        selected_qr_rod_options=["rod-1", "rod-2", "rod-3"],
+        selected_qr_rod_key_var=_FakeVar(""),
+        selected_qr_rod_display_var=_FakeVar(""),
+        selected_qr_rod_option_labels={
+            "rod-1": "Rod 1",
+            "rod-2": "Rod 2",
+            "rod-3": "Rod 3",
+        },
+        selected_qr_rod_listbox=listbox,
+    )
+    show_1d_var = _FakeVar(False)
+    schedule_calls = []
+    refresh_calls = []
+
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=["rod-2"],
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(tuple(view_state.selected_qr_rod_keys)),
+        refresh_region_visuals=lambda: refresh_calls.append(tuple(view_state.selected_qr_rod_keys)),
+    )
+
+    assert view_state.selected_qr_rod_keys_value == ["rod-2"]
+    assert view_state.selected_qr_rod_key_var.get() == "rod-2"
+    assert show_1d_var.get() is True
+    assert schedule_calls == []
+    assert refresh_calls == []
+    assert root.after_calls[0][0] == 125
+    first_token = root.after_calls[0][2]
+
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=["rod-3", "rod-1"],
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(tuple(view_state.selected_qr_rod_keys)),
+        refresh_region_visuals=lambda: refresh_calls.append(tuple(view_state.selected_qr_rod_keys)),
+    )
+
+    assert view_state.selected_qr_rod_keys_value == ["rod-1", "rod-3"]
+    assert view_state.selected_qr_rod_key_var.get() == "rod-1"
+    assert view_state.selected_qr_rod_listbox.selected == [0, 2]
+    assert schedule_calls == []
+    assert refresh_calls == []
+    assert root.after_cancel_calls == [first_token]
+    assert len(root.after_calls) == 2
+
+    root.after_calls[-1][1]()
+
+    assert schedule_calls == [("rod-1", "rod-3")]
+    assert refresh_calls == [("rod-1", "rod-3")]
+    assert view_state.selected_qr_rod_refresh_after_id is None
+    assert view_state.selected_qr_rod_refresh_after_widget is None
+
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=["rod-2"],
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(tuple(view_state.selected_qr_rod_keys)),
+        refresh_region_visuals=lambda: refresh_calls.append(tuple(view_state.selected_qr_rod_keys)),
+    )
+    assert len(root.after_calls) == 3
+
+    root.after_calls[-1][1]()
+
+    assert schedule_calls == [("rod-1", "rod-3"), ("rod-2",)]
+    assert refresh_calls == [("rod-1", "rod-3"), ("rod-2",)]
+    assert view_state.selected_qr_rod_refresh_after_id is None
+    assert view_state.selected_qr_rod_refresh_after_widget is None
+
+
+def test_delta_qr_slider_uses_single_debounced_selected_rod_refresh_path() -> None:
+    root = _FakeRoot()
+    view_state = state.IntegrationRangeControlsViewState(
+        selected_qr_rod_listbox=_FakeDebouncedListbox(root),
+        delta_qr_var=_FakeVar(0.25),
+        delta_qr_label_var=_FakeVar(""),
+        delta_qr_entry_var=_FakeVar(""),
+        delta_qr_cue_var=_FakeVar(""),
+    )
+    show_1d_var = _FakeVar(False)
+    schedule_calls = []
+    refresh_calls = []
+    callback = integration_range_drag._make_runtime_range_slider_callback(
+        view_state=view_state,
+        value_var_name="delta_qr_var",
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(view_state.delta_qr_var.get()),
+        refresh_region_visuals=lambda: refresh_calls.append(view_state.delta_qr_var.get()),
+    )
+
+    callback("0.125")
+    assert show_1d_var.get() is True
+    assert view_state.delta_qr_var.get() == 0.125
+    assert view_state.delta_qr_entry_var.get() == "0.1250"
+    assert view_state.delta_qr_cue_var.get() == "ΔQr = 0.1250 A^-1"
+    assert schedule_calls == []
+    assert refresh_calls == []
+    assert len(root.after_calls) == 1
+    first_token = root.after_calls[0][2]
+
+    callback("0.250")
+    assert view_state.delta_qr_var.get() == 0.25
+    assert view_state.delta_qr_entry_var.get() == "0.2500"
+    assert root.after_cancel_calls == [first_token]
+    assert len(root.after_calls) == 2
+    assert schedule_calls == []
+    assert refresh_calls == []
+
+    root.after_calls[-1][1]()
+
+    assert schedule_calls == [0.25]
+    assert refresh_calls == [0.25]
+    assert view_state.selected_qr_rod_refresh_after_id is None
+    assert view_state.selected_qr_rod_refresh_after_widget is None
+
+
+def test_select_runtime_selected_qr_rod_skips_debounce_after_widget_destroyed() -> None:
+    root = _FakeRoot()
+    listbox = _FakeDebouncedListbox(root)
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        selected_qr_rod_options=["rod-1", "rod-2"],
+        selected_qr_rod_key_var=_FakeVar(""),
+        selected_qr_rod_display_var=_FakeVar(""),
+        selected_qr_rod_option_labels={"rod-1": "Rod 1", "rod-2": "Rod 2"},
+        selected_qr_rod_listbox=listbox,
+    )
+    schedule_calls = []
+    refresh_calls = []
+
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=["rod-2"],
+        show_1d_var=_FakeVar(False),
+        schedule_range_update=lambda: schedule_calls.append(True),
+        refresh_region_visuals=lambda: refresh_calls.append(True),
+    )
+    listbox.exists = False
+    root.after_calls[-1][1]()
+
+    assert schedule_calls == []
+    assert refresh_calls == []
+    assert view_state.selected_qr_rod_refresh_after_id is None
+    assert view_state.selected_qr_rod_refresh_after_widget is None
+
+
+def test_select_runtime_selected_qr_rod_debounce_reads_latest_state_at_execution() -> None:
+    root = _FakeRoot()
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        selected_qr_rod_options=["rod-1", "rod-2", "rod-3"],
+        selected_qr_rod_key_var=_FakeVar(""),
+        selected_qr_rod_display_var=_FakeVar(""),
+        selected_qr_rod_option_labels={
+            "rod-1": "Rod 1",
+            "rod-2": "Rod 2",
+            "rod-3": "Rod 3",
+        },
+        selected_qr_rod_listbox=_FakeDebouncedListbox(root),
+    )
+    observed_keys = []
+
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=["rod-1"],
+        show_1d_var=_FakeVar(False),
+        schedule_range_update=lambda: observed_keys.append(tuple(view_state.selected_qr_rod_keys)),
+    )
+
+    integration_range_drag._set_runtime_selected_qr_rod_keys(
+        view_state,
+        ["rod-3", "rod-2"],
+    )
+    root.after_calls[-1][1]()
+
+    assert observed_keys == [("rod-2", "rod-3")]
+
+
+def test_qr_rod_profiling_hooks_are_env_gated_and_keep_debounce(
+    monkeypatch,
+) -> None:
+    root = _FakeRoot()
+    view_state = state.IntegrationRangeControlsViewState(
+        integrate_selected_qr_rod_var=_FakeVar(True),
+        selected_qr_rod_options=["rod-1", "rod-2", "rod-3"],
+        selected_qr_rod_key_var=_FakeVar(""),
+        selected_qr_rod_display_var=_FakeVar(""),
+        selected_qr_rod_option_labels={
+            "rod-1": "Rod 1",
+            "rod-2": "Rod 2",
+            "rod-3": "Rod 3",
+        },
+        selected_qr_rod_listbox=_FakeDebouncedListbox(root),
+    )
+    show_1d_var = _FakeVar(False)
+    schedule_calls = []
+    refresh_calls = []
+
+    monkeypatch.delenv("RA_SIM_PROFILE_QR_ROD", raising=False)
+    integration_range_drag.clear_qr_rod_profile_timings()
+    integration_range_drag._set_runtime_selected_qr_rod_options(
+        view_state,
+        [("rod-1", "Rod 1"), ("rod-2", "Rod 2")],
+    )
+    assert integration_range_drag._QR_ROD_PROFILE_TIMINGS == []
+
+    monkeypatch.setenv("RA_SIM_PROFILE_QR_ROD", "1")
+    integration_range_drag.clear_qr_rod_profile_timings()
+    integration_range_drag._set_runtime_selected_qr_rod_options(
+        view_state,
+        [("rod-1", "Rod 1"), ("rod-2", "Rod 2"), ("rod-3", "Rod 3")],
+    )
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=["rod-2"],
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(tuple(view_state.selected_qr_rod_keys)),
+        refresh_region_visuals=lambda: refresh_calls.append(tuple(view_state.selected_qr_rod_keys)),
+    )
+    first_token = root.after_calls[-1][2]
+    integration_range_drag._select_runtime_selected_qr_rod(
+        view_state=view_state,
+        display_value=["rod-3", "rod-1"],
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(tuple(view_state.selected_qr_rod_keys)),
+        refresh_region_visuals=lambda: refresh_calls.append(tuple(view_state.selected_qr_rod_keys)),
+    )
+    root.after_calls[-1][1]()
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda _ai: (None, None),
+        range_visible_factory=lambda: False,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+    )
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=object(),
+        sim_res2=None,
+    )
+
+    assert root.after_cancel_calls == [first_token]
+    assert schedule_calls == [("rod-1", "rod-3")]
+    assert refresh_calls == [("rod-1", "rod-3")]
+    assert {
+        "rod_option_sync",
+        "selection_debounce_callback",
+        "overlay_update",
+    }.issubset({entry["stage"] for entry in integration_range_drag._QR_ROD_PROFILE_TIMINGS})
+    assert all(
+        entry["elapsed_ms"] >= 0.0 for entry in integration_range_drag._QR_ROD_PROFILE_TIMINGS
+    )
+    integration_range_drag.clear_qr_rod_profile_timings()
+    for index in range(integration_range_drag._QR_ROD_PROFILE_TIMINGS_MAX_RECORDS + 5):
+        integration_range_drag._qr_rod_profile_end(f"cap-{index}", 0.0)
+    assert len(integration_range_drag._QR_ROD_PROFILE_TIMINGS) == (
+        integration_range_drag._QR_ROD_PROFILE_TIMINGS_MAX_RECORDS
+    )
+    assert integration_range_drag._QR_ROD_PROFILE_TIMINGS[0]["stage"] == "cap-5"
+
+
+def test_integration_range_drag_bindings_default_qr_rod_payload_factories_are_none() -> None:
     bindings = integration_range_drag.IntegrationRangeDragBindings(
         drag_state=state.IntegrationRangeDragState(),
         peak_selection_state=state.PeakSelectionState(),
@@ -851,8 +1169,8 @@ def test_integration_range_drag_bindings_default_custom_mask_factory_is_none() -
         ai_factory=lambda: None,
     )
 
-    assert bindings.caked_custom_mask_factory is None
-    assert bindings.caked_custom_mask_signature_factory is None
+    assert bindings.caked_qr_rod_payload_factory is None
+    assert bindings.detector_qr_rod_payload_factory is None
     assert bindings.detector_geometry_signature_factory is None
     assert bindings.caked_qr_rod_drag_context_factory is None
 
@@ -1052,7 +1370,7 @@ def test_update_runtime_integration_region_visuals_updates_caked_rectangle() -> 
     assert overlay_rect.height == 8.0
 
 
-def test_update_runtime_integration_region_visuals_uses_caked_custom_mask() -> None:
+def test_update_runtime_integration_region_visuals_uses_caked_qr_rod_payload_once() -> None:
     view_state = _range_view_state()
     view_state.tth_min_var.set(1.0)
     view_state.tth_max_var.set(3.0)
@@ -1073,6 +1391,7 @@ def test_update_runtime_integration_region_visuals_uses_caked_custom_mask() -> N
         ],
         dtype=bool,
     )
+    payload_calls = []
 
     bindings = integration_range_drag.IntegrationRangeDragBindings(
         drag_state=state.IntegrationRangeDragState(),
@@ -1088,7 +1407,15 @@ def test_update_runtime_integration_region_visuals_uses_caked_custom_mask() -> N
         caked_view_enabled_factory=lambda: True,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: None,
-        caked_custom_mask_factory=lambda: custom_mask,
+        caked_qr_rod_payload_factory=lambda: (
+            payload_calls.append(True)
+            or {
+                "mask": custom_mask,
+                "signature": ("caked-mask", 1),
+                "selected_qr_rod_keys": ["rod-1"],
+                "metadata": {"source": "test"},
+            }
+        ),
     )
 
     integration_range_drag.update_runtime_integration_region_visuals(
@@ -1100,6 +1427,7 @@ def test_update_runtime_integration_region_visuals_uses_caked_custom_mask() -> N
     assert overlay.visible is True
     assert overlay_rect.visible is False
     np.testing.assert_allclose(overlay.data, custom_mask.astype(float))
+    assert len(payload_calls) == 1
 
 
 def test_update_runtime_integration_region_visuals_emits_caked_overlay_source_signature() -> None:
@@ -1143,8 +1471,12 @@ def test_update_runtime_integration_region_visuals_emits_caked_overlay_source_si
         set_integration_overlay_image=lambda image, *, source_signature=None: projected.append(
             (np.asarray(image, dtype=float), source_signature)
         ),
-        caked_custom_mask_factory=lambda: custom_mask,
-        caked_custom_mask_signature_factory=lambda: custom_mask_signature[0],
+        caked_qr_rod_payload_factory=lambda: {
+            "mask": custom_mask,
+            "signature": custom_mask_signature[0],
+            "selected_qr_rod_keys": ["rod-1"],
+            "metadata": {},
+        },
     )
 
     integration_range_drag.update_runtime_integration_region_visuals(
@@ -1168,17 +1500,152 @@ def test_update_runtime_integration_region_visuals_emits_caked_overlay_source_si
     assert overlay_rect.visible is False
     assert len(projected) == 3
     np.testing.assert_allclose(projected[0][0], custom_mask.astype(float))
-    assert projected[0][1] == (
-        "caked_selected_qr_rod_overlay",
-        (3, 3),
-        ("mask-sig", 1),
-    )
+    assert projected[0][1] == ("mask-sig", 1)
     assert projected[1][1] == projected[0][1]
-    assert projected[2][1] == (
-        "caked_selected_qr_rod_overlay",
-        (3, 3),
-        ("mask-sig", 2),
+    assert projected[2][1] == ("mask-sig", 2)
+
+
+def test_update_runtime_integration_region_visuals_uses_qr_rod_visual_overlay() -> None:
+    view_state = _range_view_state()
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    overlay = _FakeOverlay()
+    overlay_rect = _FakeRect()
+    sim_res2 = SimpleNamespace(
+        radial=np.asarray([1.0, 2.0], dtype=float),
+        azimuthal=np.asarray([0.0, 10.0], dtype=float),
     )
+    custom_mask = np.asarray([[True, True], [False, True]], dtype=bool)
+    visual_overlay = np.asarray([[2.0, 4.0], [0.0, 3.0]], dtype=np.float32)
+    projected: list[tuple[np.ndarray, object | None]] = []
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=overlay,
+        integration_region_rect=overlay_rect,
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: True,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        set_integration_overlay_image=lambda image, *, source_signature=None: projected.append(
+            (np.asarray(image, dtype=float), source_signature)
+        ),
+        caked_qr_rod_payload_factory=lambda: {
+            "mask": custom_mask,
+            "signature": ("mask-sig", 1),
+            "visual_overlay": visual_overlay,
+            "visual_signature": ("visual-sig", 1),
+        },
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=None,
+        sim_res2=sim_res2,
+    )
+
+    assert overlay.visible is True
+    assert overlay_rect.visible is False
+    assert len(projected) == 1
+    np.testing.assert_allclose(projected[0][0], visual_overlay)
+    assert projected[0][1] == ("visual-sig", 1)
+
+
+def test_update_runtime_integration_region_visuals_payload_factory_reads_latest_selection_settings() -> (
+    None
+):
+    view_state = _range_view_state()
+    view_state.tth_min_var.set(1.0)
+    view_state.tth_max_var.set(3.0)
+    view_state.phi_min_var.set(-180.0)
+    view_state.phi_max_var.set(180.0)
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    view_state.selected_qr_rod_options = ["rod-1", "rod-2"]
+    view_state.selected_qr_rod_option_labels = {
+        "rod-1": "Rod 1",
+        "rod-2": "Rod 2",
+    }
+    view_state.selected_qr_rod_display_var = _FakeVar("")
+    view_state.selected_qr_rod_key_var = _FakeVar("")
+    view_state.qz_min_var = _FakeVar(0.0)
+    view_state.qz_max_var = _FakeVar(2.0)
+    view_state.delta_qr_var = _FakeVar(0.25)
+    integration_range_drag._set_runtime_selected_qr_rod_keys(view_state, ["rod-1"])
+
+    sim_res2 = SimpleNamespace(
+        radial=np.asarray([1.0, 2.0], dtype=float),
+        azimuthal=np.asarray([0.0, 10.0], dtype=float),
+    )
+    observed: list[tuple[tuple[str, ...], tuple[float, float, float]]] = []
+    projected: list[tuple[np.ndarray, object | None]] = []
+
+    def payload_factory() -> dict[str, object]:
+        keys = tuple(str(key) for key in getattr(view_state, "selected_qr_rod_keys", []))
+        settings = (
+            float(view_state.qz_min_var.get()),
+            float(view_state.qz_max_var.get()),
+            float(view_state.delta_qr_var.get()),
+        )
+        observed.append((keys, settings))
+        mask = (
+            np.asarray([[True, False], [False, False]], dtype=bool)
+            if keys == ("rod-2",)
+            else np.asarray([[False, False], [False, True]], dtype=bool)
+        )
+        return {
+            "mask": mask,
+            "signature": ("mask-sig", keys, settings),
+            "selected_qr_rod_keys": list(keys),
+            "metadata": {"settings": settings},
+        }
+
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: True,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        set_integration_overlay_image=lambda image, *, source_signature=None: projected.append(
+            (np.asarray(image, dtype=float), source_signature)
+        ),
+        caked_qr_rod_payload_factory=payload_factory,
+    )
+
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=None,
+        sim_res2=sim_res2,
+    )
+    view_state.qz_min_var.set(1.5)
+    view_state.qz_max_var.set(4.5)
+    view_state.delta_qr_var.set(0.5)
+    integration_range_drag._set_runtime_selected_qr_rod_keys(view_state, ["rod-2"])
+    integration_range_drag.update_runtime_integration_region_visuals(
+        bindings,
+        ai=None,
+        sim_res2=sim_res2,
+    )
+
+    assert observed == [
+        (("rod-1",), (0.0, 2.0, 0.25)),
+        (("rod-2",), (1.5, 4.5, 0.5)),
+    ]
+    assert projected[0][1] == ("mask-sig", ("rod-1",), (0.0, 2.0, 0.25))
+    assert projected[1][1] == ("mask-sig", ("rod-2",), (1.5, 4.5, 0.5))
+    np.testing.assert_allclose(projected[1][0], [[1.0, 0.0], [0.0, 0.0]])
 
 
 def test_update_runtime_integration_region_visuals_uses_cached_values_without_controls() -> None:
@@ -1277,7 +1744,7 @@ def test_update_runtime_integration_region_visuals_updates_raw_overlay() -> None
     assert int(np.sum(overlay.data)) == 6
 
 
-def test_update_runtime_integration_region_visuals_uses_detector_qr_rod_mask(
+def test_update_runtime_integration_region_visuals_uses_detector_qr_rod_payload_once(
     monkeypatch,
 ) -> None:
     view_state = _range_view_state()
@@ -1293,6 +1760,7 @@ def test_update_runtime_integration_region_visuals_uses_detector_qr_rod_mask(
         dtype=bool,
     )
     angular_calls = []
+    payload_calls = []
 
     monkeypatch.setattr(
         integration_range_drag,
@@ -1313,8 +1781,15 @@ def test_update_runtime_integration_region_visuals_uses_detector_qr_rod_mask(
         caked_view_enabled_factory=lambda: False,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: object(),
-        detector_qr_rod_mask_factory=lambda: detector_mask,
-        detector_qr_rod_mask_signature_factory=lambda: ("detector-mask", 1),
+        detector_qr_rod_payload_factory=lambda: (
+            payload_calls.append(True)
+            or {
+                "mask": detector_mask,
+                "signature": ("detector-mask", 1),
+                "selected_qr_rod_keys": ["rod-1"],
+                "metadata": {"source": "test"},
+            }
+        ),
     )
 
     integration_range_drag.update_runtime_integration_region_visuals(
@@ -1327,9 +1802,10 @@ def test_update_runtime_integration_region_visuals_uses_detector_qr_rod_mask(
     assert overlay.visible is True
     assert overlay_rect.visible is False
     np.testing.assert_allclose(overlay.data, detector_mask.astype(float))
+    assert len(payload_calls) == 1
 
 
-def test_update_runtime_integration_region_visuals_hides_invalid_detector_qr_rod_mask(
+def test_update_runtime_integration_region_visuals_hides_invalid_detector_qr_rod_payload(
     monkeypatch,
 ) -> None:
     view_state = _range_view_state()
@@ -1339,6 +1815,7 @@ def test_update_runtime_integration_region_visuals_hides_invalid_detector_qr_rod
     overlay_rect = _FakeRect()
     overlay_rect.visible = True
     angular_calls = []
+    payload_calls = []
     monkeypatch.setattr(
         integration_range_drag,
         "_update_detector_integration_overlay",
@@ -1358,7 +1835,15 @@ def test_update_runtime_integration_region_visuals_hides_invalid_detector_qr_rod
         caked_view_enabled_factory=lambda: False,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: object(),
-        detector_qr_rod_mask_factory=lambda: np.zeros((3, 3), dtype=bool),
+        detector_qr_rod_payload_factory=lambda: (
+            payload_calls.append(True)
+            or {
+                "mask": np.zeros((3,), dtype=bool),
+                "signature": ("detector-mask", 1),
+                "selected_qr_rod_keys": ["rod-1"],
+                "metadata": {},
+            }
+        ),
     )
 
     integration_range_drag.update_runtime_integration_region_visuals(
@@ -1370,6 +1855,7 @@ def test_update_runtime_integration_region_visuals_hides_invalid_detector_qr_rod
     assert angular_calls == []
     assert overlay.visible is False
     assert overlay_rect.visible is False
+    assert len(payload_calls) == 1
 
 
 def test_update_runtime_integration_region_visuals_keeps_detector_fallback_for_active_rod_mask() -> (
@@ -1421,7 +1907,6 @@ def test_update_runtime_integration_region_visuals_keeps_detector_fallback_for_a
         caked_view_enabled_factory=lambda: False,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: ai,
-        caked_custom_mask_factory=lambda: np.ones((3, 3), dtype=bool),
         last_sim_res2_factory=lambda: sim_res2,
     )
 
@@ -1485,7 +1970,6 @@ def test_update_runtime_integration_region_visuals_keeps_detector_fallback_with_
         caked_view_enabled_factory=lambda: False,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: ai,
-        caked_custom_mask_factory=lambda: np.ones((2, 2), dtype=bool),
         last_sim_res2_factory=lambda: sim_res2,
     )
 
@@ -1545,7 +2029,6 @@ def test_update_runtime_integration_region_visuals_keeps_detector_fallback_witho
         caked_view_enabled_factory=lambda: False,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: ai,
-        caked_custom_mask_factory=lambda: None,
     )
 
     integration_range_drag.update_runtime_integration_region_visuals(
@@ -2283,11 +2766,13 @@ def test_update_runtime_qr_rod_drag_preview_passes_mirrored_phi_windows(monkeypa
     monkeypatch.setattr(
         integration_range_drag.gui_qr_cylinder_overlay,
         "build_selected_qr_rod_qz_caked_mask",
-        lambda **kwargs: captured_calls.append(dict(kwargs))
-        or {
-            "mask": np.ones((azimuth_axis.size, radial_axis.size), dtype=bool),
-            "signature": ("preview", kwargs["phi_windows"]),
-        },
+        lambda **kwargs: (
+            captured_calls.append(dict(kwargs))
+            or {
+                "mask": np.ones((azimuth_axis.size, radial_axis.size), dtype=bool),
+                "signature": ("preview", kwargs["phi_windows"]),
+            }
+        ),
     )
 
     bindings = integration_range_drag.IntegrationRangeDragBindings(
@@ -2960,6 +3445,7 @@ def test_detector_qr_rod_drag_sets_qz_bounds_without_detector_angles(
     schedule_calls = []
     status_messages = []
     draw_calls = []
+    context_calls = []
     qz_map = np.asarray(
         [
             [0.0, 1.0, 2.0],
@@ -2985,8 +3471,9 @@ def test_detector_qr_rod_drag_sets_qz_bounds_without_detector_angles(
     monkeypatch.setattr(
         integration_range_drag,
         "display_to_detector_angles",
-        lambda *args, **kwargs: angle_calls.append((args, kwargs)) or (_ for _ in ()).throw(
-            AssertionError("raw detector angle path used")
+        lambda *args, **kwargs: (
+            angle_calls.append((args, kwargs))
+            or (_ for _ in ()).throw(AssertionError("raw detector angle path used"))
         ),
     )
     bindings = integration_range_drag.IntegrationRangeDragBindings(
@@ -3007,7 +3494,7 @@ def test_detector_qr_rod_drag_sets_qz_bounds_without_detector_angles(
         schedule_range_update=lambda: schedule_calls.append(True),
         draw_idle=lambda: draw_calls.append(True),
         set_status_text=status_messages.append,
-        detector_qr_rod_drag_context_factory=lambda: context,
+        detector_qr_rod_drag_context_factory=lambda: context_calls.append("shared") or context,
     )
 
     assert integration_range_drag.handle_runtime_integration_drag_press(
@@ -3030,6 +3517,94 @@ def test_detector_qr_rod_drag_sets_qz_bounds_without_detector_angles(
     assert show_1d_var.get() is True
     assert schedule_calls == [True]
     assert status_messages[-1] == "Selected Qr rod detector Qz range set: Qz=[0.0000, 8.0000] A^-1"
+    assert context_calls == ["shared", "shared", "shared"]
+    assert draw_calls
+
+
+def test_detector_qr_rod_drag_no_hit_preserves_qz_bounds_and_emits_status(
+    monkeypatch,
+) -> None:
+    axis = _FakeAxis(xlim=(0.0, 3.0), ylim=(3.0, 0.0))
+    drag_state = state.IntegrationRangeDragState()
+    view_state = _range_view_state()
+    view_state.integrate_selected_qr_rod_var = _FakeVar(True)
+    view_state.qz_min_var = _FakeVar(1.0)
+    view_state.qz_max_var = _FakeVar(3.0)
+    show_1d_var = _FakeVar(False)
+    schedule_calls = []
+    status_messages = []
+    draw_calls = []
+    context_calls = []
+    qz_map = np.asarray(
+        [
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+        ],
+        dtype=float,
+    )
+    context = {
+        "detector_shape": (3, 3),
+        "qr_map": np.ones((3, 3), dtype=float),
+        "qz_map": qz_map,
+        "valid_q": np.ones((3, 3), dtype=bool),
+        "detector_phi_deg": None,
+        "qr_center": 1.0,
+        "delta_qr": 0.05,
+        "phi_windows": ((-180.0, 180.0),),
+        "shape_mask": None,
+        "signature": ("drag-context", "empty"),
+        "union_support_mask": np.zeros((3, 3), dtype=bool),
+    }
+    monkeypatch.setattr(
+        integration_range_drag,
+        "display_to_detector_angles",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("raw detector angle path used")
+        ),
+    )
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=drag_state,
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=view_state,
+        ax=axis,
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(extent=(0.0, 3.0, 3.0, 0.0)),
+        get_detector_angular_maps=lambda ai: (_ for _ in ()).throw(AssertionError()),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: object(),
+        show_1d_var=show_1d_var,
+        schedule_range_update=lambda: schedule_calls.append(True),
+        draw_idle=lambda: draw_calls.append(True),
+        set_status_text=status_messages.append,
+        detector_qr_rod_drag_context_factory=lambda: context_calls.append("shared") or context,
+    )
+
+    assert integration_range_drag.handle_runtime_integration_drag_press(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=0.2, ydata=2.8),
+    )
+    assert integration_range_drag.handle_runtime_integration_drag_motion(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=1.1),
+    )
+    assert integration_range_drag.handle_runtime_integration_drag_release(
+        bindings,
+        _FakeEvent(button=1, inaxes=axis, xdata=1.8, ydata=1.1),
+    )
+
+    assert view_state.qz_min_var.get() == 1.0
+    assert view_state.qz_max_var.get() == 3.0
+    assert show_1d_var.get() is False
+    assert schedule_calls == []
+    assert (
+        status_messages[-1] == "Drag across the selected Qr rod detector support to set a Qz range."
+    )
+    assert context_calls == ["shared", "shared", "shared"]
     assert draw_calls
 
 

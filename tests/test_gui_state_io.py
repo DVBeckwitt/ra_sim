@@ -1,4 +1,5 @@
 import json
+from collections import OrderedDict
 
 import numpy as np
 import pytest
@@ -14,6 +15,7 @@ from ra_sim.io.data_loading import (
     save_gui_state_file,
 )
 from ra_sim.gui import state_io
+from ra_sim.gui.state import GeometryRuntimeState
 
 
 def test_build_gui_state_payload_normalizes_numpy_and_path_values(tmp_path):
@@ -104,6 +106,18 @@ def test_save_and_load_gui_state_file_round_trip_preserves_selected_qr_rod_analy
         "qz_max": 1.5,
         "delta_qr": 0.03125,
         "delta_qr_width_mode": "full_width",
+    }
+
+
+def test_geometry_runtime_state_has_dedicated_selected_qr_rod_lru_caches() -> None:
+    state = GeometryRuntimeState()
+
+    assert isinstance(state.selected_qr_rod_detector_union_mask_cache, OrderedDict)
+    assert isinstance(state.selected_qr_rod_caked_union_mask_cache, OrderedDict)
+    assert isinstance(state.selected_qr_rod_profile_cache, OrderedDict)
+    assert state.selected_qr_rod_shape_mask_index_cache == {
+        "signature": None,
+        "index": {},
     }
 
 

@@ -10,7 +10,9 @@ from ra_sim.gui import qr_cylinder_overlay
 from ra_sim.simulation import exact_cake_portable
 
 
-def _overlay_config(*, render_in_caked_space: bool) -> qr_cylinder_overlay.QrCylinderOverlayRenderConfig:
+def _overlay_config(
+    *, render_in_caked_space: bool
+) -> qr_cylinder_overlay.QrCylinderOverlayRenderConfig:
     return qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
         render_in_caked_space=render_in_caked_space,
         image_size=64,
@@ -759,6 +761,182 @@ def test_build_detector_qr_rod_support_mask_clips_shape_by_valid_qz_phi() -> Non
     assert support["shape_pixel_count"] == 4
 
 
+def test_build_selected_qr_rod_qz_detector_mask_uses_precomputed_maps(monkeypatch) -> None:
+    qr_map = np.asarray([[1.0, 1.2], [1.0, 2.0]], dtype=float)
+    qz_map = np.asarray([[0.5, 0.5], [1.5, 1.5]], dtype=float)
+    valid_q = np.ones((2, 2), dtype=bool)
+
+    monkeypatch.setattr(
+        qr_cylinder_overlay,
+        "detector_qr_qz_maps_for_projection",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("precomputed detector maps should be used")
+        ),
+    )
+
+    payload = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask(
+        selected_entry={"key": ("primary", 1), "qr": 1.0},
+        config=_overlay_config(render_in_caked_space=False),
+        detector_shape=(2, 2),
+        delta_qr=0.05,
+        qz_min=0.0,
+        qz_max=2.0,
+        detector_phi_deg=np.zeros((2, 2), dtype=float),
+        phi_windows=((-10.0, 10.0),),
+        selected_qr_rod_key="primary|1",
+        qr_map=qr_map,
+        qz_map=qz_map,
+        valid_q=valid_q,
+    )
+
+    assert payload is not None
+    np.testing.assert_array_equal(
+        payload["mask"],
+        np.asarray([[True, False], [True, False]], dtype=bool),
+    )
+
+
+def test_build_detector_selected_qr_rod_band_visual_payload_splits_layers() -> None:
+    qr_map = np.asarray(
+        [
+            [0.90, 0.95, 1.00, 1.05, 1.10],
+            [0.90, 0.95, 1.00, 1.05, 1.10],
+        ],
+        dtype=float,
+    )
+    qz_map = np.full(qr_map.shape, 0.5, dtype=float)
+    payload = qr_cylinder_overlay.build_detector_selected_qr_rod_band_visual_payload(
+        qr_map=qr_map,
+        qz_map=qz_map,
+        valid_q=np.ones(qr_map.shape, dtype=bool),
+        qr_center=1.0,
+        delta_qr=0.05,
+        qz_min=0.0,
+        qz_max=1.0,
+    )
+
+    assert payload is not None
+    np.testing.assert_array_equal(
+        payload["band_fill_mask"],
+        np.asarray(
+            [
+                [False, True, True, True, False],
+                [False, True, True, True, False],
+            ],
+            dtype=bool,
+        ),
+    )
+    np.testing.assert_array_equal(
+        payload["centerline_mask"],
+        np.asarray(
+            [
+                [False, False, True, False, False],
+                [False, False, True, False, False],
+            ],
+            dtype=bool,
+        ),
+    )
+    np.testing.assert_array_equal(
+        payload["band_boundary_inner"],
+        np.asarray(
+            [
+                [False, True, False, False, False],
+                [False, True, False, False, False],
+            ],
+            dtype=bool,
+        ),
+    )
+    np.testing.assert_array_equal(
+        payload["band_boundary_outer"],
+        np.asarray(
+            [
+                [False, False, False, True, False],
+                [False, False, False, True, False],
+            ],
+            dtype=bool,
+        ),
+    )
+    expected_overlay = np.asarray(
+        [
+            [0.0, 3.0, 4.0, 3.0, 0.0],
+            [0.0, 3.0, 4.0, 3.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    np.testing.assert_allclose(payload["visual_overlay"], expected_overlay)
+
+
+def test_compose_selected_qr_rod_band_visual_payload_dashes_boundaries_and_keeps_core() -> None:
+    fill = np.ones((3, 12), dtype=bool)
+    centerline = np.zeros_like(fill)
+    centerline[1, :] = True
+    inner = np.zeros_like(fill)
+    outer = np.zeros_like(fill)
+    inner[0, :] = True
+    outer[2, :] = True
+
+    payload = qr_cylinder_overlay.compose_selected_qr_rod_band_visual_payload(
+        band_fill_mask=fill,
+        centerline_mask=centerline,
+        band_boundary_inner=inner,
+        band_boundary_outer=outer,
+        style={"boundary_dash_on_px": 2, "boundary_dash_off_px": 2},
+    )
+
+    assert payload is not None
+    overlay = payload["visual_overlay"]
+    assert np.all(overlay[1, :] == qr_cylinder_overlay.SELECTED_QR_ROD_CENTERLINE_VALUE)
+    assert np.any(overlay[0, :] == qr_cylinder_overlay.SELECTED_QR_ROD_BAND_BOUNDARY_VALUE)
+    assert np.any(overlay[0, :] == qr_cylinder_overlay.SELECTED_QR_ROD_BAND_FILL_VALUE)
+    assert np.any(overlay[2, :] == qr_cylinder_overlay.SELECTED_QR_ROD_BAND_BOUNDARY_VALUE)
+    assert np.any(overlay[2, :] == qr_cylinder_overlay.SELECTED_QR_ROD_BAND_FILL_VALUE)
+    assert np.count_nonzero(payload["band_boundary_inner_visible"]) < np.count_nonzero(inner)
+    assert np.count_nonzero(payload["band_boundary_outer_visible"]) < np.count_nonzero(outer)
+
+
+def test_restyle_selected_qr_rod_band_visual_payload_mutes_non_primary_layers() -> None:
+    fill = np.ones((4, 5), dtype=bool)
+    centerline = np.zeros_like(fill)
+    centerline[1, :] = True
+    inner = np.zeros_like(fill)
+    outer = np.zeros_like(fill)
+    inner[0, :] = True
+    outer[2, :] = True
+    primary_style = qr_cylinder_overlay.selected_qr_rod_band_visual_style(primary=True)
+    muted_style = qr_cylinder_overlay.selected_qr_rod_band_visual_style(primary=False)
+
+    primary = qr_cylinder_overlay.compose_selected_qr_rod_band_visual_payload(
+        band_fill_mask=fill,
+        centerline_mask=centerline,
+        band_boundary_inner=inner,
+        band_boundary_outer=outer,
+        style={"boundary_dash_on_px": 2, "boundary_dash_off_px": 2},
+    )
+    muted = qr_cylinder_overlay.restyle_selected_qr_rod_band_visual_payload(
+        primary,
+        primary=False,
+    )
+
+    assert primary is not None
+    assert muted is not None
+    np.testing.assert_array_equal(muted["band_fill_mask"], primary["band_fill_mask"])
+    np.testing.assert_array_equal(muted["centerline_mask"], primary["centerline_mask"])
+    np.testing.assert_array_equal(muted["band_boundary_inner"], primary["band_boundary_inner"])
+    np.testing.assert_array_equal(muted["band_boundary_outer"], primary["band_boundary_outer"])
+    assert muted_style["fill_alpha"] < primary_style["fill_alpha"]
+    assert muted_style["boundary_alpha"] < primary_style["boundary_alpha"]
+    assert muted_style["centerline_alpha"] < primary_style["centerline_alpha"]
+    assert np.any(
+        muted["visual_overlay"] == qr_cylinder_overlay.SELECTED_QR_ROD_MUTED_BAND_FILL_VALUE
+    )
+    assert np.any(
+        muted["visual_overlay"] == qr_cylinder_overlay.SELECTED_QR_ROD_MUTED_BAND_BOUNDARY_VALUE
+    )
+    assert np.any(
+        muted["visual_overlay"] == qr_cylinder_overlay.SELECTED_QR_ROD_MUTED_CENTERLINE_VALUE
+    )
+
+
 def test_integrate_detector_qr_rod_qz_profile_respects_signed_phi_windows() -> None:
     inputs = _synthetic_detector_qr_rod_inputs()
 
@@ -950,9 +1128,7 @@ def test_build_selected_qr_rod_qz_detector_mask_signature_tracks_inputs() -> Non
         shape_source_signature=("hits", 1),
     )
 
-    base = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
-        **base_kwargs
-    )
+    base = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(**base_kwargs)
     delta_changed = qr_cylinder_overlay.build_selected_qr_rod_qz_detector_mask_signature(
         **{**base_kwargs, "delta_qr": 0.06}
     )
@@ -1936,9 +2112,7 @@ def test_refresh_runtime_qr_cylinder_overlay_resets_cache_for_empty_entries(
     monkeypatch.setattr(
         qr_cylinder_overlay.gui_overlays,
         "clear_artists",
-        lambda artists, *, draw_idle=None, redraw=True: clear_calls.append(
-            (list(artists), redraw)
-        ),
+        lambda artists, *, draw_idle=None, redraw=True: clear_calls.append((list(artists), redraw)),
     )
 
     bindings = qr_cylinder_overlay.QrCylinderOverlayRuntimeBindings(
@@ -1963,9 +2137,7 @@ def test_refresh_runtime_qr_cylinder_overlay_resets_cache_for_empty_entries(
 
     assert bindings.overlay_cache == {"signature": None, "paths": []}
     assert clear_calls == [(["artist"], True)]
-    assert status_messages == [
-        "Qr cylinder overlay unavailable: no active Bragg Qr groups."
-    ]
+    assert status_messages == ["Qr cylinder overlay unavailable: no active Bragg Qr groups."]
 
 
 def test_refresh_runtime_qr_cylinder_overlay_builds_and_reuses_cached_paths(
@@ -1980,8 +2152,7 @@ def test_refresh_runtime_qr_cylinder_overlay_builds_and_reuses_cached_paths(
     monkeypatch.setattr(
         qr_cylinder_overlay,
         "build_qr_cylinder_overlay_paths",
-        lambda active_entries, **kwargs: build_calls.append((active_entries, kwargs))
-        or fake_paths,
+        lambda active_entries, **kwargs: build_calls.append((active_entries, kwargs)) or fake_paths,
     )
     monkeypatch.setattr(
         qr_cylinder_overlay.gui_overlays,
@@ -2023,9 +2194,7 @@ def test_refresh_runtime_qr_cylinder_overlay_builds_and_reuses_cached_paths(
     assert len(draw_calls) == 2
     assert draw_calls[0][0] == "axis"
     assert draw_calls[0][1] == fake_paths
-    assert status_messages == [
-        "Showing analytic Qr-cylinder traces for 1 active Qr groups."
-    ]
+    assert status_messages == ["Showing analytic Qr-cylinder traces for 1 active Qr groups."]
 
 
 def test_refresh_runtime_qr_cylinder_overlay_can_disable_path_retention(
@@ -2053,8 +2222,7 @@ def test_refresh_runtime_qr_cylinder_overlay_can_disable_path_retention(
     monkeypatch.setattr(
         qr_cylinder_overlay,
         "build_qr_cylinder_overlay_paths",
-        lambda active_entries, **kwargs: build_calls.append((active_entries, kwargs))
-        or fake_paths,
+        lambda active_entries, **kwargs: build_calls.append((active_entries, kwargs)) or fake_paths,
     )
     monkeypatch.setattr(
         qr_cylinder_overlay.gui_overlays,
@@ -2094,8 +2262,10 @@ def test_refresh_runtime_qr_cylinder_overlay_passes_caked_projection_context_for
     monkeypatch.setattr(
         qr_cylinder_overlay,
         "build_qr_cylinder_overlay_paths",
-        lambda active_entries, **kwargs: build_calls.append(kwargs)
-        or [{"source": "secondary", "qr": 0.5, "cols": [1.0], "rows": [2.0]}],
+        lambda active_entries, **kwargs: (
+            build_calls.append(kwargs)
+            or [{"source": "secondary", "qr": 0.5, "cols": [1.0], "rows": [2.0]}]
+        ),
     )
     monkeypatch.setattr(
         qr_cylinder_overlay.gui_overlays,
@@ -2137,9 +2307,7 @@ def test_qr_cylinder_overlay_toggle_and_callback_helpers_use_live_bindings(
     monkeypatch.setattr(
         qr_cylinder_overlay.gui_overlays,
         "clear_artists",
-        lambda artists, *, draw_idle=None, redraw=True: clear_calls.append(
-            (list(artists), redraw)
-        ),
+        lambda artists, *, draw_idle=None, redraw=True: clear_calls.append((list(artists), redraw)),
     )
 
     bindings = qr_cylinder_overlay.QrCylinderOverlayRuntimeBindings(
@@ -2202,9 +2370,7 @@ def test_invalidate_runtime_qr_cylinder_overlay_cache_resets_paths_and_artists(
     monkeypatch.setattr(
         qr_cylinder_overlay.gui_overlays,
         "clear_artists",
-        lambda artists, *, draw_idle=None, redraw=True: clear_calls.append(
-            (list(artists), redraw)
-        ),
+        lambda artists, *, draw_idle=None, redraw=True: clear_calls.append((list(artists), redraw)),
     )
 
     bindings = qr_cylinder_overlay.QrCylinderOverlayRuntimeBindings(

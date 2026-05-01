@@ -91,20 +91,57 @@ class _FakeCanvas:
 
 
 class _FakeListbox:
-    def __init__(self) -> None:
+    created = []
+
+    def __init__(self, parent=None, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
         self.items = []
         self.selected = []
         self.seen_index = None
+        self.state = kwargs.get("state")
+        self.bindings = {}
+        self.delete_calls = []
+        self.insert_calls = []
+        _FakeListbox.created.append(self)
 
-    def delete(self, _start, _end) -> None:
+    def pack(self, **_kwargs) -> None:
+        pass
+
+    def bind(self, event: str, callback) -> None:
+        self.bindings[event] = callback
+
+    def configure(self, **kwargs) -> None:
+        self.state = kwargs.get("state", self.state)
+
+    def config(self, **kwargs) -> None:
+        self.configure(**kwargs)
+
+    def cget(self, key: str):
+        if key == "selectmode":
+            return self.kwargs.get("selectmode")
+        if key == "exportselection":
+            return self.kwargs.get("exportselection")
+        return self.kwargs.get(key)
+
+    def delete(self, start, end) -> None:
+        self.delete_calls.append((start, end))
         self.items = []
         self.selected = []
 
-    def insert(self, _index, line) -> None:
+    def insert(self, index, line) -> None:
+        self.insert_calls.append((index, line))
         self.items.append(line)
 
     def selection_set(self, idx: int) -> None:
-        self.selected.append(int(idx))
+        if int(idx) not in self.selected:
+            self.selected.append(int(idx))
+
+    def selection_clear(self, _start, _end) -> None:
+        self.selected = []
+
+    def curselection(self):
+        return tuple(self.selected)
 
     def see(self, idx: int) -> None:
         self.seen_index = int(idx)
@@ -3061,6 +3098,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     _FakeCheckbutton.created = []
     _FakeRadiobutton.created = []
     _FakeScale.created = []
+    _FakeListbox.created = []
     monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
@@ -3070,6 +3108,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
     monkeypatch.setattr(views.ttk, "Combobox", _FakeEntry)
     monkeypatch.setattr(views.ttk, "Scale", _FakeScale)
+    monkeypatch.setattr(views.tk, "Listbox", _FakeListbox)
     monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
     monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
@@ -3165,6 +3204,8 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.phi_max_entry.textvariable is view_state.phi_max_entry_var
     assert view_state.qz_min_entry.textvariable is view_state.qz_min_entry_var
     assert view_state.delta_qr_entry.textvariable is view_state.delta_qr_entry_var
+    assert view_state.delta_qr_cue_var.get() == "ΔQr = 0.0200 A^-1"
+    assert view_state.delta_qr_cue_label.kwargs["textvariable"] is view_state.delta_qr_cue_var
     assert view_state.integrate_selected_qr_rod_checkbutton.kwargs["text"] == (
         "Enable selected Qr rod ROI"
     )
@@ -3202,44 +3243,59 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
         view_state.rod_profile_intensity_mode_buttons[key].kwargs["state"]
         for key in ("density", "raw_sum")
     ] == [views.tk.DISABLED, views.tk.DISABLED]
-    assert view_state.tth_min_slider is _FakeScale.created[0]
-    assert view_state.tth_max_slider is _FakeScale.created[1]
-    assert view_state.phi_min_slider is _FakeScale.created[2]
-    assert view_state.phi_max_slider is _FakeScale.created[3]
-    assert view_state.qz_min_slider is _FakeScale.created[4]
-    assert view_state.qz_max_slider is _FakeScale.created[5]
-    assert view_state.delta_qr_slider is _FakeScale.created[6]
+    assert view_state.delta_qr_slider is _FakeScale.created[0]
+    assert view_state.tth_min_slider is _FakeScale.created[1]
+    assert view_state.tth_max_slider is _FakeScale.created[2]
+    assert view_state.phi_min_slider is _FakeScale.created[3]
+    assert view_state.phi_max_slider is _FakeScale.created[4]
+    assert view_state.qz_min_slider is _FakeScale.created[5]
+    assert view_state.qz_max_slider is _FakeScale.created[6]
     assert view_state.tth_min_slider.cget("from") == 0.0
     assert view_state.tth_min_slider.cget("to") == 90.0
     assert view_state.phi_min_slider.cget("from") == -180.0
     assert view_state.phi_max_slider.cget("to") == 180.0
     assert view_state.qz_min_slider.cget("from") == -0.75
     assert view_state.qz_max_slider.cget("to") == 1.25
-    assert view_state.delta_qr_slider.cget("from") == 0.0
+    assert view_state.delta_qr_slider.cget("from") == 0.001
     assert view_state.delta_qr_slider.cget("to") == 1.0
     assert any(label.text == "Delta Qr width (A^-1):" for label in _FakeLabel.created)
-    assert view_state.selected_qr_rod_combobox.state == "readonly"
-    assert view_state.selected_qr_rod_listbox is None
-    assert isinstance(view_state.selected_qr_rod_checkbox_container, _FakeFrame)
-    assert list(view_state.selected_qr_rod_checkbox_vars) == ["phase-a|1", "phase-a|2"]
-    assert [
-        view_state.selected_qr_rod_checkbuttons[key].kwargs["text"]
-        for key in ("phase-a|1", "phase-a|2")
-    ] == [
+    assert view_state.selected_qr_rod_combobox is None
+    assert isinstance(view_state.selected_qr_rod_listbox, _FakeListbox)
+    assert view_state.selected_qr_rod_listbox.cget("selectmode") == views.tk.EXTENDED
+    assert view_state.selected_qr_rod_listbox.cget("exportselection") is False
+    assert view_state.selected_qr_rod_listbox.items == [
         "phase-a m=1 | Qr=1.2500 A^-1",
         "phase-a m=2 | Qr=1.5000 A^-1",
     ]
-    assert [
-        view_state.selected_qr_rod_checkbuttons[key].state
-        for key in ("phase-a|1", "phase-a|2")
-    ] == [views.tk.DISABLED, views.tk.DISABLED]
+    assert view_state.selected_qr_rod_listbox.selected == [0, 1]
+    assert view_state.selected_qr_rod_listbox.state == views.tk.DISABLED
+    assert view_state.selected_qr_rod_checkbox_container is None
+    assert view_state.selected_qr_rod_checkbox_vars == {}
+    assert view_state.selected_qr_rod_checkbuttons == {}
+    assert not any(
+        check.kwargs.get("text", "").startswith("phase-a m=") for check in _FakeCheckbutton.created
+    )
     assert view_state.qz_min_slider.state == "disabled"
     assert view_state.delta_qr_entry.state == "disabled"
     assert "<ButtonRelease-1>" in view_state.tth_min_slider.bindings
     assert "<Return>" in view_state.tth_min_entry.bindings
     assert "<FocusOut>" in view_state.phi_max_entry.bindings
-    assert "<<ComboboxSelected>>" in view_state.selected_qr_rod_combobox.bindings
+    assert "<<ListboxSelect>>" in view_state.selected_qr_rod_listbox.bindings
     assert "<Return>" in view_state.delta_qr_entry.bindings
+    initial_delete_calls = list(view_state.selected_qr_rod_listbox.delete_calls)
+    initial_insert_calls = list(view_state.selected_qr_rod_listbox.insert_calls)
+    view_state.selected_qr_rod_listbox_options_updater(
+        [
+            ("phase-a|1", "phase-a m=1 | Qr=1.2500 A^-1"),
+            ("phase-a|2", "phase-a m=2 | Qr=1.5000 A^-1"),
+        ],
+        ["phase-a|2"],
+        False,
+    )
+    assert view_state.selected_qr_rod_listbox.delete_calls == initial_delete_calls
+    assert view_state.selected_qr_rod_listbox.insert_calls == initial_insert_calls
+    assert view_state.selected_qr_rod_keys == ["phase-a|2"]
+    assert view_state.selected_qr_rod_key_var.get() == "phase-a|2"
 
     view_state.tth_min_slider.command("3.0")
     view_state.phi_max_slider.command("17.5")
@@ -3255,11 +3311,8 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     view_state.rod_profile_intensity_mode_var.set("raw_sum")
     view_state.rod_profile_intensity_mode_buttons["raw_sum"].command()
     assert mode_calls == [("caked", "raw_sum"), "raw_sum"]
-    view_state.selected_qr_rod_display_var.set("phase-a m=1 | Qr=1.2500 A^-1")
-    view_state.selected_qr_rod_combobox.bindings["<<ComboboxSelected>>"](None)
-    assert slider_calls[-1] == ("rod-select", "phase-a m=1 | Qr=1.2500 A^-1")
-    view_state.selected_qr_rod_checkbox_vars["phase-a|1"].set(False)
-    view_state.selected_qr_rod_checkbuttons["phase-a|1"].command()
+    view_state.selected_qr_rod_listbox.selected = [1]
+    view_state.selected_qr_rod_listbox.bindings["<<ListboxSelect>>"](None)
     assert slider_calls[-1] == ("rod-select", ["phase-a|2"])
 
     view_state.tth_min_entry.bindings["<Return>"](None)
@@ -3268,7 +3321,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert apply_calls == [
         ("1.5000", 1.5, 0.0, 90.0),
         ("18.7000", 18.7, -180.0, 180.0),
-        ("0.0200", 0.02, 0.0, 1.0),
+        ("0.0200", 0.02, 0.001, 1.0),
     ]
 
     view_state.tth_min_var.set(4.0)

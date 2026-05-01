@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import wraps
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -21,6 +24,12 @@ _SELECTED_REGION_EDGE_COLOR = "#ff00a8"
 _SELECTED_REGION_FACE_RGBA = (1.0, 0.0, 0.66, 0.10)
 _SELECTED_REGION_OVERLAY_RGBA = (1.0, 0.0, 0.66, 0.46)
 _SELECTED_REGION_LINEWIDTH = 3.0
+_SELECTED_QR_ROD_BAND_FILL_RGBA = (1.0, 0.0, 0.66, 0.16)
+_SELECTED_QR_ROD_BAND_BOUNDARY_RGBA = (1.0, 0.0, 0.66, 0.58)
+_SELECTED_QR_ROD_CENTERLINE_RGBA = (1.0, 0.0, 0.66, 0.92)
+_SELECTED_QR_ROD_MUTED_BAND_FILL_RGBA = (1.0, 0.0, 0.66, 0.09)
+_SELECTED_QR_ROD_MUTED_BAND_BOUNDARY_RGBA = (1.0, 0.0, 0.66, 0.36)
+_SELECTED_QR_ROD_MUTED_CENTERLINE_RGBA = (1.0, 0.0, 0.66, 0.62)
 
 _DEFAULT_TTH_MIN = 0.0
 _DEFAULT_TTH_MAX = 80.0
@@ -33,8 +42,9 @@ _DEFAULT_QZ_MAX = 5.0
 _DEFAULT_DELTA_QR = 0.25
 _TTH_SLIDER_BOUNDS = (0.0, 90.0)
 _PHI_SLIDER_BOUNDS = (-180.0, 180.0)
-_DELTA_QR_SLIDER_BOUNDS = (0.0, 1.0)
+_DELTA_QR_SLIDER_BOUNDS = (0.001, 1.0)
 _DISPLAY_COORD_EPSILON = 1.0e-9
+_SELECTED_QR_ROD_REFRESH_DEBOUNCE_MS = 125
 _RUNTIME_RANGE_TEXT_FORMATS: dict[str, tuple[str, str]] = {
     "tth_min": ("{:.1f}", "{:.4f}"),
     "tth_max": ("{:.1f}", "{:.4f}"),
@@ -44,6 +54,69 @@ _RUNTIME_RANGE_TEXT_FORMATS: dict[str, tuple[str, str]] = {
     "qz_max": ("{:.4f}", "{:.4f}"),
     "delta_qr": ("{:.4f}", "{:.4f}"),
 }
+
+
+def _format_runtime_delta_qr_cue(value: object) -> str:
+    try:
+        numeric_value = float(value)
+    except Exception:
+        return "ΔQr = -- A^-1"
+    if not np.isfinite(numeric_value):
+        return "ΔQr = -- A^-1"
+    return f"ΔQr = {numeric_value:.4f} A^-1"
+
+
+_QR_ROD_PROFILE_TIMINGS_MAX_RECORDS = 512
+_QR_ROD_PROFILE_TIMINGS: list[dict[str, object]] = []
+
+
+def clear_qr_rod_profile_timings() -> None:
+    """Clear retained selected-Qr rod profiling records."""
+
+    _QR_ROD_PROFILE_TIMINGS.clear()
+
+
+def _qr_rod_profiling_enabled() -> bool:
+    return str(os.environ.get("RA_SIM_PROFILE_QR_ROD", "")).strip() == "1"
+
+
+def _qr_rod_profile_start() -> float | None:
+    return perf_counter() if _qr_rod_profiling_enabled() else None
+
+
+def _qr_rod_profile_end(
+    stage: str,
+    start_time: float | None,
+    **metadata: object,
+) -> None:
+    if start_time is None or not _qr_rod_profiling_enabled():
+        return
+    try:
+        elapsed_ms = (perf_counter() - float(start_time)) * 1000.0
+    except Exception:
+        return
+    record = {"stage": str(stage), "elapsed_ms": float(elapsed_ms)}
+    if metadata:
+        record.update(metadata)
+    _QR_ROD_PROFILE_TIMINGS.append(record)
+    overflow = len(_QR_ROD_PROFILE_TIMINGS) - _QR_ROD_PROFILE_TIMINGS_MAX_RECORDS
+    if overflow > 0:
+        del _QR_ROD_PROFILE_TIMINGS[:overflow]
+
+
+def _qr_rod_profiled(stage: str):
+    def _decorate(func):
+        @wraps(func)
+        def _wrapped(*args, **kwargs):
+            start_time = _qr_rod_profile_start()
+            try:
+                return func(*args, **kwargs)
+            finally:
+                _qr_rod_profile_end(str(stage), start_time)
+
+        return _wrapped
+
+    return _decorate
 
 
 @dataclass
@@ -70,10 +143,8 @@ class IntegrationRangeDragBindings:
     draw_idle: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
     set_integration_overlay_image: Callable[..., None] | None = None
-    caked_custom_mask_factory: object = None
-    caked_custom_mask_signature_factory: object = None
-    detector_qr_rod_mask_factory: object = None
-    detector_qr_rod_mask_signature_factory: object = None
+    caked_qr_rod_payload_factory: object = None
+    detector_qr_rod_payload_factory: object = None
     detector_geometry_signature_factory: object = None
     caked_qr_rod_drag_context_factory: object = None
     detector_qr_rod_drag_context_factory: object = None
@@ -210,6 +281,20 @@ def _set_runtime_range_value(
     setattr(view_state, f"{prefix}_value", numeric_value)
     _safe_var_set(getattr(view_state, f"{prefix}_var", None), numeric_value)
     return numeric_value
+
+
+def _clamp_runtime_delta_qr_width(
+    value: object,
+    fallback: float = _DEFAULT_DELTA_QR,
+) -> float:
+    try:
+        numeric_value = float(value)
+    except Exception:
+        numeric_value = float(fallback)
+    if not np.isfinite(numeric_value):
+        numeric_value = float(fallback)
+    lo, hi = _DELTA_QR_SLIDER_BOUNDS
+    return float(min(max(numeric_value, min(lo, hi)), max(lo, hi)))
 
 
 def _mark_runtime_selected_qr_rod_phi_customized(view_state: object) -> None:
@@ -399,40 +484,58 @@ def _runtime_last_sim_res2(bindings: IntegrationRangeDragBindings):
     return _resolve_runtime_value(bindings.last_sim_res2_factory)
 
 
-def _runtime_caked_custom_mask(bindings: IntegrationRangeDragBindings):
-    resolved = _resolve_runtime_value(bindings.caked_custom_mask_factory)
-    if resolved is None:
+def _runtime_qr_rod_payload(
+    payload_factory: object,
+) -> dict[str, object] | None:
+    resolved = _resolve_runtime_value(payload_factory)
+    if not isinstance(resolved, Mapping):
         return None
     try:
-        mask = np.asarray(resolved, dtype=bool)
+        mask = np.asarray(resolved.get("mask"), dtype=bool)
     except Exception:
         return None
-    return mask if mask.ndim == 2 else None
-
-
-def _runtime_caked_custom_mask_signature(
-    bindings: IntegrationRangeDragBindings,
-) -> object | None:
-    return _resolve_runtime_value(getattr(bindings, "caked_custom_mask_signature_factory", None))
-
-
-def _runtime_detector_qr_rod_mask(bindings: IntegrationRangeDragBindings):
-    resolved = _resolve_runtime_value(getattr(bindings, "detector_qr_rod_mask_factory", None))
-    if resolved is None:
+    if mask.ndim != 2:
         return None
+    payload = dict(resolved)
+    payload["mask"] = mask
+    return payload
+
+
+def _runtime_qr_rod_overlay_image(payload: Mapping[str, object]) -> np.ndarray | None:
     try:
-        mask = np.asarray(resolved, dtype=bool)
+        mask = np.asarray(payload.get("mask"), dtype=bool)
     except Exception:
         return None
-    return mask if mask.ndim == 2 else None
+    if mask.ndim != 2:
+        return None
+    visual_overlay = payload.get("visual_overlay")
+    if visual_overlay is None and isinstance(payload.get("visual_payload"), Mapping):
+        visual_overlay = payload["visual_payload"].get("visual_overlay")
+    if visual_overlay is not None:
+        try:
+            visual = np.asarray(visual_overlay, dtype=np.float32)
+        except Exception:
+            visual = None
+        if visual is not None and visual.shape == mask.shape:
+            return visual
+    return mask.astype(float)
 
 
-def _runtime_detector_qr_rod_mask_signature(
-    bindings: IntegrationRangeDragBindings,
-) -> object | None:
-    return _resolve_runtime_value(
-        getattr(bindings, "detector_qr_rod_mask_signature_factory", None)
-    )
+def _runtime_qr_rod_overlay_signature(payload: Mapping[str, object]) -> object | None:
+    if "visual_signature" in payload:
+        return payload.get("visual_signature")
+    visual_payload = payload.get("visual_payload")
+    if isinstance(visual_payload, Mapping) and "signature" in visual_payload:
+        return visual_payload.get("signature")
+    return payload.get("signature")
+
+
+def _runtime_caked_qr_rod_payload(bindings: IntegrationRangeDragBindings):
+    return _runtime_qr_rod_payload(getattr(bindings, "caked_qr_rod_payload_factory", None))
+
+
+def _runtime_detector_qr_rod_payload(bindings: IntegrationRangeDragBindings):
+    return _runtime_qr_rod_payload(getattr(bindings, "detector_qr_rod_payload_factory", None))
 
 
 def _runtime_detector_geometry_signature(
@@ -510,6 +613,12 @@ def create_integration_region_highlight_cmap(
         [
             (0.0, 0.0, 0.0, 0.0),
             _SELECTED_REGION_OVERLAY_RGBA,
+            _SELECTED_QR_ROD_BAND_FILL_RGBA,
+            _SELECTED_QR_ROD_BAND_BOUNDARY_RGBA,
+            _SELECTED_QR_ROD_CENTERLINE_RGBA,
+            _SELECTED_QR_ROD_MUTED_BAND_FILL_RGBA,
+            _SELECTED_QR_ROD_MUTED_BAND_BOUNDARY_RGBA,
+            _SELECTED_QR_ROD_MUTED_CENTERLINE_RGBA,
         ]
     )
 
@@ -1796,15 +1905,16 @@ def _caked_rect_mask(
     return np.asarray(np.outer(azimuth_mask, radial_clip_mask), dtype=bool)
 
 
-def _validated_runtime_caked_custom_mask(
+def _validated_runtime_caked_qr_rod_payload(
     bindings: IntegrationRangeDragBindings,
     sim_res2: object,
     *,
     require_shape: tuple[int, int] | None = None,
-) -> np.ndarray | None:
-    custom_mask = _runtime_caked_custom_mask(bindings)
-    if custom_mask is None:
+) -> dict[str, object] | None:
+    payload = _runtime_caked_qr_rod_payload(bindings)
+    if payload is None:
         return None
+    custom_mask = np.asarray(payload["mask"], dtype=bool)
 
     caked_reference_res2 = sim_res2 if sim_res2 is not None else _runtime_last_sim_res2(bindings)
     if caked_reference_res2 is None:
@@ -1826,7 +1936,7 @@ def _validated_runtime_caked_custom_mask(
     )
     if require_shape is not None:
         expected_shape = tuple(int(value) for value in require_shape)
-    return custom_mask if tuple(custom_mask.shape) == tuple(expected_shape) else None
+    return payload if tuple(custom_mask.shape) == tuple(expected_shape) else None
 
 
 def update_runtime_integration_region_visuals(
@@ -1867,16 +1977,13 @@ def update_runtime_integration_region_visuals(
 
     if _runtime_caked_view_enabled(bindings) and sim_res2 is not None:
         if rod_mode_enabled:
-            custom_mask = _validated_runtime_caked_custom_mask(bindings, sim_res2)
-            if custom_mask is not None and np.any(custom_mask):
+            payload = _validated_runtime_caked_qr_rod_payload(bindings, sim_res2)
+            custom_image = None if payload is None else _runtime_qr_rod_overlay_image(payload)
+            if custom_image is not None and np.any(custom_image):
                 _set_integration_overlay_image(
                     bindings,
-                    custom_mask.astype(float),
-                    source_signature=(
-                        "caked_selected_qr_rod_overlay",
-                        tuple(int(value) for value in custom_mask.shape),
-                        _runtime_caked_custom_mask_signature(bindings),
-                    ),
+                    custom_image,
+                    source_signature=_runtime_qr_rod_overlay_signature(payload),
                 )
                 bindings.integration_region_overlay.set_visible(True)
                 bindings.integration_region_rect.set_visible(False)
@@ -1896,16 +2003,13 @@ def update_runtime_integration_region_visuals(
         return
 
     if rod_mode_enabled:
-        custom_mask = _runtime_detector_qr_rod_mask(bindings)
-        if custom_mask is not None and np.any(custom_mask):
+        payload = _runtime_detector_qr_rod_payload(bindings)
+        custom_image = None if payload is None else _runtime_qr_rod_overlay_image(payload)
+        if custom_image is not None and np.any(custom_image):
             _set_integration_overlay_image(
                 bindings,
-                custom_mask.astype(float),
-                source_signature=(
-                    "detector_selected_qr_rod_overlay",
-                    tuple(int(value) for value in custom_mask.shape),
-                    _runtime_detector_qr_rod_mask_signature(bindings),
-                ),
+                custom_image,
+                source_signature=_runtime_qr_rod_overlay_signature(payload),
             )
             bindings.integration_region_overlay.set_visible(True)
             bindings.integration_region_rect.set_visible(False)
@@ -1923,6 +2027,11 @@ def update_runtime_integration_region_visuals(
         phi_min=phi_min,
         phi_max=phi_max,
     )
+
+
+update_runtime_integration_region_visuals = _qr_rod_profiled("overlay_update")(
+    update_runtime_integration_region_visuals
+)
 
 
 def refresh_runtime_integration_region_visuals(
@@ -2209,9 +2318,11 @@ def handle_runtime_integration_drag_release(
 
         context = _runtime_qr_rod_drag_context(bindings)
         qz_bounds = None
-        if (
-            context is not None
-            and None not in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1)
+        if context is not None and None not in (
+            drag_state.x0,
+            drag_state.y0,
+            drag_state.x1,
+            drag_state.y1,
         ):
             try:
                 phi_min = _get_runtime_range_value(
@@ -2316,9 +2427,11 @@ def handle_runtime_integration_drag_release(
 
         context = _runtime_detector_qr_rod_drag_context(bindings)
         qz_bounds = None
-        if (
-            context is not None
-            and None not in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1)
+        if context is not None and None not in (
+            drag_state.x0,
+            drag_state.y0,
+            drag_state.x1,
+            drag_state.y1,
         ):
             qz_bounds = qz_bounds_from_detector_drag_for_qr_rod(
                 context,
@@ -2430,10 +2543,8 @@ def make_runtime_integration_range_drag_bindings_factory(
     draw_idle_factory: object = None,
     set_status_text_factory: object = None,
     set_integration_overlay_image_factory: object = None,
-    caked_custom_mask_factory: object = None,
-    caked_custom_mask_signature_factory: object = None,
-    detector_qr_rod_mask_factory: object = None,
-    detector_qr_rod_mask_signature_factory: object = None,
+    caked_qr_rod_payload_factory: object = None,
+    detector_qr_rod_payload_factory: object = None,
     detector_geometry_signature_factory: object = None,
     caked_qr_rod_drag_context_factory: object = None,
     detector_qr_rod_drag_context_factory: object = None,
@@ -2464,10 +2575,8 @@ def make_runtime_integration_range_drag_bindings_factory(
             set_integration_overlay_image=_resolve_runtime_value(
                 set_integration_overlay_image_factory
             ),
-            caked_custom_mask_factory=caked_custom_mask_factory,
-            caked_custom_mask_signature_factory=caked_custom_mask_signature_factory,
-            detector_qr_rod_mask_factory=detector_qr_rod_mask_factory,
-            detector_qr_rod_mask_signature_factory=detector_qr_rod_mask_signature_factory,
+            caked_qr_rod_payload_factory=caked_qr_rod_payload_factory,
+            detector_qr_rod_payload_factory=detector_qr_rod_payload_factory,
             detector_geometry_signature_factory=detector_geometry_signature_factory,
             caked_qr_rod_drag_context_factory=caked_qr_rod_drag_context_factory,
             detector_qr_rod_drag_context_factory=detector_qr_rod_drag_context_factory,
@@ -2645,6 +2754,11 @@ def _sync_runtime_range_text_vars(view_state: object) -> None:
         setattr(view_state, f"{prefix}_value", numeric_value)
         _safe_var_set(label_var, label_format.format(numeric_value))
         _safe_var_set(entry_var, entry_format.format(numeric_value))
+        if prefix == "delta_qr":
+            _safe_var_set(
+                getattr(view_state, "delta_qr_cue_var", None),
+                _format_runtime_delta_qr_cue(numeric_value),
+            )
 
 
 def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
@@ -2667,7 +2781,7 @@ def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
         _set_widget_enabled(getattr(view_state, widget_name, None), True)
 
     for widget_name in (
-        "selected_qr_rod_combobox",
+        "selected_qr_rod_listbox",
         "mirror_selected_qr_phi_checkbutton",
         "include_selected_qr_rod_shape_checkbutton",
         "qz_min_slider",
@@ -2678,9 +2792,6 @@ def _sync_runtime_selected_qr_rod_mode_state(view_state: object) -> None:
         "delta_qr_entry",
     ):
         _set_widget_enabled(getattr(view_state, widget_name, None), rod_mode_enabled)
-
-    for widget in (getattr(view_state, "selected_qr_rod_checkbuttons", {}) or {}).values():
-        _set_widget_enabled(widget, rod_mode_enabled)
 
     for widget in (getattr(view_state, "rod_profile_intensity_mode_buttons", {}) or {}).values():
         _set_widget_enabled(widget, rod_mode_enabled)
@@ -2695,6 +2806,100 @@ def _refresh_runtime_region_visuals(
         refresh_region_visuals()
     except Exception:
         pass
+
+
+def _selected_qr_rod_refresh_scheduler(view_state: object) -> object | None:
+    for attr in (
+        "selected_qr_rod_listbox",
+        "selected_qr_rod_container",
+        "rod_section_frame",
+        "frame",
+    ):
+        widget = getattr(view_state, attr, None)
+        if callable(getattr(widget, "after", None)):
+            return widget
+    return None
+
+
+def _selected_qr_rod_refresh_scheduler_alive(scheduler: object | None) -> bool:
+    if scheduler is None:
+        return False
+    exists = getattr(scheduler, "winfo_exists", None)
+    if not callable(exists):
+        return True
+    try:
+        return bool(exists())
+    except Exception:
+        return False
+
+
+def _run_runtime_selected_qr_rod_refresh(
+    view_state: object,
+    *,
+    schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None,
+) -> None:
+    scheduler = getattr(view_state, "selected_qr_rod_refresh_after_widget", None)
+    setattr(view_state, "selected_qr_rod_refresh_after_id", None)
+    setattr(view_state, "selected_qr_rod_refresh_after_widget", None)
+    if scheduler is not None and not _selected_qr_rod_refresh_scheduler_alive(scheduler):
+        return
+    if callable(schedule_range_update):
+        schedule_range_update()
+    _refresh_runtime_region_visuals(refresh_region_visuals)
+
+
+_run_runtime_selected_qr_rod_refresh = _qr_rod_profiled("selection_debounce_callback")(
+    _run_runtime_selected_qr_rod_refresh
+)
+
+
+def _schedule_runtime_selected_qr_rod_refresh(
+    view_state: object,
+    *,
+    schedule_range_update: Callable[..., object] | None,
+    refresh_region_visuals: Callable[[], object] | None,
+) -> None:
+    scheduler = _selected_qr_rod_refresh_scheduler(view_state)
+    pending_id = getattr(view_state, "selected_qr_rod_refresh_after_id", None)
+    pending_scheduler = getattr(view_state, "selected_qr_rod_refresh_after_widget", None)
+    cancel_source = pending_scheduler if pending_scheduler is not None else scheduler
+    cancel = getattr(cancel_source, "after_cancel", None)
+    if pending_id and callable(cancel):
+        try:
+            cancel(pending_id)
+        except Exception:
+            pass
+
+    after = getattr(scheduler, "after", None)
+    if callable(after) and _selected_qr_rod_refresh_scheduler_alive(scheduler):
+        token_holder: dict[str, object] = {}
+
+        def _run_debounced_refresh() -> None:
+            current_id = getattr(view_state, "selected_qr_rod_refresh_after_id", None)
+            if current_id != token_holder.get("token"):
+                return
+            _run_runtime_selected_qr_rod_refresh(
+                view_state,
+                schedule_range_update=schedule_range_update,
+                refresh_region_visuals=refresh_region_visuals,
+            )
+
+        try:
+            token = after(_SELECTED_QR_ROD_REFRESH_DEBOUNCE_MS, _run_debounced_refresh)
+        except Exception:
+            token = None
+        if token is not None:
+            token_holder["token"] = token
+            setattr(view_state, "selected_qr_rod_refresh_after_id", token)
+            setattr(view_state, "selected_qr_rod_refresh_after_widget", scheduler)
+            return
+
+    _run_runtime_selected_qr_rod_refresh(
+        view_state,
+        schedule_range_update=schedule_range_update,
+        refresh_region_visuals=refresh_region_visuals,
+    )
 
 
 def _apply_runtime_range_entry(
@@ -2742,7 +2947,7 @@ def _make_runtime_range_slider_callback(
     show_1d_var: object,
     schedule_range_update: Callable[..., object] | None,
     refresh_region_visuals: Callable[[], object] | None = None,
-    ) -> Callable[[object], None]:
+) -> Callable[[object], None]:
     def _on_changed(value: object) -> None:
         value_var = getattr(view_state, value_var_name, None)
         if value_var is None:
@@ -2751,11 +2956,20 @@ def _make_runtime_range_slider_callback(
             numeric_value = float(value)
         except Exception:
             return
+        if value_var_name == "delta_qr_var":
+            numeric_value = _clamp_runtime_delta_qr_width(numeric_value)
         _safe_var_set(value_var, numeric_value)
         if value_var_name in {"phi_min_var", "phi_max_var"}:
             _mark_runtime_selected_qr_rod_phi_customized(view_state)
         _activate_runtime_1d_analysis(show_1d_var)
         _sync_runtime_range_text_vars(view_state)
+        if value_var_name == "delta_qr_var":
+            _schedule_runtime_selected_qr_rod_refresh(
+                view_state,
+                schedule_range_update=schedule_range_update,
+                refresh_region_visuals=refresh_region_visuals,
+            )
+            return
         if callable(schedule_range_update):
             schedule_range_update()
         _refresh_runtime_region_visuals(refresh_region_visuals)
@@ -2791,12 +3005,41 @@ def _normalize_runtime_selected_qr_rod_keys(
     return [key for key in option_keys if key in set(normalized)]
 
 
-def _runtime_delta_qr_half_width(value: object, fallback: float = _DEFAULT_DELTA_QR) -> float:
+def _sync_runtime_selected_qr_rod_listbox_selection(
+    view_state: object,
+    selected_keys: Sequence[str],
+) -> None:
+    listbox = getattr(view_state, "selected_qr_rod_listbox", None)
+    if listbox is None:
+        return
+    option_keys = [str(key) for key in getattr(view_state, "selected_qr_rod_options", []) or []]
     try:
-        full_width = float(value)
+        listbox.selection_clear(0, "end")
     except Exception:
-        full_width = float(fallback)
-    return max(0.0, full_width) * 0.5
+        try:
+            setattr(listbox, "selected", [])
+        except Exception:
+            pass
+    selected_key_set = {str(key) for key in selected_keys}
+    first_selected_index = None
+    for index, key in enumerate(option_keys):
+        if key not in selected_key_set:
+            continue
+        try:
+            listbox.selection_set(index)
+        except Exception:
+            pass
+        if first_selected_index is None:
+            first_selected_index = index
+    if first_selected_index is not None:
+        try:
+            listbox.see(first_selected_index)
+        except Exception:
+            pass
+
+
+def _runtime_delta_qr_half_width(value: object, fallback: float = _DEFAULT_DELTA_QR) -> float:
+    return _clamp_runtime_delta_qr_width(value, fallback) * 0.5
 
 
 def _set_runtime_selected_qr_rod_keys(
@@ -2814,15 +3057,7 @@ def _set_runtime_selected_qr_rod_keys(
         getattr(view_state, "selected_qr_rod_display_var", None),
         label_by_key.get(primary_key, ""),
     )
-
-    selected_key_set = set(selected_keys)
-    for key, checkbox_var in (
-        getattr(view_state, "selected_qr_rod_checkbox_vars", {}) or {}
-    ).items():
-        try:
-            checkbox_var.set(str(key) in selected_key_set)
-        except Exception:
-            pass
+    _sync_runtime_selected_qr_rod_listbox_selection(view_state, selected_keys)
     return selected_keys
 
 
@@ -2841,21 +3076,11 @@ def _set_runtime_selected_qr_rod_options(
     setattr(view_state, "selected_qr_rod_option_labels", label_by_key)
     setattr(view_state, "selected_qr_rod_key_by_label", key_by_label)
 
-    combobox = getattr(view_state, "selected_qr_rod_combobox", None)
-    if combobox is not None:
-        try:
-            combobox.configure(
-                values=labels,
-                state=("readonly" if labels else "disabled"),
-            )
-        except Exception:
-            pass
-
     current_keys = list(getattr(view_state, "selected_qr_rod_keys_value", []) or [])
     if not current_keys:
         current_key = _get_runtime_string_value(view_state, "selected_qr_rod_key", "")
         current_keys = [current_key] if current_key else []
-    updater = getattr(view_state, "selected_qr_rod_checkbox_options_updater", None)
+    updater = getattr(view_state, "selected_qr_rod_listbox_options_updater", None)
     if callable(updater):
         try:
             updater(
@@ -2866,6 +3091,11 @@ def _set_runtime_selected_qr_rod_options(
         except Exception:
             pass
     _set_runtime_selected_qr_rod_keys(view_state, current_keys)
+
+
+_set_runtime_selected_qr_rod_options = _qr_rod_profiled("rod_option_sync")(
+    _set_runtime_selected_qr_rod_options
+)
 
 
 def _toggle_runtime_integrate_selected_qr_rod(
@@ -2937,17 +3167,16 @@ def _select_runtime_selected_qr_rod(
             "",
         )
         selected_keys = [selected_key] if selected_key else []
-    if (
-        not selected_keys
-        and _runtime_range_boolean(view_state, "integrate_selected_qr_rod", False)
-    ):
+    if not selected_keys and _runtime_range_boolean(view_state, "integrate_selected_qr_rod", False):
         option_keys = list(getattr(view_state, "selected_qr_rod_options", []) or [])
         selected_keys = [str(option_keys[0])] if option_keys else []
     _set_runtime_selected_qr_rod_keys(view_state, selected_keys)
     _activate_runtime_1d_analysis(show_1d_var)
-    if callable(schedule_range_update):
-        schedule_range_update()
-    _refresh_runtime_region_visuals(refresh_region_visuals)
+    _schedule_runtime_selected_qr_rod_refresh(
+        view_state,
+        schedule_range_update=schedule_range_update,
+        refresh_region_visuals=refresh_region_visuals,
+    )
 
 
 def _normalize_runtime_rod_profile_intensity_mode(value: object) -> str:
@@ -3063,7 +3292,9 @@ def create_runtime_integration_range_controls(
     )
     _set_runtime_string_value(view_state, "selected_qr_rod_key", str(selected_qr_rod_key))
     if selected_qr_rod_keys is not None:
-        setattr(view_state, "selected_qr_rod_keys_value", [str(key) for key in selected_qr_rod_keys])
+        setattr(
+            view_state, "selected_qr_rod_keys_value", [str(key) for key in selected_qr_rod_keys]
+        )
     _set_runtime_string_value(
         view_state,
         "caked_intensity_mode",
@@ -3079,6 +3310,7 @@ def create_runtime_integration_range_controls(
     delta_qr_width = float(delta_qr)
     if str(delta_qr_width_mode) != "full_width":
         delta_qr_width *= 2.0
+    delta_qr_width = _clamp_runtime_delta_qr_width(delta_qr_width)
     _set_runtime_range_value(view_state, "delta_qr", delta_qr_width)
 
     views_module.create_integration_range_controls(
@@ -3210,7 +3442,7 @@ def create_runtime_integration_range_controls(
                 else None
             ),
         ),
-        )
+    )
 
     refs = (
         getattr(view_state, "tth_min_var", None),
@@ -3224,7 +3456,7 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "rod_profile_intensity_mode_var", None),
         getattr(view_state, "selected_qr_rod_key_var", None),
         getattr(view_state, "selected_qr_rod_display_var", None),
-        getattr(view_state, "selected_qr_rod_checkbox_container", None),
+        getattr(view_state, "selected_qr_rod_listbox", None),
         getattr(view_state, "qz_min_var", None),
         getattr(view_state, "qz_max_var", None),
         getattr(view_state, "delta_qr_var", None),
@@ -3232,7 +3464,6 @@ def create_runtime_integration_range_controls(
         getattr(view_state, "tth_max_slider", None),
         getattr(view_state, "phi_min_slider", None),
         getattr(view_state, "phi_max_slider", None),
-        getattr(view_state, "selected_qr_rod_combobox", None),
         getattr(view_state, "mirror_selected_qr_phi_checkbutton", None),
         getattr(view_state, "include_selected_qr_rod_shape_checkbutton", None),
         getattr(view_state, "qz_min_slider", None),
