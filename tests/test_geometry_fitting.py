@@ -4073,9 +4073,13 @@ def test_rung3_objective_uses_cached_caked_targets_and_dynamic_sim_sources(
         [expected_delta_theta, expected_delta_phi]
     )
     assert diag["metric_unit"] == "deg"
+    assert diag["simulated_fit_space_source"] == "sim_visual_caked_deg"
+    assert diag["simulated_detector_input_frame"] == "sim_visual_caked_deg"
     assert diag["sim_refinement_status"] == "point_only_dynamic_sim_visual_caked_deg"
     assert summary["manual_caked_residual_row_count"] == 1
     assert summary["cached_fit_space_anchor_row_count"] == 1
+    assert summary["sim_visual_caked_source_row_count"] == 1
+    assert summary["optimizer_point_component_failure_count"] == 0
 
 
 def test_rung3_objective_changes_dynamic_sim_source_when_trial_params_change(

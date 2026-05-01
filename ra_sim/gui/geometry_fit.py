@@ -1956,6 +1956,42 @@ def _geometry_fit_source_coverage_key_payload(
     }
 
 
+def _geometry_fit_apply_source_coverage_identity(row: dict[str, object]) -> None:
+    key = normalize_new4_source_coverage_key(row)
+    payload = _geometry_fit_source_coverage_key_payload(key)
+    if not isinstance(payload, Mapping):
+        return
+
+    aliases = list(row.get("source_coverage_aliases") or [])
+    payload_dict = dict(payload)
+    if payload_dict not in aliases:
+        aliases.append(payload_dict)
+    row["source_coverage_aliases"] = aliases
+
+    if row.get("normalized_hkl") is None and payload.get("hkl") is not None:
+        row["normalized_hkl"] = tuple(int(value) for value in payload["hkl"])
+    if row.get("q_group_key") is None and payload.get("q_group_key") is not None:
+        row["q_group_key"] = payload.get("q_group_key")
+
+    branch_slot = payload.get("branch_slot")
+    if branch_slot is not None:
+        row["physical_branch_slot"] = branch_slot
+    if branch_slot == _GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT:
+        row["source_branch_index_namespace"] = "00l_collapsed"
+        row["is_00l_collapsed"] = True
+        row.setdefault("source_peak_index", 0)
+    elif branch_slot in {0, 1}:
+        row.setdefault("source_branch_index_namespace", "physical_branch_slot")
+
+    row["fit_qr_branch_key"] = {
+        "q_group_key": _geometry_fit_cache_jsonable(row.get("q_group_key")),
+        "hkl": _geometry_fit_cache_jsonable(row.get("normalized_hkl", row.get("hkl"))),
+        "physical_branch_slot": row.get("physical_branch_slot"),
+        "source_branch_index": row.get("source_branch_index"),
+        "source_peak_index": row.get("source_peak_index"),
+    }
+
+
 def _geometry_fit_source_coverage_alias_keys(
     entry: Mapping[str, object] | None,
 ) -> set[tuple[tuple[int, int, int], object | None, object | None]]:
@@ -2564,7 +2600,7 @@ def _geometry_fit_handoff_pair(
         else None
     )
 
-    return {
+    handoff_pair = {
         "pair_index": int(pair_index),
         "provider_pair_index": int(provider.get("provider_pair_index", pair_index)),
         "dataset_pair_index": int(pair_index),
@@ -2619,6 +2655,8 @@ def _geometry_fit_handoff_pair(
         "solver_measured_point": background_point,
         "solver_measured_frame": background_frame,
     }
+    _geometry_fit_apply_source_coverage_identity(handoff_pair)
+    return handoff_pair
 
 
 def _geometry_fit_dataset_pairs_from_handoff(
@@ -3798,7 +3836,7 @@ def _geometry_fit_saved_state_provider_pair(
         and simulated_source in _GEOMETRY_FIT_PICKER_OWNED_POINT_SOURCES
         else "picker_saved_value_unavailable"
     )
-    return {
+    provider_pair = {
         "pair_index": int(pair_index),
         "provider_pair_index": int(pair_index),
         "dataset_pair_index": int(pair_index),
@@ -3827,6 +3865,8 @@ def _geometry_fit_saved_state_provider_pair(
         "fallback_reason": None,
         "stale_saved_source_identity": None,
     }
+    _geometry_fit_apply_source_coverage_identity(provider_pair)
+    return provider_pair
 
 
 def _geometry_fit_saved_state_handoff_rows(
@@ -3868,6 +3908,7 @@ def _geometry_fit_saved_state_handoff_rows(
         _geometry_fit_point_list(provider_pair.get("simulated_point")),
         provider_pair.get("simulated_frame"),
     )
+    _geometry_fit_apply_source_coverage_identity(measured_entry)
 
     initial_entry: dict[str, object] = {
         **shared,
@@ -3887,6 +3928,7 @@ def _geometry_fit_saved_state_handoff_rows(
         _geometry_fit_point_list(provider_pair.get("simulated_point")),
         provider_pair.get("simulated_frame"),
     )
+    _geometry_fit_apply_source_coverage_identity(initial_entry)
     return measured_entry, initial_entry
 
 
@@ -13210,6 +13252,7 @@ def build_geometry_manual_fit_dataset(
                 else None
             ),
         }
+        _geometry_fit_apply_source_coverage_identity(provider_pair)
         provider_pairs.append(provider_pair)
         resolution_diag: dict[str, object] = {
             "pair_index": int(pair_idx),
@@ -13359,6 +13402,7 @@ def build_geometry_manual_fit_dataset(
             provider_simulated_point,
             provider_simulated_frame,
         )
+        _geometry_fit_apply_source_coverage_identity(measured_entry)
         measured_display.append(measured_entry)
         if isinstance(legacy_resolution_trace, Mapping):
             source_resolution_diagnostics[-1]["legacy_fit_bound_entry"] = (
@@ -13604,6 +13648,7 @@ def build_geometry_manual_fit_dataset(
             provider_simulated_point_source,
             overwrite_existing=provider_overwrites_existing_sim,
         )
+        _geometry_fit_apply_source_coverage_identity(initial_entry)
         initial_pairs_display.append(initial_entry)
 
     measured_native = manual_dataset_bindings.unrotate_display_peaks(
@@ -13808,6 +13853,7 @@ def build_geometry_manual_fit_dataset(
             measured_entry["background_phi_deg"] = float(caked_phi)
             measured_entry["fit_space_anchor_override"] = True
             measured_entry["fit_space_anchor_source"] = "manual_caked_background_angles"
+        _geometry_fit_apply_source_coverage_identity(measured_entry)
     for pair_idx, provider_pair in enumerate(provider_pairs):
         measured_entry = (
             measured_for_fit[pair_idx]
@@ -13855,6 +13901,7 @@ def build_geometry_manual_fit_dataset(
                 else None
             ),
         }
+        _geometry_fit_apply_source_coverage_identity(dataset_pair)
         dataset_manual_point_pairs.append(dataset_pair)
     backend_background = manual_dataset_bindings.apply_background_backend_orientation(
         native_background
@@ -18785,6 +18832,7 @@ def _build_geometry_fit_optimizer_request_rows(
         row["optimizer_request_pair_index"] = int(pair_index)
         row["optimizer_request_source"] = "provider_pair"
         row["provider_selected_source_identity_canonical"] = copy.deepcopy(identity)
+        _geometry_fit_apply_source_coverage_identity(row)
 
         identity_matches = bool(identity) and _geometry_fit_optimizer_identity_matches(
             identity, row
@@ -19913,18 +19961,10 @@ def build_geometry_fit_rejection_reason_lines(
             sim_caked_rows = int(
                 point_match_summary.get("sim_visual_caked_source_row_count", 0) or 0
             )
-            fixed_source_rows = int(
-                point_match_summary.get("fixed_source_resolved_count", 0) or 0
-            )
-            matched_pair_count = int(
-                point_match_summary.get("matched_pair_count", 0) or 0
-            )
-            missing_pair_count = int(
-                point_match_summary.get("missing_pair_count", 0) or 0
-            )
-            fallback_entry_count = int(
-                point_match_summary.get("fallback_entry_count", 0) or 0
-            )
+            fixed_source_rows = int(point_match_summary.get("fixed_source_resolved_count", 0) or 0)
+            matched_pair_count = int(point_match_summary.get("matched_pair_count", 0) or 0)
+            missing_pair_count = int(point_match_summary.get("missing_pair_count", 0) or 0)
+            fallback_entry_count = int(point_match_summary.get("fallback_entry_count", 0) or 0)
             fallback_row_count = int(point_match_summary.get("fallback_row_count", 0) or 0)
         except Exception:
             manual_caked_rows = 0
@@ -19966,10 +20006,7 @@ def build_geometry_fit_rejection_reason_lines(
 
     if not np.isfinite(rms):
         reasons.append("RMS residual is not finite.")
-    elif (
-        float(rms) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX
-        and not headless_caked_angular_acceptance
-    ):
+    elif float(rms) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX and not headless_caked_angular_acceptance:
         reasons.append(
             "RMS residual {rms:.2f} px exceeds the acceptance limit of {limit:.2f} px.".format(
                 rms=float(rms),

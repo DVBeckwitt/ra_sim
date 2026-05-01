@@ -2525,6 +2525,24 @@ def _build_saved_state_point_provider_report_dataset():
     )
 
 
+def test_saved_state_point_provider_marks_00l_q3_as_collapsed_branch() -> None:
+    dataset = _build_saved_state_point_provider_report_dataset()
+    collapsed = geometry_fit._GEOMETRY_FIT_ZERO_QR_COVERAGE_BRANCH_SLOT
+
+    for surface in (
+        "provider_pairs",
+        "manual_point_pairs",
+        "initial_pairs_display",
+        "measured_for_fit",
+    ):
+        row = dataset[surface][0]
+        assert row["physical_branch_slot"] == collapsed
+        assert row["source_branch_index"] == 0
+        assert row["source_branch_index_namespace"] == "00l_collapsed"
+        assert row["is_00l_collapsed"] is True
+        assert row["fit_qr_branch_key"]["physical_branch_slot"] == collapsed
+
+
 def _coordinate_visual_capture():
     return {
         "visual_truth_available": True,
@@ -17947,10 +17965,7 @@ def test_headless_geometry_fit_explicit_a_enables_lattice_refinement_but_exclude
     assert result.accepted is True
     assert captured["prepare_var_names"] == ["a", "psi_z"]
     assert captured["execute_var_names"] == ["a", "psi_z"]
-    assert (
-        captured["prepare_fit_config"]["geometry"]["lattice_refinement"]["enabled"]
-        is True
-    )
+    assert captured["prepare_fit_config"]["geometry"]["lattice_refinement"]["enabled"] is True
     assert saved_state == saved_state_before
 
 
@@ -33300,6 +33315,23 @@ def _load_new4_caked_reprojection_module():
     return module
 
 
+def _load_new4_coordinate_audit_module():
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "debug"
+        / "visualize_new4_qr_fit_coordinates.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "visualize_new4_qr_fit_coordinates",
+        module_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def _make_caked_point_reprojection_context(
     *,
     projector_kind="exact_caked_bundle",
@@ -33428,6 +33460,115 @@ def _run_stub_caked_point_reprojection(tmp_path, **context_kwargs):
         run_dir=tmp_path / "new4_run",
     )
     return report, projector_calls, module
+
+
+def test_new4_coordinate_objective_audit_schema_is_machine_checkable() -> None:
+    module = _load_new4_coordinate_audit_module()
+    rows = []
+    for index in range(7):
+        q_group_key = ["q_group", "primary", index, index + 1]
+        hkl = [index, 0, index + 1]
+        branch_slot = index % 2
+        target = (20.0 + index, 170.0 - index)
+        source = (target[0] + 1.25, -179.5 + index)
+        fit_qr_branch_key = {
+            "q_group_key": q_group_key,
+            "hkl": hkl,
+            "physical_branch_slot": branch_slot,
+        }
+        objective_phi = opt._wrap_phi_deg(source[1] - target[1])
+        row = module._build_objective_audit_pair_row(
+            index=index,
+            entry={
+                "pair_id": f"pair-{index}",
+                "q_group_key": q_group_key,
+                "normalized_hkl": hkl,
+                "physical_branch_slot": branch_slot,
+                "fit_qr_branch_key": fit_qr_branch_key,
+                "fit_space_anchor_override": True,
+                "background_two_theta_deg": target[0],
+                "background_phi_deg": target[1],
+            },
+            measured_anchor=target,
+            measured_reason="cached_fit_space_anchor",
+            measured_meta={"fit_space_source": "cached_fit_space_anchor"},
+            prediction={
+                "available": True,
+                "fit_qr_branch_key": fit_qr_branch_key,
+                "dynamic_baseline_anchor_caked_deg": list(source),
+                "dynamic_baseline_anchor_actual_source": "sim_visual_caked_deg",
+                "dynamic_baseline_anchor_source_kind": "sim_visual_caked_deg",
+                "dynamic_baseline_anchor_projection_frame": "caked_display",
+                "dynamic_baseline_anchor_units": "deg",
+                "dynamic_baseline_anchor_q_group_key": q_group_key,
+                "dynamic_baseline_anchor_hkl": hkl,
+                "dynamic_baseline_anchor_physical_branch_slot": branch_slot,
+                "sim_refined_caked_deg": list(source),
+                "sim_refinement_status": "point_only_dynamic_sim_visual_caked_deg",
+            },
+            objective_diag={
+                "manual_pair_id": f"pair-{index}",
+                "delta_two_theta_deg": source[0] - target[0],
+                "wrapped_delta_phi_deg": objective_phi,
+                "solver_residual_vector": [source[0] - target[0], objective_phi],
+            },
+        )
+        rows.append(row)
+
+    checks = module._pair_checks(rows)
+
+    assert all(not row["schema_missing_fields"] for row in rows)
+    assert checks["objective_audit_schema_machine_checkable"] is True
+    assert checks["objective_audit_pair_count_is_7"] is True
+    assert checks["all_frame_match"] is True
+    assert checks["all_unit_match"] is True
+    assert checks["all_branch_slot_match"] is True
+    assert checks["all_q_group_match"] is True
+    assert checks["all_hkl_match"] is True
+    assert checks["all_residual_contract_match"] is True
+    assert rows[0]["manual_visual_frame"] == "caked_display"
+    assert rows[0]["cached_target_source"] == "cached_fit_space_anchor"
+    assert rows[0]["dynamic_source_source"] == "sim_visual_caked_deg"
+    assert rows[0]["optimizer_source_source"] == "sim_visual_caked_deg"
+
+
+def test_new4_coordinate_audit_cli_accepts_objective_step_flags(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    module = _load_new4_coordinate_audit_module()
+    captured = {}
+
+    def fake_run_coordinate_audit(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "pass",
+            "json_path": str(tmp_path / "audit.json"),
+            "png_path": str(tmp_path / "audit.png"),
+        }
+
+    monkeypatch.setattr(module, "run_coordinate_audit", fake_run_coordinate_audit)
+
+    rc = module.main(
+        [
+            "--state",
+            str(tmp_path / "new4.json"),
+            "--output-root",
+            str(tmp_path),
+            "--objective-audit",
+            "--after-objective-step",
+            "--step-param",
+            "center_x",
+            "--step-size",
+            "0.25",
+        ]
+    )
+
+    assert rc == 0
+    assert captured["objective_audit"] is True
+    assert captured["after_objective_step"] is True
+    assert captured["step_param"] == "center_x"
+    assert captured["step_size"] == pytest.approx(0.25)
 
 
 def test_caked_point_reprojection_recomputes_when_theta_changes(tmp_path) -> None:
@@ -34087,9 +34228,7 @@ def test_headless_saved_manual_caked_ladder_budget_is_narrow() -> None:
     assert runtime_cfg["solver"]["weighted_matching"] is False
     assert runtime_cfg["solver"]["q_group_line_constraints"] is False
     assert (
-        runtime_cfg["solver"][
-            "_headless_accept_caked_angular_metric_without_pixel_threshold"
-        ]
+        runtime_cfg["solver"]["_headless_accept_caked_angular_metric_without_pixel_threshold"]
         is True
     )
     assert runtime_cfg["solver"]["parallel_mode"] == "off"

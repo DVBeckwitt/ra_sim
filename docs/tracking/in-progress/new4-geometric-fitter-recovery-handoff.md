@@ -5,10 +5,40 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 ## Current status
 
+- 2026-05-01 New4 manual caked Qr geometry-fit contract is validated through
+  Rung 7, explicit C2, explicit 12-active headless, and default headless.
+  Manual caked Qr targets stay fixed in cached `2θ/φ`; optimizer sources use
+  dynamic `sim_visual_caked_deg`; residuals are degree-space
+  `[Δ2θ, wrapped Δφ] = source - target`; and saved-manual-caked headless fits
+  use the bounded point-only solve policy without exposing a public flag or
+  re-enabling saved/manual source-coordinate fallback.
+- Bug/error fixed: the historical mixed coordinate-authority failure is closed
+  for the saved New4 caked Qr path. The objective now reports 7/7 fixed Qr
+  pairs, `fixed_source_resolved_count == 7`, `matched_pair_count == 7`,
+  `missing_pair_count == 0`, clean fallback counters, target source
+  `cached_fit_space_anchor`, source `sim_visual_caked_deg`, metric
+  `raw_angular_rms_deg`, unit `deg`, point-only projection enabled, `c`
+  fixed/excluded, and `gamma/Gamma` bounded inside `[-90, +90]`.
+- Feature/status: the coordinate audit visualizer now emits machine-checkable
+  JSON plus diagnostic PNGs for objective rows, perturbations, and
+  after-objective-step residual checks. The audit proves visual/manual cached
+  target identity, immutable optimizer measured targets, dynamic simulated
+  source authority, q-group/HKL/branch identity, and the angular residual
+  contract.
+- Headless status: explicit C2, explicit 12-active, and default
+  `python -m ra_sim fit-geometry artifacts/geometry_fit_gui_states/new4.json`
+  now accept the saved-manual-caked point-only contract. Default headless
+  infers the validated policy for saved New4 caked Qr states, keeps `c`
+  excluded, and uses `ladder-multistart`.
+- Validation status: focused coordinate tests, manual caked helper tests,
+  protected Rung workflow slices, final CLI geometry-fit tests, and compileall
+  pass. `python -m ra_sim.dev check` is still blocked only by pre-existing
+  formatting drift in `ra_sim/fitting/optimization.py`, which is outside this
+  patch. Generated ladder/audit/temp artifacts remain ignored and uncommitted.
 - 2026-04-30 New4 caked Qr fit checkpoint: coordinate contract is fixed and
   validated through Rung 5. Manual caked Qr targets now use fixed cached
   `(2theta, phi)` anchors in degrees, even when an exact caked projector is
@@ -55,10 +85,10 @@ Last updated: 2026-04-30
   `chi_cor_angle_theta_initial`, `corto_detector_theta_initial_zs_zb`, and
   `a_c_psi_z`. The legacy `a_c_psi_z` block label now solves only `a, psi_z`
   and records `c` as fixed with `fixed_param_policy = rung2_inactive_fixed`.
-- Remaining work: Rung 6 combined, Rung 7 features, explicit/default headless
-  `fit-geometry`, and the final focused + dev-check test set are not run yet.
-  Generated ladder and visualizer artifacts remain local validation output and
-  should not be committed.
+- Remaining work for this contract patch: none. Rung 1-7, the coordinate
+  contract, Rung 2 active/fixed policy, point-only projection contract, and
+  headless acceptance policy are frozen unless a future audit proves a shared
+  regression.
 - 2026-04-29 strict full-validation checkpoint: Rung 0/provider parity remains
   green on the restored historical 7-pair fixture. The active state is
   `artifacts/geometry_fit_gui_states/new4.json`, preserved hash

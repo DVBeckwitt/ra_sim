@@ -58,6 +58,20 @@ HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES = (
 HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET = set(
     HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES
 )
+_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DEFAULT_ACTIVE_VAR_NAMES = (
+    "center_x",
+    "center_y",
+    "gamma",
+    "Gamma",
+    "chi",
+    "cor_angle",
+    "theta_initial",
+    "corto_detector",
+    "zs",
+    "zb",
+    "a",
+    "psi_z",
+)
 
 
 @dataclass(frozen=True)
@@ -2255,6 +2269,34 @@ def _headless_geometry_entry_has_fixed_manual_caked_qr(entry: Mapping[str, objec
     return bool(fixed_source and cached_target and dynamic_sim)
 
 
+def _infer_headless_saved_manual_caked_defaults(
+    active_var_names: Sequence[str] | None,
+    seed_policy: str | None,
+    manual_pair_rows: Sequence[Mapping[str, object]] | None,
+) -> tuple[list[str] | None, str | None, bool]:
+    saved_manual_caked = any(
+        isinstance(entry, Mapping) and _headless_geometry_entry_has_fixed_manual_caked_qr(entry)
+        for entry in (manual_pair_rows or ())
+    )
+    if not saved_manual_caked:
+        return (
+            list(active_var_names) if active_var_names is not None else None,
+            seed_policy,
+            False,
+        )
+    resolved_active = (
+        list(active_var_names)
+        if active_var_names is not None
+        else list(_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DEFAULT_ACTIVE_VAR_NAMES)
+    )
+    resolved_seed_policy = (
+        seed_policy
+        if seed_policy is not None
+        else HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+    )
+    return resolved_active, resolved_seed_policy, True
+
+
 def _headless_geometry_fixed_manual_caked_qr_row_count(prepared_run: object) -> int:
     return sum(
         1
@@ -4148,6 +4190,21 @@ def run_headless_geometry_fit(
         apply_orientation_to_entries=gui_geometry_overlay.apply_orientation_to_entries,
         orient_image_for_fit=gui_geometry_overlay.orient_image_for_fit,
     )
+
+    (
+        resolved_active_var_names,
+        resolved_seed_policy,
+        saved_manual_caked_defaults_enabled,
+    ) = _infer_headless_saved_manual_caked_defaults(
+        resolved_active_var_names,
+        resolved_seed_policy,
+        _headless_fixed_manual_caked_qr_pair_rows(),
+    )
+    if saved_manual_caked_defaults_enabled:
+        progress_writer.update_static(
+            active_vars=resolved_active_var_names,
+            seed_policy=resolved_seed_policy,
+        )
 
     params = value_callbacks.current_params()
     use_shared_theta_offset = bool(_geometry_fit_uses_shared_theta_offset())

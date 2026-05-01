@@ -50,6 +50,71 @@ def test_shared_headless_geometry_fit_backfills_caked_manual_pairs_before_prepar
     assert backfill_index < prepare_index
 
 
+def test_saved_manual_caked_defaults_infer_bounded_point_only_policy() -> None:
+    active_vars, seed_policy, inferred = (
+        headless_geometry_fit._infer_headless_saved_manual_caked_defaults(
+            None,
+            None,
+            [
+                {
+                    "source_row_index": 24,
+                    "caked_x": 9.315,
+                    "caked_y": -1.217,
+                    "q_group_key": ["q_group", "primary", 0, 3],
+                    "hkl": [0, 0, 3],
+                }
+            ],
+        )
+    )
+
+    assert inferred is True
+    assert active_vars == [
+        "center_x",
+        "center_y",
+        "gamma",
+        "Gamma",
+        "chi",
+        "cor_angle",
+        "theta_initial",
+        "corto_detector",
+        "zs",
+        "zb",
+        "a",
+        "psi_z",
+    ]
+    assert "c" not in active_vars
+    assert (
+        seed_policy
+        == headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+    )
+
+
+def test_saved_manual_caked_defaults_preserve_explicit_policy() -> None:
+    explicit_active = ["corto_detector", "theta_initial"]
+
+    active_vars, seed_policy, inferred = (
+        headless_geometry_fit._infer_headless_saved_manual_caked_defaults(
+            explicit_active,
+            headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+            [
+                {
+                    "source_row_index": 1,
+                    "caked_x": 1.0,
+                    "q_group_key": ["q"],
+                    "hkl": [0, 0, 1],
+                }
+            ],
+        )
+    )
+
+    assert inferred is True
+    assert active_vars == explicit_active
+    assert (
+        seed_policy
+        == headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+    )
+
+
 def test_cli_build_parser_accepts_fit_geometry_active_vars_option() -> None:
     if getattr(cli, "_cmd_fit_geometry", None) is None:
         pytest.skip("fit-geometry CLI command is not available in this checkout")
