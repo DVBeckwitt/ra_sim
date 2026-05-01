@@ -9471,6 +9471,7 @@ def _selected_qr_rod_clear_bounded_caches() -> None:
         "selected_qr_rod_detector_union_mask_cache",
         "selected_qr_rod_caked_union_mask_cache",
         "selected_qr_rod_profile_cache",
+        "selected_qr_rod_profile_component_cache",
     ):
         cache = getattr(geometry_runtime_state, attr_name, None)
         if hasattr(cache, "clear") and callable(cache.clear):
@@ -15498,15 +15499,42 @@ def _finite_profile_curve(values: object) -> np.ndarray | None:
 
 
 def _caked_profile_payload_for_result(res2) -> dict[str, object] | None:
+    if res2 is None:
+        return None
+    ai = simulation_runtime_state.ai_cache.get("ai")
+    detector_shape = simulation_runtime_state.ai_cache.get("detector_shape")
+    try:
+        detector_shape_key = tuple(int(v) for v in detector_shape[:2])
+    except Exception:
+        detector_shape_key = None
+    cache_key = (
+        "selected_qr_rod_caked_profile_payload",
+        id(res2),
+        id(ai) if ai is not None else None,
+        detector_shape_key,
+    )
+    payload_cache = getattr(geometry_runtime_state, "selected_qr_rod_caked_payload_cache", None)
+    if not isinstance(payload_cache, dict):
+        payload_cache = {}
+        try:
+            setattr(geometry_runtime_state, "selected_qr_rod_caked_payload_cache", payload_cache)
+        except Exception:
+            payload_cache = {}
+    cached_payload = payload_cache.get(cache_key)
+    if isinstance(cached_payload, dict):
+        return cached_payload
     try:
         payload = gui_geometry_fit.build_geometry_fit_caked_view_payload_from_result(
             res2,
-            ai=simulation_runtime_state.ai_cache.get("ai"),
-            detector_shape=simulation_runtime_state.ai_cache.get("detector_shape"),
+            ai=ai,
+            detector_shape=detector_shape,
         )
     except Exception:
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    payload_cache[cache_key] = payload
+    return payload
 
 
 def _caked_qz_map_for_profile_payload(payload: Mapping[str, object]) -> np.ndarray | None:
@@ -15664,6 +15692,307 @@ def _selected_qr_rod_profile_cache_copy(
     }
 
 
+def _selected_qr_rod_profile_component_cache_signature(
+    shared: Mapping[str, object],
+    selected_key: str,
+    mask_shape: tuple[int, int],
+) -> tuple[object, ...]:
+    return (
+        "selected_qr_rod_profile_components",
+        str(selected_key or ""),
+        tuple(int(v) for v in mask_shape),
+        _selected_qr_rod_array_identity_signature(shared.get("caked_image")),
+        _selected_qr_rod_array_identity_signature(shared.get("qz_map")),
+        _selected_qr_rod_axis_signature(shared.get("qz_edges")),
+        _selected_qr_rod_axis_signature(shared.get("radial_axis")),
+        _selected_qr_rod_axis_signature(shared.get("azimuth_axis")),
+        shared.get("caked_projection_signature"),
+        bool(shared.get("include_selected_qr_rod_shape", False)),
+        _timing_signature_digest(shared.get("stored_hit_table_signature")),
+        _normalize_caked_intensity_mode(shared.get("caked_intensity_mode", "density")),
+        shared.get("result_identity"),
+        _selected_qr_rod_array_identity_signature(shared.get("signal_sum")),
+        _selected_qr_rod_array_identity_signature(shared.get("normalization_sum")),
+        _selected_qr_rod_array_identity_signature(shared.get("acceptance")),
+    )
+
+
+def _selected_qr_rod_profile_component_source(shared: Mapping[str, object]) -> str:
+    signal_sum = shared.get("signal_sum")
+    normalization_sum = shared.get("normalization_sum")
+    if signal_sum is not None and normalization_sum is not None:
+        return "sum_normalization"
+    if shared.get("acceptance") is not None:
+        return "acceptance"
+    return "pixel_count"
+
+
+def _selected_qr_rod_profile_component_bincount(
+    bins: np.ndarray,
+    values: np.ndarray,
+    bin_count: int,
+) -> np.ndarray:
+    if bins.size <= 0:
+        return np.zeros(bin_count, dtype=np.float64)
+    return np.bincount(
+        bins.astype(np.intp, copy=False),
+        weights=np.asarray(values, dtype=np.float64),
+        minlength=bin_count,
+    )[:bin_count].astype(np.float64, copy=False)
+
+
+def _selected_qr_rod_profile_nan_to_zero(values: np.ndarray) -> np.ndarray:
+    return np.where(np.isnan(values), 0.0, values)
+
+
+def _selected_qr_rod_profile_components_for_mask(
+    shared: Mapping[str, object],
+    mask: np.ndarray,
+) -> dict[str, object] | None:
+    try:
+        image = np.asarray(shared.get("caked_image"), dtype=np.float64)
+        qz_map = np.asarray(shared.get("qz_map"), dtype=np.float64)
+        qz_edges = np.asarray(shared.get("qz_edges"), dtype=np.float64).reshape(-1)
+        mask_array = np.asarray(mask, dtype=bool)
+    except Exception:
+        return None
+    if (
+        image.ndim != 2
+        or qz_map.shape != image.shape
+        or mask_array.shape != image.shape
+        or qz_edges.ndim != 1
+        or qz_edges.size < 2
+    ):
+        return None
+
+    bin_count = int(qz_edges.size - 1)
+    source = _selected_qr_rod_profile_component_source(shared)
+    qz_flat = qz_map.reshape(-1)
+    mask_flat = mask_array.reshape(-1)
+    bin_index = np.searchsorted(qz_edges, qz_flat, side="right") - 1
+    finite_qz = np.isfinite(qz_flat)
+    last_edge = finite_qz & (qz_flat == qz_edges[-1])
+    if np.any(last_edge):
+        bin_index[last_edge] = bin_count - 1
+    support = (
+        mask_flat
+        & finite_qz
+        & (bin_index >= 0)
+        & (bin_index < bin_count)
+    )
+    support_bins = bin_index[support].astype(np.intp, copy=False)
+    if support_bins.size > 0:
+        pixel_count = np.bincount(support_bins, minlength=bin_count)[:bin_count].astype(
+            np.int64,
+            copy=False,
+        )
+    else:
+        pixel_count = np.zeros(bin_count, dtype=np.int64)
+
+    image_flat = image.reshape(-1)
+    acceptance_sum = np.zeros(bin_count, dtype=np.float64)
+    weighted_sum = np.zeros(bin_count, dtype=np.float64)
+
+    if source == "sum_normalization":
+        try:
+            signal_sum = np.asarray(shared.get("signal_sum"), dtype=np.float64)
+            normalization_sum = np.asarray(shared.get("normalization_sum"), dtype=np.float64)
+        except Exception:
+            return None
+        if signal_sum.shape != image.shape or normalization_sum.shape != image.shape:
+            return None
+        signal_flat = signal_sum.reshape(-1)
+        normalization_flat = normalization_sum.reshape(-1)
+        weighted = (
+            support
+            & np.isfinite(signal_flat)
+            & np.isfinite(normalization_flat)
+            & (normalization_flat > 0.0)
+        )
+        weighted_bins = bin_index[weighted].astype(np.intp, copy=False)
+        weighted_sum = _selected_qr_rod_profile_component_bincount(
+            weighted_bins,
+            signal_flat[weighted],
+            bin_count,
+        )
+        acceptance_sum = _selected_qr_rod_profile_component_bincount(
+            weighted_bins,
+            normalization_flat[weighted],
+            bin_count,
+        )
+    elif source == "acceptance":
+        try:
+            acceptance = np.asarray(shared.get("acceptance"), dtype=np.float64)
+        except Exception:
+            return None
+        if acceptance.shape != image.shape:
+            return None
+        acceptance_flat = acceptance.reshape(-1)
+        weighted = support & np.isfinite(acceptance_flat) & (acceptance_flat > 0.0)
+        weighted_bins = bin_index[weighted].astype(np.intp, copy=False)
+        acceptance_sum = _selected_qr_rod_profile_component_bincount(
+            weighted_bins,
+            acceptance_flat[weighted],
+            bin_count,
+        )
+        weighted_sum = _selected_qr_rod_profile_component_bincount(
+            weighted_bins,
+            _selected_qr_rod_profile_nan_to_zero(image_flat[weighted] * acceptance_flat[weighted]),
+            bin_count,
+        )
+    else:
+        weighted_sum = _selected_qr_rod_profile_component_bincount(
+            support_bins,
+            _selected_qr_rod_profile_nan_to_zero(image_flat[support]),
+            bin_count,
+        )
+        acceptance_sum = pixel_count.astype(np.float64)
+
+    return {
+        "source": source,
+        "qz_center": 0.5 * (qz_edges[:-1] + qz_edges[1:]),
+        "pixel_count": pixel_count,
+        "weighted_sum": weighted_sum,
+        "acceptance_sum": acceptance_sum,
+    }
+
+
+def _selected_qr_rod_profile_component_entry(
+    mask: np.ndarray,
+    components: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "mask": np.asarray(mask, dtype=bool).copy(),
+        "source": str(components.get("source", "pixel_count")),
+        "qz_center": np.asarray(components["qz_center"], dtype=np.float64).copy(),
+        "pixel_count": np.asarray(components["pixel_count"], dtype=np.int64).copy(),
+        "weighted_sum": np.asarray(components["weighted_sum"], dtype=np.float64).copy(),
+        "acceptance_sum": np.asarray(components["acceptance_sum"], dtype=np.float64).copy(),
+    }
+
+
+def _selected_qr_rod_profile_result_from_components(
+    components: Mapping[str, object],
+) -> dict[str, np.ndarray] | None:
+    try:
+        source = str(components.get("source", "pixel_count"))
+        qz_center = np.asarray(components["qz_center"], dtype=np.float64)
+        pixel_count = np.asarray(components["pixel_count"], dtype=np.int64)
+        weighted_sum = np.asarray(components["weighted_sum"], dtype=np.float64)
+        acceptance_components = np.asarray(components["acceptance_sum"], dtype=np.float64)
+    except Exception:
+        return None
+    if (
+        qz_center.ndim != 1
+        or pixel_count.shape != qz_center.shape
+        or weighted_sum.shape != qz_center.shape
+        or acceptance_components.shape != qz_center.shape
+    ):
+        return None
+
+    pixel_count = np.maximum(pixel_count, 0)
+    empty = pixel_count <= 0
+    intensity_sum = weighted_sum.copy()
+    intensity_sum[empty] = np.nan
+    acceptance_sum = acceptance_components.copy()
+    if source == "pixel_count":
+        acceptance_sum[empty] = 0.0
+    else:
+        acceptance_sum[empty] = np.nan
+    intensity_mean = np.full(qz_center.shape, np.nan, dtype=np.float64)
+    valid = (~empty) & np.isfinite(acceptance_components) & (acceptance_components > 0.0)
+    intensity_mean[valid] = weighted_sum[valid] / acceptance_components[valid]
+    return {
+        "qz_center": qz_center.copy(),
+        "pixel_count": pixel_count.copy(),
+        "intensity_sum": intensity_sum,
+        "intensity_mean": intensity_mean,
+        "acceptance_sum": acceptance_sum,
+    }
+
+
+def _selected_qr_rod_profile_from_component_cache(
+    shared: Mapping[str, object],
+    mask: np.ndarray,
+    component_signature: tuple[object, ...],
+) -> dict[str, np.ndarray] | None:
+    cache = _selected_qr_rod_bounded_cache("selected_qr_rod_profile_component_cache")
+    entry = _selected_qr_rod_bounded_cache_get(cache, component_signature)
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        old_mask = np.asarray(entry["mask"], dtype=bool)
+        if old_mask.shape != mask.shape:
+            return None
+        source = str(entry.get("source", "pixel_count"))
+        components = {
+            "source": source,
+            "qz_center": np.asarray(entry["qz_center"], dtype=np.float64).copy(),
+            "pixel_count": np.asarray(entry["pixel_count"], dtype=np.int64).copy(),
+            "weighted_sum": np.asarray(entry["weighted_sum"], dtype=np.float64).copy(),
+            "acceptance_sum": np.asarray(entry["acceptance_sum"], dtype=np.float64).copy(),
+        }
+    except Exception:
+        return None
+
+    current_source = _selected_qr_rod_profile_component_source(shared)
+    if current_source != source:
+        return None
+    added_mask = mask & ~old_mask
+    removed_mask = old_mask & ~mask
+    if np.any(added_mask):
+        added = _selected_qr_rod_profile_components_for_mask(shared, added_mask)
+        if not isinstance(added, Mapping) or added.get("source") != source:
+            return None
+        components["pixel_count"] += np.asarray(added["pixel_count"], dtype=np.int64)
+        components["weighted_sum"] += np.asarray(added["weighted_sum"], dtype=np.float64)
+        components["acceptance_sum"] += np.asarray(added["acceptance_sum"], dtype=np.float64)
+    if np.any(removed_mask):
+        removed = _selected_qr_rod_profile_components_for_mask(shared, removed_mask)
+        if not isinstance(removed, Mapping) or removed.get("source") != source:
+            return None
+        components["pixel_count"] -= np.asarray(removed["pixel_count"], dtype=np.int64)
+        components["weighted_sum"] -= np.asarray(removed["weighted_sum"], dtype=np.float64)
+        components["acceptance_sum"] -= np.asarray(removed["acceptance_sum"], dtype=np.float64)
+
+    components["pixel_count"] = np.maximum(
+        np.asarray(components["pixel_count"], dtype=np.int64),
+        0,
+    )
+    acceptance_sum = np.asarray(components["acceptance_sum"], dtype=np.float64)
+    near_zero = np.isfinite(acceptance_sum) & (np.abs(acceptance_sum) < 1.0e-12)
+    acceptance_sum[near_zero] = 0.0
+    components["acceptance_sum"] = np.maximum(acceptance_sum, 0.0)
+
+    result = _selected_qr_rod_profile_result_from_components(components)
+    if result is None:
+        return None
+    _selected_qr_rod_bounded_cache_put(
+        cache,
+        component_signature,
+        _selected_qr_rod_profile_component_entry(mask, components),
+        cap=SELECTED_QR_ROD_PROFILE_CACHE_CAP,
+    )
+    return result
+
+
+def _selected_qr_rod_seed_profile_component_cache(
+    shared: Mapping[str, object],
+    mask: np.ndarray,
+    component_signature: tuple[object, ...],
+) -> None:
+    components = _selected_qr_rod_profile_components_for_mask(shared, mask)
+    if not isinstance(components, Mapping):
+        return
+    cache = _selected_qr_rod_bounded_cache("selected_qr_rod_profile_component_cache")
+    _selected_qr_rod_bounded_cache_put(
+        cache,
+        component_signature,
+        _selected_qr_rod_profile_component_entry(mask, components),
+        cap=SELECTED_QR_ROD_PROFILE_CACHE_CAP,
+    )
+
+
 def _selected_qr_rod_caked_shared_profile_inputs(res2) -> dict[str, object] | None:
     payload = _caked_profile_payload_for_result(res2)
     if payload is None:
@@ -15784,7 +16113,7 @@ def _selected_qr_rod_caked_shared_profile_inputs(res2) -> dict[str, object] | No
 
     return {
         "payload": payload,
-        "result_identity": ("res2", id(res2), id(payload)),
+        "result_identity": ("res2", id(res2)),
         "caked_image": image,
         "radial_axis": radial_axis,
         "azimuth_axis": azimuth_axis,
@@ -15857,6 +16186,25 @@ def _selected_qr_rod_caked_profile_from_shared_inputs(
         cached_profile = _selected_qr_rod_bounded_cache_get(cache, cache_signature)
         if isinstance(cached_profile, Mapping):
             return _selected_qr_rod_profile_cache_copy(cached_profile)
+    component_signature = _selected_qr_rod_profile_component_cache_signature(
+        shared,
+        encoded_key,
+        tuple(int(v) for v in mask.shape),
+    )
+    component_profile = _selected_qr_rod_profile_from_component_cache(
+        shared,
+        mask,
+        component_signature,
+    )
+    if component_profile is not None:
+        if cache_signature is not None:
+            _selected_qr_rod_bounded_cache_put(
+                cache,
+                cache_signature,
+                _selected_qr_rod_profile_cache_copy(component_profile),
+                cap=SELECTED_QR_ROD_PROFILE_CACHE_CAP,
+            )
+        return _selected_qr_rod_profile_cache_copy(component_profile)
     try:
         profile = qz_profile_from_caked_mask(
             image=image,
@@ -15894,6 +16242,11 @@ def _selected_qr_rod_caked_profile_from_shared_inputs(
             _selected_qr_rod_profile_cache_copy(result),
             cap=SELECTED_QR_ROD_PROFILE_CACHE_CAP,
         )
+    _selected_qr_rod_seed_profile_component_cache(
+        shared,
+        mask,
+        component_signature,
+    )
     return _selected_qr_rod_profile_cache_copy(result)
 
 

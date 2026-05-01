@@ -22370,6 +22370,228 @@ def test_runtime_session_selected_qr_rod_profile_cache_semantics(
     assert not any(np.array_equal(mask, mask_a | mask_b) for mask in profile_calls)
 
 
+def test_runtime_session_selected_qr_rod_caked_profile_payload_reuses_result_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(selected_qr_rod_caked_payload_cache={}),
+        raising=False,
+    )
+    detector_shape = (2, 3)
+    ai = object()
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(ai_cache={"ai": ai, "detector_shape": detector_shape}),
+        raising=False,
+    )
+    calls: list[object] = []
+    payload = {"image": np.ones((1, 1), dtype=float)}
+
+    def _build(res2, *, ai=None, detector_shape=None):
+        calls.append((res2, ai, detector_shape))
+        return payload
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_view_payload_from_result",
+        _build,
+    )
+    res2 = object()
+
+    first = runtime_session._caked_profile_payload_for_result(res2)
+    second = runtime_session._caked_profile_payload_for_result(res2)
+
+    assert first is payload
+    assert second is payload
+    assert calls == [(res2, ai, detector_shape)]
+
+
+def _selected_qr_component_shared(
+    payload: Mapping[str, object],
+    *,
+    image: np.ndarray | None = None,
+    qz_map: np.ndarray | None = None,
+    signal_sum: np.ndarray | None = None,
+    normalization_sum: np.ndarray | None = None,
+    result_identity: object = ("sim", "component"),
+) -> dict[str, object]:
+    if image is None:
+        image = np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float)
+    if qz_map is None:
+        qz_map = np.asarray([[0.5, 1.5, 2.5], [0.5, 1.5, 2.5]], dtype=float)
+    return {
+        "caked_image": image,
+        "qz_map": qz_map,
+        "qz_edges": np.asarray([0.0, 1.0, 2.0, 3.0], dtype=float),
+        "radial_axis": np.asarray([10.0, 20.0, 30.0], dtype=float),
+        "azimuth_axis": np.asarray([-5.0, 5.0], dtype=float),
+        "caked_projection_signature": ("projection", "component"),
+        "delta_qr": 0.1,
+        "qz_min": 0.0,
+        "qz_max": 3.0,
+        "phi_windows": ((-180.0, 180.0),),
+        "include_selected_qr_rod_shape": False,
+        "stored_hit_table_signature": ("hit", "component"),
+        "result_identity": result_identity,
+        "rod_profile_intensity_mode": "density",
+        "caked_intensity_mode": "density",
+        "signal_sum": signal_sum,
+        "normalization_sum": normalization_sum,
+        "acceptance": None,
+        "mask_payloads_by_key": {"rod-a": payload},
+    }
+
+
+def test_runtime_session_selected_qr_rod_component_cache_reuses_delta_and_phi_edits(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    from ra_sim.fitting.rod_profiles import qz_profile_from_caked_mask as real_profile
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(),
+        raising=False,
+    )
+    wide_mask = np.asarray(
+        [[True, True, False], [False, True, True]],
+        dtype=bool,
+    )
+    narrow_mask = np.asarray(
+        [[True, False, False], [False, True, False]],
+        dtype=bool,
+    )
+    wide_payload = {
+        "selected_qr_rod_key": "rod-a",
+        "signature": ("selected_qr_rod_qz_caked_mask_payload", "rod-a", "wide"),
+        "mask": wide_mask,
+    }
+    narrow_payload = {
+        "selected_qr_rod_key": "rod-a",
+        "signature": ("selected_qr_rod_qz_caked_mask_payload", "rod-a", "narrow"),
+        "mask": narrow_mask,
+    }
+    profile_calls: list[np.ndarray] = []
+
+    def _profile(**kwargs):
+        profile_calls.append(np.asarray(kwargs["mask"], dtype=bool).copy())
+        return real_profile(**kwargs)
+
+    monkeypatch.setattr(runtime_session, "qz_profile_from_caked_mask", _profile)
+
+    wide_shared = _selected_qr_component_shared(wide_payload)
+    narrow_shared = dict(wide_shared)
+    narrow_shared["delta_qr"] = 0.05
+    narrow_shared["phi_windows"] = ((-90.0, 90.0),)
+    narrow_shared["mask_payloads_by_key"] = {"rod-a": narrow_payload}
+
+    first = runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
+        wide_shared,
+        {},
+        "rod-a",
+    )
+    second = runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
+        narrow_shared,
+        {},
+        "rod-a",
+    )
+    expected = real_profile(
+        image=narrow_shared["caked_image"],
+        qz_map=narrow_shared["qz_map"],
+        qz_edges=narrow_shared["qz_edges"],
+        mask=narrow_mask,
+    )
+
+    assert len(profile_calls) == 1
+    assert first is not None
+    assert second is not None
+    np.testing.assert_allclose(
+        second["intensity_sum"],
+        expected["background_weighted_sum"],
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        second["intensity_mean"],
+        expected["background_density"],
+        equal_nan=True,
+    )
+    np.testing.assert_array_equal(second["pixel_count"], expected["pixel_count"])
+    np.testing.assert_allclose(
+        second["acceptance_sum"],
+        expected["acceptance_sum"],
+        equal_nan=True,
+    )
+
+
+def test_runtime_session_selected_qr_rod_component_cache_invalidates_base_inputs(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    from ra_sim.fitting.rod_profiles import qz_profile_from_caked_mask as real_profile
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(),
+        raising=False,
+    )
+    mask = np.asarray([[True, False, True], [False, True, False]], dtype=bool)
+    payload = {
+        "selected_qr_rod_key": "rod-a",
+        "signature": ("selected_qr_rod_qz_caked_mask_payload", "rod-a"),
+        "mask": mask,
+    }
+    image = np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float)
+    signal_sum = image * 2.0
+    normalization_sum = np.full_like(image, 2.0)
+    shared = _selected_qr_component_shared(
+        payload,
+        image=image,
+        signal_sum=signal_sum,
+        normalization_sum=normalization_sum,
+    )
+    profile_calls: list[np.ndarray] = []
+
+    def _profile(**kwargs):
+        profile_calls.append(np.asarray(kwargs["mask"], dtype=bool).copy())
+        return real_profile(**kwargs)
+
+    monkeypatch.setattr(runtime_session, "qz_profile_from_caked_mask", _profile)
+
+    runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(shared, {}, "rod-a")
+
+    changed_result = dict(shared)
+    changed_result["result_identity"] = ("sim", "changed")
+    runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
+        changed_result,
+        {},
+        "rod-a",
+    )
+
+    changed_qz = dict(shared)
+    changed_qz["qz_map"] = np.asarray(shared["qz_map"], dtype=float).copy()
+    runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
+        changed_qz,
+        {},
+        "rod-a",
+    )
+
+    changed_signal = dict(shared)
+    changed_signal["signal_sum"] = signal_sum.copy()
+    runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
+        changed_signal,
+        {},
+        "rod-a",
+    )
+
+    assert len(profile_calls) == 4
+
+
 def test_runtime_session_selected_qr_rod_no_detector_fallback_without_caked_profile(
     monkeypatch,
 ) -> None:

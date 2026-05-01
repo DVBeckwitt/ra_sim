@@ -1033,6 +1033,9 @@ class GeometryRuntimeState:
         default_factory=OrderedDict
     )
     selected_qr_rod_profile_cache: OrderedDict[object, object] = field(default_factory=OrderedDict)
+    selected_qr_rod_profile_component_cache: OrderedDict[object, object] = field(
+        default_factory=OrderedDict
+    )
     selected_qr_rod_shape_mask_index_cache: dict[str, object] = field(
         default_factory=lambda: {
             "signature": None,

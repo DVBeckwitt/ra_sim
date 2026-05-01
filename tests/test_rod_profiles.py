@@ -127,6 +127,23 @@ def test_pixel_count_fallback_divides_raw_sum_by_selected_count() -> None:
     assert profile["fit_density"][0] == profile["fit_sum"][0] / 3.0
 
 
+def test_last_coord_edge_is_inclusive() -> None:
+    image = np.array([[2.0, 4.0, 8.0]])
+    coord = np.array([[0.0, 1.0, 2.0]])
+
+    profile = binned_caked_mask_profile(
+        image=image,
+        coord_map=coord,
+        coord_edges=np.array([0.0, 1.0, 2.0]),
+        mask=np.ones_like(image, dtype=bool),
+        coord_name="q",
+    )
+
+    np.testing.assert_array_equal(profile["pixel_count"], np.array([1, 2]))
+    np.testing.assert_allclose(profile["background_sum"], np.array([2.0, 12.0]))
+    np.testing.assert_allclose(profile["background_density"], np.array([2.0, 6.0]))
+
+
 def test_zero_acceptance_returns_nan_density() -> None:
     image = np.array([[2.0, 4.0]])
     coord = np.array([[0.2, 0.4]])

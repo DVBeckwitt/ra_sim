@@ -85,6 +85,24 @@ def _fill_nan(size: int) -> np.ndarray:
     return np.full(size, np.nan, dtype=np.float64)
 
 
+def _nan_to_zero(values: np.ndarray) -> np.ndarray:
+    return np.where(np.isnan(values), 0.0, values)
+
+
+def _bincount_float(
+    bins: np.ndarray,
+    values: np.ndarray,
+    bin_count: int,
+) -> np.ndarray:
+    if bins.size <= 0:
+        return np.zeros(bin_count, dtype=np.float64)
+    return np.bincount(
+        bins.astype(np.intp, copy=False),
+        weights=np.asarray(values, dtype=np.float64),
+        minlength=bin_count,
+    )[:bin_count].astype(np.float64, copy=False)
+
+
 def _normalize_mode_source(
     *,
     signal_sum: np.ndarray | None,
@@ -148,79 +166,137 @@ def binned_caked_mask_profile(
     two_theta_max = _fill_nan(bin_count)
     two_theta_mean = _fill_nan(bin_count)
 
-    for idx in range(bin_count):
-        lo = float(edges[idx])
-        hi = float(edges[idx + 1])
-        if idx == bin_count - 1:
-            in_bin = (coord_array >= lo) & (coord_array <= hi)
-        else:
-            in_bin = (coord_array >= lo) & (coord_array < hi)
-        support = mask_array & np.isfinite(coord_array) & in_bin
-        support_count = int(np.count_nonzero(support))
-        pixel_count[idx] = support_count
-        if support_count <= 0:
-            if source == "pixel_count":
-                acceptance_sum[idx] = 0.0
-            continue
+    coord_flat = coord_array.reshape(-1)
+    mask_flat = mask_array.reshape(-1)
+    bin_index = np.searchsorted(edges, coord_flat, side="right") - 1
+    finite_coord = np.isfinite(coord_flat)
+    last_edge = finite_coord & (coord_flat == edges[-1])
+    if np.any(last_edge):
+        bin_index[last_edge] = bin_count - 1
+    support = (
+        mask_flat
+        & finite_coord
+        & (bin_index >= 0)
+        & (bin_index < bin_count)
+    )
+    support_bins = bin_index[support].astype(np.intp, copy=False)
+    if support_bins.size > 0:
+        pixel_count = np.bincount(support_bins, minlength=bin_count)[:bin_count].astype(
+            np.int64,
+            copy=False,
+        )
+    has_support = pixel_count > 0
 
-        background_sum[idx] = _safe_sum(image_array[support])
-        background_mean[idx] = background_sum[idx] / float(support_count)
-        if model_array is not None:
-            fit_sum[idx] = _safe_sum(model_array[support])
-            fit_mean[idx] = fit_sum[idx] / float(support_count)
+    image_flat = image_array.reshape(-1)
+    background_sum_all = _bincount_float(
+        support_bins,
+        _nan_to_zero(image_flat[support]),
+        bin_count,
+    )
+    background_sum[has_support] = background_sum_all[has_support]
+    background_mean[has_support] = (
+        background_sum_all[has_support] / pixel_count[has_support].astype(np.float64)
+    )
 
-        if theta_array is not None:
-            theta_values = theta_array[support & np.isfinite(theta_array)]
-            if theta_values.size > 0:
-                two_theta_min[idx] = float(np.nanmin(theta_values))
-                two_theta_max[idx] = float(np.nanmax(theta_values))
-                two_theta_mean[idx] = float(np.nanmean(theta_values))
+    if model_array is not None:
+        model_flat = model_array.reshape(-1)
+        fit_sum_all = _bincount_float(
+            support_bins,
+            _nan_to_zero(model_flat[support]),
+            bin_count,
+        )
+        fit_sum[has_support] = fit_sum_all[has_support]
+        fit_mean[has_support] = (
+            fit_sum_all[has_support] / pixel_count[has_support].astype(np.float64)
+        )
+    else:
+        model_flat = None
 
-        if source == "sum_normalization":
-            weighted = (
-                support
-                & np.isfinite(signal_array)
-                & np.isfinite(normalization_array)
-                & (normalization_array > 0.0)
+    if theta_array is not None:
+        theta_flat = theta_array.reshape(-1)
+        theta_support = support & np.isfinite(theta_flat)
+        theta_bins = bin_index[theta_support].astype(np.intp, copy=False)
+        theta_values = theta_flat[theta_support]
+        if theta_bins.size > 0:
+            theta_min = np.full(bin_count, np.inf, dtype=np.float64)
+            theta_max = np.full(bin_count, -np.inf, dtype=np.float64)
+            np.minimum.at(theta_min, theta_bins, theta_values)
+            np.maximum.at(theta_max, theta_bins, theta_values)
+            theta_count = np.bincount(theta_bins, minlength=bin_count)[:bin_count]
+            theta_sum = _bincount_float(theta_bins, theta_values, bin_count)
+            valid_theta = theta_count > 0
+            two_theta_min[valid_theta] = theta_min[valid_theta]
+            two_theta_max[valid_theta] = theta_max[valid_theta]
+            two_theta_mean[valid_theta] = theta_sum[valid_theta] / theta_count[
+                valid_theta
+            ].astype(np.float64)
+
+    if source == "sum_normalization":
+        signal_flat = signal_array.reshape(-1)
+        normalization_flat = normalization_array.reshape(-1)
+        weighted = (
+            support
+            & np.isfinite(signal_flat)
+            & np.isfinite(normalization_flat)
+            & (normalization_flat > 0.0)
+        )
+        weighted_bins = bin_index[weighted].astype(np.intp, copy=False)
+        acc_all = _bincount_float(weighted_bins, normalization_flat[weighted], bin_count)
+        sig_all = _bincount_float(weighted_bins, signal_flat[weighted], bin_count)
+        acceptance_sum[has_support] = acc_all[has_support]
+        background_weighted_sum[has_support] = sig_all[has_support]
+        positive_acceptance = has_support & (acc_all > 0.0)
+        background_density[positive_acceptance] = (
+            sig_all[positive_acceptance] / acc_all[positive_acceptance]
+        )
+        if model_flat is not None:
+            fit_sig_all = _bincount_float(
+                weighted_bins,
+                _nan_to_zero(model_flat[weighted] * normalization_flat[weighted]),
+                bin_count,
             )
-            acc = float(np.nansum(normalization_array[weighted]))
-            sig = float(np.nansum(signal_array[weighted]))
-            acceptance_sum[idx] = acc
-            background_weighted_sum[idx] = sig
-            if acc > 0.0:
-                background_density[idx] = sig / acc
-            if model_array is not None:
-                fit_sig = float(
-                    np.nansum(model_array[weighted] * normalization_array[weighted])
-                )
-                fit_weighted_sum[idx] = fit_sig
-                if acc > 0.0:
-                    fit_density[idx] = fit_sig / acc
-            continue
-
-        if source == "acceptance":
-            weighted = support & np.isfinite(acceptance_array) & (acceptance_array > 0.0)
-            acc = float(np.nansum(acceptance_array[weighted]))
-            acceptance_sum[idx] = acc
-            background_sig = float(np.nansum(image_array[weighted] * acceptance_array[weighted]))
-            background_weighted_sum[idx] = background_sig
-            if acc > 0.0:
-                background_density[idx] = background_sig / acc
-            if model_array is not None:
-                fit_sig = float(
-                    np.nansum(model_array[weighted] * acceptance_array[weighted])
-                )
-                fit_weighted_sum[idx] = fit_sig
-                if acc > 0.0:
-                    fit_density[idx] = fit_sig / acc
-            continue
-
-        acceptance_sum[idx] = float(support_count)
-        background_weighted_sum[idx] = background_sum[idx]
-        background_density[idx] = background_sum[idx] / float(support_count)
-        if model_array is not None:
-            fit_weighted_sum[idx] = fit_sum[idx]
-            fit_density[idx] = fit_sum[idx] / float(support_count)
+            fit_weighted_sum[has_support] = fit_sig_all[has_support]
+            fit_density[positive_acceptance] = (
+                fit_sig_all[positive_acceptance] / acc_all[positive_acceptance]
+            )
+    elif source == "acceptance":
+        acceptance_flat = acceptance_array.reshape(-1)
+        weighted = support & np.isfinite(acceptance_flat) & (acceptance_flat > 0.0)
+        weighted_bins = bin_index[weighted].astype(np.intp, copy=False)
+        acc_all = _bincount_float(weighted_bins, acceptance_flat[weighted], bin_count)
+        background_sig_all = _bincount_float(
+            weighted_bins,
+            _nan_to_zero(image_flat[weighted] * acceptance_flat[weighted]),
+            bin_count,
+        )
+        acceptance_sum[has_support] = acc_all[has_support]
+        background_weighted_sum[has_support] = background_sig_all[has_support]
+        positive_acceptance = has_support & (acc_all > 0.0)
+        background_density[positive_acceptance] = (
+            background_sig_all[positive_acceptance] / acc_all[positive_acceptance]
+        )
+        if model_flat is not None:
+            fit_sig_all = _bincount_float(
+                weighted_bins,
+                _nan_to_zero(model_flat[weighted] * acceptance_flat[weighted]),
+                bin_count,
+            )
+            fit_weighted_sum[has_support] = fit_sig_all[has_support]
+            fit_density[positive_acceptance] = (
+                fit_sig_all[positive_acceptance] / acc_all[positive_acceptance]
+            )
+    else:
+        acceptance_sum[~has_support] = 0.0
+        acceptance_sum[has_support] = pixel_count[has_support].astype(np.float64)
+        background_weighted_sum[has_support] = background_sum_all[has_support]
+        background_density[has_support] = (
+            background_sum_all[has_support] / pixel_count[has_support].astype(np.float64)
+        )
+        if model_flat is not None:
+            fit_weighted_sum[has_support] = fit_sum_all[has_support]
+            fit_density[has_support] = (
+                fit_sum_all[has_support] / pixel_count[has_support].astype(np.float64)
+            )
 
     result: dict[str, np.ndarray] = {
         f"{coord_name}_bin": np.arange(1, bin_count + 1, dtype=np.int64),
