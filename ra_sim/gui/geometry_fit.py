@@ -2371,6 +2371,11 @@ def _geometry_fit_sim_native_source_is_display_to_native(source: object) -> bool
     )
 
 
+def _geometry_fit_sim_native_source_is_raw_display_to_native(source: object) -> bool:
+    text = str(source or "").strip().lower()
+    return text.startswith("display_to_native_sim_coords(sim_col_raw")
+
+
 def _geometry_fit_points_match(
     left: object,
     right: object,
@@ -9969,7 +9974,19 @@ def build_geometry_manual_fit_dataset(
                     float(point_list[0]),
                     float(point_list[1]),
                 )
-            if picker_owned and (overwrite_existing or "sim_native" not in initial_entry):
+            raw_native_point = (
+                _geometry_fit_point_list(initial_entry.get("sim_native"))
+                if bool(initial_entry.get("sim_native_raw_live_source"))
+                and _geometry_fit_sim_native_source_is_raw_display_to_native(
+                    initial_entry.get("sim_native_source")
+                )
+                else None
+            )
+            if (
+                picker_owned
+                and raw_native_point is None
+                and (overwrite_existing or "sim_native" not in initial_entry)
+            ):
                 sim_native = None
                 try:
                     sim_native = manual_dataset_bindings.display_to_native_sim_coords(
@@ -9999,6 +10016,7 @@ def build_geometry_manual_fit_dataset(
                         initial_entry["sim_native_source"] = (
                             f"display_to_native_sim_coords({source_text or 'sim_display'})"
                         )
+                        initial_entry.pop("sim_native_raw_live_source", None)
         elif point_frame == "caked_2theta_phi":
             initial_entry["simulated_two_theta_deg"] = float(point_list[0])
             initial_entry["simulated_phi_deg"] = float(point_list[1])
@@ -10020,6 +10038,7 @@ def build_geometry_manual_fit_dataset(
                 float(point_list[1]),
             )
             initial_entry["sim_native_source"] = str(source_text or "provider_detector_native")
+            initial_entry.pop("sim_native_raw_live_source", None)
 
     raw_selected_entries = [
         entry
@@ -13633,6 +13652,20 @@ def build_geometry_manual_fit_dataset(
                 or canonical_live_identity_required
             )
         )
+        if use_caked_display and not saved_identity_resolved:
+            saved_caked_simulated_point = _entry_point(
+                saved_entry_for_diag,
+                "refined_sim_caked_x",
+                "refined_sim_caked_y",
+            ) or _entry_point(entry, "refined_sim_caked_x", "refined_sim_caked_y")
+            if saved_caked_simulated_point is not None:
+                provider_simulated_point = [
+                    float(saved_caked_simulated_point[0]),
+                    float(saved_caked_simulated_point[1]),
+                ]
+                provider_simulated_frame = "display"
+                provider_simulated_point_source = "manual_picker_saved"
+                provider_saved_simulated_point_available = True
         rebinding_fallback_used = bool(
             (saved_identity_available and not saved_identity_resolved)
             or (
@@ -13868,7 +13901,9 @@ def build_geometry_manual_fit_dataset(
             ),
         }
         if isinstance(legacy_resolution_trace, Mapping):
-            resolution_diag.update(_geometry_fit_cache_jsonable(legacy_resolution_trace))
+            diagnostic_trace = _geometry_fit_diagnostic_jsonable(legacy_resolution_trace)
+            if isinstance(diagnostic_trace, Mapping):
+                resolution_diag.update(diagnostic_trace)
         source_resolution_diagnostics.append(resolution_diag)
         for key in (
             "source_table_index",
@@ -14153,6 +14188,23 @@ def build_geometry_manual_fit_dataset(
                 )
                 if sim_native_point_source:
                     initial_entry["sim_native_source"] = sim_native_point_source
+                if sim_native_point_source == "display_to_native_sim_coords(sim_col_raw)":
+                    initial_entry["sim_native_raw_live_source"] = bool(
+                        isinstance(strict_source_entry, Mapping)
+                    )
+            if use_caked_display and not bool(initial_entry.get("sim_native_raw_live_source")):
+                saved_caked_simulated_point = _entry_point(
+                    saved_entry_for_diag,
+                    "refined_sim_caked_x",
+                    "refined_sim_caked_y",
+                )
+                if saved_caked_simulated_point is not None:
+                    provider_simulated_point = [
+                        float(saved_caked_simulated_point[0]),
+                        float(saved_caked_simulated_point[1]),
+                    ]
+                    provider_simulated_frame = "display"
+                    provider_simulated_point_source = "manual_picker_saved"
         provider_overwrites_existing_sim = bool(
             provider_simulated_point_source in _GEOMETRY_FIT_PICKER_OWNED_POINT_SOURCES
         )
@@ -14163,6 +14215,23 @@ def build_geometry_manual_fit_dataset(
             provider_simulated_point_source,
             overwrite_existing=provider_overwrites_existing_sim,
         )
+        if use_caked_display and not bool(initial_entry.get("sim_native_raw_live_source")):
+            saved_caked_simulated_point = _entry_point(
+                saved_entry_for_diag,
+                "refined_sim_caked_x",
+                "refined_sim_caked_y",
+            ) or _entry_point(entry, "refined_sim_caked_x", "refined_sim_caked_y")
+            if saved_caked_simulated_point is not None:
+                initial_entry["sim_display"] = (
+                    float(saved_caked_simulated_point[0]),
+                    float(saved_caked_simulated_point[1]),
+                )
+                initial_entry["sim_caked_display"] = (
+                    float(saved_caked_simulated_point[0]),
+                    float(saved_caked_simulated_point[1]),
+                )
+                initial_entry["provider_simulated_frame"] = "display"
+                initial_entry["provider_simulated_point_source"] = "manual_picker_saved"
         _geometry_fit_apply_source_coverage_identity(initial_entry)
         initial_pairs_display.append(initial_entry)
 
@@ -14226,12 +14295,30 @@ def build_geometry_manual_fit_dataset(
             continue
         try:
             sim_native_raw = initial_entry.get("sim_native")
-            sim_native_from_display = manual_dataset_bindings.display_to_native_sim_coords(
-                float(sim_display[0]),
-                float(sim_display[1]),
-                sim_native_shape,
+            raw_native_point = (
+                _geometry_fit_point_list(sim_native_raw)
+                if bool(initial_entry.get("sim_native_raw_live_source"))
+                and _geometry_fit_sim_native_source_is_raw_display_to_native(
+                    initial_entry.get("sim_native_source")
+                )
+                else None
             )
-            if isinstance(sim_native_raw, (list, tuple, np.ndarray)) and len(sim_native_raw) >= 2:
+            if raw_native_point is not None:
+                sim_native = (float(raw_native_point[0]), float(raw_native_point[1]))
+                sim_native_from_display = None
+            else:
+                sim_native_from_display = manual_dataset_bindings.display_to_native_sim_coords(
+                    float(sim_display[0]),
+                    float(sim_display[1]),
+                    sim_native_shape,
+                )
+                sim_native_raw = _geometry_fit_point_list(sim_native_raw)
+            if sim_native_from_display is None:
+                pass
+            elif (
+                isinstance(sim_native_raw, (list, tuple, np.ndarray))
+                and len(sim_native_raw) >= 2
+            ):
                 sim_native = (
                     float(sim_native_raw[0]),
                     float(sim_native_raw[1]),
@@ -14251,7 +14338,11 @@ def build_geometry_manual_fit_dataset(
             continue
         if not _geometry_fit_sim_native_source_is_display_to_native(
             initial_entry.get("sim_native_source")
-        ) and _geometry_fit_points_match(sim_native, sim_native_from_display, tol=1.0e-6):
+        ) and sim_native_from_display is not None and _geometry_fit_points_match(
+            sim_native,
+            sim_native_from_display,
+            tol=1.0e-6,
+        ):
             initial_entry["sim_native_source"] = "display_to_native_sim_coords(sim_display)"
         sim_orientation_points.append((float(sim_native[0]), float(sim_native[1])))
         meas_orientation_points.append((float(mx), float(my)))
@@ -16436,6 +16527,66 @@ def _geometry_fit_cache_jsonable(
             _seen.discard(marker)
     if isinstance(value, np.generic):
         return value.item()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _geometry_fit_diagnostic_jsonable(
+    value: object,
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> object:
+    """Convert user-facing diagnostics to JSON-safe values without canonicalizing maps."""
+
+    if _seen is None:
+        _seen = set()
+    if int(_depth) > 20:
+        return "<max_depth>"
+    if isinstance(value, Mapping):
+        marker = id(value)
+        if marker in _seen:
+            return "<cycle>"
+        _seen.add(marker)
+        try:
+            return {
+                str(key): _geometry_fit_diagnostic_jsonable(
+                    item,
+                    _seen,
+                    int(_depth) + 1,
+                )
+                for key, item in value.items()
+            }
+        finally:
+            _seen.discard(marker)
+    if isinstance(value, np.ndarray):
+        marker = id(value)
+        if marker in _seen:
+            return "<cycle>"
+        _seen.add(marker)
+        try:
+            return [
+                _geometry_fit_diagnostic_jsonable(item, _seen, int(_depth) + 1)
+                for item in value.tolist()
+            ]
+        finally:
+            _seen.discard(marker)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        marker = id(value)
+        if marker in _seen:
+            return "<cycle>"
+        _seen.add(marker)
+        try:
+            return [
+                _geometry_fit_diagnostic_jsonable(item, _seen, int(_depth) + 1)
+                for item in value
+            ]
+        finally:
+            _seen.discard(marker)
+    if isinstance(value, np.generic):
+        return _geometry_fit_diagnostic_jsonable(value.item(), _seen, int(_depth) + 1)
+    if isinstance(value, (Path, PureWindowsPath, os.PathLike)):
+        return os.fspath(value)
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return repr(value)
@@ -18771,7 +18922,7 @@ def _build_geometry_fit_trace_records(
                             "phase": "live_source_rows",
                             "dataset_index": int(dataset.get("dataset_index", 0) or 0),
                             "background_index": int(dataset.get("dataset_index", 0) or 0),
-                            **_geometry_fit_cache_jsonable(dict(raw_failure)),
+                            **_geometry_fit_diagnostic_jsonable(dict(raw_failure)),
                         }
                     )
             dual_path_diff = simulation_diag.get("cache_metadata", {})
@@ -18791,7 +18942,7 @@ def _build_geometry_fit_trace_records(
                                 "phase": "live_source_rows",
                                 "dataset_index": int(dataset.get("dataset_index", 0) or 0),
                                 "background_index": int(dataset.get("dataset_index", 0) or 0),
-                                **_geometry_fit_cache_jsonable(dict(raw_diff)),
+                                **_geometry_fit_diagnostic_jsonable(dict(raw_diff)),
                             }
                         )
 
@@ -18998,7 +19149,7 @@ def _build_geometry_fit_trace_records(
         )
 
     return [
-        _geometry_fit_cache_jsonable(record)  # type: ignore[arg-type]
+        _geometry_fit_diagnostic_jsonable(record)  # type: ignore[arg-type]
         for record in records
     ]
 

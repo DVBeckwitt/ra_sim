@@ -963,39 +963,50 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     assert "experimental_image_for_fit" not in prepared.current_dataset
     prepared_spec = dict(prepared.dataset_specs[0])
     assert prepared_spec.pop("manual_point_pairs") == prepared.current_dataset["manual_point_pairs"]
-    assert [prepared_spec] == [
-        {
-            "dataset_index": 0,
-            "label": "bg0.osc",
-            "theta_initial": 9.0,
-            "measured_peaks": [
-                {
-                    "x": 31.0,
-                    "y": 41.0,
-                    "display_col": 31.0,
-                    "display_row": 41.0,
-                    "fit_detector_x": 31.0,
-                    "fit_detector_y": 41.0,
-                    "detector_x": 31.0,
-                    "detector_y": 41.0,
-                    "detector_input_frame": "fit_detector",
-                    "detector_input_frame_reason": "apply_orientation_to_entries",
-                    "fit_source_identity_only": True,
-                    "overlay_match_index": 0,
-                    "pair_id": "bg0:pair0",
-                    "q_group_key": ("q", 1),
-                    "source_table_index": 1,
-                    "source_row_index": 2,
-                }
-            ],
-            "experimental_image": "fit-image",
-            "dynamic_reanchor_callback": None,
-            "dynamic_reanchor_enabled": False,
-            "fit_space_projector": None,
-            "fit_space_projector_kind": None,
-            "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
-        }
-    ]
+    expected_spec_subset = {
+        "dataset_index": 0,
+        "label": "bg0.osc",
+        "theta_initial": 9.0,
+        "measured_peaks": [
+            {
+                "x": 31.0,
+                "y": 41.0,
+                "display_col": 31.0,
+                "display_row": 41.0,
+                "fit_detector_x": 31.0,
+                "fit_detector_y": 41.0,
+                "detector_x": 31.0,
+                "detector_y": 41.0,
+                "detector_input_frame": "fit_detector",
+                "detector_input_frame_reason": "apply_orientation_to_entries",
+                "fit_source_identity_only": True,
+                "overlay_match_index": 0,
+                "pair_id": "bg0:pair0",
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        "experimental_image": "fit-image",
+        "dynamic_reanchor_callback": None,
+        "dynamic_reanchor_enabled": False,
+        "fit_space_projector": None,
+        "fit_space_projector_kind": None,
+        "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
+    }
+    for key, expected in expected_spec_subset.items():
+        assert prepared_spec[key] == expected
+    assert prepared_spec["sim_caked_image_builder"] is None
+    assert prepared_spec["sim_caked_image_builder_kind"] is None
+    assert callable(prepared_spec["qr_fit_trial_source_rows_builder"])
+    assert (
+        prepared_spec["qr_fit_trial_source_rows_builder_kind"]
+        == "geometry_manual_trial_source_rows"
+    )
+    assert prepared_spec["baseline_fit_params"] == {
+        "theta_initial": 9.0,
+        "theta_offset": 0.0,
+    }
     assert prepared.max_display_markers == 90
     assert prepared.geometry_runtime_cfg == (
         geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
@@ -1109,28 +1120,48 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert dataset["group_count"] == 1
     assert dataset["pair_count"] == 1
     assert dataset["resolved_source_pair_count"] == 1
-    assert dataset["initial_pairs_display"] == [
-        {
-            "overlay_match_index": 0,
-            "pair_id": "bg0:pair0",
-            "hkl": (1, 1, 0),
-            "q_group_key": ("q", 1),
-            "bg_display": (50.0, 60.0),
+    assert len(dataset["initial_pairs_display"]) == 1
+    initial_entry = dataset["initial_pairs_display"][0]
+    expected_initial_subset = {
+        "overlay_match_index": 0,
+        "pair_id": "bg0:pair0",
+        "hkl": (1, 1, 0),
+        "q_group_key": ("q", 1),
+        "source_label": "primary",
+        "bg_display": (50.0, 60.0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "selected_source_identity_canonical": {
+            "normalized_hkl": [1, 1, 0],
             "source_table_index": 1,
             "source_row_index": 2,
-            "selected_source_identity_canonical": {
-                "normalized_hkl": [1, 1, 0],
-                "source_table_index": 1,
-                "source_row_index": 2,
-                "q_group_key": ["q", 1],
-            },
-            "sim_display": (9.0, 8.0),
-            "provider_simulated_frame": "display",
-            "provider_simulated_point_source": "live_source_row_projection",
-            "bg_native": (30.0, 40.0),
-            "sim_native": (1.0, 2.0),
+            "q_group_key": ["q", 1],
+        },
+        "sim_display": (9.0, 8.0),
+        "sim_native": (1.0, 2.0),
+        "sim_native_source": "display_to_native_sim_coords(sim_col_raw)",
+        "provider_simulated_frame": "display",
+        "provider_simulated_point_source": "live_source_row_projection",
+        "normalized_hkl": (1, 1, 0),
+        "bg_native": (30.0, 40.0),
+    }
+    for key, expected in expected_initial_subset.items():
+        assert initial_entry[key] == expected
+    assert initial_entry["source_coverage_aliases"] == [
+        {
+            "hkl": (1, 1, 0),
+            "branch_slot": None,
+            "branch_index": None,
+            "q_group_key": ["q", 1],
         }
     ]
+    assert initial_entry["fit_qr_branch_key"] == {
+        "q_group_key": ["q", 1],
+        "hkl": [1, 1, 0],
+        "physical_branch_slot": None,
+        "source_branch_index": None,
+        "source_peak_index": None,
+    }
     assert dataset["measured_native"] == measured_native
     assert dataset["measured_for_fit"] == measured_for_fit
     assert "experimental_image_for_fit" not in dataset
@@ -1138,7 +1169,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert dataset["orientation_diag"] == orientation_diag
     dataset_spec = dict(dataset["spec"])
     assert dataset_spec.pop("manual_point_pairs") == dataset["manual_point_pairs"]
-    assert dataset_spec == {
+    expected_dataset_spec_subset = {
         "dataset_index": 0,
         "label": "bg0.osc",
         "theta_initial": 1.5,
@@ -1150,26 +1181,37 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         "fit_space_projector_kind": None,
         "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
     }
-    assert dataset["measured_for_fit"] == [
-        {
-            "x": 31.0,
-            "y": 41.0,
-            "display_col": 31.0,
-            "display_row": 41.0,
-            "fit_detector_x": 31.0,
-            "fit_detector_y": 41.0,
-            "detector_x": 31.0,
-            "detector_y": 41.0,
-            "detector_input_frame": "fit_detector",
-            "detector_input_frame_reason": "apply_orientation_to_entries",
-            "fit_source_identity_only": True,
-            "overlay_match_index": 0,
-            "pair_id": "bg0:pair0",
-            "q_group_key": ("q", 1),
-            "source_table_index": 1,
-            "source_row_index": 2,
-        }
-    ]
+    for key, expected in expected_dataset_spec_subset.items():
+        assert dataset_spec[key] == expected
+    assert dataset_spec["sim_caked_image_builder"] is None
+    assert dataset_spec["sim_caked_image_builder_kind"] is None
+    assert callable(dataset_spec["qr_fit_trial_source_rows_builder"])
+    assert (
+        dataset_spec["qr_fit_trial_source_rows_builder_kind"]
+        == "geometry_manual_trial_source_rows"
+    )
+    assert dataset_spec["baseline_fit_params"] == {"theta_offset": 0.25}
+    assert len(dataset["measured_for_fit"]) == 1
+    measured_entry = dataset["measured_for_fit"][0]
+    for key, expected in {
+        "x": 31.0,
+        "y": 41.0,
+        "display_col": 31.0,
+        "display_row": 41.0,
+        "fit_detector_x": 31.0,
+        "fit_detector_y": 41.0,
+        "detector_x": 31.0,
+        "detector_y": 41.0,
+        "detector_input_frame": "fit_detector",
+        "detector_input_frame_reason": "apply_orientation_to_entries",
+        "fit_source_identity_only": True,
+        "overlay_match_index": 0,
+        "pair_id": "bg0:pair0",
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+    }.items():
+        assert measured_entry[key] == expected
     assert "orientation=rotate+flip" in dataset["summary_line"]
 
     sim_params, prefer_cache = calls["sim_params"]
@@ -2843,6 +2885,8 @@ def test_new4_visual_capture_path_uses_manual_render_wrapper_not_saved_builder(
     monkeypatch,
     tmp_path,
 ) -> None:
+    state_path = require_new4_state()
+
     def _fail_saved_builder(*_args, **_kwargs):
         raise AssertionError("saved-field visual builder must not be used")
 
@@ -2853,7 +2897,7 @@ def test_new4_visual_capture_path_uses_manual_render_wrapper_not_saved_builder(
     )
 
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -2867,6 +2911,8 @@ def test_new4_visual_capture_path_uses_manual_render_wrapper_not_saved_builder(
 
 
 def test_diagnostic_does_not_call_optimizer(monkeypatch, tmp_path) -> None:
+    state_path = require_new4_state()
+
     def _fail(*_args, **_kwargs):
         raise AssertionError("optimizer must not run")
 
@@ -2874,7 +2920,7 @@ def test_diagnostic_does_not_call_optimizer(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(opt, "least_squares", _fail)
 
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -2887,7 +2933,8 @@ def test_diagnostic_does_not_call_optimizer(monkeypatch, tmp_path) -> None:
 
 
 def _new4_visual_rows_for_optimizer_request() -> list[dict[str, object]]:
-    state = coord_diag.load_gui_state_payload(Path("artifacts/geometry_fit_gui_states/new4.json"))
+    state_path = require_new4_state()
+    state = coord_diag.load_gui_state_payload(state_path)
     entries = coord_diag.saved_entries_for_background(state, background_index=0)
     overlay = coord_diag.capture_manual_geometry_overlay_input_from_render_path(
         entries,
@@ -2920,6 +2967,7 @@ def test_coordinate_diagnostic_compares_optimizer_request_when_available(
     monkeypatch,
     tmp_path,
 ) -> None:
+    state_path = require_new4_state()
     rows = _new4_visual_rows_for_optimizer_request()
 
     def _fake_capture(*, state_path, background_index):
@@ -2939,7 +2987,7 @@ def test_coordinate_diagnostic_compares_optimizer_request_when_available(
     )
 
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -2961,6 +3009,7 @@ def test_coordinate_diagnostic_optimizer_request_capture_failure_is_incomplete_n
     monkeypatch,
     tmp_path,
 ) -> None:
+    state_path = require_new4_state()
     capture_error = "Failed to capture headless execution setup context."
 
     def _fake_capture(*, state_path, background_index):
@@ -2980,7 +3029,7 @@ def test_coordinate_diagnostic_optimizer_request_capture_failure_is_incomplete_n
     )
 
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -3033,8 +3082,9 @@ def test_optimizer_request_capture_missing_ladder_returns_structured_error(
 def test_coordinate_diagnostic_without_optimizer_request_still_ok_for_dataset_surfaces(
     tmp_path,
 ) -> None:
+    state_path = require_new4_state()
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -3054,6 +3104,8 @@ def test_coordinate_diagnostic_optimizer_request_path_does_not_solve(
     monkeypatch,
     tmp_path,
 ) -> None:
+    state_path = require_new4_state()
+
     def _fail(*_args, **_kwargs):
         raise AssertionError("solve path must not run")
 
@@ -3061,7 +3113,7 @@ def test_coordinate_diagnostic_optimizer_request_path_does_not_solve(
     monkeypatch.setattr(geometry_fit, "solve_geometry_fit_request", _fail)
 
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -3077,8 +3129,9 @@ def test_coordinate_diagnostic_optimizer_request_path_does_not_solve(
 
 
 def test_new4_diagnostic_rung_absent_does_not_fail_optimizer_optional(tmp_path) -> None:
+    state_path = require_new4_state()
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -3093,6 +3146,7 @@ def test_new4_diagnostic_rung_absent_does_not_fail_optimizer_optional(tmp_path) 
 
 
 def test_new4_diagnostic_rung_lacks_coordinates_reports_reason(tmp_path) -> None:
+    state_path = require_new4_state()
     rung_path = tmp_path / "rung_01_objective_dry_run.json"
     rung_path.write_text(
         json.dumps(
@@ -3106,7 +3160,7 @@ def test_new4_diagnostic_rung_lacks_coordinates_reports_reason(tmp_path) -> None
     )
 
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -3122,7 +3176,8 @@ def test_new4_diagnostic_rung_lacks_coordinates_reports_reason(tmp_path) -> None
 def test_new4_diagnostic_rung_rows_do_not_compare_without_optimizer_flag(
     tmp_path,
 ) -> None:
-    state = coord_diag.load_gui_state_payload(Path("artifacts/geometry_fit_gui_states/new4.json"))
+    state_path = require_new4_state()
+    state = coord_diag.load_gui_state_payload(state_path)
     entries = coord_diag.saved_entries_for_background(state, background_index=0)
     overlay = coord_diag.capture_manual_geometry_overlay_input_from_render_path(
         entries,
@@ -3153,7 +3208,7 @@ def test_new4_diagnostic_rung_rows_do_not_compare_without_optimizer_flag(
     )
 
     report = coord_diag.run_new4_visual_backend_coordinate_diagnostic(
-        state_path=Path("artifacts/geometry_fit_gui_states/new4.json"),
+        state_path=state_path,
         provider_report_path=Path(
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json"
         ),
@@ -3167,6 +3222,7 @@ def test_new4_diagnostic_rung_rows_do_not_compare_without_optimizer_flag(
 
 
 def test_new4_visual_backend_coordinate_report_writes_files(tmp_path) -> None:
+    state_path = require_new4_state()
     script = Path("scripts/debug/diagnose_new4_visual_backend_coordinates.py")
     output_dir = tmp_path / "new4"
 
@@ -3175,7 +3231,7 @@ def test_new4_visual_backend_coordinate_report_writes_files(tmp_path) -> None:
             sys.executable,
             str(script),
             "--state",
-            "artifacts/geometry_fit_gui_states/new4.json",
+            str(state_path),
             "--provider-report",
             "artifacts/geometry_fit_gui_states/new4_point_provider_report.json",
             "--background-index",
@@ -4211,6 +4267,68 @@ def _new4_ladder_provider_identity_pair(
     return provider_pair, manual_pair, measured_row
 
 
+def _new4_dynamic_trial_source_rows(*, full_source: bool = True) -> list[dict[str, object]]:
+    rows = []
+    for index in range(7):
+        hkl = (int(index), 0, 1)
+        branch_slot = "00l_collapsed" if hkl[0] == 0 and hkl[1] == 0 else int(index % 2)
+        row = {
+            "hkl": hkl,
+            "normalized_hkl": hkl,
+            "source_label": "primary",
+            "source_kind": "sim_visual_caked_deg",
+            "actual_source": "sim_visual_caked_deg",
+            "coordinate_provenance": "trial_geometry_projection",
+            "projection_frame": "caked_display",
+            "is_dynamic_trial_row": True,
+            "source_table_index": int(index),
+            "source_row_index": 0,
+            "source_branch_index": int(index % 2),
+            "source_peak_index": int(index % 2),
+            "physical_branch_slot": branch_slot,
+            "fit_qr_branch_key": {
+                "q_group_key": None,
+                "hkl": list(hkl),
+                "physical_branch_slot": branch_slot,
+                "source_branch_index": int(index % 2),
+                "source_peak_index": int(index % 2),
+            },
+        }
+        if full_source:
+            row.update(
+                {
+                    "source_reflection_index": int(index),
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                }
+            )
+        rows.append(row)
+    return rows
+
+
+def _new4_dynamic_trial_source_rows_payload(
+    *,
+    full_source: bool = True,
+) -> dict[str, object]:
+    rows = _new4_dynamic_trial_source_rows(full_source=full_source)
+    return {
+        "available": True,
+        "source": "synthetic_dynamic_trial_source_rows",
+        "row_count": len(rows),
+        "rows": [dict(row) for row in rows],
+        "source_diagnostics": {
+            "geometry_fit_trial_source_rows_stages": {
+                "source_rows_after_provider_coverage_promotion": {
+                    "required_pair_count": 7,
+                    "dynamic_source_row_count": len(rows),
+                    "missing_dynamic_pair_count": 0,
+                    "stale_coordinate_pair_count": 0,
+                }
+            }
+        },
+    }
+
+
 def _new4_ladder_context_with_provider_rows(
     *,
     full_source: bool,
@@ -4231,6 +4349,7 @@ def _new4_ladder_context_with_provider_rows(
         manual_pairs.append(manual_pair)
         measured_rows.append(measured_row)
         miller.append([index, 0, 1])
+    trial_source_payload = _new4_dynamic_trial_source_rows_payload(full_source=full_source)
     prepared_run = replace(
         base_prepared_run,
         fit_params={
@@ -4250,6 +4369,11 @@ def _new4_ladder_context_with_provider_rows(
                 "dataset_index": 0,
                 "theta_initial": 3.0,
                 "measured_peaks": list(measured_rows),
+                "qr_fit_trial_source_rows_builder": (
+                    (lambda local_params=None: dict(trial_source_payload))
+                    if not missing_identity
+                    else None
+                ),
             }
         ],
         geometry_runtime_cfg={"solver": {}, "optimizer": {}, "bounds": {}},
@@ -5411,9 +5535,7 @@ def test_new4_ladder_sensitivity_real_new4_cli_smoke(
     tmp_path,
 ) -> None:
     ladder = _load_new4_ladder_module()
-    state_path = Path("artifacts/geometry_fit_gui_states/new4.json")
-    if not state_path.exists():
-        pytest.skip("new4 artifact is not present")
+    state_path = require_new4_state()
     missing_paths = _missing_new4_local_headless_paths(state_path)
     if missing_paths:
         pytest.skip(
@@ -10420,6 +10542,29 @@ def test_new4_ladder_objective_dry_run_keeps_exact_caked_raw_metric_when_px_nan(
         var_names=["center_x"],
         candidate_param_names=["center_x"],
         params={"center_x": 1.0},
+        dataset_specs=[
+            {
+                "dataset_index": 0,
+                "measured_peaks": [
+                    {
+                        "hkl": (index, 0, 1),
+                        "fit_qr_branch_key": {
+                            "q_group_key": None,
+                            "hkl": [index, 0, 1],
+                            "physical_branch_slot": (
+                                "00l_collapsed" if index == 0 else int(index % 2)
+                            ),
+                            "source_branch_index": int(index % 2),
+                            "source_peak_index": int(index % 2),
+                        },
+                    }
+                    for index in range(7)
+                ],
+                "qr_fit_trial_source_rows_builder": (
+                    lambda local_params=None: _new4_dynamic_trial_source_rows_payload()
+                ),
+            }
+        ],
         refinement_config={
             "projection_view_mode": "caked",
             "bounds": {"center_x": [0.0, 2.0]},
@@ -16219,8 +16364,7 @@ def test_new4_ladder_warm_solver_passes_context_to_worker(
 
 def test_new4_ladder_does_not_mutate_new4_state(monkeypatch, tmp_path) -> None:
     ladder = _load_new4_ladder_module()
-    repo_root = Path(__file__).resolve().parents[1]
-    state_path = repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+    state_path = require_new4_state()
     before_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
 
     def _green_guard(*, output_path, **_kwargs):
@@ -16459,8 +16603,7 @@ def test_new4_rung1_direct_objective_dry_run_green_or_fail_before_solve(
     tmp_path,
 ) -> None:
     ladder = _load_new4_ladder_module()
-    repo_root = Path(__file__).resolve().parents[1]
-    state_path = repo_root / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+    state_path = require_new4_state()
 
     context = ladder._capture_solver_context(state_path, 0)
     report = ladder.run_objective_dry_run(

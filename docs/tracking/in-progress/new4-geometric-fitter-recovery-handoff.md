@@ -5,10 +5,39 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-01
+Last updated: 2026-05-03
 
 ## Current status
 
+- 2026-05-03 narrow integration-hardening pass completed. Runtime
+  diagnostics now keep mappings as dicts for user-facing/in-memory payloads and
+  trace records, while cache signature canonicalization is unchanged. Raw
+  `sim_col_raw/sim_row_raw` derived `sim_native` is preserved through provider
+  point install and orientation setup when it comes from live source rows;
+  saved/refined caked display authority can still override when no finite
+  raw-derived live native point exists. Optional New4 tests now use the shared
+  `require_new4_state()` fixture gate, and synthetic New4 mocks include 7/7
+  dynamic trial source rows without weakening the production dynamic-source
+  gate.
+- Bug/error status: the scoped stale exact-dict assertion failures,
+  `legacy_chosen_live_row` dict-shape regression, raw display-to-native
+  overwrite regression, optional New4 fixture hard-fail class, trace
+  list-shaped record regression, and synthetic Rung 1 dynamic-source fixture
+  failures are fixed. The broad integration marker is still not green:
+  `tests/test_gui_geometry_fit_workflow.py -m integration` reports
+  `586 passed, 1 skipped, 22 failed`. Remaining failures are intentionally left
+  for follow-up because they touch frozen/out-of-scope areas: real New4
+  Rung 1/CLI source resolution, exact-caked guard expectation updates,
+  dynamic reanchor matching, headless `_signature_numeric`, saved-state
+  compatibility probe callbacks, exact projector local-parameter authority,
+  live-cache validator reason/count semantics, trial source row caked pool,
+  targeted fallback scoring, dual-path diff expectations, and caked ROI
+  fallback reason precedence.
+- Validation status for this pass: `tests/test_geometry_fitting.py` passes
+  (`201 passed`), the live-cache/source-rung/fit-space/disordered subset passes
+  (`46 passed`), the PowerShell fast tier passes (`279 passed`),
+  `python -m compileall ra_sim tests` passes, and `git diff --check` passes
+  with only CRLF normalization warnings.
 - 2026-05-01 manual point audit contract updated to match the final coordinate
   authority. `fit_observed_caked_deg` is the cached caked target from
   `cached_fit_space_anchor` and must match `manual_saved_caked_deg`.
