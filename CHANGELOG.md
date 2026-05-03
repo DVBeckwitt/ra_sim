@@ -32,16 +32,17 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
-  - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI and headless geometry-fit paths, and kept beam-center picking out of the center-dependent caked wrapper.
-  - Fixed beam-center picking to use the clicked detector-display point exactly, avoiding local peak snapping before applying `row = height - display_col`, `col = display_row`.
-  - Fixed beam-center pick commit order so the mapped pick values are reversed into the GUI beam-center slider order.
-  - Clarified the pick path so the visible Beam Center Col field receives `3000 - display_col` for the default 3000 px detector view.
-  - Fixed `Pick Beam Center` to drive the visible Beam Center Row/Col slider widgets directly so their entry boxes refresh after a pick.
+  - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI startup, headless `fit-geometry`, and headless `simulate` paths, and kept beam-center picking out of the center-dependent caked wrapper.
+  - Fixed beam-center picking to use the clicked detector-display point exactly, avoiding local peak snapping before applying the GUI contract `row = display_row`, `col = detector_width - display_col`.
+  - Untangled `Pick Beam Center` coordinate handling so the pick writes one canonical GUI Row/Col pair through the visible sliders and entries, projects the marker back into detector/caked views from that same pair, and keeps detector-center remap reads on the same values.
+  - Added gated beam-center JSONL tracing behind `RA_SIM_TRACE_BEAM_CENTER=1`, including widget-chain, scheduled-update, marker, remap, and overwrite-guard records in `debug/beam_center_trace.jsonl`.
+  - Fixed the default clockwise pick mapping to commit `row = display_row`, `col = detector_width - display_col` without a slider-only correction path.
   - Changed Refine tab panels to start collapsed by default, including geometry, beam, lattice, CIF, and ordered-structure sections.
   - Backfilled legacy manual Qr/Qz pairs that have detector/background pixels but no saved caked `(2theta, phi)` anchors before headless geometry-fit preparation, and carried the repaired `manual_pairs` into the returned saved-state snapshot.
   - Fixed generated disordered-phase Qr/Qz references so nonzero disordered stacking weights invalidate live picker caches, schedule disordered hit-table collection even when primary hit tables are reusable, and preserve `source_label="disordered_phase"` in pickable Qr/Qz groups.
   - Added live runtime trace diagnostics for generated disordered-phase Qr/Qz references, including source counts, skip reasons, collection counts, and published group/peak counts.
   - Added an explicit `Include generated disordered-phase Qr refs` GUI toggle, enabled by default and independent from the packaged 6H reference toggle.
+  - Fixed source-consistent generated-disordered manual Qr/Qz handoff through detector picker candidates, placement, saved geometry pairs, and geometry-fit preflight, including a job-local picker/Q-group source-row fallback and a deduped fresh rebuild `consumer` wrapper.
   - Added trial caked axes-only payload support so refined geometry probes can recompute dynamic Qr/Qz source rows without rasterizing a full caked image.
   - Added New4 ladder worker phase/partial-report telemetry, residual-evaluation timing, cache-rebuild counters, and timeout diagnostics; singleton solve rungs can skip the duplicate initial dry-run objective and use the first solver evaluation instead.
   - Added a mixed-update geometry-fitter cache regression suite covering unsafe mixed fast-path fallbacks, stale worker result handling, deferred q-group refresh, projection handoff validity, and objective-cache reject reasons.
@@ -70,16 +71,17 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
 
 - **GUI and UX updates**
-  - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and native detector row/col mapping to update the beam-center sliders.
+  - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and GUI Row/Col mapping to update the beam-center sliders and entries.
   - Fixed detector-view Selected-Qr rod ROI mode so it displays a detector-native Qr/Qz support mask, suppresses the legacy detector `2theta/phi` angular ROI while enabled, and sets Qz bounds from detector pixels during rod drags.
   - Fixed Selected-Qr rod ROI profiles so detector view uses detector-native masks only for overlay/drag, while plotted Qz profiles always integrate from caked `2theta/phi` data.
-  - Added Selected-Qr rod multi-selection with union overlay/drag masks and vertically stacked per-rod Qz subplots; saved GUI state now records both `selected_qr_rod_keys` and legacy `selected_qr_rod_key`.
+  - Added Selected-Qr rod multi-selection with a stable extended-selection rod list, union overlay/drag masks, and vertically stacked per-rod Qz subplots; saved GUI state now records both `selected_qr_rod_keys` and legacy `selected_qr_rod_key`.
   - Changed fresh Selected-Qr rod ROI phi defaults to `-90..90` without overwriting restored/custom phi windows.
   - Changed detector-view Selected-Qr rod profile defaults to raw accumulated intensity while preserving restored/custom rod intensity modes and caked-view density defaults.
-  - Replaced modifier-key Selected-Qr rod multi-selection with explicit rod checkboxes; selected keys remain saved in displayed rod order.
+  - Optimized Selected-Qr rod interactions with debounced selection refreshes, shared detector/caked inputs, bounded per-feature caches, reusable 1D plot axes/lines, and optional `RA_SIM_PROFILE_QR_ROD=1` timing hooks.
+  - Replaced modifier-key Selected-Qr rod multi-selection with an extended-selection rod list; selected keys remain saved in displayed rod order.
   - Changed the Selected-Qr rod `delta_Qr` control and saved `analysis_range.delta_qr` to mean full rod width, with legacy half-width saved states migrated on load and low-level mask builders still receiving half-width.
   - Added a Match-tab `Place Background Qr Set` control for saving background-only Qr reference peaks with local peak-top refinement and `2theta,phi` labels instead of HKL values.
-  - Fixed `Pick Beam Center` conversion to use detector-extent beam-center coordinates instead of raw pixel-index inversion, avoiding a one-pixel frame error in the default rotated detector view.
+  - Fixed `Pick Beam Center` conversion to use the detector display extent instead of raw pixel-index inversion, with Row following clicked display row and Col mirrored across displayed detector width.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.
   - Fixed full GUI-state import so legacy manual placements with detector pixels but missing caked `2theta,phi` anchors rebuild those anchors from the exact caked projection before geometry figures or fits consume them.
   - Warmed caked Qr/Qz projection cache data immediately after detector-mode Qr/Qz selector changes, so manual picking can use caked sim/background coordinates without first switching to caked view.
@@ -94,7 +96,7 @@
   - Fixed GUI startup after selected-Qr rod picker wiring by threading `listed_q_group_keys_for_picker` through the manual-geometry cache callbacks.
   - Changed selected-Qr rod Qz controls to default to `0..5` and clamp slider bounds to the positive caked-Qz candidate range.
   - Changed the selected-Qr rod half-width default to `0.1 A^-1`.
-  - Added an Analyze selected-Qr rod `Include rod shape` option, saved as `analysis_range.include_selected_qr_rod_shape`, so detector-space Qz profiles can include the selected rod hit-cloud footprint outside the numeric Qr band.
+  - Added an Analyze selected-Qr rod `Include rod shape` option, saved as `analysis_range.include_selected_qr_rod_shape`, so rod overlay/drag masks and per-rod caked profile masks can include the selected rod hit-cloud footprint outside the numeric Qr band.
   - Fixed the selected-Qr rod ROI toggle so it remains selectable in detector view; only Q-space view disables it.
   - Added an opt-in `Include 6H Qr refs` stacking control that loads the packaged PbI2 6H reference CIF when `w1` is nonzero, merges duplicate numeric Qr/Qz groups, and makes 6H-only groups available to manual Qr picking.
   - Reorganized Match-tab peak tools so `Drag Move Placed Peaks` stays visible beside the manual pick control, removed the auto-search radius slider from the peak tool row, and renamed the point-removal toggle to `Click Remove Placed Peaks`.
@@ -110,8 +112,8 @@
   - Parallelized the post-placement geometry refinement pass for auto-added Qr/Qz peaks with a bounded CPU worker pool.
   - Added selected-Qr rod `Mirror +/-phi band` integration so caked high-azimuth lobes can be selected as a symmetric `|phi|` band without filling the central phi rows.
   - Fixed selected-Qr rod caked integration masks so valid high-`|phi|` bins are selected from detector Qr/Qz pixels through the exact-cake LUT instead of depending on finite forward-projected Qr trace samples; selected-Qr drag Qz bounds now use the LUT transpose from dragged caked bins back to detector contributors.
-  - Fixed selected-Qr rod 1D profiles to integrate detector pixels by Qr/Qz/phi before Qz binning, leaving the caked rod mask as a display overlay instead of using it as the numeric integration mask.
-  - Added an optional selected-Qr rod shape mask so rod ROI masks and detector-backed Qz profiles can include detector support from the selected Qr/Qz group shape in addition to the numeric Qr band.
+  - Fixed selected-Qr rod 1D profiles to stay on the caked `2theta/phi` integration path; detector-native Qr/Qz/phi masks are reserved for detector overlay and drag support.
+  - Added an optional selected-Qr rod shape mask so rod ROI masks and per-rod caked profiles can include detector-derived support from the selected Qr/Qz group shape in addition to the numeric Qr band.
   - Hardened GUI detector-center remap cache handling so exact remaps retain QR/Qz identity, invalidate stale manual/caked/q-space projection caches, report projection and handoff trace state, and fall back to full simulation for missing secondary exact caches or center-plus-physics changes.
   - Fixed manual geometry refresh so detector-coordinate truth is not replaced by stale caked fields and refreshed caked coordinates update raw caked fields.
   - Hardened GUI runtime prune reuse/fill QR selector cache handling so explicit QR/Qz masks persist, stale source-row snapshots are not retained across incompatible hit-table identity, and runtime traces report selector retention/deferred refresh/fitter handoff validity.

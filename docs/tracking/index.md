@@ -29,10 +29,10 @@ downstream of green mosaic fitting.
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
-| Beam center background pick | feature | - | none | p1 | 2026-04-30 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
+| Beam center background pick | feature | - | none | p1 | 2026-05-01 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
 | 6H Qr reference SF picking | feature/bug | - | none | p1 | 2026-04-30 | [6h-qr-reference-sf-picking.md](in-progress/6h-qr-reference-sf-picking.md) |
-| Generated disordered Qr live path | bug/feature | - | none | p1 | 2026-05-01 | [generated-disordered-qr-live-path.md](in-progress/generated-disordered-qr-live-path.md) |
+| Generated disordered Qr live path | bug/feature | - | none | p1 | 2026-05-02 | [generated-disordered-qr-live-path.md](in-progress/generated-disordered-qr-live-path.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
@@ -58,14 +58,14 @@ drift in the dirty worktree.
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the
 loaded detector/background image, switches out of caked/q-space views, shows the
-background if hidden, and commits the clicked detector-display point as native
-detector `center_x = row`, `center_y = col` on release. The latest coordinate
-bug is fixed by converting the display point through the detector-extent
-beam-center transform:
-`display_col=1404`, `display_row=1453` now maps to `row=1596`, `col=1453`.
-Targeted beam-center/canvas tests, targeted compile, and the previously failing
-stacking-panel view test pass. Full `ra_sim.dev check` was not rerun after the
-focused fix; status remains tracked in the feature note.
+background if hidden, and commits the clicked detector-display point as GUI
+Beam Center Row/Col on release. The current GUI contract is
+`row = display_row`, `col = detector_width - display_col`; for the default
+3000 px clockwise view, `display_col=1456`, `display_row=1607` maps to
+`row=1607`, `col=1544`. `RA_SIM_TRACE_BEAM_CENTER=1` writes
+`debug/beam_center_trace.jsonl` with widget-chain, scheduled-update, marker,
+remap, and overwrite-guard diagnostics. Targeted beam-center, remap-cache,
+canvas-route, smoke, and compile checks pass.
 
 Background Qr reference pick status note:
 `Place Background Qr Set` is implemented in the Match tab. The mode places a
@@ -95,9 +95,18 @@ are missing or stale, publishes stored `disordered_phase` rows into the active
 Qr/Qz picker cache, and exposes `Include generated disordered-phase Qr refs`
 as a saved checkbox defaulting on. The path logs enable/skip decisions,
 inventory paths, collection counts, published group/peak counts, and final
-source counts. Focused user-report, live-refresh, inventory, scheduling,
-current-refresh, UI enable, q-group cache, hit-table, logging, compile, and
-targeted ruff checks pass. Full `ra_sim.dev check` is still blocked by existing
+source counts. Manual selection, placement, saved pairs, and geometry-fit
+preflight now preserve `source_label="disordered_phase"` through the active
+handoff. Geometry-fit preflight also logs
+`geometry_fit_live_handoff_patch_marker=phase4d1`, job-build live-row counts,
+and `fresh_rebuild_consumer_wrapper=deduped`; if live preview rows are empty,
+the job can build source rows from the active picker/Q-group cache without
+falling back to primary-only rows. Focused user-report, live-refresh,
+inventory, scheduling, current-refresh, UI enable, q-group cache, hit-table,
+logging, source-aware picker/fitter, geometry-fit handoff, compile, and
+targeted ruff checks pass. Manual GUI validation should confirm the committed
+build emits `source_cache_live_runtime_cache_accepted` with nonzero
+`live_rows_raw_count`. Full `ra_sim.dev check` is still blocked by existing
 `ra_sim/fitting/optimization.py` formatting drift.
 
 Weighted-event representative status note:

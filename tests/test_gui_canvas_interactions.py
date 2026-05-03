@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -301,20 +302,261 @@ def test_canvas_interaction_binding_factory_builds_live_bindings(monkeypatch) ->
     assert callable(calls[0]["cancel_beam_center_pick"])
 
 
-def test_beam_center_pick_press_motion_release_uses_priority_canvas_route() -> None:
+def test_beam_center_pick_press_motion_release_uses_priority_canvas_route(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim.gui._runtime import runtime_session
+
     axis = _FakeAxis()
     geometry_runtime = state.GeometryRuntimeState()
     geometry_runtime.manual_pick_armed = True
+    geometry_runtime.beam_center_pick_armed = True
     peak_state = state.PeakSelectionState()
     peak_state.hkl_pick_armed = True
     drag_callbacks = _DragCallbacks()
     calls = []
     session_active = {"value": False}
+    scheduled_reads = {}
+
+    class _TraceVar:
+        def __init__(self, value):
+            self.value = float(value)
+            self.callbacks = []
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = float(value)
+            for callback in list(self.callbacks):
+                callback("name", "index", "write")
+
+        def trace_add(self, _mode, callback):
+            self.callbacks.append(callback)
+            return f"trace-{len(self.callbacks)}"
+
+    class _Entry:
+        def __init__(self, value=""):
+            self.value = str(value)
+            self.bindings = {}
+
+        def bind(self, event_name, callback, add=None):
+            self.bindings.setdefault(event_name, []).append((callback, add))
+
+        def get(self):
+            return self.value
+
+        def cget(self, key):
+            if key == "textvariable":
+                return ""
+            raise KeyError(key)
+
+        def delete(self, *_args):
+            self.value = ""
+
+        def insert(self, _index, text):
+            self.value = str(text)
+
+    class _SliderRow:
+        def __init__(self, scale, entry):
+            self.children = [scale, entry]
+
+        def winfo_children(self):
+            return list(self.children)
+
+    class _VisibleScale:
+        def __init__(self, value_var, entry):
+            self.value_var = value_var
+            self.entry = entry
+            self.value = float(value_var.get())
+            self.bounds = {"from": 0.0, "to": 3000.0}
+            self.master = _SliderRow(self, entry)
+
+        def cget(self, key):
+            return self.bounds[key]
+
+        def configure(self, **kwargs):
+            if "from_" in kwargs:
+                self.bounds["from"] = float(kwargs["from_"])
+            if "to" in kwargs:
+                self.bounds["to"] = float(kwargs["to"])
+
+        def set(self, value):
+            self.value = float(value)
+            self.value_var.set(self.value)
+            self.entry.value = str(int(round(self.value)))
+
+        def get(self):
+            return self.value
+
+    class _Marker:
+        def __init__(self):
+            self.xdata = []
+            self.ydata = []
+            self.visible = False
+
+        def set_xdata(self, values):
+            self.xdata = list(values)
+
+        def set_ydata(self, values):
+            self.ydata = list(values)
+
+        def set_visible(self, value):
+            self.visible = bool(value)
+
+        def get_xdata(self):
+            return list(self.xdata)
+
+        def get_ydata(self):
+            return list(self.ydata)
+
+    class _Root:
+        def __init__(self):
+            self.callbacks = []
+
+        def after(self, _delay_ms, callback):
+            self.callbacks.append(callback)
+            return f"after-{len(self.callbacks)}"
+
+        def update(self):
+            while self.callbacks:
+                callback = self.callbacks.pop(0)
+                callback()
+
+        def update_idletasks(self):
+            pass
+
+    row_var = _TraceVar(0.0)
+    col_var = _TraceVar(0.0)
+    row_entry = _Entry("0")
+    col_entry = _Entry("0")
+    row_scale = _VisibleScale(row_var, row_entry)
+    col_scale = _VisibleScale(col_var, col_entry)
+    marker = _Marker()
+    root = _Root()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RA_SIM_TRACE_BEAM_CENTER", "1")
+    monkeypatch.setattr(runtime_session, "_beam_center_trace_counter", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "_beam_center_trace_hooks_attached", False, raising=False)
+    monkeypatch.setattr(runtime_session, "_beam_center_trace_hook_refs", [], raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_debug_expected_beam_center_after_pick",
+        None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_debug_beam_center_overwrite_reported",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "center_x_var", row_var, raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", col_var, raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_scale", row_scale, raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_scale", col_scale, raising=False)
+    monkeypatch.setattr(runtime_session, "center_marker", marker, raising=False)
+    monkeypatch.setattr(runtime_session, "root", root, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 3000.0, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", -1, raising=False)
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_runtime, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            profile_cache={},
+            primary_relative_hit_table_cache_center=None,
+            secondary_relative_hit_table_cache_center=None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_beam_center_coordinate_shape",
+        lambda: (3000, 3000),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_beam_center_pick_session_active",
+        lambda: bool(session_active["value"]),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_beam_center_spot_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_caked_roi_preview_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
+    monkeypatch.setattr(runtime_session, "_set_beam_center_pick_status", lambda _text: None)
+    monkeypatch.setattr(runtime_session, "_restore_beam_center_pick_view", lambda **_kw: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_manual_preview_artists",
+        lambda **_kw: None,
+    )
+    monkeypatch.setattr(runtime_session, "_set_beam_center_pick_cursor", lambda _enabled: None)
+    monkeypatch.setattr(runtime_session, "_update_beam_center_pick_button_label", lambda: None)
+    monkeypatch.setattr(runtime_session, "_clear_geometry_fit_dataset_cache", lambda: None)
+    monkeypatch.setattr(runtime_session, "_invalidate_simulation_cache", lambda: None)
+
+    def _runtime_preview(display_col, display_row, **_kwargs):
+        geometry_runtime.beam_center_pick_session["refined_col"] = float(display_col)
+        geometry_runtime.beam_center_pick_session["refined_row"] = float(display_row)
+        return True
+
+    def _runtime_schedule_update():
+        runtime_session._trace_beam_center("update.scheduled.before")
+
+        def _after_callback():
+            center_pair = (float(row_var.get()), float(col_var.get()))
+            scheduled_reads["runtime"] = center_pair
+            scheduled_reads["simulation"] = center_pair
+            scheduled_reads["remap"] = center_pair
+            runtime_session._trace_beam_center_writer(
+                "update.after_runtime_read",
+                new_pair=center_pair,
+            )
+            runtime_session._trace_beam_center_writer(
+                "remap.after_read",
+                new_pair=center_pair,
+                current_center_pair=center_pair,
+            )
+
+        token = root.after(0, _after_callback)
+        runtime_session._trace_beam_center("update.scheduled.after", queued_token=token)
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_update_beam_center_pick_preview",
+        _runtime_preview,
+    )
+    monkeypatch.setattr(runtime_session, "schedule_update", _runtime_schedule_update)
+    runtime_session._attach_beam_center_widget_trace_hooks()
 
     def _start(col, row, **kwargs):
         session_active["value"] = True
+        geometry_runtime.beam_center_pick_session = {
+            "refined_col": float(col),
+            "refined_row": float(row),
+        }
         calls.append(("start", float(col), float(row), dict(kwargs)))
         return True
+
+    def _commit(col, row):
+        calls.append(("commit", float(col), float(row)))
+        return runtime_session._commit_beam_center_pick_at(float(col), float(row))
 
     bindings = _basic_canvas_bindings(
         axis=axis,
@@ -328,24 +570,49 @@ def test_beam_center_pick_press_motion_release_uses_priority_canvas_route() -> N
         update_beam_center_pick_preview=(
             lambda col, row: calls.append(("preview", float(col), float(row)))
         ),
-        commit_beam_center_pick_at=(
-            lambda col, row: calls.append(("commit", float(col), float(row)))
-        ),
+        commit_beam_center_pick_at=_commit,
     )
 
-    press = _FakeEvent(button=1, inaxes=axis, xdata=20.0, ydata=30.0, x=110.0, y=70.0)
+    press = _FakeEvent(button=1, inaxes=axis, xdata=1456.0, ydata=1607.0, x=110.0, y=70.0)
     assert canvas_interactions.handle_runtime_canvas_press(bindings, press) is True
-    assert calls[0][0:3] == ("start", 20.0, 30.0)
+    assert calls[0][0:3] == ("start", 1456.0, 1607.0)
     assert calls[0][3]["anchor_fraction_x"] == pytest.approx(0.5)
     assert calls[0][3]["anchor_fraction_y"] == pytest.approx(0.5)
 
-    motion = _FakeEvent(button=1, inaxes=axis, xdata=21.0, ydata=31.0)
+    motion = _FakeEvent(button=1, inaxes=axis, xdata=1456.0, ydata=1607.0)
     assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion) is True
-    assert calls[1] == ("preview", 21.0, 31.0)
+    assert calls[1] == ("preview", 1456.0, 1607.0)
 
-    release = _FakeEvent(button=1, inaxes=axis, xdata=22.0, ydata=32.0)
+    release = _FakeEvent(button=1, inaxes=axis, xdata=1456.0, ydata=1607.0)
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release) is True
-    assert calls[2] == ("commit", 22.0, 32.0)
+    assert calls[2] == ("commit", 1456.0, 1607.0)
+    root.update()
+    root.update_idletasks()
+    runtime_session._trace_beam_center_after_idle_drain()
+
+    assert row_var.get() == pytest.approx(1607.0)
+    assert col_var.get() == pytest.approx(1544.0)
+    assert row_scale.get() == pytest.approx(1607.0)
+    assert col_scale.get() == pytest.approx(1544.0)
+    assert float(row_entry.get()) == pytest.approx(1607.0)
+    assert float(col_entry.get()) == pytest.approx(1544.0)
+    assert scheduled_reads["runtime"] == pytest.approx((1607.0, 1544.0))
+    assert scheduled_reads["simulation"] == pytest.approx((1607.0, 1544.0))
+    assert scheduled_reads["remap"] == pytest.approx((1607.0, 1544.0))
+    assert marker.xdata == pytest.approx([1456.0])
+    assert marker.ydata == pytest.approx([1607.0])
+    assert marker.visible is True
+
+    trace_path = tmp_path / "debug" / "beam_center_trace.jsonl"
+    trace_records = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert "BEAM_CENTER_OVERWRITE" not in {
+        str(record.get("event_name")) for record in trace_records
+    }
+    assert any(record.get("event_name") == "tk.after_idle_drain" for record in trace_records)
     assert drag_callbacks.calls == []
 
 

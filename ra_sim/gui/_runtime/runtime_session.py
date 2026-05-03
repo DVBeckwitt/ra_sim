@@ -372,6 +372,13 @@ if DEBUG_ENABLED:
 BACKEND_ORIENTATION_UI_ENABLED = False
 BACKGROUND_BACKEND_DEBUG_UI_ENABLED = False
 HBN_GEOMETRY_DEBUG_ENABLED = False
+BEAM_CENTER_TRACE_ENV = "RA_SIM_TRACE_BEAM_CENTER"
+BEAM_CENTER_TRACE_PATH = Path("debug") / "beam_center_trace.jsonl"
+_beam_center_trace_counter = 0
+_beam_center_trace_hooks_attached = False
+_beam_center_trace_hook_refs = []
+_debug_expected_beam_center_after_pick = None
+_debug_beam_center_overwrite_reported = False
 
 _RUNTIME_SOURCE_COMPAT_SENTINELS = """
 PREVIEW_CALCULATIONS_ENABLED
@@ -7457,6 +7464,389 @@ def _set_beam_center_pick_cursor(enabled: bool) -> None:
             pass
 
 
+def _beam_center_trace_enabled() -> bool:
+    raw = str(os.environ.get(BEAM_CENTER_TRACE_ENV, "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _beam_center_json_safe(value: object) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.generic):
+        try:
+            return value.item()
+        except Exception:
+            return repr(value)
+    if isinstance(value, np.ndarray):
+        return {
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+        }
+    if isinstance(value, Mapping):
+        return {str(key): _beam_center_json_safe(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_beam_center_json_safe(item) for item in value]
+    return repr(value)
+
+
+def _beam_center_project_stack(limit: int = 16) -> list[str]:
+    try:
+        project_root = Path(__file__).resolve().parents[3]
+    except Exception:
+        project_root = None
+    stack: list[str] = []
+    for frame in traceback.extract_stack(limit=limit + 8)[:-2]:
+        filename = str(frame.filename)
+        if project_root is not None:
+            try:
+                rel = os.path.relpath(filename, project_root)
+            except Exception:
+                rel = filename
+            if rel.startswith(".."):
+                continue
+        else:
+            rel = filename
+        if "site-packages" in rel or "lib\\" in rel:
+            continue
+        stack.append(f"{rel}:{int(frame.lineno)}:{frame.name}")
+    return stack[-limit:]
+
+
+def _beam_center_safe_get(value_source: object) -> object:
+    getter = getattr(value_source, "get", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception as exc:
+            return f"<get failed: {exc}>"
+    return None
+
+
+def _beam_center_safe_float(value_source: object) -> float | None:
+    try:
+        value = _beam_center_safe_get(value_source)
+        value_float = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(value_float):
+        return None
+    return value_float
+
+
+def _beam_center_entry_widget(slider_widget: object | None) -> object | None:
+    finder = getattr(gui_views, "_find_slider_entry", None)
+    if callable(finder):
+        try:
+            entry = finder(slider_widget)
+            if entry is not None:
+                return entry
+        except Exception:
+            pass
+    master = getattr(slider_widget, "master", None)
+    children = getattr(master, "winfo_children", None)
+    if not callable(children):
+        return None
+    try:
+        for child in children():
+            if child is not slider_widget and callable(getattr(child, "bind", None)):
+                return child
+    except Exception:
+        return None
+    return None
+
+
+def _beam_center_entry_text(slider_widget: object | None) -> object:
+    entry = _beam_center_entry_widget(slider_widget)
+    if entry is None:
+        return None
+    getter = getattr(entry, "get", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception as exc:
+            return f"<entry get failed: {exc}>"
+    cget = getattr(entry, "cget", None)
+    if callable(cget):
+        try:
+            variable_name = str(cget("textvariable"))
+        except Exception:
+            variable_name = ""
+        if variable_name:
+            try:
+                return entry.getvar(variable_name)
+            except Exception:
+                return None
+    return None
+
+
+def _beam_center_marker_display_position() -> object:
+    marker = globals().get("center_marker")
+    if marker is None:
+        return None
+    try:
+        x_data = marker.get_xdata()
+        y_data = marker.get_ydata()
+        marker_col = float(list(x_data)[0])
+        marker_row = float(list(y_data)[0])
+        return [marker_col, marker_row]
+    except Exception:
+        return None
+
+
+def _beam_center_runtime_snapshot() -> dict[str, object]:
+    snapshot: dict[str, object] = {}
+    for axis_name, var_name, scale_name in (
+        ("row", "center_x_var", "center_x_scale"),
+        ("col", "center_y_var", "center_y_scale"),
+    ):
+        var_obj = globals().get(var_name)
+        scale_obj = globals().get(scale_name)
+        snapshot[f"{var_name}.get"] = _beam_center_safe_get(var_obj)
+        snapshot[f"{scale_name}.get"] = _beam_center_safe_get(scale_obj)
+        snapshot[f"{axis_name}_entry_text"] = _beam_center_entry_text(scale_obj)
+    try:
+        snapshot["runtime_beam_center"] = [
+            float(center_x_var.get()),
+            float(center_y_var.get()),
+        ]
+    except Exception:
+        snapshot["runtime_beam_center"] = None
+    profile_cache = getattr(globals().get("simulation_runtime_state"), "profile_cache", None)
+    if isinstance(profile_cache, Mapping):
+        snapshot["simulation_profile_cache_center"] = [
+            profile_cache.get("center_x"),
+            profile_cache.get("center_y"),
+        ]
+    sim_state = globals().get("simulation_runtime_state")
+    snapshot["remap_primary_relative_center"] = getattr(
+        sim_state,
+        "primary_relative_hit_table_cache_center",
+        None,
+    )
+    snapshot["remap_secondary_relative_center"] = getattr(
+        sim_state,
+        "secondary_relative_hit_table_cache_center",
+        None,
+    )
+    snapshot["marker_display_position"] = _beam_center_marker_display_position()
+    return snapshot
+
+
+def _trace_beam_center(event_name: str, **fields) -> None:
+    """Append one gated beam-center diagnostic trace record."""
+
+    if not _beam_center_trace_enabled():
+        return
+    global _beam_center_trace_counter
+    try:
+        _beam_center_trace_counter += 1
+        record = {
+            "event_name": str(event_name),
+            "counter": int(_beam_center_trace_counter),
+            "stack": _beam_center_project_stack(),
+        }
+        record.update(_beam_center_runtime_snapshot())
+        record.update({str(key): _beam_center_json_safe(value) for key, value in fields.items()})
+        trace_path = Path(BEAM_CENTER_TRACE_PATH)
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        with trace_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_beam_center_json_safe(record), sort_keys=True) + "\n")
+    except Exception:
+        return
+
+
+def _current_gui_beam_center_pair() -> tuple[float, float] | None:
+    try:
+        row_value = float(center_x_var.get())
+        col_value = float(center_y_var.get())
+    except Exception:
+        return None
+    if not (math.isfinite(row_value) and math.isfinite(col_value)):
+        return None
+    return row_value, col_value
+
+
+def _beam_center_pairs_match(
+    left: tuple[float, float] | None,
+    right: tuple[float, float] | None,
+    *,
+    abs_tol: float = 1.0e-6,
+) -> bool:
+    if left is None or right is None:
+        return False
+    return bool(
+        math.isclose(float(left[0]), float(right[0]), rel_tol=0.0, abs_tol=abs_tol)
+        and math.isclose(float(left[1]), float(right[1]), rel_tol=0.0, abs_tol=abs_tol)
+    )
+
+
+def _set_expected_beam_center_after_pick(gui_row_value: float, gui_col_value: float) -> None:
+    global _debug_expected_beam_center_after_pick, _debug_beam_center_overwrite_reported
+    if not _beam_center_trace_enabled():
+        return
+    _debug_expected_beam_center_after_pick = (float(gui_row_value), float(gui_col_value))
+    _debug_beam_center_overwrite_reported = False
+    _trace_beam_center(
+        "pick.guard.expected_set",
+        expected_row=float(gui_row_value),
+        expected_col=float(gui_col_value),
+    )
+
+
+def _check_beam_center_overwrite(
+    writer_event_name: str,
+    *,
+    old_pair: tuple[float, float] | None = None,
+    new_pair: tuple[float, float] | None = None,
+) -> None:
+    global _debug_beam_center_overwrite_reported
+    if (
+        not _beam_center_trace_enabled()
+        or _debug_expected_beam_center_after_pick is None
+        or _debug_beam_center_overwrite_reported
+    ):
+        return
+    if new_pair is None:
+        new_pair = _current_gui_beam_center_pair()
+    expected_pair = _debug_expected_beam_center_after_pick
+    if new_pair is None or _beam_center_pairs_match(new_pair, expected_pair):
+        return
+    _debug_beam_center_overwrite_reported = True
+    _trace_beam_center(
+        "BEAM_CENTER_OVERWRITE",
+        writer_event_name=str(writer_event_name),
+        expected_row=float(expected_pair[0]),
+        expected_col=float(expected_pair[1]),
+        old_row=None if old_pair is None else float(old_pair[0]),
+        old_col=None if old_pair is None else float(old_pair[1]),
+        new_row=float(new_pair[0]),
+        new_col=float(new_pair[1]),
+    )
+
+
+def _trace_beam_center_writer(
+    event_name: str,
+    *,
+    old_pair: tuple[float, float] | None = None,
+    new_pair: tuple[float, float] | None = None,
+    **fields,
+) -> None:
+    _trace_beam_center(
+        event_name,
+        old_beam_center=old_pair,
+        new_beam_center=new_pair,
+        **fields,
+    )
+    _check_beam_center_overwrite(event_name, old_pair=old_pair, new_pair=new_pair)
+
+
+def _beam_center_entry_text_matches(slider_widget: object | None, value: float) -> bool:
+    text = _beam_center_entry_text(slider_widget)
+    try:
+        return math.isclose(float(str(text).strip()), float(value), rel_tol=0.0, abs_tol=1.0e-6)
+    except Exception:
+        return False
+
+
+def _set_beam_center_entry_text(slider_widget: object | None, value: float) -> None:
+    entry = _beam_center_entry_widget(slider_widget)
+    if entry is None:
+        return
+    value_float = float(value)
+    text = (
+        str(int(round(value_float)))
+        if math.isclose(value_float, round(value_float))
+        else f"{value_float:.6g}"
+    )
+    cget = getattr(entry, "cget", None)
+    if callable(cget):
+        try:
+            variable_name = str(cget("textvariable"))
+        except Exception:
+            variable_name = ""
+        if variable_name:
+            try:
+                entry.setvar(variable_name, text)
+                return
+            except Exception:
+                pass
+    delete = getattr(entry, "delete", None)
+    insert = getattr(entry, "insert", None)
+    if callable(delete) and callable(insert):
+        try:
+            delete(0, "end")
+            insert(0, text)
+        except Exception:
+            pass
+
+
+def _attach_beam_center_widget_trace_hooks() -> None:
+    """Attach debug-only observers to the beam-center vars, entries, and validation events."""
+
+    global _beam_center_trace_hooks_attached
+    if _beam_center_trace_hooks_attached:
+        return
+    _beam_center_trace_hooks_attached = True
+    for axis_name, var_obj, scale_obj in (
+        ("row", globals().get("center_x_var"), globals().get("center_x_scale")),
+        ("col", globals().get("center_y_var"), globals().get("center_y_scale")),
+    ):
+        trace_add = getattr(var_obj, "trace_add", None)
+        if callable(trace_add):
+            try:
+                token = trace_add(
+                    "write",
+                    lambda *_args, axis_name=axis_name: _trace_beam_center_writer(
+                        f"widget.{axis_name}.doublevar.write",
+                    ),
+                )
+                _beam_center_trace_hook_refs.append((var_obj, token))
+            except Exception:
+                pass
+        entry = _beam_center_entry_widget(scale_obj)
+        if entry is None:
+            continue
+        cget = getattr(entry, "cget", None)
+        if callable(cget):
+            try:
+                variable_name = str(cget("textvariable"))
+            except Exception:
+                variable_name = ""
+            if variable_name:
+                try:
+                    entry_var = tk.StringVar(master=entry, name=variable_name)
+                    token = entry_var.trace_add(
+                        "write",
+                        lambda *_args, axis_name=axis_name: _trace_beam_center(
+                            f"widget.{axis_name}.entry_stringvar.write",
+                        ),
+                    )
+                    _beam_center_trace_hook_refs.append((entry_var, token))
+                except Exception:
+                    pass
+        bind = getattr(entry, "bind", None)
+        if callable(bind):
+            for event_name in ("<FocusOut>", "<Return>"):
+                try:
+                    bind(
+                        event_name,
+                        lambda _event, axis_name=axis_name, event_name=event_name: (
+                            _trace_beam_center(
+                                f"widget.{axis_name}.validation_callback.after",
+                                validation_event=event_name,
+                            )
+                        ),
+                        add="+",
+                    )
+                except Exception:
+                    pass
+
+
+def _trace_beam_center_after_idle_drain(event_name: str = "tk.after_idle_drain") -> None:
+    current_pair = _current_gui_beam_center_pair()
+    _trace_beam_center_writer(event_name, new_pair=current_pair)
+
+
 def _current_beam_center_pick_background_image() -> np.ndarray | None:
     """Return the detector/background image used for beam-center picking."""
     try:
@@ -7476,28 +7866,20 @@ def _current_beam_center_pick_background_image() -> np.ndarray | None:
     return background_array
 
 
-def _current_beam_center_native_shape() -> tuple[int, int] | None:
-    """Return native detector image shape for beam-center coordinate conversion."""
+def _current_beam_center_coordinate_shape() -> tuple[int, int] | None:
+    """Return the detector-coordinate extent used by beam-center sliders."""
 
     try:
-        native_background = _get_current_background_native()
+        image_size_value = float(image_size)
     except Exception:
-        native_background = None
-    if native_background is not None:
-        try:
-            shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
-        except Exception:
-            shape = ()
-        if len(shape) >= 2 and min(shape[:2]) > 0:
-            return int(shape[0]), int(shape[1])
+        image_size_value = 0.0
+    if math.isfinite(image_size_value) and image_size_value > 0.0:
+        detector_size = int(round(image_size_value))
+        return detector_size, detector_size
 
-    try:
-        image_size_value = int(image_size)
-    except Exception:
-        image_size_value = 0
-    if image_size_value > 0:
-        return image_size_value, image_size_value
-
+    # Fallback only for import-safe tests or partially initialized sessions. The
+    # live GUI maps detector rasters onto the image_size extent, so raw OSC array
+    # shape must not be used when image_size is available.
     display_background = _current_beam_center_pick_background_image()
     if display_background is None:
         return None
@@ -7697,76 +8079,208 @@ def _set_beam_center_pick_slider_value(
     slider_widget: object,
     value_var: object,
     value: float,
+    *,
+    axis_name: str,
 ) -> None:
-    """Set one beam-center slider so the visible slider row refreshes."""
+    """Set one beam-center slider so its visible slider and entry refresh."""
 
     value_float = float(value)
+    old_pair = _current_gui_beam_center_pair()
+    _trace_beam_center(
+        "widget.visible_value.before_write",
+        axis_name=axis_name,
+        target_value=value_float,
+        old_beam_center=old_pair,
+    )
     _ensure_slider_includes_value(slider_widget, value_float, pad=5.0)
     slider_set = getattr(slider_widget, "set", None)
     if callable(slider_set):
         try:
+            _trace_beam_center(
+                "widget.scale_set.before",
+                axis_name=axis_name,
+                target_value=value_float,
+            )
             slider_set(value_float)
-            return
-        except Exception:
-            pass
+            _trace_beam_center(
+                "widget.scale_set.after",
+                axis_name=axis_name,
+                target_value=value_float,
+            )
+        except Exception as exc:
+            _trace_beam_center(
+                "widget.scale_set.failed",
+                axis_name=axis_name,
+                target_value=value_float,
+                error=str(exc),
+            )
     var_set = getattr(value_var, "set", None)
+    var_get = getattr(value_var, "get", None)
     if callable(var_set):
-        var_set(value_float)
+        try:
+            current_value = float(var_get()) if callable(var_get) else float("nan")
+        except Exception:
+            current_value = float("nan")
+        if not math.isclose(current_value, value_float, rel_tol=0.0, abs_tol=1.0e-6):
+            _trace_beam_center(
+                "widget.doublevar_set.before",
+                axis_name=axis_name,
+                target_value=value_float,
+            )
+            var_set(value_float)
+            _trace_beam_center(
+                "widget.doublevar_set.after",
+                axis_name=axis_name,
+                target_value=value_float,
+            )
+    if not _beam_center_entry_text_matches(slider_widget, value_float):
+        _trace_beam_center(
+            "widget.entry_stringvar_set.before",
+            axis_name=axis_name,
+            target_value=value_float,
+        )
+        _set_beam_center_entry_text(slider_widget, value_float)
+        _trace_beam_center(
+            "widget.entry_stringvar_set.after",
+            axis_name=axis_name,
+            target_value=value_float,
+        )
+    _trace_beam_center_writer(
+        "widget.visible_value.after_write",
+        old_pair=old_pair,
+        new_pair=_current_gui_beam_center_pair(),
+        axis_name=axis_name,
+        target_value=value_float,
+    )
+
+
+def _set_visible_beam_center_row(value: float) -> float:
+    row_value = float(value)
+    _set_beam_center_pick_slider_value(
+        center_x_scale,
+        center_x_var,
+        row_value,
+        axis_name="row",
+    )
+    return row_value
+
+
+def _set_visible_beam_center_col(value: float) -> float:
+    col_value = float(value)
+    _set_beam_center_pick_slider_value(
+        center_y_scale,
+        center_y_var,
+        col_value,
+        axis_name="col",
+    )
+    return col_value
+
+
+def _set_beam_center_row_col_sliders(center_row: float, center_col: float) -> tuple[float, float]:
+    """Write one canonical GUI beam-center row/col pair into the GUI controls."""
+
+    row_float = float(center_row)
+    col_float = float(center_col)
+    if not (np.isfinite(row_float) and np.isfinite(col_float)):
+        raise ValueError("beam-center row and column must be finite")
+    row_float = _set_visible_beam_center_row(row_float)
+    col_float = _set_visible_beam_center_col(col_float)
+    return row_float, col_float
 
 
 def _beam_center_display_to_center_coords(
-    col: float,
-    row: float,
+    display_col: float,
+    display_row: float,
 ) -> tuple[float, float] | None:
     """Map detector-view display pixels into beam-center row/col coordinates."""
 
-    native_shape = _current_beam_center_native_shape()
-    if native_shape is None:
+    coordinate_shape = _current_beam_center_coordinate_shape()
+    if coordinate_shape is None:
         return None
+    detector_height = int(coordinate_shape[0])
+    detector_width = int(coordinate_shape[1])
     try:
+        _trace_beam_center(
+            "pick.mapping.before",
+            display_col=float(display_col),
+            display_row=float(display_row),
+            detector_width=detector_width,
+            detector_height=detector_height,
+        )
         center_row, center_col = gui_geometry_overlay.beam_center_row_col_from_detector_display(
-            float(col),
-            float(row),
-            native_shape,
+            float(display_col),
+            float(display_row),
+            coordinate_shape,
             int(DISPLAY_ROTATE_K),
         )
     except Exception:
         return None
     if not (np.isfinite(center_col) and np.isfinite(center_row)):
         return None
+    _trace_beam_center(
+        "pick.mapping.after",
+        display_col=float(display_col),
+        display_row=float(display_row),
+        detector_width=detector_width,
+        detector_height=detector_height,
+        gui_row_value=float(center_row),
+        gui_col_value=float(center_col),
+    )
     return float(center_row), float(center_col)
 
 
-def _commit_beam_center_pick_at(col: float, row: float) -> bool:
-    """Commit refined display coords as native detector row/col beam center."""
+def _commit_beam_center_pick_at(display_col: float, display_row: float) -> bool:
+    """Commit refined display coords as GUI row/col beam center."""
+    _trace_beam_center(
+        "pick.event.received",
+        display_col=float(display_col),
+        display_row=float(display_row),
+    )
     if not _beam_center_pick_session_active():
         return False
-    if not _update_beam_center_pick_preview(float(col), float(row), force=True):
+    if not _update_beam_center_pick_preview(float(display_col), float(display_row), force=True):
         return False
     session = geometry_runtime_state.beam_center_pick_session
-    refined_col = float(session.get("refined_col", col))
-    refined_row = float(session.get("refined_row", row))
+    refined_display_col = float(session.get("refined_col", display_col))
+    refined_display_row = float(session.get("refined_row", display_row))
     try:
-        center_row, center_col = _beam_center_display_to_center_coords(
-            float(refined_col),
-            float(refined_row),
+        gui_row_value, gui_col_value = _beam_center_display_to_center_coords(
+            float(refined_display_col),
+            float(refined_display_row),
         )
     except (TypeError, ValueError):
         _set_beam_center_pick_status("Beam center pick failed: could not map to detector coords.")
         return False
     try:
-        center_row = float(center_row)
-        center_col = float(center_col)
+        gui_row_value = float(gui_row_value)
+        gui_col_value = float(gui_col_value)
     except (TypeError, ValueError):
         _set_beam_center_pick_status("Beam center pick failed: could not map to detector coords.")
         return False
-    if not (np.isfinite(center_row) and np.isfinite(center_col)):
+    if not (np.isfinite(gui_row_value) and np.isfinite(gui_col_value)):
         _set_beam_center_pick_status("Beam center pick failed: could not map to detector coords.")
         return False
-    gui_row_value = center_col
-    gui_col_value = center_row
-    _set_beam_center_pick_slider_value(center_x_scale, center_x_var, gui_row_value)
-    _set_beam_center_pick_slider_value(center_y_scale, center_y_var, gui_col_value)
+    _trace_beam_center(
+        "pick.commit.before",
+        display_col=float(refined_display_col),
+        display_row=float(refined_display_row),
+        gui_row_value=gui_row_value,
+        gui_col_value=gui_col_value,
+    )
+    try:
+        gui_row_value, gui_col_value = _set_beam_center_row_col_sliders(
+            gui_row_value,
+            gui_col_value,
+        )
+    except (TypeError, ValueError):
+        _set_beam_center_pick_status("Beam center pick failed: could not update GUI sliders.")
+        return False
+    _set_expected_beam_center_after_pick(gui_row_value, gui_col_value)
+    _trace_beam_center(
+        "pick.commit.after_visible_write",
+        gui_row_value=gui_row_value,
+        gui_col_value=gui_col_value,
+    )
     _restore_beam_center_pick_view(redraw=False)
     _clear_geometry_manual_preview_artists(redraw=False)
     geometry_runtime_state.beam_center_pick_armed = False
@@ -7778,7 +8292,8 @@ def _commit_beam_center_pick_at(col: float, row: float) -> bool:
     _invalidate_simulation_cache()
     schedule_update()
     _set_beam_center_pick_status(
-        f"Beam center set to row={gui_row_value:.2f}, col={gui_col_value:.2f} px "
+        f"Beam center set to row={gui_row_value:.2f}, "
+        f"col={gui_col_value:.2f} px "
         f"from background {int(background_runtime_state.current_background_index) + 1}."
     )
     return True
@@ -13073,13 +13588,16 @@ def _beam_center_spot_enabled() -> bool:
 
 
 def _sync_center_marker(*, redraw: bool) -> None:
+    _trace_beam_center("marker.before_redraw", redraw=bool(redraw))
     marker = globals().get("center_marker")
     if marker is None:
+        _trace_beam_center("marker.after_redraw", marker_present=False)
         return
     try:
         center_row = float(center_x_var.get())
         center_col = float(center_y_var.get())
     except Exception:
+        _trace_beam_center("marker.after_redraw", marker_present=True, center_read_failed=True)
         return
 
     marker_x = float(center_col)
@@ -13087,9 +13605,10 @@ def _sync_center_marker(*, redraw: bool) -> None:
     visible = _beam_center_spot_enabled()
     if visible and _current_geometry_fit_caked_roi_preview_enabled():
         visible = False
-    show_caked_var = getattr(analysis_view_controls_view_state, "show_caked_2d_var", None)
-    show_caked = bool(getattr(show_caked_var, "get", lambda: False)())
-    if visible and show_caked:
+    view_mode = _current_app_shell_view_mode()
+    if visible and view_mode == "q_space":
+        visible = False
+    if visible and view_mode == "caked":
         try:
             projected = _native_detector_coords_to_caked_display_coords(
                 float(center_col),
@@ -13102,13 +13621,42 @@ def _sync_center_marker(*, redraw: bool) -> None:
         else:
             marker_x = float(projected[0])
             marker_y = float(projected[1])
+    elif visible:
+        coordinate_shape = _current_beam_center_coordinate_shape()
+        if coordinate_shape is None:
+            visible = False
+        else:
+            try:
+                marker_x, marker_y = gui_geometry_overlay.beam_center_row_col_to_detector_display(
+                    float(center_row),
+                    float(center_col),
+                    coordinate_shape,
+                    int(DISPLAY_ROTATE_K),
+                )
+            except Exception:
+                visible = False
 
     try:
         marker.set_xdata([marker_x])
         marker.set_ydata([marker_y])
         marker.set_visible(bool(visible))
     except Exception:
+        _trace_beam_center(
+            "marker.after_redraw",
+            marker_present=True,
+            marker_write_failed=True,
+            marker_display_col=marker_x,
+            marker_display_row=marker_y,
+            marker_visible=bool(visible),
+        )
         return
+    _trace_beam_center(
+        "marker.after_redraw",
+        marker_present=True,
+        marker_display_col=marker_x,
+        marker_display_row=marker_y,
+        marker_visible=bool(visible),
+    )
 
     if not redraw:
         return
@@ -13671,7 +14219,10 @@ def _apply_projected_primary_raster_to_artist(artist: object | None) -> bool:
         max_size=_current_main_display_raster_size_limit(),
         bbox_width_px=bbox_width,
         bbox_height_px=bbox_height,
-        preserve_bright_features=bool(artist is globals().get("image_display")),
+        preserve_bright_features=bool(
+            artist is globals().get("image_display")
+            or artist is globals().get("integration_region_overlay")
+        ),
     )
     if timing_artist_is_simulation:
         _timing_event(
@@ -17382,7 +17933,7 @@ def _hit_table_state_present_for_run_sides(
         return False
     if (
         bool(run_disordered_phase)
-        and getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None) is None
+        and _disordered_phase_stored_hit_table_row_count() <= 0
     ):
         return False
     return True
@@ -17477,6 +18028,20 @@ def _table_row_count(table_payload: object) -> int:
     return int(row_count)
 
 
+def _disordered_phase_stored_hit_table_row_count() -> int:
+    return _table_row_count(
+        getattr(
+            simulation_runtime_state,
+            "stored_disordered_phase_max_positions",
+            None,
+        )
+    )
+
+
+def _disordered_phase_stored_rows_available() -> bool:
+    return _disordered_phase_stored_hit_table_row_count() > 0
+
+
 def _cached_hit_tables_reusable(
     requested_signature: object,
     *,
@@ -17540,7 +18105,7 @@ def _clear_live_peak_record_cache_after_restore_miss() -> None:
 PBII_6H_QR_REFERENCE_SOURCE_LABEL = "pbii_6h_ref"
 DISORDERED_PHASE_QR_SOURCE_LABEL = DISORDERED_PHASE_SOURCE_LABEL
 DISORDERED_PHASE_QR_DISPLAY_LABEL = DISORDERED_PHASE_DISPLAY_LABEL
-DISORDERED_PHASE_QR_GENERATOR_VERSION = "ra_sim.pbi2_ht_shift_cif.v1"
+DISORDERED_PHASE_QR_GENERATOR_VERSION = "ra_sim.pbi2_ht_shift_cif.v2"
 _QR_QZ_SOURCE_LOG_ORDER = (
     "primary",
     DISORDERED_PHASE_SOURCE_LABEL,
@@ -17644,6 +18209,16 @@ def _log_disordered_qr_refs_skipped(reason: str, **fields: object) -> None:
     _log_disordered_qr_refs(f"Disordered Qr refs skipped: {reason}", skip_reason=reason, **fields)
 
 
+def _log_visible_disordered_qr_status(message: str, **fields: object) -> None:
+    _log_disordered_qr_refs(str(message), **fields)
+    try:
+        label = globals().get("progress_label_geometry")
+        if label is not None:
+            label.config(text=str(message))
+    except Exception:
+        pass
+
+
 def _log_disordered_qr_enable_status(status: DisorderedPhaseQrEnableStatus) -> None:
     fields = {
         "enabled": bool(status.enabled),
@@ -17656,6 +18231,36 @@ def _log_disordered_qr_enable_status(status: DisorderedPhaseQrEnableStatus) -> N
         _log_disordered_qr_refs("Disordered Qr refs enabled: true", **fields)
     else:
         _log_disordered_qr_refs_skipped(str(status.reason), **fields)
+
+
+@dataclass(frozen=True)
+class DisorderedQrLiveRefreshResult:
+    status: DisorderedPhaseQrEnableStatus
+    can_refresh_selector: bool
+    published: bool
+    scheduled_collection: bool
+    visible_message: str
+
+
+def _clear_disordered_phase_hit_table_collection_request() -> None:
+    simulation_runtime_state.disordered_phase_hit_table_collection_requested = False
+    simulation_runtime_state.disordered_phase_hit_table_collection_request_signature = None
+
+
+def _set_disordered_phase_hit_table_collection_request(signature: object) -> None:
+    simulation_runtime_state.disordered_phase_hit_table_collection_requested = True
+    simulation_runtime_state.disordered_phase_hit_table_collection_request_signature = signature
+
+
+def _clear_geometry_q_group_refresh_request() -> None:
+    try:
+        gui_controllers.consume_geometry_q_group_refresh_request(geometry_q_group_state)
+    except Exception:
+        pass
+    try:
+        geometry_q_group_state.refresh_requested = False
+    except Exception:
+        pass
 
 
 def _disordered_phase_inventory_payload_available(payload: Mapping[str, object] | None) -> bool:
@@ -17678,7 +18283,17 @@ def _disordered_phase_inventory_payload_available(payload: Mapping[str, object] 
         and np.isfinite(c_val)
         and c_val > 0.0
         and payload.get("cif_path") not in (None, "")
+        and bool(payload.get("available", True))
     )
+
+
+def _disordered_phase_inventory_skip_message(payload: Mapping[str, object] | None) -> str:
+    reason = "inventory diagnostic failed: no payload"
+    if isinstance(payload, Mapping):
+        raw_reason = payload.get("skip_reason")
+        if raw_reason not in (None, ""):
+            reason = str(raw_reason)
+    return f"Disordered Qr refs skipped: {reason}"
 
 
 def _log_disordered_qr_inventory_status(
@@ -17686,23 +18301,51 @@ def _log_disordered_qr_inventory_status(
     *,
     active_primary_cif_path: str | None,
 ) -> bool:
-    _log_disordered_qr_refs(
-        f"Disordered Qr refs inventory: source_cif={active_primary_cif_path}",
-        source_cif=active_primary_cif_path,
+    diagnostics = payload.get("diagnostics", {}) if isinstance(payload, Mapping) else {}
+    if not isinstance(diagnostics, Mapping):
+        diagnostics = {}
+    source_cif = diagnostics.get("source_cif", active_primary_cif_path)
+    source_exists = bool(diagnostics.get("source_cif_exists", False))
+    _log_visible_disordered_qr_status(
+        f"Disordered Qr refs inventory: source_cif={source_cif}; "
+        f"exists={str(source_exists).lower()}",
+        source_cif=source_cif,
+        source_cif_exists=source_exists,
     )
-    generated_cif = None
-    if isinstance(payload, Mapping):
+    generated_cif = diagnostics.get("generated_cif")
+    if generated_cif is None and isinstance(payload, Mapping):
         generated_cif = payload.get("cif_path")
-    _log_disordered_qr_refs(
-        f"Disordered Qr refs inventory: generated_cif={generated_cif}",
+    generated_exists = bool(diagnostics.get("generated_cif_exists", False))
+    fallback_mode = payload.get("inventory_mode", None) if isinstance(payload, Mapping) else None
+    inventory_mode = str(diagnostics.get("inventory_mode", fallback_mode))
+    _log_visible_disordered_qr_status(
+        f"Disordered Qr refs inventory: generated_cif={generated_cif}; "
+        f"exists={str(generated_exists).lower()}; mode={inventory_mode}",
         generated_cif=generated_cif,
+        generated_cif_exists=generated_exists,
+        inventory_mode=inventory_mode,
+    )
+    current_rows = int(diagnostics.get("current_threshold_miller_count", 0) or 0)
+    reference_rows = int(diagnostics.get("reference_threshold_miller_count", 0) or 0)
+    reference_threshold = float(diagnostics.get("reference_threshold", 0.0) or 0.0)
+    _log_visible_disordered_qr_status(
+        f"Disordered Qr refs inventory: generated Miller rows at current threshold={current_rows}",
+        current_threshold_miller_count=current_rows,
+    )
+    _log_visible_disordered_qr_status(
+        "Disordered Qr refs inventory: generated Miller rows at "
+        f"reference threshold={reference_threshold:g} -> {reference_rows}",
+        reference_threshold=reference_threshold,
+        reference_threshold_miller_count=reference_rows,
     )
     if not isinstance(payload, Mapping):
-        _log_disordered_qr_refs_skipped("inventory unavailable")
+        _log_visible_disordered_qr_status(
+            "Disordered Qr refs skipped: inventory diagnostic failed: no payload"
+        )
         return False
     available = _disordered_phase_inventory_payload_available(payload)
     if not available:
-        _log_disordered_qr_refs_skipped("inventory unavailable")
+        _log_visible_disordered_qr_status(_disordered_phase_inventory_skip_message(payload))
     return bool(available)
 
 
@@ -17727,11 +18370,8 @@ def _log_disordered_qr_published_counts(
     except Exception:
         peak_count = 0
         group_count = 0
-    _log_disordered_qr_refs(
-        f"Disordered Qr refs published: groups={group_count} peaks={peak_count}",
-        groups=group_count,
-        peaks=peak_count,
-    )
+    message = f"Disordered Qr refs published: groups={group_count} peaks={peak_count}"
+    _log_visible_disordered_qr_status(message, groups=group_count, peaks=peak_count)
     return group_count, peak_count
 
 
@@ -17782,14 +18422,17 @@ def _publish_stored_disordered_phase_rows_to_current_q_groups(
 ) -> bool:
     if not status.enabled:
         return False
+    row_count = _disordered_phase_stored_hit_table_row_count()
+    if row_count <= 0:
+        _log_visible_disordered_qr_status(
+            "Disordered Qr refs skipped: no stored disordered hit tables"
+        )
+        return False
     stored_rows = getattr(
         simulation_runtime_state,
         "stored_disordered_phase_max_positions",
         None,
     )
-    if stored_rows is None:
-        _log_disordered_qr_refs_skipped("no stored disordered hit tables")
-        return False
     disordered_rows = list(stored_rows)
     disordered_lattice = _disordered_phase_lattice_entries_for_rows(len(disordered_rows))
     if not _current_q_group_cache_has_disordered_phase_rows():
@@ -17845,13 +18488,111 @@ def _evaluate_live_disordered_qr_inventory_if_enabled(
         return None
     try:
         payload = _geometry_disordered_phase_inventory_payload(log_status=False)
-    except Exception:
-        payload = None
+    except Exception as exc:
+        payload = {
+            "available": False,
+            "skip_reason": f"inventory diagnostic failed: {type(exc).__name__}: {exc}",
+            "diagnostics": {
+                "source_cif": status.active_primary_cif_path,
+                "source_cif_exists": False,
+                "generator_error_type": None,
+                "generator_error_message": None,
+                "miller_error_type": type(exc).__name__,
+                "miller_error_message": str(exc),
+            },
+        }
     _log_disordered_qr_inventory_status(
         payload,
         active_primary_cif_path=status.active_primary_cif_path,
     )
     return dict(payload) if isinstance(payload, Mapping) else None
+
+
+def _ensure_generated_disordered_qr_rows_for_live_refresh(
+    status: DisorderedPhaseQrEnableStatus,
+    *,
+    primary_a: float,
+    primary_c: float,
+) -> DisorderedQrLiveRefreshResult:
+    if not status.enabled:
+        message = f"Disordered Qr refs skipped: {status.reason}"
+        _log_visible_disordered_qr_status(message)
+        _clear_disordered_phase_hit_table_collection_request()
+        return DisorderedQrLiveRefreshResult(
+            status=status,
+            can_refresh_selector=True,
+            published=False,
+            scheduled_collection=False,
+            visible_message=message,
+        )
+
+    enabled_message = "Disordered Qr refs enabled: true"
+    _log_visible_disordered_qr_status(enabled_message)
+    payload = _evaluate_live_disordered_qr_inventory_if_enabled(status)
+    if not _disordered_phase_inventory_payload_available(payload):
+        message = _disordered_phase_inventory_skip_message(payload)
+        _log_visible_disordered_qr_status(message)
+        _clear_disordered_phase_hit_table_collection_request()
+        _clear_geometry_q_group_refresh_request()
+        return DisorderedQrLiveRefreshResult(
+            status=status,
+            can_refresh_selector=False,
+            published=False,
+            scheduled_collection=False,
+            visible_message=message,
+        )
+
+    if _disordered_phase_stored_rows_available():
+        published = _publish_stored_disordered_phase_rows_to_current_q_groups(
+            status,
+            primary_a=float(primary_a),
+            primary_c=float(primary_c),
+        )
+        if published:
+            _clear_disordered_phase_hit_table_collection_request()
+            return DisorderedQrLiveRefreshResult(
+                status=status,
+                can_refresh_selector=True,
+                published=True,
+                scheduled_collection=False,
+                visible_message="Disordered Qr refs published",
+            )
+
+    request_signature = _geometry_disordered_phase_source_signature()
+    request_pending = bool(
+        getattr(
+            simulation_runtime_state,
+            "disordered_phase_hit_table_collection_requested",
+            False,
+        )
+    )
+    pending_signature = getattr(
+        simulation_runtime_state,
+        "disordered_phase_hit_table_collection_request_signature",
+        None,
+    )
+    if request_pending and pending_signature == request_signature:
+        message = "Disordered Qr refs pending: waiting for generated disordered hit-table update"
+        _log_visible_disordered_qr_status(message)
+        return DisorderedQrLiveRefreshResult(
+            status=status,
+            can_refresh_selector=False,
+            published=False,
+            scheduled_collection=False,
+            visible_message=message,
+        )
+
+    _set_disordered_phase_hit_table_collection_request(request_signature)
+    gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
+    message = "Disordered Qr refs pending: collecting generated disordered hit tables"
+    _log_visible_disordered_qr_status(message)
+    return DisorderedQrLiveRefreshResult(
+        status=status,
+        can_refresh_selector=False,
+        published=False,
+        scheduled_collection=True,
+        visible_message=message,
+    )
 
 
 def _geometry_include_6h_qr_reference_checked() -> bool:
@@ -18200,17 +18941,21 @@ def _geometry_disordered_phase_source_signature() -> tuple[object, ...]:
         two_theta_signature,
         round(float(threshold_value), 6) if np.isfinite(threshold_value) else None,
         DISORDERED_PHASE_QR_GENERATOR_VERSION,
+        ("inventory_mode_policy", "compact_6h_then_explicit_p1"),
+        ("reference_threshold", 0.0),
     )
 
 
 def _geometry_disordered_phase_inventory_payload(*, log_status: bool = True) -> dict[str, object]:
     signature = _geometry_disordered_phase_source_signature()
-    if len(signature) < 2 or not bool(signature[1]):
-        status = _geometry_disordered_phase_qr_enable_status()
-        if log_status:
-            _log_disordered_qr_refs_skipped(status.reason)
-        _clear_disordered_phase_runtime_tables(clear_inventory=True)
-        return {
+    disordered_qr_reference_threshold = 0.0
+
+    def _empty_payload(
+        *,
+        skip_reason: str | None,
+        diagnostics: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        payload = {
             "signature": signature,
             "miller": np.empty((0, 3), dtype=np.float64),
             "intensities": np.empty((0,), dtype=np.float64),
@@ -18219,17 +18964,32 @@ def _geometry_disordered_phase_inventory_payload(*, log_status: bool = True) -> 
             "source_label": DISORDERED_PHASE_SOURCE_LABEL,
             "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
             "cif_path": None,
+            "available": False,
+            "skip_reason": skip_reason,
+            "inventory_mode": None,
+            "diagnostics": dict(diagnostics or {}),
         }
+        if log_status:
+            _log_disordered_qr_inventory_status(
+                payload,
+                active_primary_cif_path=payload["diagnostics"].get("source_cif"),
+            )
+        return payload
+
+    if len(signature) < 2 or not bool(signature[1]):
+        status = _geometry_disordered_phase_qr_enable_status()
+        _clear_disordered_phase_runtime_tables(clear_inventory=True)
+        return _empty_payload(skip_reason=str(status.reason))
 
     if log_status:
-        _log_disordered_qr_refs("Disordered Qr refs enabled: true", enabled=True)
+        _log_visible_disordered_qr_status("Disordered Qr refs enabled: true", enabled=True)
     cached = getattr(simulation_runtime_state, "disordered_phase_inventory_cache", None)
     if isinstance(cached, Mapping) and cached.get("signature") == signature:
         cached_path = cached.get("cif_path")
         simulation_runtime_state.generated_disordered_phase_cif_path = (
             str(cached_path) if cached_path else None
         )
-        return {
+        payload = {
             "signature": signature,
             "miller": np.asarray(cached.get("miller", ()), dtype=np.float64).copy(),
             "intensities": np.asarray(cached.get("intensities", ()), dtype=np.float64).copy(),
@@ -18238,69 +18998,226 @@ def _geometry_disordered_phase_inventory_payload(*, log_status: bool = True) -> 
             "source_label": DISORDERED_PHASE_SOURCE_LABEL,
             "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
             "cif_path": cached_path,
+            "available": bool(cached.get("available", True)),
+            "skip_reason": cached.get("skip_reason"),
+            "inventory_mode": cached.get("inventory_mode"),
+            "diagnostics": dict(cached.get("diagnostics", {}) or {}),
         }
+        if log_status:
+            _log_disordered_qr_inventory_status(
+                payload,
+                active_primary_cif_path=payload["diagnostics"].get("source_cif"),
+            )
+        return payload
 
     if isinstance(cached, Mapping) and cached.get("signature") != signature:
         _clear_disordered_phase_runtime_tables(clear_inventory=False)
 
     active_primary_cif_path = signature[2] if len(signature) > 2 else None
-    skip_reason = None
     try:
-        if active_primary_cif_path is None:
-            skip_reason = "missing active primary CIF"
-            raise FileNotFoundError("active primary CIF path is unavailable")
-        generated = generate_pbii_ht_shifted_cif(
-            source_cif=active_primary_cif_path,
-            output_dir=_disordered_phase_cif_cache_dir(),
-            mode="compact_6h",
-        )
-        simulation_runtime_state.generated_disordered_phase_cif_path = str(generated.cif_path)
-        lambda_value = float(lambda_)
-        energy_kev = 12.398419843320026 / lambda_value
-        miller_arr, intensities_arr, _deg, _details = miller_generator(
-            int(mx),
-            str(generated.cif_path),
-            [1.0],
-            lambda_value,
-            energy=energy_kev,
-            intensity_threshold=float(intensity_threshold),
-            two_theta_range=tuple(two_theta_range),
-        )
-        a_disordered = float(generated.a)
-        c_disordered = float(generated.c)
-        cif_path_text = str(generated.cif_path)
+        current_threshold = float(intensity_threshold)
     except Exception:
-        miller_arr = np.empty((0, 3), dtype=np.float64)
-        intensities_arr = np.empty((0,), dtype=np.float64)
-        a_disordered = float("nan")
-        c_disordered = float("nan")
-        cif_path_text = None
-        simulation_runtime_state.generated_disordered_phase_cif_path = None
+        current_threshold = float("nan")
+    try:
+        mx_value = int(mx)
+    except Exception:
+        mx_value = 0
+    try:
+        lambda_value = float(lambda_)
+    except Exception:
+        lambda_value = float("nan")
+    try:
+        theta_range = tuple(two_theta_range)
+    except Exception:
+        theta_range = ()
+    diagnostics: dict[str, object] = {
+        "source_cif": None if active_primary_cif_path is None else str(active_primary_cif_path),
+        "source_cif_exists": False,
+        "generated_cif": None,
+        "generated_cif_exists": False,
+        "generator_error_type": None,
+        "generator_error_message": None,
+        "miller_error_type": None,
+        "miller_error_message": None,
+        "current_threshold_miller_count": 0,
+        "current_threshold_intensity_count": 0,
+        "reference_threshold_miller_count": 0,
+        "reference_threshold_intensity_count": 0,
+        "a": float("nan"),
+        "c": float("nan"),
+        "intensity_threshold": current_threshold,
+        "reference_threshold": disordered_qr_reference_threshold,
+        "two_theta_range": theta_range,
+        "mx": mx_value,
+        "inventory_mode": None,
+        "generator_version": DISORDERED_PHASE_QR_GENERATOR_VERSION,
+    }
 
-    if skip_reason is None:
-        available = bool(
-            np.asarray(miller_arr, dtype=np.float64).ndim == 2
-            and np.asarray(miller_arr, dtype=np.float64).shape[0] > 0
-            and np.asarray(intensities_arr, dtype=np.float64).reshape(-1).size > 0
-            and np.isfinite(float(a_disordered))
-            and float(a_disordered) > 0.0
-            and np.isfinite(float(c_disordered))
-            and float(c_disordered) > 0.0
+    if active_primary_cif_path is None:
+        simulation_runtime_state.generated_disordered_phase_cif_path = None
+        return _empty_payload(
+            skip_reason="active primary CIF not found: None",
+            diagnostics=diagnostics,
         )
-        if not available:
-            skip_reason = "inventory unavailable"
+
+    source_path = Path(str(active_primary_cif_path)).expanduser().resolve()
+    diagnostics["source_cif"] = str(source_path)
+    diagnostics["source_cif_exists"] = source_path.is_file()
+    if not source_path.is_file():
+        simulation_runtime_state.generated_disordered_phase_cif_path = None
+        return _empty_payload(
+            skip_reason=f"active primary CIF not found: {source_path}",
+            diagnostics=diagnostics,
+        )
+
+    def _generate(mode: str):
+        try:
+            generated_value = generate_pbii_ht_shifted_cif(
+                source_cif=source_path,
+                output_dir=_disordered_phase_cif_cache_dir(),
+                mode=mode,
+            )
+        except Exception as exc:
+            diagnostics["generator_error_type"] = type(exc).__name__
+            diagnostics["generator_error_message"] = str(exc)
+            return None, f"generated CIF failed: {type(exc).__name__}: {exc}"
+        generated_path = Path(generated_value.cif_path).expanduser().resolve()
+        diagnostics["generated_cif"] = str(generated_path)
+        diagnostics["generated_cif_exists"] = generated_path.is_file()
+        diagnostics["a"] = float(getattr(generated_value, "a", float("nan")))
+        diagnostics["c"] = float(getattr(generated_value, "c", float("nan")))
+        diagnostics["inventory_mode"] = str(mode)
+        if not generated_path.is_file():
+            return generated_value, f"generated CIF missing: {generated_path}"
+        return generated_value, None
+
+    def _miller_for(generated_value, *, threshold: float):
+        try:
+            energy_kev = 12.398419843320026 / lambda_value
+            miller_values, intensity_values, _deg, _details = miller_generator(
+                mx_value,
+                str(generated_value.cif_path),
+                [1.0],
+                lambda_value,
+                energy=energy_kev,
+                intensity_threshold=float(threshold),
+                two_theta_range=theta_range,
+            )
+        except Exception as exc:
+            diagnostics["miller_error_type"] = type(exc).__name__
+            diagnostics["miller_error_message"] = str(exc)
+            return (
+                np.empty((0, 3), dtype=np.float64),
+                np.empty((0,), dtype=np.float64),
+                f"generated Miller calculation failed: {type(exc).__name__}: {exc}",
+            )
+        miller_values = np.asarray(miller_values, dtype=np.float64)
+        intensity_values = np.asarray(intensity_values, dtype=np.float64).reshape(-1)
+        return miller_values, intensity_values, None
+
+    generated, skip_reason = _generate("compact_6h")
     if skip_reason is not None:
-        _log_disordered_qr_refs_skipped(skip_reason)
+        simulation_runtime_state.generated_disordered_phase_cif_path = None
+        return _empty_payload(skip_reason=skip_reason, diagnostics=diagnostics)
+
+    current_miller, current_intensities, current_error = _miller_for(
+        generated,
+        threshold=current_threshold,
+    )
+    if current_error is not None:
+        fallback_reason = current_error
+    else:
+        diagnostics["current_threshold_miller_count"] = int(
+            current_miller.shape[0] if current_miller.ndim == 2 else 0
+        )
+        diagnostics["current_threshold_intensity_count"] = int(current_intensities.size)
+        fallback_reason = None
+
+    reference_miller, reference_intensities, reference_error = _miller_for(
+        generated,
+        threshold=disordered_qr_reference_threshold,
+    )
+    if reference_error is not None:
+        fallback_reason = reference_error
+    else:
+        diagnostics["reference_threshold_miller_count"] = int(
+            reference_miller.shape[0] if reference_miller.ndim == 2 else 0
+        )
+        diagnostics["reference_threshold_intensity_count"] = int(reference_intensities.size)
+        if diagnostics["reference_threshold_miller_count"] <= 0:
+            fallback_reason = (
+                "generated Miller rows empty; "
+                f"mx={mx_value} threshold={disordered_qr_reference_threshold:g} "
+                f"two_theta_range={theta_range}"
+            )
+
+    selected_generated = generated
+    selected_miller = reference_miller
+    selected_intensities = reference_intensities
+    selected_mode = "compact_6h"
+    if fallback_reason is not None:
+        _log_visible_disordered_qr_status(
+            f"Disordered Qr refs inventory: using explicit-P1 fallback because {fallback_reason}"
+        )
+        diagnostics["compact_6h_skip_reason"] = fallback_reason
+        fallback_generated, fallback_generate_error = _generate("explicit_p1")
+        if fallback_generate_error is not None:
+            simulation_runtime_state.generated_disordered_phase_cif_path = None
+            return _empty_payload(skip_reason=fallback_generate_error, diagnostics=diagnostics)
+        fallback_miller, fallback_intensities, fallback_error = _miller_for(
+            fallback_generated,
+            threshold=disordered_qr_reference_threshold,
+        )
+        diagnostics["reference_threshold_miller_count"] = int(
+            fallback_miller.shape[0] if fallback_miller.ndim == 2 else 0
+        )
+        diagnostics["reference_threshold_intensity_count"] = int(fallback_intensities.size)
+        if fallback_error is not None:
+            simulation_runtime_state.generated_disordered_phase_cif_path = None
+            return _empty_payload(skip_reason=fallback_error, diagnostics=diagnostics)
+        if diagnostics["reference_threshold_miller_count"] <= 0:
+            simulation_runtime_state.generated_disordered_phase_cif_path = None
+            return _empty_payload(
+                skip_reason=(
+                    "generated Miller rows empty after explicit-P1 fallback; "
+                    f"mx={mx_value} threshold={disordered_qr_reference_threshold:g} "
+                    f"two_theta_range={theta_range}"
+                ),
+                diagnostics=diagnostics,
+            )
+        selected_generated = fallback_generated
+        selected_miller = fallback_miller
+        selected_intensities = fallback_intensities
+        selected_mode = "explicit_p1"
+        diagnostics["inventory_mode"] = selected_mode
+
+    a_disordered = float(getattr(selected_generated, "a", float("nan")))
+    c_disordered = float(getattr(selected_generated, "c", float("nan")))
+    diagnostics["a"] = a_disordered
+    diagnostics["c"] = c_disordered
+    if not (np.isfinite(a_disordered) and a_disordered > 0.0):
+        simulation_runtime_state.generated_disordered_phase_cif_path = None
+        return _empty_payload(skip_reason=f"bad generated a value: {a_disordered}", diagnostics=diagnostics)
+    if not (np.isfinite(c_disordered) and c_disordered > 0.0):
+        simulation_runtime_state.generated_disordered_phase_cif_path = None
+        return _empty_payload(skip_reason=f"bad generated c value: {c_disordered}", diagnostics=diagnostics)
+
+    cif_path_text = str(Path(selected_generated.cif_path).expanduser().resolve())
+    simulation_runtime_state.generated_disordered_phase_cif_path = cif_path_text
 
     payload = {
         "signature": signature,
-        "miller": np.asarray(miller_arr, dtype=np.float64).copy(),
-        "intensities": np.asarray(intensities_arr, dtype=np.float64).reshape(-1).copy(),
+        "miller": np.asarray(selected_miller, dtype=np.float64).copy(),
+        "intensities": np.asarray(selected_intensities, dtype=np.float64).reshape(-1).copy(),
         "a": float(a_disordered),
         "c": float(c_disordered),
         "source_label": DISORDERED_PHASE_SOURCE_LABEL,
         "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
         "cif_path": cif_path_text,
+        "available": True,
+        "skip_reason": None,
+        "inventory_mode": selected_mode,
+        "diagnostics": dict(diagnostics),
     }
     simulation_runtime_state.disordered_phase_inventory_cache = {
         "signature": signature,
@@ -18311,7 +19228,16 @@ def _geometry_disordered_phase_inventory_payload(*, log_status: bool = True) -> 
         "source_label": DISORDERED_PHASE_SOURCE_LABEL,
         "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
         "cif_path": cif_path_text,
+        "available": True,
+        "skip_reason": None,
+        "inventory_mode": selected_mode,
+        "diagnostics": dict(diagnostics),
     }
+    if log_status:
+        _log_disordered_qr_inventory_status(
+            payload,
+            active_primary_cif_path=str(source_path),
+        )
     return payload
 
 
@@ -18346,9 +19272,7 @@ def _publish_combined_simulation_state(
     else:
         active_display_sides = _normalized_active_peak_row_sides(active_peak_row_sides)
     include_disordered_phase_peak_rows = bool(
-        _geometry_disordered_phase_qr_enabled()
-        and getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None)
-        is not None
+        _geometry_disordered_phase_qr_enabled() and _disordered_phase_stored_rows_available()
     )
     include_primary_peak_rows = bool(
         "primary" in active_display_sides
@@ -21321,16 +22245,18 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
         timing_reason=timing_reason,
         job_kind=str(result.get("job_kind", "full")),
     )
-    simulation_runtime_state.stored_primary_sim_image = np.asarray(
-        result.get("primary_image"),
-        dtype=np.float64,
-    )
-    simulation_runtime_state.stored_secondary_sim_image = np.asarray(
-        result.get("secondary_image"),
-        dtype=np.float64,
-    )
     run_primary = bool(result.get("run_primary", False))
     run_secondary = bool(result.get("run_secondary", False))
+    if run_primary or simulation_runtime_state.stored_primary_sim_image is None:
+        simulation_runtime_state.stored_primary_sim_image = np.asarray(
+            result.get("primary_image"),
+            dtype=np.float64,
+        )
+    if run_secondary or simulation_runtime_state.stored_secondary_sim_image is None:
+        simulation_runtime_state.stored_secondary_sim_image = np.asarray(
+            result.get("secondary_image"),
+            dtype=np.float64,
+        )
     primary_hit_table_state_refreshed = bool(result.get("primary_hit_table_state_refreshed", False))
     secondary_hit_table_state_refreshed = bool(
         result.get("secondary_hit_table_state_refreshed", False)
@@ -21509,10 +22435,19 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
                 ),
             )
         )
+        if _disordered_phase_stored_hit_table_row_count() > 0:
+            _clear_disordered_phase_hit_table_collection_request()
+        else:
+            _log_visible_disordered_qr_status(
+                "Disordered Qr refs skipped: generated disordered hit tables are empty"
+            )
+            _clear_disordered_phase_hit_table_collection_request()
+            _clear_geometry_q_group_refresh_request()
     elif not _geometry_disordered_phase_qr_enabled():
         simulation_runtime_state.stored_disordered_phase_max_positions = None
         simulation_runtime_state.stored_disordered_phase_peak_table_lattice = None
         simulation_runtime_state.stored_disordered_phase_source_reflection_indices = None
+        _clear_disordered_phase_hit_table_collection_request()
 
     active_peak_rows_fresh = _active_peak_row_sides_have_fresh_raw_rows(
         active_peak_row_sides,
@@ -21527,8 +22462,15 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
             run_disordered_phase=_geometry_disordered_phase_qr_enabled(),
         )
     )
-    if active_peak_rows_fresh or (
-        bool(result.get("collected_hit_tables", False)) and all_required_hit_table_rows_present
+    required_disordered_rows_missing = bool(
+        _geometry_disordered_phase_qr_enabled()
+        and _disordered_phase_stored_hit_table_row_count() <= 0
+    )
+    if not required_disordered_rows_missing and (
+        active_peak_rows_fresh
+        or (
+            bool(result.get("collected_hit_tables", False)) and all_required_hit_table_rows_present
+        )
     ):
         simulation_runtime_state.stored_hit_table_signature = result.get("hit_table_signature")
     else:
@@ -22806,8 +23748,10 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
 def schedule_update():
     """Queue a throttled simulation/redraw update."""
 
+    _trace_beam_center("update.scheduled.before")
     if bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
         simulation_runtime_state.pending_startup_refresh = True
+        _trace_beam_center("update.scheduled.suspended")
         return
 
     _ensure_runtime_update_trace_hooks()
@@ -22829,9 +23773,26 @@ def schedule_update():
         root,
         simulation_runtime_state.update_pending,
     )
+    update_delay_ms = _current_update_debounce_ms()
+    update_callback = do_update
+    if _beam_center_trace_enabled():
+
+        def _beam_center_traced_do_update():
+            _trace_beam_center("root.after.update_callback.begin")
+            try:
+                return do_update()
+            finally:
+                _trace_beam_center_after_idle_drain("root.after.update_callback.end")
+
+        update_callback = _beam_center_traced_do_update
     simulation_runtime_state.update_pending = root.after(
-        _current_update_debounce_ms(),
-        do_update,
+        update_delay_ms,
+        update_callback,
+    )
+    _trace_beam_center(
+        "update.scheduled.after",
+        root_after_delay_ms=update_delay_ms,
+        queued_token=simulation_runtime_state.update_pending,
     )
     _timing_event(
         _timing_named_event(timing_prefix, "update_scheduled", "update_scheduled"),
@@ -22957,6 +23918,7 @@ def _initialize_runtime_controls_block_28() -> None:
     simulation_runtime_state.stored_disordered_phase_peak_table_lattice = None
     simulation_runtime_state.disordered_phase_inventory_cache = None
     simulation_runtime_state.generated_disordered_phase_cif_path = None
+    _clear_disordered_phase_hit_table_collection_request()
     simulation_runtime_state.stored_primary_intersection_cache = None
     simulation_runtime_state.stored_primary_intersection_cache_signature = None
     simulation_runtime_state.stored_secondary_intersection_cache = None
@@ -23535,6 +24497,12 @@ def do_update():
     corto_det_up = float(corto_detector_var.get())
     center_x_up = float(center_x_var.get())
     center_y_up = float(center_y_var.get())
+    _trace_beam_center_writer(
+        "update.after_runtime_read",
+        new_pair=(center_x_up, center_y_up),
+        gui_row_value=center_x_up,
+        gui_col_value=center_y_up,
+    )
     _trace_update(
         "do_update_params",
         background_index=int(background_runtime_state.current_background_index),
@@ -23873,11 +24841,19 @@ def do_update():
         disordered_phase_status_for_job.enabled
         and requested_hit_table_sig != current_hit_table_signature
     )
+    disordered_collection_requested = bool(
+        getattr(
+            simulation_runtime_state,
+            "disordered_phase_hit_table_collection_requested",
+            False,
+        )
+    )
     needs_disordered_tables = bool(
         disordered_phase_status_for_job.enabled
         and disordered_phase_available_for_job
         and (
-            getattr(simulation_runtime_state, "stored_disordered_phase_max_positions", None) is None
+            disordered_collection_requested
+            or _disordered_phase_stored_hit_table_row_count() <= 0
             or disordered_phase_signature_is_stale
         )
     )
@@ -24188,8 +25164,15 @@ def do_update():
             return False
         return _detector_relative_cache_payload_present(relative_cache)
 
+    _trace_beam_center("remap.before_read")
     previous_center_pair = _dependency_center_pair(previous_dependency_signatures)
     current_center_pair = (float(center_x_up), float(center_y_up))
+    _trace_beam_center_writer(
+        "remap.after_read",
+        new_pair=current_center_pair,
+        previous_center_pair=previous_center_pair,
+        current_center_pair=current_center_pair,
+    )
 
     def _detector_center_remap_cache_fallback_reason() -> str | None:
         if previous_center_pair is None:
@@ -25521,13 +26504,32 @@ def do_update():
         q_group_bindings_factory = globals().get("geometry_q_group_runtime_bindings_factory")
         if callable(q_group_bindings_factory):
             disordered_qr_status = _geometry_disordered_phase_qr_enable_status()
-            _log_disordered_qr_enable_status(disordered_qr_status)
-            _evaluate_live_disordered_qr_inventory_if_enabled(disordered_qr_status)
-            _publish_stored_disordered_phase_rows_to_current_q_groups(
+            disordered_refresh = _ensure_generated_disordered_qr_rows_for_live_refresh(
                 disordered_qr_status,
                 primary_a=float(a_updated),
                 primary_c=float(c_updated),
             )
+            if not disordered_refresh.can_refresh_selector:
+                if disordered_refresh.scheduled_collection:
+                    gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
+                    schedule_update_fn = globals().get("schedule_update")
+                    if callable(schedule_update_fn):
+                        schedule_update_fn()
+                    simulation_runtime_state.update_phase = "queued"
+                else:
+                    simulation_runtime_state.update_phase = "ready"
+                try:
+                    progress_label_geometry.config(text=disordered_refresh.visible_message)
+                except Exception:
+                    pass
+                _set_qr_selector_trace(
+                    qr_selector_entries_retained=True,
+                    qr_selector_entries_refreshed=False,
+                    qr_selector_refresh_deferred=True,
+                )
+                simulation_runtime_state.update_running = False
+                _refresh_run_status_bar()
+                return
             listed_entries = (
                 gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
                     q_group_bindings_factory()
@@ -25546,12 +26548,19 @@ def do_update():
                     qr_selector_entries_refreshed=True,
                     qr_selector_refresh_deferred=False,
                 )
-            progress_label_geometry.config(
-                text=(
-                    f"Updated listed Qr/Qz peaks: {len(listed_entries)} groups, "
-                    f"{sum(int(entry.get('peak_count', 0)) for entry in listed_entries)} peaks."
-                )
+            q_group_update_message = _format_qr_qz_group_update_log_message(listed_entries)
+            source_counts, peak_source_counts = _qr_qz_source_counts_from_entries(listed_entries)
+            _trace_update(
+                "do_update_q_group_listing_refreshed",
+                q_group_count=int(len(listed_entries)),
+                q_group_peak_count=int(
+                    sum(int(entry.get("peak_count", 0)) for entry in listed_entries)
+                ),
+                q_group_source_counts=dict(source_counts),
+                q_group_peak_source_counts=dict(peak_source_counts),
+                message=q_group_update_message,
             )
+            progress_label_geometry.config(text=q_group_update_message)
 
     _set_update_trace_stage("redraw")
     _trace_update(
@@ -26535,8 +27544,15 @@ def reset_to_defaults():
         structure_factor_pruning_controls_view_state,
         pruning_defaults,
     )
+    defaults_old_pair = _current_gui_beam_center_pair()
+    _trace_beam_center("defaults.apply.before", new_beam_center=defaults_old_pair)
     center_x_var.set(defaults["center_x"])
     center_y_var.set(defaults["center_y"])
+    _trace_beam_center_writer(
+        "defaults.apply.after",
+        old_pair=defaults_old_pair,
+        new_pair=_current_gui_beam_center_pair(),
+    )
     _sync_background_theta_controls(preserve_existing=False, trigger_update=False)
     if geometry_fit_background_selection_var is not None:
         geometry_fit_background_selection_var.set(_default_geometry_fit_background_selection())
@@ -27029,8 +28045,19 @@ def import_hbn_tilt_from_bundle():
             if np.isfinite(center_row) and np.isfinite(center_col):
                 _ensure_slider_includes(center_x_scale, center_row, pad=5.0)
                 _ensure_slider_includes(center_y_scale, center_col, pad=5.0)
+                hbn_old_pair = _current_gui_beam_center_pair()
+                _trace_beam_center(
+                    "hbn.apply_center.before",
+                    gui_row_value=center_row,
+                    gui_col_value=center_col,
+                )
                 center_x_var.set(center_row)
                 center_y_var.set(center_col)
+                _trace_beam_center_writer(
+                    "hbn.apply_center.after",
+                    old_pair=hbn_old_pair,
+                    new_pair=_current_gui_beam_center_pair(),
+                )
                 center_text = f" and center (row={center_row:.2f}, col={center_col:.2f}) px"
         except Exception:
             pass
@@ -32655,9 +33682,35 @@ def _legacy_auto_match_on_fit_geometry_click():
             elif name == "c":
                 c_var.set(val)
             elif name == "center_x":
+                fit_old_pair = _current_gui_beam_center_pair()
+                _trace_beam_center(
+                    "geometry_fit.apply_center.before",
+                    parameter_name=name,
+                    value=val,
+                )
                 center_x_var.set(val)
+                _trace_beam_center_writer(
+                    "geometry_fit.apply_center.after",
+                    old_pair=fit_old_pair,
+                    new_pair=_current_gui_beam_center_pair(),
+                    parameter_name=name,
+                    value=val,
+                )
             elif name == "center_y":
+                fit_old_pair = _current_gui_beam_center_pair()
+                _trace_beam_center(
+                    "geometry_fit.apply_center.before",
+                    parameter_name=name,
+                    value=val,
+                )
                 center_y_var.set(val)
+                _trace_beam_center_writer(
+                    "geometry_fit.apply_center.after",
+                    old_pair=fit_old_pair,
+                    new_pair=_current_gui_beam_center_pair(),
+                    parameter_name=name,
+                    value=val,
+                )
 
         if joint_background_mode and not preserve_live_theta:
             theta_initial_var.set(
@@ -33604,9 +34657,35 @@ def _legacy_auto_match_on_fit_geometry_click():
                     elif name == "c":
                         c_var.set(val)
                     elif name == "center_x":
+                        fit_old_pair = _current_gui_beam_center_pair()
+                        _trace_beam_center(
+                            "geometry_fit.apply_center.before",
+                            parameter_name=name,
+                            value=float(val),
+                        )
                         center_x_var.set(val)
+                        _trace_beam_center_writer(
+                            "geometry_fit.apply_center.after",
+                            old_pair=fit_old_pair,
+                            new_pair=_current_gui_beam_center_pair(),
+                            parameter_name=name,
+                            value=float(val),
+                        )
                     elif name == "center_y":
+                        fit_old_pair = _current_gui_beam_center_pair()
+                        _trace_beam_center(
+                            "geometry_fit.apply_center.before",
+                            parameter_name=name,
+                            value=float(val),
+                        )
                         center_y_var.set(val)
+                        _trace_beam_center_writer(
+                            "geometry_fit.apply_center.after",
+                            old_pair=fit_old_pair,
+                            new_pair=_current_gui_beam_center_pair(),
+                            parameter_name=name,
+                            value=float(val),
+                        )
 
                 if _geometry_fit_uses_shared_theta_offset() and not preserve_live_theta:
                     theta_initial_var.set(
@@ -39120,6 +40199,7 @@ def _initialize_runtime_controls_block_48() -> None:
     bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_scale
     center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
     center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
+    _attach_beam_center_widget_trace_hooks()
     main_display_raster_size_var = tk.DoubleVar(
         value=float(_default_main_display_raster_size_limit())
     )
@@ -39562,6 +40642,313 @@ def _geometry_fit_source_cache_event_token(
     return (job_id, background_index, generation_id)
 
 
+def _geometry_fit_int_keyed_mapping(raw_mapping: object) -> dict[int, object]:
+    if not isinstance(raw_mapping, Mapping):
+        return {}
+    normalized: dict[int, object] = {}
+    for key, value in raw_mapping.items():
+        try:
+            normalized[int(key)] = value
+        except Exception:
+            continue
+    return normalized
+
+
+def _geometry_fit_live_row_source_counts(raw_rows: Sequence[object] | None) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in raw_rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            source_label = str(gui_geometry_fit._geometry_fit_entry_source_label(row))
+        except Exception:
+            source_label = str(row.get("source_label", "primary") or "primary")
+        counts[source_label] = int(counts.get(source_label, 0)) + 1
+    return dict(sorted(counts.items()))
+
+
+GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER = "phase4d1"
+GEOMETRY_FIT_FRESH_REBUILD_CONSUMER_WRAPPER_MARKER = "deduped"
+
+
+def _geometry_fit_normalized_q_group_key(value: object) -> tuple[object, ...] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 4:
+        return None
+    if str(value[0]) != "q_group":
+        return None
+    return tuple(value)
+
+
+def _geometry_fit_q_group_cache_entries() -> list[dict[str, object]]:
+    q_group_state = globals().get("geometry_q_group_state")
+    raw_entries = getattr(q_group_state, "cached_entries", None)
+    if not isinstance(raw_entries, Sequence) or isinstance(raw_entries, (str, bytes)):
+        return []
+    return [dict(entry) for entry in raw_entries if isinstance(entry, Mapping)]
+
+
+def _geometry_fit_hkl_from_row(row: Mapping[str, object]) -> tuple[int, int, int] | None:
+    for key in ("hkl", "normalized_hkl", "source_hkl"):
+        value = row.get(key)
+        if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 3:
+            try:
+                return int(value[0]), int(value[1]), int(value[2])
+            except Exception:
+                pass
+    hkl_preview = row.get("hkl_preview")
+    if isinstance(hkl_preview, Sequence) and not isinstance(hkl_preview, (str, bytes)):
+        for preview_value in hkl_preview:
+            if isinstance(preview_value, (list, tuple, np.ndarray)) and len(preview_value) >= 3:
+                try:
+                    return int(preview_value[0]), int(preview_value[1]), int(preview_value[2])
+                except Exception:
+                    continue
+    return None
+
+
+def _geometry_fit_copy_numeric_pair(
+    row: dict[str, object],
+    *,
+    source_keys: Sequence[tuple[str, str]],
+    target_keys: tuple[str, str],
+) -> None:
+    if row.get(target_keys[0]) is not None and row.get(target_keys[1]) is not None:
+        return
+    for x_key, y_key in source_keys:
+        try:
+            x_value = float(row[x_key])
+            y_value = float(row[y_key])
+        except Exception:
+            continue
+        if np.isfinite(x_value) and np.isfinite(y_value):
+            row.setdefault(target_keys[0], float(x_value))
+            row.setdefault(target_keys[1], float(y_value))
+            return
+
+
+def _geometry_fit_source_row_from_q_group_cache_row(
+    raw_row: Mapping[str, object],
+    *,
+    fallback_index: int,
+) -> dict[str, object] | None:
+    row = dict(raw_row)
+    group_key = (
+        _geometry_fit_normalized_q_group_key(row.get("q_group_key"))
+        or _geometry_fit_normalized_q_group_key(row.get("source_q_group_key"))
+        or _geometry_fit_normalized_q_group_key(row.get("group_key"))
+        or _geometry_fit_normalized_q_group_key(row.get("key"))
+    )
+    if group_key is not None:
+        row["q_group_key"] = tuple(group_key)
+        row.setdefault("source_q_group_key", tuple(group_key))
+        if len(group_key) >= 2:
+            row.setdefault("source_label", str(group_key[1]))
+    source_label = str(row.get("source_label", "primary") or "primary")
+    row["source_label"] = source_label
+    row.setdefault(
+        "phase_label",
+        "Disordered phase" if source_label == "disordered_phase" else "Primary",
+    )
+    row.setdefault(
+        "structure_role",
+        "disordered" if source_label == "disordered_phase" else "primary",
+    )
+    hkl = _geometry_fit_hkl_from_row(row)
+    if hkl is not None:
+        row["hkl"] = tuple(hkl)
+    _geometry_fit_copy_numeric_pair(
+        row,
+        source_keys=(
+            ("detector_display_x", "detector_display_y"),
+            ("display_col", "display_row"),
+            ("sim_col", "sim_row"),
+            ("sim_col_raw", "sim_row_raw"),
+            ("x", "y"),
+            ("simulated_x", "simulated_y"),
+        ),
+        target_keys=("sim_col", "sim_row"),
+    )
+    _geometry_fit_copy_numeric_pair(
+        row,
+        source_keys=(
+            ("sim_col", "sim_row"),
+            ("display_col", "display_row"),
+            ("detector_display_x", "detector_display_y"),
+        ),
+        target_keys=("detector_display_x", "detector_display_y"),
+    )
+    _geometry_fit_copy_numeric_pair(
+        row,
+        source_keys=(
+            ("detector_native_x", "detector_native_y"),
+            ("native_col", "native_row"),
+            ("sim_native_col", "sim_native_row"),
+        ),
+        target_keys=("detector_native_x", "detector_native_y"),
+    )
+    _geometry_fit_copy_numeric_pair(
+        row,
+        source_keys=(
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+            ("background_two_theta_deg", "background_phi_deg"),
+        ),
+        target_keys=("caked_x", "caked_y"),
+    )
+    if row.get("source_reflection_index") is not None:
+        row.setdefault("source_reflection_namespace", "full_reflection")
+        row.setdefault("source_reflection_is_full", True)
+    row.setdefault("job_local_fit_source_row_index", int(fallback_index))
+    if group_key is None and hkl is None:
+        return None
+    return row
+
+
+def _geometry_fit_flatten_q_group_cache_entries(
+    entries: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for entry_index, raw_entry in enumerate(entries or ()):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        group_key = (
+            _geometry_fit_normalized_q_group_key(entry.get("q_group_key"))
+            or _geometry_fit_normalized_q_group_key(entry.get("key"))
+        )
+        child_rows: list[dict[str, object]] = []
+        for key in (
+            "rows",
+            "peaks",
+            "peak_rows",
+            "source_rows",
+            "detector_picker_source_rows",
+            "detector_picker_rows",
+        ):
+            raw_rows = entry.get(key)
+            if not isinstance(raw_rows, Sequence) or isinstance(raw_rows, (str, bytes)):
+                continue
+            for raw_row in raw_rows:
+                if isinstance(raw_row, Mapping):
+                    child = dict(raw_row)
+                    if group_key is not None:
+                        child.setdefault("q_group_key", group_key)
+                    child.setdefault("source_label", entry.get("source_label"))
+                    child.setdefault("phase_label", entry.get("phase_label"))
+                    child.setdefault("structure_role", entry.get("structure_role"))
+                    child_rows.append(child)
+        if child_rows:
+            rows.extend(child_rows)
+            continue
+        rows.append(entry)
+    normalized_rows: list[dict[str, object]] = []
+    for row_index, raw_row in enumerate(rows):
+        normalized = _geometry_fit_source_row_from_q_group_cache_row(
+            raw_row,
+            fallback_index=int(row_index),
+        )
+        if normalized is not None:
+            normalized_rows.append(normalized)
+    return normalized_rows
+
+
+def _geometry_fit_manual_picker_cache_data_for_job(
+    *,
+    background_index: int,
+    params_local: Mapping[str, object],
+    display_background: object | None,
+) -> dict[str, object]:
+    cached_data = getattr(geometry_runtime_state, "manual_pick_cache_data", None)
+    if isinstance(cached_data, dict) and cached_data:
+        return dict(cached_data)
+    get_cache = globals().get("_get_geometry_manual_pick_cache")
+    if callable(get_cache):
+        try:
+            cache_data = get_cache(
+                param_set=dict(params_local),
+                prefer_cache=True,
+                background_index=int(background_index),
+                background_image=display_background,
+            )
+        except Exception:
+            cache_data = None
+        if isinstance(cache_data, dict):
+            return dict(cache_data)
+    return {}
+
+
+def _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
+    *,
+    background_index: int,
+    params_local: Mapping[str, object],
+    display_background: object | None,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    q_group_entries = _geometry_fit_q_group_cache_entries()
+    cache_data = _geometry_fit_manual_picker_cache_data_for_job(
+        background_index=int(background_index),
+        params_local=params_local,
+        display_background=display_background,
+    )
+    picker_rows = (
+        gui_manual_geometry.geometry_manual_detector_picker_source_rows_from_cache(cache_data)
+        if isinstance(cache_data, Mapping)
+        else []
+    )
+    normalized_picker_rows = [
+        row
+        for idx, raw_row in enumerate(picker_rows or ())
+        if isinstance(raw_row, Mapping)
+        for row in (
+            _geometry_fit_source_row_from_q_group_cache_row(
+                raw_row,
+                fallback_index=int(idx),
+            ),
+        )
+        if row is not None
+    ]
+    if normalized_picker_rows:
+        rows = normalized_picker_rows
+        cache_source = "manual_picker_cache"
+    else:
+        rows = _geometry_fit_flatten_q_group_cache_entries(q_group_entries)
+        cache_source = "q_group_snapshot"
+    diagnostics = {
+        "q_group_cached_entries": int(len(q_group_entries)),
+        "manual_picker_candidates": int(len(picker_rows or ())),
+        "job_local_fallback_rows": int(len(rows)),
+        "job_local_fallback_source": str(cache_source),
+        "job_local_fallback_source_counts": _geometry_fit_live_row_source_counts(rows),
+    }
+    return rows, diagnostics
+
+
+def _geometry_fit_forward_source_rows_for_rebuild(
+    rebuild_callback: Callable[..., object],
+    source_tables: Sequence[object] | None,
+    *,
+    params_local: Mapping[str, object],
+    fallback_consumer: object = "geometry_fit_preflight_cache",
+    kwargs: Mapping[str, object] | None = None,
+) -> object:
+    forwarded = dict(kwargs or {})
+    forwarded_consumer = str(
+        forwarded.pop("consumer", None)
+        or fallback_consumer
+        or "geometry_fit_preflight_cache"
+    )
+    _append_runtime_update_trace(
+        "geometry_fit_fresh_rebuild_consumer_wrapper",
+        fresh_rebuild_consumer_wrapper=GEOMETRY_FIT_FRESH_REBUILD_CONSUMER_WRAPPER_MARKER,
+        consumer=forwarded_consumer,
+    )
+    return rebuild_callback(
+        source_tables,
+        params_local=params_local,
+        consumer=forwarded_consumer,
+        **forwarded,
+    )
+
+
 def _geometry_fit_pending_late_event_tokens() -> set[tuple[int, int, int]]:
     tokens = getattr(simulation_runtime_state, "geometry_fit_pending_late_event_tokens", None)
     if isinstance(tokens, set):
@@ -39942,16 +41329,155 @@ def _build_geometry_fit_async_job(
 
     live_rows_by_background: dict[int, list[dict[str, object]]] = {}
     live_rows_cache_metadata_by_background: dict[int, dict[str, object]] = {}
+    live_rows_signature_by_background: dict[int, object] = {}
+    live_rows_handoff_diagnostics: dict[str, object] = {
+        "geometry_fit_live_handoff_patch_marker": GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
+        "current_background": int(current_background_index),
+        "q_group_cached_entries": int(len(_geometry_fit_q_group_cache_entries())),
+        "manual_picker_candidates": 0,
+        "live_preview_rows_count": 0,
+        "live_rows_by_background_keys": [],
+        "live_rows_by_background_current_count": 0,
+        "requested_signature_keys": sorted(int(key) for key in requested_signatures),
+        "requested_signature_by_background_keys": sorted(
+            int(key) for key in requested_signatures
+        ),
+        "live_rows_signature_by_background_keys": [],
+    }
     if int(current_background_index) in set(required_indices):
-        live_rows_by_background[int(current_background_index)] = [
+        current_background_idx = int(current_background_index)
+        live_preview_rows = [
             dict(entry)
             for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
             if isinstance(entry, Mapping)
         ]
-        live_rows_cache_metadata_by_background[int(current_background_index)] = (
+        live_rows_by_background[current_background_idx] = live_preview_rows
+        live_rows_cache_metadata_by_background[current_background_idx] = (
             dict(_last_live_preview_cache_metadata())
             if callable(_last_live_preview_cache_metadata)
             else {}
+        )
+        live_rows_signature_by_background[current_background_idx] = requested_signatures.get(
+            current_background_idx
+        )
+        live_rows_cache_metadata_by_background[current_background_idx].update(
+            {
+                "live_rows_raw_count": int(
+                    len(live_rows_by_background.get(current_background_idx, ()))
+                ),
+                "live_rows_payload_count": int(
+                    len(live_rows_by_background.get(current_background_idx, ()))
+                ),
+                "live_rows_signature_match": True,
+                "live_rows_signature_reason": "matched_at_job_build",
+                "live_rows_cache_source": str(
+                    live_rows_cache_metadata_by_background[current_background_idx].get(
+                        "cache_source",
+                        "live_preview_cache",
+                    )
+                    or "live_preview_cache"
+                ),
+                "live_rows_source_counts": _geometry_fit_live_row_source_counts(
+                    live_rows_by_background.get(current_background_idx, ())
+                ),
+                "geometry_fit_live_handoff_patch_marker": (
+                    GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
+                ),
+            }
+        )
+        live_rows_handoff_diagnostics["live_preview_rows_count"] = int(len(live_preview_rows))
+        if not live_preview_rows:
+            background_payload = dict(background_images.get(current_background_idx) or {})
+            fallback_params = dict(fit_params_snapshot)
+            fallback_params["theta_initial"] = float(
+                theta_initial_by_background.get(
+                    current_background_idx,
+                    fit_params_snapshot.get("theta_initial", theta_initial_value),
+                )
+            )
+            fallback_rows, fallback_diag = (
+                _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
+                    background_index=current_background_idx,
+                    params_local=fallback_params,
+                    display_background=background_payload.get("display"),
+                )
+            )
+            live_rows_handoff_diagnostics.update(dict(fallback_diag))
+            if fallback_rows:
+                live_rows_by_background[current_background_idx] = [
+                    dict(row) for row in fallback_rows
+                ]
+                live_rows_cache_metadata_by_background[current_background_idx].update(
+                    {
+                        "cache_source": str(
+                            fallback_diag.get("job_local_fallback_source")
+                            or "q_group_snapshot"
+                        ),
+                        "live_rows_cache_source": str(
+                            fallback_diag.get("job_local_fallback_source")
+                            or "q_group_snapshot"
+                        ),
+                        "live_rows_raw_count": int(len(fallback_rows)),
+                        "live_rows_payload_count": int(len(fallback_rows)),
+                        "live_rows_signature_match": True,
+                        "live_rows_signature_reason": "matched_job_local_snapshot",
+                        "live_rows_source_counts": _geometry_fit_live_row_source_counts(
+                            fallback_rows
+                        ),
+                        "geometry_fit_live_handoff_patch_marker": (
+                            GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
+                        ),
+                        "job_local_fallback_rows": int(len(fallback_rows)),
+                        "job_local_fallback_source": str(
+                            fallback_diag.get("job_local_fallback_source")
+                            or "q_group_snapshot"
+                        ),
+                    }
+                )
+                _append_runtime_update_trace(
+                    "geometry_fit_job_live_rows_from_q_group_snapshot",
+                    geometry_fit_live_handoff_patch_marker=(
+                        GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
+                    ),
+                    background_index=int(current_background_idx),
+                    rows=int(len(fallback_rows)),
+                    sources=_geometry_fit_live_row_source_counts(fallback_rows),
+                    job_local_fallback_source=str(
+                        fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
+                    ),
+                )
+        live_rows_handoff_diagnostics.update(
+            {
+                "live_rows_by_background_keys": sorted(
+                    int(key) for key in live_rows_by_background
+                ),
+                "live_rows_by_background_current_count": int(
+                    len(live_rows_by_background.get(current_background_idx, ()))
+                ),
+                "live_rows_current_background_count": int(
+                    len(live_rows_by_background.get(current_background_idx, ()))
+                ),
+                "live_rows_signature_by_background_keys": sorted(
+                    int(key) for key in live_rows_signature_by_background
+                ),
+            }
+        )
+        live_rows_cache_metadata_by_background[current_background_idx].update(
+            {
+                "geometry_fit_live_handoff_patch_marker": (
+                    GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
+                ),
+                "live_rows_handoff_diagnostics": dict(live_rows_handoff_diagnostics),
+                "q_group_cached_entries": int(
+                    live_rows_handoff_diagnostics.get("q_group_cached_entries", 0) or 0
+                ),
+                "manual_picker_candidates": int(
+                    live_rows_handoff_diagnostics.get("manual_picker_candidates", 0) or 0
+                ),
+                "live_preview_rows_count": int(
+                    live_rows_handoff_diagnostics.get("live_preview_rows_count", 0) or 0
+                ),
+            }
         )
     if manual_fit_uses_caked_space and int(current_background_index) in set(required_indices):
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
@@ -40057,6 +41583,28 @@ def _build_geometry_fit_async_job(
         int(getattr(simulation_runtime_state, "geometry_fit_job_counter", 0) or 0) + 1
     )
     job_id = int(getattr(simulation_runtime_state, "geometry_fit_job_counter", 0) or 0)
+    live_rows_handoff_diagnostics.update(
+        {
+            "live_rows_by_background_keys": sorted(int(key) for key in live_rows_by_background),
+            "live_rows_current_background_count": int(
+                len(live_rows_by_background.get(int(current_background_index), ()))
+            ),
+            "live_rows_by_background_current_count": int(
+                len(live_rows_by_background.get(int(current_background_index), ()))
+            ),
+            "live_rows_signature_by_background_keys": sorted(
+                int(key) for key in live_rows_signature_by_background
+            ),
+            "requested_signature_keys": sorted(int(key) for key in requested_signatures),
+            "requested_signature_by_background_keys": sorted(
+                int(key) for key in requested_signatures
+            ),
+        }
+    )
+    _append_runtime_update_trace(
+        "geometry_fit_job_live_rows_build",
+        **dict(live_rows_handoff_diagnostics),
+    )
     return {
         "job_id": int(job_id),
         "stamp": stamp,
@@ -40123,7 +41671,9 @@ def _build_geometry_fit_async_job(
         "memory_intersection_cache_signature": (simulation_runtime_state.last_simulation_signature),
         "live_rows_by_background": live_rows_by_background,
         "live_rows_cache_metadata_by_background": live_rows_cache_metadata_by_background,
+        "live_rows_signature_by_background": live_rows_signature_by_background,
         "live_rows_signature": simulation_runtime_state.last_simulation_signature,
+        "live_rows_handoff_diagnostics": live_rows_handoff_diagnostics,
         "manual_match_config": manual_match_config,
         "manual_fit_space_by_background": dict(manual_fit_space_by_background),
         "pick_uses_caked_space": bool(pick_uses_caked_space),
@@ -40182,6 +41732,14 @@ def _format_source_cache_worker_event_message(
     generation_id = payload_mapping.get("source_cache_generation_id")
 
     parts: list[str] = []
+    marker = str(payload_mapping.get("geometry_fit_live_handoff_patch_marker", "") or "").strip()
+    if marker:
+        parts.append(f"geometry_fit_live_handoff_patch_marker={marker}")
+    wrapper_marker = str(
+        payload_mapping.get("fresh_rebuild_consumer_wrapper", "") or ""
+    ).strip()
+    if wrapper_marker:
+        parts.append(f"fresh_rebuild_consumer_wrapper={wrapper_marker}")
     if background_number is not None and background_number > 0:
         parts.append(f"background {int(background_number)}")
     if status:
@@ -40196,6 +41754,81 @@ def _format_source_cache_worker_event_message(
             parts.append(f"hit_tables={int(hit_table_count)}")
         except Exception:
             pass
+    for output_key, payload_key in (
+        ("stored_tables", "stored_tables"),
+        ("stored_hit_rows", "stored_hit_rows"),
+        ("built_rows", "built_rows"),
+        ("projection_rows", "projection_rows"),
+        ("enabled_filter_rows", "enabled_filter_rows"),
+        ("required_pair_source_filter_rows", "required_pair_source_filter_rows"),
+        ("live_rows_raw_count", "live_rows_raw_count"),
+        ("live_rows_payload_count", "live_rows_payload_count"),
+        ("q_group_cached_entries", "q_group_cached_entries"),
+        ("manual_picker_candidates", "manual_picker_candidates"),
+        ("live_preview_rows_count", "live_preview_rows_count"),
+        ("live_rows_by_background_current_count", "live_rows_by_background_current_count"),
+    ):
+        raw_value = payload_mapping.get(payload_key)
+        if raw_value is None:
+            continue
+        try:
+            parts.append(f"{output_key}={int(raw_value)}")
+        except Exception:
+            parts.append(f"{output_key}={raw_value}")
+    if payload_mapping.get("live_rows_signature_match") is not None:
+        parts.append(
+            "live_rows_signature_match="
+            f"{str(bool(payload_mapping.get('live_rows_signature_match'))).lower()}"
+        )
+    live_rows_signature_reason = str(
+        payload_mapping.get("live_rows_signature_reason", "") or ""
+    ).strip()
+    if live_rows_signature_reason:
+        parts.append(f"live_rows_signature_reason={live_rows_signature_reason}")
+    live_rows_cache_source = str(payload_mapping.get("live_rows_cache_source", "") or "").strip()
+    if live_rows_cache_source:
+        parts.append(f"live_rows_cache_source={live_rows_cache_source}")
+    for list_key in (
+        "live_rows_by_background_keys",
+        "requested_signature_keys",
+        "requested_signature_by_background_keys",
+        "live_rows_signature_by_background_keys",
+    ):
+        raw_values = payload_mapping.get(list_key)
+        if raw_values is None:
+            continue
+        if isinstance(raw_values, (list, tuple, set)):
+            list_text = ",".join(str(value) for value in raw_values)
+        else:
+            list_text = str(raw_values)
+        parts.append(f"{list_key}=[{list_text}]")
+    required_pair_sources = payload_mapping.get("required_pair_sources")
+    if required_pair_sources is not None:
+        if isinstance(required_pair_sources, (list, tuple, set)):
+            source_text = ",".join(str(value) for value in required_pair_sources)
+        else:
+            source_text = str(required_pair_sources)
+        if source_text:
+            parts.append(f"required_pair_sources={source_text}")
+    for counts_key in (
+        "source_counts_before_filter",
+        "source_counts_after_filter",
+        "live_rows_source_counts",
+    ):
+        raw_counts = payload_mapping.get(counts_key)
+        if raw_counts is None:
+            continue
+        if isinstance(raw_counts, Mapping):
+            counts_text = ",".join(
+                f"{source}={count}"
+                for source, count in sorted(raw_counts.items(), key=lambda item: str(item[0]))
+            )
+        else:
+            counts_text = str(raw_counts)
+        parts.append(f"{counts_key}={{{counts_text}}}")
+    reason = str(payload_mapping.get("reason", "") or "").strip()
+    if reason:
+        parts.append(f"reason={reason}")
     if cache_source:
         parts.append(f"cache_source={cache_source}")
     if elapsed_s is not None:
@@ -41420,7 +43053,11 @@ def _run_async_geometry_fit_worker_job(
             )
         return _geometry_manual_build_source_rows_from_hit_tables(
             hit_tables_local,
-            image_size_value=int(job_data.get("image_size", image_size)),
+            image_size_value=int(
+                job_data.get("image_size")
+                or globals().get("image_size", 0)
+                or 0
+            ),
             params_local=params_local,
             allow_nominal_hkl_indices=True,
         )
@@ -41443,12 +43080,14 @@ def _run_async_geometry_fit_worker_job(
         if isinstance(param_set, Mapping):
             params_local.update(dict(param_set))
 
-        base_requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
-            int(background_idx)
+        requested_signature_map = _geometry_fit_int_keyed_mapping(
+            job_data.get("requested_signatures", {})
         )
-        base_requested_signature_summary = dict(
-            job_data.get("requested_signature_summaries", {}) or {}
-        ).get(int(background_idx))
+        requested_signature_summary_map = _geometry_fit_int_keyed_mapping(
+            job_data.get("requested_signature_summaries", {})
+        )
+        base_requested_signature = requested_signature_map.get(int(background_idx))
+        base_requested_signature_summary = requested_signature_summary_map.get(int(background_idx))
         if base_requested_signature_summary is None:
             base_requested_signature_summary = _live_cache_signature_summary(
                 base_requested_signature
@@ -41484,22 +43123,53 @@ def _run_async_geometry_fit_worker_job(
             required_manual_fit_targets
         )
         preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
-        live_rows_signature = job_data.get("live_rows_signature")
+        live_rows_signature_map = _geometry_fit_int_keyed_mapping(
+            job_data.get("live_rows_signature_by_background", {})
+        )
+        live_rows_signature = live_rows_signature_map.get(
+            int(background_idx),
+            job_data.get("live_rows_signature"),
+        )
         live_rows_cache_metadata = dict(
             copy.deepcopy(
-                dict(job_data.get("live_rows_cache_metadata_by_background", {}) or {}).get(
-                    int(background_idx),
-                    {},
-                )
+                _geometry_fit_int_keyed_mapping(
+                    job_data.get("live_rows_cache_metadata_by_background", {})
+                ).get(int(background_idx), {})
             )
             or {}
         )
         live_rows = _copy_source_rows(
-            dict(job_data.get("live_rows_by_background", {}) or {}).get(
-                int(background_idx),
-                (),
+            _geometry_fit_int_keyed_mapping(job_data.get("live_rows_by_background", {})).get(
+                int(background_idx), ()
             )
         )
+        live_rows_cache_metadata.setdefault("live_rows_raw_count", int(len(live_rows)))
+        live_rows_cache_metadata.setdefault("live_rows_payload_count", int(len(live_rows)))
+        live_rows_cache_metadata.setdefault(
+            "live_rows_source_counts",
+            _geometry_fit_live_row_source_counts(live_rows),
+        )
+        live_rows_cache_metadata.setdefault(
+            "live_rows_cache_source",
+            str(live_rows_cache_metadata.get("cache_source", "live_preview_cache") or "live_preview_cache"),
+        )
+        live_rows_cache_metadata.setdefault(
+            "geometry_fit_live_handoff_patch_marker",
+            GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
+        )
+        handoff_diag = dict(job_data.get("live_rows_handoff_diagnostics", {}) or {})
+        for diag_key in (
+            "q_group_cached_entries",
+            "manual_picker_candidates",
+            "live_preview_rows_count",
+            "live_rows_by_background_keys",
+            "live_rows_by_background_current_count",
+            "requested_signature_keys",
+            "requested_signature_by_background_keys",
+            "live_rows_signature_by_background_keys",
+        ):
+            if diag_key in handoff_diag:
+                live_rows_cache_metadata.setdefault(diag_key, handoff_diag.get(diag_key))
 
         snapshot = dict(worker_source_row_snapshots.get(int(background_idx)) or {})
         snapshot_signature = snapshot.get("simulation_signature")
@@ -41559,16 +43229,43 @@ def _run_async_geometry_fit_worker_job(
             )
 
         def _worker_live_rows_payload() -> dict[str, object] | list[dict[str, object]]:
-            if requested_signature != live_rows_signature:
-                return []
-            if live_rows_cache_metadata:
-                return {
-                    "rows": [
-                        dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)
-                    ],
-                    "cache_metadata": dict(live_rows_cache_metadata),
+            signature_match = requested_signature == live_rows_signature
+            payload_metadata = dict(live_rows_cache_metadata)
+            payload_metadata.update(
+                {
+                    "live_rows_raw_count": int(len(live_rows)),
+                    "live_rows_payload_count": int(len(live_rows) if signature_match else 0),
+                    "live_rows_signature_match": bool(signature_match),
+                    "live_rows_signature_reason": (
+                        "matched" if signature_match else "requested_signature_mismatch"
+                    ),
+                    "requested_signature_summary": requested_signature_summary,
+                    "live_rows_signature_summary": _live_cache_signature_summary(
+                        live_rows_signature
+                    ),
+                    "live_rows_cache_source": str(
+                        payload_metadata.get("live_rows_cache_source")
+                        or payload_metadata.get("cache_source")
+                        or "live_preview_cache"
+                    ),
+                    "live_rows_source_counts": _geometry_fit_live_row_source_counts(live_rows),
+                    "geometry_fit_live_handoff_patch_marker": (
+                        GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
+                    ),
                 }
-            return [dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)]
+            )
+            if not signature_match:
+                payload_metadata["reason"] = "requested_signature_mismatch"
+                return {
+                    "rows": [],
+                    "cache_metadata": payload_metadata,
+                }
+            return {
+                "rows": [
+                    dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)
+                ],
+                "cache_metadata": payload_metadata,
+            }
 
         projection_view_mode = str(job_data.get("projection_view_mode") or "detector")
         projection_view_signature = _worker_projection_view_signature_for_background(
@@ -41647,11 +43344,12 @@ def _run_async_geometry_fit_worker_job(
             load_logged_intersection_cache=logged_cache_loader,
             logged_cache_matches_params=_geometry_manual_logged_cache_matches_params,
             build_source_rows_from_hit_tables=(
-                lambda source_tables, **kwargs: _build_source_rows_for_rebuild(
+                lambda source_tables, **kwargs: _geometry_fit_forward_source_rows_for_rebuild(
+                    _build_source_rows_for_rebuild,
                     source_tables,
                     params_local=params_local,
-                    consumer=str(consumer or "geometry_fit_preflight_cache"),
-                    **kwargs,
+                    fallback_consumer=str(consumer or "geometry_fit_preflight_cache"),
+                    kwargs=kwargs,
                 )
             ),
             simulate_hit_tables=(

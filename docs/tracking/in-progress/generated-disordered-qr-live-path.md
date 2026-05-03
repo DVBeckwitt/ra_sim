@@ -1,11 +1,11 @@
 # Generated Disordered Qr Live Path
 
-Status: implemented, focused live-path validation green
+Status: implemented, focused live-picker and fit-handoff validation green
 Type: bug fix / GUI picker feature
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
 ## Summary
 
@@ -36,14 +36,33 @@ disordered-phase candidates.
   active picker cache and keeps `source_label="disordered_phase"`.
 - Ordered and disordered rows with the same numeric Qr/Qz remain separate by
   source label.
+- Manual Qr/Qz selection and placement carry the selected source through
+  candidates, detector hit-table coordinates, assigned HKL rows, saved manual
+  pairs, and geometry-fit inputs.
+- Geometry-fit preflight now logs a live handoff marker
+  `geometry_fit_live_handoff_patch_marker=phase4d1`, reports job-build
+  live-row counts, and can build a job-local fit-source-row fallback from the
+  active picker/Q-group cache when preview rows are empty.
+- The fresh source-row rebuild wrapper logs
+  `fresh_rebuild_consumer_wrapper=deduped` and removes duplicate `consumer`
+  keyword forwarding, preventing the prior fit fallback crash.
 
 ## Bug / Error / Feature Status
 
-- Bug status: fixed for the user-reported primary-only picker cache reuse.
-- Error status: no known generated-disordered runtime error remains in focused
-  coverage.
+- Bug status: fixed for the user-reported primary-only picker cache reuse and
+  the downstream source-consistency gap through manual placement and fit
+  preflight handoff.
+- Error status: the active fallback crash
+  `_build_source_rows_for_rebuild() got multiple values for keyword argument
+  'consumer'` is covered by regression tests and should no longer occur on the
+  patched live path.
 - Feature status: implemented with explicit GUI control, live runtime logging,
-  cache invalidation, hit-table scheduling, publishing, and picker-cache tests.
+  cache invalidation, hit-table scheduling, publishing, source-aware picker
+  placement, and fit-handoff diagnostics/tests.
+- Remaining manual check: relaunch the GUI from the committed branch and confirm
+  the live fit trace includes the `phase4d1` marker, nonzero
+  `live_rows_raw_count`, and either `source_cache_live_runtime_cache_accepted`
+  or a specific handoff-drop reason.
 - Remaining risk: full `ra_sim.dev check` is still blocked by pre-existing
   formatting drift in `ra_sim/fitting/optimization.py`, outside this bug fix.
 
@@ -64,6 +83,17 @@ Generated-disordered diagnostics also report:
 - source counts in the Qr/Qz listing message, for example
   `sources: primary=22, disordered_phase=22`
 
+Geometry-fit handoff diagnostics report:
+
+- `geometry_fit_job_live_rows_build`
+- `q_group_cached_entries`
+- `manual_picker_candidates`
+- `live_preview_rows_count`
+- `live_rows_by_background_current_count`
+- `live_rows_source_counts`
+- `live_rows_signature_match`
+- `fresh_rebuild_consumer_wrapper=deduped`
+
 ## Validation
 
 Focused validation:
@@ -79,6 +109,10 @@ Focused validation:
 - `python -m ruff check ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/geometry_q_group_manager.py tests/test_disordered_phase_user_report_live_path.py`
   - passed.
 - `python -m ruff format --check ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/geometry_q_group_manager.py tests/test_disordered_phase_user_report_live_path.py`
+  - passed.
+- `python -m pytest tests/test_geometry_fit_fresh_rebuild_consumer.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fit_live_cache_diagnostics.py -q`
+  - 25 passed.
+- `python -m compileall ra_sim/gui/geometry_fit.py ra_sim/gui/_runtime/runtime_session.py tests`
   - passed.
 
 Blocked validation:

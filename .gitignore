@@ -52,6 +52,7 @@ ra_sim/simulation/output.png
 scripts/debug/simulation.npz
 
 # Generated diagnostic artifacts
+/debug/beam_center_trace.jsonl
 /artifacts/background_peak_fits/
 /artifacts/geometry_fit_correlations/
 /artifacts/geometry_fit_coordinate_diagnostics/
@@ -64,6 +65,7 @@ scripts/debug/simulation.npz
 /artifacts/geometry_fit_ladder/new4_full_validation/a_nfev*/
 /artifacts/geometry_fit_ladder/new4_full_validation/tmp_worker_*.json
 /artifacts/geometry_fit_ladder/new4_full_validation/variant_summary.json
+/artifacts/geometry_fit_ladder/new4_coordinate_audit/
 /artifacts/geometry_fit_ladder/new4/*_rung7_feature_gate_provider_*.json
 /artifacts/geometry_fit_ladder/new4/codex_provider_*/
 /artifacts/geometry_fit_ladder/new4/codex_provider_*.json

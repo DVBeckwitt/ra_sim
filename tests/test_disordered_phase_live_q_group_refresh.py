@@ -82,7 +82,11 @@ def _decision_lines(log_text: str) -> list[str]:
     return [
         line
         for line in log_text.splitlines()
-        if "Disordered Qr refs enabled:" in line or "Disordered Qr refs skipped:" in line
+        if (
+            "Disordered Qr refs enabled:" in line
+            or "Disordered Qr refs skipped:" in line
+            or "Disordered Qr refs pending:" in line
+        )
     ]
 
 
@@ -93,7 +97,9 @@ def _exercise_update_listed_peaks_refresh(
     disordered_enabled: bool,
     generate_pbii_ht_shifted_cif=None,
     miller_generator=None,
-) -> str:
+    capture_trace: bool = True,
+    return_messages: bool = False,
+) -> str | tuple[list[str], list[str], object]:
     runtime_session, runtime_state = _prepare_live_runtime(
         monkeypatch,
         tmp_path,
@@ -131,12 +137,20 @@ def _exercise_update_listed_peaks_refresh(
         lambda job: requested_jobs.append(dict(job)) or "submitted",
         raising=False,
     )
-    monkeypatch.setattr(
-        runtime_session,
-        "_append_runtime_update_trace",
-        lambda event, **fields: trace_messages.append(str(fields.get("message") or event)),
-        raising=False,
-    )
+    if capture_trace:
+        monkeypatch.setattr(
+            runtime_session,
+            "_append_runtime_update_trace",
+            lambda event, **fields: trace_messages.append(str(fields.get("message") or event)),
+            raising=False,
+        )
+    else:
+        monkeypatch.setattr(
+            runtime_session,
+            "_append_runtime_update_trace",
+            lambda *_args, **_kwargs: None,
+            raising=False,
+        )
 
     runtime_session.do_update()
     progress_messages.clear()
@@ -151,6 +165,8 @@ def _exercise_update_listed_peaks_refresh(
     runtime_session.do_update()
     first_log_text = "\n".join([*progress_messages, *trace_messages])
     if "Updated listed Qr/Qz peaks:" in first_log_text or not requested_jobs:
+        if return_messages:
+            return list(progress_messages), list(trace_messages), runtime_state
         return first_log_text
 
     requested_job = dict(requested_jobs[-1])
@@ -177,87 +193,332 @@ def _exercise_update_listed_peaks_refresh(
 
     runtime_session.do_update()
 
+    if return_messages:
+        return list(progress_messages), list(trace_messages), runtime_state
     return "\n".join([*progress_messages, *trace_messages])
+
+
+def _has_primary_only_update(progress_messages: list[str]) -> bool:
+    return any(
+        "Updated listed Qr/Qz peaks:" in msg
+        and "sources: primary=" in msg
+        and f"{DISORDERED_PHASE_SOURCE_LABEL}=" not in msg
+        for msg in progress_messages
+    )
 
 
 def test_q_group_refresh_always_logs_disordered_decision(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    log_text = _exercise_update_listed_peaks_refresh(
+    progress_messages, trace_messages, _runtime_state = _exercise_update_listed_peaks_refresh(
         monkeypatch,
         tmp_path,
         disordered_enabled=False,
+        return_messages=True,
     )
+    progress_text = "\n".join(progress_messages)
+    trace_text = "\n".join(trace_messages)
+    log_text = "\n".join([progress_text, trace_text])
 
     assert "Updating listed Qr/Qz peaks from the current simulation..." in log_text
-    assert "Updated listed Qr/Qz peaks:" in log_text
-    assert len(_decision_lines(log_text)) == 1
+    assert "Updated listed Qr/Qz peaks:" in progress_text
+    assert len(_decision_lines(progress_text)) == 1
 
 
-def test_user_report_nonzero_disorder_does_not_silently_remain_primary_only(
+def test_visible_q_group_refresh_log_includes_disordered_decision_without_trace_capture(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    log_text = _exercise_update_listed_peaks_refresh(
+    runtime_session, runtime_state = _prepare_live_runtime(
         monkeypatch,
         tmp_path,
         disordered_enabled=True,
     )
-
-    assert "Updated listed Qr/Qz peaks:" in log_text
-    assert "sources: primary=" in log_text
-    assert len(_decision_lines(log_text)) == 1
-    assert (
-        f"{DISORDERED_PHASE_SOURCE_LABEL}=" in log_text
-        or "Disordered Qr refs enabled:" in log_text
-        or "Disordered Qr refs skipped:" in log_text
+    progress_messages: list[str] = []
+    scheduled_updates: list[str] = []
+    _install_live_q_group_refresh_path(
+        monkeypatch,
+        runtime_session,
+        runtime_state,
+        progress_messages=progress_messages,
+        scheduled_updates=scheduled_updates,
     )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
+    runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
+
+    assert any(
+        "Disordered Qr refs enabled:" in msg
+        or "Disordered Qr refs skipped:" in msg
+        or "Disordered Qr refs pending:" in msg
+        for msg in progress_messages
+    )
+
+
+def test_enabled_disordered_missing_rows_defers_primary_only_q_group_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_session, runtime_state = _prepare_live_runtime(
+        monkeypatch,
+        tmp_path,
+        disordered_enabled=True,
+    )
+    progress_messages: list[str] = []
+    scheduled_updates: list[str] = []
+    _install_live_q_group_refresh_path(
+        monkeypatch,
+        runtime_session,
+        runtime_state,
+        progress_messages=progress_messages,
+        scheduled_updates=scheduled_updates,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
+    runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
+
+    assert any("Disordered Qr refs pending:" in msg for msg in progress_messages)
+    assert runtime_state.disordered_phase_hit_table_collection_requested is True
+    assert not _has_primary_only_update(progress_messages)
 
 
 def test_q_group_refresh_logs_enabled_status_when_generated_disorder_active(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    log_text = _exercise_update_listed_peaks_refresh(
+    runtime_session, runtime_state = _prepare_live_runtime(
         monkeypatch,
         tmp_path,
         disordered_enabled=True,
     )
+    progress_messages: list[str] = []
+    scheduled_updates: list[str] = []
+    _install_live_q_group_refresh_path(
+        monkeypatch,
+        runtime_session,
+        runtime_state,
+        progress_messages=progress_messages,
+        scheduled_updates=scheduled_updates,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
+    runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
 
-    assert "Updated listed Qr/Qz peaks:" in log_text
-    assert _decision_lines(log_text) == ["Disordered Qr refs enabled: true"]
+    assert "Disordered Qr refs enabled: true" in progress_messages
+    assert any("Disordered Qr refs pending:" in msg for msg in progress_messages)
+    assert not _has_primary_only_update(progress_messages)
 
 
 def test_q_group_refresh_logs_skip_reason_when_generated_disorder_inactive(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    log_text = _exercise_update_listed_peaks_refresh(
+    progress_messages, trace_messages, _runtime_state = _exercise_update_listed_peaks_refresh(
         monkeypatch,
         tmp_path,
         disordered_enabled=False,
+        return_messages=True,
     )
+    progress_text = "\n".join(progress_messages)
 
-    assert "Updated listed Qr/Qz peaks:" in log_text
-    assert _decision_lines(log_text) == ["Disordered Qr refs skipped: zero disordered weight"]
+    assert any("Updated listed Qr/Qz peaks:" in msg for msg in progress_messages)
+    assert _decision_lines(progress_text) == [
+        "Disordered Qr refs skipped: zero disordered weight"
+    ]
+
+
+def test_disabled_generated_disordered_qr_does_not_log_inventory_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    progress_messages, _trace_messages, _runtime_state = _exercise_update_listed_peaks_refresh(
+        monkeypatch,
+        tmp_path,
+        disordered_enabled=False,
+        return_messages=True,
+    )
+    progress_text = "\n".join(progress_messages)
+
+    assert "Disordered Qr refs skipped: zero disordered weight" in progress_messages
+    assert "Disordered Qr refs inventory:" not in progress_text
 
 
 def test_updated_q_group_log_cannot_appear_without_disordered_decision_log(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    inactive_log_text = _exercise_update_listed_peaks_refresh(
+    inactive_progress, inactive_trace, _runtime_state = _exercise_update_listed_peaks_refresh(
         monkeypatch,
         tmp_path,
         disordered_enabled=False,
+        return_messages=True,
     )
-    active_log_text = _exercise_update_listed_peaks_refresh(
+    runtime_session, runtime_state = _prepare_live_runtime(
+        monkeypatch, tmp_path, disordered_enabled=True
+    )
+    active_progress: list[str] = []
+    scheduled_updates: list[str] = []
+    _install_live_q_group_refresh_path(
+        monkeypatch,
+        runtime_session,
+        runtime_state,
+        progress_messages=active_progress,
+        scheduled_updates=scheduled_updates,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
+    runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
+
+    for log_text in (
+        "\n".join(inactive_progress),
+        "\n".join(active_progress),
+    ):
+        assert _decision_lines(log_text)
+    assert any("Updated listed Qr/Qz peaks:" in msg for msg in inactive_progress)
+    assert not _has_primary_only_update(active_progress)
+
+
+def test_pending_disordered_collection_does_not_reschedule_forever(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_session, runtime_state = _prepare_live_runtime(
         monkeypatch,
         tmp_path,
         disordered_enabled=True,
     )
+    progress_messages: list[str] = []
+    scheduled_updates: list[str] = []
+    _install_live_q_group_refresh_path(
+        monkeypatch,
+        runtime_session,
+        runtime_state,
+        progress_messages=progress_messages,
+        scheduled_updates=scheduled_updates,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
 
-    for log_text in (inactive_log_text, active_log_text):
-        assert "Updated listed Qr/Qz peaks:" in log_text
-        assert len(_decision_lines(log_text)) == 1
+    first = runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
+    second = runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
+
+    assert first.scheduled_collection is True
+    assert second.scheduled_collection is False
+    assert runtime_state.disordered_phase_hit_table_collection_requested is True
+    assert "Disordered Qr refs pending: collecting generated disordered hit tables" in (
+        progress_messages
+    )
+    assert (
+        "Disordered Qr refs pending: waiting for generated disordered hit-table update"
+        in progress_messages
+    )
+
+
+def test_terminal_disordered_skip_clears_collection_request_and_does_not_spin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_session, runtime_state = _prepare_live_runtime(
+        monkeypatch,
+        tmp_path,
+        disordered_enabled=True,
+    )
+    progress_messages: list[str] = []
+    scheduled_updates: list[str] = []
+    _install_live_q_group_refresh_path(
+        monkeypatch,
+        runtime_session,
+        runtime_state,
+        progress_messages=progress_messages,
+        scheduled_updates=scheduled_updates,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "miller_generator",
+        lambda *_args, **_kwargs: (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            None,
+            None,
+        ),
+        raising=False,
+    )
+    runtime_state.disordered_phase_inventory_cache = None
+    runtime_state.disordered_phase_hit_table_collection_requested = True
+    runtime_state.disordered_phase_hit_table_collection_request_signature = ("old",)
+    runtime_session.geometry_q_group_state.refresh_requested = True
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
+
+    result = runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
+
+    assert result.can_refresh_selector is False
+    assert result.scheduled_collection is False
+    assert runtime_state.disordered_phase_hit_table_collection_requested is False
+    assert runtime_state.disordered_phase_hit_table_collection_request_signature is None
+    assert runtime_session.geometry_q_group_state.refresh_requested is False
+    assert any(
+        message.startswith(
+            "Disordered Qr refs skipped: generated Miller rows empty after explicit-P1 fallback;"
+        )
+        for message in progress_messages
+    )

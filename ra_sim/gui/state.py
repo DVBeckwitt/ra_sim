@@ -1164,6 +1164,8 @@ class SimulationRuntimeState:
     stored_disordered_phase_peak_table_lattice: Any = None
     disordered_phase_inventory_cache: dict[str, object] | None = None
     generated_disordered_phase_cif_path: str | None = None
+    disordered_phase_hit_table_collection_requested: bool = False
+    disordered_phase_hit_table_collection_request_signature: object = None
     stored_primary_intersection_cache: list[Any] | None = None
     stored_primary_intersection_cache_signature: object = None
     stored_secondary_intersection_cache: list[Any] | None = None

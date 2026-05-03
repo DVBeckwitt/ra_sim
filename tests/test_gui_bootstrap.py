@@ -1441,7 +1441,7 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
         integration_region_overlay="overlay",
         image_display="image-display",
         range_visible_factory="range-visible",
-        caked_custom_mask_factory="custom-mask",
+        caked_qr_rod_payload_factory="custom-payload",
     )
 
     assert bundle.bindings_factory == "bindings-factory"
@@ -1460,7 +1460,7 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
                 "integration_region_overlay": "overlay",
                 "image_display": "image-display",
                 "range_visible_factory": "range-visible",
-                "caked_custom_mask_factory": "custom-mask",
+                "caked_qr_rod_payload_factory": "custom-payload",
             },
         ),
         ("refresh", "bindings-factory"),

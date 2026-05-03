@@ -193,8 +193,64 @@ def test_current_refresh_logs_no_stored_rows_skip_reason(
         inventory_available=False,
     )
 
-    assert "Updated listed Qr/Qz peaks:" in log_text
-    assert "Disordered Qr refs skipped: no stored disordered hit tables" in log_text
+    assert "Updated listed Qr/Qz peaks:" not in log_text
+    assert "Disordered Qr refs skipped: generated Miller rows empty after explicit-P1 fallback;" in log_text
+
+
+def test_empty_disordered_hit_tables_are_not_present_for_required_run_side(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_session, runtime_state = _prepare_live_runtime(
+        monkeypatch,
+        tmp_path,
+        disordered_enabled=True,
+    )
+    runtime_state.stored_disordered_phase_max_positions = []
+
+    assert not runtime_session._hit_table_state_present_for_run_sides(
+        run_primary=True,
+        run_secondary=False,
+        run_disordered_phase=True,
+    )
+
+
+def test_empty_disordered_rows_do_not_publish_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_session, runtime_state = _prepare_live_runtime(
+        monkeypatch,
+        tmp_path,
+        disordered_enabled=True,
+    )
+    progress_messages: list[str] = []
+    scheduled_updates: list[str] = []
+    _install_live_q_group_refresh_path(
+        monkeypatch,
+        runtime_session,
+        runtime_state,
+        progress_messages=progress_messages,
+        scheduled_updates=scheduled_updates,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_append_runtime_update_trace",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    runtime_state.stored_disordered_phase_max_positions = []
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
+
+    assert (
+        runtime_session._publish_stored_disordered_phase_rows_to_current_q_groups(
+            status,
+            primary_a=4.557,
+            primary_c=6.979,
+        )
+        is False
+    )
+    assert "Disordered Qr refs skipped: no stored disordered hit tables" in progress_messages
 
 
 def test_current_refresh_source_counts_include_disordered_phase(

@@ -49,6 +49,7 @@ from ra_sim.hbn_geometry import load_tilt_hint
 from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.osc_reader import read_osc
+from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 
 if TYPE_CHECKING:
     from ra_sim.simulation.types import (
@@ -2526,11 +2527,12 @@ def build_headless_simulation_defaults(
         distance_m=distance_m,
     )
 
-    center = np.array(
-        [
-            (poni2 / pixel_size_m),
-            resolved_image_size - (poni1 / pixel_size_m),
-        ],
+    center = np.asarray(
+        gui_geometry_overlay.beam_center_row_col_from_poni(
+            float(poni1),
+            float(poni2),
+            float(pixel_size_m),
+        ),
         dtype=np.float64,
     )
     two_theta_max = detector_two_theta_max(

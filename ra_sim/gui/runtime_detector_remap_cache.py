@@ -22,14 +22,16 @@ class DetectorCenterRemapCacheState:
     has_unclipped_hit_tables: bool = False
 
 
-def _as_center_pair(center: Sequence[object]) -> tuple[float, float]:
+def _as_center_row_col(center: Sequence[object]) -> tuple[float, float]:
+    """Return a detector-center sequence as native ``(row, col)`` pixels."""
+
     if len(center) < 2:
-        raise ValueError("center must contain column and row")
-    center_col = float(center[0])
-    center_row = float(center[1])
-    if not np.isfinite(center_col) or not np.isfinite(center_row):
+        raise ValueError("center must contain row and column")
+    center_row = float(center[0])
+    center_col = float(center[1])
+    if not np.isfinite(center_row) or not np.isfinite(center_col):
         raise ValueError("center values must be finite")
-    return center_col, center_row
+    return center_row, center_col
 
 
 def _copy_hit_tables(hit_tables: object) -> list[np.ndarray]:
@@ -81,9 +83,9 @@ def make_relative_hit_tables_for_center(
     hit_tables: object,
     center: Sequence[object],
 ) -> list[np.ndarray]:
-    """Store hit-table col/row coordinates relative to a detector center."""
+    """Store hit-table col/row coordinates relative to native ``(row, col)`` center."""
 
-    center_col, center_row = _as_center_pair(center)
+    center_row, center_col = _as_center_row_col(center)
     relative_tables = _copy_hit_tables(hit_tables)
     for table in relative_tables:
         table[:, 1] -= center_col
@@ -95,9 +97,9 @@ def materialize_absolute_hit_tables_from_relative(
     relative_tables: object,
     new_center: Sequence[object],
 ) -> list[np.ndarray]:
-    """Convert detector-relative hit tables to absolute detector coordinates."""
+    """Convert detector-relative hit tables to absolute col/row detector coordinates."""
 
-    center_col, center_row = _as_center_pair(new_center)
+    center_row, center_col = _as_center_row_col(new_center)
     absolute_tables = _copy_hit_tables(relative_tables)
     for table in absolute_tables:
         table[:, 1] += center_col
@@ -132,7 +134,7 @@ def _payload_present(value: object) -> bool:
 
 def _finite_center(center: Sequence[object]) -> bool:
     try:
-        _as_center_pair(center)
+        _as_center_row_col(center)
     except Exception:
         return False
     return True

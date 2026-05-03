@@ -95,7 +95,9 @@ def _patch_generator(monkeypatch, runtime_session, tmp_path):
 
     def fake_generate_pbii_ht_shifted_cif(*, source_cif, output_dir, mode):
         calls.append((source_cif, output_dir))
-        return SimpleNamespace(cif_path=tmp_path / f"generated-{len(calls)}.cif", a=4.0, c=21.0)
+        generated_path = tmp_path / f"generated-{len(calls)}.cif"
+        generated_path.write_text("data_generated\n", encoding="utf-8")
+        return SimpleNamespace(cif_path=generated_path, a=4.0, c=21.0)
 
     monkeypatch.setattr(
         runtime_session,

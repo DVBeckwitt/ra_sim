@@ -144,18 +144,25 @@ def detector_display_to_native_coords(
 def beam_center_row_col_from_detector_display(
     display_col: float,
     display_row: float,
-    native_shape: tuple[int, ...],
+    detector_shape: tuple[int, ...],
     k: int,
 ) -> tuple[float, float]:
     """Return slider-order ``(row, col)`` for a picked detector-display point.
 
-    Beam-center sliders use detector geometry coordinates, not raw pixel-index
-    coordinates. The inverse rotation therefore uses image extents. For the
-    default clockwise background display, ``row = detector_height - display_col``
-    and ``col = display_row``.
+    For the current default clockwise detector display, GUI Row follows the
+    clicked display row and GUI Col is mirrored across the displayed detector
+    width.
     """
 
-    display_shape = rotated_image_shape(native_shape, int(k))
+    display_shape = rotated_image_shape(detector_shape, int(k))
+    if int(k) % 4 == 3:
+        display_width = float(display_shape[1])
+        center_row = float(display_row)
+        center_col = display_width - float(display_col)
+        return float(center_row), float(center_col)
+    if int(k) % 4 == 0:
+        return float(display_row), float(display_col)
+
     native_col, native_row = rotate_point_for_display_extent(
         float(display_col),
         float(display_row),
@@ -163,6 +170,36 @@ def beam_center_row_col_from_detector_display(
         -int(k),
     )
     return float(native_row), float(native_col)
+
+
+def beam_center_row_col_to_detector_display(
+    center_row: float,
+    center_col: float,
+    detector_shape: tuple[int, ...],
+    k: int,
+) -> tuple[float, float]:
+    """Project slider-order beam-center ``(row, col)`` into detector display.
+
+    This is the inverse of :func:`beam_center_row_col_from_detector_display`
+    for marker placement and diagnostics. For the current default clockwise
+    detector display, ``display_col = detector_width - center_col`` and
+    ``display_row = center_row``.
+    """
+
+    display_shape = rotated_image_shape(detector_shape, int(k))
+    if int(k) % 4 == 3:
+        display_width = float(display_shape[1])
+        return display_width - float(center_col), float(center_row)
+    if int(k) % 4 == 0:
+        return float(center_col), float(center_row)
+
+    display_col, display_row = rotate_point_for_display_extent(
+        float(center_col),
+        float(center_row),
+        detector_shape,
+        int(k),
+    )
+    return float(display_col), float(display_row)
 
 
 def transform_points_orientation(

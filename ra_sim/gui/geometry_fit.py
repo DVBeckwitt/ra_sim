@@ -1819,6 +1819,25 @@ def _geometry_fit_group_identity(
     return None
 
 
+def _geometry_fit_entry_source_label(entry: Mapping[str, object] | None) -> str:
+    if not isinstance(entry, Mapping):
+        return "primary"
+    for key in ("q_group_key", "source_q_group_key"):
+        group_value = entry.get(key)
+        if isinstance(group_value, (list, tuple)) and len(group_value) >= 4:
+            try:
+                if str(group_value[0]) == "q_group":
+                    return gui_manual_geometry.normalize_bragg_qr_source_label(
+                        str(group_value[1])
+                    )
+            except Exception:
+                pass
+    raw_source = entry.get("source_label")
+    if raw_source is not None:
+        return gui_manual_geometry.normalize_bragg_qr_source_label(str(raw_source))
+    return "primary"
+
+
 def _geometry_fit_branch_constraint_status(
     entry: Mapping[str, object] | None,
 ) -> str:
@@ -5987,6 +6006,238 @@ def rebuild_geometry_fit_source_rows(
         copied = copy.deepcopy(resolved)
         return copied if isinstance(copied, dict) else {}
 
+    def _safe_int_value(raw_value: object, default: int = 0) -> int:
+        try:
+            return int(raw_value)
+        except Exception:
+            return int(default)
+
+    def _source_counts_from_rows(
+        rows: Sequence[object] | None,
+    ) -> dict[str, int]:
+        counts: Counter[str] = Counter()
+        for row in rows or ():
+            if not isinstance(row, Mapping):
+                continue
+            counts[str(_geometry_fit_entry_source_label(row))] += 1
+        return dict(sorted(counts.items()))
+
+    def _source_counts_from_metadata(
+        metadata_local: Mapping[str, object],
+        *keys: str,
+    ) -> dict[str, int] | None:
+        for key in keys:
+            raw_counts = metadata_local.get(key)
+            if isinstance(raw_counts, Mapping):
+                return {
+                    str(label): _safe_int_value(count, 0)
+                    for label, count in sorted(raw_counts.items(), key=lambda item: str(item[0]))
+                }
+        return None
+
+    def _required_pair_source_labels() -> list[str]:
+        source_labels = {
+            str(_geometry_fit_entry_source_label(entry))
+            for entry in (
+                collected_required_manual_fit_targets
+                if collected_required_manual_fit_targets
+                else required_pairs or ()
+            )
+            if isinstance(entry, Mapping)
+        }
+        return sorted(source_labels)
+
+    def _live_runtime_cache_empty_reason(
+        *,
+        stored_hit_rows: int,
+        built_rows: int,
+        projected_rows: int,
+        enabled_filter_rows: int,
+        required_pair_source_filter_rows: int,
+    ) -> str:
+        if stored_hit_rows <= 0:
+            return "stored_hit_tables_missing_or_empty"
+        if built_rows <= 0:
+            return "stored_hit_tables_built_zero_rows"
+        if projected_rows <= 0:
+            return "projection_dropped_all_rows"
+        if enabled_filter_rows <= 0:
+            return "enabled_q_group_filter_dropped_all_rows"
+        if required_pair_source_filter_rows <= 0:
+            return "required_pair_source_filter_dropped_all_rows"
+        return "live_runtime_cache_rows_empty"
+
+    def _live_runtime_cache_validation_diagnostics(
+        rows: Sequence[object] | None,
+        metadata_local: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        metadata_dict = dict(metadata_local or {})
+        row_count = int(len(rows or ()))
+        stored_tables = _safe_int_value(
+            metadata_dict.get(
+                "stored_max_positions_table_count",
+                metadata_dict.get("stored_tables", metadata_dict.get("hit_table_count", 0)),
+            ),
+            0,
+        )
+        stored_hit_rows = _safe_int_value(
+            metadata_dict.get(
+                "stored_max_positions_hit_row_count",
+                metadata_dict.get(
+                    "stored_hit_rows",
+                    metadata_dict.get("max_positions_row_count", row_count),
+                ),
+            ),
+            row_count,
+        )
+        stored_lattice = _safe_int_value(
+            metadata_dict.get(
+                "stored_peak_table_lattice_count",
+                metadata_dict.get("stored_peak_table_lattice", 0),
+            ),
+            0,
+        )
+        stored_source_indices = _safe_int_value(
+            metadata_dict.get(
+                "stored_source_reflection_indices_count",
+                metadata_dict.get("stored_source_reflection_indices", 0),
+            ),
+            0,
+        )
+        built_rows = _safe_int_value(
+            metadata_dict.get(
+                "built_stored_hit_table_peak_count",
+                metadata_dict.get("built_rows", metadata_dict.get("simulated_peak_count", row_count)),
+            ),
+            row_count,
+        )
+        projected_rows = _safe_int_value(
+            metadata_dict.get("projected_row_count", metadata_dict.get("projection_rows", row_count)),
+            row_count,
+        )
+        enabled_filter_rows = _safe_int_value(
+            metadata_dict.get(
+                "after_enabled_q_group_filter_count",
+                metadata_dict.get("enabled_filter_rows", row_count),
+            ),
+            row_count,
+        )
+        required_pair_source_filter_rows = _safe_int_value(
+            metadata_dict.get(
+                "after_required_pair_source_filter_count",
+                metadata_dict.get("required_pair_source_filter_rows", row_count),
+            ),
+            row_count,
+        )
+        live_rows_raw_count = _safe_int_value(
+            metadata_dict.get("live_rows_raw_count", row_count),
+            row_count,
+        )
+        live_rows_payload_count = _safe_int_value(
+            metadata_dict.get("live_rows_payload_count", row_count),
+            row_count,
+        )
+        live_rows_signature_match = metadata_dict.get("live_rows_signature_match")
+        if live_rows_signature_match is None:
+            live_rows_signature_match = True
+        else:
+            live_rows_signature_match = bool(live_rows_signature_match)
+        live_rows_signature_reason = str(
+            metadata_dict.get("live_rows_signature_reason", "") or ""
+        ).strip()
+        live_rows_cache_source = str(metadata_dict.get("live_rows_cache_source", "") or "").strip()
+        live_rows_source_counts = _source_counts_from_metadata(
+            metadata_dict,
+            "live_rows_source_counts",
+        )
+        if live_rows_source_counts is None:
+            live_rows_source_counts = _source_counts_from_rows(rows)
+        source_counts_before = _source_counts_from_metadata(
+            metadata_dict,
+            "source_counts_before_filter",
+            "source_counts",
+        )
+        if source_counts_before is None:
+            source_counts_before = _source_counts_from_rows(rows)
+        source_counts_after = _source_counts_from_metadata(
+            metadata_dict,
+            "source_counts_after_filter",
+        )
+        if source_counts_after is None:
+            source_counts_after = _source_counts_from_rows(rows)
+        required_sources = _required_pair_source_labels()
+        reason = str(
+            metadata_dict.get("reason")
+            or metadata_dict.get("empty_reason")
+            or _live_runtime_cache_empty_reason(
+                stored_hit_rows=stored_hit_rows,
+                built_rows=built_rows,
+                projected_rows=projected_rows,
+                enabled_filter_rows=enabled_filter_rows,
+                required_pair_source_filter_rows=required_pair_source_filter_rows,
+            )
+        )
+        return {
+            "geometry_fit_live_handoff_patch_marker": str(
+                metadata_dict.get("geometry_fit_live_handoff_patch_marker", "") or ""
+            ),
+            "stored_max_positions_table_count": int(stored_tables),
+            "stored_max_positions_hit_row_count": int(stored_hit_rows),
+            "stored_peak_table_lattice_count": int(stored_lattice),
+            "stored_source_reflection_indices_count": int(stored_source_indices),
+            "built_stored_hit_table_peak_count": int(built_rows),
+            "projected_row_count": int(projected_rows),
+            "after_enabled_q_group_filter_count": int(enabled_filter_rows),
+            "after_required_pair_source_filter_count": int(required_pair_source_filter_rows),
+            "stored_tables": int(stored_tables),
+            "stored_hit_rows": int(stored_hit_rows),
+            "stored_peak_table_lattice": int(stored_lattice),
+            "stored_source_reflection_indices": int(stored_source_indices),
+            "built_rows": int(built_rows),
+            "projection_rows": int(projected_rows),
+            "enabled_filter_rows": int(enabled_filter_rows),
+            "required_pair_source_filter_rows": int(required_pair_source_filter_rows),
+            "live_rows_raw_count": int(live_rows_raw_count),
+            "live_rows_payload_count": int(live_rows_payload_count),
+            "live_rows_signature_match": bool(live_rows_signature_match),
+            "live_rows_signature_reason": str(live_rows_signature_reason),
+            "live_rows_cache_source": str(live_rows_cache_source),
+            "live_rows_source_counts": dict(live_rows_source_counts),
+            "q_group_cached_entries": _safe_int_value(
+                metadata_dict.get("q_group_cached_entries", 0),
+                0,
+            ),
+            "manual_picker_candidates": _safe_int_value(
+                metadata_dict.get("manual_picker_candidates", 0),
+                0,
+            ),
+            "live_preview_rows_count": _safe_int_value(
+                metadata_dict.get("live_preview_rows_count", row_count),
+                row_count,
+            ),
+            "live_rows_by_background_current_count": _safe_int_value(
+                metadata_dict.get("live_rows_by_background_current_count", row_count),
+                row_count,
+            ),
+            "live_rows_by_background_keys": copy.deepcopy(
+                metadata_dict.get("live_rows_by_background_keys", [])
+            ),
+            "requested_signature_keys": copy.deepcopy(
+                metadata_dict.get("requested_signature_keys", [])
+            ),
+            "requested_signature_by_background_keys": copy.deepcopy(
+                metadata_dict.get("requested_signature_by_background_keys", [])
+            ),
+            "live_rows_signature_by_background_keys": copy.deepcopy(
+                metadata_dict.get("live_rows_signature_by_background_keys", [])
+            ),
+            "required_pair_count": int(len(required_pairs or ())),
+            "required_pair_sources": list(required_sources),
+            "source_counts_before_filter": dict(source_counts_before),
+            "source_counts_after_filter": dict(source_counts_after),
+            "reason": str(reason),
+        }
+
     def _resolve_runtime_simulation_diagnostics() -> dict[str, object]:
         if not callable(last_runtime_simulation_diagnostics):
             return {}
@@ -6134,6 +6385,12 @@ def rebuild_geometry_fit_source_rows(
             ),
             cache_source=str(cache_source),
             hit_table_count=int(len(hit_tables_local or ())),
+            preflight_mode=normalized_preflight_mode,
+        )
+        _emit_rebuild_stage(
+            "source_cache_fresh_rebuild_consumer_wrapper",
+            cache_source=str(cache_source),
+            fresh_rebuild_consumer_wrapper="deduped",
             preflight_mode=normalized_preflight_mode,
         )
         raw_result, accepted_build_keywords = _call_with_optional_keywords(
@@ -6529,6 +6786,10 @@ def rebuild_geometry_fit_source_rows(
             cache_source="live_runtime_cache",
         )
         live_rows, live_runtime_cache_metadata = _resolve_live_rows_payload(build_live_rows())
+        live_runtime_cache_diag = _live_runtime_cache_validation_diagnostics(
+            live_rows,
+            live_runtime_cache_metadata,
+        )
         if live_rows:
             live_cache_validation = validate_geometry_fit_live_source_rows(
                 live_rows,
@@ -6543,7 +6804,6 @@ def rebuild_geometry_fit_source_rows(
                     or ("valid" if live_cache_validation.get("valid") else "invalid")
                 ),
                 row_count=int(len(live_rows)),
-                required_pair_count=int(live_cache_validation.get("required_pair_count", 0) or 0),
                 validated_pair_count=int(live_cache_validation.get("validated_pair_count", 0) or 0),
                 missing_required_pair_count=int(
                     live_cache_validation.get("missing_required_pair_count", 0) or 0
@@ -6554,6 +6814,7 @@ def rebuild_geometry_fit_source_rows(
                 hkl_missing_candidate_count=int(
                     live_cache_validation.get("hkl_missing_candidate_count", 0) or 0
                 ),
+                **live_runtime_cache_diag,
             )
             if bool(live_cache_validation.get("valid", False)):
                 if targeted_preflight_enabled:
@@ -6603,22 +6864,22 @@ def rebuild_geometry_fit_source_rows(
                 cache_source="live_runtime_cache",
                 status="empty_live_runtime_cache",
                 row_count=0,
-                required_pair_count=int(len(required_pairs or ())),
                 validated_pair_count=0,
                 missing_required_pair_count=0,
                 branch_mismatch_count=0,
                 hkl_missing_candidate_count=0,
+                **live_runtime_cache_diag,
             )
             _emit_rebuild_stage(
                 "source_cache_live_runtime_cache_rejected",
                 cache_source="live_runtime_cache",
                 status="empty_live_runtime_cache",
                 row_count=0,
-                required_pair_count=int(len(required_pairs or ())),
                 validated_pair_count=0,
                 missing_required_pair_count=0,
                 branch_mismatch_count=0,
                 hkl_missing_candidate_count=0,
+                **live_runtime_cache_diag,
             )
 
     if force_fresh_simulation:
@@ -6841,6 +7102,7 @@ def rebuild_geometry_fit_source_rows(
     targeted_simulation_used = False
     targeted_simulation_supported = False
     targeted_simulation_fallback_reason: str | None = None
+    fresh_required_source_missing: list[str] = []
     if callable(simulate_hit_tables):
         try:
             if targeted_preflight_enabled and collected_required_branch_group_keys:
@@ -6989,18 +7251,50 @@ def rebuild_geometry_fit_source_rows(
         )
     )
     if fresh_rows:
-        return _success_result(
-            fresh_rows,
-            rebuild_source="fresh_simulation",
-            peak_table_lattice=fresh_lattice,
-            hit_tables_local=fresh_hit_tables,
-            source_reflection_indices=fresh_source_reflection_indices,
-            runtime_simulation_diagnostics=runtime_simulation_diagnostics,
-        )
+        required_source_labels = _required_pair_source_labels()
+        fresh_source_counts = _source_counts_from_rows(fresh_rows)
+        fresh_required_source_missing = [
+            source_label
+            for source_label in required_source_labels
+            if int(fresh_source_counts.get(source_label, 0) or 0) <= 0
+        ]
+        if fresh_required_source_missing:
+            _emit_rebuild_stage(
+                "source_cache_fresh_simulation_required_source_missing",
+                cache_source="fresh_simulation",
+                status="required_source_rows_unavailable",
+                required_pair_sources=list(required_source_labels),
+                source_counts_before_filter=dict(fresh_source_counts),
+                missing_required_sources=list(fresh_required_source_missing),
+                reason="required_source_rows_unavailable",
+            )
+            runtime_simulation_diagnostics = dict(runtime_simulation_diagnostics or {})
+            runtime_simulation_diagnostics.setdefault(
+                "status",
+                "required_source_rows_unavailable",
+            )
+            runtime_simulation_diagnostics["required_pair_sources"] = list(
+                required_source_labels
+            )
+            runtime_simulation_diagnostics["missing_required_sources"] = list(
+                fresh_required_source_missing
+            )
+            runtime_simulation_diagnostics["fresh_source_counts"] = dict(fresh_source_counts)
+        else:
+            return _success_result(
+                fresh_rows,
+                rebuild_source="fresh_simulation",
+                peak_table_lattice=fresh_lattice,
+                hit_tables_local=fresh_hit_tables,
+                source_reflection_indices=fresh_source_reflection_indices,
+                runtime_simulation_diagnostics=runtime_simulation_diagnostics,
+            )
 
     runtime_status = str(runtime_simulation_diagnostics.get("status", "")).strip()
     if fresh_simulation_exception is not None:
         failure_status = runtime_status or "fresh_simulation_exception"
+    elif fresh_required_source_missing:
+        failure_status = "required_source_rows_unavailable"
     elif fresh_hit_tables:
         failure_status = "empty_source_rows"
     elif runtime_status:
@@ -9592,7 +9886,12 @@ def build_geometry_manual_fit_dataset(
                 }
             )
     selected_entries = [
-        dict(item["entry"])
+        {
+            **dict(item["entry"]),
+            "source_label": _geometry_fit_entry_source_label(
+                item["entry"] if isinstance(item.get("entry"), Mapping) else None
+            ),
+        }
         for item in selected_entry_inputs
         if isinstance(item.get("entry"), Mapping)
     ]
@@ -11655,10 +11954,12 @@ def build_geometry_manual_fit_dataset(
     simulated_by_reflection_row: dict[tuple[int, int], dict[str, object]] = {}
     simulated_by_group: dict[object, list[dict[str, object]]] = {}
     simulated_by_hkl: dict[tuple[int, int, int], list[dict[str, object]]] = {}
+    simulated_by_source_hkl: dict[tuple[str, int, int, int], list[dict[str, object]]] = {}
     for raw_entry in simulated_peaks or ():
         if not isinstance(raw_entry, Mapping):
             continue
         entry = dict(raw_entry)
+        entry["source_label"] = _geometry_fit_entry_source_label(entry)
         reflection_row_key = _source_reflection_row_key(entry)
         if reflection_row_key is not None:
             simulated_by_reflection_row[reflection_row_key] = entry
@@ -11671,6 +11972,10 @@ def build_geometry_manual_fit_dataset(
         hkl_key = _normalized_hkl(entry.get("hkl"))
         if hkl_key is not None:
             simulated_by_hkl.setdefault(hkl_key, []).append(entry)
+            simulated_by_source_hkl.setdefault(
+                (_geometry_fit_entry_source_label(entry), *hkl_key),
+                [],
+            ).append(entry)
 
     def _entry_display_point(
         entry: Mapping[str, object] | None,
@@ -11824,6 +12129,8 @@ def build_geometry_manual_fit_dataset(
         if not isinstance(entry, Mapping):
             return True
         if not isinstance(candidate, Mapping):
+            return False
+        if _geometry_fit_entry_source_label(candidate) != _geometry_fit_entry_source_label(entry):
             return False
         required_branch_group = _geometry_fit_stable_group_identity(entry.get("branch_group_key"))
         if required_branch_group is not None:
@@ -12197,9 +12504,17 @@ def build_geometry_manual_fit_dataset(
             )
         hkl_key = _normalized_hkl(entry.get("hkl"))
         if hkl_key is not None:
-            hkl_pool = [dict(item) for item in simulated_by_hkl.get(hkl_key, ())]
+            source_hkl_key = (_geometry_fit_entry_source_label(entry), *hkl_key)
+            hkl_pool = [dict(item) for item in simulated_by_source_hkl.get(source_hkl_key, ())]
+            if not hkl_pool:
+                hkl_pool = [
+                    dict(item)
+                    for item in simulated_by_hkl.get(hkl_key, ())
+                    if _geometry_fit_entry_source_label(item)
+                    == _geometry_fit_entry_source_label(entry)
+                ]
             if hkl_pool:
-                return hkl_pool, "hkl"
+                return hkl_pool, "source_hkl"
         return [], None
 
     def _resolve_source_entry(
@@ -13384,6 +13699,7 @@ def build_geometry_manual_fit_dataset(
             ):
                 if key in identity_source_entry:
                     measured_entry[key] = identity_source_entry.get(key)
+        measured_entry["source_label"] = _geometry_fit_entry_source_label(entry)
         measured_entry["selected_source_identity_canonical"] = provider_identity
         measured_entry["fit_source_identity_only"] = True
         if record.get("fit_resolution_kind") is not None:
@@ -13419,6 +13735,7 @@ def build_geometry_manual_fit_dataset(
             initial_entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             initial_entry["q_group_key"] = tuple(raw_group_key)
+        initial_entry["source_label"] = _geometry_fit_entry_source_label(entry)
         try:
             bg_coords = manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
         except Exception:

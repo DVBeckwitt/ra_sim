@@ -288,6 +288,7 @@ def geometry_manual_cmd_provenance_text(
     branch: object | None = None,
     actual_source: object | None = None,
     expected_source: object | None = None,
+    **extra_fields: object,
 ) -> str:
     resolved_run_id = (
         str(run_id) if run_id is not None and str(run_id) else MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID
@@ -306,6 +307,13 @@ def geometry_manual_cmd_provenance_text(
         parts.append(f"actual_source={str(actual_source)}")
     if expected_source is not None:
         parts.append(f"expected_source={str(expected_source)}")
+    for key, value in extra_fields.items():
+        if value is None:
+            continue
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        parts.append(f"{key_text}={str(value)}")
     return " ".join(parts)
 
 
@@ -1572,7 +1580,22 @@ def normalize_geometry_manual_pair_entry(
         )
 
     if entry.get("source_label") is not None:
-        normalized["source_label"] = str(entry.get("source_label"))
+        if bool(entry.get("background_qr_set_reference", False)):
+            normalized["source_label"] = str(entry.get("source_label"))
+        else:
+            normalized["source_label"] = normalize_bragg_qr_source_label(
+                str(entry.get("source_label"))
+            )
+    elif normalized.get("q_group_key") is not None:
+        normalized["source_label"] = _geometry_manual_q_group_source_label(
+            normalized.get("q_group_key")
+        )
+    elif not bool(entry.get("background_qr_set_reference", False)):
+        normalized["source_label"] = "primary"
+    for text_key in ("phase_label", "structure_role"):
+        raw_text = entry.get(text_key)
+        if raw_text is not None and str(raw_text).strip():
+            normalized[text_key] = str(raw_text)
     if entry.get("background_qr_set_reference_label_source") is not None:
         normalized["background_qr_set_reference_label_source"] = str(
             entry.get("background_qr_set_reference_label_source")
@@ -1676,6 +1699,8 @@ def normalize_geometry_manual_pair_entry(
         ("refined_sim_x", "refined_sim_y"),
         ("refined_sim_native_x", "refined_sim_native_y"),
         ("refined_sim_caked_x", "refined_sim_caked_y"),
+        ("sim_detector_x", "sim_detector_y"),
+        ("obs_detector_x", "obs_detector_y"),
     ):
         raw_x_local = entry.get(x_key)
         raw_y_local = entry.get(y_key)
@@ -3662,11 +3687,20 @@ def _geometry_manual_entry_explicit_current_view_display_point(
 def _geometry_manual_entry_detector_display_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
+    explicit_frame = _geometry_manual_entry_display_frame(entry)
+    if explicit_frame == "detector":
+        detector_point = _geometry_manual_finite_point(
+            entry,
+            (("display_col", "display_row"),),
+        )
+        if detector_point is not None:
+            return detector_point
+
     caked_display_row = bool(
         isinstance(entry, Mapping)
         and (
             entry.get("_caked_qr_projection_cache")
-            or _geometry_manual_entry_display_frame(entry) == "caked"
+            or explicit_frame == "caked"
         )
     )
 
@@ -3810,6 +3844,14 @@ def _geometry_manual_tuple_point(
 def _geometry_manual_entry_current_view_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
+    if _geometry_manual_entry_display_frame(entry) == "detector":
+        detector_point = _geometry_manual_finite_point(
+            entry,
+            (("display_col", "display_row"),),
+        )
+        if detector_point is not None:
+            return detector_point
+
     refined_point = _geometry_manual_tuple_point(entry, "sim_refined_detector_display_px")
     if refined_point is None:
         refined_point = _geometry_manual_finite_point(entry, (("refined_sim_x", "refined_sim_y"),))
@@ -5064,6 +5106,112 @@ def _geometry_manual_q_group_source_label(value: object) -> str:
             str(value.get("source_label")) if value.get("source_label") is not None else None
         )
     return "primary"
+
+
+def _geometry_manual_entry_source_label(
+    entry: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+) -> str:
+    key = _geometry_manual_real_q_group_key(group_key)
+    if key is None:
+        key = _geometry_manual_real_q_group_key(entry)
+    if isinstance(key, tuple) and len(key) >= 4 and str(key[0]) == "q_group":
+        return normalize_bragg_qr_source_label(str(key[1]))
+    if isinstance(entry, Mapping) and entry.get("source_label") is not None:
+        return normalize_bragg_qr_source_label(str(entry.get("source_label")))
+    return "primary"
+
+
+def _geometry_manual_source_phase_label(source_label: object) -> str:
+    label = normalize_bragg_qr_source_label(str(source_label) if source_label is not None else None)
+    if label == DISORDERED_PHASE_SOURCE_LABEL:
+        return DISORDERED_PHASE_DISPLAY_LABEL
+    if label == "primary":
+        return "Primary phase"
+    return str(source_label or label)
+
+
+def _geometry_manual_source_structure_role(source_label: object) -> str:
+    label = normalize_bragg_qr_source_label(str(source_label) if source_label is not None else None)
+    if label == DISORDERED_PHASE_SOURCE_LABEL:
+        return "disordered"
+    return str(label)
+
+
+def _geometry_manual_detector_position_source(
+    entry: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+) -> str:
+    source_label = _geometry_manual_entry_source_label(entry, group_key=group_key)
+    if source_label == DISORDERED_PHASE_SOURCE_LABEL:
+        return "disordered_phase_hit_table"
+    return f"{source_label}_hit_table"
+
+
+def _geometry_manual_source_consistency_fields(
+    *,
+    selected_group_key: object = None,
+    candidate: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    selected_source = _geometry_manual_entry_source_label(None, group_key=selected_group_key)
+    candidate_source = _geometry_manual_entry_source_label(candidate, group_key=selected_group_key)
+    hit_table_source = candidate_source
+    return {
+        "selected_group_source": selected_source,
+        "candidate_source": candidate_source,
+        "sim_peak_source": candidate_source,
+        "hit_table_source": hit_table_source,
+        "detector_position_source": _geometry_manual_detector_position_source(
+            candidate,
+            group_key=selected_group_key,
+        ),
+        "assigned_hkl_source": candidate_source,
+    }
+
+
+def _geometry_manual_candidate_matches_selected_group_source(
+    entry: Mapping[str, object] | None,
+    *,
+    group_key: object = None,
+) -> bool:
+    normalized_group_key = _geometry_manual_real_q_group_key(group_key)
+    if normalized_group_key is None:
+        return True
+    candidate_group_key = _geometry_manual_real_q_group_key(entry)
+    if candidate_group_key is not None and candidate_group_key != normalized_group_key:
+        return False
+    return (
+        _geometry_manual_entry_source_label(entry, group_key=candidate_group_key)
+        == _geometry_manual_entry_source_label(None, group_key=normalized_group_key)
+    )
+
+
+def _geometry_manual_filter_candidates_for_selected_group_source(
+    candidates: Sequence[dict[str, object]] | None,
+    *,
+    group_key: object = None,
+) -> list[dict[str, object]]:
+    return [
+        dict(entry)
+        for entry in (candidates or ())
+        if isinstance(entry, dict)
+        and _geometry_manual_candidate_matches_selected_group_source(entry, group_key=group_key)
+    ]
+
+
+def _geometry_manual_available_candidate_sources(
+    candidates: Sequence[dict[str, object]] | None,
+) -> list[str]:
+    seen: list[str] = []
+    for entry in candidates or ():
+        if not isinstance(entry, Mapping):
+            continue
+        source_label = _geometry_manual_entry_source_label(entry)
+        if source_label not in seen:
+            seen.append(source_label)
+    return seen
 
 
 def _geometry_manual_q_group_entry_is_00l(
@@ -6516,6 +6664,8 @@ def _geometry_manual_detector_point_is_caked(
     point: tuple[float, float] | None,
 ) -> bool:
     if not isinstance(entry, Mapping) or point is None:
+        return False
+    if _geometry_manual_entry_display_frame(entry) == "detector":
         return False
     for key_pair in (
         ("caked_x", "caked_y"),
@@ -10166,6 +10316,12 @@ def _geometry_manual_candidate_visual_caked_sim_point(
     )
     if refined_caked is not None:
         return refined_caked, "sim_visual_caked_deg"
+    cached_caked = _geometry_manual_finite_point(
+        candidate,
+        (("caked_x", "caked_y"), ("two_theta_deg", "phi_deg")),
+    )
+    if cached_caked is not None:
+        return cached_caked, "sim_visual_caked_deg"
     return None, "<unavailable>"
 
 
@@ -10235,6 +10391,9 @@ def geometry_manual_candidate_distance_details(
         }
 
     visual_point, visual_source = _geometry_manual_candidate_visual_detector_sim_point(candidate)
+    visual_caked_point, _visual_caked_source = _geometry_manual_candidate_visual_caked_sim_point(
+        candidate
+    )
     if visual_point is None:
         distance = float("nan")
     else:
@@ -10254,6 +10413,7 @@ def geometry_manual_candidate_distance_details(
         "visual_detector_native_point": (
             visual_point if visual_source == "sim_visual_detector_native_px" else None
         ),
+        "visual_caked_point": visual_caked_point,
         "cache_current_distance": float("nan"),
         "cache_current_delta": None,
     }
@@ -10638,11 +10798,20 @@ def geometry_manual_pair_entry_from_candidate(
 
     if not isinstance(candidate, dict):
         return None
+    source_label = _geometry_manual_entry_source_label(candidate, group_key=group_key)
+    phase_label = str(
+        candidate.get("phase_label") or _geometry_manual_source_phase_label(source_label)
+    )
+    structure_role = str(
+        candidate.get("structure_role") or _geometry_manual_source_structure_role(source_label)
+    )
     entry: dict[str, object] = {
         "label": str(candidate.get("label", "")),
         "hkl": normalize_hkl_key(candidate.get("hkl", candidate.get("label"))),
         "x": float(peak_col),
         "y": float(peak_row),
+        "obs_detector_x": float(peak_col),
+        "obs_detector_y": float(peak_row),
         "source_table_index": candidate.get("source_table_index"),
         "source_reflection_index": candidate.get("source_reflection_index"),
         "source_reflection_namespace": candidate.get("source_reflection_namespace"),
@@ -10650,7 +10819,9 @@ def geometry_manual_pair_entry_from_candidate(
         "source_row_index": candidate.get("source_row_index"),
         "source_branch_index": candidate.get("source_branch_index"),
         "source_peak_index": candidate.get("source_peak_index"),
-        "source_label": candidate.get("source_label"),
+        "source_label": source_label,
+        "phase_label": phase_label,
+        "structure_role": structure_role,
         "q_group_key": group_key,
     }
     provenance_keys = set(
@@ -10666,6 +10837,8 @@ def geometry_manual_pair_entry_from_candidate(
             "selection_reason",
             "selection_scope",
             "selected_q_group_key",
+            "phase_label",
+            "structure_role",
             "raw_detector_display_px",
             "raw_detector_native_px",
             "raw_detector_native_source",
@@ -10730,6 +10903,8 @@ def geometry_manual_pair_entry_from_candidate(
     if simulated_detector_point is not None:
         entry["refined_sim_x"] = float(simulated_detector_point[0])
         entry["refined_sim_y"] = float(simulated_detector_point[1])
+        entry["sim_detector_x"] = float(simulated_detector_point[0])
+        entry["sim_detector_y"] = float(simulated_detector_point[1])
 
     simulated_native_point = _geometry_manual_candidate_native_sim_point(candidate)
     if simulated_native_point is not None:
@@ -11677,9 +11852,42 @@ def geometry_manual_pick_preview_state(
         if isinstance(built_state, dict):
             state = built_state
 
+    selected_group_key = pick_session.get("group_key") if isinstance(pick_session, dict) else None
+    source_candidates = _geometry_manual_filter_candidates_for_selected_group_source(
+        remaining_candidates,
+        group_key=selected_group_key,
+    )
+    if remaining_candidates and not source_candidates:
+        selected_source = _geometry_manual_entry_source_label(
+            None,
+            group_key=selected_group_key,
+        )
+        available_sources = _geometry_manual_available_candidate_sources(remaining_candidates)
+        message = (
+            "Manual pick preview source mismatch: "
+            "source_mismatch_error=true "
+            f"selected_group_source={selected_source} "
+            f"available_sources={available_sources}"
+        )
+        return {
+            "manual_geometry_run_id": _geometry_manual_session_run_id(pick_session),
+            "manual_trace_version": MANUAL_GEOMETRY_TRACE_VERSION,
+            "raw_col": float(raw_col),
+            "raw_row": float(raw_row),
+            "candidate": None,
+            "sim_dist": float("nan"),
+            "sim_dist_source": "source_mismatch",
+            "preview_distance_source": "source_mismatch",
+            "message": message,
+            "source_mismatch_error": True,
+            "selected_group_source": selected_source,
+            "available_sources": available_sources,
+        }
+    active_remaining_candidates = source_candidates if remaining_candidates else remaining_candidates
+
     tagged_candidate = geometry_manual_tagged_candidate_from_session(
         pick_session,
-        remaining_candidates,
+        active_remaining_candidates,
     )
     seed_candidate: dict[str, object] | None = None
     if isinstance(tagged_candidate, dict):
@@ -11690,22 +11898,21 @@ def geometry_manual_pick_preview_state(
             seed_candidate, _seed_dist = nearest_candidate_to_point(
                 float(raw_col),
                 float(raw_row),
-                remaining_candidates,
+                active_remaining_candidates,
                 use_caked_display=use_caked_space,
             )
         else:
             seed_candidate, _seed_dist = nearest_candidate_to_point(
                 float(raw_col),
                 float(raw_row),
-                remaining_candidates,
+                active_remaining_candidates,
             )
         candidate_relation = "nearest sim"
     candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
     if isinstance(seed_candidate, dict):
-        group_key = pick_session.get("group_key") if isinstance(pick_session, dict) else None
         selected_candidate = _geometry_manual_select_q_group_representative(
-            remaining_candidates,
-            group_key=group_key,
+            active_remaining_candidates,
+            group_key=selected_group_key,
             seed_candidate=seed_candidate,
             profile_cache=profile_cache,
         )
@@ -11813,6 +12020,10 @@ def geometry_manual_pick_preview_state(
             branch=candidate_branch if candidate_branch is not None else "<none>",
             actual_source=sim_dist_source,
             expected_source=_geometry_manual_expected_distance_source(use_caked_space),
+            **_geometry_manual_source_consistency_fields(
+                selected_group_key=selected_group_key,
+                candidate=candidate,
+            ),
         )
         + " "
         + geometry_manual_format_status_distance_trace(status_trace)
@@ -15257,6 +15468,10 @@ def geometry_manual_toggle_selection_at(
                     if bool(use_caked_space)
                     else "sim_visual_detector_display_px"
                 ),
+                **_geometry_manual_source_consistency_fields(
+                    selected_group_key=best_group_key,
+                    candidate=tagged_candidate if isinstance(tagged_candidate, Mapping) else None,
+                ),
             )
             + " "
             + (f"Tagged seed [{tagged_label}]. " if tagged_label else "")
@@ -15571,6 +15786,26 @@ def geometry_manual_place_selection_at(
         current_background_index=current_background_index,
         candidate_source_key=candidate_source_key,
     )
+    selected_group_key = pick_session.get("group_key") if isinstance(pick_session, dict) else None
+    raw_remaining_candidates = [dict(entry) for entry in remaining_candidates or ()]
+    remaining_candidates = _geometry_manual_filter_candidates_for_selected_group_source(
+        remaining_candidates,
+        group_key=selected_group_key,
+    )
+    if raw_remaining_candidates and not remaining_candidates:
+        selected_source = _geometry_manual_entry_source_label(
+            None,
+            group_key=selected_group_key,
+        )
+        available_sources = _geometry_manual_available_candidate_sources(raw_remaining_candidates)
+        if callable(set_status_text):
+            set_status_text(
+                "Manual geometry picking source mismatch: "
+                "source_mismatch_error=true "
+                f"selected_group_source={selected_source} "
+                f"available_sources={available_sources}"
+            )
+        return False, current_session
     if not remaining_candidates:
         if use_caked_space:
             restore_view_fn(redraw=False)
@@ -15607,7 +15842,7 @@ def geometry_manual_place_selection_at(
     if isinstance(seed_candidate, dict):
         selected_candidate = _geometry_manual_select_q_group_representative(
             remaining_candidates,
-            group_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+            group_key=selected_group_key,
             seed_candidate=seed_candidate,
             profile_cache=profile_cache,
         )
@@ -15650,6 +15885,8 @@ def geometry_manual_place_selection_at(
     pair_kwargs: dict[str, object]
     detector_col = None
     detector_row = None
+    detector_to_caked_unavailable = False
+    detector_to_caked_refreshed = False
     placement_error_px_value: float
     if isinstance(resolved_background_pick, dict):
         if use_caked_space:
@@ -15670,9 +15907,7 @@ def geometry_manual_place_selection_at(
             if isinstance(refined_branch_candidate, dict):
                 selected_candidate = _geometry_manual_select_q_group_representative(
                     remaining_candidates,
-                    group_key=(
-                        pick_session.get("group_key") if isinstance(pick_session, dict) else None
-                    ),
+                    group_key=selected_group_key,
                     seed_candidate=refined_branch_candidate,
                     profile_cache=profile_cache,
                 )
@@ -15833,9 +16068,84 @@ def geometry_manual_place_selection_at(
                 "raw_caked_row": float(row),
             }
 
+    def _finite_pair(value: object) -> tuple[float, float] | None:
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+            return None
+        try:
+            x_value = float(value[0])
+            y_value = float(value[1])
+        except Exception:
+            return None
+        if not (np.isfinite(x_value) and np.isfinite(y_value)):
+            return None
+        return float(x_value), float(y_value)
+
+    raw_detector_display = (
+        float(pair_kwargs["raw_col"]),
+        float(pair_kwargs["raw_row"]),
+    )
+    geometry_detector_display = (
+        float(pair_kwargs["peak_col"]),
+        float(pair_kwargs["peak_row"]),
+    )
+    raw_detector_native = _geometry_manual_detector_display_to_native(
+        background_display_to_native_detector_coords,
+        raw_detector_display,
+    )
+    geometry_detector_native = None
+    if detector_col is not None and detector_row is not None:
+        geometry_detector_native = (float(detector_col), float(detector_row))
+    else:
+        geometry_detector_native = _geometry_manual_detector_display_to_native(
+            background_display_to_native_detector_coords,
+            geometry_detector_display,
+        )
+        if geometry_detector_native is not None:
+            detector_col = float(geometry_detector_native[0])
+            detector_row = float(geometry_detector_native[1])
+
+    if not bool(use_caked_space) and "caked_col" not in pair_kwargs:
+        if callable(background_display_to_native_detector_coords) and callable(
+            native_detector_coords_to_caked_display_coords
+        ):
+            geometry_caked = (
+                _finite_pair(
+                    native_detector_coords_to_caked_display_coords(
+                        float(geometry_detector_native[0]),
+                        float(geometry_detector_native[1]),
+                    )
+                )
+                if geometry_detector_native is not None
+                else None
+            )
+            raw_caked = (
+                _finite_pair(
+                    native_detector_coords_to_caked_display_coords(
+                        float(raw_detector_native[0]),
+                        float(raw_detector_native[1]),
+                    )
+                )
+                if raw_detector_native is not None
+                else None
+            )
+            if geometry_caked is not None:
+                pair_kwargs["caked_col"] = float(geometry_caked[0])
+                pair_kwargs["caked_row"] = float(geometry_caked[1])
+                pair_kwargs["raw_caked_col"] = float(
+                    raw_caked[0] if raw_caked is not None else geometry_caked[0]
+                )
+                pair_kwargs["raw_caked_row"] = float(
+                    raw_caked[1] if raw_caked is not None else geometry_caked[1]
+                )
+                detector_to_caked_refreshed = True
+            else:
+                detector_to_caked_unavailable = True
+        else:
+            detector_to_caked_unavailable = True
+
     status_observed_caked = (
         (float(pair_kwargs["caked_col"]), float(pair_kwargs["caked_row"]))
-        if use_caked_space and "caked_col" in pair_kwargs and "caked_row" in pair_kwargs
+        if "caked_col" in pair_kwargs and "caked_row" in pair_kwargs
         else None
     )
     status_trace = geometry_manual_status_distance_trace(
@@ -15872,7 +16182,7 @@ def geometry_manual_place_selection_at(
         candidate,
         float(pair_kwargs["peak_col"]),
         float(pair_kwargs["peak_row"]),
-        group_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+        group_key=selected_group_key,
         detector_col=detector_col,
         detector_row=detector_row,
         raw_col=float(pair_kwargs["raw_col"]),
@@ -15908,20 +16218,10 @@ def geometry_manual_place_selection_at(
         pair_entry["background_detector_y"] = float(detector_row)
         pair_entry["background_detector_input_frame"] = "native_detector"
         pair_entry["background_detector_frame_provenance"] = "caked_inverse_projection_refresh"
-    raw_detector_display = (
-        float(pair_kwargs["raw_col"]),
-        float(pair_kwargs["raw_row"]),
-    )
-    geometry_detector_display = (
-        float(pair_kwargs["peak_col"]),
-        float(pair_kwargs["peak_row"]),
-    )
+    pair_entry["detector_display_x"] = float(geometry_detector_display[0])
+    pair_entry["detector_display_y"] = float(geometry_detector_display[1])
     pair_entry["raw_detector_display_px"] = raw_detector_display
     pair_entry["geometry_detector_display_px"] = geometry_detector_display
-    raw_detector_native = _geometry_manual_detector_display_to_native(
-        background_display_to_native_detector_coords,
-        raw_detector_display,
-    )
     if raw_detector_native is not None:
         pair_entry["raw_detector_native_px"] = (
             float(raw_detector_native[0]),
@@ -15929,11 +16229,20 @@ def geometry_manual_place_selection_at(
         )
         pair_entry["raw_detector_native_source"] = "display_to_native_callback"
     if detector_col is not None and detector_row is not None:
+        pair_entry["detector_native_x"] = float(detector_col)
+        pair_entry["detector_native_y"] = float(detector_row)
         pair_entry["geometry_detector_native_px"] = (
             float(detector_col),
             float(detector_row),
         )
         pair_entry["geometry_detector_native_source"] = "saved_native"
+    if detector_to_caked_refreshed and detector_col is not None and detector_row is not None:
+        pair_entry["background_detector_x"] = float(detector_col)
+        pair_entry["background_detector_y"] = float(detector_row)
+        pair_entry["background_detector_input_frame"] = "native_detector"
+        pair_entry["background_detector_frame_provenance"] = "detector_to_caked_refresh"
+    if detector_to_caked_unavailable:
+        pair_entry["detector_to_caked_unavailable"] = True
     sim_visual_display, _sim_visual_display_source = (
         _geometry_manual_candidate_visual_detector_sim_point(candidate)
     )
@@ -16029,6 +16338,31 @@ def geometry_manual_place_selection_at(
                     float(detector_row),
                 )
                 pair_entry["geometry_detector_native_source"] = "saved_native"
+                pair_entry["detector_native_x"] = float(detector_col)
+                pair_entry["detector_native_y"] = float(detector_row)
+            pair_entry["detector_display_x"] = float(geometry_detector_display[0])
+            pair_entry["detector_display_y"] = float(geometry_detector_display[1])
+            if (
+                detector_to_caked_refreshed
+                and detector_col is not None
+                and detector_row is not None
+            ):
+                pair_entry["background_detector_x"] = float(detector_col)
+                pair_entry["background_detector_y"] = float(detector_row)
+                pair_entry["background_detector_input_frame"] = "native_detector"
+                pair_entry["background_detector_frame_provenance"] = (
+                    "detector_to_caked_refresh"
+                )
+                if "caked_col" in pair_kwargs and "caked_row" in pair_kwargs:
+                    pair_entry["background_two_theta_deg"] = float(pair_kwargs["caked_col"])
+                    pair_entry["background_phi_deg"] = float(pair_kwargs["caked_row"])
+                    pair_entry["caked_x"] = float(pair_kwargs["caked_col"])
+                    pair_entry["caked_y"] = float(pair_kwargs["caked_row"])
+                if "raw_caked_col" in pair_kwargs and "raw_caked_row" in pair_kwargs:
+                    pair_entry["raw_caked_x"] = float(pair_kwargs["raw_caked_col"])
+                    pair_entry["raw_caked_y"] = float(pair_kwargs["raw_caked_row"])
+            if detector_to_caked_unavailable:
+                pair_entry["detector_to_caked_unavailable"] = True
             if not use_caked_space:
                 _geometry_manual_apply_sim_visual_detector_fields(
                     pair_entry,
@@ -16174,10 +16508,18 @@ def geometry_manual_place_selection_at(
                     branch=candidate_branch if candidate_branch is not None else "<none>",
                     actual_source=assignment_source,
                     expected_source=_geometry_manual_expected_distance_source(use_caked_space),
+                    **_geometry_manual_source_consistency_fields(
+                        selected_group_key=selected_group_key,
+                        candidate=candidate,
+                    ),
+                    detector_to_caked_unavailable=(
+                        "true" if detector_to_caked_unavailable else None
+                    ),
                 )
                 + " "
                 f"on background {int(current_background_index) + 1}. "
-                f"Last placement error={float(placement_error_px_value):.2f}px, sigma={float(sigma_px_value):.2f}px."
+                f"Last placement error={float(placement_error_px_value):.2f}px, sigma={float(sigma_px_value):.2f}px. "
+                + geometry_manual_format_status_distance_trace(status_trace)
             )
         return True, {}
 
@@ -16195,6 +16537,13 @@ def geometry_manual_place_selection_at(
                 branch=candidate_branch if candidate_branch is not None else "<none>",
                 actual_source=assignment_source,
                 expected_source=_geometry_manual_expected_distance_source(use_caked_space),
+                **_geometry_manual_source_consistency_fields(
+                    selected_group_key=selected_group_key,
+                    candidate=candidate,
+                ),
+                detector_to_caked_unavailable=(
+                    "true" if detector_to_caked_unavailable else None
+                ),
             )
             + " "
             + (
@@ -17388,6 +17737,10 @@ def geometry_manual_pair_entry_to_jsonable(
         "refined_sim_native_y",
         "refined_sim_caked_x",
         "refined_sim_caked_y",
+        "sim_detector_x",
+        "sim_detector_y",
+        "obs_detector_x",
+        "obs_detector_y",
     ):
         value = normalized.get(key)
         if value is None:
@@ -17430,6 +17783,9 @@ def geometry_manual_pair_entry_to_jsonable(
 
     if normalized.get("source_label") is not None:
         row["source_label"] = str(normalized.get("source_label"))
+    for text_key in ("phase_label", "structure_role"):
+        if normalized.get(text_key) is not None:
+            row[text_key] = str(normalized.get(text_key))
     for bool_key in (
         "background_qr_set_reference",
         "manual_background_reference",

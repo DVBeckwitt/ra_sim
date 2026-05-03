@@ -54,8 +54,8 @@ def test_user_report_workflow_reaches_disordered_q_group_cache(
         disordered_enabled=False,
     )
     progress_messages: list[str] = []
-    trace_messages: list[str] = []
     scheduled_updates: list[str] = []
+    live_schedule_calls: list[str] = []
     requested_jobs: list[dict[str, object]] = []
     _install_live_q_group_refresh_path(
         monkeypatch,
@@ -86,7 +86,13 @@ def test_user_report_workflow_reaches_disordered_q_group_cache(
     monkeypatch.setattr(
         runtime_session,
         "_append_runtime_update_trace",
-        lambda event, **fields: trace_messages.append(str(fields.get("message") or event)),
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "schedule_update",
+        lambda: live_schedule_calls.append("schedule_update"),
         raising=False,
     )
 
@@ -130,6 +136,36 @@ def test_user_report_workflow_reaches_disordered_q_group_cache(
     assert requested_jobs
     scheduled_job = {**requested_jobs[-1], "job_id": 1}
     assert scheduled_job["collect_disordered_phase_hit_tables"] is True
+    runtime_state.stored_hit_table_signature = scheduled_job["hit_table_signature"]
+    runtime_state.stored_primary_intersection_cache_signature = scheduled_job[
+        "hit_table_signature"
+    ]
+    runtime_state.stored_primary_intersection_cache = [_hit_table()]
+    runtime_state.stored_intersection_cache = [_hit_table()]
+    runtime_state.last_simulation_signature = scheduled_job["signature"]
+    runtime_state.update_running = False
+    progress_messages.clear()
+    requested_jobs.clear()
+    scheduled_updates.clear()
+
+    status = runtime_session._geometry_disordered_phase_qr_enable_status()
+    pending_result = runtime_session._ensure_generated_disordered_qr_rows_for_live_refresh(
+        status,
+        primary_a=4.557,
+        primary_c=6.979,
+    )
+
+    assert pending_result.can_refresh_selector is False
+    assert pending_result.scheduled_collection is True
+    assert any("Disordered Qr refs pending:" in msg for msg in progress_messages)
+    assert runtime_state.disordered_phase_hit_table_collection_requested is True
+    assert not any(
+        "Updated listed Qr/Qz peaks:" in msg
+        and "sources: primary=" in msg
+        and f"{DISORDERED_PHASE_SOURCE_LABEL}=" not in msg
+        for msg in progress_messages
+    )
+    assert live_schedule_calls == []
 
     result = runtime_session._run_simulation_generation_job(scheduled_job)
     runtime_session._apply_ready_simulation_result(result)
@@ -143,21 +179,19 @@ def test_user_report_workflow_reaches_disordered_q_group_cache(
         runtime_state.last_dependency_signatures = dependency_updates[-1]
     runtime_state.update_running = False
 
+    progress_messages.clear()
+    scheduled_updates.clear()
     geometry_q_group_manager.request_runtime_geometry_q_group_window_update(
         runtime_session.geometry_q_group_runtime_bindings_factory()
     )
     runtime_state.update_running = False
     runtime_session.do_update()
 
-    log_text = "\n".join([*progress_messages, *trace_messages])
-
-    assert "Disordered Qr refs enabled: true" in log_text
-    assert (
-        "Disordered Qr refs inventory: generated_cif=" in log_text
-        or "Disordered Qr refs skipped: inventory unavailable" in log_text
+    assert "Disordered Qr refs enabled: true" in progress_messages
+    assert any(
+        "Updated listed Qr/Qz peaks:" in msg and f"{DISORDERED_PHASE_SOURCE_LABEL}=" in msg
+        for msg in progress_messages
     )
-    assert "sources: primary=" in log_text
-    assert "disordered_phase=" in log_text
     assert any(
         entry["source_label"] == DISORDERED_PHASE_SOURCE_LABEL
         for entry in runtime_session.geometry_q_group_state.cached_entries

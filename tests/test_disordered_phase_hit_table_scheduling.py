@@ -82,6 +82,32 @@ def test_disordered_collection_runs_when_run_primary_false(
     assert job["collect_disordered_phase_hit_tables"] is True
 
 
+def test_disordered_collection_request_schedules_hit_table_job(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def request_disordered_collection_without_primary(state) -> None:
+        state.sim_miller1 = np.empty((0, 3), dtype=np.float64)
+        state.sim_intens1 = np.empty((0,), dtype=np.float64)
+        state.sim_miller1_all = state.sim_miller1.copy()
+        state.sim_intens1_all = state.sim_intens1.copy()
+        state.sim_primary_qr = {}
+        state.sim_primary_qr_all = {}
+        state.stored_disordered_phase_max_positions = []
+        state.disordered_phase_hit_table_collection_requested = True
+        state.disordered_phase_hit_table_collection_request_signature = ("pending",)
+
+    job = _scheduled_disordered_job(
+        monkeypatch,
+        tmp_path,
+        mutate_state=request_disordered_collection_without_primary,
+    )
+
+    assert job["run_primary"] is False
+    assert job["collect_hit_tables"] is True
+    assert job["collect_disordered_phase_hit_tables"] is True
+
+
 def test_disordered_collection_runs_when_signature_is_stale(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

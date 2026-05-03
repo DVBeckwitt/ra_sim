@@ -2943,6 +2943,34 @@ def make_runtime_geometry_q_group_value_callbacks(
     def _last_live_preview_cache_metadata() -> dict[str, object]:
         return dict(_last_live_preview_cache_metadata_state)
 
+    def _live_preview_source_label(entry: Mapping[str, object] | None) -> str:
+        if not isinstance(entry, Mapping):
+            return "primary"
+        raw_group_key = entry.get("q_group_key")
+        if isinstance(raw_group_key, (list, tuple)) and len(raw_group_key) >= 4:
+            try:
+                if str(raw_group_key[0]) == "q_group":
+                    return gui_controllers.normalize_bragg_qr_source_label(
+                        str(raw_group_key[1])
+                    )
+            except Exception:
+                pass
+        raw_source = entry.get("source_label")
+        if raw_source is None:
+            return "primary"
+        return gui_controllers.normalize_bragg_qr_source_label(str(raw_source))
+
+    def _live_preview_source_counts(
+        rows: Sequence[Mapping[str, object]] | None,
+    ) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for entry in rows or ():
+            if not isinstance(entry, Mapping):
+                continue
+            source_label = _live_preview_source_label(entry)
+            counts[source_label] = int(counts.get(source_label, 0)) + 1
+        return dict(sorted(counts.items()))
+
     def _current_geometry_fit_var_names() -> list[object]:
         raw_value = _resolve_runtime_value(current_geometry_fit_var_names_factory)
         if raw_value is None:
@@ -3350,37 +3378,94 @@ def make_runtime_geometry_q_group_value_callbacks(
             else 0
         )
         max_positions_row_count = 0
+        stored_table_count = 0
         hit_tables = getattr(simulation_runtime_state, "stored_max_positions_local", None)
         if isinstance(hit_tables, Sequence) and not isinstance(hit_tables, (str, bytes)):
+            stored_table_count = int(len(hit_tables))
             max_positions_row_count = sum(
                 int(len(geometry_reference_hit_rows(table))) for table in hit_tables
             )
+        stored_peak_table_lattice = getattr(
+            simulation_runtime_state,
+            "stored_peak_table_lattice",
+            None,
+        )
+        stored_peak_table_lattice_count = (
+            int(len(stored_peak_table_lattice))
+            if isinstance(stored_peak_table_lattice, Sequence)
+            and not isinstance(stored_peak_table_lattice, (str, bytes))
+            else 0
+        )
+        stored_source_reflection_indices = getattr(
+            simulation_runtime_state,
+            "stored_source_reflection_indices_local",
+            None,
+        )
+        stored_source_reflection_indices_count = (
+            int(len(stored_source_reflection_indices))
+            if isinstance(stored_source_reflection_indices, Sequence)
+            and not isinstance(stored_source_reflection_indices, (str, bytes))
+            else 0
+        )
+
+        def _common_live_preview_metadata(
+            rows: Sequence[Mapping[str, object]] | None,
+            *,
+            cache_source: str,
+            fallback_used: bool,
+            reason: str | None = None,
+        ) -> dict[str, object]:
+            row_count = int(len(rows or ()))
+            source_counts = _live_preview_source_counts(rows)
+            return {
+                "cache_source": str(cache_source),
+                "fallback_used": bool(fallback_used),
+                "max_positions_row_count": int(max_positions_row_count),
+                "stored_max_positions_table_count": int(stored_table_count),
+                "stored_max_positions_hit_row_count": int(max_positions_row_count),
+                "stored_peak_table_lattice_count": int(stored_peak_table_lattice_count),
+                "stored_source_reflection_indices_count": int(
+                    stored_source_reflection_indices_count
+                ),
+                "built_stored_hit_table_peak_count": int(row_count),
+                "projected_row_count": int(row_count),
+                "after_enabled_q_group_filter_count": int(row_count),
+                "after_required_pair_source_filter_count": int(row_count),
+                "source_counts_before_filter": dict(source_counts),
+                "source_counts_after_filter": dict(source_counts),
+                "peak_record_count": int(peak_record_count),
+                "active_signature_matches": bool(
+                    provenance.get("active_signature_matches", False)
+                ),
+                "source_snapshot_row_count": int(
+                    provenance.get("source_snapshot_row_count", 0) or 0
+                ),
+                "source_snapshot_background_index": provenance.get(
+                    "source_snapshot_background_index"
+                ),
+                "simulated_peak_count": int(row_count),
+                "reason": str(reason or "ready"),
+            }
 
         intersection_cache_peaks = _build_simulated_peaks_from_stored_intersection_cache()
         if intersection_cache_peaks:
             _set_live_preview_cache_metadata(
-                cache_source="stored_intersection_cache",
-                fallback_used=False,
-                max_positions_row_count=int(max_positions_row_count),
-                peak_record_count=int(peak_record_count),
-                active_signature_matches=bool(provenance.get("active_signature_matches", False)),
-                source_snapshot_row_count=int(provenance.get("source_snapshot_row_count", 0) or 0),
-                source_snapshot_background_index=provenance.get("source_snapshot_background_index"),
-                simulated_peak_count=int(len(intersection_cache_peaks)),
+                **_common_live_preview_metadata(
+                    intersection_cache_peaks,
+                    cache_source="stored_intersection_cache",
+                    fallback_used=False,
+                )
             )
             return intersection_cache_peaks
 
         hit_table_peaks = _build_simulated_peaks_from_stored_hit_tables()
         if hit_table_peaks:
             _set_live_preview_cache_metadata(
-                cache_source="stored_hit_tables",
-                fallback_used=True,
-                max_positions_row_count=int(max_positions_row_count),
-                peak_record_count=int(peak_record_count),
-                active_signature_matches=bool(provenance.get("active_signature_matches", False)),
-                source_snapshot_row_count=int(provenance.get("source_snapshot_row_count", 0) or 0),
-                source_snapshot_background_index=provenance.get("source_snapshot_background_index"),
-                simulated_peak_count=int(len(hit_table_peaks)),
+                **_common_live_preview_metadata(
+                    hit_table_peaks,
+                    cache_source="stored_hit_tables",
+                    fallback_used=True,
+                )
             )
             return hit_table_peaks
 
@@ -3401,27 +3486,27 @@ def make_runtime_geometry_q_group_value_callbacks(
                 if group_key is not None:
                     entry["q_group_key"] = group_key
         _set_live_preview_cache_metadata(
-            cache_source="peak_records",
-            fallback_used=True,
-            max_positions_row_count=int(max_positions_row_count),
-            peak_record_count=int(peak_record_count),
-            active_signature_matches=bool(provenance.get("active_signature_matches", False)),
-            source_snapshot_row_count=int(provenance.get("source_snapshot_row_count", 0) or 0),
-            source_snapshot_background_index=provenance.get("source_snapshot_background_index"),
-            simulated_peak_count=int(len(cached_peaks)),
+            **_common_live_preview_metadata(
+                cached_peaks,
+                cache_source="peak_records",
+                fallback_used=True,
+                reason=("ready" if cached_peaks else "peak_records_empty"),
+            )
         )
         if cached_peaks:
             return cached_peaks
 
         _set_live_preview_cache_metadata(
-            cache_source="empty",
-            fallback_used=bool(peak_record_count > 0),
-            max_positions_row_count=int(max_positions_row_count),
-            peak_record_count=int(peak_record_count),
-            active_signature_matches=bool(provenance.get("active_signature_matches", False)),
-            source_snapshot_row_count=int(provenance.get("source_snapshot_row_count", 0) or 0),
-            source_snapshot_background_index=provenance.get("source_snapshot_background_index"),
-            simulated_peak_count=0,
+            **_common_live_preview_metadata(
+                [],
+                cache_source="empty",
+                fallback_used=bool(peak_record_count > 0),
+                reason=(
+                    "stored_hit_tables_built_zero_rows"
+                    if int(max_positions_row_count) > 0
+                    else "stored_hit_tables_missing_or_empty"
+                ),
+            )
         )
         return []
 

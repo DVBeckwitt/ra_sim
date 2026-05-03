@@ -68,8 +68,8 @@ def test_run_headless_simulation_builds_typed_request(monkeypatch, tmp_path) -> 
             "Dist": 0.1,
             "Rot1": 0.0,
             "Rot2": 0.0,
-            "Poni1": 0.0,
-            "Poni2": 0.0,
+            "Poni1": 3.0e-4,
+            "Poni2": 2.0e-4,
             "Wavelength": 1.54e-10,
         },
     )
@@ -150,6 +150,10 @@ def test_run_headless_simulation_builds_typed_request(monkeypatch, tmp_path) -> 
     assert request.geometry.image_size == 8
     assert request.geometry.distance_m == 0.1
     assert request.geometry.pixel_size_m == 1.0e-4
+    np.testing.assert_allclose(
+        request.geometry.center,
+        np.array([3.0, 2.0], dtype=np.float64),
+    )
     assert request.mosaic.solve_q_steps == 1000
     assert np.array_equal(request.beam.wavelength_array, np.ones(2, dtype=np.float64))
     assert np.array_equal(request.beam.n2_sample_array, np.ones(2, dtype=np.complex128))

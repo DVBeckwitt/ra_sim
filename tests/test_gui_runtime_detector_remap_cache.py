@@ -30,7 +30,7 @@ def test_translate_hit_tables_for_center_delta_shifts_only_col_row() -> None:
     assert np.allclose(hit_table[:, 1], [1.25, -0.5])
 
 
-def test_materialize_absolute_hit_tables_from_relative_uses_new_center() -> None:
+def test_materialize_absolute_hit_tables_from_relative_uses_native_row_col_center() -> None:
     relative_table = np.asarray(
         [
             [12.0, -2.0, 3.5, 42.0],
@@ -46,9 +46,25 @@ def test_materialize_absolute_hit_tables_from_relative_uses_new_center() -> None
 
     assert len(absolute) == 1
     assert np.allclose(absolute[0][:, 0], relative_table[:, 0])
-    assert np.allclose(absolute[0][:, 1], [8.0, 11.25])
-    assert np.allclose(absolute[0][:, 2], [23.5, 16.0])
+    assert np.allclose(absolute[0][:, 1], [18.0, 21.25])
+    assert np.allclose(absolute[0][:, 2], [13.5, 6.0])
     assert np.allclose(absolute[0][:, 3:], relative_table[:, 3:])
+
+
+def test_detector_relative_center_cache_uses_row_col_not_col_row() -> None:
+    hit_table = np.asarray([[9.0, 1607.0, 1544.0, 1.0]], dtype=np.float64)
+
+    relative = remap_cache.make_relative_hit_tables_for_center(
+        [hit_table],
+        center=(1544.0, 1607.0),
+    )
+    absolute = remap_cache.materialize_absolute_hit_tables_from_relative(
+        relative,
+        new_center=(1500.0, 1700.0),
+    )
+
+    np.testing.assert_allclose(relative[0][:, 1:3], [[0.0, 0.0]])
+    np.testing.assert_allclose(absolute[0][:, 1:3], [[1700.0, 1500.0]])
 
 
 def test_center_remap_falls_back_when_cache_missing() -> None:
@@ -132,7 +148,7 @@ def test_center_remap_matches_full_simulation_for_safe_in_bounds_shift() -> None
         new_center=(1.5, 1.25),
     )
     full_simulation_at_new_center_tables = [
-        np.asarray([[4.0, 1.75, 1.75, 0.0, 1.0, 0.0, 0.0]], dtype=np.float64)
+        np.asarray([[4.0, 1.5, 2.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float64)
     ]
 
     remapped_image = runtime_primary_cache.rasterize_hit_tables_to_image(

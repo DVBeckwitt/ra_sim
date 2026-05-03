@@ -118,7 +118,7 @@ def _patch_disordered_controls(
         runtime_session,
         "generate_pbii_ht_shifted_cif",
         lambda *, source_cif, output_dir, mode: SimpleNamespace(
-            cif_path=tmp_path / "generated-disordered.cif",
+            cif_path=_write_source_cif(tmp_path / "generated-disordered.cif"),
             a=4.557,
             c=20.937,
         ),

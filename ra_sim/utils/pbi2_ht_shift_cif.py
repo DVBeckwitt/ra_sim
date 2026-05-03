@@ -15,9 +15,105 @@ from typing import Sequence
 DISORDERED_PHASE_SOURCE_LABEL = "disordered_phase"
 DISORDERED_PHASE_DISPLAY_LABEL = "Disordered phase"
 
-_GENERATOR_SCHEMA_ID = "ra_sim.pbi2_ht_shift_cif.v1"
+_GENERATOR_SCHEMA_ID = "ra_sim.pbi2_ht_shift_cif.v2"
 _TOL = 1.0e-5
 _HT_BASAL_SHIFT = (2.0 / 3.0, 1.0 / 3.0)
+_ELEMENT_SYMBOLS = {
+    "H",
+    "He",
+    "Li",
+    "Be",
+    "B",
+    "C",
+    "N",
+    "O",
+    "F",
+    "Ne",
+    "Na",
+    "Mg",
+    "Al",
+    "Si",
+    "P",
+    "S",
+    "Cl",
+    "Ar",
+    "K",
+    "Ca",
+    "Sc",
+    "Ti",
+    "V",
+    "Cr",
+    "Mn",
+    "Fe",
+    "Co",
+    "Ni",
+    "Cu",
+    "Zn",
+    "Ga",
+    "Ge",
+    "As",
+    "Se",
+    "Br",
+    "Kr",
+    "Rb",
+    "Sr",
+    "Y",
+    "Zr",
+    "Nb",
+    "Mo",
+    "Tc",
+    "Ru",
+    "Rh",
+    "Pd",
+    "Ag",
+    "Cd",
+    "In",
+    "Sn",
+    "Sb",
+    "Te",
+    "I",
+    "Xe",
+    "Cs",
+    "Ba",
+    "La",
+    "Ce",
+    "Pr",
+    "Nd",
+    "Pm",
+    "Sm",
+    "Eu",
+    "Gd",
+    "Tb",
+    "Dy",
+    "Ho",
+    "Er",
+    "Tm",
+    "Yb",
+    "Lu",
+    "Hf",
+    "Ta",
+    "W",
+    "Re",
+    "Os",
+    "Ir",
+    "Pt",
+    "Au",
+    "Hg",
+    "Tl",
+    "Pb",
+    "Bi",
+    "Po",
+    "At",
+    "Rn",
+    "Fr",
+    "Ra",
+    "Ac",
+    "Th",
+    "Pa",
+    "U",
+    "Np",
+    "Pu",
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +135,7 @@ class _Atom:
     y: float
     z: float
     occ: float = 1.0
+    raw_species: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +158,28 @@ class _ParsedCif:
 
 def _clean_token(value: str) -> str:
     return str(value).strip().strip("'\"")
+
+
+def canonical_element_symbol(raw: object) -> str:
+    """Return a neutral element symbol for common CIF charged species labels."""
+
+    text = _clean_token(str(raw or ""))
+    if not text:
+        return ""
+
+    match = re.fullmatch(r"([A-Z][a-z]?)(?:\d*[+-]?|[+-]\d*)", text)
+    if match:
+        symbol = match.group(1)
+        if symbol in _ELEMENT_SYMBOLS:
+            return symbol
+
+    match = re.match(r"^([A-Z][a-z]?)(?=$|[\d_.-])", text)
+    if match:
+        symbol = match.group(1)
+        if symbol in _ELEMENT_SYMBOLS:
+            return symbol
+
+    return text
 
 
 def _parse_fraction(value: str) -> float:
@@ -220,10 +339,10 @@ def _read_cif_simple(path: Path) -> _ParsedCif:
                     else f"X{n}"
                 )
                 if ispecies is not None and ispecies < len(row):
-                    species = _clean_token(row[ispecies])
+                    raw_species = _clean_token(row[ispecies])
                 else:
-                    match = re.match(r"[A-Za-z]+", label)
-                    species = match.group(0) if match else "X"
+                    raw_species = label
+                species = canonical_element_symbol(raw_species)
                 occ = (
                     _parse_optional_number(row[iocc], 1.0)
                     if iocc is not None and iocc < len(row)
@@ -237,6 +356,7 @@ def _read_cif_simple(path: Path) -> _ParsedCif:
                         y=_parse_number(row[iy]),
                         z=_parse_number(row[iz]),
                         occ=occ,
+                        raw_species=raw_species,
                     )
                 )
 
@@ -285,6 +405,7 @@ def _apply_symop(symop: str, atom: _Atom) -> _Atom:
         y=_eval_sym_expr(parts[1], atom.x, atom.y, atom.z),
         z=_eval_sym_expr(parts[2], atom.x, atom.y, atom.z),
         occ=atom.occ,
+        raw_species=atom.raw_species,
     )
 
 
@@ -309,18 +430,25 @@ def _expand_to_p1(parsed: _ParsedCif, tol: float = _TOL) -> list[_Atom]:
 
 
 def _find_layer_origin_z(atoms: Sequence[_Atom], anchor_species: str) -> float:
-    anchors = [atom.z for atom in atoms if atom.species.lower() == anchor_species.lower()]
+    anchor = canonical_element_symbol(anchor_species)
+    anchors = [atom.z for atom in atoms if atom.species.lower() == anchor.lower()]
     if not anchors:
-        species = sorted({atom.species for atom in atoms})
-        raise ValueError(f"anchor species {anchor_species!r} not found. Available species: {species}")
+        raw_species = sorted({atom.raw_species or atom.species for atom in atoms})
+        normalized_species = sorted({atom.species for atom in atoms})
+        raise ValueError(
+            f"anchor species {anchor_species!r} normalized to {anchor!r} not found. "
+            f"Available raw species: {raw_species}. "
+            f"Available normalized species: {normalized_species}"
+        )
     return sorted(anchors)[0]
 
 
 def _infer_internal_z(atoms: Sequence[_Atom], origin_z: float, anchor_species: str) -> float:
+    anchor = canonical_element_symbol(anchor_species)
     offsets = [
         abs(_periodic_delta(atom.z, origin_z))
         for atom in atoms
-        if atom.species.lower() != anchor_species.lower()
+        if atom.species.lower() != anchor.lower()
     ]
     offsets = [value for value in offsets if value > _TOL]
     if not offsets:
@@ -394,6 +522,7 @@ def _build_explicit_supercell(
                     y=_wrap01(atom.y + oy),
                     z=_wrap01((layer_idx + dz_out) / int(layers)),
                     occ=atom.occ,
+                    raw_species=atom.raw_species,
                 )
             )
     out.sort(key=lambda atom: (atom.z, atom.species, atom.y, atom.x))
@@ -553,8 +682,20 @@ def _write_compact_6h_cif(
 ) -> None:
     z_compact = (1.0 - float(internal_z_parent)) / 3.0
     atoms = [
-        _Atom(label="Pb1", species=anchor_species, x=0.0, y=0.0, z=0.0),
-        _Atom(label="I1", species=iodine_species, x=0.0, y=0.0, z=z_compact),
+        _Atom(
+            label="Pb1",
+            species=canonical_element_symbol(anchor_species),
+            x=0.0,
+            y=0.0,
+            z=0.0,
+        ),
+        _Atom(
+            label="I1",
+            species=canonical_element_symbol(iodine_species),
+            x=0.0,
+            y=0.0,
+            z=z_compact,
+        ),
     ]
 
     with path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -714,5 +855,6 @@ __all__ = [
     "DISORDERED_PHASE_DISPLAY_LABEL",
     "DISORDERED_PHASE_SOURCE_LABEL",
     "GeneratedDisorderedCif",
+    "canonical_element_symbol",
     "generate_pbii_ht_shifted_cif",
 ]
