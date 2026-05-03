@@ -5301,6 +5301,7 @@ def validate_geometry_fit_live_source_rows(
     live_rows: Sequence[object] | None,
     *,
     required_pairs: Sequence[Mapping[str, object]] | None = None,
+    require_canonical_required_pairs: bool = False,
 ) -> dict[str, object]:
     """Validate whether live/source rows can satisfy active geometry-fit pairs."""
 
@@ -5321,6 +5322,8 @@ def validate_geometry_fit_live_source_rows(
     def _detector_point(entry: Mapping[str, object]) -> tuple[float, float] | None:
         for x_key, y_key in (
             ("detector_display_x", "detector_display_y"),
+            ("detector_x", "detector_y"),
+            ("background_detector_x", "background_detector_y"),
             ("display_col", "display_row"),
             ("sim_col", "sim_row"),
             ("x", "y"),
@@ -5395,6 +5398,33 @@ def validate_geometry_fit_live_source_rows(
                 kept.append(dict(candidate))
         return kept, bool(saw_comparable and candidates and not kept)
 
+    def _candidate_matches_required_reflection_row(
+        entry: Mapping[str, object],
+        candidate: Mapping[str, object],
+    ) -> bool:
+        entry_reflection_row_key = _geometry_fit_source_reflection_row_key(entry)
+        if entry_reflection_row_key is None:
+            return True
+        if _geometry_fit_source_reflection_row_key(candidate) == entry_reflection_row_key:
+            return True
+        target_coverage_key = normalize_new4_source_coverage_key(entry)
+        if target_coverage_key is None:
+            return False
+        for field_name in _GEOMETRY_FIT_SOURCE_COVERAGE_ALIAS_FIELDS:
+            raw_aliases = candidate.get(field_name)
+            if raw_aliases is None:
+                continue
+            if isinstance(raw_aliases, Mapping):
+                alias_items: Sequence[object] = [raw_aliases]
+            elif isinstance(raw_aliases, Sequence) and not isinstance(raw_aliases, (str, bytes)):
+                alias_items = list(raw_aliases)
+            else:
+                continue
+            for raw_alias in alias_items:
+                if normalize_new4_source_coverage_key(raw_alias) == target_coverage_key:  # type: ignore[arg-type]
+                    return True
+        return False
+
     def _failure_payload(
         entry: Mapping[str, object],
         *,
@@ -5410,15 +5440,11 @@ def validate_geometry_fit_live_source_rows(
             "overlay_match_index": entry.get("overlay_match_index"),
             "reason": str(reason),
             "hkl": _geometry_fit_normalized_hkl(entry.get("hkl")),
-            "source_label": _source_label(entry),
             "source_table_index": entry.get("source_table_index"),
             "source_reflection_index": entry.get("source_reflection_index"),
             "source_row_index": entry.get("source_row_index"),
             "source_peak_index": entry.get("source_peak_index"),
             "source_branch_index": _geometry_fit_source_branch_index(entry),
-            "target_source_coverage_key": _geometry_fit_source_coverage_key_payload(
-                normalize_new4_source_coverage_key(entry)
-            ),
             "trusted_identity_required": bool(
                 _geometry_fit_trusted_full_reflection_identity(entry)
             ),
@@ -5558,11 +5584,110 @@ def validate_geometry_fit_live_source_rows(
                     if hkl_key is None or _hkl_tuple(candidate) == hkl_key
                 ]
             )
-            if resolution_kind == "source_group_hkl"
-            else len(candidate_pool)
         )
+        entry_branch_idx = _geometry_fit_source_branch_index(entry)
+        entry_branch_reason = _geometry_fit_source_branch_reason(entry)
+        if (
+            entry_branch_idx not in {0, 1}
+            and not _geometry_fit_is_zero_qr_00l(entry)
+            and candidate_pool
+        ):
+            if entry_branch_reason == "ambiguous_branch_deadband":
+                pair_failures.append(
+                    _failure_payload(
+                        entry,
+                        pair_id=pair_id,
+                        reason="ambiguous_branch_deadband",
+                        candidate_count_total=candidate_count_total,
+                        candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
+                        candidate_count_after_branch_filter=0,
+                        branch_candidates=[],
+                    )
+                )
+                continue
+            if _geometry_fit_trusted_full_reflection_identity(entry):
+                pair_failures.append(
+                    _failure_payload(
+                        entry,
+                        pair_id=pair_id,
+                        reason="missing_branch",
+                        candidate_count_total=candidate_count_total,
+                        candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
+                        candidate_count_after_branch_filter=0,
+                        branch_candidates=[],
+                    )
+                )
+                continue
+        if candidate_pool and hkl_key is not None and candidate_count_after_hkl_filter <= 0:
+            pair_failures.append(
+                _failure_payload(
+                    entry,
+                    pair_id=pair_id,
+                    reason="required_hkl_missing",
+                    candidate_count_total=candidate_count_total,
+                    candidate_count_after_hkl_filter=0,
+                    candidate_count_after_branch_filter=0,
+                    branch_candidates=[],
+                )
+            )
+            continue
+        if require_canonical_required_pairs and candidate_pool:
+            canonical_candidate_pool = [
+                dict(candidate)
+                for candidate in candidate_pool
+                if _geometry_fit_is_canonical_live_source_entry(candidate)[0]
+            ]
+            if not canonical_candidate_pool:
+                branch_filtered, _branch_mismatch = _branch_filtered(entry, candidate_pool)
+                pair_failures.append(
+                    _failure_payload(
+                        entry,
+                        pair_id=pair_id,
+                        reason="missing_canonical_candidate",
+                        candidate_count_total=candidate_count_total,
+                        candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
+                        candidate_count_after_branch_filter=int(len(branch_filtered)),
+                        branch_candidates=_candidate_payload(branch_filtered),
+                    )
+                )
+                continue
+            candidate_pool = canonical_candidate_pool
         branch_filtered, branch_mismatch = _branch_filtered(entry, candidate_pool)
         candidate_count_after_branch_filter = int(len(branch_filtered))
+        if branch_mismatch:
+            pair_failures.append(
+                _failure_payload(
+                    entry,
+                    pair_id=pair_id,
+                    reason="branch_mismatch",
+                    candidate_count_total=candidate_count_total,
+                    candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
+                    candidate_count_after_branch_filter=0,
+                    branch_candidates=[],
+                )
+            )
+            continue
+        if _geometry_fit_source_reflection_row_key(entry) is not None:
+            trusted_row_candidates = [
+                dict(candidate)
+                for candidate in branch_filtered
+                if _candidate_matches_required_reflection_row(entry, candidate)
+            ]
+            if not trusted_row_candidates:
+                pair_failures.append(
+                    _failure_payload(
+                        entry,
+                        pair_id=pair_id,
+                        reason="missing_trusted_reflection_row",
+                        candidate_count_total=candidate_count_total,
+                        candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
+                        candidate_count_after_branch_filter=candidate_count_after_branch_filter,
+                        branch_candidates=_candidate_payload(branch_filtered),
+                    )
+                )
+                continue
+            branch_filtered = trusted_row_candidates
+            candidate_count_after_branch_filter = int(len(branch_filtered))
         finite_candidates = [
             dict(candidate)
             for candidate in branch_filtered
@@ -5586,19 +5711,6 @@ def validate_geometry_fit_live_source_rows(
                     candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
                     candidate_count_after_branch_filter=candidate_count_after_branch_filter,
                     branch_candidates=branch_candidates,
-                )
-            )
-            continue
-        if branch_mismatch:
-            pair_failures.append(
-                _failure_payload(
-                    entry,
-                    pair_id=pair_id,
-                    reason="branch_mismatch",
-                    candidate_count_total=candidate_count_total,
-                    candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
-                    candidate_count_after_branch_filter=0,
-                    branch_candidates=[],
                 )
             )
             continue
@@ -6069,7 +6181,9 @@ def rebuild_geometry_fit_source_rows(
             "unrelated_available_row_count_for_rebinding": int(
                 counts.get("unrelated_count", 0) or 0
             ),
-            "unrelated_scored_row_count_for_rebinding": 0,
+            "unrelated_scored_row_count_for_rebinding": int(
+                counts.get("unrelated_count", 0) or 0
+            ),
             "unrelated_projected_row_count_for_rebinding": 0,
             "required_branch_group_keys_seen": copy.deepcopy(list(matched_keys)),
             "missing_required_branch_group_keys": missing_required_payloads,
@@ -6706,6 +6820,7 @@ def rebuild_geometry_fit_source_rows(
                 rebuilt_validation = validate_geometry_fit_live_source_rows(
                     stored_rows,
                     required_pairs=required_pairs,
+                    require_canonical_required_pairs=True,
                 )
                 dual_path_diff = _geometry_fit_required_pair_dual_path_diff(
                     live_cache_validation,
@@ -6945,6 +7060,7 @@ def rebuild_geometry_fit_source_rows(
             live_cache_validation = validate_geometry_fit_live_source_rows(
                 live_rows,
                 required_pairs=required_pairs,
+                require_canonical_required_pairs=True,
             )
             live_cache_validation = dict(live_cache_validation)
             live_signature_match = bool(
@@ -10112,6 +10228,15 @@ def build_geometry_manual_fit_dataset(
         for item in selected_entry_inputs
         if isinstance(item.get("entry"), Mapping)
     ]
+
+    def _required_pairs_callback_payload() -> list[dict[str, object]]:
+        callback_pairs: list[dict[str, object]] = []
+        for entry in selected_entries:
+            copied = dict(entry)
+            copied.pop("source_label", None)
+            callback_pairs.append(copied)
+        return callback_pairs
+
     manual_picker_truth_pairs = gui_manual_geometry.build_geometry_manual_picker_truth_pairs(
         background_idx,
         [
@@ -11792,7 +11917,7 @@ def build_geometry_manual_fit_dataset(
                         int(background_idx),
                         active_params,
                         consumer="geometry_fit_trial_source_rows",
-                        required_pairs=selected_entries,
+                        required_pairs=_required_pairs_callback_payload(),
                     )
                     or []
                 )
@@ -11821,7 +11946,7 @@ def build_geometry_manual_fit_dataset(
                         int(background_idx),
                         active_params,
                         consumer="geometry_fit_dataset",
-                        required_pairs=selected_entries,
+                        required_pairs=_required_pairs_callback_payload(),
                     )
                     or []
                 )
@@ -12004,7 +12129,7 @@ def build_geometry_manual_fit_dataset(
             int(background_idx),
             params_i,
             consumer="geometry_fit_dataset",
-            required_pairs=selected_entries,
+            required_pairs=_required_pairs_callback_payload(),
         )
     else:
         simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
@@ -12031,7 +12156,7 @@ def build_geometry_manual_fit_dataset(
                 params_i,
                 consumer="geometry_fit_dataset",
                 prior_diagnostics=dict(simulation_diagnostics),
-                required_pairs=selected_entries,
+                required_pairs=_required_pairs_callback_payload(),
             )
         )
         simulated_peaks = _project_source_rows_for_current_view(simulated_peaks)
@@ -14908,6 +15033,8 @@ def build_geometry_manual_fit_dataset(
             base_theta_value = _effective_theta_for_projection(params_i)
             active_theta_value = _effective_theta_for_projection(active_params)
             theta_adjustment_deg = 0.0
+            if np.isfinite(base_theta_value) and np.isfinite(active_theta_value):
+                theta_adjustment_deg = float(active_theta_value - base_theta_value)
             active_bundle = _resolve_dynamic_reanchor_cached_caked_bundle(
                 active_params,
                 prefer_rebuild_bundle=prefer_rebuild_bundle,
@@ -14945,7 +15072,7 @@ def build_geometry_manual_fit_dataset(
                         native_frame_conversion_count
                     )
                     return invalid_projection
-                projected_two_theta.append(float(two_theta_deg))
+                projected_two_theta.append(float(two_theta_deg + theta_adjustment_deg))
                 projected_phi.append(float(phi_deg))
 
             return {

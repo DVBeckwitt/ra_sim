@@ -1025,6 +1025,8 @@ def _project_caked_qr_grouped_candidates(
     projection_callbacks,
     rows: Sequence[Mapping[str, object]] | None,
 ) -> dict[tuple[object, ...], list[dict[str, object]]]:
+    if projection_callbacks is None:
+        return {}
     try:
         projected_rows = projection_callbacks.project_peaks_to_current_view(
             [dict(entry) for entry in rows or () if isinstance(entry, Mapping)]
@@ -1045,6 +1047,38 @@ def _project_caked_qr_grouped_candidates(
         for group_key, entries in grouped.items()
         if _normalize_q_group_key(group_key) is not None
     }
+
+
+def _callbacks_pick_uses_caked_space(
+    projection_callbacks,
+    *,
+    saved_entries: Sequence[Mapping[str, object]] | None = None,
+) -> bool:
+    if projection_callbacks is not None:
+        try:
+            return bool(projection_callbacks.pick_uses_caked_space())
+        except Exception:
+            return False
+    try:
+        return bool(gui_geometry_fit.geometry_manual_pairs_use_caked_fit_space(saved_entries or ()))
+    except Exception:
+        return False
+
+
+def _noop_simulated_peaks_for_params(*_args, **_kwargs) -> list[dict[str, object]]:
+    return []
+
+
+def _noop_pick_candidates(
+    _rows: Sequence[Mapping[str, object]] | None = None,
+) -> dict[tuple[object, ...], list[dict[str, object]]]:
+    return {}
+
+
+def _noop_simulated_lookup(
+    _rows: Sequence[Mapping[str, object]] | None = None,
+) -> dict[tuple[object, ...], dict[str, object]]:
+    return {}
 
 
 def _select_live_candidate_for_saved_entry(
@@ -2296,12 +2330,18 @@ def _build_group_cache(
     if isinstance(simulation_diagnostics, Mapping):
         requested_signature = simulation_diagnostics.get("requested_signature")
 
+    use_caked_space = _callbacks_pick_uses_caked_space(
+        projection_callbacks,
+        saved_entries=required_pairs,
+    )
+    if use_caked_space and projection_callbacks is None:
+        raise RuntimeError("projection_callbacks_required_for_caked_group_cache")
     try:
-        use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
-    except Exception:
-        use_caked_space = False
-    try:
-        caked_projection_signature = projection_callbacks.caked_projection_signature()
+        caked_projection_signature = (
+            projection_callbacks.caked_projection_signature()
+            if projection_callbacks is not None
+            else None
+        )
     except Exception:
         caked_projection_signature = None
 
@@ -2350,13 +2390,25 @@ def _build_group_cache(
                 )
             )
         ),
-        simulated_peaks_for_params=projection_callbacks.simulated_peaks_for_params,
+        simulated_peaks_for_params=(
+            projection_callbacks.simulated_peaks_for_params
+            if projection_callbacks is not None
+            else _noop_simulated_peaks_for_params
+        ),
         peak_records=[],
-        build_grouped_candidates=projection_callbacks.pick_candidates,
-        build_simulated_lookup=projection_callbacks.simulated_lookup,
+        build_grouped_candidates=(
+            projection_callbacks.pick_candidates
+            if projection_callbacks is not None
+            else _noop_pick_candidates
+        ),
+        build_simulated_lookup=(
+            projection_callbacks.simulated_lookup
+            if projection_callbacks is not None
+            else _noop_simulated_lookup
+        ),
         project_peaks_to_current_view=(
             projection_callbacks.project_peaks_to_current_view
-            if use_caked_space
+            if use_caked_space and projection_callbacks is not None
             else None
         ),
         current_match_config=manual_dataset_bindings.geometry_manual_match_config,
@@ -2802,7 +2854,7 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
     captured = _capture_preflight(saved_state=saved_state, state_path=state_path)
     prepare_kwargs = dict(captured["prepare_kwargs"])
     prepare_result = captured["prepare_result"]
-    projection_callbacks = captured["projection_callbacks"]
+    projection_callbacks = captured.get("projection_callbacks")
     prepared_run = prepare_result.prepared_run
     bindings = prepare_kwargs["bindings"]
     params = dict(prepare_kwargs["params"] or {})
@@ -2818,6 +2870,7 @@ def _prepare_validation_context(state_path: Path, background_index: int) -> dict
         "captured_preflight_error_text": prepare_result.error_text,
         "used_isolated_background_dataset": prepared_run is None,
         "runtime_prepare_ok": runtime_prepare_ok,
+        "projection_callbacks_available": projection_callbacks is not None,
     }
     try:
         if prepared_run is not None:
@@ -3032,8 +3085,11 @@ def _run_saved_state_compatibility_validation(
     dataset = dict(context["dataset"])
     group_cache = dict(context["group_cache"])
     manual_dataset_bindings = context["manual_dataset_bindings"]
-    projection_callbacks = context["projection_callbacks"]
-    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
+    projection_callbacks = context.get("projection_callbacks")
+    use_caked_space = _callbacks_pick_uses_caked_space(
+        projection_callbacks,
+        saved_entries=saved_entries,
+    )
     result = {
         key: value
         for key, value in context.items()
@@ -3064,16 +3120,18 @@ def _run_saved_state_compatibility_validation(
 
     checked_pairs: list[dict[str, object]] = []
     for slot_index in checked_slot_indices:
-        pair_result = _validate_pair(
-            background_index=int(background_index),
-            slot_index=int(slot_index),
-            expected_pair_id=f"bg{int(background_index)}:pair{int(slot_index)}",
-            saved_entries=saved_entries,
-            dataset=dataset,
-            group_cache=group_cache,
-            entry_display_coords=manual_dataset_bindings.geometry_manual_entry_display_coords,
-            use_caked_space=use_caked_space,
-        )
+        validate_pair_kwargs = {
+            "background_index": int(background_index),
+            "slot_index": int(slot_index),
+            "expected_pair_id": f"bg{int(background_index)}:pair{int(slot_index)}",
+            "saved_entries": saved_entries,
+            "dataset": dataset,
+            "group_cache": group_cache,
+            "entry_display_coords": manual_dataset_bindings.geometry_manual_entry_display_coords,
+        }
+        if use_caked_space:
+            validate_pair_kwargs["use_caked_space"] = True
+        pair_result = _validate_pair(**validate_pair_kwargs)
         checked_pairs.append(pair_result)
         if not bool(pair_result.get("ok", False)):
             result["ok"] = False
@@ -3099,16 +3157,18 @@ def _run_saved_state_compatibility_validation(
     full_sweep: list[dict[str, object]] = []
     seen: set[tuple[object, ...]] = set()
     for slot_index in range(len(saved_entries)):
-        pair_result = _validate_pair(
-            background_index=int(background_index),
-            slot_index=int(slot_index),
-            expected_pair_id=f"bg{int(background_index)}:pair{int(slot_index)}",
-            saved_entries=saved_entries,
-            dataset=dataset,
-            group_cache=group_cache,
-            entry_display_coords=manual_dataset_bindings.geometry_manual_entry_display_coords,
-            use_caked_space=use_caked_space,
-        )
+        validate_pair_kwargs = {
+            "background_index": int(background_index),
+            "slot_index": int(slot_index),
+            "expected_pair_id": f"bg{int(background_index)}:pair{int(slot_index)}",
+            "saved_entries": saved_entries,
+            "dataset": dataset,
+            "group_cache": group_cache,
+            "entry_display_coords": manual_dataset_bindings.geometry_manual_entry_display_coords,
+        }
+        if use_caked_space:
+            validate_pair_kwargs["use_caked_space"] = True
+        pair_result = _validate_pair(**validate_pair_kwargs)
         full_sweep.append(
             {
                 "slot_index": int(slot_index),
@@ -3313,6 +3373,8 @@ def _entry_caked_display_coords(
         point = _finite_point(entry, *keys)
         if point is not None:
             return point
+    if projection_callbacks is None:
+        return None
     detector_point = _finite_point(entry, "detector_x", "detector_y")
     if detector_point is not None:
         converted = projection_callbacks.native_detector_coords_to_caked_display_coords(
@@ -3356,17 +3418,23 @@ def _run_single_slot_preflight_validation(
     dataset = dict(context["dataset"])
     group_cache = dict(context["group_cache"])
     manual_dataset_bindings = context["manual_dataset_bindings"]
-    projection_callbacks = context["projection_callbacks"]
-    pair_result = _validate_pair(
-        background_index=int(background_index),
-        slot_index=int(slot_index),
-        expected_pair_id=f"bg{int(background_index)}:pair{int(slot_index)}",
+    projection_callbacks = context.get("projection_callbacks")
+    use_caked_space = _callbacks_pick_uses_caked_space(
+        projection_callbacks,
         saved_entries=saved_entries,
-        dataset=dataset,
-        group_cache=group_cache,
-        entry_display_coords=manual_dataset_bindings.geometry_manual_entry_display_coords,
-        use_caked_space=bool(projection_callbacks.pick_uses_caked_space()),
     )
+    validate_pair_kwargs = {
+        "background_index": int(background_index),
+        "slot_index": int(slot_index),
+        "expected_pair_id": f"bg{int(background_index)}:pair{int(slot_index)}",
+        "saved_entries": saved_entries,
+        "dataset": dataset,
+        "group_cache": group_cache,
+        "entry_display_coords": manual_dataset_bindings.geometry_manual_entry_display_coords,
+    }
+    if use_caked_space:
+        validate_pair_kwargs["use_caked_space"] = True
+    pair_result = _validate_pair(**validate_pair_kwargs)
     result = _public_context_fields(context)
     result["slot_index"] = int(slot_index)
     result["pair_result"] = pair_result
@@ -3633,7 +3701,7 @@ def _prepare_fresh_slot_runtime(
     context: Mapping[str, object],
     background_index: int,
 ) -> dict[str, object]:
-    projection_callbacks = context["projection_callbacks"]
+    projection_callbacks = context.get("projection_callbacks")
     group_cache = dict(context["group_cache"])
     saved_entries = [
         dict(entry)
@@ -3645,9 +3713,30 @@ def _prepare_fresh_slot_runtime(
         context=context,
         consumer="manual_pick_group_probe",
     )
-    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
+    use_caked_space = _callbacks_pick_uses_caked_space(
+        projection_callbacks,
+        saved_entries=saved_entries,
+    )
     grouped_candidates: dict[tuple[object, ...], list[dict[str, object]]] = {}
     grouped_candidate_source = "pick_cache"
+    missing_qr_projection_candidates: list[dict[str, object]] = []
+    if use_caked_space and projection_callbacks is None:
+        return {
+            "projection_callbacks": projection_callbacks,
+            "group_cache": group_cache,
+            "current_source_rows": current_source_rows,
+            "grouped_candidates": grouped_candidates,
+            "grouped_candidate_source": "missing_projection_callbacks",
+            "missing_qr_projection_candidates": [
+                {
+                    "slot_index": int(index),
+                    "pair_id": entry.get("pair_id"),
+                    "reason": "projection_callbacks_required_for_caked_projection",
+                }
+                for index, entry in enumerate(saved_entries)
+                if isinstance(entry, Mapping)
+            ],
+        }
     if use_caked_space:
         grouped_candidates = dict(
             group_cache.get("caked_qr_projection_grouped_candidates", {}) or {}
@@ -3700,7 +3789,11 @@ def _prepare_fresh_slot_runtime(
         grouped_candidate_source = "pick_cache"
         if not grouped_candidates and current_source_rows:
             try:
-                grouped_candidates = projection_callbacks.pick_candidates(current_source_rows)
+                grouped_candidates = (
+                    projection_callbacks.pick_candidates(current_source_rows)
+                    if projection_callbacks is not None
+                    else _noop_pick_candidates(current_source_rows)
+                )
             except Exception:
                 grouped_candidates = {}
             grouped_candidate_source = "current_live_source_rows"
@@ -3746,7 +3839,7 @@ def _run_fresh_slot_validation(
             background_index=int(background_index),
         )
     )
-    projection_callbacks = prepared_runtime["projection_callbacks"]
+    projection_callbacks = prepared_runtime.get("projection_callbacks")
     group_cache = dict(prepared_runtime["group_cache"])
     current_source_rows = [
         dict(entry)
@@ -3762,7 +3855,10 @@ def _run_fresh_slot_validation(
         slot_index=int(slot_index),
     )
     pair_id = f"bg{int(background_index)}:pair{int(slot_index)}"
-    use_caked_space = bool(projection_callbacks.pick_uses_caked_space())
+    use_caked_space = _callbacks_pick_uses_caked_space(
+        projection_callbacks,
+        saved_entries=saved_entries,
+    )
     saved_simulated_detector_hint = _saved_simulated_detector_hint(saved_entry)
     saved_measured_detector_point = _saved_measured_detector_point(saved_entry)
     saved_background_current_view_point = _saved_background_current_view_point(
@@ -3822,6 +3918,30 @@ def _run_fresh_slot_validation(
         result["grouped_candidate_source"] = grouped_candidate_source
         result["candidate_selection"] = failed_pair
         result["failed_pair"] = failed_pair
+        result["ok"] = False
+        result["classification"] = "seam_failure"
+        result["rebind_ok"] = False
+        return result
+    if projection_callbacks is None:
+        result["saved_entry"] = {
+            **dict(saved_entry),
+            **_identity_payload(saved_entry, pair_id=pair_id),
+            "q_group_key": _normalize_q_group_key(saved_entry.get("q_group_key")),
+            "saved_source_identity_fields": _source_locator_payload(saved_entry),
+            "saved_measured_detector_point": _point_payload(saved_measured_detector_point),
+            "saved_background_current_view_point": _point_payload(
+                saved_background_current_view_point
+            ),
+            "saved_background_current_view_frame": saved_background_current_view_frame,
+            "saved_simulated_detector_hint": _point_payload(saved_simulated_detector_hint),
+        }
+        result["grouped_candidate_source"] = grouped_candidate_source
+        result["candidate_selection"] = {
+            "ok": False,
+            "failure_stage": "projection_callbacks_unavailable",
+            "selection_status": "projection_callbacks_required_for_slot_replay",
+        }
+        result["failed_pair"] = dict(result["candidate_selection"])
         result["ok"] = False
         result["classification"] = "seam_failure"
         result["rebind_ok"] = False

@@ -2831,6 +2831,21 @@ def run_headless_geometry_fit(
             _pairs_for_index(background_idx)
         )
 
+    def _signature_numeric(value: object) -> object:
+        try:
+            parsed = float(value)
+        except Exception:
+            return None
+        if not np.isfinite(parsed):
+            return None
+        return round(float(parsed), 9)
+
+    def _signature_summary(signature: object) -> str | None:
+        if signature is None:
+            return None
+        text = repr(signature)
+        return text if len(text) <= 240 else text[:237] + "..."
+
     def _headless_geometry_fit_caked_payload_signature(
         background_idx: int,
         detector_shape: Sequence[object],
@@ -3482,21 +3497,6 @@ def run_headless_geometry_fit(
             for entry in _project_peaks_to_current_view_for_dataset(preview_rows)
             if isinstance(entry, Mapping)
         ]
-
-    def _signature_numeric(value: object) -> object:
-        try:
-            parsed = float(value)
-        except Exception:
-            return None
-        if not np.isfinite(parsed):
-            return None
-        return round(float(parsed), 9)
-
-    def _signature_summary(signature: object) -> str | None:
-        if signature is None:
-            return None
-        text = repr(signature)
-        return text if len(text) <= 240 else text[:237] + "..."
 
     def _source_snapshot_signature_for_background(
         background_index: int,

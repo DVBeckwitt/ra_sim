@@ -26,6 +26,7 @@ downstream of green mosaic fitting.
 | --- | --- | --- | --- | --- | --- | --- |
 | Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-23 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 | New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-03 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
+| Deterministic geometry runtime fix pass | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-03 | [deterministic-geometry-runtime-fix-pass.md](in-progress/deterministic-geometry-runtime-fix-pass.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |

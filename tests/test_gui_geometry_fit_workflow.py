@@ -11219,8 +11219,8 @@ def test_new4_ladder_caked_gate_rejects_per_dataset_projector_manual_mismatch() 
         require_improvement=False,
     )
 
-    assert "dataset_fit_space_projector_row_count_4_expected_3" in failures
-    assert "dataset_fit_space_projector_row_count_3_expected_4" in failures
+    assert "dataset_fit_space_projector_or_sim_visual_row_count_4_0_expected_3" in failures
+    assert "dataset_fit_space_projector_or_sim_visual_row_count_3_0_expected_4" in failures
     assert ladder._rung_passed(report) is False
 
 
@@ -25314,6 +25314,7 @@ def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_
             refresh_pairs=False,
         ),
         geometry_manual_rebuild_source_rows_for_background=_rebuild,
+        pick_uses_caked_space=lambda: True,
     )
 
     dataset = geometry_fit.build_geometry_manual_fit_dataset(
@@ -26392,6 +26393,7 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
         "source_cache_full_simulation_fallback_ready",
         "source_cache_targeted_fresh_simulation_ready",
         "source_cache_targeted_source_rows_start",
+        "source_cache_fresh_rebuild_consumer_wrapper",
         "source_cache_targeted_source_rows_ready",
         "source_cache_project_rows_start",
         "source_cache_project_rows_ready",
