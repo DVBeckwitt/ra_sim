@@ -1,11 +1,11 @@
 # Generated Disordered Qr Live Path
 
-Status: implemented, focused live-picker and fit-handoff validation green
+Status: implemented, focused live-picker, fit-handoff, and branch-switch validation green
 Type: bug fix / GUI picker feature
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-02
+Last updated: 2026-05-03
 
 ## Summary
 
@@ -46,25 +46,52 @@ disordered-phase candidates.
 - The fresh source-row rebuild wrapper logs
   `fresh_rebuild_consumer_wrapper=deduped` and removes duplicate `consumer`
   keyword forwarding, preventing the prior fit fallback crash.
+- Geometry-fit live-cache validation now separates live-row fit usability from
+  trusted full-reflection identity. Source-matched Q-group rows can validate by
+  `source + group + hkl`, `source + group`, or `source + hkl` when the match is
+  unambiguous and detector coordinates are finite.
+- The live-cache validator now reports exact validator predicates and cannot
+  emit `status=invalid reason=ready`. Invalid rows report a concrete reason
+  such as `required_source_missing`, `ambiguous_candidate`, or
+  `no_finite_detector_position`.
+- Detector-origin manual pairs keep detector fit-space even when caked
+  diagnostic fields are backfilled. Exact-caked projector setup remains
+  required only for caked-origin pairs.
+- Fresh fallback is source-safe for `disordered_phase`: primary-only fallback
+  rows cannot satisfy disordered saved pairs and report
+  `required_source_rows_unavailable` instead.
+- The geometry correspondence resolver now runs the existing stale source-row
+  proof and saved-detector/source-switch fallback before returning
+  `locked_qr_row_unavailable` for locked/stale QR rows. This restores
+  `prediction_branch_source_switched` when a deterministic alternate source is
+  proven, while ambiguous alternate evidence keeps the rejection reason.
 
 ## Bug / Error / Feature Status
 
-- Bug status: fixed for the user-reported primary-only picker cache reuse and
-  the downstream source-consistency gap through manual placement and fit
-  preflight handoff.
+- Bug status: fixed for the user-reported primary-only picker cache reuse, the
+  `status=invalid reason=ready` live-cache contradiction, detector-origin
+  caked-projector fallthrough, primary-only disordered fallback, and the
+  follow-up locked/stale QR branch-switch regression.
 - Error status: the active fallback crash
   `_build_source_rows_for_rebuild() got multiple values for keyword argument
   'consumer'` is covered by regression tests and should no longer occur on the
-  patched live path.
+  patched live path. The later broad geometry failure that returned
+  `locked_qr_row_unavailable` instead of `prediction_branch_source_switched`
+  is also covered by regression tests.
 - Feature status: implemented with explicit GUI control, live runtime logging,
   cache invalidation, hit-table scheduling, publishing, source-aware picker
-  placement, and fit-handoff diagnostics/tests.
+  placement, fit-handoff diagnostics/tests, source-cache rung tests, and
+  detector/caked fit-space classification tests.
 - Remaining manual check: relaunch the GUI from the committed branch and confirm
   the live fit trace includes the `phase4d1` marker, nonzero
   `live_rows_raw_count`, and either `source_cache_live_runtime_cache_accepted`
   or a specific handoff-drop reason.
 - Remaining risk: full `ra_sim.dev check` is still blocked by pre-existing
   formatting drift in `ra_sim/fitting/optimization.py`, outside this bug fix.
+  The broad local selector
+  `python -m pytest tests -q -k "geometry_fit or manual_geometry or manual_picker or disordered_phase"`
+  timed out after five minutes during final validation without failure output;
+  focused required gates passed.
 
 ## Diagnostics
 
@@ -93,6 +120,17 @@ Geometry-fit handoff diagnostics report:
 - `live_rows_source_counts`
 - `live_rows_signature_match`
 - `fresh_rebuild_consumer_wrapper=deduped`
+- `validator_rows_nonempty`
+- `validator_signature_match`
+- `validator_required_sources_present`
+- `validator_required_groups_present`
+- `validator_required_hkls_present`
+- `validator_finite_detector_rows`
+- `validator_finite_caked_rows`
+- `validator_canonical_row_count`
+- `validator_row_schema_valid_count`
+- `validator_failure_reason`
+- accepted live-cache `source_counts`
 
 ## Validation
 
@@ -114,8 +152,22 @@ Focused validation:
   - 25 passed.
 - `python -m compileall ra_sim/gui/geometry_fit.py ra_sim/gui/_runtime/runtime_session.py tests`
   - passed.
+- `python -m pytest tests/test_geometry_fitting.py::test_geometry_fit_correspondence_saved_detector_waits_for_row_proof -q`
+  - passed.
+- `python -m pytest tests/test_geometry_fitting.py -k "prediction_branch_source_switched or locked_qr_row_unavailable" -q`
+  - 1 passed, 200 deselected.
+- `python -m pytest tests/test_geometry_fitting.py -q`
+  - 201 passed.
+- `python -m pytest tests/test_geometry_fit_live_cache_validation_acceptance.py tests/test_geometry_fit_source_cache_rungs.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_geometry_fit_disordered_preflight.py tests/test_geometry_fit_live_cache_diagnostics.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_job_live_rows_handoff.py -q`
+  - 46 passed.
+- `python -m compileall ra_sim tests`
+  - passed.
+- `git diff --check`
+  - passed.
 
 Blocked validation:
 
 - `python -m ra_sim.dev check`
   - blocked by existing `ra_sim/fitting/optimization.py` formatting drift.
+- `python -m pytest tests -q -k "geometry_fit or manual_geometry or manual_picker or disordered_phase"`
+  - timed out after five minutes without failure output.

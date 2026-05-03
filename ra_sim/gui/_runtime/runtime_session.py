@@ -16325,12 +16325,7 @@ def _selected_qr_rod_profile_components_for_mask(
     last_edge = finite_qz & (qz_flat == qz_edges[-1])
     if np.any(last_edge):
         bin_index[last_edge] = bin_count - 1
-    support = (
-        mask_flat
-        & finite_qz
-        & (bin_index >= 0)
-        & (bin_index < bin_count)
-    )
+    support = mask_flat & finite_qz & (bin_index >= 0) & (bin_index < bin_count)
     support_bins = bin_index[support].astype(np.intp, copy=False)
     if support_bins.size > 0:
         pixel_count = np.bincount(support_bins, minlength=bin_count)[:bin_count].astype(
@@ -17931,10 +17926,7 @@ def _hit_table_state_present_for_run_sides(
         and getattr(simulation_runtime_state, "stored_sixh_reference_max_positions", None) is None
     ):
         return False
-    if (
-        bool(run_disordered_phase)
-        and _disordered_phase_stored_hit_table_row_count() <= 0
-    ):
+    if bool(run_disordered_phase) and _disordered_phase_stored_hit_table_row_count() <= 0:
         return False
     return True
 
@@ -19197,10 +19189,14 @@ def _geometry_disordered_phase_inventory_payload(*, log_status: bool = True) -> 
     diagnostics["c"] = c_disordered
     if not (np.isfinite(a_disordered) and a_disordered > 0.0):
         simulation_runtime_state.generated_disordered_phase_cif_path = None
-        return _empty_payload(skip_reason=f"bad generated a value: {a_disordered}", diagnostics=diagnostics)
+        return _empty_payload(
+            skip_reason=f"bad generated a value: {a_disordered}", diagnostics=diagnostics
+        )
     if not (np.isfinite(c_disordered) and c_disordered > 0.0):
         simulation_runtime_state.generated_disordered_phase_cif_path = None
-        return _empty_payload(skip_reason=f"bad generated c value: {c_disordered}", diagnostics=diagnostics)
+        return _empty_payload(
+            skip_reason=f"bad generated c value: {c_disordered}", diagnostics=diagnostics
+        )
 
     cif_path_text = str(Path(selected_generated.cif_path).expanduser().resolve())
     simulation_runtime_state.generated_disordered_phase_cif_path = cif_path_text
@@ -22468,9 +22464,7 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
     )
     if not required_disordered_rows_missing and (
         active_peak_rows_fresh
-        or (
-            bool(result.get("collected_hit_tables", False)) and all_required_hit_table_rows_present
-        )
+        or (bool(result.get("collected_hit_tables", False)) and all_required_hit_table_rows_present)
     ):
         simulation_runtime_state.stored_hit_table_signature = result.get("hit_table_signature")
     else:
@@ -40812,10 +40806,9 @@ def _geometry_fit_flatten_q_group_cache_entries(
         if not isinstance(raw_entry, Mapping):
             continue
         entry = dict(raw_entry)
-        group_key = (
-            _geometry_fit_normalized_q_group_key(entry.get("q_group_key"))
-            or _geometry_fit_normalized_q_group_key(entry.get("key"))
-        )
+        group_key = _geometry_fit_normalized_q_group_key(
+            entry.get("q_group_key")
+        ) or _geometry_fit_normalized_q_group_key(entry.get("key"))
         child_rows: list[dict[str, object]] = []
         for key in (
             "rows",
@@ -40932,9 +40925,7 @@ def _geometry_fit_forward_source_rows_for_rebuild(
 ) -> object:
     forwarded = dict(kwargs or {})
     forwarded_consumer = str(
-        forwarded.pop("consumer", None)
-        or fallback_consumer
-        or "geometry_fit_preflight_cache"
+        forwarded.pop("consumer", None) or fallback_consumer or "geometry_fit_preflight_cache"
     )
     _append_runtime_update_trace(
         "geometry_fit_fresh_rebuild_consumer_wrapper",
@@ -41339,9 +41330,7 @@ def _build_geometry_fit_async_job(
         "live_rows_by_background_keys": [],
         "live_rows_by_background_current_count": 0,
         "requested_signature_keys": sorted(int(key) for key in requested_signatures),
-        "requested_signature_by_background_keys": sorted(
-            int(key) for key in requested_signatures
-        ),
+        "requested_signature_by_background_keys": sorted(int(key) for key in requested_signatures),
         "live_rows_signature_by_background_keys": [],
     }
     if int(current_background_index) in set(required_indices):
@@ -41380,9 +41369,7 @@ def _build_geometry_fit_async_job(
                 "live_rows_source_counts": _geometry_fit_live_row_source_counts(
                     live_rows_by_background.get(current_background_idx, ())
                 ),
-                "geometry_fit_live_handoff_patch_marker": (
-                    GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
-                ),
+                "geometry_fit_live_handoff_patch_marker": (GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER),
             }
         )
         live_rows_handoff_diagnostics["live_preview_rows_count"] = int(len(live_preview_rows))
@@ -41410,12 +41397,10 @@ def _build_geometry_fit_async_job(
                 live_rows_cache_metadata_by_background[current_background_idx].update(
                     {
                         "cache_source": str(
-                            fallback_diag.get("job_local_fallback_source")
-                            or "q_group_snapshot"
+                            fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
                         ),
                         "live_rows_cache_source": str(
-                            fallback_diag.get("job_local_fallback_source")
-                            or "q_group_snapshot"
+                            fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
                         ),
                         "live_rows_raw_count": int(len(fallback_rows)),
                         "live_rows_payload_count": int(len(fallback_rows)),
@@ -41429,16 +41414,13 @@ def _build_geometry_fit_async_job(
                         ),
                         "job_local_fallback_rows": int(len(fallback_rows)),
                         "job_local_fallback_source": str(
-                            fallback_diag.get("job_local_fallback_source")
-                            or "q_group_snapshot"
+                            fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
                         ),
                     }
                 )
                 _append_runtime_update_trace(
                     "geometry_fit_job_live_rows_from_q_group_snapshot",
-                    geometry_fit_live_handoff_patch_marker=(
-                        GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
-                    ),
+                    geometry_fit_live_handoff_patch_marker=(GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER),
                     background_index=int(current_background_idx),
                     rows=int(len(fallback_rows)),
                     sources=_geometry_fit_live_row_source_counts(fallback_rows),
@@ -41448,9 +41430,7 @@ def _build_geometry_fit_async_job(
                 )
         live_rows_handoff_diagnostics.update(
             {
-                "live_rows_by_background_keys": sorted(
-                    int(key) for key in live_rows_by_background
-                ),
+                "live_rows_by_background_keys": sorted(int(key) for key in live_rows_by_background),
                 "live_rows_by_background_current_count": int(
                     len(live_rows_by_background.get(current_background_idx, ()))
                 ),
@@ -41464,9 +41444,7 @@ def _build_geometry_fit_async_job(
         )
         live_rows_cache_metadata_by_background[current_background_idx].update(
             {
-                "geometry_fit_live_handoff_patch_marker": (
-                    GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
-                ),
+                "geometry_fit_live_handoff_patch_marker": (GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER),
                 "live_rows_handoff_diagnostics": dict(live_rows_handoff_diagnostics),
                 "q_group_cached_entries": int(
                     live_rows_handoff_diagnostics.get("q_group_cached_entries", 0) or 0
@@ -41735,9 +41713,7 @@ def _format_source_cache_worker_event_message(
     marker = str(payload_mapping.get("geometry_fit_live_handoff_patch_marker", "") or "").strip()
     if marker:
         parts.append(f"geometry_fit_live_handoff_patch_marker={marker}")
-    wrapper_marker = str(
-        payload_mapping.get("fresh_rebuild_consumer_wrapper", "") or ""
-    ).strip()
+    wrapper_marker = str(payload_mapping.get("fresh_rebuild_consumer_wrapper", "") or "").strip()
     if wrapper_marker:
         parts.append(f"fresh_rebuild_consumer_wrapper={wrapper_marker}")
     if background_number is not None and background_number > 0:
@@ -41767,6 +41743,10 @@ def _format_source_cache_worker_event_message(
         ("manual_picker_candidates", "manual_picker_candidates"),
         ("live_preview_rows_count", "live_preview_rows_count"),
         ("live_rows_by_background_current_count", "live_rows_by_background_current_count"),
+        ("validator_finite_detector_rows", "validator_finite_detector_rows"),
+        ("validator_finite_caked_rows", "validator_finite_caked_rows"),
+        ("validator_canonical_row_count", "validator_canonical_row_count"),
+        ("validator_row_schema_valid_count", "validator_row_schema_valid_count"),
     ):
         raw_value = payload_mapping.get(payload_key)
         if raw_value is None:
@@ -41780,6 +41760,15 @@ def _format_source_cache_worker_event_message(
             "live_rows_signature_match="
             f"{str(bool(payload_mapping.get('live_rows_signature_match'))).lower()}"
         )
+    for bool_key in (
+        "validator_rows_nonempty",
+        "validator_signature_match",
+        "validator_required_sources_present",
+        "validator_required_groups_present",
+        "validator_required_hkls_present",
+    ):
+        if payload_mapping.get(bool_key) is not None:
+            parts.append(f"{bool_key}={str(bool(payload_mapping.get(bool_key))).lower()}")
     live_rows_signature_reason = str(
         payload_mapping.get("live_rows_signature_reason", "") or ""
     ).strip()
@@ -41814,6 +41803,7 @@ def _format_source_cache_worker_event_message(
         "source_counts_before_filter",
         "source_counts_after_filter",
         "live_rows_source_counts",
+        "source_counts",
     ):
         raw_counts = payload_mapping.get(counts_key)
         if raw_counts is None:
@@ -41826,6 +41816,18 @@ def _format_source_cache_worker_event_message(
         else:
             counts_text = str(raw_counts)
         parts.append(f"{counts_key}={{{counts_text}}}")
+    invalid_reasons = payload_mapping.get("validator_invalid_reasons")
+    if invalid_reasons is not None:
+        if isinstance(invalid_reasons, (list, tuple, set)):
+            invalid_text = ",".join(str(value) for value in invalid_reasons)
+        else:
+            invalid_text = str(invalid_reasons)
+        parts.append(f"validator_invalid_reasons=[{invalid_text}]")
+    validator_failure_reason = str(
+        payload_mapping.get("validator_failure_reason", "") or ""
+    ).strip()
+    if validator_failure_reason:
+        parts.append(f"validator_failure_reason={validator_failure_reason}")
     reason = str(payload_mapping.get("reason", "") or "").strip()
     if reason:
         parts.append(f"reason={reason}")
@@ -43053,11 +43055,7 @@ def _run_async_geometry_fit_worker_job(
             )
         return _geometry_manual_build_source_rows_from_hit_tables(
             hit_tables_local,
-            image_size_value=int(
-                job_data.get("image_size")
-                or globals().get("image_size", 0)
-                or 0
-            ),
+            image_size_value=int(job_data.get("image_size") or globals().get("image_size", 0) or 0),
             params_local=params_local,
             allow_nominal_hkl_indices=True,
         )
@@ -43151,7 +43149,10 @@ def _run_async_geometry_fit_worker_job(
         )
         live_rows_cache_metadata.setdefault(
             "live_rows_cache_source",
-            str(live_rows_cache_metadata.get("cache_source", "live_preview_cache") or "live_preview_cache"),
+            str(
+                live_rows_cache_metadata.get("cache_source", "live_preview_cache")
+                or "live_preview_cache"
+            ),
         )
         live_rows_cache_metadata.setdefault(
             "geometry_fit_live_handoff_patch_marker",
@@ -43261,9 +43262,7 @@ def _run_async_geometry_fit_worker_job(
                     "cache_metadata": payload_metadata,
                 }
             return {
-                "rows": [
-                    dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)
-                ],
+                "rows": [dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)],
                 "cache_metadata": payload_metadata,
             }
 

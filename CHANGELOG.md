@@ -32,6 +32,7 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Fixed geometry-fit live-cache preflight so source-matched q-group rows can satisfy generated-disordered manual pairs without falling through to fresh simulation or caked-projector setup, and restored locked/stale QR prediction-branch source switching before `locked_qr_row_unavailable` is returned.
   - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI startup, headless `fit-geometry`, and headless `simulate` paths, and kept beam-center picking out of the center-dependent caked wrapper.
   - Fixed beam-center picking to use the clicked detector-display point exactly, avoiding local peak snapping before applying the GUI contract `row = display_row`, `col = detector_width - display_col`.
   - Untangled `Pick Beam Center` coordinate handling so the pick writes one canonical GUI Row/Col pair through the visible sliders and entries, projects the marker back into detector/caked views from that same pair, and keeps detector-center remap reads on the same values.

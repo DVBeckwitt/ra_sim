@@ -4572,7 +4572,7 @@ def test_resolve_fixed_source_matches_saved_detector_waits_for_row_proof() -> No
     )
 
 
-def test_geometry_fit_correspondence_saved_detector_waits_for_row_proof() -> None:
+def _saved_detector_waits_for_row_proof_payload() -> tuple[object, dict[str, object]]:
     correspondence = _provider_local_singleton_entry(
         source_row_index=24,
         source_branch_index=1,
@@ -4590,11 +4590,15 @@ def test_geometry_fit_correspondence_saved_detector_waits_for_row_proof() -> Non
     )
     hit_tables = [np.asarray([[1.0, 4.0, 4.0, -10.0, 3.0, 0.0, 0.0]], dtype=np.float64)]
 
-    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+    return opt._geometry_fit_correspondence_simulated_point_payload(
         correspondence,
         hit_tables=hit_tables,
         max_positions=np.zeros((1, 6), dtype=np.float64),
     )
+
+
+def test_geometry_fit_correspondence_saved_detector_waits_for_row_proof() -> None:
+    point, payload = _saved_detector_waits_for_row_proof_payload()
 
     assert point is None
     assert payload["resolution_reason"] == "prediction_branch_source_switched"
@@ -4602,6 +4606,55 @@ def test_geometry_fit_correspondence_saved_detector_waits_for_row_proof() -> Non
     assert payload["provider_local_saved_sim_detector_fallback_rejected_reason"] == (
         "provider_local_hkl_mismatch"
     )
+    assert payload["prediction_source"] == "locked_manual_qr:provider_local_hkl_mismatch"
+    assert payload["source_row_preferred_over_branch_representative"] is True
+
+
+def test_prediction_branch_source_switched_for_locked_qr_row_unavailable() -> None:
+    point, payload = _saved_detector_waits_for_row_proof_payload()
+
+    assert point is None
+    assert payload["resolution_reason"] == "prediction_branch_source_switched"
+    assert payload["prediction_source"] == "locked_manual_qr:provider_local_hkl_mismatch"
+
+
+def test_geometry_fit_correspondence_saved_detector_rejects_ambiguous_stale_row() -> None:
+    correspondence = _provider_local_singleton_entry(
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+            "source_row_index": 24,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
+        },
+        sim_visual_detector_display_px=(9.0, 8.0),
+        sim_visual_detector_canonical_native_px=(19.0, 18.0),
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 4.0, 4.0, 10.0, 2.0, 0.0, 0.0],
+                [1.0, 5.0, 5.0, 12.0, 2.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point is None
+    assert payload["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
+    assert payload["resolution_reason"] != "prediction_branch_source_switched"
+    assert payload["branch_resolution_reason"] != "prediction_branch_source_switched"
+    assert payload["prediction_source_status"] == "unavailable_ambiguous"
 
 
 def test_resolve_fixed_source_matches_does_not_upgrade_local_to_full_reflection() -> None:

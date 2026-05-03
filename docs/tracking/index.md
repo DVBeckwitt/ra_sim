@@ -32,7 +32,7 @@ downstream of green mosaic fitting.
 | Beam center background pick | feature | - | none | p1 | 2026-05-01 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
 | 6H Qr reference SF picking | feature/bug | - | none | p1 | 2026-04-30 | [6h-qr-reference-sf-picking.md](in-progress/6h-qr-reference-sf-picking.md) |
-| Generated disordered Qr live path | bug/feature | - | none | p1 | 2026-05-02 | [generated-disordered-qr-live-path.md](in-progress/generated-disordered-qr-live-path.md) |
+| Generated disordered Qr live path | bug/feature | - | none | p1 | 2026-05-03 | [generated-disordered-qr-live-path.md](in-progress/generated-disordered-qr-live-path.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
@@ -101,13 +101,24 @@ handoff. Geometry-fit preflight also logs
 `geometry_fit_live_handoff_patch_marker=phase4d1`, job-build live-row counts,
 and `fresh_rebuild_consumer_wrapper=deduped`; if live preview rows are empty,
 the job can build source rows from the active picker/Q-group cache without
-falling back to primary-only rows. Focused user-report, live-refresh,
+falling back to primary-only rows. The Phase 4E/4F live-cache validator now
+accepts unambiguous source-matched q-group rows with finite detector
+coordinates, cannot emit `status=invalid reason=ready`, keeps detector-origin
+manual pairs out of exact-caked projector fallback despite caked diagnostic
+backfill, and fails source-safely when disordered rows are missing. The
+follow-up locked/stale QR correspondence regression is fixed too: the resolver
+runs existing stale-row proof and saved-detector/source-switch fallback before
+returning `locked_qr_row_unavailable`, restoring
+`prediction_branch_source_switched` for deterministic alternate evidence while
+ambiguous evidence remains rejected. Focused user-report, live-refresh,
 inventory, scheduling, current-refresh, UI enable, q-group cache, hit-table,
-logging, source-aware picker/fitter, geometry-fit handoff, compile, and
-targeted ruff checks pass. Manual GUI validation should confirm the committed
-build emits `source_cache_live_runtime_cache_accepted` with nonzero
-`live_rows_raw_count`. Full `ra_sim.dev check` is still blocked by existing
-`ra_sim/fitting/optimization.py` formatting drift.
+logging, source-aware picker/fitter, source-cache rung, fit-space
+classification, disordered preflight, branch-switch, compile, and diff-check
+gates pass. Manual GUI validation should confirm the committed build emits
+`source_cache_live_runtime_cache_accepted` with nonzero `live_rows_raw_count`.
+Full `ra_sim.dev check` is still blocked by existing
+`ra_sim/fitting/optimization.py` formatting drift; broad geometry/manual
+selector timed out locally after five minutes without failure output.
 
 Weighted-event representative status note:
 `Weighted-event representative cache carry-through` is implemented on fast

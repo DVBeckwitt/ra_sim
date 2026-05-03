@@ -15023,6 +15023,80 @@ def _resolve_geometry_fit_correspondence(
                     sim_hkl=_branch_sim_hkl(exact_source_row),
                     extra=source_row_extra,
                 )
+        if exact_source_row_required and exact_source_row is None and not shared_qr_required:
+            (
+                stale_row,
+                stale_payload,
+                stale_reason,
+            ) = _provider_local_resolve_stale_fixed_source_row(
+                correspondence,
+                row_records,
+                row_reason=str(exact_source_row_failure_reason),
+            )
+            if stale_row is not None:
+                stale_reason_text = str(stale_payload.get("resolution_reason", stale_reason))
+                stale_extra = dict(branch_trace)
+                stale_extra.update(dict(exact_source_row_payload))
+                stale_extra.update(dict(stale_payload))
+                stale_extra.update(
+                    {
+                        "branch_resolution_reason": stale_reason_text,
+                        "resolution_subreason": str(stale_reason),
+                        "source_row_resolution_required": True,
+                        "projection_available": True,
+                        "projection_finite": True,
+                        "off_detector": False,
+                        "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                        "frozen_branch_index_recovered_from_provider_identity": bool(
+                            local_branch_frozen_index_recovered
+                        ),
+                        "source_row_preferred_over_branch_representative": True,
+                        "exact_source_row_was_available": False,
+                    }
+                )
+                return (
+                    float(stale_row[1]),
+                    float(stale_row[2]),
+                ), _payload(
+                    stale_reason_text,
+                    table_idx=table_idx,
+                    peak_idx=stale_payload.get("resolved_peak_index", peak_idx),
+                    sim_hkl=_branch_sim_hkl(stale_row, fallback=correspondence.get("hkl")),
+                    extra=stale_extra,
+                )
+            rejected_reason = str(stale_reason)
+            resolution_reason = (
+                rejected_reason
+                if stale_payload.get("prediction_source_status") == "unavailable_ambiguous"
+                else "prediction_branch_source_switched"
+            )
+            stale_rejection_extra = dict(branch_trace)
+            stale_rejection_extra.update(dict(exact_source_row_payload))
+            stale_rejection_extra.update(dict(stale_payload))
+            stale_rejection_extra.update(
+                {
+                    "branch_resolution_reason": resolution_reason,
+                    "resolution_subreason": rejected_reason,
+                    "source_row_rejection_reason": rejected_reason,
+                    "source_row_resolution_required": True,
+                    "provider_local_saved_sim_detector_fallback_rejected_reason": rejected_reason,
+                    "projection_available": False,
+                    "projection_finite": False,
+                    "off_detector": False,
+                    "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
+                    "frozen_branch_index_recovered_from_provider_identity": bool(
+                        local_branch_frozen_index_recovered
+                    ),
+                    "source_row_preferred_over_branch_representative": True,
+                    "exact_source_row_was_available": False,
+                }
+            )
+            return None, _payload(
+                resolution_reason,
+                table_idx=table_idx,
+                peak_idx=peak_idx,
+                extra=stale_rejection_extra,
+            )
         shared_qr_branch_extra: Dict[str, object] = {}
         if shared_qr_required:
             shared_entry = dict(correspondence)
@@ -15066,7 +15140,7 @@ def _resolve_geometry_fit_correspondence(
                     switched_extra.update(_shared_qr_row_extra(rejected_reason))
                     switched_extra.update(
                         {
-                            "branch_resolution_reason": "prediction_branch_source_switched",
+                            "branch_resolution_reason": rejected_reason,
                             "resolution_subreason": rejected_reason,
                             "source_row_rejection_reason": rejected_reason,
                             "source_row_resolution_required": True,
@@ -15210,29 +15284,6 @@ def _resolve_geometry_fit_correspondence(
                     sim_hkl=_branch_sim_hkl(locked_qr_row, fallback=correspondence.get("hkl")),
                     extra=locked_extra,
                 )
-            rejected_reason = str(locked_qr_reason or "provider_local_locked_branch_row_missing")
-            switched_extra = dict(branch_trace)
-            switched_extra.update(dict(row_proof_payload))
-            switched_extra.update(_shared_qr_row_extra(rejected_reason))
-            switched_extra.update(
-                {
-                    "branch_resolution_reason": rejected_reason,
-                    "resolution_subreason": rejected_reason,
-                    "source_row_rejection_reason": rejected_reason,
-                    "source_row_resolution_required": True,
-                    "projection_available": False,
-                    "projection_finite": False,
-                    "off_detector": False,
-                    "trusted_full_reflection_remapped": bool(trusted_full_reflection_remapped),
-                    "exact_source_row_was_available": False,
-                }
-            )
-            return None, _payload(
-                rejected_reason,
-                table_idx=table_idx,
-                peak_idx=peak_idx,
-                extra=switched_extra,
-            )
             shared_entry.update(row_proof_payload)
             saved_detector_point, saved_detector_payload, saved_detector_reason = (
                 _resolve_fixed_manual_qr_fit_prediction(shared_entry)
@@ -15287,7 +15338,7 @@ def _resolve_geometry_fit_correspondence(
             switched_extra.update(_shared_qr_row_extra(rejected_reason))
             switched_extra.update(
                 {
-                    "branch_resolution_reason": "prediction_branch_source_switched",
+                    "branch_resolution_reason": resolution_reason,
                     "resolution_subreason": rejected_reason,
                     "source_row_rejection_reason": rejected_reason,
                     "source_row_resolution_required": True,
