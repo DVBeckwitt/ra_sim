@@ -436,6 +436,7 @@ def _install_streaming_fast_outer_backend(
         save_flag = int(args[31])
         q_data = args[32]
         q_count = args[33]
+        q_debug_truncated_count = args[34]
         candidate_mass = args[-6]
         candidate_row = args[-5]
         candidate_col = args[-4]
@@ -453,6 +454,8 @@ def _install_streaming_fast_outer_backend(
                 q_data[peak_idx, q_store_idx, 3] = mass
                 q_data[peak_idx, q_store_idx, 4] = float(sample_idx)
                 q_count[peak_idx] += 1
+            elif save_flag == 1:
+                q_debug_truncated_count[0] += 1
             candidate_mass[candidate_count] = mass
             candidate_row[candidate_count] = 0.0
             candidate_col[candidate_count] = 10.0 + peak_idx
@@ -1196,6 +1199,93 @@ def test_fast_outer_loop_candidate_reuse_preserves_q_data_save_flag(monkeypatch)
     stats = diffraction.get_last_process_peaks_weighted_event_stats()
     assert stats["n_stored_projected_candidates"] == 1
     assert stats["candidate_buffer_fallback_count"] == 0
+
+
+def test_q_debug_max_solutions_per_peak_normalizes_and_rejects_invalid():
+    assert (
+        diffraction._normalize_q_debug_max_solutions_per_peak(None)
+        == diffraction.DEFAULT_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK
+    )
+    assert diffraction._normalize_q_debug_max_solutions_per_peak(0) == 1
+    assert diffraction._normalize_q_debug_max_solutions_per_peak(-10) == 1
+    assert diffraction._normalize_q_debug_max_solutions_per_peak(np.int64(3)) == 3
+    with pytest.raises(TypeError):
+        diffraction._normalize_q_debug_max_solutions_per_peak("bad")
+    with pytest.raises(TypeError):
+        diffraction._normalize_q_debug_max_solutions_per_peak(1.5)
+
+
+def test_save_flag_q_data_allocation_is_bounded(monkeypatch):
+    num_peaks = 8
+    miller = np.column_stack(
+        (
+            np.arange(1, num_peaks + 1, dtype=np.float64),
+            np.zeros(num_peaks, dtype=np.float64),
+            np.ones(num_peaks, dtype=np.float64),
+        )
+    )
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={peak_idx: 1.0 for peak_idx in range(num_peaks)},
+    )
+
+    result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(miller=miller, intensities=np.ones(num_peaks, dtype=np.float64)),
+        save_flag=1,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        events_per_beam_phase=1,
+    )
+    q_data = result[2]
+    q_count = result[3]
+    assert q_data.shape == (
+        num_peaks,
+        diffraction.DEFAULT_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK,
+        5,
+    )
+    assert q_data.shape[1] != 2_000_000
+    assert np.all(q_count <= q_data.shape[1])
+
+    off_result = diffraction._process_peaks_parallel_weighted_events_fast(
+        **_base_process_kwargs(),
+        save_flag=0,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        events_per_beam_phase=1,
+    )
+    assert off_result[2].shape == (1, 1, 5)
+    assert off_result[3].shape == (1,)
+    assert np.all(off_result[2] == 0.0)
+
+
+def test_save_flag_q_data_reports_truncation_when_debug_buffer_full(monkeypatch):
+    _install_streaming_fast_outer_backend(
+        monkeypatch,
+        pass1_masses={(0, 0): 1.0, (0, 1): 1.0},
+    )
+    result = diffraction.process_peaks_parallel(
+        **_base_process_kwargs(n_samp=2),
+        save_flag=1,
+        collect_hit_tables=False,
+        accumulate_image=False,
+        events_per_beam_phase=1,
+        q_debug_max_solutions_per_peak=1,
+    )
+
+    q_data = result[2]
+    q_count = result[3]
+    assert q_data.shape[1] == 1
+    assert np.all(q_count <= q_data.shape[1])
+    stats = diffraction.get_last_process_peaks_weighted_event_stats()
+    assert stats["q_debug_truncated_solution_count"] > 0
+
+
+def test_diffraction_debug_uses_bounded_q_debug_allocation():
+    from ra_sim.simulation import diffraction_debug
+
+    source = inspect.getsource(diffraction_debug.process_peaks_parallel_debug)
+    assert "2000000" not in source
+    assert "_allocate_q_debug_buffers" in source
 
 
 def test_image_level_conservation_uses_constant_event_deposit(monkeypatch):

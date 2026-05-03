@@ -6,6 +6,7 @@
   - Set the active development version to `1.0.0.dev0`, documented the 1.0 release sequence, and surfaced the resolved package version in the simulation GUI title and Help tab.
 
 - **Simulation performance**
+  - Bounded `save_flag=1` Q-debug buffers with a configurable per-peak cap and truncation diagnostics to avoid multi-GB upfront allocations.
   - Made best-sample provenance buffers lazy for image-only/no-cache forward and QR rod simulations while preserving explicit caller buffers and cache-building provenance.
   - Vectorized primary-cache hit-table rematerialization, filtered impossible off-detector rows before integer casts, and skipped optional last-intersection cache builds when retention is disabled.
   - Optimized diffraction simulation with low-discrepancy antithetic beam sampling, weighted beam clustering, nominal detector culling, local-arc `solve_q`, sparse bilinear accumulation, and a fast-mode optics lookup table.

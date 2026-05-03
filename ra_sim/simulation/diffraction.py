@@ -6,6 +6,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from operator import index as _operator_index
 from pathlib import Path
 from threading import local
 
@@ -297,6 +298,7 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "default_solve_q_sin",
     "numba_thread_count",
     "events_per_beam_phase",
+    "q_debug_max_solutions_per_peak",
 )
 
 _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
@@ -327,6 +329,7 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "default_solve_q_sin": None,
     "numba_thread_count": None,
     "events_per_beam_phase": 50,
+    "q_debug_max_solutions_per_peak": None,
 }
 
 
@@ -579,11 +582,37 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "parallel_requested_worker_count": None,
     "parallel_effective_worker_count": 1,
     "parallel_worker_count_source": "auto",
+    "q_debug_truncated_solution_count": 0,
 }
 _LAST_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = dict(_EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS)
 
 _WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES = 5 * 8
 _WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK = 8192
+MIN_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK = 1
+
+
+def _normalize_q_debug_max_solutions_per_peak(value):
+    if value is None:
+        return DEFAULT_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK
+    try:
+        normalized = _operator_index(value)
+    except TypeError as exc:
+        raise TypeError(
+            "q_debug_max_solutions_per_peak must be an integer or None"
+        ) from exc
+    return max(MIN_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK, int(normalized))
+
+
+def _allocate_q_debug_buffers(num_peaks, save_flag, max_solutions_per_peak=None):
+    if save_flag == 1:
+        max_solutions = _normalize_q_debug_max_solutions_per_peak(max_solutions_per_peak)
+        q_data = np.full((int(num_peaks), max_solutions, 5), np.nan, dtype=np.float64)
+        q_count = np.zeros(int(num_peaks), dtype=np.int64)
+    else:
+        q_data = np.zeros((1, 1, 5), dtype=np.float64)
+        q_count = np.zeros(1, dtype=np.int64)
+    return q_data, q_count
 
 
 def _retain_diffraction_safe_cache() -> bool:
@@ -3710,6 +3739,33 @@ def _candidate_valid_mass(value: float) -> bool:
     return bool(np.isfinite(value) and float(value) > 0.0)
 
 
+@njit(fastmath=True, cache=True, nogil=True)
+def _store_weighted_event_q_debug_row(
+    save_flag,
+    q_data,
+    q_count,
+    q_debug_truncated_count,
+    peak_idx,
+    sample_idx,
+    Qx,
+    Qy,
+    Qz,
+    mass,
+):
+    if save_flag != 1 or (not np.isfinite(mass)) or mass <= 0.0:
+        return
+    if q_count[peak_idx] < q_data.shape[1]:
+        q_store_idx = q_count[peak_idx]
+        q_data[peak_idx, q_store_idx, 0] = Qx
+        q_data[peak_idx, q_store_idx, 1] = Qy
+        q_data[peak_idx, q_store_idx, 2] = Qz
+        q_data[peak_idx, q_store_idx, 3] = mass
+        q_data[peak_idx, q_store_idx, 4] = float(sample_idx)
+        q_count[peak_idx] += 1
+    else:
+        q_debug_truncated_count[0] += 1
+
+
 def _lookup_fast_optics(k0, n2_samp, n2_real, thickness, theta):
     Tf_s = fresnel_transmission(theta, n2_samp, True, False)
     Tf_p = fresnel_transmission(theta, n2_samp, False, False)
@@ -4382,6 +4438,7 @@ def _weighted_event_pass1_for_qset(
     save_flag,
     q_data,
     q_count,
+    q_debug_truncated_count,
     representative_slot_by_peak_branch,
     representative_valid,
     representative_neg_mosaic_weight,
@@ -4457,14 +4514,18 @@ def _weighted_event_pass1_for_qset(
             fast_optics_lut_ready,
             fast_optics_lut_row,
         )
-        if save_flag == 1 and np.isfinite(mass) and mass > 0.0 and q_count[peak_idx] < q_data.shape[1]:
-            q_store_idx = q_count[peak_idx]
-            q_data[peak_idx, q_store_idx, 0] = Qx
-            q_data[peak_idx, q_store_idx, 1] = Qy
-            q_data[peak_idx, q_store_idx, 2] = Qz
-            q_data[peak_idx, q_store_idx, 3] = mass
-            q_data[peak_idx, q_store_idx, 4] = float(sample_idx)
-            q_count[peak_idx] += 1
+        _store_weighted_event_q_debug_row(
+            save_flag,
+            q_data,
+            q_count,
+            q_debug_truncated_count,
+            peak_idx,
+            sample_idx,
+            Qx,
+            Qy,
+            Qz,
+            mass,
+        )
         if not candidate_valid:
             continue
         total_mass += mass
@@ -4539,6 +4600,7 @@ def _weighted_event_project_store_for_qset(
     save_flag,
     q_data,
     q_count,
+    q_debug_truncated_count,
     representative_slot_by_peak_branch,
     representative_valid,
     representative_neg_mosaic_weight,
@@ -4620,14 +4682,18 @@ def _weighted_event_project_store_for_qset(
             fast_optics_lut_ready,
             fast_optics_lut_row,
         )
-        if save_flag == 1 and np.isfinite(mass) and mass > 0.0 and q_count[peak_idx] < q_data.shape[1]:
-            q_store_idx = q_count[peak_idx]
-            q_data[peak_idx, q_store_idx, 0] = Qx
-            q_data[peak_idx, q_store_idx, 1] = Qy
-            q_data[peak_idx, q_store_idx, 2] = Qz
-            q_data[peak_idx, q_store_idx, 3] = mass
-            q_data[peak_idx, q_store_idx, 4] = float(sample_idx)
-            q_count[peak_idx] += 1
+        _store_weighted_event_q_debug_row(
+            save_flag,
+            q_data,
+            q_count,
+            q_debug_truncated_count,
+            peak_idx,
+            sample_idx,
+            Qx,
+            Qy,
+            Qz,
+            mass,
+        )
         if not candidate_valid:
             continue
 
@@ -5249,6 +5315,7 @@ def _weighted_event_sample_chunk_kernel(
                         0,
                         q_data,
                         q_count,
+                        q_count,
                         representative_slot_by_peak_branch,
                         representative_valid,
                         representative_neg_mosaic_weight,
@@ -5303,6 +5370,7 @@ def _weighted_event_sample_chunk_kernel(
                     fast_optics_lut[sample_idx],
                     0,
                     q_data,
+                    q_count,
                     q_count,
                     representative_slot_by_peak_branch,
                     representative_valid,
@@ -7296,6 +7364,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     default_solve_q_sin=None,
     numba_thread_count=None,
     events_per_beam_phase=50,
+    q_debug_max_solutions_per_peak=None,
     *,
     reuse_weighted_event_projected_candidates=True,
     weighted_event_candidate_buffer_max_bytes=_WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES,
@@ -7396,13 +7465,12 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     phase_event_counts = np.full(n_samp, int(events_per_beam_phase), dtype=np.int64)
     flat_capacity_total = int(np.sum(phase_event_counts)) if n_samp > 0 else 0
 
-    if save_flag == 1:
-        max_solutions = 2000000
-        q_data = np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
-        q_count = np.zeros(num_peaks, dtype=np.int64)
-    else:
-        q_data = np.zeros((1, 1, 5), dtype=np.float64)
-        q_count = np.zeros(1, dtype=np.int64)
+    q_data, q_count = _allocate_q_debug_buffers(
+        num_peaks,
+        save_flag,
+        q_debug_max_solutions_per_peak,
+    )
+    q_debug_truncated_count = np.zeros(1, dtype=np.int64)
 
     if collect_tables:
         flat_capacity = max(int(flat_capacity_total), 0)
@@ -8095,6 +8163,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             parallel_requested_worker_count=requested_worker_count,
             parallel_effective_worker_count=int(active_worker_count),
             parallel_worker_count_source=str(worker_count_source),
+            q_debug_truncated_solution_count=0,
         )
         return (
             image,
@@ -8236,6 +8305,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                         int(save_flag),
                         q_data,
                         q_count,
+                        q_debug_truncated_count,
                         representative_slot_by_peak_branch,
                         representative_valid,
                         representative_neg_mosaic_weight,
@@ -8291,6 +8361,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                     int(save_flag),
                     q_data,
                     q_count,
+                    q_debug_truncated_count,
                     representative_slot_by_peak_branch,
                     representative_valid,
                     representative_neg_mosaic_weight,
@@ -8616,6 +8687,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         parallel_requested_worker_count=requested_worker_count,
         parallel_effective_worker_count=1,
         parallel_worker_count_source=str(worker_count_source),
+        q_debug_truncated_solution_count=int(q_debug_truncated_count[0]),
     )
     return (
         image,
@@ -8711,6 +8783,7 @@ def _process_peaks_parallel_impl(
     default_solve_q_sin=None,
     numba_thread_count=None,
     events_per_beam_phase=50,
+    q_debug_max_solutions_per_peak=None,
 ):
     """Run weighted-event sampling through compiled helpers when hooks are default."""
 
@@ -8784,6 +8857,7 @@ def _process_peaks_parallel_impl(
             default_solve_q_sin=default_solve_q_sin,
             numba_thread_count=numba_thread_count,
             events_per_beam_phase=events_per_beam_phase,
+            q_debug_max_solutions_per_peak=q_debug_max_solutions_per_peak,
         )
         _set_last_process_peaks_representative_hit_tables(result[6])
         return result[:6]
@@ -8847,6 +8921,7 @@ def _process_peaks_parallel_impl(
         default_solve_q_sin=default_solve_q_sin,
         numba_thread_count=numba_thread_count,
         events_per_beam_phase=events_per_beam_phase,
+        q_debug_max_solutions_per_peak=q_debug_max_solutions_per_peak,
     )
     _set_last_process_peaks_representative_hit_tables(result[6])
     return result[:6]
@@ -8912,6 +8987,7 @@ def _process_peaks_parallel_weighted_events_python(
     default_solve_q_sin=None,
     numba_thread_count=None,
     events_per_beam_phase=50,
+    q_debug_max_solutions_per_peak=None,
 ):
     del sample_qr_ring_once
     requested_worker_count = _weighted_event_requested_worker_count_for_stats(
@@ -8992,13 +9068,12 @@ def _process_peaks_parallel_weighted_events_python(
     all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
     event_counts = np.zeros((num_peaks, n_samp), dtype=np.int64)
 
-    if save_flag == 1:
-        max_solutions = 2000000
-        q_data = np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
-        q_count = np.zeros(num_peaks, dtype=np.int64)
-    else:
-        q_data = np.zeros((1, 1, 5), dtype=np.float64)
-        q_count = np.zeros(1, dtype=np.int64)
+    q_data, q_count = _allocate_q_debug_buffers(
+        num_peaks,
+        save_flag,
+        q_debug_max_solutions_per_peak,
+    )
+    q_debug_truncated_solution_count = 0
 
     if collect_tables:
         hit_rows_by_peak = [[] for _ in range(num_peaks)]
@@ -9204,14 +9279,17 @@ def _process_peaks_parallel_weighted_events_python(
                     projection_debug_row_tthp_sums=peak_projection_debug_row_tthp_sums,
                     projection_debug_row_tth_sums=peak_projection_debug_row_tth_sums,
                 )
-                if save_flag == 1 and _candidate_valid_mass(mass) and q_count[i_pk] < q_data.shape[1]:
-                    idx = int(q_count[i_pk])
-                    q_data[i_pk, idx, 0] = Qx
-                    q_data[i_pk, idx, 1] = Qy
-                    q_data[i_pk, idx, 2] = Qz
-                    q_data[i_pk, idx, 3] = float(mass)
-                    q_data[i_pk, idx, 4] = float(sample_idx)
-                    q_count[i_pk] += 1
+                if save_flag == 1 and _candidate_valid_mass(mass):
+                    if q_count[i_pk] < q_data.shape[1]:
+                        idx = int(q_count[i_pk])
+                        q_data[i_pk, idx, 0] = Qx
+                        q_data[i_pk, idx, 1] = Qy
+                        q_data[i_pk, idx, 2] = Qz
+                        q_data[i_pk, idx, 3] = float(mass)
+                        q_data[i_pk, idx, 4] = float(sample_idx)
+                        q_count[i_pk] += 1
+                    else:
+                        q_debug_truncated_solution_count += 1
                 candidate_valid = bool(
                     candidate_valid
                     and _candidate_has_detector_support(int(image_size), float(row_f), float(col_f))
@@ -9355,6 +9433,7 @@ def _process_peaks_parallel_weighted_events_python(
         parallel_requested_worker_count=requested_worker_count,
         parallel_effective_worker_count=1,
         parallel_worker_count_source="python_fallback",
+        q_debug_truncated_solution_count=int(q_debug_truncated_solution_count),
     )
     return image, hit_tables, q_data, q_count, all_status, miss_tables, representative_hit_tables
 
@@ -9419,6 +9498,7 @@ def process_peaks_parallel(
     default_solve_q_sin=None,
     numba_thread_count=None,
     events_per_beam_phase=50,
+    q_debug_max_solutions_per_peak=None,
 ):
     """Inject runtime defaults before entering cached compiled kernel."""
 
@@ -9501,6 +9581,7 @@ def process_peaks_parallel(
         default_solve_q_sin=default_solve_q_sin,
         numba_thread_count=numba_thread_count,
         events_per_beam_phase=events_per_beam_phase,
+        q_debug_max_solutions_per_peak=q_debug_max_solutions_per_peak,
     )
     return image_out, hit_tables, q_data, q_count, all_status, miss_tables
 

@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 from ra_sim.config import get_dir
 from ra_sim.debug_controls import diffraction_debug_csv_logging_enabled
-from ra_sim.simulation.diffraction import transmit_angle_grazing
+from ra_sim.simulation.diffraction import _allocate_q_debug_buffers, transmit_angle_grazing
 from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
 import numpy as np
 from math import sin, cos, sqrt, pi, exp, acos
@@ -670,6 +670,7 @@ def process_peaks_parallel_debug(
     sample_weights=None,
     pixel_size_m=100e-6,
     n2_sample_array_override=None,
+    q_debug_max_solutions_per_peak=None,
 ):
     gamma_rad = gamma_deg*(pi/180.0)
     Gamma_rad = Gamma_deg*(pi/180.0)
@@ -740,7 +741,6 @@ def process_peaks_parallel_debug(
     P0= np.array([0.0,0.0,-zs], dtype=np.float64)
 
     num_peaks= miller.shape[0]
-    max_solutions=2000000
     (
         beam_x_array,
         beam_y_array,
@@ -760,12 +760,11 @@ def process_peaks_parallel_debug(
         n2_sample_array_override=n2_sample_array_override,
     )
 
-    if save_flag==1:
-        q_data= np.full((num_peaks,max_solutions,5), np.nan, dtype=np.float64)
-        q_count= np.zeros(num_peaks, dtype=np.int64)
-    else:
-        q_data= np.zeros((1,1,5), dtype=np.float64)
-        q_count= np.zeros(1, dtype=np.int64)
+    q_data, q_count = _allocate_q_debug_buffers(
+        num_peaks,
+        save_flag,
+        q_debug_max_solutions_per_peak,
+    )
 
     max_positions= np.empty((num_peaks,6), dtype=np.float64)
 
