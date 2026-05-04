@@ -168,6 +168,78 @@ def test_live_cache_canonical_gate_rejects_untrusted_candidate_for_full_required
     assert validation["reason"] == "missing_canonical_candidate"
 
 
+def test_qr_live_cache_accepts_two_branches_for_non_00l_required_pair() -> None:
+    q_group = ("q_group", DISORDERED, 1, 5)
+    live_rows = [
+        _row(DISORDERED, group_key=q_group, hkl=(1, 0, 5), branch=0),
+        _row(DISORDERED, group_key=q_group, hkl=(1, 0, 5), branch=1),
+    ]
+    required_pairs = [
+        _pair(DISORDERED, group_key=q_group, hkl=(1, 0, 5), branch=0),
+        _pair(DISORDERED, group_key=q_group, hkl=(1, 0, 5), branch=1),
+    ]
+
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        live_rows,
+        required_pairs=required_pairs,
+        require_canonical_required_pairs=True,
+    )
+
+    assert validation["valid"] is True
+    assert validation["reason"] == "ready"
+    assert validation["validated_pair_count"] == 2
+    assert {entry["source_branch_index"] for entry in validation["resolved_pairs"]} == {0, 1}
+
+
+def test_qr_live_cache_accepts_one_collapsed_branch_for_00l_required_pair() -> None:
+    q_group = ("q_group", DISORDERED, 0, 3)
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [_row(DISORDERED, group_key=q_group, hkl=(0, 0, 3), branch=1)],
+        required_pairs=[_pair(DISORDERED, group_key=q_group, hkl=(0, 0, 3), branch=0)],
+        require_canonical_required_pairs=True,
+    )
+
+    assert validation["valid"] is True
+    assert validation["reason"] == "ready"
+    assert validation["resolved_pairs"][0]["resolution_kind"] == (
+        "zero_qr_00l_branch_unconstrained"
+    )
+
+
+def test_qr_live_cache_does_not_collapse_non_00l_branches() -> None:
+    q_group = ("q_group", DISORDERED, 1, 5)
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [_row(DISORDERED, group_key=q_group, hkl=(0, 1, 5), branch=0)],
+        required_pairs=[
+            _pair(DISORDERED, group_key=q_group, hkl=(0, 1, 5), branch=0),
+            _pair(DISORDERED, group_key=q_group, hkl=(0, 1, 5), branch=1),
+        ],
+        require_canonical_required_pairs=True,
+    )
+
+    assert validation["valid"] is False
+    assert validation["reason"] == "branch_mismatch"
+    assert validation["validated_pair_count"] == 2
+    assert validation["branch_mismatch_count"] == 1
+
+
+def test_qr_live_cache_does_not_require_two_00l_branches() -> None:
+    q_group = ("q_group", DISORDERED, 0, 3)
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [_row(DISORDERED, group_key=q_group, hkl=(0, 0, 3), branch=1)],
+        required_pairs=[
+            _pair(DISORDERED, group_key=q_group, hkl=(0, 0, 3), branch=0),
+            _pair(DISORDERED, group_key=q_group, hkl=(0, 0, 3), branch=1),
+        ],
+        require_canonical_required_pairs=True,
+    )
+
+    assert validation["valid"] is True
+    assert validation["reason"] == "ready"
+    assert validation["validated_pair_count"] == 2
+    assert validation["missing_required_pair_count"] == 0
+
+
 def test_live_cache_source_group_satisfies_pair_without_hkl_when_unique() -> None:
     validation = geometry_fit.validate_geometry_fit_live_source_rows(
         [_row(DISORDERED, hkl=None)],

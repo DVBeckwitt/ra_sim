@@ -39,6 +39,10 @@ source-row regression.
   can reuse matching non-canonical live rows when existing source, Q group, HKL,
   branch, and finite-coordinate checks pass. Full-reflection pairs still reject
   untrusted matching candidates with `missing_canonical_candidate`.
+- Validation invariant added: Qr branch cardinality is independent from
+  canonical full-reflection filtering. Non-00l rows, where `(h, k) != (0, 0)`,
+  keep two branch-specific points per Qr; 00l rows, where `h == 0` and
+  `k == 0`, use one collapsed branch point per Qr.
 
 ## Validation
 
@@ -55,7 +59,7 @@ source-row regression.
 - Focused source-row/validator cluster
   - Result: `5 passed`.
 - `python -m pytest tests/test_geometry_fit_live_cache_validation_acceptance.py -q`
-  - Result: `12 passed`.
+  - Result: `16 passed`.
 - `python -m compileall -q ra_sim/gui/geometry_fit.py tests/test_geometry_fit_live_cache_validation_acceptance.py tests/test_gui_geometry_fit_workflow.py`
   - Result: passed.
 - `git ls-files --eol -- ra_sim/gui/geometry_fit.py tests/test_geometry_fit_live_cache_validation_acceptance.py tests/test_gui_geometry_fit_workflow.py`
