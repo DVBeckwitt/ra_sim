@@ -421,11 +421,13 @@ def test_process_qr_rods_parallel_debug_forwards_optional_debug_kwargs(monkeypat
         sample_weights=np.asarray([4.0], dtype=np.float64),
         pixel_size_m=3.0e-4,
         n2_sample_array_override=np.asarray([1.1 + 0.0j], dtype=np.complex128),
+        q_debug_max_solutions_per_peak=1,
     )
 
     np.testing.assert_array_equal(captured["sample_weights"], [4.0])
     assert captured["pixel_size_m"] == pytest.approx(3.0e-4)
     np.testing.assert_array_equal(captured["n2_sample_array_override"], [1.1 + 0.0j])
+    assert captured["q_debug_max_solutions_per_peak"] == 1
     assert result[:4] == ("image", "maxpos", "qdata", "qcount")
     np.testing.assert_array_equal(result[4], np.asarray([3], dtype=np.int64))
 

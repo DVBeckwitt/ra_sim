@@ -877,6 +877,7 @@ def process_qr_rods_parallel_debug(
     sample_weights=None,
     pixel_size_m=100e-6,
     n2_sample_array_override=None,
+    q_debug_max_solutions_per_peak=None,
 ):
     """Wrapper to debug-process rods instead of individual reflections.
 
@@ -924,6 +925,7 @@ def process_qr_rods_parallel_debug(
         sample_weights=sample_weights,
         pixel_size_m=pixel_size_m,
         n2_sample_array_override=n2_sample_array_override,
+        q_debug_max_solutions_per_peak=q_debug_max_solutions_per_peak,
     )
 
     return (*result, degeneracy)

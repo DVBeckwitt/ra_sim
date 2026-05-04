@@ -2050,7 +2050,12 @@ def test_weighted_event_threaded_backend_does_not_use_prange_kernel():
     assert hasattr(diffraction, "_weighted_event_sample_chunk_kernel")
     assert hasattr(diffraction, "_run_weighted_event_sample_chunks")
 
-    source = inspect.getsource(diffraction._weighted_event_sample_chunk_kernel.py_func)
+    kernel_func = getattr(
+        diffraction._weighted_event_sample_chunk_kernel,
+        "py_func",
+        diffraction._weighted_event_sample_chunk_kernel,
+    )
+    source = inspect.getsource(kernel_func)
     assert "prange" not in source
     assert "get_thread_id" not in source
     assert "all_q_data" not in source

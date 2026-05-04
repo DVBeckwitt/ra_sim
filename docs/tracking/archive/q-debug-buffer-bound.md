@@ -49,6 +49,12 @@ Follow-up hardening in `ra_sim/simulation/diffraction.py` and
 - legacy `process_peaks_parallel_debug(...)` keeps its four-value return tuple
   unchanged and exposes bounded-buffer diagnostics through
   `get_last_process_peaks_debug_q_stats()`.
+- `process_qr_rods_parallel_debug(...)` forwards the same optional
+  `q_debug_max_solutions_per_peak` cap to the peak debug helper while keeping
+  its existing five-value return tuple unchanged.
+- the weighted-event chunk source regression test now inspects either the
+  Numba `.py_func` body or the direct Python fallback, so the alias guard runs
+  when `NUMBA_DISABLE_JIT=1`.
 
 ## Status
 
