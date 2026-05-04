@@ -164,6 +164,9 @@ def _run_python_with_env(code: str, env_updates: dict[str, str]) -> subprocess.C
         text=True,
         timeout=120,
     )
+    if completed.returncode == 77:
+        message = completed.stdout.strip() or completed.stderr.strip()
+        pytest.skip(message or "Numba unavailable in subprocess")
     assert completed.returncode == 0, (
         f"subprocess failed with exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\n"
@@ -333,12 +336,15 @@ def test_numba_compat_raw_real_njit_results_get_py_func(monkeypatch):
 
 
 def test_numba_disable_jit_diffraction_decorated_functions_keep_py_func():
-    pytest.importorskip("numba")
-
     completed = _run_python_with_env(
         """
-        from ra_sim.simulation import diffraction
         from ra_sim.utils import numba_compat
+
+        if not numba_compat.NUMBA_AVAILABLE:
+            print(f"Numba unavailable: {numba_compat.NUMBA_IMPORT_ERROR!r}")
+            raise SystemExit(77)
+
+        from ra_sim.simulation import diffraction
 
         assert numba_compat.NUMBA_AVAILABLE is True
         assert numba_compat.NUMBA_JIT_DISABLED is True
@@ -361,12 +367,15 @@ def test_numba_disable_jit_diffraction_decorated_functions_keep_py_func():
 
 
 def test_numba_disable_jit_exact_cake_engine_resolution():
-    pytest.importorskip("numba")
-
     completed = _run_python_with_env(
         """
-        from ra_sim.simulation import exact_cake
         from ra_sim.utils import numba_compat
+
+        if not numba_compat.NUMBA_AVAILABLE:
+            print(f"Numba unavailable: {numba_compat.NUMBA_IMPORT_ERROR!r}")
+            raise SystemExit(77)
+
+        from ra_sim.simulation import exact_cake
 
         assert numba_compat.NUMBA_AVAILABLE is True
         assert numba_compat.NUMBA_JIT_DISABLED is True
@@ -394,6 +403,8 @@ def test_numba_compat_real_numba_path_when_available():
     compat = importlib.import_module("ra_sim.utils.numba_compat")
     if not compat.NUMBA_AVAILABLE:
         pytest.skip(f"Numba unavailable: {compat.NUMBA_IMPORT_ERROR!r}")
+    if compat.NUMBA_JIT_DISABLED or not compat.NUMBA_COMPILATION_AVAILABLE:
+        pytest.skip("real compiled Numba path unavailable because JIT is disabled")
 
     assert compat.NUMBA_IMPORT_ERROR is None
     assert compat.NUMBA_JIT_DISABLED is False

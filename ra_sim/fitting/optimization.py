@@ -5005,7 +5005,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     dynamic_reanchor_rematched_pair_ids: List[str] = []
     dynamic_reanchor_fallback_pair_ids: List[str] = []
     dynamic_reanchor_rejected_pair_ids: List[str] = []
-    fit_prediction_shared_source_rows_cache: Dict[Tuple[object, ...], Dict[str, object]] = {}
+    fit_prediction_shared_source_rows_cache = _BoundedPredictionSourceRowsCache(
+        local.get(
+            "_prediction_source_rows_cache_max_entries",
+            DEFAULT_PREDICTION_SOURCE_ROWS_CACHE_MAX_ENTRIES,
+        )
+    )
 
     def _append_unique(values: List[str], value: object) -> None:
         text = str(value)
@@ -6620,6 +6625,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "exact_fit_space_projector_available": bool(exact_fit_space_projector_available),
         "exact_fit_space_projection_reason": exact_fit_space_projection_reason,
         "fit_space_projector_kind": dataset_ctx.fit_space_projector_kind,
+        **_prediction_source_rows_cache_stats(fit_prediction_shared_source_rows_cache),
         "_live_cache_records": live_cache_records,
         **_fit_space_provenance_summary(
             local,
@@ -15963,6 +15969,55 @@ def _fit_prediction_array_signature(value: object) -> str:
     return hashlib.sha1(payload).hexdigest()
 
 
+DEFAULT_PREDICTION_SOURCE_ROWS_CACHE_MAX_ENTRIES = 8
+
+
+def _normalize_prediction_source_rows_cache_max_entries(
+    value: object,
+    default: int = DEFAULT_PREDICTION_SOURCE_ROWS_CACHE_MAX_ENTRIES,
+) -> int:
+    try:
+        max_entries = int(value)
+    except (TypeError, ValueError, OverflowError):
+        max_entries = int(default)
+    return max(1, max_entries)
+
+
+class _BoundedPredictionSourceRowsCache(dict):
+    def __init__(self, max_entries: int = DEFAULT_PREDICTION_SOURCE_ROWS_CACHE_MAX_ENTRIES):
+        super().__init__()
+        self.max_entries = _normalize_prediction_source_rows_cache_max_entries(max_entries)
+        self.eviction_count = 0
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        super().__delitem__(key)
+        super().__setitem__(key, value)
+        return value
+
+    def get(self, key, default=None):
+        if key not in self:
+            return default
+        return self[key]
+
+    def __setitem__(self, key, value):
+        if key in self:
+            super().__delitem__(key)
+        super().__setitem__(key, value)
+        while len(self) > self.max_entries:
+            oldest_key = next(iter(self))
+            super().__delitem__(oldest_key)
+            self.eviction_count += 1
+
+
+def _prediction_source_rows_cache_stats(cache: object) -> dict[str, object]:
+    return {
+        "prediction_source_rows_cache_size": len(cache) if isinstance(cache, dict) else 0,
+        "prediction_source_rows_cache_max_entries": getattr(cache, "max_entries", None),
+        "prediction_source_rows_cache_eviction_count": getattr(cache, "eviction_count", 0),
+    }
+
+
 def _fit_prediction_trial_params_signature(trial_params: Mapping[str, object] | None) -> str:
     if not isinstance(trial_params, Mapping):
         return _fit_prediction_signature({})
@@ -17081,6 +17136,7 @@ def _build_trial_qr_source_rows_payload(
         cached["objective_cache_hit"] = True
         cached["objective_cache_reject_reason"] = None
         cached["objective_process_peaks_called"] = False
+        cached.update(_prediction_source_rows_cache_stats(cache))
         return cached
     try:
         payload = dataset_ctx.qr_fit_trial_source_rows_builder(local_params=trial_params)
@@ -17114,6 +17170,7 @@ def _build_trial_qr_source_rows_payload(
         result["unavailable_reason"] = "qr_fit_trial_source_rows_empty"
     if isinstance(cache, dict):
         cache[cache_key] = dict(result)
+    result.update(_prediction_source_rows_cache_stats(cache))
     return result
 
 

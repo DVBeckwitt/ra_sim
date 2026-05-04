@@ -6,6 +6,7 @@ import pytest
 
 from ra_sim.simulation import exact_cake
 from ra_sim.simulation import exact_cake_portable
+from ra_sim.utils.numba_compat import NUMBA_COMPILATION_AVAILABLE
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,13 @@ def _make_identity_lut(
         matrix=np.eye(int(len(radial_deg) * len(azimuthal_deg)), int(np.prod(detector_shape)), dtype=np.float32),
         count_flat=np.ones(int(len(radial_deg) * len(azimuthal_deg)), dtype=np.float64),
     )
+
+
+def _skip_without_compiled_numba_lut() -> None:
+    if not NUMBA_COMPILATION_AVAILABLE:
+        pytest.skip("Exact-cake LUT tests require compiled Numba")
+    if not exact_cake._HAS_SCIPY:
+        pytest.skip("Exact-cake LUT tests require scipy")
 
 
 def test_fast_azimuthal_integrator_detector_maps_match_flat_geometry() -> None:
@@ -439,6 +447,8 @@ def test_caked_point_to_detector_pixel_uses_display_axis_lut_centroid(
 
 
 def test_real_lut_detector_flatten_order_is_row_major_for_caked_projection() -> None:
+    _skip_without_compiled_numba_lut()
+
     detector_shape = (12, 14)
     image = np.zeros(detector_shape, dtype=np.float32)
     integrator = exact_cake_portable.FastAzimuthalIntegrator(
@@ -1568,6 +1578,8 @@ def test_fast_azimuthal_integrator_reuses_solid_angle_normalization(monkeypatch)
 
 
 def test_exact_cake_lut_matches_direct_integration() -> None:
+    _skip_without_compiled_numba_lut()
+
     image = np.arange(1, 17, dtype=np.float32).reshape(4, 4)
     geometry = exact_cake.DetectorCakeGeometry(
         pixel_size_m=1.0e-4,
@@ -1607,6 +1619,8 @@ def test_exact_cake_lut_matches_direct_integration() -> None:
 
 
 def test_default_exact_cake_lut_and_inverse_lut_agree_on_detector_pixels() -> None:
+    _skip_without_compiled_numba_lut()
+
     image = np.arange(1, 26, dtype=np.float32).reshape(5, 5)
     integrator = exact_cake_portable.FastAzimuthalIntegrator(
         dist=0.075,

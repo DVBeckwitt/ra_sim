@@ -564,7 +564,98 @@ def test_geometry_objective_reuses_trial_source_rows_for_same_params_signature()
 
     assert len(builder_calls) == 2
     assert first["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
+    assert first["prediction_source_rows_cache_size"] == 1
+    assert first["prediction_source_rows_cache_max_entries"] is None
+    assert first["prediction_source_rows_cache_eviction_count"] == 0
     assert second["rows"] == first["rows"]
     assert second["source_rows_rebuilt_or_reused"] == "reused_for_same_params_signature"
     assert second["reuse_valid_for_same_params_signature"] is True
+    assert second["prediction_source_rows_cache_size"] == 1
+    assert second["prediction_source_rows_cache_max_entries"] is None
+    assert second["prediction_source_rows_cache_eviction_count"] == 0
     assert third["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
+    assert third["prediction_source_rows_cache_size"] == 2
+    assert third["prediction_source_rows_cache_max_entries"] is None
+    assert third["prediction_source_rows_cache_eviction_count"] == 0
+
+
+def test_geometry_objective_trial_source_rows_cache_is_bounded() -> None:
+    builder_calls: list[dict[str, object]] = []
+
+    def build_source_rows(*, local_params):
+        builder_calls.append(dict(local_params))
+        return {
+            "rows": [
+                {
+                    "source_row_index": len(builder_calls),
+                    "hkl": (1, 0, 0),
+                }
+            ],
+            "source": "test-builder",
+        }
+
+    subset = optimization.ReflectionSimulationSubset(
+        miller=np.asarray([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.asarray([10.0], dtype=np.float64),
+        measured_entries=[],
+        original_indices=np.asarray([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = optimization.GeometryFitDatasetContext(
+        dataset_index=7,
+        label="background-7",
+        theta_initial=0.0,
+        subset=subset,
+        qr_fit_trial_source_rows_builder=build_source_rows,
+        qr_fit_trial_source_rows_builder_kind="test-builder-kind",
+    )
+    cache = optimization._BoundedPredictionSourceRowsCache(max_entries=3)
+    fit_context: dict[str, object] = {"prediction_source_rows_cache": cache}
+
+    results = [
+        optimization._build_trial_qr_source_rows_payload(
+            dataset_ctx,
+            trial_params={"center_x": float(index)},
+            params_signature=f"signature-{index}",
+            fit_context=fit_context,
+        )
+        for index in range(5)
+    ]
+
+    assert len(builder_calls) == 5
+    assert len(cache) == 3
+    assert cache.eviction_count == 2
+    assert results[-1]["prediction_source_rows_cache_size"] == 3
+    assert results[-1]["prediction_source_rows_cache_max_entries"] == 3
+    assert results[-1]["prediction_source_rows_cache_eviction_count"] == 2
+
+    cached_call_count = len(builder_calls)
+    cached = optimization._build_trial_qr_source_rows_payload(
+        dataset_ctx,
+        trial_params={"center_x": 3.0},
+        params_signature="signature-3",
+        fit_context=fit_context,
+    )
+
+    assert len(builder_calls) == cached_call_count
+    assert cached["source_rows_rebuilt_or_reused"] == "reused_for_same_params_signature"
+    assert cached["objective_cache_hit"] is True
+    assert cached["prediction_source_rows_cache_size"] == 3
+    assert cached["prediction_source_rows_cache_max_entries"] == 3
+    assert cached["prediction_source_rows_cache_eviction_count"] == 2
+
+    evicted = optimization._build_trial_qr_source_rows_payload(
+        dataset_ctx,
+        trial_params={"center_x": 0.0},
+        params_signature="signature-0",
+        fit_context=fit_context,
+    )
+
+    assert len(builder_calls) == cached_call_count + 1
+    assert evicted["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
+    assert evicted["objective_cache_hit"] is False
+    assert len(cache) == 3
+    assert cache.eviction_count == 3

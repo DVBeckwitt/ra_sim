@@ -249,6 +249,7 @@ def test_geometry_objective_source_rows_cache_key_includes_identity_signature():
     )
 
     assert len(builder_calls) == 2
+    assert len(shared_cache) == 2
     assert first["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
     assert second["source_rows_rebuilt_or_reused"] == "reused_for_same_params_signature"
     assert third["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
