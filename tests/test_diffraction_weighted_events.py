@@ -1272,6 +1272,17 @@ def test_q_debug_max_solutions_per_peak_normalizes_and_rejects_invalid():
         diffraction._normalize_q_debug_max_solutions_per_peak(1.5)
 
 
+def test_allocate_q_debug_buffers_default_handles_100_peaks():
+    q_data, q_count = diffraction._allocate_q_debug_buffers(100, 1, None)
+
+    assert q_data.shape == (
+        100,
+        diffraction.DEFAULT_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK,
+        5,
+    )
+    assert q_count.shape == (100,)
+
+
 def test_save_flag_q_data_allocation_is_bounded(monkeypatch):
     num_peaks = 8
     miller = np.column_stack(
@@ -2045,6 +2056,9 @@ def test_weighted_event_threaded_backend_does_not_use_prange_kernel():
     assert "all_q_data" not in source
     assert "all_q_counts" not in source
     assert "phase_event_counts" in source
+    assert "q_debug_truncated_count_parts" in source
+    assert "q_debug_truncated_count = q_debug_truncated_count_parts[worker_slot_i]" in source
+    assert "q_count,\n                        q_count," not in source
 
     diffraction.process_peaks_parallel(
         **_base_process_kwargs(n_samp=2),
@@ -2059,6 +2073,7 @@ def test_weighted_event_threaded_backend_does_not_use_prange_kernel():
     assert stats["parallel_worker_count"] == 2
     assert stats["time_chunk_compute"] > 0.0
     assert stats["time_project"] == 0.0
+    assert stats["q_debug_truncated_solution_count"] == 0
 
 
 def test_parallel_weighted_events_match_serial_image():

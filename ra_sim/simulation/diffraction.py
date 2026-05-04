@@ -5228,6 +5228,7 @@ def _weighted_event_sample_chunk_kernel(
     fast_optics_lut,
     q_data,
     q_count,
+    q_debug_truncated_count_parts,
     representative_slot_by_peak_branch,
     representative_valid_parts,
     representative_neg_mosaic_weight_parts,
@@ -5278,6 +5279,7 @@ def _weighted_event_sample_chunk_kernel(
     candidate_col = candidate_col_parts[worker_slot_i]
     candidate_phi = candidate_phi_parts[worker_slot_i]
     candidate_peak_idx = candidate_peak_idx_parts[worker_slot_i]
+    q_debug_truncated_count = q_debug_truncated_count_parts[worker_slot_i]
 
     n_project_candidate_calls = 0
     n_valid_candidates = 0
@@ -5378,7 +5380,7 @@ def _weighted_event_sample_chunk_kernel(
                         0,
                         q_data,
                         q_count,
-                        q_count,
+                        q_debug_truncated_count,
                         representative_slot_by_peak_branch,
                         representative_valid,
                         representative_neg_mosaic_weight,
@@ -5434,7 +5436,7 @@ def _weighted_event_sample_chunk_kernel(
                     0,
                     q_data,
                     q_count,
-                    q_count,
+                    q_debug_truncated_count,
                     representative_slot_by_peak_branch,
                     representative_valid,
                     representative_neg_mosaic_weight,
@@ -8001,6 +8003,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         )
         q_data_chunk = np.zeros((1, 1, 5), dtype=np.float64)
         q_count_chunk = np.zeros(1, dtype=np.int64)
+        # Threaded Q-debug capture remains disabled: save_flag == 1 resolves to one worker.
+        # Keep a distinct truncation counter to avoid aliasing if this path changes later.
+        q_debug_truncated_count_parts = np.zeros((active_worker_count, 1), dtype=np.int64)
         sample_weight_array_arg = (
             sample_weight_array
             if sample_weight_array is not None
@@ -8053,6 +8058,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 fast_optics_lut,
                 q_data_chunk,
                 q_count_chunk,
+                q_debug_truncated_count_parts,
                 representative_slot_by_peak_branch,
                 representative_valid_parts,
                 representative_neg_mosaic_weight_parts,
@@ -8190,6 +8196,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 ]
             )
         )
+        q_debug_truncated_solution_count = int(
+            np.sum(q_debug_truncated_count_parts[:active_worker_count, 0])
+        )
 
         emit_start = time.perf_counter()
         if best_sample_indices_out is not None:
@@ -8264,7 +8273,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             parallel_requested_worker_count=requested_worker_count,
             parallel_effective_worker_count=int(active_worker_count),
             parallel_worker_count_source=str(worker_count_source),
-            q_debug_truncated_solution_count=0,
+            q_debug_truncated_solution_count=int(q_debug_truncated_solution_count),
         )
         return (
             image,

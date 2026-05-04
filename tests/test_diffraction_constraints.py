@@ -295,6 +295,78 @@ def test_process_peaks_parallel_debug_falls_back_for_invalid_pixel_size(
     assert int(q_count[0]) == 1
 
 
+def test_process_peaks_parallel_debug_reports_q_debug_truncation(monkeypatch):
+    intersection_call = {"count": 0}
+
+    def fake_intersect_line_plane(_p0, _k_vec, plane_point, _n_plane):
+        call_idx = intersection_call["count"] % 2
+        intersection_call["count"] += 1
+        if call_idx == 0:
+            return 0.0, 0.0, 0.0, True
+        return float(plane_point[0] + 2.0e-4), float(plane_point[1]), float(plane_point[2]), True
+
+    def fake_solve_q(_k_in_crystal, _k_scat, _g_vec, _sigma_rad):
+        return np.asarray(
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 2.0],
+            ],
+            dtype=np.float64,
+        )
+
+    monkeypatch.setattr(diffraction_debug, "intersect_line_plane", fake_intersect_line_plane)
+    monkeypatch.setattr(diffraction_debug, "solve_q", fake_solve_q)
+
+    image = np.zeros((24, 24), dtype=np.float64)
+    image_out, max_positions, q_data, q_count = diffraction_debug.process_peaks_parallel_debug(
+        np.asarray([[0.0, 0.0, 1.0]], dtype=np.float64),
+        np.asarray([1.0], dtype=np.float64),
+        24,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        7.0 + 0.0j,
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        np.asarray([0.0], dtype=np.float64),
+        0.0,
+        0.0,
+        0.0,
+        np.asarray([1.0], dtype=np.float64),
+        0.0,
+        0.0,
+        [12.0, 12.0],
+        0.0,
+        0.0,
+        np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=1,
+        pixel_size_m=2.0e-4,
+        n2_sample_array_override=np.asarray([2.0 + 0.0j], dtype=np.complex128),
+        q_debug_max_solutions_per_peak=1,
+    )
+
+    assert image_out[12, 13] > 0.0
+    assert max_positions.shape == (1, 6)
+    assert q_data.shape == (1, 1, 5)
+    assert np.all(q_count <= 1)
+    stats = diffraction_debug.get_last_process_peaks_debug_q_stats()
+    assert stats["save_flag"] == 1
+    assert stats["q_debug_capacity_per_peak"] == 1
+    assert stats["q_debug_saved_solution_count"] > 0
+    assert stats["q_debug_truncated_solution_count"] > 0
+
+
 def test_process_qr_rods_parallel_debug_forwards_optional_debug_kwargs(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -788,7 +860,10 @@ def test_branch_representative_intersection_cache_preserves_preselected_rows_and
 
     assert len(cache) == 2
     roundtrip_rows = np.vstack(
-        [np.asarray(table, dtype=np.float64) for table in diffraction.intersection_cache_to_hit_tables(cache)]
+        [
+            np.asarray(table, dtype=np.float64)
+            for table in diffraction.intersection_cache_to_hit_tables(cache)
+        ]
     )
     np.testing.assert_allclose(roundtrip_rows, np.vstack(hit_tables))
 
@@ -838,12 +913,16 @@ def test_branch_representative_cache_group_by_qr_set_flag_is_passthrough(monkeyp
     monkeypatch.setattr(
         diffraction,
         "_expand_intersection_cache_group_with_metadata",
-        lambda *_args, **_kwargs: pytest.fail("group_by_qr_set must not recollapse representative rows"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "group_by_qr_set must not recollapse representative rows"
+        ),
     )
     monkeypatch.setattr(
         diffraction,
         "_intersection_cache_selected_row_indices",
-        lambda *_args, **_kwargs: pytest.fail("group_by_qr_set must not reselect representative rows"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "group_by_qr_set must not reselect representative rows"
+        ),
     )
 
     hit_tables = [
@@ -862,7 +941,10 @@ def test_branch_representative_cache_group_by_qr_set_flag_is_passthrough(monkeyp
 
     assert len(cache) == 4
     roundtrip_rows = np.vstack(
-        [np.asarray(table, dtype=np.float64) for table in diffraction.intersection_cache_to_hit_tables(cache)]
+        [
+            np.asarray(table, dtype=np.float64)
+            for table in diffraction.intersection_cache_to_hit_tables(cache)
+        ]
     )
     np.testing.assert_allclose(roundtrip_rows, np.vstack(hit_tables))
 

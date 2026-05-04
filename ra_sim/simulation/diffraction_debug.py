@@ -13,6 +13,12 @@ from math import sin, cos, sqrt, pi, exp, acos
 # Global debug log
 # -----------------------------------------------------------
 DEBUG_LOG = []
+_LAST_PROCESS_PEAKS_DEBUG_Q_STATS = {}
+
+
+def get_last_process_peaks_debug_q_stats():
+    return dict(_LAST_PROCESS_PEAKS_DEBUG_Q_STATS)
+
 
 def dump_debug_log():
     """Write the global debug log to ``debug_log_dir`` as ``mosaic_full_debug_log.csv``."""
@@ -422,7 +428,7 @@ def calculate_phi(
     R_z_R_y,
     R_ZY_n,
     P0, unit_x,
-    save_flag, q_data, q_count, i_peaks_index,
+    save_flag, q_data, q_count, q_debug_truncated_count, i_peaks_index,
     pixel_size_m,
     sample_weights,
     n2_sample_array,
@@ -645,6 +651,8 @@ def calculate_phi(
                 q_data[i_peaks_index, idx,2] = Qz
                 q_data[i_peaks_index, idx,3] = val
                 q_count[i_peaks_index]+=1
+            elif save_flag==1:
+                q_debug_truncated_count[0] += 1
 
     return (max_I_sign0, max_x_sign0, max_y_sign0,
             max_I_sign1, max_x_sign1, max_y_sign1)
@@ -672,6 +680,14 @@ def process_peaks_parallel_debug(
     n2_sample_array_override=None,
     q_debug_max_solutions_per_peak=None,
 ):
+    global _LAST_PROCESS_PEAKS_DEBUG_Q_STATS
+    _LAST_PROCESS_PEAKS_DEBUG_Q_STATS = {
+        "save_flag": int(save_flag),
+        "q_debug_capacity_per_peak": 0,
+        "q_debug_saved_solution_count": 0,
+        "q_debug_truncated_solution_count": 0,
+    }
+
     gamma_rad = gamma_deg*(pi/180.0)
     Gamma_rad = Gamma_deg*(pi/180.0)
     chi_rad   = chi_deg*(pi/180.0)
@@ -765,6 +781,9 @@ def process_peaks_parallel_debug(
         save_flag,
         q_debug_max_solutions_per_peak,
     )
+    q_debug_truncated_count = np.zeros(1, dtype=np.int64)
+    if save_flag == 1:
+        _LAST_PROCESS_PEAKS_DEBUG_Q_STATS["q_debug_capacity_per_peak"] = int(q_data.shape[1])
 
     max_positions= np.empty((num_peaks,6), dtype=np.float64)
 
@@ -798,7 +817,7 @@ def process_peaks_parallel_debug(
             R_ZY_n,
             P0, 
             unit_x,
-            save_flag, q_data, q_count, i_pk,
+            save_flag, q_data, q_count, q_debug_truncated_count, i_pk,
             pixel_size_m,
             sample_weights,
             n2_sample_array,
@@ -809,6 +828,13 @@ def process_peaks_parallel_debug(
         max_positions[i_pk,3] = mx1
         max_positions[i_pk,4] = my1
         max_positions[i_pk,5] = mv1
+
+    _LAST_PROCESS_PEAKS_DEBUG_Q_STATS.update(
+        {
+            "q_debug_saved_solution_count": int(np.sum(q_count)) if save_flag == 1 else 0,
+            "q_debug_truncated_solution_count": int(q_debug_truncated_count[0]),
+        }
+    )
 
     if save_flag==1:
         return image, max_positions, q_data, q_count
