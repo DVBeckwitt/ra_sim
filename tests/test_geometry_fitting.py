@@ -347,6 +347,35 @@ def test_simulate_and_compare_hkl_hit_table_simulation_disables_image_accumulati
     assert distances.tolist() == pytest.approx([0.0, 0.0])
 
 
+def test_hit_table_simulation_compat_fallback_strips_accumulate_image(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if "accumulate_image" in kwargs:
+            raise TypeError("got an unexpected keyword argument 'accumulate_image'")
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", fake_process)
+    monkeypatch.setattr(opt, "get_last_process_peaks_safe_stats", lambda: {})
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", True)
+    monkeypatch.setattr(opt, "_NUMBA_PROCESS_PEAKS_WARMED", True)
+
+    image_size = 8
+    hit_tables, maxpos, sim_buffer = opt._run_fit_hit_table_simulation(
+        _base_params(image_size),
+        np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        0.0,
+    )
+
+    assert [("accumulate_image" in call) for call in calls] == [True, False]
+    assert len(hit_tables) == 1
+    assert maxpos.shape == (1, 6)
+    assert sim_buffer.shape == (0, 0)
+
+
 def test_full_beam_polish_hit_table_simulation_disables_image_accumulation(monkeypatch):
     calls: list[dict[str, object]] = []
     solve_phase = {"value": None, "count": 0}

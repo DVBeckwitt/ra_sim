@@ -1878,7 +1878,7 @@ def _run_fit_hit_table_simulation(
     theta_value: float,
     *,
     prefer_python_runner: bool = False,
-) -> tuple[list[np.ndarray], list[np.ndarray], np.ndarray]:
+) -> tuple[list[np.ndarray], np.ndarray, np.ndarray]:
     mosaic = local["mosaic_params"]
     wavelength_array = mosaic.get("wavelength_array")
     if wavelength_array is None:
