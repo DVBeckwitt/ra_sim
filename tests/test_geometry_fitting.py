@@ -78,6 +78,357 @@ def _fake_process_peaks_same_hkl_two_hits(*args, **kwargs):
     return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
 
+def _single_reflection_dataset_context(
+    image_size: int,
+    measured_entries: list[dict[str, object]] | None = None,
+    *,
+    experimental_image: bool = True,
+) -> opt.GeometryFitDatasetContext:
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=(
+            [{"label": "1,0,0", "hkl": (1, 0, 0), "x": 4.0, "y": 4.0}]
+            if measured_entries is None
+            else [dict(entry) for entry in measured_entries]
+        ),
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    return opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        experimental_image=(
+            np.zeros((image_size, image_size), dtype=np.float64) if experimental_image else None
+        ),
+    )
+
+
+def _record_fit_hit_table_process_call(
+    calls: list[dict[str, object]],
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    *,
+    phase: str | None = None,
+) -> None:
+    assert len(args) > 30
+    assert np.asarray(args[0], dtype=np.float64).ndim == 2
+    assert np.asarray(args[1], dtype=np.float64).ndim == 1
+    assert isinstance(int(args[2]), int)
+    assert np.asarray(args[5], dtype=np.float64).ndim == 1
+    buffer_arg_index = 6
+    image_buffer = np.asarray(args[buffer_arg_index], dtype=np.float64)
+    assert image_buffer.ndim == 2
+    calls.append(
+        {
+            "phase": phase,
+            "buffer_shape": tuple(image_buffer.shape),
+            "collect_hit_tables": kwargs.get("collect_hit_tables"),
+            "accumulate_image": kwargs.get("accumulate_image"),
+            "prefer_python_runner": kwargs.get("prefer_python_runner"),
+        }
+    )
+
+
+def _assert_hit_table_only_process_call(call: Mapping[str, object]) -> None:
+    assert call["buffer_shape"] == (0, 0)
+    assert call["collect_hit_tables"] is True
+    assert call["accumulate_image"] is False
+
+
+def test_point_match_hit_table_simulation_disables_image_accumulation(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        _record_fit_hit_table_process_call(calls, args, kwargs)
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 8
+    local = _base_params(image_size, optics_mode=1)
+    dataset_ctx = _single_reflection_dataset_context(image_size)
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_point_matches(
+        local,
+        dataset_ctx,
+        image_size=image_size,
+        pixel_tol=np.inf,
+        weighted_matching=False,
+        solver_f_scale=1.0,
+        missing_pair_penalty=10.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert len(calls) == 1
+    _assert_hit_table_only_process_call(calls[0])
+    assert residual.tolist() == pytest.approx([0.0, 0.0])
+    assert int(summary["matched_pair_count"]) == 1
+    assert int(summary["missing_pair_count"]) == 0
+
+
+def test_dynamic_point_match_hit_table_simulation_disables_image_accumulation(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        _record_fit_hit_table_process_call(calls, args, kwargs)
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 8
+    local = _base_params(image_size, optics_mode=1)
+    local["_qr_fit_point_only_projection"] = False
+    dataset_ctx = _single_reflection_dataset_context(
+        image_size,
+        [
+            {
+                "label": "1,0,0",
+                "hkl": (1, 0, 0),
+                "x": 4.0,
+                "y": 4.0,
+                "source_reflection_index": 0,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_table_index": 0,
+                "source_row_index": 0,
+                "source_branch_index": 0,
+                "source_peak_index": 0,
+            }
+        ],
+    )
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=image_size,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert len(calls) == 1
+    _assert_hit_table_only_process_call(calls[0])
+    assert residual.tolist() == pytest.approx([0.0, 0.0])
+    assert int(summary["matched_pair_count"]) == 1
+    assert int(summary["missing_pair_count"]) == 0
+
+
+def test_dynamic_point_only_projection_uses_empty_sim_buffer_without_process_call(monkeypatch):
+    def fake_process(*args, **kwargs):
+        raise AssertionError("_process_peaks_parallel_safe should not be called")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(40.0, 179.8)])
+
+    def projector(_cols, _rows, *, local_params=None, **_kwargs):
+        del local_params
+        return {
+            "two_theta_deg": np.asarray([40.0], dtype=np.float64),
+            "phi_deg": np.asarray([179.8], dtype=np.float64),
+            "native_cols": np.asarray([12.0], dtype=np.float64),
+            "native_rows": np.asarray([13.0], dtype=np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "fit_space_local_params_signature": "unit-test",
+            "cake_bundle_signature": "unit-test",
+            "input_frame": "native_detector",
+            "invalid_reason": None,
+            "native_frame_conversion_source": "",
+            "native_frame_conversion_count": 0,
+            "valid": True,
+        }
+
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=179.8,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    dataset_ctx = _point_only_qr_dataset_ctx(source_rows_builder, projector)
+    dataset_ctx.subset.measured_entries = [measured]
+    local = _base_params(30, optics_mode=1)
+    local["_qr_fit_point_only_projection"] = True
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=30,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert opt._fit_hit_table_only_sim_buffer().shape == (0, 0)
+    assert residual.tolist() == pytest.approx([0.0, 0.0])
+    assert int(summary["matched_pair_count"]) == 1
+
+
+def test_fixed_correspondence_hit_table_simulation_disables_image_accumulation(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        _record_fit_hit_table_process_call(calls, args, kwargs)
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 8
+    local = _base_params(image_size, optics_mode=1)
+    dataset_ctx = _single_reflection_dataset_context(image_size)
+    correspondence = {
+        "hkl": (1, 0, 0),
+        "measured_x": 4.0,
+        "measured_y": 4.0,
+        "resolution_kind": "fixed_source",
+        "frozen_locator_kind": "local_branch",
+        "frozen_table_namespace": "current_full_local",
+        "frozen_table_index": 0,
+        "frozen_branch_index": 0,
+    }
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_fixed_correspondences(
+        local,
+        dataset_ctx,
+        [correspondence],
+        image_size=image_size,
+        weighted_matching=False,
+        solver_f_scale=1.0,
+        missing_pair_penalty=10.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert len(calls) == 1
+    _assert_hit_table_only_process_call(calls[0])
+    assert residual.tolist() == pytest.approx([0.0, 0.0])
+    assert int(summary["matched_pair_count"]) == 1
+    assert int(summary["missing_pair_count"]) == 0
+
+
+def test_simulate_and_compare_hkl_hit_table_simulation_disables_image_accumulation(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_process(*args, **kwargs):
+        _record_fit_hit_table_process_call(calls, args, kwargs)
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+
+    distances, *_ = opt.simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured,
+        prefer_python_runner=True,
+    )
+
+    assert len(calls) == 1
+    _assert_hit_table_only_process_call(calls[0])
+    assert calls[0]["prefer_python_runner"] is True
+    assert distances.tolist() == pytest.approx([0.0, 0.0])
+
+
+def test_full_beam_polish_hit_table_simulation_disables_image_accumulation(monkeypatch):
+    calls: list[dict[str, object]] = []
+    solve_phase = {"value": None, "count": 0}
+
+    def fake_process(*args, **kwargs):
+        _record_fit_hit_table_process_call(calls, args, kwargs, phase=solve_phase["value"])
+        return _fake_process_peaks_same_hkl_two_hits(*args, **kwargs)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        del kwargs
+        solve_phase["count"] += 1
+        solve_phase["value"] = "main" if solve_phase["count"] == 1 else "full_beam"
+        try:
+            x = np.asarray(x0, dtype=float)
+            fun = np.asarray(residual_fn(x), dtype=float)
+        finally:
+            solve_phase["value"] = None
+        return opt.OptimizeResult(
+            x=x,
+            fun=fun,
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "label": "1,0,0",
+            "hkl": (1, 0, 0),
+            "x": 8.0,
+            "y": 8.0,
+            "source_reflection_index": 0,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 1,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "fit_source_resolution_kind": "source_row",
+        }
+    ]
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "dynamic_point_geometry_fit": True,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+            },
+            "full_beam_polish": {"enabled": True, "max_nfev": 10},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    full_beam_calls = [call for call in calls if call.get("phase") == "full_beam"]
+    assert bool(result.success) is True
+    assert full_beam_calls
+    for call in full_beam_calls:
+        _assert_hit_table_only_process_call(call)
+    assert np.asarray(result.full_beam_polish_summary["fun"], dtype=float).tolist() == pytest.approx(
+        [0.0, 0.0]
+    )
+    assert int(result.full_beam_polish_summary["matched_pair_count_after"]) == 1
+
+
 def test_trial_sim_caked_image_payload_accepts_axes_only_builder():
     calls = []
 

@@ -1177,6 +1177,7 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 or "n2_sample_array_override" in call_kwargs
                 or "prefer_python_runner" in call_kwargs
                 or "collect_hit_tables" in call_kwargs
+                or "accumulate_image" in call_kwargs
             ) and "unexpected keyword" in str(exc):
                 reduced_kwargs = dict(call_kwargs)
                 reduced_kwargs.pop("optics_mode", None)
@@ -1190,6 +1191,7 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 reduced_kwargs.pop("n2_sample_array_override", None)
                 reduced_kwargs.pop("prefer_python_runner", None)
                 reduced_kwargs.pop("collect_hit_tables", None)
+                reduced_kwargs.pop("accumulate_image", None)
                 return fn(*call_args, **reduced_kwargs)
             raise
 
@@ -1860,6 +1862,72 @@ class GeometryFitDatasetContext:
     qr_fit_trial_source_rows_builder: Optional[Callable[..., Mapping[str, object] | None]] = None
     qr_fit_trial_source_rows_builder_kind: str | None = None
     baseline_fit_params: Optional[Dict[str, object]] = None
+
+
+def _fit_hit_table_only_sim_buffer() -> np.ndarray:
+    # Keep this shape empty, not 1x1: locked-Qr detector payloads treat empty
+    # arrays as shape unavailable and fall back to image_size.
+    return np.empty((0, 0), dtype=np.float64)
+
+
+def _run_fit_hit_table_simulation(
+    local: Mapping[str, object],
+    fit_miller: np.ndarray,
+    fit_intensities: np.ndarray,
+    image_size: int,
+    theta_value: float,
+    *,
+    prefer_python_runner: bool = False,
+) -> tuple[list[np.ndarray], list[np.ndarray], np.ndarray]:
+    mosaic = local["mosaic_params"]
+    wavelength_array = mosaic.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic.get("wavelength_i_array")
+
+    sim_buffer = _fit_hit_table_only_sim_buffer()
+    call_kwargs = {
+        **_simulation_kernel_kwargs(local, mosaic),
+        "save_flag": 0,
+        "collect_hit_tables": True,
+        "accumulate_image": False,
+    }
+    if prefer_python_runner:
+        call_kwargs["prefer_python_runner"] = True
+    _, hit_tables, *_ = _process_peaks_parallel_safe(
+        fit_miller,
+        fit_intensities,
+        image_size,
+        local["a"],
+        local["c"],
+        wavelength_array,
+        sim_buffer,
+        local["corto_detector"],
+        local["gamma"],
+        local["Gamma"],
+        local["chi"],
+        local.get("psi", 0.0),
+        local.get("psi_z", 0.0),
+        local["zs"],
+        local["zb"],
+        local["n2"],
+        mosaic["beam_x_array"],
+        mosaic["beam_y_array"],
+        mosaic["theta_array"],
+        mosaic["phi_array"],
+        mosaic["sigma_mosaic_deg"],
+        mosaic["gamma_mosaic_deg"],
+        mosaic["eta"],
+        wavelength_array,
+        local["debye_x"],
+        local["debye_y"],
+        local["center"],
+        theta_value,
+        local.get("cor_angle", 0.0),
+        np.array([1.0, 0.0, 0.0]),
+        np.array([0.0, 1.0, 0.0]),
+        **call_kwargs,
+    )
+    return hit_tables, hit_tables_to_max_positions(hit_tables), sim_buffer
 
 
 def _copy_geometry_fit_dataset_context(
@@ -4129,46 +4197,12 @@ def _evaluate_geometry_fit_dataset_point_matches(
             },
         )
 
-    mosaic = local["mosaic_params"]
-    wavelength_array = mosaic.get("wavelength_array")
-    if wavelength_array is None:
-        wavelength_array = mosaic.get("wavelength_i_array")
-
-    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-    _, hit_tables, *_ = _process_peaks_parallel_safe(
+    hit_tables, maxpos, sim_buffer = _run_fit_hit_table_simulation(
+        local,
         fit_miller,
         fit_intensities,
         image_size,
-        local["a"],
-        local["c"],
-        wavelength_array,
-        sim_buffer,
-        local["corto_detector"],
-        local["gamma"],
-        local["Gamma"],
-        local["chi"],
-        local.get("psi", 0.0),
-        local.get("psi_z", 0.0),
-        local["zs"],
-        local["zb"],
-        local["n2"],
-        mosaic["beam_x_array"],
-        mosaic["beam_y_array"],
-        mosaic["theta_array"],
-        mosaic["phi_array"],
-        mosaic["sigma_mosaic_deg"],
-        mosaic["gamma_mosaic_deg"],
-        mosaic["eta"],
-        wavelength_array,
-        local["debye_x"],
-        local["debye_y"],
-        local["center"],
         theta_value,
-        local.get("cor_angle", 0.0),
-        np.array([1.0, 0.0, 0.0]),
-        np.array([0.0, 1.0, 0.0]),
-        save_flag=0,
-        **_simulation_kernel_kwargs(local, mosaic),
     )
 
     def _point_radius_px(point: Tuple[float, float]) -> float:
@@ -4186,7 +4220,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
             return float("nan")
         return float(math.hypot(float(point[0]) - center_col, float(point[1]) - center_row))
 
-    maxpos = hit_tables_to_max_positions(hit_tables) if hit_tables else []
+    maxpos = maxpos if hit_tables else []
     measured_index_lookup = {id(entry): int(idx) for idx, entry in enumerate(normalized_measured)}
     # Keep one fixed two-component residual block per measured point. SciPy's
     # finite-difference Jacobian estimation requires a stable residual shape
@@ -4822,50 +4856,18 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             },
         )
 
-    mosaic = local["mosaic_params"]
-    wavelength_array = mosaic.get("wavelength_array")
-    if wavelength_array is None:
-        wavelength_array = mosaic.get("wavelength_i_array")
-
     qr_fit_point_only_projection = bool(local.get("_qr_fit_point_only_projection", False))
-    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+    sim_buffer = _fit_hit_table_only_sim_buffer()
     if qr_fit_point_only_projection:
         hit_tables = ()
+        maxpos = []
     else:
-        _, hit_tables, *_ = _process_peaks_parallel_safe(
+        hit_tables, maxpos, sim_buffer = _run_fit_hit_table_simulation(
+            local,
             fit_miller,
             fit_intensities,
             image_size,
-            local["a"],
-            local["c"],
-            wavelength_array,
-            sim_buffer,
-            local["corto_detector"],
-            local["gamma"],
-            local["Gamma"],
-            local["chi"],
-            local.get("psi", 0.0),
-            local.get("psi_z", 0.0),
-            local["zs"],
-            local["zb"],
-            local["n2"],
-            mosaic["beam_x_array"],
-            mosaic["beam_y_array"],
-            mosaic["theta_array"],
-            mosaic["phi_array"],
-            mosaic["sigma_mosaic_deg"],
-            mosaic["gamma_mosaic_deg"],
-            mosaic["eta"],
-            wavelength_array,
-            local["debye_x"],
-            local["debye_y"],
-            local["center"],
             theta_value,
-            local.get("cor_angle", 0.0),
-            np.array([1.0, 0.0, 0.0]),
-            np.array([0.0, 1.0, 0.0]),
-            save_flag=0,
-            **_simulation_kernel_kwargs(local, mosaic),
         )
 
     def _overlay_index(entry: Dict[str, object], fallback: int) -> int:
@@ -4877,7 +4879,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             return int(fallback)
         return int(out)
 
-    maxpos = hit_tables_to_max_positions(hit_tables) if hit_tables else []
+    maxpos = maxpos if hit_tables else []
     full_reflection_local_index_map = _full_reflection_local_index_map(
         simulation_subset.original_indices
     )
@@ -6722,48 +6724,13 @@ def _evaluate_geometry_fit_dataset_fixed_correspondences(
 
     fit_miller = dataset_ctx.subset.miller
     fit_intensities = dataset_ctx.subset.intensities
-    mosaic = local["mosaic_params"]
-    wavelength_array = mosaic.get("wavelength_array")
-    if wavelength_array is None:
-        wavelength_array = mosaic.get("wavelength_i_array")
-
-    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-    _, hit_tables, *_ = _process_peaks_parallel_safe(
+    hit_tables, maxpos, sim_buffer = _run_fit_hit_table_simulation(
+        local,
         fit_miller,
         fit_intensities,
         image_size,
-        local["a"],
-        local["c"],
-        wavelength_array,
-        sim_buffer,
-        local["corto_detector"],
-        local["gamma"],
-        local["Gamma"],
-        local["chi"],
-        local.get("psi", 0.0),
-        local.get("psi_z", 0.0),
-        local["zs"],
-        local["zb"],
-        local["n2"],
-        mosaic["beam_x_array"],
-        mosaic["beam_y_array"],
-        mosaic["theta_array"],
-        mosaic["phi_array"],
-        mosaic["sigma_mosaic_deg"],
-        mosaic["gamma_mosaic_deg"],
-        mosaic["eta"],
-        wavelength_array,
-        local["debye_x"],
-        local["debye_y"],
-        local["center"],
         theta_value,
-        local.get("cor_angle", 0.0),
-        np.array([1.0, 0.0, 0.0]),
-        np.array([0.0, 1.0, 0.0]),
-        save_flag=0,
-        **_simulation_kernel_kwargs(local, mosaic),
     )
-    maxpos = hit_tables_to_max_positions(hit_tables)
     full_reflection_local_index_map = _full_reflection_local_index_map(
         dataset_ctx.subset.original_indices
     )
@@ -19939,69 +19906,15 @@ def simulate_and_compare_hkl(
     normalized_measured = sim_subset.measured_entries
     sim_miller = sim_subset.miller
     sim_intensities = sim_subset.intensities
-    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
-    # Unpack geometry & mosaic parameters
-    a = params["a"]
-    c = params["c"]
-    dist = params["corto_detector"]
-    gamma = params["gamma"]
-    Gamma = params["Gamma"]
-    chi = params["chi"]
-    psi = params.get("psi", 0.0)
-    psi_z = params.get("psi_z", 0.0)
-    zs = params["zs"]
-    zb = params["zb"]
-    debye_x = params["debye_x"]
-    debye_y = params["debye_y"]
-    n2 = params["n2"]
-    center = params["center"]
-    theta_initial = params["theta_initial"]
-    cor_angle = params.get("cor_angle", 0.0)
-
-    mosaic = params["mosaic_params"]
-    wavelength_array = mosaic.get("wavelength_array")
-    if wavelength_array is None:
-        wavelength_array = mosaic.get("wavelength_i_array")
-
-    # Full-pattern simulation
-    updated_image, hit_tables, *_ = _process_peaks_parallel_safe(
+    hit_tables, maxpos, _ = _run_fit_hit_table_simulation(
+        params,
         sim_miller,
         sim_intensities,
         image_size,
-        a,
-        c,
-        wavelength_array,
-        sim_buffer,
-        dist,
-        gamma,
-        Gamma,
-        chi,
-        psi,
-        psi_z,
-        zs,
-        zb,
-        n2,
-        mosaic["beam_x_array"],
-        mosaic["beam_y_array"],
-        mosaic["theta_array"],
-        mosaic["phi_array"],
-        mosaic["sigma_mosaic_deg"],
-        mosaic["gamma_mosaic_deg"],
-        mosaic["eta"],
-        wavelength_array,
-        debye_x,
-        debye_y,
-        center,
-        theta_initial,
-        cor_angle,
-        np.array([1.0, 0.0, 0.0]),
-        np.array([0.0, 1.0, 0.0]),
-        save_flag=0,
+        params["theta_initial"],
         prefer_python_runner=bool(prefer_python_runner),
-        **_simulation_kernel_kwargs(params, mosaic),
     )
-    maxpos = hit_tables_to_max_positions(hit_tables)
 
     distances: list[float] = []
     sim_coords: list[tuple[float, float]] = []
@@ -25679,48 +25592,13 @@ def fit_geometry_parameters(
                 hk0_peak_priority_weight = 1.0
             fit_miller = dataset_ctx.subset.miller
             fit_intensities = dataset_ctx.subset.intensities
-            mosaic = local_full["mosaic_params"]
-            wavelength_array = mosaic.get("wavelength_array")
-            if wavelength_array is None:
-                wavelength_array = mosaic.get("wavelength_i_array")
-
-            sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-            _, hit_tables, *_ = _process_peaks_parallel_safe(
+            hit_tables, maxpos, sim_buffer = _run_fit_hit_table_simulation(
+                local_full,
                 fit_miller,
                 fit_intensities,
                 image_size,
-                local_full["a"],
-                local_full["c"],
-                wavelength_array,
-                sim_buffer,
-                local_full["corto_detector"],
-                local_full["gamma"],
-                local_full["Gamma"],
-                local_full["chi"],
-                local_full.get("psi", 0.0),
-                local_full.get("psi_z", 0.0),
-                local_full["zs"],
-                local_full["zb"],
-                local_full["n2"],
-                mosaic["beam_x_array"],
-                mosaic["beam_y_array"],
-                mosaic["theta_array"],
-                mosaic["phi_array"],
-                mosaic["sigma_mosaic_deg"],
-                mosaic["gamma_mosaic_deg"],
-                mosaic["eta"],
-                wavelength_array,
-                local_full["debye_x"],
-                local_full["debye_y"],
-                local_full["center"],
                 theta_value,
-                local_full.get("cor_angle", 0.0),
-                np.array([1.0, 0.0, 0.0]),
-                np.array([0.0, 1.0, 0.0]),
-                save_flag=0,
-                **_simulation_kernel_kwargs(local_full, mosaic),
             )
-            maxpos = hit_tables_to_max_positions(hit_tables)
             filtered_rows_cache: Dict[int, List[np.ndarray]] = {}
             current_local_table_signature = _local_table_signature(
                 dataset_ctx.subset.original_indices

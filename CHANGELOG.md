@@ -55,6 +55,7 @@
   - Added a repeatable geometry-fitter cache regression gate script with local and strict modes, fast cache/handoff/objective coverage, workflow-slice validation, slow-geometry strict coverage, and optional New4 artifact handling.
   - Added a fast end-to-end QR selector to geometry-fitter handoff scenario covering fast-path invalidation sequencing, point-provider parity, projection-cache invalidation, and objective-cache reuse/reject behavior without requiring New4 artifacts.
   - Hardened geometry-objective cache signatures so center-only reuse is gated by unchanged physics, dataset, point-provider, QR branch identity, source-row identity, manual selection, refined peak, objective mode, and active fit-parameter signatures.
+  - Avoided dense detector-image allocation in hit-table-only geometry fitting paths by using an empty simulation buffer, disabling image accumulation, and keeping locked-Qr detector-shape fallback behavior intact.
   - Added diffuse-background `radial_plus_phi_blocks` and `radial_plus_phi_blocks_plus_caked_2d` modes with coarse phi/theta block residual modeling, component diagnostics, GUI controls, CLI mode support, and artifact exports.
   - Expanded `hbn_fitter/fitter.py` with uncertainty-aware ellipse refinement and point-sigma handling.
   - Added projective tilt optimization path with fallback to legacy optimization.
