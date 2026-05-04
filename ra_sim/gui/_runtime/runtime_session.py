@@ -9654,6 +9654,8 @@ def _geometry_manual_project_peaks_for_background(
             or (lambda col, row: (float(col), float(row)))
         ),
         display_rotate_k=int(globals().get("DISPLAY_ROTATE_K", 0) or 0),
+        current_background_index=lambda: int(background_index),
+        caked_projection_payload=lambda: resolved_caked_payload,
         current_geometry_fit_params=lambda: _current_geometry_fit_params(),
         build_live_preview_simulated_peaks_from_cache=lambda: [],
         ensure_peak_overlay_data=lambda **_kwargs: False,
@@ -11665,6 +11667,7 @@ def _initialize_runtime_controls_block_04() -> None:
             wrap_phi_range=lambda value: raw_phi_to_gui_phi(value),
             rotate_point_for_display=_rotate_point_for_display,
             display_rotate_k=DISPLAY_ROTATE_K,
+            current_background_index=lambda: background_runtime_state.current_background_index,
             current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
             build_live_preview_simulated_peaks_from_cache=(
                 lambda: globals()["_build_live_preview_simulated_peaks_from_cache"]()
@@ -30184,25 +30187,60 @@ def _geometry_fit_projection_payload_digest(
 ) -> str | None:
     if not isinstance(payload, Mapping):
         return None
+    transform_bundle = payload.get("transform_bundle")
+    lut = getattr(transform_bundle, "lut", None) if transform_bundle is not None else None
+    lut_t = getattr(transform_bundle, "lut_t", None) if transform_bundle is not None else None
     return gui_geometry_fit._geometry_fit_digest_payload(
         {
-            "detector_shape": gui_geometry_fit._geometry_fit_cache_jsonable(
-                payload.get("detector_shape")
-            ),
-            "radial_axis": gui_geometry_fit._geometry_fit_cache_jsonable(
-                payload.get("radial_axis")
-            ),
-            "azimuth_axis": gui_geometry_fit._geometry_fit_cache_jsonable(
-                payload.get("azimuth_axis")
-            ),
-            "raw_azimuth_axis": gui_geometry_fit._geometry_fit_cache_jsonable(
+            "detector_shape": _geometry_fit_projection_shape_token(payload.get("detector_shape")),
+            "radial_axis": _geometry_fit_projection_axis_token(payload.get("radial_axis")),
+            "azimuth_axis": _geometry_fit_projection_axis_token(payload.get("azimuth_axis")),
+            "raw_azimuth_axis": _geometry_fit_projection_axis_token(
                 payload.get("raw_azimuth_axis")
             ),
-            "raw_to_gui_row_permutation": gui_geometry_fit._geometry_fit_cache_jsonable(
+            "raw_to_gui_row_permutation": _geometry_fit_projection_axis_token(
                 payload.get("raw_to_gui_row_permutation")
+            ),
+            "payload_signature": gui_geometry_fit._geometry_fit_cache_jsonable(
+                payload.get("signature")
+            ),
+            "transform_bundle": (
+                id(transform_bundle) if transform_bundle is not None else None,
+                id(lut) if lut is not None else None,
+                id(lut_t) if lut_t is not None else None,
             ),
         }
     )
+
+
+def _geometry_fit_projection_shape_token(value: object) -> list[int] | None:
+    try:
+        shape = [int(item) for item in tuple(value)[:2]]  # type: ignore[arg-type]
+    except Exception:
+        return None
+    if len(shape) < 2 or shape[0] <= 0 or shape[1] <= 0:
+        return None
+    return shape[:2]
+
+
+def _geometry_fit_projection_axis_token(value: object) -> dict[str, object] | None:
+    try:
+        arr = np.asarray(value).reshape(-1)
+    except Exception:
+        return None
+    if arr.size == 0:
+        return None
+    token: dict[str, object] = {
+        "id": int(id(value)),
+        "length": int(arr.size),
+        "dtype": str(arr.dtype),
+    }
+    try:
+        token["first"] = float(arr[0])
+        token["last"] = float(arr[-1])
+    except Exception:
+        pass
+    return token
 
 
 def _geometry_fit_targeted_projection_view_mode() -> str:
@@ -30382,22 +30420,18 @@ def _geometry_fit_targeted_projection_view_signature(
                 {
                     "available": True,
                     "detector_shape": list(tuple(normalized_payload.get("detector_shape", ()))[:2]),
-                    "radial_axis": np.asarray(
-                        normalized_payload.get("radial_axis"),
-                        dtype=np.float64,
-                    ).reshape(-1),
-                    "azimuth_axis": np.asarray(
-                        normalized_payload.get("azimuth_axis"),
-                        dtype=np.float64,
-                    ).reshape(-1),
-                    "raw_azimuth_axis": np.asarray(
-                        normalized_payload.get("raw_azimuth_axis"),
-                        dtype=np.float64,
-                    ).reshape(-1),
-                    "raw_to_gui_row_permutation": np.asarray(
-                        normalized_payload.get("raw_to_gui_row_permutation"),
-                        dtype=np.int32,
-                    ).reshape(-1),
+                    "radial_axis": _geometry_fit_projection_axis_token(
+                        normalized_payload.get("radial_axis")
+                    ),
+                    "azimuth_axis": _geometry_fit_projection_axis_token(
+                        normalized_payload.get("azimuth_axis")
+                    ),
+                    "raw_azimuth_axis": _geometry_fit_projection_axis_token(
+                        normalized_payload.get("raw_azimuth_axis")
+                    ),
+                    "raw_to_gui_row_permutation": _geometry_fit_projection_axis_token(
+                        normalized_payload.get("raw_to_gui_row_permutation")
+                    ),
                     "projection_payload_digest": _geometry_fit_projection_payload_digest(
                         normalized_payload
                     ),
@@ -42499,6 +42533,8 @@ def _run_async_geometry_fit_worker_job(
                 display_rotate_k=int(
                     job_data.get("display_rotate_k", globals().get("DISPLAY_ROTATE_K", 0))
                 ),
+                current_background_index=lambda: int(background_index),
+                caked_projection_payload=lambda: resolved_caked_payload,
                 current_geometry_fit_params=lambda: dict(job_data.get("params", {}) or {}),
                 build_live_preview_simulated_peaks_from_cache=lambda: [],
                 ensure_peak_overlay_data=lambda **_kwargs: False,

@@ -244,6 +244,10 @@ def geometry_manual_start_run_id() -> str:
     global _GEOMETRY_MANUAL_RUN_COUNTER
     _GEOMETRY_MANUAL_RUN_COUNTER += 1
     _GEOMETRY_MANUAL_ACTIVE_RUN_ID = f"manual-{_GEOMETRY_MANUAL_RUN_COUNTER:06d}"
+    try:
+        _LIVE_CAKED_TRACE_LAST.clear()
+    except NameError:
+        pass
     return _GEOMETRY_MANUAL_ACTIVE_RUN_ID
 
 
@@ -3699,10 +3703,7 @@ def _geometry_manual_entry_detector_display_point(
 
     caked_display_row = bool(
         isinstance(entry, Mapping)
-        and (
-            entry.get("_caked_qr_projection_cache")
-            or explicit_frame == "caked"
-        )
+        and (entry.get("_caked_qr_projection_cache") or explicit_frame == "caked")
     )
 
     def _valid_detector_point(point: tuple[float, float] | None) -> tuple[float, float] | None:
@@ -5183,10 +5184,9 @@ def _geometry_manual_candidate_matches_selected_group_source(
     candidate_group_key = _geometry_manual_real_q_group_key(entry)
     if candidate_group_key is not None and candidate_group_key != normalized_group_key:
         return False
-    return (
-        _geometry_manual_entry_source_label(entry, group_key=candidate_group_key)
-        == _geometry_manual_entry_source_label(None, group_key=normalized_group_key)
-    )
+    return _geometry_manual_entry_source_label(
+        entry, group_key=candidate_group_key
+    ) == _geometry_manual_entry_source_label(None, group_key=normalized_group_key)
 
 
 def _geometry_manual_filter_candidates_for_selected_group_source(
@@ -7573,9 +7573,7 @@ def _geometry_manual_generation_token(value: object) -> object:
         "source_snapshot_revision",
     )
     if isinstance(value, Mapping):
-        return tuple(
-            (key, value.get(key)) for key in generation_keys if value.get(key) is not None
-        )
+        return tuple((key, value.get(key)) for key in generation_keys if value.get(key) is not None)
     tokens: list[tuple[str, object]] = []
     for key in generation_keys:
         try:
@@ -7629,6 +7627,8 @@ def _geometry_manual_array_token(value: object) -> tuple[object, ...]:
 def geometry_manual_qr_sim_refinement_signature(
     cache_data: Mapping[str, object] | None,
     *,
+    simulation_signature: object = None,
+    caked_projection_signature: object = None,
     detector_simulation_image: object | None = None,
     caked_simulation_image: object | None = None,
     radial_axis: Sequence[float] | None = None,
@@ -7639,11 +7639,15 @@ def geometry_manual_qr_sim_refinement_signature(
     search_radius_px: int = 5,
 ) -> tuple[object, ...]:
     cache = cache_data if isinstance(cache_data, Mapping) else {}
-    metadata = cache.get("cache_metadata") if isinstance(cache.get("cache_metadata"), Mapping) else {}
+    metadata = (
+        cache.get("cache_metadata") if isinstance(cache.get("cache_metadata"), Mapping) else {}
+    )
     return (
         "manual_qr_sim_refinement_v1",
         cache.get("signature"),
         cache.get("placed_signature"),
+        simulation_signature,
+        caked_projection_signature,
         _geometry_manual_generation_token(cache),
         _geometry_manual_generation_token(metadata),
         _geometry_manual_array_token(detector_simulation_image),
@@ -7773,6 +7777,9 @@ def geometry_manual_refine_qr_sim_candidates_in_cache(
     if refinement_signature is not None:
         refined_cache["qr_sim_refinement_signature"] = refinement_signature
         refined_cache["qr_sim_refinement_complete"] = True
+    else:
+        refined_cache.pop("qr_sim_refinement_signature", None)
+        refined_cache.pop("qr_sim_refinement_complete", None)
     return refined_cache
 
 
@@ -7800,6 +7807,7 @@ def geometry_manual_rebuild_refined_qr_cache_lookups(
         not force_rebuild
         and refinement_signature is not None
         and cache_data.get("qr_sim_refinement_lookup_signature") == refinement_signature
+        and cache_data.get("qr_sim_refinement_lookup_complete") is True
         and has_required_lookups
     ):
         return dict(cache_data)
@@ -7810,6 +7818,7 @@ def geometry_manual_rebuild_refined_qr_cache_lookups(
         return [dict(entry) for entry in rows if isinstance(entry, Mapping)]
 
     rebuilt_cache = dict(cache_data)
+    lookup_complete = True
     if "active_simulated_peaks" in rebuilt_cache or "simulated_peaks" in rebuilt_cache:
         if "active_simulated_peaks" in rebuilt_cache:
             lookup_source_rows = _row_dicts(rebuilt_cache.get("active_simulated_peaks"))
@@ -7819,20 +7828,29 @@ def geometry_manual_rebuild_refined_qr_cache_lookups(
             rebuilt_lookup = build_simulated_lookup(lookup_source_rows)
         except Exception:
             rebuilt_lookup = {}
+            lookup_complete = False
         rebuilt_cache["simulated_lookup"] = _geometry_manual_copy_lookup(rebuilt_lookup)
 
     if "caked_qr_projection_entries" in rebuilt_cache:
-        projection_lookup: GeometryManualLookupMap = {}
-        for entry in _row_dicts(rebuilt_cache.get("caked_qr_projection_entries")):
-            key = _geometry_manual_caked_qr_projection_key(entry)
-            if key is not None:
-                _geometry_manual_add_lookup_entry(projection_lookup, key, entry)
+        try:
+            projection_lookup: GeometryManualLookupMap = {}
+            for entry in _row_dicts(rebuilt_cache.get("caked_qr_projection_entries")):
+                key = _geometry_manual_caked_qr_projection_key(entry)
+                if key is not None:
+                    _geometry_manual_add_lookup_entry(projection_lookup, key, entry)
+        except Exception:
+            projection_lookup = {}
+            lookup_complete = False
         rebuilt_cache["caked_qr_projection_lookup"] = _geometry_manual_copy_lookup(
             projection_lookup
         )
 
-    if refinement_signature is not None:
+    if refinement_signature is not None and lookup_complete:
         rebuilt_cache["qr_sim_refinement_lookup_signature"] = refinement_signature
+        rebuilt_cache["qr_sim_refinement_lookup_complete"] = True
+    else:
+        rebuilt_cache.pop("qr_sim_refinement_lookup_signature", None)
+        rebuilt_cache["qr_sim_refinement_lookup_complete"] = False
     return rebuilt_cache
 
 
@@ -12036,7 +12054,9 @@ def geometry_manual_pick_preview_state(
             "selected_group_source": selected_source,
             "available_sources": available_sources,
         }
-    active_remaining_candidates = source_candidates if remaining_candidates else remaining_candidates
+    active_remaining_candidates = (
+        source_candidates if remaining_candidates else remaining_candidates
+    )
 
     tagged_candidate = geometry_manual_tagged_candidate_from_session(
         pick_session,
@@ -13317,15 +13337,19 @@ def make_runtime_geometry_manual_cache_callbacks(
         existing_cache_signature_value = _resolve_runtime_value(current_cache_signature)
         existing_cache_data_value = _resolve_runtime_value(current_cache_data)
         peak_records_value = _resolve_runtime_value(peak_records)
+        last_simulation_signature_value = _resolve_runtime_value(last_simulation_signature)
+        caked_projection_signature_value = (
+            caked_projection_signature_override
+            if caked_projection_signature_override is not None
+            else _resolve_runtime_value(caked_projection_signature)
+        )
         detector_simulation_image_value = _resolve_runtime_value(detector_simulation_image)
         caked_simulation_image_value = _resolve_runtime_value(caked_simulation_image)
         radial_axis_value = _resolve_runtime_value(radial_axis)
         azimuth_axis_value = _resolve_runtime_value(azimuth_axis)
 
         def _request_caked_projection_signature() -> object:
-            if caked_projection_signature_override is not None:
-                return caked_projection_signature_override
-            return _resolve_runtime_value(caked_projection_signature)
+            return caked_projection_signature_value
 
         def _placed_pick_cache_signature_for_request(
             *,
@@ -13342,7 +13366,7 @@ def make_runtime_geometry_manual_cache_callbacks(
                     param_set,
                 )
             else:
-                source_snapshot_signature = _resolve_runtime_value(last_simulation_signature)
+                source_snapshot_signature = last_simulation_signature_value
             return geometry_manual_pick_placed_cache_signature(
                 source_snapshot_signature=source_snapshot_signature,
                 background_index=resolved_background_index,
@@ -13401,6 +13425,8 @@ def make_runtime_geometry_manual_cache_callbacks(
                 return {}
             refinement_signature = geometry_manual_qr_sim_refinement_signature(
                 raw_cache,
+                simulation_signature=last_simulation_signature_value,
+                caked_projection_signature=caked_projection_signature_value,
                 detector_simulation_image=detector_simulation_image_value,
                 caked_simulation_image=caked_simulation_image_value,
                 radial_axis=radial_axis_value,
@@ -13492,6 +13518,10 @@ def make_runtime_geometry_manual_projection_callbacks(
         [float, float, tuple[int, ...], int], tuple[float, float]
     ] = _default_rotate_point,
     display_rotate_k: int = 0,
+    current_background_index: Callable[[], object] | object = None,
+    caked_projection_payload: Callable[[], object] | object = None,
+    last_caked_raw_azimuth_values: Callable[[], object] | object = None,
+    last_caked_raw_to_gui_row_permutation: Callable[[], object] | object = None,
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
     build_live_preview_simulated_peaks_from_cache: (
         Callable[[], Sequence[dict[str, object]]] | None
@@ -14669,53 +14699,111 @@ def make_runtime_geometry_manual_projection_callbacks(
 
     def _axis_signature(values: object) -> tuple[object, ...] | None:
         try:
-            arr = np.asarray(values, dtype=np.float64).ravel()
+            arr = np.asarray(values).reshape(-1)
         except Exception:
             return None
         if arr.size == 0:
             return None
-        return (
+        token: list[object] = [
+            "axis",
+            id(values),
             int(arr.size),
-            tuple(float(value) for value in arr.tolist()),
+            str(arr.dtype),
+            tuple(int(value) for value in arr.shape),
+        ]
+        try:
+            token.extend([float(arr[0]), float(arr[-1])])
+        except Exception:
+            pass
+        return tuple(token)
+
+    def _detector_shape_signature(values: object) -> tuple[int, int] | None:
+        try:
+            shape = tuple(int(value) for value in tuple(values)[:2])  # type: ignore[arg-type]
+        except Exception:
+            return None
+        if len(shape) < 2 or shape[0] <= 0 or shape[1] <= 0:
+            return None
+        return int(shape[0]), int(shape[1])
+
+    def _background_index_signature() -> int | None:
+        try:
+            return int(_resolve_runtime_value(current_background_index))
+        except Exception:
+            return None
+
+    def _projection_payload_mapping() -> Mapping[str, object] | None:
+        payload = _resolve_runtime_value(caked_projection_payload)
+        return payload if isinstance(payload, Mapping) else None
+
+    def _bundle_signature(bundle: object) -> tuple[object, ...] | None:
+        if not isinstance(bundle, CakeTransformBundle):
+            return None
+        lut = getattr(bundle, "lut", None)
+        lut_t = getattr(bundle, "lut_t", None)
+        return (
+            "cake_transform_bundle",
+            id(bundle),
+            _detector_shape_signature(bundle.detector_shape),
+            _axis_signature(bundle.radial_deg),
+            _axis_signature(bundle.gui_azimuth_deg),
+            _axis_signature(bundle.raw_azimuth_deg),
+            id(lut) if lut is not None else None,
+            id(lut_t) if lut_t is not None else None,
         )
 
     def _caked_projection_signature() -> object:
         if not _pick_uses_caked_space():
             return None
-
-        def _image_token(value: object) -> tuple[tuple[int, ...], str] | None:
-            try:
-                arr = np.asarray(value)
-                return tuple(int(v) for v in arr.shape), str(arr.dtype)
-            except Exception:
-                return None
-
-        background_image = _resolve_runtime_value(last_caked_background_image_unscaled)
-        background_token = _image_token(background_image)
-        detector_display_token = (
-            int(display_rotate_k),
-            _image_token(_resolve_runtime_value(current_background_display)),
-            _image_token(_resolve_runtime_value(current_background_native)),
-            id(rotate_point_for_display) if callable(rotate_point_for_display) else None,
-            id(native_detector_coords_to_detector_display_coords)
-            if callable(native_detector_coords_to_detector_display_coords)
-            else None,
+        payload = _projection_payload_mapping()
+        bundle = (
+            payload.get("transform_bundle")
+            if isinstance(payload, Mapping)
+            else _resolve_runtime_value(caked_transform_bundle)
         )
-        bundle = _resolve_runtime_value(caked_transform_bundle)
-        bundle_token = None
+        detector_shape = payload.get("detector_shape") if isinstance(payload, Mapping) else None
         if isinstance(bundle, CakeTransformBundle):
-            bundle_token = (
-                tuple(int(v) for v in tuple(bundle.detector_shape)),
-                _axis_signature(bundle.radial_deg),
-                _axis_signature(bundle.raw_azimuth_deg),
+            detector_shape = detector_shape or bundle.detector_shape
+        radial_axis = (
+            payload.get("radial_axis")
+            if isinstance(payload, Mapping)
+            else _resolve_runtime_value(last_caked_radial_values)
+        )
+        azimuth_axis = (
+            payload.get("azimuth_axis")
+            if isinstance(payload, Mapping)
+            else _resolve_runtime_value(last_caked_azimuth_values)
+        )
+        raw_azimuth_axis = (
+            payload.get("raw_azimuth_axis")
+            if isinstance(payload, Mapping)
+            else (
+                _resolve_runtime_value(last_caked_raw_azimuth_values)
+                if last_caked_raw_azimuth_values is not None
+                else getattr(bundle, "raw_azimuth_deg", None)
             )
+        )
+        raw_to_gui = (
+            payload.get("raw_to_gui_row_permutation")
+            if isinstance(payload, Mapping)
+            else _resolve_runtime_value(last_caked_raw_to_gui_row_permutation)
+        )
         return (
-            "caked_qr_projection",
-            background_token,
-            detector_display_token,
-            _axis_signature(_resolve_runtime_value(last_caked_radial_values)),
-            _axis_signature(_resolve_runtime_value(last_caked_azimuth_values)),
-            bundle_token,
+            "caked_qr_projection_v2",
+            _background_index_signature(),
+            _detector_shape_signature(detector_shape),
+            _axis_signature(radial_axis),
+            _axis_signature(azimuth_axis),
+            _axis_signature(raw_azimuth_axis),
+            _axis_signature(raw_to_gui),
+            payload.get("signature") if isinstance(payload, Mapping) else None,
+            _bundle_signature(bundle),
+            id(native_detector_coords_to_bundle_detector_coords)
+            if callable(native_detector_coords_to_bundle_detector_coords)
+            else None,
+            id(simulation_native_detector_coords_to_caked_display_coords)
+            if callable(simulation_native_detector_coords_to_caked_display_coords)
+            else None,
         )
 
     return GeometryManualRuntimeProjectionCallbacks(
@@ -16519,9 +16607,7 @@ def geometry_manual_place_selection_at(
                 pair_entry["background_detector_x"] = float(detector_col)
                 pair_entry["background_detector_y"] = float(detector_row)
                 pair_entry["background_detector_input_frame"] = "native_detector"
-                pair_entry["background_detector_frame_provenance"] = (
-                    "detector_to_caked_refresh"
-                )
+                pair_entry["background_detector_frame_provenance"] = "detector_to_caked_refresh"
                 if "caked_col" in pair_kwargs and "caked_row" in pair_kwargs:
                     pair_entry["background_two_theta_deg"] = float(pair_kwargs["caked_col"])
                     pair_entry["background_phi_deg"] = float(pair_kwargs["caked_row"])
@@ -16710,9 +16796,7 @@ def geometry_manual_place_selection_at(
                     selected_group_key=selected_group_key,
                     candidate=candidate,
                 ),
-                detector_to_caked_unavailable=(
-                    "true" if detector_to_caked_unavailable else None
-                ),
+                detector_to_caked_unavailable=("true" if detector_to_caked_unavailable else None),
             )
             + " "
             + (

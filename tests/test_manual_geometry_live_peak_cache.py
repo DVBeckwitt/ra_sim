@@ -45,6 +45,33 @@ def _fail_projection_legacy_path(message: str):
     return _fail
 
 
+def _caked_projection_bundle() -> mg.CakeTransformBundle:
+    return mg.CakeTransformBundle(
+        detector_shape=(10, 10),
+        radial_deg=np.linspace(0.0, 9.0, 10, dtype=float),
+        raw_azimuth_deg=np.linspace(-4.5, 4.5, 10, dtype=float),
+        gui_azimuth_deg=np.linspace(-4.5, 4.5, 10, dtype=float),
+        lut=object(),
+    )
+
+
+def _caked_projection_payload(
+    bundle: mg.CakeTransformBundle,
+    *,
+    signature: object,
+) -> dict[str, object]:
+    return {
+        "payload_kind": "projection",
+        "signature": signature,
+        "detector_shape": bundle.detector_shape,
+        "radial_axis": bundle.radial_deg,
+        "azimuth_axis": bundle.gui_azimuth_deg,
+        "raw_azimuth_axis": bundle.raw_azimuth_deg,
+        "raw_to_gui_row_permutation": np.arange(len(bundle.gui_azimuth_deg), dtype=np.int32),
+        "transform_bundle": bundle,
+    }
+
+
 def test_build_geometry_manual_pick_cache_falls_back_to_live_peak_records() -> None:
     peak_record = {
         "display_col": 13.5,
@@ -255,6 +282,39 @@ def test_refine_qr_sim_candidates_in_cache_skips_when_refinement_signature_match
     assert direct["simulated_peaks"][0]["refined"] is True
 
 
+def test_refine_qr_sim_candidates_direct_no_signature_clears_stale_refinement_metadata(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return {**dict(candidate), "refined": True}
+
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+
+    result = mg.geometry_manual_refine_qr_sim_candidates_in_cache(
+        {
+            "active_simulated_peaks": [dict(candidate)],
+            "qr_sim_refinement_signature": ("old",),
+            "qr_sim_refinement_complete": True,
+        }
+    )
+
+    assert calls == ["detector"]
+    assert result["active_simulated_peaks"][0]["refined"] is True
+    assert "qr_sim_refinement_signature" not in result
+    assert "qr_sim_refinement_complete" not in result
+
+
 def test_rebuild_refined_qr_cache_lookups_skips_when_refinement_signature_matches() -> None:
     calls: list[int] = []
     signature = ("refinement", 2)
@@ -277,6 +337,7 @@ def test_rebuild_refined_qr_cache_lookups_skips_when_refinement_signature_matche
             "active_simulated_peaks": [dict(candidate)],
             "simulated_lookup": existing_lookup,
             "qr_sim_refinement_lookup_signature": signature,
+            "qr_sim_refinement_lookup_complete": True,
         },
         _count_build_lookup,
         refinement_signature=signature,
@@ -294,6 +355,7 @@ def test_rebuild_refined_qr_cache_lookups_skips_when_refinement_signature_matche
             "active_simulated_peaks": [dict(candidate)],
             "simulated_lookup": existing_lookup,
             "qr_sim_refinement_lookup_signature": signature,
+            "qr_sim_refinement_lookup_complete": True,
         },
         _count_build_lookup,
     )
@@ -301,7 +363,128 @@ def test_rebuild_refined_qr_cache_lookups_skips_when_refinement_signature_matche
     assert calls == [1, 1]
     assert skipped["simulated_lookup"] == existing_lookup
     assert _source_key(candidate) in rebuilt_missing["simulated_lookup"]
+    assert rebuilt_missing["qr_sim_refinement_lookup_complete"] is True
     assert _source_key(candidate) in rebuilt_direct["simulated_lookup"]
+    assert "qr_sim_refinement_lookup_signature" not in rebuilt_direct
+    assert rebuilt_direct["qr_sim_refinement_lookup_complete"] is False
+
+
+def test_rebuild_refined_qr_cache_lookups_direct_no_signature_clears_stale_lookup_metadata() -> (
+    None
+):
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+    existing_lookup = _build_lookup([candidate])
+    calls: list[int] = []
+
+    def _working_lookup(entries):
+        calls.append(len(list(entries or ())))
+        return _build_lookup(entries)
+
+    result = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        {
+            "active_simulated_peaks": [dict(candidate)],
+            "simulated_lookup": existing_lookup,
+            "qr_sim_refinement_lookup_signature": ("old",),
+            "qr_sim_refinement_lookup_complete": True,
+        },
+        _working_lookup,
+    )
+
+    assert calls == [1]
+    assert _source_key(candidate) in result["simulated_lookup"]
+    assert "qr_sim_refinement_lookup_signature" not in result
+    assert result["qr_sim_refinement_lookup_complete"] is False
+
+
+def test_rebuild_refined_qr_cache_lookups_no_signature_failure_does_not_allow_later_skip() -> None:
+    signature = ("old",)
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+    calls: list[str] = []
+
+    def _raising_lookup(_entries):
+        calls.append("raise")
+        raise RuntimeError("lookup unavailable")
+
+    def _working_lookup(entries):
+        calls.append("work")
+        return _build_lookup(entries)
+
+    failed = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        {
+            "active_simulated_peaks": [dict(candidate)],
+            "simulated_lookup": _build_lookup([candidate]),
+            "qr_sim_refinement_lookup_signature": signature,
+            "qr_sim_refinement_lookup_complete": True,
+        },
+        _raising_lookup,
+    )
+    rebuilt = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        failed,
+        _working_lookup,
+        refinement_signature=signature,
+    )
+
+    assert calls == ["raise", "work"]
+    assert failed["simulated_lookup"] == {}
+    assert "qr_sim_refinement_lookup_signature" not in failed
+    assert failed["qr_sim_refinement_lookup_complete"] is False
+    assert _source_key(candidate) in rebuilt["simulated_lookup"]
+    assert rebuilt["qr_sim_refinement_lookup_signature"] == signature
+    assert rebuilt["qr_sim_refinement_lookup_complete"] is True
+
+
+def test_rebuild_refined_qr_cache_lookups_retries_after_failed_signature_build() -> None:
+    signature = ("refinement", 3)
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+    calls: list[str] = []
+
+    def _raising_lookup(_entries):
+        calls.append("raise")
+        raise RuntimeError("lookup unavailable")
+
+    def _working_lookup(entries):
+        calls.append("work")
+        return _build_lookup(entries)
+
+    failed = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        {"active_simulated_peaks": [dict(candidate)]},
+        _raising_lookup,
+        refinement_signature=signature,
+    )
+    rebuilt = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        failed,
+        _working_lookup,
+        refinement_signature=signature,
+    )
+
+    assert calls == ["raise", "work"]
+    assert failed["simulated_lookup"] == {}
+    assert failed["qr_sim_refinement_lookup_complete"] is False
+    assert failed.get("qr_sim_refinement_lookup_signature") != signature
+    assert _source_key(candidate) in rebuilt["simulated_lookup"]
+    assert rebuilt["qr_sim_refinement_lookup_signature"] == signature
+    assert rebuilt["qr_sim_refinement_lookup_complete"] is True
 
 
 def test_get_pick_cache_refines_same_next_cache_object_only_once(monkeypatch) -> None:
@@ -346,9 +529,10 @@ def test_get_pick_cache_refines_same_next_cache_object_only_once(monkeypatch) ->
     cache_data = callbacks.get_pick_cache(prefer_cache=True)
 
     assert calls == ["detector"]
-    assert cache_state["data"]["qr_sim_refinement_signature"] == cache_data[
-        "qr_sim_refinement_signature"
-    ]
+    assert (
+        cache_state["data"]["qr_sim_refinement_signature"]
+        == cache_data["qr_sim_refinement_signature"]
+    )
 
 
 def test_get_pick_cache_skips_row_refinement_on_warm_cache(monkeypatch) -> None:
@@ -360,12 +544,20 @@ def test_get_pick_cache_skips_row_refinement_on_warm_cache(monkeypatch) -> None:
         "hkl": (-1, 0, 2),
         "source_table_index": 4,
         "source_row_index": 5,
+        "source_reflection_index": 42,
+        "source_branch_index": 0,
+        "source_ray_id": "ray-0",
+        "branch_id": "branch-0",
         "display_col": 5.0,
         "display_row": 6.0,
         "sim_col": 5.0,
         "sim_row": 6.0,
+        "sim_col_raw": 5.0,
+        "sim_row_raw": 6.0,
         "native_col": 5.0,
         "native_row": 6.0,
+        "qr": 1.0,
+        "qz": 2.0,
         "weight": 1.0,
     }
 
@@ -402,15 +594,374 @@ def test_get_pick_cache_skips_row_refinement_on_warm_cache(monkeypatch) -> None:
 
     assert first_call_count > 0
     assert len(calls) == first_call_count
-    assert cache_state["data"]["qr_sim_refinement_signature"] == first_cache[
-        "qr_sim_refinement_signature"
-    ]
-    assert cache_state["data"]["qr_sim_refinement_lookup_signature"] == first_cache[
-        "qr_sim_refinement_signature"
-    ]
-    assert second_cache["qr_sim_refinement_signature"] == first_cache[
-        "qr_sim_refinement_signature"
-    ]
+    assert (
+        cache_state["data"]["qr_sim_refinement_signature"]
+        == first_cache["qr_sim_refinement_signature"]
+    )
+    assert (
+        cache_state["data"]["qr_sim_refinement_lookup_signature"]
+        == first_cache["qr_sim_refinement_signature"]
+    )
+    assert second_cache["qr_sim_refinement_signature"] == first_cache["qr_sim_refinement_signature"]
+
+
+def test_get_pick_cache_skips_caked_row_refinement_on_warm_cache(monkeypatch) -> None:
+    calls: list[str] = []
+    background = np.zeros((10, 10), dtype=float)
+    radial = np.linspace(0.0, 9.0, 10)
+    azimuth = np.linspace(0.0, 9.0, 10)
+    caked_image = np.zeros((10, 10), dtype=float)
+    caked_image[4, 7] = 100.0
+    cache_state: dict[str, object] = {"signature": None, "data": {}}
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_reflection_index": 42,
+        "source_branch_index": 0,
+        "source_ray_id": "ray-0",
+        "branch_id": "branch-0",
+        "display_col": 5.0,
+        "display_row": 6.0,
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "sim_col_raw": 5.0,
+        "sim_row_raw": 6.0,
+        "native_col": 5.0,
+        "native_row": 6.0,
+        "qr": 1.0,
+        "qz": 2.0,
+        "weight": 1.0,
+    }
+
+    def _replace_cache_state(signature, data) -> None:
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    def _project_to_caked(rows):
+        return [
+            {
+                **dict(entry),
+                "display_col": 7.0,
+                "display_row": 4.0,
+                "caked_x": 7.0,
+                "caked_y": 4.0,
+                "raw_caked_x": 7.0,
+                "raw_caked_y": 4.0,
+                "two_theta_deg": 7.0,
+                "phi_deg": 4.0,
+            }
+            for entry in rows or ()
+            if isinstance(entry, dict)
+        ]
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return dict(candidate)
+
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background,
+        use_caked_space=lambda: True,
+        replace_cache_state=_replace_cache_state,
+        current_geometry_fit_params=lambda: {"a": 2.0},
+        pairs_for_index=lambda _idx: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [dict(candidate)],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+        caked_projection_signature=lambda: ("caked-projection", 1),
+        caked_simulation_image=lambda: caked_image,
+        radial_axis=lambda: radial,
+        azimuth_axis=lambda: azimuth,
+    )
+
+    first_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+    first_caked_call_count = calls.count("caked")
+    second_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+
+    assert first_caked_call_count > 0
+    assert calls.count("caked") == first_caked_call_count
+    assert first_cache["caked_qr_projection_entries"]
+    assert first_cache["caked_qr_projection_grouped_candidates"]
+    assert first_cache["caked_qr_projection_lookup"]
+    assert second_cache["caked_qr_projection_lookup"] == first_cache["caked_qr_projection_lookup"]
+    assert (
+        second_cache["qr_sim_refinement_lookup_signature"]
+        == first_cache["qr_sim_refinement_signature"]
+    )
+    assert second_cache["qr_sim_refinement_lookup_complete"] is True
+
+
+def test_caked_warm_pick_cache_skips_refinement_with_projection_only_payload(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    bundle = _caked_projection_bundle()
+    payload = _caked_projection_payload(bundle, signature=("projection", "A"))
+    projection_callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: payload["radial_axis"],
+        last_caked_azimuth_values=lambda: payload["azimuth_axis"],
+        current_background_display=lambda: np.zeros((10, 10), dtype=float),
+        current_background_native=lambda: np.ones((10, 10), dtype=float),
+        current_background_index=lambda: 0,
+        caked_projection_payload=lambda: payload,
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 10,
+    )
+    projection_signature = projection_callbacks.caked_projection_signature()
+    cache_state: dict[str, object] = {"signature": None, "data": {}}
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_reflection_index": 42,
+        "source_branch_index": 0,
+        "source_ray_id": "ray-0",
+        "branch_id": "branch-0",
+        "display_col": 5.0,
+        "display_row": 6.0,
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "sim_col_raw": 5.0,
+        "sim_row_raw": 6.0,
+        "native_col": 5.0,
+        "native_row": 6.0,
+        "qr": 1.0,
+        "qz": 2.0,
+        "weight": 1.0,
+    }
+
+    def _project_to_caked(rows):
+        return [
+            {
+                **dict(entry),
+                "display_col": 7.0,
+                "display_row": 4.0,
+                "caked_x": 7.0,
+                "caked_y": 4.0,
+                "raw_caked_x": 7.0,
+                "raw_caked_y": 4.0,
+                "two_theta_deg": 7.0,
+                "phi_deg": 4.0,
+            }
+            for entry in rows or ()
+            if isinstance(entry, dict)
+        ]
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return dict(candidate)
+
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: None,
+        use_caked_space=lambda: True,
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {"a": 2.0},
+        pairs_for_index=lambda _idx: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [dict(candidate)],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+        caked_projection_signature=projection_callbacks.caked_projection_signature,
+        caked_simulation_image=lambda: None,
+        radial_axis=lambda: payload["radial_axis"],
+        azimuth_axis=lambda: payload["azimuth_axis"],
+    )
+
+    first_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+    first_caked_call_count = calls.count("caked")
+    second_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+
+    assert first_caked_call_count > 0
+    assert calls.count("caked") == first_caked_call_count
+    assert first_cache["caked_qr_projection_lookup"]
+    assert second_cache["caked_qr_projection_lookup"] == first_cache["caked_qr_projection_lookup"]
+    assert projection_signature in first_cache["qr_sim_refinement_signature"]
+    assert second_cache["qr_sim_refinement_lookup_complete"] is True
+
+
+def test_caked_pick_cache_invalidates_when_projection_payload_signature_changes(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    projection_signature_state: dict[str, object] = {"value": ("projection", "A")}
+    cache_state: dict[str, object] = {"signature": None, "data": {}}
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_reflection_index": 42,
+        "source_branch_index": 0,
+        "source_ray_id": "ray-0",
+        "branch_id": "branch-0",
+        "display_col": 5.0,
+        "display_row": 6.0,
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "sim_col_raw": 5.0,
+        "sim_row_raw": 6.0,
+        "native_col": 5.0,
+        "native_row": 6.0,
+        "qr": 1.0,
+        "qz": 2.0,
+        "weight": 1.0,
+    }
+
+    def _project_to_caked(rows):
+        return [
+            {
+                **dict(entry),
+                "display_col": 7.0,
+                "display_row": 4.0,
+                "caked_x": 7.0,
+                "caked_y": 4.0,
+            }
+            for entry in rows or ()
+            if isinstance(entry, dict)
+        ]
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return dict(candidate)
+
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: None,
+        use_caked_space=lambda: True,
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {"a": 2.0},
+        pairs_for_index=lambda _idx: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [dict(candidate)],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+        caked_projection_signature=lambda: projection_signature_state["value"],
+    )
+
+    first_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+    first_caked_call_count = calls.count("caked")
+    callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+    projection_signature_state["value"] = ("projection", "B")
+    third_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+
+    assert first_caked_call_count > 0
+    assert calls.count("caked") == first_caked_call_count * 2
+    assert ("projection", "A") in first_cache["qr_sim_refinement_signature"]
+    assert ("projection", "B") in third_cache["qr_sim_refinement_signature"]
+
+
+def test_display_density_zero_support_nan_sanitization_does_not_churn_projection_cache() -> None:
+    bundle = _caked_projection_bundle()
+    payload = _caked_projection_payload(bundle, signature=("projection", "stable"))
+    display_state = {"image": np.full((10, 10), np.nan, dtype=float)}
+    native_state = {"image": np.ones((10, 10), dtype=float)}
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: display_state["image"],
+        last_caked_radial_values=lambda: payload["radial_axis"],
+        last_caked_azimuth_values=lambda: payload["azimuth_axis"],
+        current_background_display=lambda: display_state["image"],
+        current_background_native=lambda: native_state["image"],
+        current_background_index=lambda: 0,
+        caked_projection_payload=lambda: payload,
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 10,
+    )
+
+    first_signature = callbacks.caked_projection_signature()
+    display_state["image"] = np.nan_to_num(display_state["image"], nan=0.0)
+    native_state["image"] = np.zeros((10, 10), dtype=float)
+    second_signature = callbacks.caked_projection_signature()
+
+    assert first_signature == second_signature
+
+
+def test_projection_payload_background_index_is_not_cross_reused() -> None:
+    bundle = _caked_projection_bundle()
+    payload = _caked_projection_payload(bundle, signature=("projection", "stable"))
+    background_state = {"index": 0}
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: payload["radial_axis"],
+        last_caked_azimuth_values=lambda: payload["azimuth_axis"],
+        current_background_display=lambda: np.zeros((10, 10), dtype=float),
+        current_background_native=lambda: np.ones((10, 10), dtype=float),
+        current_background_index=lambda: background_state["index"],
+        caked_projection_payload=lambda: payload,
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 10,
+    )
+
+    signature_zero = callbacks.caked_projection_signature()
+    background_state["index"] = 1
+    signature_one = callbacks.caked_projection_signature()
+
+    assert signature_zero != signature_one
+    assert signature_zero[1] == 0
+    assert signature_one[1] == 1
 
 
 def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analytic_forward_path(

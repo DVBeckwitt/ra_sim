@@ -206,6 +206,25 @@ and add `RA_SIM_LIVE_CAKED_TRACE_ALL=1` to include unchanged duplicate rows.
 `RA_SIM_SUPPRESS_LIVE_CAKED_TRACE=1` suppresses the ledger regardless of the
 enable flags.
 
+Warm-cache simulated-candidate refinement relies on cache, simulation, and
+exact caked-projection signatures plus cheap array tokens. Projection-only
+payloads are valid geometry inputs even when the display/background caked image
+is absent. Display density sanitization, including zero-support `NaN -> 0.0`
+storage cleanup, must not churn the geometric projection signature unless that
+image is directly used for local image refinement. Do not mutate simulation or
+caked image arrays in place without also bumping the corresponding simulation or
+projection signature; full image hashing is intentionally avoided in this hot
+path.
+
+Status as of 2026-05-04: live caked trace output is opt-in, unchanged trace rows
+are suppressed unless explicitly requested, warm caked pick-cache calls skip
+row-level refinement when simulation/projection signatures are unchanged, failed
+lookup rebuilds retry, and no-signature direct refine/rebuild calls clear stale
+skip metadata. The exact-caked cold-start path accepts projection-only payloads
+without requiring a display image. Remaining known validation issue is outside
+this cache path: the New4 ladder finalizer exact-caked workflow tests still
+return `status=failed` where those tests expect `ok`.
+
 The HKL picker intentionally shares the corrected Qr/manual picker candidate
 payload for hit testing and selected-marker placement. If either picker
 regresses, first check whether the failing path bypassed that shared candidate

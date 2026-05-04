@@ -21650,6 +21650,41 @@ def test_live_caked_visual_trace_skips_unchanged_rows_unless_all_enabled(
     assert "changed_since_previous_event=no" in output
 
 
+def test_live_caked_visual_trace_resets_unchanged_state_for_new_run(
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE", "1")
+    monkeypatch.delenv("RA_SIM_LIVE_CAKED_TRACE_ALL", raising=False)
+    monkeypatch.delenv("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", raising=False)
+    mg._LIVE_CAKED_TRACE_LAST.clear()
+    entry = _live_caked_trace_target_entry()
+
+    first_run_id = mg.geometry_manual_start_run_id()
+    mg.geometry_manual_trace_live_caked_visual_source_event(
+        "first_run",
+        manual_geometry_run_id=first_run_id,
+        selected_candidate=entry,
+    )
+    mg.geometry_manual_trace_live_caked_visual_source_event(
+        "first_run_duplicate",
+        manual_geometry_run_id=first_run_id,
+        selected_candidate=entry,
+    )
+    second_run_id = mg.geometry_manual_start_run_id()
+    mg.geometry_manual_trace_live_caked_visual_source_event(
+        "second_run",
+        manual_geometry_run_id=second_run_id,
+        selected_candidate=entry,
+    )
+    output = capsys.readouterr().out
+
+    assert output.count("[ra-sim] live_caked_visual_source") == 2
+    assert f"manual_geometry_run_id={first_run_id}" in output
+    assert f"manual_geometry_run_id={second_run_id}" in output
+    assert "first_run_duplicate" not in output
+
+
 def test_live_caked_visual_trace_without_run_id_stays_unattributed(
     capsys,
     monkeypatch,
