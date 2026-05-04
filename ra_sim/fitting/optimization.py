@@ -1162,6 +1162,35 @@ def _process_peaks_parallel_safe(*args, **kwargs):
             call_kwargs["prefer_python_runner"] = True
             call_args = _coerce_python_runner_args(call_args)
 
+        def _is_unexpected_keyword_type_error(error: TypeError) -> bool:
+            return "unexpected keyword" in str(error)
+
+        def _rejects_keyword(error: TypeError, keyword: str) -> bool:
+            message = str(error)
+            return (
+                f"unexpected keyword argument '{keyword}'" in message
+                or f'unexpected keyword argument "{keyword}"' in message
+            )
+
+        def _with_dense_retry_buffer_if_needed(
+            source_args: Tuple[object, ...],
+            source_kwargs: Mapping[str, object],
+        ) -> Tuple[object, ...]:
+            if "accumulate_image" not in source_kwargs:
+                return source_args
+            if len(source_args) <= 6:
+                return source_args
+            try:
+                image_arg = np.asarray(source_args[6])
+                image_size = int(source_args[2])
+            except Exception:
+                return source_args
+            if image_arg.ndim == 2 and image_arg.shape == (0, 0) and image_size > 0:
+                retry_args = list(source_args)
+                retry_args[6] = np.zeros((image_size, image_size), dtype=np.float64)
+                return tuple(retry_args)
+            return source_args
+
         try:
             return fn(*call_args, **call_kwargs)
         except TypeError as exc:
@@ -1178,7 +1207,20 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 or "prefer_python_runner" in call_kwargs
                 or "collect_hit_tables" in call_kwargs
                 or "accumulate_image" in call_kwargs
-            ) and "unexpected keyword" in str(exc):
+            ) and _is_unexpected_keyword_type_error(exc):
+                if (
+                    "accumulate_image" in call_kwargs
+                    and _rejects_keyword(exc, "accumulate_image")
+                ):
+                    narrow_kwargs = dict(call_kwargs)
+                    narrow_kwargs.pop("accumulate_image", None)
+                    narrow_args = _with_dense_retry_buffer_if_needed(call_args, call_kwargs)
+                    try:
+                        return fn(*narrow_args, **narrow_kwargs)
+                    except TypeError as retry_exc:
+                        if not _is_unexpected_keyword_type_error(retry_exc):
+                            raise
+
                 reduced_kwargs = dict(call_kwargs)
                 reduced_kwargs.pop("optics_mode", None)
                 reduced_kwargs.pop("solve_q_steps", None)
@@ -1192,7 +1234,8 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 reduced_kwargs.pop("prefer_python_runner", None)
                 reduced_kwargs.pop("collect_hit_tables", None)
                 reduced_kwargs.pop("accumulate_image", None)
-                return fn(*call_args, **reduced_kwargs)
+                reduced_args = _with_dense_retry_buffer_if_needed(call_args, call_kwargs)
+                return fn(*reduced_args, **reduced_kwargs)
             raise
 
     def _invoke_numba_path():

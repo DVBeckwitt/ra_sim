@@ -376,6 +376,191 @@ def test_hit_table_simulation_compat_fallback_strips_accumulate_image(monkeypatc
     assert sim_buffer.shape == (0, 0)
 
 
+def test_hit_table_simulation_compat_fallback_allocates_dense_buffer_for_legacy_image_writer(
+    monkeypatch,
+):
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+
+    normal_calls: list[dict[str, object]] = []
+
+    def normal_process(*args, **kwargs):
+        normal_calls.append(
+            {
+                "buffer_shape": tuple(np.asarray(args[6]).shape),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", normal_process)
+    monkeypatch.setattr(opt, "get_last_process_peaks_safe_stats", lambda: {})
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", True)
+    monkeypatch.setattr(opt, "_NUMBA_PROCESS_PEAKS_WARMED", True)
+
+    _hit_tables, _maxpos, sim_buffer = opt._run_fit_hit_table_simulation(
+        _base_params(image_size),
+        miller,
+        intensities,
+        image_size,
+        0.0,
+    )
+
+    assert [call["buffer_shape"] for call in normal_calls] == [(0, 0)]
+    assert normal_calls[0]["kwargs"]["accumulate_image"] is False
+    assert sim_buffer.shape == (0, 0)
+
+    calls: list[dict[str, object]] = []
+
+    def legacy_process(*args, **kwargs):
+        calls.append(
+            {
+                "buffer_shape": tuple(np.asarray(args[6]).shape),
+                "kwargs": dict(kwargs),
+            }
+        )
+        if "accumulate_image" in kwargs:
+            raise TypeError("got an unexpected keyword argument 'accumulate_image'")
+        args[6][0, 0] = 1.0
+        hit_tables = [
+            np.array(
+                [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return args[6], hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", legacy_process)
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", True)
+    monkeypatch.setattr(opt, "_NUMBA_PROCESS_PEAKS_WARMED", True)
+
+    hit_tables, maxpos, sim_buffer = opt._run_fit_hit_table_simulation(
+        _base_params(image_size),
+        miller,
+        intensities,
+        image_size,
+        0.0,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["buffer_shape"] == (0, 0)
+    assert calls[1]["buffer_shape"] == (image_size, image_size)
+    assert "accumulate_image" in calls[0]["kwargs"]
+    assert "accumulate_image" not in calls[1]["kwargs"]
+    assert sim_buffer.shape == (0, 0)
+    assert len(hit_tables) == 1
+    assert maxpos.shape == (1, 6)
+
+
+def test_hit_table_simulation_compat_fallback_preserves_collect_hit_tables_when_only_accumulate_image_is_legacy(
+    monkeypatch,
+):
+    calls: list[dict[str, object]] = []
+
+    def legacy_process(*args, **kwargs):
+        calls.append(
+            {
+                "buffer_shape": tuple(np.asarray(args[6]).shape),
+                "kwargs": dict(kwargs),
+            }
+        )
+        if "accumulate_image" in kwargs:
+            raise TypeError("got an unexpected keyword argument 'accumulate_image'")
+        hit_tables = (
+            [
+                np.array(
+                    [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                )
+            ]
+            if kwargs.get("collect_hit_tables") is True
+            else []
+        )
+        return args[6], hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", legacy_process)
+    monkeypatch.setattr(opt, "get_last_process_peaks_safe_stats", lambda: {})
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", True)
+    monkeypatch.setattr(opt, "_NUMBA_PROCESS_PEAKS_WARMED", True)
+
+    image_size = 8
+    hit_tables, maxpos, sim_buffer = opt._run_fit_hit_table_simulation(
+        _base_params(image_size),
+        np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        0.0,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["buffer_shape"] == (0, 0)
+    assert "accumulate_image" in calls[0]["kwargs"]
+    assert calls[0]["kwargs"]["collect_hit_tables"] is True
+    assert calls[1]["buffer_shape"] == (image_size, image_size)
+    assert "accumulate_image" not in calls[1]["kwargs"]
+    assert calls[1]["kwargs"]["collect_hit_tables"] is True
+    assert calls[1]["kwargs"]["save_flag"] == 0
+    assert len(hit_tables) == 1
+    assert maxpos.shape == (1, 6)
+    assert sim_buffer.shape == (0, 0)
+
+
+def test_hit_table_simulation_compat_fallback_broad_retry_handles_second_legacy_keyword(
+    monkeypatch,
+):
+    calls: list[dict[str, object]] = []
+
+    def legacy_process(*args, **kwargs):
+        calls.append(
+            {
+                "buffer_shape": tuple(np.asarray(args[6]).shape),
+                "kwargs": dict(kwargs),
+            }
+        )
+        if "accumulate_image" in kwargs:
+            raise TypeError("got an unexpected keyword argument 'accumulate_image'")
+        if "collect_hit_tables" in kwargs:
+            raise TypeError('got an unexpected keyword argument "collect_hit_tables"')
+        args[6][0, 0] = 1.0
+        hit_tables = [
+            np.array(
+                [[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return args[6], hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", legacy_process)
+    monkeypatch.setattr(opt, "get_last_process_peaks_safe_stats", lambda: {})
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", True)
+    monkeypatch.setattr(opt, "_NUMBA_PROCESS_PEAKS_WARMED", True)
+
+    image_size = 8
+    hit_tables, maxpos, sim_buffer = opt._run_fit_hit_table_simulation(
+        _base_params(image_size),
+        np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        0.0,
+    )
+
+    assert len(calls) == 3
+    assert calls[0]["buffer_shape"] == (0, 0)
+    assert "accumulate_image" in calls[0]["kwargs"]
+    assert "collect_hit_tables" in calls[0]["kwargs"]
+    assert calls[1]["buffer_shape"] == (image_size, image_size)
+    assert "accumulate_image" not in calls[1]["kwargs"]
+    assert "collect_hit_tables" in calls[1]["kwargs"]
+    assert calls[2]["buffer_shape"] == (image_size, image_size)
+    assert "accumulate_image" not in calls[2]["kwargs"]
+    assert "collect_hit_tables" not in calls[2]["kwargs"]
+    assert calls[2]["kwargs"]["save_flag"] == 0
+    assert len(hit_tables) == 1
+    assert maxpos.shape == (1, 6)
+    assert sim_buffer.shape == (0, 0)
+
+
 def test_full_beam_polish_hit_table_simulation_disables_image_accumulation(monkeypatch):
     calls: list[dict[str, object]] = []
     solve_phase = {"value": None, "count": 0}
