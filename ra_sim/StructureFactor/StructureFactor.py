@@ -1,7 +1,7 @@
 """Legacy Bi2Se3-specific X-ray structure-factor helpers."""
 
 import numpy as np
-from numba import njit
+from ra_sim.utils.numba_compat import njit
 
 _SUPPORTED_BI2SE3_LABELS = ("Bi", "Se1", "Se2")
 _ANGSTROMS_PER_NM = 10.0

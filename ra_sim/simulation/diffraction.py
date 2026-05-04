@@ -12,7 +12,6 @@ from threading import local
 
 import numpy as np
 from ra_sim.config import get_dir, get_instrument_config
-from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_BEST_SAMPLE_INDEX,
@@ -40,8 +39,14 @@ from ra_sim.utils.calculations import (
     fresnel_transmission,
 )
 from ra_sim.utils.parallel import resolve_weighted_event_worker_count
-from numba import types
-from numba.typed import List  #  only List lives here
+from ra_sim.utils.numba_compat import (
+    NUMBA_AVAILABLE,
+    NUMBA_IMPORT_ERROR,
+    List,
+    njit,
+    prange,
+    types,
+)
 
 
 # Optical transport modes

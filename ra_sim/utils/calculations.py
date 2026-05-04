@@ -8,11 +8,10 @@ import re
 import numpy as np
 import json
 import matplotlib.pyplot as plt
-from numba import njit
 import math
-import numba
 
 from ra_sim.config import get_material_config
+from ra_sim.utils.numba_compat import njit
 
 _OPTIONAL_IMPORT_UNSET = object()
 _DANS_DIFFRACTION_MODULE = _OPTIONAL_IMPORT_UNSET

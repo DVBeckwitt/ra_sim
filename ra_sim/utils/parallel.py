@@ -10,16 +10,11 @@ import threading
 from typing import Callable, Iterator, Optional
 import weakref
 
+from ra_sim.utils.numba_compat import get_num_threads as _numba_get_num_threads
+from ra_sim.utils.numba_compat import set_num_threads as _numba_set_num_threads
 
 AUTO_PARALLEL_WORKER_RESERVE = 2
 WEIGHTED_EVENT_WORKERS_ENV = "RA_SIM_WEIGHTED_EVENT_WORKERS"
-
-try:
-    from numba import get_num_threads as _numba_get_num_threads
-    from numba import set_num_threads as _numba_set_num_threads
-except Exception:  # pragma: no cover - numba is optional in some test/runtime paths
-    _numba_get_num_threads = None
-    _numba_set_num_threads = None
 
 
 class _DetachedThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):

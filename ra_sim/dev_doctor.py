@@ -179,6 +179,14 @@ def _check_tkinter() -> DoctorFinding:
     return DoctorFinding("OK", "tkinter", "importable")
 
 
+def _check_numba() -> DoctorFinding:
+    from ra_sim.utils.numba_compat import NUMBA_AVAILABLE, NUMBA_IMPORT_ERROR
+
+    if NUMBA_AVAILABLE:
+        return DoctorFinding("OK", "numba", "available")
+    return DoctorFinding("WARN", "numba", f"unavailable; import error: {NUMBA_IMPORT_ERROR!r}")
+
+
 def check_dev_tools() -> list[DoctorFinding]:
     findings: list[DoctorFinding] = []
     for module_name, label in DEV_TOOL_MODULES:
@@ -253,6 +261,7 @@ def build_report(
     )
     findings.extend(_check_dirs(active_config_dir))
     findings.append(_check_tkinter())
+    findings.append(_check_numba())
     findings.extend(check_dev_tools())
 
     strict_failed = any(finding.strict_failure for finding in findings)

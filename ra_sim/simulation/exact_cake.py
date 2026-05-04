@@ -12,6 +12,9 @@ from ra_sim.utils.parallel import (
     make_detached_thread_pool_executor,
     system_cpu_worker_count,
 )
+from ra_sim.utils.numba_compat import NUMBA_AVAILABLE as _HAS_NUMBA
+from ra_sim.utils.numba_compat import NUMBA_IMPORT_ERROR as _NUMBA_IMPORT_ERROR
+from ra_sim.utils.numba_compat import njit
 
 try:  # pragma: no cover - optional dependency
     from scipy import sparse as _scipy_sparse
@@ -20,15 +23,6 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - optional dependency
     _scipy_sparse = None
     _HAS_SCIPY = False
-
-try:  # pragma: no cover - optional dependency
-    from numba import njit
-
-    _HAS_NUMBA = True
-except Exception:  # pragma: no cover - optional dependency
-    njit = None
-    _HAS_NUMBA = False
-
 
 def _optional_njit(*jit_args, **jit_kwargs):
     def _decorate(fn):
@@ -171,7 +165,12 @@ def _resolve_engine(engine: str) -> str:
     if engine_name not in {"python", "numba"}:
         raise ValueError("engine must be one of: auto, python, numba.")
     if engine_name == "numba" and not numba_available:
-        raise RuntimeError("engine='numba' requested, but numba is unavailable.")
+        detail = (
+            f" Import error: {_NUMBA_IMPORT_ERROR!r}"
+            if _NUMBA_IMPORT_ERROR is not None
+            else ""
+        )
+        raise RuntimeError(f"engine='numba' requested, but numba is unavailable.{detail}")
     return engine_name
 
 
