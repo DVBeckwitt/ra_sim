@@ -557,6 +557,10 @@ _EMPTY_PROCESS_PEAKS_WEIGHTED_EVENT_STATS = {
     "n_stored_projected_candidates": 0,
     "candidate_buffer_capacity_max": 0,
     "candidate_buffer_fallback_count": 0,
+    "candidate_buffer_requested_per_worker_bytes": 0,
+    "candidate_buffer_requested_total_bytes": 0,
+    "candidate_buffer_effective_max_bytes": 0,
+    "candidate_buffer_disabled_by_worker_memory": False,
     "n_qsets_precomputed": 0,
     "n_qset_lookup_entries": 0,
     "n_qset_reuse_hits": 0,
@@ -592,15 +596,71 @@ DEFAULT_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK = 8192
 MIN_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK = 1
 
 
+def _normalize_weighted_event_candidate_buffer_max_bytes(value):
+    try:
+        max_bytes = int(value)
+    except Exception:
+        max_bytes = _WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES
+    return max(int(max_bytes), 0)
+
+
+def _weighted_event_candidate_buffer_memory_policy(
+    *,
+    candidate_capacity,
+    worker_count,
+    max_bytes,
+    record_bytes=_WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES,
+):
+    try:
+        candidate_capacity_i = int(candidate_capacity)
+    except Exception:
+        candidate_capacity_i = 0
+    candidate_capacity_i = max(candidate_capacity_i, 0)
+
+    try:
+        worker_count_i = int(worker_count)
+    except Exception:
+        worker_count_i = 1
+    worker_count_i = max(worker_count_i, 1)
+
+    try:
+        record_bytes_i = int(record_bytes)
+    except Exception:
+        record_bytes_i = _WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES
+    record_bytes_i = max(record_bytes_i, 1)
+
+    max_bytes_i = _normalize_weighted_event_candidate_buffer_max_bytes(max_bytes)
+
+    requested_per_worker_bytes = candidate_capacity_i * record_bytes_i
+    requested_total_bytes = requested_per_worker_bytes * worker_count_i
+
+    fits = candidate_capacity_i == 0 or (max_bytes_i > 0 and requested_total_bytes <= max_bytes_i)
+    disabled_by_worker_memory = (
+        candidate_capacity_i > 0
+        and worker_count_i > 1
+        and max_bytes_i > 0
+        and requested_per_worker_bytes <= max_bytes_i
+        and requested_total_bytes > max_bytes_i
+    )
+
+    return {
+        "fits": bool(fits),
+        "candidate_capacity": int(candidate_capacity_i),
+        "worker_count": int(worker_count_i),
+        "requested_per_worker_bytes": int(requested_per_worker_bytes),
+        "requested_total_bytes": int(requested_total_bytes),
+        "max_bytes": int(max_bytes_i),
+        "disabled_by_worker_memory": bool(disabled_by_worker_memory),
+    }
+
+
 def _normalize_q_debug_max_solutions_per_peak(value):
     if value is None:
         return DEFAULT_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK
     try:
         normalized = _operator_index(value)
     except TypeError as exc:
-        raise TypeError(
-            "q_debug_max_solutions_per_peak must be an integer or None"
-        ) from exc
+        raise TypeError("q_debug_max_solutions_per_peak must be an integer or None") from exc
     return max(MIN_Q_DEBUG_MAX_SOLUTIONS_PER_PEAK, int(normalized))
 
 
@@ -3695,18 +3755,34 @@ def _candidate_representative_rank_key(
         neg_mosaic_weight = -float(sample_mosaic_weight)
 
     angular_metric = float("inf")
-    theta_arr = None if theta_array is None else np.asarray(theta_array, dtype=np.float64).reshape(-1)
+    theta_arr = (
+        None if theta_array is None else np.asarray(theta_array, dtype=np.float64).reshape(-1)
+    )
     phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64).reshape(-1)
-    if theta_arr is not None and phi_arr is not None and sample_idx < theta_arr.size and sample_idx < phi_arr.size:
+    if (
+        theta_arr is not None
+        and phi_arr is not None
+        and sample_idx < theta_arr.size
+        and sample_idx < phi_arr.size
+    ):
         theta_val = float(theta_arr[sample_idx])
         phi_val = float(phi_arr[sample_idx])
         if np.isfinite(theta_val) and np.isfinite(phi_val):
             angular_metric = theta_val * theta_val + phi_val * phi_val
 
     beam_metric = float("inf")
-    beam_x_arr = None if beam_x_array is None else np.asarray(beam_x_array, dtype=np.float64).reshape(-1)
-    beam_y_arr = None if beam_y_array is None else np.asarray(beam_y_array, dtype=np.float64).reshape(-1)
-    if beam_x_arr is not None and beam_y_arr is not None and sample_idx < beam_x_arr.size and sample_idx < beam_y_arr.size:
+    beam_x_arr = (
+        None if beam_x_array is None else np.asarray(beam_x_array, dtype=np.float64).reshape(-1)
+    )
+    beam_y_arr = (
+        None if beam_y_array is None else np.asarray(beam_y_array, dtype=np.float64).reshape(-1)
+    )
+    if (
+        beam_x_arr is not None
+        and beam_y_arr is not None
+        and sample_idx < beam_x_arr.size
+        and sample_idx < beam_y_arr.size
+    ):
         beam_x_val = float(beam_x_arr[sample_idx])
         beam_y_val = float(beam_y_arr[sample_idx])
         if np.isfinite(beam_x_val) and np.isfinite(beam_y_val):
@@ -4136,11 +4212,7 @@ def _project_weighted_candidate_fast(
     kf_prime_y = R_sample[1, 0] * kf_x + R_sample[1, 1] * kf_y + R_sample[1, 2] * kf_z
     kf_prime_z = R_sample[2, 0] * kf_x + R_sample[2, 1] * kf_y + R_sample[2, 2] * kf_z
 
-    denom = (
-        kf_prime_x * n_det_rot[0]
-        + kf_prime_y * n_det_rot[1]
-        + kf_prime_z * n_det_rot[2]
-    )
+    denom = kf_prime_x * n_det_rot[0] + kf_prime_y * n_det_rot[1] + kf_prime_z * n_det_rot[2]
     if abs(denom) < 1e-14:
         dist = (
             (I_plane_x - Detector_Pos[0]) * n_det_rot[0]
@@ -4171,16 +4243,8 @@ def _project_weighted_candidate_fast(
     plane_to_det_x = dx - Detector_Pos[0]
     plane_to_det_y = dy - Detector_Pos[1]
     plane_to_det_z = dz - Detector_Pos[2]
-    x_det = (
-        plane_to_det_x * e1_det[0]
-        + plane_to_det_y * e1_det[1]
-        + plane_to_det_z * e1_det[2]
-    )
-    y_det = (
-        plane_to_det_x * e2_det[0]
-        + plane_to_det_y * e2_det[1]
-        + plane_to_det_z * e2_det[2]
-    )
+    x_det = plane_to_det_x * e1_det[0] + plane_to_det_y * e1_det[1] + plane_to_det_z * e1_det[2]
+    y_det = plane_to_det_x * e2_det[0] + plane_to_det_y * e2_det[1] + plane_to_det_z * e2_det[2]
     if (not np.isfinite(x_det)) or (not np.isfinite(y_det)):
         return False, np.nan, np.nan, np.nan, 0.0
 
@@ -5256,10 +5320,9 @@ def _weighted_event_sample_chunk_kernel(
             sample_candidate_capacity += int(qset_lengths[qset_id])
         if sample_candidate_capacity > candidate_buffer_capacity_max:
             candidate_buffer_capacity_max = int(sample_candidate_capacity)
-        sample_use_candidate_reuse = (
-            bool(reuse_projected_candidates)
-            and int(sample_candidate_capacity) <= int(candidate_capacity)
-        )
+        sample_use_candidate_reuse = bool(reuse_projected_candidates) and int(
+            sample_candidate_capacity
+        ) <= int(candidate_capacity)
         if (not sample_use_candidate_reuse) and sample_candidate_capacity > 0:
             candidate_buffer_fallback_count += 1
         candidate_count = 0
@@ -5553,7 +5616,9 @@ def _weighted_event_sample_chunk_kernel(
             1.0e-10,
             1.0e-9 * max(1.0, abs(float(sample_total_mass))),
         )
-        if (not np.isfinite(sample_pass2_mass_delta)) or sample_pass2_mass_delta > sample_pass2_mass_tol:
+        if (
+            not np.isfinite(sample_pass2_mass_delta)
+        ) or sample_pass2_mass_delta > sample_pass2_mass_tol:
             pass2_mass_mismatch_count += 1
             if np.isfinite(sample_pass2_mass_delta):
                 pass2_mass_mismatch_max_abs = max(
@@ -5849,8 +5914,7 @@ def _weighted_event_parallel_eligible(
         and _weighted_event_pass1_for_qset is _DEFAULT_WEIGHTED_EVENT_PASS1_FOR_QSET
         and _weighted_event_pass2_for_qset is _DEFAULT_WEIGHTED_EVENT_PASS2_FOR_QSET
         and (
-            _weighted_event_project_store_for_qset
-            is _DEFAULT_WEIGHTED_EVENT_PROJECT_STORE_FOR_QSET
+            _weighted_event_project_store_for_qset is _DEFAULT_WEIGHTED_EVENT_PROJECT_STORE_FOR_QSET
         )
         and (
             _weighted_event_emit_from_stored_candidates
@@ -7371,9 +7435,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
 ):
     del lambda_
     del sample_qr_ring_once
-    requested_worker_count = _weighted_event_requested_worker_count_for_stats(
-        numba_thread_count
-    )
+    requested_worker_count = _weighted_event_requested_worker_count_for_stats(numba_thread_count)
 
     miller = np.asarray(miller, dtype=np.float64)
     intensities = np.asarray(intensities, dtype=np.float64).reshape(-1)
@@ -7400,9 +7462,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         np.clip(float(solve_q_rel_tol), MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL)
     )
     solve_q_mode_i = (
-        SOLVE_Q_MODE_UNIFORM
-        if int(solve_q_mode) == SOLVE_Q_MODE_UNIFORM
-        else SOLVE_Q_MODE_ADAPTIVE
+        SOLVE_Q_MODE_UNIFORM if int(solve_q_mode) == SOLVE_Q_MODE_UNIFORM else SOLVE_Q_MODE_ADAPTIVE
     )
 
     cg = cos(gamma_rad)
@@ -7544,6 +7604,10 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     n_stored_projected_candidates = 0
     candidate_buffer_capacity_max = 0
     candidate_buffer_fallback_count = 0
+    candidate_buffer_requested_per_worker_bytes = 0
+    candidate_buffer_requested_total_bytes = 0
+    candidate_buffer_effective_max_bytes = 0
+    candidate_buffer_disabled_by_worker_memory = False
     candidate_mass = np.empty(0, dtype=np.float64)
     candidate_row = np.empty(0, dtype=np.float64)
     candidate_col = np.empty(0, dtype=np.float64)
@@ -7558,19 +7622,13 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     n_exact_solve_q_phase_groups = 0
     phase_weight_sum = 0.0
     phase_event_count_total = 0
-    try:
-        weighted_event_candidate_buffer_max_bytes = int(
+    weighted_event_candidate_buffer_max_bytes = (
+        _normalize_weighted_event_candidate_buffer_max_bytes(
             weighted_event_candidate_buffer_max_bytes
         )
-    except Exception:
-        weighted_event_candidate_buffer_max_bytes = (
-            _WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES
-        )
-    if weighted_event_candidate_buffer_max_bytes < 0:
-        weighted_event_candidate_buffer_max_bytes = 0
-    reuse_weighted_event_projected_candidates = bool(
-        reuse_weighted_event_projected_candidates
     )
+    candidate_buffer_effective_max_bytes = int(weighted_event_candidate_buffer_max_bytes)
+    reuse_weighted_event_projected_candidates = bool(reuse_weighted_event_projected_candidates)
 
     precompute_start = time.perf_counter()
     (
@@ -7603,8 +7661,8 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     mean_wavelength = float(np.mean(finite_wavelengths)) if finite_wavelengths.size > 0 else np.nan
     sample_mosaic_weights_rank = np.ones(n_samp, dtype=np.float64)
     if sample_weight_array is not None:
-        finite_positive_sample_weights = (
-            np.isfinite(sample_weight_array) & (sample_weight_array > 0.0)
+        finite_positive_sample_weights = np.isfinite(sample_weight_array) & (
+            sample_weight_array > 0.0
         )
         sample_mosaic_weights_rank[finite_positive_sample_weights] = sample_weight_array[
             finite_positive_sample_weights
@@ -7676,15 +7734,29 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     center_row = float(center[0]) if center.size > 0 else 0.0
     center_col = float(center[1]) if center.size > 1 else center_row
 
-    peak_h = miller[:, 0].astype(np.float64, copy=False) if num_peaks > 0 else np.empty(0, dtype=np.float64)
-    peak_k = miller[:, 1].astype(np.float64, copy=False) if num_peaks > 0 else np.empty(0, dtype=np.float64)
-    peak_l = miller[:, 2].astype(np.float64, copy=False) if num_peaks > 0 else np.empty(0, dtype=np.float64)
+    peak_h = (
+        miller[:, 0].astype(np.float64, copy=False)
+        if num_peaks > 0
+        else np.empty(0, dtype=np.float64)
+    )
+    peak_k = (
+        miller[:, 1].astype(np.float64, copy=False)
+        if num_peaks > 0
+        else np.empty(0, dtype=np.float64)
+    )
+    peak_l = (
+        miller[:, 2].astype(np.float64, copy=False)
+        if num_peaks > 0
+        else np.empty(0, dtype=np.float64)
+    )
     peak_reflection_intensity = np.zeros(num_peaks, dtype=np.float64)
     peak_gr0 = np.zeros(num_peaks, dtype=np.float64)
     peak_gz0 = np.zeros(num_peaks, dtype=np.float64)
     peak_valid = np.zeros(num_peaks, dtype=np.uint8)
     for peak_idx in range(num_peaks):
-        reflection_intensity = float(intensities[peak_idx]) if peak_idx < intensities.shape[0] else 0.0
+        reflection_intensity = (
+            float(intensities[peak_idx]) if peak_idx < intensities.shape[0] else 0.0
+        )
         peak_reflection_intensity[peak_idx] = reflection_intensity
         H = float(peak_h[peak_idx])
         K = float(peak_k[peak_idx])
@@ -7692,15 +7764,17 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         if np.isfinite(reflection_intensity) and reflection_intensity > 0.0 and L >= 0.0:
             peak_valid[peak_idx] = 1
             peak_gz0[peak_idx] = 2.0 * pi * (L / float(cv))
-            peak_gr0[peak_idx] = 4.0 * pi / float(av) * sqrt(
-                max((H * H + H * K + K * K) / 3.0, 0.0)
+            peak_gr0[peak_idx] = (
+                4.0 * pi / float(av) * sqrt(max((H * H + H * K + K * K) / 3.0, 0.0))
             )
 
     if accumulate_image_flag:
         cache_capacity = int(_choose_local_pixel_cache_capacity(n_samp))
         cache_keys = np.empty(cache_capacity, dtype=np.int64)
         cache_values = np.empty(cache_capacity, dtype=np.float64)
-        cache_flush_limit = (cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM) // _LOCAL_PIXEL_CACHE_LOAD_DEN
+        cache_flush_limit = (
+            cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM
+        ) // _LOCAL_PIXEL_CACHE_LOAD_DEN
         if cache_flush_limit < 4:
             cache_flush_limit = 4
     else:
@@ -7782,18 +7856,31 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 int(max_sample_candidate_capacity),
                 int(sample_candidate_capacity),
             )
-        chunk_reuse_projected_candidates = (
-            bool(reuse_weighted_event_projected_candidates)
-            and int(max_sample_candidate_capacity) * _WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES
-            <= int(weighted_event_candidate_buffer_max_bytes)
+        candidate_buffer_policy = _weighted_event_candidate_buffer_memory_policy(
+            candidate_capacity=max_sample_candidate_capacity,
+            worker_count=active_worker_count,
+            max_bytes=weighted_event_candidate_buffer_max_bytes,
+        )
+        candidate_buffer_requested_per_worker_bytes = int(
+            candidate_buffer_policy["requested_per_worker_bytes"]
+        )
+        candidate_buffer_requested_total_bytes = int(
+            candidate_buffer_policy["requested_total_bytes"]
+        )
+        candidate_buffer_effective_max_bytes = int(candidate_buffer_policy["max_bytes"])
+        candidate_buffer_disabled_by_worker_memory = bool(
+            reuse_weighted_event_projected_candidates
+            and candidate_buffer_policy["disabled_by_worker_memory"]
+        )
+        chunk_reuse_projected_candidates = bool(reuse_weighted_event_projected_candidates) and bool(
+            candidate_buffer_policy["fits"]
         )
         chunk_candidate_capacity = (
             int(max_sample_candidate_capacity) if chunk_reuse_projected_candidates else 0
         )
         if collect_tables:
             max_worker_flat_capacity = max(
-                int(np.sum(phase_event_counts[start:stop]))
-                for _worker_slot, start, stop in chunks
+                int(np.sum(phase_event_counts[start:stop])) for _worker_slot, start, stop in chunks
             )
             flat_event_rows_parts = np.empty(
                 (
@@ -7871,8 +7958,12 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             cache_keys_parts = np.empty((active_worker_count, cache_capacity), dtype=np.int64)
             cache_values_parts = np.empty((active_worker_count, cache_capacity), dtype=np.float64)
             for worker_slot in range(active_worker_count):
-                _clear_local_pixel_cache(cache_keys_parts[worker_slot], cache_values_parts[worker_slot])
-            chunk_cache_flush_limit = (cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM) // _LOCAL_PIXEL_CACHE_LOAD_DEN
+                _clear_local_pixel_cache(
+                    cache_keys_parts[worker_slot], cache_values_parts[worker_slot]
+                )
+            chunk_cache_flush_limit = (
+                cache_capacity * _LOCAL_PIXEL_CACHE_LOAD_NUM
+            ) // _LOCAL_PIXEL_CACHE_LOAD_DEN
             if chunk_cache_flush_limit < 4:
                 chunk_cache_flush_limit = 4
         else:
@@ -7911,7 +8002,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         q_data_chunk = np.zeros((1, 1, 5), dtype=np.float64)
         q_count_chunk = np.zeros(1, dtype=np.int64)
         sample_weight_array_arg = (
-            sample_weight_array if sample_weight_array is not None else np.empty(0, dtype=np.float64)
+            sample_weight_array
+            if sample_weight_array is not None
+            else np.empty(0, dtype=np.float64)
         )
 
         chunk_start = time.perf_counter()
@@ -8008,9 +8101,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 count = int(flat_event_count_parts[worker_slot])
                 if count <= 0:
                     continue
-                flat_event_rows[out_offset : out_offset + count, :] = (
-                    flat_event_rows_parts[worker_slot, :count, :]
-                )
+                flat_event_rows[out_offset : out_offset + count, :] = flat_event_rows_parts[
+                    worker_slot, :count, :
+                ]
                 flat_event_peak_indices[out_offset : out_offset + count] = (
                     flat_event_peak_indices_parts[worker_slot, :count]
                 )
@@ -8138,6 +8231,14 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             n_stored_projected_candidates=int(n_stored_projected_candidates),
             candidate_buffer_capacity_max=int(candidate_buffer_capacity_max),
             candidate_buffer_fallback_count=int(candidate_buffer_fallback_count),
+            candidate_buffer_requested_per_worker_bytes=int(
+                candidate_buffer_requested_per_worker_bytes
+            ),
+            candidate_buffer_requested_total_bytes=int(candidate_buffer_requested_total_bytes),
+            candidate_buffer_effective_max_bytes=int(candidate_buffer_effective_max_bytes),
+            candidate_buffer_disabled_by_worker_memory=bool(
+                candidate_buffer_disabled_by_worker_memory
+            ),
             n_qsets_precomputed=int(n_qsets_precomputed),
             n_qset_lookup_entries=int(n_qset_lookup_entries),
             n_qset_reuse_hits=int(n_qset_reuse_hits),
@@ -8244,10 +8345,22 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             sample_qsets.append((int(peak_idx), all_q))
             sample_candidate_capacity += int(length)
 
-        sample_use_candidate_reuse = (
-            reuse_weighted_event_projected_candidates
-            and int(sample_candidate_capacity) * _WEIGHTED_EVENT_CANDIDATE_RECORD_BYTES
-            <= int(weighted_event_candidate_buffer_max_bytes)
+        sample_candidate_buffer_policy = _weighted_event_candidate_buffer_memory_policy(
+            candidate_capacity=sample_candidate_capacity,
+            worker_count=1,
+            max_bytes=weighted_event_candidate_buffer_max_bytes,
+        )
+        candidate_buffer_requested_per_worker_bytes = max(
+            int(candidate_buffer_requested_per_worker_bytes),
+            int(sample_candidate_buffer_policy["requested_per_worker_bytes"]),
+        )
+        candidate_buffer_requested_total_bytes = max(
+            int(candidate_buffer_requested_total_bytes),
+            int(sample_candidate_buffer_policy["requested_total_bytes"]),
+        )
+        candidate_buffer_effective_max_bytes = int(sample_candidate_buffer_policy["max_bytes"])
+        sample_use_candidate_reuse = bool(reuse_weighted_event_projected_candidates) and bool(
+            sample_candidate_buffer_policy["fits"]
         )
         if sample_candidate_capacity > candidate_buffer_capacity_max:
             candidate_buffer_capacity_max = int(sample_candidate_capacity)
@@ -8546,7 +8659,9 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             1.0e-10,
             1.0e-9 * max(1.0, abs(float(sample_total_mass))),
         )
-        if (not np.isfinite(sample_pass2_mass_delta)) or sample_pass2_mass_delta > sample_pass2_mass_tol:
+        if (
+            not np.isfinite(sample_pass2_mass_delta)
+        ) or sample_pass2_mass_delta > sample_pass2_mass_tol:
             pass2_mass_mismatch_count += 1
             if np.isfinite(sample_pass2_mass_delta):
                 pass2_mass_mismatch_max_abs = max(
@@ -8662,6 +8777,12 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         n_stored_projected_candidates=int(n_stored_projected_candidates),
         candidate_buffer_capacity_max=int(candidate_buffer_capacity_max),
         candidate_buffer_fallback_count=int(candidate_buffer_fallback_count),
+        candidate_buffer_requested_per_worker_bytes=int(
+            candidate_buffer_requested_per_worker_bytes
+        ),
+        candidate_buffer_requested_total_bytes=int(candidate_buffer_requested_total_bytes),
+        candidate_buffer_effective_max_bytes=int(candidate_buffer_effective_max_bytes),
+        candidate_buffer_disabled_by_worker_memory=bool(candidate_buffer_disabled_by_worker_memory),
         n_qsets_precomputed=int(n_qsets_precomputed),
         n_qset_lookup_entries=int(n_qset_lookup_entries),
         n_qset_reuse_hits=int(n_qset_reuse_hits),
@@ -8990,9 +9111,7 @@ def _process_peaks_parallel_weighted_events_python(
     q_debug_max_solutions_per_peak=None,
 ):
     del sample_qr_ring_once
-    requested_worker_count = _weighted_event_requested_worker_count_for_stats(
-        numba_thread_count
-    )
+    requested_worker_count = _weighted_event_requested_worker_count_for_stats(numba_thread_count)
 
     miller = np.asarray(miller, dtype=np.float64)
     intensities = np.asarray(intensities, dtype=np.float64).reshape(-1)
@@ -9014,8 +9133,12 @@ def _process_peaks_parallel_weighted_events_python(
     sigma_rad = float(sigma_pv_deg) * (pi / 180.0)
     gamma_rad_m = float(gamma_pv_deg) * (pi / 180.0)
     solve_q_steps_i = int(np.clip(int(solve_q_steps), MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS))
-    solve_q_rel_tol_i = float(np.clip(float(solve_q_rel_tol), MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL))
-    solve_q_mode_i = SOLVE_Q_MODE_UNIFORM if int(solve_q_mode) == SOLVE_Q_MODE_UNIFORM else SOLVE_Q_MODE_ADAPTIVE
+    solve_q_rel_tol_i = float(
+        np.clip(float(solve_q_rel_tol), MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL)
+    )
+    solve_q_mode_i = (
+        SOLVE_Q_MODE_UNIFORM if int(solve_q_mode) == SOLVE_Q_MODE_UNIFORM else SOLVE_Q_MODE_ADAPTIVE
+    )
 
     cg = cos(gamma_rad)
     sg = sin(gamma_rad)
@@ -9329,9 +9452,7 @@ def _process_peaks_parallel_weighted_events_python(
                 if 0 <= i_pk < representative_slot_by_peak_branch.shape[0] and 0 <= branch_id < 2:
                     rep_slot = int(representative_slot_by_peak_branch[i_pk, branch_id])
                 current_rep = representative_rows_by_slot.get(rep_slot)
-                if rep_slot >= 0 and (
-                    current_rep is None or representative_key < current_rep[0]
-                ):
+                if rep_slot >= 0 and (current_rep is None or representative_key < current_rep[0]):
                     representative_rows_by_slot[rep_slot] = (
                         representative_key,
                         representative_row,
@@ -11002,7 +11123,9 @@ def build_intersection_cache(
         cache_table[:, CACHE_COL_SOURCE_TABLE_INDEX] = np.nan
         cache_table[:, CACHE_COL_SOURCE_ROW_INDEX] = np.nan
         if hits_arr.shape[1] > HIT_ROW_COL_SOURCE_TABLE_INDEX:
-            raw_source_table = np.asarray(hits_arr[:, HIT_ROW_COL_SOURCE_TABLE_INDEX], dtype=np.float64)
+            raw_source_table = np.asarray(
+                hits_arr[:, HIT_ROW_COL_SOURCE_TABLE_INDEX], dtype=np.float64
+            )
             finite_source_table = np.isfinite(raw_source_table)
             cache_table[finite_source_table, CACHE_COL_SOURCE_TABLE_INDEX] = raw_source_table[
                 finite_source_table

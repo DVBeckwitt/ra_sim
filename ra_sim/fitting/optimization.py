@@ -19478,8 +19478,7 @@ def _merge_exact_fit_space_provenance_counts(
     )
     summary["sim_visual_caked_source_row_count"] = int(
         sum(
-            int(item.get("sim_visual_caked_source_row_count", 0) or 0)
-            for item in dataset_summaries
+            int(item.get("sim_visual_caked_source_row_count", 0) or 0) for item in dataset_summaries
         )
     )
     summary["cached_fit_space_anchor_row_count"] = int(
@@ -32081,9 +32080,9 @@ def fit_geometry_parameters(
             point_match_summary["final_full_beam_rms_px"] = float(
                 point_match_summary.get("unweighted_peak_rms_px", np.nan)
             )
-            point_match_summary[
-                "_headless_accept_caked_angular_metric_without_pixel_threshold"
-            ] = bool(headless_accept_caked_angular_metric)
+            point_match_summary["_headless_accept_caked_angular_metric_without_pixel_threshold"] = (
+                bool(headless_accept_caked_angular_metric)
+            )
             seed_trace_summary = geometry_fit_debug_summary.get("seed_multistart_trace")
             if isinstance(seed_trace_summary, Mapping):
                 public_seed_trace = copy.deepcopy(seed_trace_summary)
