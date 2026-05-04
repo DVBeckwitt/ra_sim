@@ -24265,7 +24265,11 @@ def test_rebuild_geometry_fit_source_rows_rejects_invalid_live_cache_for_require
                 "hkl": (1, 0, 0),
                 "q_group_key": ("q", 1),
                 "source_table_index": 5,
+                "source_reflection_index": 7,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
                 "source_row_index": 0,
+                "source_branch_index": 1,
                 "source_peak_index": 13,
             }
         ],

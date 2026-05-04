@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
 ## Summary
 
@@ -34,6 +34,11 @@ source-row regression.
   branch mismatches still fail, required callback payloads no longer leak
   internal `source_label`, and targeted full-simulation fallback diagnostics
   report unrelated scored rows.
+- Bug fixed: live-cache canonical filtering is now scoped to trusted
+  full-reflection required pairs. Q-group and disordered Q-group required pairs
+  can reuse matching non-canonical live rows when existing source, Q group, HKL,
+  branch, and finite-coordinate checks pass. Full-reflection pairs still reject
+  untrusted matching candidates with `missing_canonical_candidate`.
 
 ## Validation
 
@@ -49,6 +54,12 @@ source-row regression.
   - Result: `1 passed`.
 - Focused source-row/validator cluster
   - Result: `5 passed`.
+- `python -m pytest tests/test_geometry_fit_live_cache_validation_acceptance.py -q`
+  - Result: `12 passed`.
+- `python -m compileall -q ra_sim/gui/geometry_fit.py tests/test_geometry_fit_live_cache_validation_acceptance.py tests/test_gui_geometry_fit_workflow.py`
+  - Result: passed.
+- `git ls-files --eol -- ra_sim/gui/geometry_fit.py tests/test_geometry_fit_live_cache_validation_acceptance.py tests/test_gui_geometry_fit_workflow.py`
+  - Result: touched files are `i/lf w/lf`.
 - `python -m pytest tests/test_geometry_fitting.py tests/test_gui_geometry_fit_workflow.py --tb=short -ra`
   - Result: `803 passed, 1 skipped, 6 failed`.
   - Remaining failures are outside this narrow pass: New4 sensitivity CLI
@@ -58,7 +69,7 @@ source-row regression.
   - Blocked by existing frozen formatter drift:
     `Would reformat: ra_sim\fitting\optimization.py`.
 - `git diff --check`
-  - Result: passed, with CRLF normalization warnings only.
+  - Result: passed, with Windows CRLF checkout warnings only.
 
 ## Next actions
 

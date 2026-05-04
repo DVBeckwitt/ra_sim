@@ -5078,6 +5078,14 @@ def _geometry_fit_is_canonical_live_source_entry(
     return True, None
 
 
+def _geometry_fit_required_pair_requires_canonical_candidate(
+    entry: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    return bool(_geometry_fit_trusted_full_reflection_identity(entry))
+
+
 def _geometry_fit_trace_candidate_inventory(
     candidates: Sequence[Mapping[str, object]] | None,
 ) -> list[dict[str, object]]:
@@ -5631,7 +5639,11 @@ def validate_geometry_fit_live_source_rows(
                 )
             )
             continue
-        if require_canonical_required_pairs and candidate_pool:
+        if (
+            require_canonical_required_pairs
+            and candidate_pool
+            and _geometry_fit_required_pair_requires_canonical_candidate(entry)
+        ):
             canonical_candidate_pool = [
                 dict(candidate)
                 for candidate in candidate_pool

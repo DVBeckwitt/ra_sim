@@ -123,6 +123,51 @@ def test_live_cache_does_not_require_trusted_full_identity_for_q_group_rows() ->
     assert validation["validator_row_schema_valid_count"] == 1
 
 
+def test_live_cache_canonical_gate_does_not_reject_q_group_required_pair() -> None:
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [_row(DISORDERED, group_key=("q", 1), hkl=(1, 0, 0), branch=1)],
+        required_pairs=[_pair(DISORDERED, group_key=("q", 1), hkl=(1, 0, 0), branch=1)],
+        require_canonical_required_pairs=True,
+    )
+
+    assert validation["valid"] is True
+    assert validation["reason"] == "ready"
+    assert validation["validator_canonical_row_count"] == 0
+
+
+def test_live_cache_canonical_gate_rejects_untrusted_candidate_for_full_required_pair() -> None:
+    live_rows = [
+        {
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_branch_index": 1,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        }
+    ]
+    required_pairs = [
+        {
+            "pair_id": "bg0:pair0",
+            "hkl": (1, 0, 0),
+            "q_group_key": ("q", 1),
+            "source_branch_index": 1,
+            "source_reflection_index": 7,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+        }
+    ]
+
+    validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        live_rows,
+        required_pairs=required_pairs,
+        require_canonical_required_pairs=True,
+    )
+
+    assert validation["valid"] is False
+    assert validation["reason"] == "missing_canonical_candidate"
+
+
 def test_live_cache_source_group_satisfies_pair_without_hkl_when_unique() -> None:
     validation = geometry_fit.validate_geometry_fit_live_source_rows(
         [_row(DISORDERED, hkl=None)],
