@@ -9,6 +9,7 @@ import os
 import sys
 import inspect
 import math
+import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -83,6 +84,7 @@ GEOMETRY_FIT_LEGACY_REBIND_CAKED_TIE_TOLERANCE = 1.0e-6
 GEOMETRY_FIT_EXACT_CAKE_AXIS_TOLERANCE = 1.0e-9
 GEOMETRY_FIT_STORED_POINT_ABS_TOLERANCE_PX = 1.0e-6
 GEOMETRY_FIT_RECOMPUTED_REFINEMENT_TOLERANCE_PX = 1.0e-3
+GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S = 30.0
 
 
 def _geometry_fit_float64_vector(
@@ -107,6 +109,99 @@ def _geometry_fit_detector_shape_2d(
     if len(detector_shape) < 2 or detector_shape[0] <= 0 or detector_shape[1] <= 0:
         return None
     return detector_shape
+
+
+def geometry_fit_caked_projection_payload(
+    payload: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Return only exact-caked projection metadata from a caked payload."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    return {
+        "payload_kind": "projection",
+        "detector_shape": payload.get("detector_shape"),
+        "radial_axis": payload.get("radial_axis", payload.get("radial")),
+        "azimuth_axis": payload.get("azimuth_axis", payload.get("azimuth")),
+        "raw_azimuth_axis": payload.get(
+            "raw_azimuth_axis",
+            payload.get("raw_azimuth"),
+        ),
+        "raw_to_gui_row_permutation": payload.get("raw_to_gui_row_permutation"),
+        "transform_bundle": payload.get("transform_bundle"),
+    }
+
+
+def sanitize_geometry_fit_caked_display_payload(
+    payload: Mapping[str, object] | None,
+) -> tuple[dict[str, object] | None, dict[str, object]]:
+    """Sanitize undefined empty caked bins while rejecting supported-bin corruption."""
+
+    if not isinstance(payload, Mapping):
+        return None, {"status": "invalid_caked_payload"}
+    background_value = payload.get(
+        "background",
+        payload.get("background_image", payload.get("image")),
+    )
+    if background_value is None:
+        return None, {"status": "missing_caked_background"}
+    try:
+        background = np.asarray(background_value, dtype=np.float64).copy()
+    except Exception:
+        return None, {"status": "invalid_caked_background"}
+    if background.ndim != 2 or background.size <= 0:
+        return None, {"status": "invalid_caked_background"}
+
+    finite = np.isfinite(background)
+    if np.all(finite):
+        sanitized = dict(payload)
+        sanitized["background"] = background
+        sanitized["image"] = background.copy()
+        return sanitized, {
+            "status": "stored",
+            "sanitized_empty_bin_count": 0,
+            "nonfinite_supported_bin_count": 0,
+        }
+
+    zero_support = np.zeros(background.shape, dtype=bool)
+    normalization_value = payload.get("sum_normalization")
+    if normalization_value is not None:
+        try:
+            normalization = np.asarray(normalization_value, dtype=np.float64)
+        except Exception:
+            normalization = None
+        if isinstance(normalization, np.ndarray) and normalization.shape == background.shape:
+            zero_support |= np.isfinite(normalization) & (normalization <= 0.0)
+    count_value = payload.get("count")
+    if count_value is not None:
+        try:
+            count = np.asarray(count_value, dtype=np.float64)
+        except Exception:
+            count = None
+        if isinstance(count, np.ndarray) and count.shape == background.shape:
+            zero_support |= np.isfinite(count) & (count <= 0.0)
+
+    nonfinite = ~finite
+    supported_nonfinite = nonfinite & ~zero_support
+    supported_count = int(np.count_nonzero(supported_nonfinite))
+    if supported_count:
+        return None, {
+            "status": "nonfinite_supported_caked_background",
+            "sanitized_empty_bin_count": 0,
+            "nonfinite_supported_bin_count": int(supported_count),
+        }
+
+    sanitized_count = int(np.count_nonzero(nonfinite & zero_support))
+    sanitized_background = background.copy()
+    sanitized_background[nonfinite & zero_support] = 0.0
+    sanitized = dict(payload)
+    sanitized["background"] = sanitized_background
+    sanitized["image"] = sanitized_background.copy()
+    return sanitized, {
+        "status": ("empty_bin_nan_density_sanitized" if sanitized_count else "stored"),
+        "sanitized_empty_bin_count": int(sanitized_count),
+        "nonfinite_supported_bin_count": 0,
+    }
 
 
 def normalize_geometry_fit_caked_view_payload(
@@ -991,7 +1086,9 @@ def _geometry_fit_caked_payload_exact_bundle(
             background = np.asarray(background_value, dtype=np.float64)
         except Exception:
             return None
-        if background.ndim != 2 or background.size <= 0 or not np.all(np.isfinite(background)):
+        if background.ndim != 2 or background.size <= 0:
+            return None
+        if require_background and not np.all(np.isfinite(background)):
             return None
     elif require_background:
         return None
@@ -1202,6 +1299,7 @@ class GeometryFitRuntimeManualDatasetBindings:
     geometry_manual_refresh_pair_entry: (
         Callable[[Mapping[str, object] | None], dict[str, object] | None] | None
     ) = None
+    geometry_manual_caked_projection_for_index: Callable[[int], object] | None = None
 
 
 @dataclass(frozen=True)
@@ -6193,9 +6291,7 @@ def rebuild_geometry_fit_source_rows(
             "unrelated_available_row_count_for_rebinding": int(
                 counts.get("unrelated_count", 0) or 0
             ),
-            "unrelated_scored_row_count_for_rebinding": int(
-                counts.get("unrelated_count", 0) or 0
-            ),
+            "unrelated_scored_row_count_for_rebinding": int(counts.get("unrelated_count", 0) or 0),
             "unrelated_projected_row_count_for_rebinding": 0,
             "required_branch_group_keys_seen": copy.deepcopy(list(matched_keys)),
             "missing_required_branch_group_keys": missing_required_payloads,
@@ -7436,6 +7532,27 @@ def rebuild_geometry_fit_source_rows(
     targeted_simulation_supported = False
     targeted_simulation_fallback_reason: str | None = None
     fresh_required_source_missing: list[str] = []
+    fresh_timeout_fired = threading.Event()
+    fresh_simulation_done = threading.Event()
+    fresh_timeout_timer: threading.Timer | None = None
+    if targeted_preflight_enabled:
+        timeout_s = float(GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S)
+
+        def _emit_targeted_fresh_timeout() -> None:
+            if fresh_simulation_done.is_set():
+                return
+            fresh_timeout_fired.set()
+            _emit_rebuild_stage(
+                "source_cache_targeted_fresh_simulation_timeout",
+                cache_source="fresh_simulation",
+                preflight_mode=normalized_preflight_mode,
+                status="timeout",
+                timeout_s=float(timeout_s),
+            )
+
+        fresh_timeout_timer = threading.Timer(timeout_s, _emit_targeted_fresh_timeout)
+        fresh_timeout_timer.daemon = True
+        fresh_timeout_timer.start()
     if callable(simulate_hit_tables):
         try:
             if targeted_preflight_enabled and collected_required_branch_group_keys:
@@ -7540,6 +7657,9 @@ def rebuild_geometry_fit_source_rows(
         except Exception as exc:
             fresh_simulation_exception = exc
             fresh_hit_tables = []
+    fresh_simulation_done.set()
+    if fresh_timeout_timer is not None:
+        fresh_timeout_timer.cancel()
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
     if targeted_preflight_enabled and isinstance(runtime_simulation_diagnostics, Mapping):
         _update_targeted_runtime_flags(
@@ -7576,6 +7696,7 @@ def rebuild_geometry_fit_source_rows(
             if fresh_simulation_exception is not None
             else str(runtime_simulation_diagnostics.get("status") or "ready")
         ),
+        late=bool(fresh_timeout_fired.is_set()),
     )
     fresh_rows, fresh_lattice, fresh_hit_tables, fresh_source_reflection_indices = (
         _build_source_rows_result(
@@ -7737,6 +7858,7 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
     geometry_manual_refresh_pair_entry: (
         Callable[[Mapping[str, object] | None], dict[str, object] | None] | None
     ) = None,
+    geometry_manual_caked_projection_for_index: Callable[[int], object] | None = None,
 ) -> GeometryFitRuntimeManualDatasetBindings:
     """Build the live manual-pair dataset bundle used during geometry-fit prep."""
 
@@ -7786,6 +7908,7 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         pick_uses_caked_space=pick_uses_caked_space,
         geometry_manual_caked_view_for_index=geometry_manual_caked_view_for_index,
         geometry_manual_refresh_pair_entry=geometry_manual_refresh_pair_entry,
+        geometry_manual_caked_projection_for_index=geometry_manual_caked_projection_for_index,
     )
 
 
@@ -7847,6 +7970,7 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
     geometry_manual_refresh_pair_entry: (
         Callable[[Mapping[str, object] | None], dict[str, object] | None] | None
     ) = None,
+    geometry_manual_caked_projection_for_index: Callable[[int], object] | None = None,
 ) -> Callable[[], GeometryFitRuntimeManualDatasetBindings]:
     """Build a factory that resolves the live manual-pair dataset bundle on demand."""
 
@@ -7899,6 +8023,7 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             pick_uses_caked_space=pick_uses_caked_space,
             geometry_manual_caked_view_for_index=(geometry_manual_caked_view_for_index),
             geometry_manual_refresh_pair_entry=(geometry_manual_refresh_pair_entry),
+            geometry_manual_caked_projection_for_index=(geometry_manual_caked_projection_for_index),
         )
 
     return _build
@@ -14452,10 +14577,7 @@ def build_geometry_manual_fit_dataset(
                 sim_native_raw = _geometry_fit_point_list(sim_native_raw)
             if sim_native_from_display is None:
                 pass
-            elif (
-                isinstance(sim_native_raw, (list, tuple, np.ndarray))
-                and len(sim_native_raw) >= 2
-            ):
+            elif isinstance(sim_native_raw, (list, tuple, np.ndarray)) and len(sim_native_raw) >= 2:
                 sim_native = (
                     float(sim_native_raw[0]),
                     float(sim_native_raw[1]),
@@ -14473,12 +14595,16 @@ def build_geometry_manual_fit_dataset(
             and np.isfinite(my)
         ):
             continue
-        if not _geometry_fit_sim_native_source_is_display_to_native(
-            initial_entry.get("sim_native_source")
-        ) and sim_native_from_display is not None and _geometry_fit_points_match(
-            sim_native,
-            sim_native_from_display,
-            tol=1.0e-6,
+        if (
+            not _geometry_fit_sim_native_source_is_display_to_native(
+                initial_entry.get("sim_native_source")
+            )
+            and sim_native_from_display is not None
+            and _geometry_fit_points_match(
+                sim_native,
+                sim_native_from_display,
+                tol=1.0e-6,
+            )
         ):
             initial_entry["sim_native_source"] = "display_to_native_sim_coords(sim_display)"
         sim_orientation_points.append((float(sim_native[0]), float(sim_native[1])))
@@ -14688,6 +14814,18 @@ def build_geometry_manual_fit_dataset(
             )
         except Exception:
             dynamic_reanchor_match_cfg = {}
+    raw_projection_payload = None
+    if callable(
+        getattr(manual_dataset_bindings, "geometry_manual_caked_projection_for_index", None)
+    ):
+        try:
+            raw_projection_payload = (
+                manual_dataset_bindings.geometry_manual_caked_projection_for_index(
+                    int(background_idx)
+                )
+            )
+        except Exception:
+            raw_projection_payload = None
     if callable(manual_dataset_bindings.geometry_manual_caked_view_for_index):
         try:
             raw_caked_view = manual_dataset_bindings.geometry_manual_caked_view_for_index(
@@ -14713,19 +14851,38 @@ def build_geometry_manual_fit_dataset(
             caked_background_local = raw_caked_view[0]
             radial_axis_local = raw_caked_view[1]
             azimuth_axis_local = raw_caked_view[2]
-        exact_payload = {
-            "background": caked_background_local,
-            "detector_shape": np.asarray(native_background).shape[:2],
-            "radial_axis": radial_axis_local,
-            "azimuth_axis": azimuth_axis_local,
-            "raw_azimuth_axis": raw_azimuth_axis_local,
-            "transform_bundle": dynamic_reanchor_transform_bundle,
-        }
+        projection_payload = (
+            dict(raw_projection_payload) if isinstance(raw_projection_payload, Mapping) else None
+        )
+        if projection_payload is None and isinstance(raw_caked_view, Mapping):
+            projection_payload = geometry_fit_caked_projection_payload(raw_caked_view)
+        if projection_payload is not None:
+            radial_axis_local = projection_payload.get("radial_axis", radial_axis_local)
+            azimuth_axis_local = projection_payload.get("azimuth_axis", azimuth_axis_local)
+            raw_azimuth_axis_local = projection_payload.get(
+                "raw_azimuth_axis",
+                raw_azimuth_axis_local,
+            )
+            dynamic_reanchor_transform_bundle = projection_payload.get(
+                "transform_bundle",
+                dynamic_reanchor_transform_bundle,
+            )
+        exact_payload = dict(projection_payload or {})
+        if exact_payload.get("detector_shape") is None:
+            exact_payload["detector_shape"] = np.asarray(native_background).shape[:2]
+        if exact_payload.get("radial_axis") is None:
+            exact_payload["radial_axis"] = radial_axis_local
+        if exact_payload.get("azimuth_axis") is None:
+            exact_payload["azimuth_axis"] = azimuth_axis_local
+        if exact_payload.get("raw_azimuth_axis") is None:
+            exact_payload["raw_azimuth_axis"] = raw_azimuth_axis_local
+        if exact_payload.get("transform_bundle") is None:
+            exact_payload["transform_bundle"] = dynamic_reanchor_transform_bundle
         dynamic_reanchor_exact_bundle = _geometry_fit_caked_payload_exact_bundle(
             exact_payload,
             detector_shape=np.asarray(native_background).shape[:2],
             params=params_i,
-            require_background=True,
+            require_background=False,
         )
         if isinstance(dynamic_reanchor_exact_bundle, CakeTransformBundle):
             dynamic_reanchor_transform_bundle = dynamic_reanchor_exact_bundle
@@ -14765,6 +14922,7 @@ def build_geometry_manual_fit_dataset(
             isinstance(dynamic_reanchor_caked_background, np.ndarray)
             and dynamic_reanchor_caked_background.ndim == 2
             and dynamic_reanchor_caked_background.size > 0
+            and np.all(np.isfinite(dynamic_reanchor_caked_background))
             and isinstance(dynamic_reanchor_radial_axis, np.ndarray)
             and dynamic_reanchor_radial_axis.size > 0
             and isinstance(dynamic_reanchor_azimuth_axis, np.ndarray)
@@ -15440,7 +15598,10 @@ def build_geometry_manual_fit_dataset(
             }
 
         dynamic_reanchor_callback = _dynamic_reanchor_callback
-        if dynamic_reanchor_caked_view_ready and dynamic_reanchor_native_shape is not None:
+        if (
+            isinstance(dynamic_reanchor_exact_bundle, CakeTransformBundle)
+            and dynamic_reanchor_native_shape is not None
+        ):
             fit_space_projector = _fit_space_projector
             fit_space_projector_kind = "exact_caked_bundle"
             fit_space_projector_unavailable_reason = None
@@ -16717,8 +16878,7 @@ def _geometry_fit_diagnostic_jsonable(
         _seen.add(marker)
         try:
             return [
-                _geometry_fit_diagnostic_jsonable(item, _seen, int(_depth) + 1)
-                for item in value
+                _geometry_fit_diagnostic_jsonable(item, _seen, int(_depth) + 1) for item in value
             ]
         finally:
             _seen.discard(marker)

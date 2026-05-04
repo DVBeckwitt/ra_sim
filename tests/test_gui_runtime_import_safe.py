@@ -16517,6 +16517,146 @@ def test_worker_caked_manual_rejects_axes_only_payload_before_dataset_build(
     assert "exact caked projector unavailable for background 1" in action_result.error_text
 
 
+def test_worker_caked_manual_stores_projection_before_row_projection_with_zero_support_nan(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    projection_payload = _geometry_fit_worker_caked_payload(
+        runtime_session,
+        background_value=1.0,
+        radial_values=[1.0, 2.0],
+        azimuth_values=[3.0, 4.0],
+    )
+
+    job["var_names"] = ["zb"]
+    job["projection_view_mode"] = "caked"
+    job["projection_payload_by_background"] = {0: dict(projection_payload)}
+    job["caked_views_by_background"] = {}
+    job["pick_uses_caked_space"] = True
+    job["manual_fit_space_by_background"] = {0: "caked"}
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(2, 2),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _cfg: object())
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(runtime_session, "caking", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_project_peaks_for_background",
+        lambda _background_index, rows, **_kwargs: [
+            dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)
+        ],
+    )
+
+    caked_image = np.asarray([[np.nan, 2.0], [3.0, 4.0]], dtype=np.float64)
+    worker_payload = dict(projection_payload)
+    worker_payload.update(
+        {
+            "image": caked_image,
+            "background": caked_image,
+            "radial": worker_payload["radial_axis"],
+            "azimuth": worker_payload["azimuth_axis"],
+            "sum_normalization": np.asarray(
+                [[0.0, 1.0], [1.0, 1.0]],
+                dtype=np.float64,
+            ),
+            "count": np.asarray([[0.0, 1.0], [1.0, 1.0]], dtype=np.float64),
+        }
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prepare_caked_display_payload",
+        lambda *_args, **_kwargs: dict(worker_payload),
+    )
+
+    def _fake_rebuild_geometry_fit_source_rows(**kwargs):
+        stage_callback = kwargs.get("stage_callback")
+        if callable(stage_callback):
+            stage_callback(
+                "source_cache_project_rows_start",
+                {"background_index": 0, "status": "starting"},
+            )
+            stage_callback(
+                "source_cache_project_rows_ready",
+                {"background_index": 0, "status": "projected", "row_count": 1},
+            )
+        return runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
+            background_index=0,
+            requested_signature=kwargs.get("requested_signature"),
+            requested_signature_summary=kwargs.get("requested_signature_summary"),
+            projected_rows=[_geometry_fit_worker_live_row()],
+            stored_rows=[_geometry_fit_worker_live_row()],
+            rebuild_source="unit",
+            rebuild_attempts=["unit"],
+            diagnostics={"cache_source": "unit"},
+        )
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "rebuild_geometry_fit_source_rows",
+        _fake_rebuild_geometry_fit_source_rows,
+    )
+
+    def _prepare_geometry_fit_run(**kwargs):
+        kwargs["ensure_geometry_fit_caked_view"]()
+        return runtime_session.gui_geometry_fit.GeometryFitPreparationResult(
+            error_text="stop before solver"
+        )
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        _prepare_geometry_fit_run,
+    )
+
+    runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+
+    assert "projection_payload_ready" in kinds
+    assert "source_cache_project_rows_start" in kinds
+    assert kinds.index("projection_payload_ready") < kinds.index("source_cache_project_rows_start")
+    assert "source_cache_caked_view_ready" in kinds, [
+        (event.get("kind"), event.get("payload")) for event in events
+    ]
+    assert "source_cache_caked_view_failed" not in kinds
+    ready_event = next(
+        event for event in events if str(event.get("kind")) == "source_cache_caked_view_ready"
+    )
+    assert ready_event["payload"]["background_index"] == 0
+    assert ready_event["payload"]["caked_view_status"] == "empty_bin_nan_density_sanitized"
+    stored_projection = job["projection_payload_by_background"][0]
+    assert stored_projection["payload_kind"] == "projection"
+    assert "background" not in stored_projection
+
+
 def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load(
     monkeypatch,
 ) -> None:

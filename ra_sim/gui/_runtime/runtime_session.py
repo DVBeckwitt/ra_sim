@@ -8736,6 +8736,32 @@ def _geometry_fit_caked_view_for_index(
     )
 
 
+def _geometry_fit_caked_projection_for_index(
+    index: int,
+) -> dict[str, object] | None:
+    """Return exact caked projection metadata without image-facing background data."""
+
+    payload = _geometry_fit_caked_view_for_index(int(index))
+    if not isinstance(payload, Mapping):
+        return None
+    projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
+    if not isinstance(projection_payload, Mapping):
+        return None
+    try:
+        params_for_payload = dict(_current_geometry_fit_params() or {})
+    except Exception:
+        params_for_payload = {}
+    hydrated = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+        projection_payload,
+        detector_shape=projection_payload.get("detector_shape"),
+        params=params_for_payload,
+        require_background=False,
+    )
+    if not isinstance(hydrated, Mapping):
+        return None
+    return gui_geometry_fit.geometry_fit_caked_projection_payload(hydrated)
+
+
 def _current_geometry_fit_caked_roi_enabled() -> bool:
     """Return whether geometry-fit branch-restricted caking is enabled."""
 
@@ -9390,8 +9416,18 @@ def _geometry_fit_resolve_targeted_caked_projection_payload(
 
     if not isinstance(resolved_payload, Mapping):
         return None
-    return _normalize_geometry_fit_caked_view_payload(
+    normalized_payload = _normalize_geometry_fit_caked_view_payload(
         resolved_payload,
+        detector_shape=normalized_shape,
+        ai=ai_value,
+    )
+    if isinstance(normalized_payload, Mapping):
+        return normalized_payload
+    projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(resolved_payload)
+    if not isinstance(projection_payload, Mapping):
+        return None
+    return _normalize_geometry_fit_caked_view_payload(
+        projection_payload,
         detector_shape=normalized_shape,
         ai=ai_value,
     )
@@ -41464,35 +41500,47 @@ def _build_geometry_fit_async_job(
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
         if isinstance(caked_view_payload, Mapping):
             try:
-                caked_views_by_background[int(current_background_index)] = {
-                    "background": np.asarray(
-                        caked_view_payload.get("background"),
-                        dtype=np.float64,
-                    ).copy(),
-                    "radial_axis": np.asarray(
-                        caked_view_payload.get("radial_axis"),
-                        dtype=np.float64,
-                    ).copy(),
-                    "azimuth_axis": np.asarray(
-                        caked_view_payload.get("azimuth_axis"),
-                        dtype=np.float64,
-                    ).copy(),
-                    "raw_azimuth_axis": np.asarray(
-                        caked_view_payload.get("raw_azimuth_axis"),
-                        dtype=np.float64,
-                    ).copy(),
-                    "raw_to_gui_row_permutation": np.asarray(
-                        caked_view_payload.get("raw_to_gui_row_permutation"),
-                        dtype=np.int32,
-                    ).copy(),
-                    "transform_bundle": caked_view_payload.get("transform_bundle"),
-                    "detector_shape": tuple(
-                        int(v) for v in tuple(caked_view_payload.get("detector_shape", ()))[:2]
-                    ),
-                }
-                projection_payload_by_background[int(current_background_index)] = copy.deepcopy(
-                    caked_views_by_background[int(current_background_index)]
+                projection_payload = _geometry_fit_caked_projection_for_index(
+                    int(current_background_index)
                 )
+                if not isinstance(projection_payload, Mapping):
+                    projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
+                        caked_view_payload
+                    )
+                if isinstance(projection_payload, Mapping):
+                    projection_payload_by_background[int(current_background_index)] = copy.deepcopy(
+                        dict(projection_payload)
+                    )
+                sanitized_payload, _sanitize_diag = (
+                    gui_geometry_fit.sanitize_geometry_fit_caked_display_payload(caked_view_payload)
+                )
+                if isinstance(sanitized_payload, Mapping):
+                    caked_views_by_background[int(current_background_index)] = {
+                        "background": np.asarray(
+                            sanitized_payload.get("background"),
+                            dtype=np.float64,
+                        ).copy(),
+                        "radial_axis": np.asarray(
+                            sanitized_payload.get("radial_axis"),
+                            dtype=np.float64,
+                        ).copy(),
+                        "azimuth_axis": np.asarray(
+                            sanitized_payload.get("azimuth_axis"),
+                            dtype=np.float64,
+                        ).copy(),
+                        "raw_azimuth_axis": np.asarray(
+                            sanitized_payload.get("raw_azimuth_axis"),
+                            dtype=np.float64,
+                        ).copy(),
+                        "raw_to_gui_row_permutation": np.asarray(
+                            sanitized_payload.get("raw_to_gui_row_permutation"),
+                            dtype=np.int32,
+                        ).copy(),
+                        "transform_bundle": sanitized_payload.get("transform_bundle"),
+                        "detector_shape": tuple(
+                            int(v) for v in tuple(sanitized_payload.get("detector_shape", ()))[:2]
+                        ),
+                    }
             except Exception:
                 pass
 
@@ -41552,7 +41600,9 @@ def _build_geometry_fit_async_job(
                 _geometry_fit_targeted_projection_view_signature(
                     int(idx),
                     mode_override=projection_view_mode,
-                    caked_payload=dict(caked_views_by_background.get(int(idx)) or {}) or None,
+                    caked_payload=(
+                        dict(projection_payload_by_background.get(int(idx)) or {}) or None
+                    ),
                     detector_shape=detector_shape,
                     analysis_preview_bins=analysis_bins,
                 ),
@@ -42079,10 +42129,135 @@ def _run_async_geometry_fit_worker_job(
             return None
         job_data.setdefault("caked_views_by_background", {})[int(index)] = hydrated_payload
         if str(job_data.get("projection_view_mode") or "").strip().lower() == "caked":
-            job_data.setdefault("projection_payload_by_background", {})[int(index)] = (
+            projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
                 hydrated_payload
             )
+            if isinstance(projection_payload, Mapping):
+                job_data.setdefault("projection_payload_by_background", {})[int(index)] = dict(
+                    projection_payload
+                )
         return hydrated_payload
+
+    def _caked_projection_payload_status(
+        payload: Mapping[str, object] | None,
+    ) -> str:
+        if not isinstance(payload, Mapping):
+            return "projection_payload_missing_axes"
+        try:
+            radial_axis = np.asarray(
+                payload.get("radial_axis", payload.get("radial")),
+                dtype=np.float64,
+            ).reshape(-1)
+            azimuth_axis = np.asarray(
+                payload.get("azimuth_axis", payload.get("azimuth")),
+                dtype=np.float64,
+            ).reshape(-1)
+            raw_azimuth_axis = np.asarray(
+                payload.get("raw_azimuth_axis", payload.get("raw_azimuth")),
+                dtype=np.float64,
+            ).reshape(-1)
+        except Exception:
+            return "projection_payload_missing_axes"
+        if radial_axis.size <= 0 or azimuth_axis.size <= 0 or raw_azimuth_axis.size <= 0:
+            return "projection_payload_missing_axes"
+        if (
+            raw_azimuth_axis.shape != azimuth_axis.shape
+            or not np.all(np.isfinite(radial_axis))
+            or not np.all(np.isfinite(azimuth_axis))
+            or not np.all(np.isfinite(raw_azimuth_axis))
+        ):
+            return "projection_payload_axis_mismatch"
+        if not isinstance(payload.get("transform_bundle"), CakeTransformBundle):
+            return "missing_exact_caked_bundle"
+        return "projection_payload_ready"
+
+    def _load_caked_projection_by_index_snapshot(
+        index: int,
+        *,
+        detector_shape: Sequence[object] | None = None,
+        allow_generated_payload: bool = False,
+    ) -> dict[str, object] | None:
+        background_idx = int(index)
+        payload_map = job_data.setdefault("projection_payload_by_background", {})
+        raw_payload = payload_map.get(background_idx)
+        if not isinstance(raw_payload, Mapping):
+            caked_payload = dict(
+                dict(job_data.get("caked_views_by_background", {}) or {}).get(background_idx) or {}
+            )
+            raw_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(caked_payload)
+        if not isinstance(raw_payload, Mapping) and bool(allow_generated_payload):
+            raw_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+                background_idx,
+                detector_shape=detector_shape,
+                ai=_worker_geometry_fit_caking_integrator(),
+                analysis_preview_bins=job_data.get("analysis_bins"),
+                allow_generated_payload=True,
+            )
+        projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(raw_payload)
+        if not isinstance(projection_payload, Mapping):
+            return None
+        if not isinstance(projection_payload.get("transform_bundle"), CakeTransformBundle):
+            return None
+        normalized_payload = _normalize_geometry_fit_caked_view_payload(
+            projection_payload,
+            detector_shape=detector_shape or projection_payload.get("detector_shape"),
+            ai=_worker_geometry_fit_caking_integrator(),
+        )
+        if not isinstance(normalized_payload, Mapping):
+            return None
+        hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            gui_geometry_fit.geometry_fit_caked_projection_payload(normalized_payload),
+            detector_shape=(
+                detector_shape
+                or normalized_payload.get("detector_shape")
+                or projection_payload.get("detector_shape")
+            ),
+            params=dict(job_data.get("params", {}) or {}),
+            require_background=False,
+        )
+        if not isinstance(hydrated_payload, Mapping):
+            return None
+        stored_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(hydrated_payload)
+        if not isinstance(stored_payload, Mapping):
+            return None
+        payload_map[background_idx] = dict(stored_payload)
+        return dict(stored_payload)
+
+    def _ensure_worker_caked_projection_payload(
+        background_index: int,
+        *,
+        detector_shape: Sequence[object] | None = None,
+        stage_callback: gui_geometry_fit.GeometryFitStageCallback | None = None,
+        emit_event: bool = False,
+    ) -> dict[str, object] | None:
+        projection_payload = _load_caked_projection_by_index_snapshot(
+            int(background_index),
+            detector_shape=detector_shape,
+            allow_generated_payload=True,
+        )
+        status = _caked_projection_payload_status(projection_payload)
+        if bool(emit_event):
+            gui_geometry_fit._emit_geometry_fit_stage_event(
+                stage_callback,
+                str(status),
+                background_index=int(background_index),
+                background_label=str(
+                    dict(job_data.get("background_labels", {}) or {}).get(
+                        int(background_index),
+                        f"background {int(background_index) + 1}",
+                    )
+                ),
+                status=str(status),
+                payload_kind="projection",
+                message=(
+                    f"preflight: exact caked projection payload ready for background {int(background_index) + 1}"
+                    if status == "projection_payload_ready"
+                    else f"preflight: exact caked projection payload failed for background {int(background_index) + 1} (status={status})"
+                ),
+            )
+        if status != "projection_payload_ready":
+            return None
+        return projection_payload
 
     def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
@@ -42156,7 +42331,11 @@ def _run_async_geometry_fit_worker_job(
             worker_ai = _worker_geometry_fit_caking_integrator()
             caked_payload = payload_map.get(background_idx)
             if not isinstance(caked_payload, Mapping):
-                caked_payload = _load_caked_view_by_index_snapshot(background_idx)
+                caked_payload = _load_caked_projection_by_index_snapshot(
+                    background_idx,
+                    detector_shape=detector_shape,
+                    allow_generated_payload=True,
+                )
             if isinstance(caked_payload, Mapping):
                 resolved_signature = _geometry_fit_targeted_projection_view_signature(
                     background_idx,
@@ -42234,14 +42413,9 @@ def _run_async_geometry_fit_worker_job(
             payload_map = job_data.setdefault("projection_payload_by_background", {})
             resolved_caked_payload = payload_map.get(int(background_index))
             if not isinstance(resolved_caked_payload, Mapping):
-                resolved_caked_payload = _load_caked_view_by_index_snapshot(int(background_index))
-            if not isinstance(resolved_caked_payload, Mapping):
-                resolved_caked_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+                resolved_caked_payload = _load_caked_projection_by_index_snapshot(
                     int(background_index),
-                    caked_payload=None,
                     detector_shape=detector_shape,
-                    ai=_worker_geometry_fit_caking_integrator(),
-                    analysis_preview_bins=job_data.get("analysis_bins"),
                     allow_generated_payload=True,
                 )
             if not isinstance(resolved_caked_payload, Mapping):
@@ -42864,21 +43038,84 @@ def _run_async_geometry_fit_worker_job(
                 roi_fallback_reason="invalid_caked_payload",
                 roi_half_width_px=float(roi_half_width_px),
             )
+        projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(caked_payload)
+        projection_status = _caked_projection_payload_status(projection_payload)
+        if projection_status != "projection_payload_ready":
+            return _caked_result(
+                projection_status,
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=projection_status,
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        hydrated_projection_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            projection_payload,
+            detector_shape=backend_background.shape[:2],
+            params=dict(job_data.get("params", {}) or {}),
+            require_background=False,
+        )
+        projection_status = _caked_projection_payload_status(hydrated_projection_payload)
+        if not isinstance(hydrated_projection_payload, Mapping) or not isinstance(
+            hydrated_projection_payload.get("transform_bundle"),
+            CakeTransformBundle,
+        ):
+            return _caked_result(
+                projection_status,
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=projection_status,
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
+            hydrated_projection_payload
+        )
+        if not isinstance(projection_payload, Mapping):
+            return _caked_result(
+                "missing_exact_caked_bundle",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="missing_exact_caked_bundle",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        sanitized_caked_payload, sanitize_diag = (
+            gui_geometry_fit.sanitize_geometry_fit_caked_display_payload(caked_payload)
+        )
+        sanitize_status = str(sanitize_diag.get("status", "invalid_caked_payload"))
+        if not isinstance(sanitized_caked_payload, Mapping):
+            return _caked_result(
+                sanitize_status,
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=sanitize_status,
+                roi_half_width_px=float(roi_half_width_px),
+            )
         hydrated_caked_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
-            caked_payload,
+            sanitized_caked_payload,
             detector_shape=backend_background.shape[:2],
             params=dict(job_data.get("params", {}) or {}),
             require_background=True,
         )
         if not isinstance(hydrated_caked_payload, Mapping):
             return _caked_result(
-                "invalid_exact_caked_payload",
+                "missing_exact_caked_bundle",
                 caked_view_stored=False,
                 roi_enabled=bool(roi_enabled),
                 roi_used_restricted_cake=bool(roi_used_restricted_cake),
                 roi_pixel_count=int(roi_pixel_count),
                 roi_fraction=float(roi_fraction),
-                roi_fallback_reason="invalid_exact_caked_payload",
+                roi_fallback_reason="missing_exact_caked_bundle",
                 roi_half_width_px=float(roi_half_width_px),
             )
         caked_payload = hydrated_caked_payload
@@ -42899,6 +43136,15 @@ def _run_async_geometry_fit_worker_job(
                 ),
                 roi_half_width_px=float(roi_half_width_px),
             )
+
+        projection_payload_by_background[int(bundle.background_index)] = copy.deepcopy(
+            dict(projection_payload)
+        )
+        _emit_caked_stage(
+            "projection_payload_ready",
+            status="projection_payload_ready",
+            payload_kind="projection",
+        )
 
         try:
             caked_views_by_background[int(bundle.background_index)] = {
@@ -42925,10 +43171,14 @@ def _run_async_geometry_fit_worker_job(
                     str(roi_fallback_reason) if roi_fallback_reason is not None else None
                 ),
                 "roi_half_width_px": float(roi_half_width_px),
+                "caked_display_sanitize_status": sanitize_status,
+                "sanitized_empty_bin_count": int(
+                    sanitize_diag.get("sanitized_empty_bin_count", 0) or 0
+                ),
+                "nonfinite_supported_bin_count": int(
+                    sanitize_diag.get("nonfinite_supported_bin_count", 0) or 0
+                ),
             }
-            projection_payload_by_background[int(bundle.background_index)] = copy.deepcopy(
-                caked_views_by_background[int(bundle.background_index)]
-            )
             if str(job_data.get("projection_view_mode") or "").strip().lower() == "caked":
                 projection_signature_map = job_data.setdefault(
                     "projection_view_signature_by_background",
@@ -42939,9 +43189,7 @@ def _run_async_geometry_fit_worker_job(
                         _geometry_fit_targeted_projection_view_signature(
                             int(bundle.background_index),
                             mode_override="caked",
-                            caked_payload=dict(
-                                caked_views_by_background.get(int(bundle.background_index)) or {}
-                            ),
+                            caked_payload=dict(projection_payload),
                             detector_shape=backend_background.shape[:2],
                             ai=worker_ai,
                             analysis_preview_bins=job_data.get("analysis_bins"),
@@ -43007,20 +43255,21 @@ def _run_async_geometry_fit_worker_job(
                             refreshed_bundle.stored_rows or refreshed_bundle.projected_rows
                         ),
                     }
-        except Exception:
+        except Exception as exc:
+            failure_status = f"store_caked_payload_failed:{type(exc).__name__}:{exc}"
             return _caked_result(
-                "store_caked_payload_failed",
+                failure_status,
                 caked_view_stored=False,
                 roi_enabled=bool(roi_enabled),
                 roi_used_restricted_cake=bool(roi_used_restricted_cake),
                 roi_pixel_count=int(roi_pixel_count),
                 roi_fraction=float(roi_fraction),
-                roi_fallback_reason="store_caked_payload_failed",
+                roi_fallback_reason=failure_status,
                 roi_half_width_px=float(roi_half_width_px),
             )
 
         return _caked_result(
-            "stored",
+            sanitize_status if sanitize_status != "stored" else "stored",
             caked_view_stored=True,
             roi_enabled=bool(roi_enabled),
             roi_used_restricted_cake=bool(roi_used_restricted_cake),
@@ -43270,16 +43519,6 @@ def _run_async_geometry_fit_worker_job(
             }
 
         projection_view_mode = str(job_data.get("projection_view_mode") or "detector")
-        projection_view_signature = _worker_projection_view_signature_for_background(
-            int(background_idx)
-        )
-        projection_payload = (
-            dict(
-                job_data.setdefault("projection_payload_by_background", {}).get(int(background_idx))
-                or {}
-            )
-            or None
-        )
         try:
             detector_shape_for_projection = tuple(
                 int(v)
@@ -43292,17 +43531,29 @@ def _run_async_geometry_fit_worker_job(
             )
         except Exception:
             detector_shape_for_projection = None
+        if projection_view_mode == "caked":
+            _ensure_worker_caked_projection_payload(
+                int(background_idx),
+                detector_shape=detector_shape_for_projection,
+                stage_callback=stage_callback,
+                emit_event=True,
+            )
+        projection_view_signature = _worker_projection_view_signature_for_background(
+            int(background_idx)
+        )
+        projection_payload = (
+            dict(
+                job_data.setdefault("projection_payload_by_background", {}).get(int(background_idx))
+                or {}
+            )
+            or None
+        )
         if projection_view_mode == "caked" and not isinstance(projection_payload, Mapping):
-            projection_payload = _load_caked_view_by_index_snapshot(int(background_idx))
-            if not isinstance(projection_payload, Mapping):
-                projection_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
-                    int(background_idx),
-                    caked_payload=None,
-                    detector_shape=detector_shape_for_projection,
-                    ai=_worker_geometry_fit_caking_integrator(),
-                    analysis_preview_bins=job_data.get("analysis_bins"),
-                    allow_generated_payload=True,
-                )
+            projection_payload = _load_caked_projection_by_index_snapshot(
+                int(background_idx),
+                detector_shape=detector_shape_for_projection,
+                allow_generated_payload=True,
+            )
         if projection_view_mode == "caked" and isinstance(projection_payload, Mapping):
             projection_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
                 projection_payload,
@@ -43931,7 +44182,21 @@ def _run_async_geometry_fit_worker_job(
         )
 
     def _worker_caked_view_payload_ready(background_index: int) -> bool:
-        payload = _load_caked_view_by_index_snapshot(int(background_index))
+        background_payload = dict(
+            dict(job_data.get("background_images", {}) or {}).get(int(background_index)) or {}
+        )
+        try:
+            detector_shape = tuple(
+                int(v)
+                for v in np.asarray(background_payload.get("native"), dtype=np.float64).shape[:2]
+            )
+        except Exception:
+            detector_shape = None
+        payload = _load_caked_projection_by_index_snapshot(
+            int(background_index),
+            detector_shape=detector_shape,
+            allow_generated_payload=True,
+        )
         return isinstance(
             gui_geometry_fit._geometry_fit_caked_payload_exact_bundle(
                 payload,
@@ -43939,7 +44204,7 @@ def _run_async_geometry_fit_worker_job(
                     payload.get("detector_shape") if isinstance(payload, Mapping) else None
                 ),
                 params=dict(job_data.get("params", {}) or {}),
-                require_background=True,
+                require_background=False,
             ),
             CakeTransformBundle,
         )
@@ -44043,6 +44308,7 @@ def _run_async_geometry_fit_worker_job(
                 rows,
             )
         ),
+        geometry_manual_caked_projection_for_index=_load_caked_projection_by_index_snapshot,
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
         display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
         native_detector_coords_to_detector_display_coords=(

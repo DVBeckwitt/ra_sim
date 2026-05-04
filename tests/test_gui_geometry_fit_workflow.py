@@ -285,6 +285,147 @@ def _make_stub_caked_bundle(
     )
 
 
+def test_exact_caked_hydration_ignores_nonfinite_background_for_projection() -> None:
+    radial_axis = np.linspace(10.0, 17.0, 8)
+    azimuth_axis = np.linspace(-4.0, 3.0, 8)
+    bundle = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+    )
+    background = np.zeros((8, 8), dtype=np.float64)
+    background[0, 0] = np.nan
+    payload = {
+        "background": background,
+        "detector_shape": (8, 8),
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "raw_azimuth_axis": bundle.raw_azimuth_deg,
+        "transform_bundle": bundle,
+    }
+
+    projection = geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+        payload,
+        detector_shape=(8, 8),
+        params={},
+        require_background=False,
+    )
+    image_facing = geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+        payload,
+        detector_shape=(8, 8),
+        params={},
+        require_background=True,
+    )
+
+    assert projection is not None
+    assert projection["transform_bundle"] is bundle
+    assert image_facing is None
+
+
+def test_caked_display_sanitizer_only_fills_zero_support_nans() -> None:
+    radial_axis = np.asarray([10.0, 11.0], dtype=np.float64)
+    azimuth_axis = np.asarray([-1.0, 1.0], dtype=np.float64)
+    image = np.asarray([[np.nan, 2.0], [3.0, 4.0]], dtype=np.float64)
+    payload = {
+        "background": image,
+        "image": image,
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "sum_normalization": np.asarray([[0.0, 1.0], [1.0, 1.0]], dtype=np.float64),
+    }
+
+    sanitized, diag = geometry_fit.sanitize_geometry_fit_caked_display_payload(payload)
+
+    assert sanitized is not None
+    assert diag["status"] == "empty_bin_nan_density_sanitized"
+    assert np.asarray(sanitized["background"])[0, 0] == 0.0
+
+    rejected, rejected_diag = geometry_fit.sanitize_geometry_fit_caked_display_payload(
+        {
+            **payload,
+            "sum_normalization": np.ones((2, 2), dtype=np.float64),
+        }
+    )
+
+    assert rejected is None
+    assert rejected_diag["status"] == "nonfinite_supported_caked_background"
+
+
+def test_targeted_fresh_simulation_timeout_emits_late_completion(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        geometry_fit,
+        "GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S",
+        0.01,
+    )
+
+    def _stage_callback(stage: str, payload: Mapping[str, object]) -> None:
+        events.append((str(stage), dict(payload)))
+
+    def _simulate_hit_tables(_params, **_kwargs):
+        time.sleep(0.05)
+        return [{"hit": 1}]
+
+    def _build_source_rows_from_hit_tables(_tables, **_kwargs):
+        return (
+            [
+                {
+                    "hkl": (1, 0, 0),
+                    "q_group_key": ("q", 1),
+                    "source_branch_index": 0,
+                    "source_reflection_index": 7,
+                    "source_reflection_namespace": "full_reflection",
+                    "source_reflection_is_full": True,
+                    "source_row_index": 0,
+                    "source_peak_index": 1,
+                    "sim_col": 1.0,
+                    "sim_row": 2.0,
+                }
+            ],
+            [],
+            [{"hit": 1}],
+            [0],
+        )
+
+    geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"theta_initial": 0.0},
+        consumer="geometry_fit_preflight_cache",
+        prior_diagnostics={},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache=None,
+        build_source_rows_from_hit_tables=_build_source_rows_from_hit_tables,
+        simulate_hit_tables=_simulate_hit_tables,
+        logged_cache_matches_params=None,
+        required_manual_fit_targets=[
+            {"hkl": (1, 0, 0), "q_group_key": ("q", 1), "source_branch_index": 0}
+        ],
+        required_branch_group_keys=[((1, 0, 0), 0, ("q", 1))],
+        preflight_mode="manual_geometry_targeted",
+        projection_view_mode="detector",
+        projection_view_signature={"mode": "detector", "available": True},
+        stage_callback=_stage_callback,
+    )
+
+    names = [name for name, _payload in events]
+    assert "source_cache_targeted_fresh_simulation_timeout" in names
+    assert "source_cache_targeted_fresh_simulation_ready" in names
+    assert names.index("source_cache_targeted_fresh_simulation_timeout") < names.index(
+        "source_cache_targeted_fresh_simulation_ready"
+    )
+    ready_payload = next(
+        payload
+        for name, payload in events
+        if name == "source_cache_targeted_fresh_simulation_ready"
+    )
+    assert ready_payload["late"] is True
+
+
 def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_first() -> None:
     calls: dict[str, object] = {
         "selection": [],
@@ -1187,8 +1328,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert dataset_spec["sim_caked_image_builder_kind"] is None
     assert callable(dataset_spec["qr_fit_trial_source_rows_builder"])
     assert (
-        dataset_spec["qr_fit_trial_source_rows_builder_kind"]
-        == "geometry_manual_trial_source_rows"
+        dataset_spec["qr_fit_trial_source_rows_builder_kind"] == "geometry_manual_trial_source_rows"
     )
     assert dataset_spec["baseline_fit_params"] == {"theta_offset": 0.25}
     assert len(dataset["measured_for_fit"]) == 1
@@ -22081,6 +22221,111 @@ def test_build_geometry_manual_fit_dataset_requires_exact_caked_bundle_for_proje
     assert dataset["spec"]["fit_space_projector_unavailable_reason"] == (
         "missing_exact_caked_bundle"
     )
+
+
+def test_build_geometry_manual_fit_dataset_uses_projection_payload_without_image_ready_background() -> (
+    None
+):
+    radial_axis = np.linspace(10.0, 17.0, 8)
+    azimuth_axis = np.linspace(-4.0, 3.0, 8)
+    bundle = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+    )
+    caked_background = np.zeros((8, 8), dtype=np.float64)
+    caked_background[0, 0] = np.nan
+    projection_payload = {
+        "payload_kind": "projection",
+        "detector_shape": (8, 8),
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "raw_azimuth_axis": bundle.raw_azimuth_deg,
+        "raw_to_gui_row_permutation": np.arange(8, dtype=np.int32),
+        "transform_bundle": bundle,
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=8,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda _idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "background_two_theta_deg": 10.0,
+                "background_phi_deg": -4.0,
+                "caked_x": 10.0,
+                "caked_y": -4.0,
+            }
+        ],
+        load_background_by_index=lambda _idx: (
+            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((8, 8), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda rows: {
+            (1, 2): next(dict(entry) for entry in rows if entry.get("source_row_index") == 2)
+        },
+        geometry_manual_source_rows_for_background=lambda *_args, **_kwargs: [
+            {
+                "display_col": 3.0,
+                "display_row": 4.0,
+                "sim_col": 3.0,
+                "sim_row": 4.0,
+                "sim_col_raw": 3.0,
+                "sim_row_raw": 4.0,
+                "hkl": (1, 1, 0),
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        geometry_manual_entry_display_coords=lambda entry: (10.0, -4.0),
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: [
+            dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)
+        ],
+        unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+        geometry_manual_caked_view_for_index=lambda _idx: {
+            "background": caked_background,
+            "detector_shape": (8, 8),
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "raw_azimuth_axis": bundle.raw_azimuth_deg,
+            "raw_to_gui_row_permutation": np.arange(8, dtype=np.int32),
+            "transform_bundle": bundle,
+        },
+        geometry_manual_caked_projection_for_index=lambda _idx: dict(projection_payload),
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert dataset["spec"]["fit_space_projector_kind"] == "exact_caked_bundle"
+    assert dataset["spec"]["fit_space_projector_unavailable_reason"] is None
 
 
 def test_build_geometry_manual_fit_dataset_projects_raw_detector_rows_into_caked_angles(

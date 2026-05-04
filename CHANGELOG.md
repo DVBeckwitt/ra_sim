@@ -76,6 +76,7 @@
   - Hardened New4 targeted source-row preflight diagnostics with drop-stage HKL/branch inventories, a separate source-coverage gate, Q-group HKL alias matching after canonical source-row construction, and deferred raw hit-table branch filtering. Provider-only parity remains green; full preflight is still red at 5/7 source pairs pending missing live rows for collapsed `00l` and q16 branch 1.
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
   - Hardened the geometry-fit integration workflow tests and diagnostics by keeping in-memory source-resolution diagnostics dict-shaped, preserving raw-derived simulated native coordinates during orientation setup, routing optional New4 artifact tests through the shared skip gate, and refreshing synthetic New4 dynamic-source coverage fixtures without changing the production dynamic-source gate.
+  - Fixed cold-start caked manual geometry-fit preflight so exact caked projection metadata is cached separately from display intensity images, allowing zero-support density NaNs without discarding the geometric projector.
 
 - **GUI and UX updates**
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and GUI Row/Col mapping to update the beam-center sliders and entries.
