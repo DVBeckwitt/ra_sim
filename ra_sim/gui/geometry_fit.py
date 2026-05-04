@@ -120,6 +120,7 @@ def geometry_fit_caked_projection_payload(
         return None
     projection = {
         "payload_kind": "projection",
+        "signature": payload.get("signature"),
         "detector_shape": payload.get("detector_shape"),
         "radial_axis": payload.get("radial_axis", payload.get("radial")),
         "azimuth_axis": payload.get("azimuth_axis", payload.get("azimuth")),

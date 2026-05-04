@@ -209,16 +209,19 @@ enable flags.
 Warm-cache simulated-candidate refinement relies on cache, simulation, and
 exact caked-projection signatures plus cheap array tokens. Projection-only
 payloads are valid geometry inputs even when the display/background caked image
-is absent. Display density sanitization, including zero-support `NaN -> 0.0`
-storage cleanup, must not churn the geometric projection signature unless that
-image is directly used for local image refinement. Do not mutate simulation or
-caked image arrays in place without also bumping the corresponding simulation or
-projection signature; full image hashing is intentionally avoided in this hot
-path.
+is absent. Caked pick-cache signatures intentionally ignore image-facing
+background payload identity, so display density sanitization, including
+zero-support `NaN -> 0.0` storage cleanup, must not churn the geometric
+projection cache. Stable projection signatures use explicit payload signatures
+when present and cheap value tokens for axes/permutations, not array object IDs
+or full image hashes. Do not mutate simulation or caked image arrays in place
+without also bumping the corresponding simulation or projection signature.
 
 Status as of 2026-05-04: live caked trace output is opt-in, unchanged trace rows
 are suppressed unless explicitly requested, warm caked pick-cache calls skip
-row-level refinement when simulation/projection signatures are unchanged, failed
+row-level refinement when simulation/projection signatures are unchanged,
+zero-support display sanitization no longer invalidates caked pick caches,
+equivalent copied projection payloads keep the same signature/digest, failed
 lookup rebuilds retry, and no-signature direct refine/rebuild calls clear stale
 skip metadata. The exact-caked cold-start path accepts projection-only payloads
 without requiring a display image. Remaining known validation issue is outside

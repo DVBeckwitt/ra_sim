@@ -72,6 +72,18 @@ def _caked_projection_payload(
     }
 
 
+def _copy_caked_projection_payload(payload: dict[str, object]) -> dict[str, object]:
+    copied = dict(payload)
+    for key in (
+        "radial_axis",
+        "azimuth_axis",
+        "raw_azimuth_axis",
+        "raw_to_gui_row_permutation",
+    ):
+        copied[key] = np.asarray(payload[key]).copy()
+    return copied
+
+
 def test_build_geometry_manual_pick_cache_falls_back_to_live_peak_records() -> None:
     peak_record = {
         "display_col": 13.5,
@@ -936,6 +948,129 @@ def test_display_density_zero_support_nan_sanitization_does_not_churn_projection
     second_signature = callbacks.caked_projection_signature()
 
     assert first_signature == second_signature
+
+
+def test_caked_warm_pick_cache_ignores_zero_support_display_sanitization(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    background_state = {"image": np.full((10, 10), np.nan, dtype=float)}
+    cache_state: dict[str, object] = {"signature": None, "data": {}}
+    projection_signature = ("projection", "stable")
+    radial = np.linspace(0.0, 9.0, 10, dtype=float)
+    azimuth = np.linspace(-4.5, 4.5, 10, dtype=float)
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "source_reflection_index": 42,
+        "source_branch_index": 0,
+        "source_ray_id": "ray-0",
+        "branch_id": "branch-0",
+        "display_col": 5.0,
+        "display_row": 6.0,
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "sim_col_raw": 5.0,
+        "sim_row_raw": 6.0,
+        "native_col": 5.0,
+        "native_row": 6.0,
+        "qr": 1.0,
+        "qz": 2.0,
+        "weight": 1.0,
+    }
+
+    def _project_to_caked(rows):
+        return [
+            {
+                **dict(entry),
+                "display_col": 7.0,
+                "display_row": 4.0,
+                "caked_x": 7.0,
+                "caked_y": 4.0,
+                "raw_caked_x": 7.0,
+                "raw_caked_y": 4.0,
+                "two_theta_deg": 7.0,
+                "phi_deg": 4.0,
+            }
+            for entry in rows or ()
+            if isinstance(entry, dict)
+        ]
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return dict(candidate)
+
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background_state["image"],
+        use_caked_space=lambda: True,
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {"a": 2.0},
+        pairs_for_index=lambda _idx: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [dict(candidate)],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+        caked_projection_signature=lambda: projection_signature,
+        caked_simulation_image=lambda: None,
+        radial_axis=lambda: radial,
+        azimuth_axis=lambda: azimuth,
+    )
+
+    first_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+    first_call_count = len(calls)
+    background_state["image"] = np.nan_to_num(background_state["image"], nan=0.0).copy()
+    second_cache = callbacks.get_pick_cache(
+        param_set={"a": 2.0},
+        prefer_cache=True,
+        build_caked_projection_sidecar=True,
+        project_peaks_to_caked_view=_project_to_caked,
+    )
+
+    assert first_call_count > 0
+    assert len(calls) == first_call_count
+    assert second_cache["signature"] == first_cache["signature"]
+    assert second_cache["qr_sim_refinement_signature"] == first_cache["qr_sim_refinement_signature"]
+
+
+def test_caked_projection_signature_stable_for_equivalent_payload_copy() -> None:
+    bundle = _caked_projection_bundle()
+    payload_state = {
+        "payload": _caked_projection_payload(bundle, signature=("projection", "stable"))
+    }
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: payload_state["payload"]["radial_axis"],
+        last_caked_azimuth_values=lambda: payload_state["payload"]["azimuth_axis"],
+        current_background_display=lambda: np.zeros((10, 10), dtype=float),
+        current_background_native=lambda: np.ones((10, 10), dtype=float),
+        current_background_index=lambda: 0,
+        caked_projection_payload=lambda: payload_state["payload"],
+        caked_transform_bundle=lambda: bundle,
+        image_size=lambda: 10,
+    )
+
+    first_signature = callbacks.caked_projection_signature()
+    payload_state["payload"] = _copy_caked_projection_payload(payload_state["payload"])
+    second_signature = callbacks.caked_projection_signature()
+
+    assert first_signature == second_signature
+    assert first_signature[7] == ("projection", "stable")
 
 
 def test_projection_payload_background_index_is_not_cross_reused() -> None:

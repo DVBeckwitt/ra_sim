@@ -6361,7 +6361,7 @@ def geometry_manual_pick_placed_cache_signature(
     """Return stable signature for placed manual-pick rows before Q-group masks."""
 
     bg_token = None
-    if background_image is not None:
+    if background_image is not None and not bool(use_caked_space):
         raw_arr = np.asarray(background_image)
         try:
             bg_ptr = int(raw_arr.__array_interface__["data"][0])
@@ -14704,18 +14704,43 @@ def make_runtime_geometry_manual_projection_callbacks(
             return None
         if arr.size == 0:
             return None
-        token: list[object] = [
-            "axis",
-            id(values),
-            int(arr.size),
-            str(arr.dtype),
-            tuple(int(value) for value in arr.shape),
-        ]
         try:
-            token.extend([float(arr[0]), float(arr[-1])])
+            middle = arr[int(arr.size // 2)]
+            return (
+                "axis_v2",
+                int(arr.size),
+                str(arr.dtype),
+                float(arr[0]),
+                float(middle),
+                float(arr[-1]),
+            )
         except Exception:
-            pass
-        return tuple(token)
+            return ("axis_v2", int(arr.size), str(arr.dtype), repr(arr[0]), repr(arr[-1]))
+
+    def _permutation_signature(values: object) -> tuple[object, ...] | None:
+        try:
+            arr = np.asarray(values).reshape(-1)
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        modulo = 1_000_000_007
+        checksum = 0
+        try:
+            for idx, value in enumerate(arr.tolist()):
+                checksum = (checksum + (idx + 1) * int(value)) % modulo
+            middle = arr[int(arr.size // 2)]
+            return (
+                "perm_v2",
+                int(arr.size),
+                str(arr.dtype),
+                int(arr[0]),
+                int(middle),
+                int(arr[-1]),
+                int(checksum),
+            )
+        except Exception:
+            return ("perm_v2", int(arr.size), str(arr.dtype), repr(arr[0]), repr(arr[-1]))
 
     def _detector_shape_signature(values: object) -> tuple[int, int] | None:
         try:
@@ -14788,6 +14813,8 @@ def make_runtime_geometry_manual_projection_callbacks(
             if isinstance(payload, Mapping)
             else _resolve_runtime_value(last_caked_raw_to_gui_row_permutation)
         )
+        payload_signature = payload.get("signature") if isinstance(payload, Mapping) else None
+        bundle_signature = None if payload_signature is not None else _bundle_signature(bundle)
         return (
             "caked_qr_projection_v2",
             _background_index_signature(),
@@ -14795,9 +14822,9 @@ def make_runtime_geometry_manual_projection_callbacks(
             _axis_signature(radial_axis),
             _axis_signature(azimuth_axis),
             _axis_signature(raw_azimuth_axis),
-            _axis_signature(raw_to_gui),
-            payload.get("signature") if isinstance(payload, Mapping) else None,
-            _bundle_signature(bundle),
+            _permutation_signature(raw_to_gui),
+            payload_signature,
+            bundle_signature,
             id(native_detector_coords_to_bundle_detector_coords)
             if callable(native_detector_coords_to_bundle_detector_coords)
             else None,

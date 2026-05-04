@@ -30187,9 +30187,17 @@ def _geometry_fit_projection_payload_digest(
 ) -> str | None:
     if not isinstance(payload, Mapping):
         return None
+    payload_signature = payload.get("signature")
     transform_bundle = payload.get("transform_bundle")
     lut = getattr(transform_bundle, "lut", None) if transform_bundle is not None else None
     lut_t = getattr(transform_bundle, "lut_t", None) if transform_bundle is not None else None
+    transform_token = None
+    if payload_signature is None:
+        transform_token = (
+            id(transform_bundle) if transform_bundle is not None else None,
+            id(lut) if lut is not None else None,
+            id(lut_t) if lut_t is not None else None,
+        )
     return gui_geometry_fit._geometry_fit_digest_payload(
         {
             "detector_shape": _geometry_fit_projection_shape_token(payload.get("detector_shape")),
@@ -30198,17 +30206,11 @@ def _geometry_fit_projection_payload_digest(
             "raw_azimuth_axis": _geometry_fit_projection_axis_token(
                 payload.get("raw_azimuth_axis")
             ),
-            "raw_to_gui_row_permutation": _geometry_fit_projection_axis_token(
+            "raw_to_gui_row_permutation": _geometry_fit_projection_permutation_token(
                 payload.get("raw_to_gui_row_permutation")
             ),
-            "payload_signature": gui_geometry_fit._geometry_fit_cache_jsonable(
-                payload.get("signature")
-            ),
-            "transform_bundle": (
-                id(transform_bundle) if transform_bundle is not None else None,
-                id(lut) if lut is not None else None,
-                id(lut_t) if lut_t is not None else None,
-            ),
+            "payload_signature": gui_geometry_fit._geometry_fit_cache_jsonable(payload_signature),
+            "transform_bundle": transform_token,
         }
     )
 
@@ -30230,17 +30232,56 @@ def _geometry_fit_projection_axis_token(value: object) -> dict[str, object] | No
         return None
     if arr.size == 0:
         return None
-    token: dict[str, object] = {
-        "id": int(id(value)),
-        "length": int(arr.size),
-        "dtype": str(arr.dtype),
-    }
     try:
-        token["first"] = float(arr[0])
-        token["last"] = float(arr[-1])
+        middle = arr[int(arr.size // 2)]
+        return {
+            "kind": "axis_v2",
+            "length": int(arr.size),
+            "dtype": str(arr.dtype),
+            "first": float(arr[0]),
+            "middle": float(middle),
+            "last": float(arr[-1]),
+        }
     except Exception:
-        pass
-    return token
+        return {
+            "kind": "axis_v2",
+            "length": int(arr.size),
+            "dtype": str(arr.dtype),
+            "first": repr(arr[0]),
+            "last": repr(arr[-1]),
+        }
+
+
+def _geometry_fit_projection_permutation_token(value: object) -> dict[str, object] | None:
+    try:
+        arr = np.asarray(value).reshape(-1)
+    except Exception:
+        return None
+    if arr.size == 0:
+        return None
+    modulo = 1_000_000_007
+    checksum = 0
+    try:
+        for idx, item in enumerate(arr.tolist()):
+            checksum = (checksum + (idx + 1) * int(item)) % modulo
+        middle = arr[int(arr.size // 2)]
+        return {
+            "kind": "perm_v2",
+            "length": int(arr.size),
+            "dtype": str(arr.dtype),
+            "first": int(arr[0]),
+            "middle": int(middle),
+            "last": int(arr[-1]),
+            "weighted_sum_mod": int(checksum),
+        }
+    except Exception:
+        return {
+            "kind": "perm_v2",
+            "length": int(arr.size),
+            "dtype": str(arr.dtype),
+            "first": repr(arr[0]),
+            "last": repr(arr[-1]),
+        }
 
 
 def _geometry_fit_targeted_projection_view_mode() -> str:
@@ -30429,7 +30470,7 @@ def _geometry_fit_targeted_projection_view_signature(
                     "raw_azimuth_axis": _geometry_fit_projection_axis_token(
                         normalized_payload.get("raw_azimuth_axis")
                     ),
-                    "raw_to_gui_row_permutation": _geometry_fit_projection_axis_token(
+                    "raw_to_gui_row_permutation": _geometry_fit_projection_permutation_token(
                         normalized_payload.get("raw_to_gui_row_permutation")
                     ),
                     "projection_payload_digest": _geometry_fit_projection_payload_digest(
@@ -44935,6 +44976,9 @@ def _initialize_runtime_controls_block_50() -> None:
             ),
             "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
             "geometry_manual_caked_view_for_index": (_geometry_fit_caked_view_for_index),
+            "geometry_manual_caked_projection_for_index": (
+                _geometry_fit_caked_projection_for_index
+            ),
             "unrotate_display_peaks": _unrotate_display_peaks,
             "display_to_native_sim_coords": _display_to_native_sim_coords,
             "select_fit_orientation": _select_fit_orientation,

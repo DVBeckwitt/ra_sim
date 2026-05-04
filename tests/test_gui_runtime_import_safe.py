@@ -16681,6 +16681,52 @@ def test_geometry_fit_caked_projection_payload_empty_mapping_is_absent() -> None
     )
 
 
+def test_geometry_fit_caked_projection_payload_preserves_signature() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    projection = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
+        {
+            "signature": ("projection", "stable"),
+            "detector_shape": (4, 5),
+            "radial_axis": np.linspace(0.0, 1.0, 5),
+            "azimuth_axis": np.linspace(-1.0, 1.0, 4),
+            "raw_azimuth_axis": np.linspace(-1.0, 1.0, 4),
+            "raw_to_gui_row_permutation": np.arange(4),
+        }
+    )
+
+    assert projection is not None
+    assert projection["payload_kind"] == "projection"
+    assert projection["signature"] == ("projection", "stable")
+
+
+def test_geometry_fit_projection_payload_digest_stable_for_equivalent_normalized_payloads() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = {
+        "signature": ("projection", "stable"),
+        "detector_shape": (4, 5),
+        "radial_axis": np.linspace(0.0, 1.0, 5),
+        "azimuth_axis": np.linspace(-1.0, 1.0, 4),
+        "raw_azimuth_axis": np.linspace(-1.0, 1.0, 4),
+        "raw_to_gui_row_permutation": np.array([3, 2, 1, 0], dtype=np.int32),
+    }
+    copied_payload = {
+        key: (np.asarray(value).copy() if isinstance(value, np.ndarray) else value)
+        for key, value in payload.items()
+    }
+    normalized = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
+    copied_normalized = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
+        copied_payload
+    )
+
+    assert normalized is not None
+    assert copied_normalized is not None
+    assert id(normalized["radial_axis"]) != id(copied_normalized["radial_axis"])
+    assert runtime_session._geometry_fit_projection_payload_digest(
+        normalized
+    ) == runtime_session._geometry_fit_projection_payload_digest(copied_normalized)
+
+
 def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load(
     monkeypatch,
 ) -> None:
