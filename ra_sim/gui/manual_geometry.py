@@ -1213,12 +1213,13 @@ def refresh_geometry_manual_pair_entry(
         normalized["two_theta_deg"] = float(output_caked[0])
         normalized["phi_deg"] = float(output_caked[1])
 
-    geometry_manual_trace_live_caked_visual_source_event(
-        "caked_to_detector_projection",
-        selected_candidate=current_projected_sim_entry,
-        placement_entry=normalized,
-        saved_entries=[normalized],
-    )
+    if geometry_manual_live_caked_trace_enabled():
+        geometry_manual_trace_live_caked_visual_source_event(
+            "caked_to_detector_projection",
+            selected_candidate=current_projected_sim_entry,
+            placement_entry=normalized,
+            saved_entries=[normalized],
+        )
     return normalized
 
 
@@ -7550,6 +7551,112 @@ def geometry_manual_refine_qr_sim_peak_for_view(
     )
 
 
+def _geometry_manual_generation_token(value: object) -> object:
+    """Return a cheap generation/revision token when one is carried by an object."""
+
+    generation_keys = (
+        "generation",
+        "generation_id",
+        "revision",
+        "revision_id",
+        "version",
+        "cache_generation",
+        "cache_revision",
+        "cache_version",
+        "simulation_generation",
+        "simulation_revision",
+        "simulation_version",
+        "update_counter",
+        "counter",
+        "sequence",
+        "source_snapshot_generation",
+        "source_snapshot_revision",
+    )
+    if isinstance(value, Mapping):
+        return tuple(
+            (key, value.get(key)) for key in generation_keys if value.get(key) is not None
+        )
+    tokens: list[tuple[str, object]] = []
+    for key in generation_keys:
+        try:
+            attr_value = getattr(value, key)
+        except Exception:
+            continue
+        if attr_value is not None:
+            tokens.append((key, attr_value))
+    return tuple(tokens)
+
+
+def _geometry_manual_array_token(value: object) -> tuple[object, ...]:
+    generation_token = _geometry_manual_generation_token(value)
+    if isinstance(value, np.ndarray):
+        token: list[object] = [
+            "ndarray",
+            id(value),
+            tuple(value.shape),
+            str(value.dtype),
+            tuple(value.strides),
+            generation_token,
+        ]
+        if value.size:
+            try:
+                token.extend([float(value.flat[0]), float(value.flat[-1])])
+            except Exception:
+                pass
+        return tuple(token)
+    try:
+        arr = np.asarray(value)
+    except Exception:
+        return ("object", id(value), generation_token)
+    if arr.ndim == 0:
+        return ("scalar", id(value), str(arr.dtype), generation_token)
+    token = [
+        "array_like",
+        id(value),
+        tuple(arr.shape),
+        str(arr.dtype),
+        tuple(arr.strides),
+        generation_token,
+    ]
+    if arr.size:
+        try:
+            token.extend([float(arr.flat[0]), float(arr.flat[-1])])
+        except Exception:
+            pass
+    return tuple(token)
+
+
+def geometry_manual_qr_sim_refinement_signature(
+    cache_data: Mapping[str, object] | None,
+    *,
+    detector_simulation_image: object | None = None,
+    caked_simulation_image: object | None = None,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    detector_display_to_native_coords: object | None = None,
+    native_detector_coords_to_caked_display_coords: object | None = None,
+    caked_angles_to_detector_display_coords: object | None = None,
+    search_radius_px: int = 5,
+) -> tuple[object, ...]:
+    cache = cache_data if isinstance(cache_data, Mapping) else {}
+    metadata = cache.get("cache_metadata") if isinstance(cache.get("cache_metadata"), Mapping) else {}
+    return (
+        "manual_qr_sim_refinement_v1",
+        cache.get("signature"),
+        cache.get("placed_signature"),
+        _geometry_manual_generation_token(cache),
+        _geometry_manual_generation_token(metadata),
+        _geometry_manual_array_token(detector_simulation_image),
+        _geometry_manual_array_token(caked_simulation_image),
+        _geometry_manual_array_token(radial_axis),
+        _geometry_manual_array_token(azimuth_axis),
+        id(detector_display_to_native_coords),
+        id(native_detector_coords_to_caked_display_coords),
+        id(caked_angles_to_detector_display_coords),
+        int(search_radius_px),
+    )
+
+
 def geometry_manual_refine_qr_sim_candidates_in_cache(
     cache_data: Mapping[str, object] | None,
     *,
@@ -7577,9 +7684,18 @@ def geometry_manual_refine_qr_sim_candidates_in_cache(
         tuple[float, float],
     ] = refine_caked_peak_center,
     search_radius_px: int = 5,
+    refinement_signature: object = None,
+    force_refine: bool = False,
 ) -> dict[str, object]:
     if not isinstance(cache_data, Mapping):
         return {}
+    if (
+        not force_refine
+        and refinement_signature is not None
+        and cache_data.get("qr_sim_refinement_signature") == refinement_signature
+        and cache_data.get("qr_sim_refinement_complete") is True
+    ):
+        return dict(cache_data)
 
     def _refine_rows(rows: object, *, view_mode: str) -> list[dict[str, object]]:
         if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
@@ -7654,6 +7770,9 @@ def geometry_manual_refine_qr_sim_candidates_in_cache(
             refined_cache.get("caked_qr_projection_grouped_candidates"),
             view_mode="caked",
         )
+    if refinement_signature is not None:
+        refined_cache["qr_sim_refinement_signature"] = refinement_signature
+        refined_cache["qr_sim_refinement_complete"] = True
     return refined_cache
 
 
@@ -7663,11 +7782,27 @@ def geometry_manual_rebuild_refined_qr_cache_lookups(
         [Sequence[dict[str, object]] | None],
         GeometryManualLookupMap,
     ],
+    *,
+    refinement_signature: object = None,
+    force_rebuild: bool = False,
 ) -> dict[str, object]:
     """Rebuild Qr lookup maps after simulated rows have been refined."""
 
     if not isinstance(cache_data, Mapping):
         return {}
+    requires_sim_lookup = "active_simulated_peaks" in cache_data or "simulated_peaks" in cache_data
+    requires_projection_lookup = "caked_qr_projection_entries" in cache_data
+    has_required_lookups = bool(
+        (not requires_sim_lookup or "simulated_lookup" in cache_data)
+        and (not requires_projection_lookup or "caked_qr_projection_lookup" in cache_data)
+    )
+    if (
+        not force_rebuild
+        and refinement_signature is not None
+        and cache_data.get("qr_sim_refinement_lookup_signature") == refinement_signature
+        and has_required_lookups
+    ):
+        return dict(cache_data)
 
     def _row_dicts(rows: object) -> list[dict[str, object]]:
         if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
@@ -7696,6 +7831,8 @@ def geometry_manual_rebuild_refined_qr_cache_lookups(
             projection_lookup
         )
 
+    if refinement_signature is not None:
+        rebuilt_cache["qr_sim_refinement_lookup_signature"] = refinement_signature
     return rebuilt_cache
 
 
@@ -10498,6 +10635,20 @@ _LIVE_CAKED_TRACE_HKL = (-1, 0, 10)
 _LIVE_CAKED_TRACE_LAST: dict[int, tuple[float, float] | None] = {}
 
 
+def _geometry_manual_env_flag(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def geometry_manual_live_caked_trace_enabled() -> bool:
+    if _geometry_manual_env_flag("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE"):
+        return False
+    return _geometry_manual_env_flag("RA_SIM_LIVE_CAKED_TRACE")
+
+
+def geometry_manual_live_caked_trace_emit_unchanged() -> bool:
+    return _geometry_manual_env_flag("RA_SIM_LIVE_CAKED_TRACE_ALL")
+
+
 def _geometry_manual_trace_branch(entry: Mapping[str, object] | None) -> int | None:
     if not isinstance(entry, Mapping):
         return None
@@ -10612,7 +10763,7 @@ def geometry_manual_trace_live_caked_visual_source_event(
 ) -> None:
     """Print live-only visual-source ledger rows for the (-1,0,10) caked picker."""
 
-    if str(os.environ.get("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", "")).strip() == "1":
+    if not geometry_manual_live_caked_trace_enabled():
         return
 
     resolved_run_id = (
@@ -10719,6 +10870,8 @@ def geometry_manual_trace_live_caked_visual_source_event(
             cache_point=cache_point,
         )
         changed = _geometry_manual_trace_changed(int(branch), actual_point)
+        if changed == "no" and not geometry_manual_live_caked_trace_emit_unchanged():
+            continue
         print(
             "[ra-sim] live_caked_visual_source "
             + geometry_manual_cmd_provenance_text(
@@ -12049,7 +12202,7 @@ def geometry_manual_pick_preview_state(
         "quality_label": str(quality_label),
         "message": message,
     }
-    if use_caked_space:
+    if use_caked_space and geometry_manual_live_caked_trace_enabled():
         geometry_manual_trace_live_caked_visual_source_event(
             "manual_pick_preview",
             manual_geometry_run_id=manual_run_id,
@@ -13159,7 +13312,15 @@ def make_runtime_geometry_manual_cache_callbacks(
         | None = None,
     ) -> dict[str, object]:
         bg_index = _background_index() if background_index is None else int(background_index)
+        current_bg_index = _background_index()
         background_local = _background_image() if background_image is None else background_image
+        existing_cache_signature_value = _resolve_runtime_value(current_cache_signature)
+        existing_cache_data_value = _resolve_runtime_value(current_cache_data)
+        peak_records_value = _resolve_runtime_value(peak_records)
+        detector_simulation_image_value = _resolve_runtime_value(detector_simulation_image)
+        caked_simulation_image_value = _resolve_runtime_value(caked_simulation_image)
+        radial_axis_value = _resolve_runtime_value(radial_axis)
+        azimuth_axis_value = _resolve_runtime_value(azimuth_axis)
 
         def _request_caked_projection_signature() -> object:
             if caked_projection_signature_override is not None:
@@ -13213,16 +13374,16 @@ def make_runtime_geometry_manual_cache_callbacks(
             param_set=param_set,
             prefer_cache=prefer_cache,
             background_index=bg_index,
-            current_background_index=_background_index(),
+            current_background_index=current_bg_index,
             background_image=background_local,
-            existing_cache_signature=_resolve_runtime_value(current_cache_signature),
-            existing_cache_data=_resolve_runtime_value(current_cache_data),
+            existing_cache_signature=existing_cache_signature_value,
+            existing_cache_data=existing_cache_data_value,
             placed_cache_signature_fn=_placed_pick_cache_signature_for_request,
             cache_signature_fn=_pick_cache_signature_for_request,
             source_rows_for_background=source_rows_for_background,
             listed_q_group_keys_for_picker=listed_q_group_keys_for_picker,
             simulated_peaks_for_params=simulated_peaks_for_params,
-            peak_records=_resolve_runtime_value(peak_records),
+            peak_records=peak_records_value,
             build_grouped_candidates=build_grouped_candidates,
             build_simulated_lookup=build_simulated_lookup,
             filter_active_rows=_filter_active_rows,
@@ -13233,41 +13394,49 @@ def make_runtime_geometry_manual_cache_callbacks(
             auto_match_background_context=auto_match_background_context,
             build_caked_projection_sidecar=bool(build_caked_projection_sidecar),
         )
-        cache_data = geometry_manual_refine_qr_sim_candidates_in_cache(
-            cache_data,
-            detector_simulation_image=_resolve_runtime_value(detector_simulation_image),
-            caked_simulation_image=_resolve_runtime_value(caked_simulation_image),
-            radial_axis=_resolve_runtime_value(radial_axis),
-            azimuth_axis=_resolve_runtime_value(azimuth_axis),
-            detector_display_to_native_coords=detector_display_to_native_coords,
-            native_detector_coords_to_caked_display_coords=(
-                native_detector_coords_to_caked_display_coords
-            ),
-            caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
-        )
-        cache_data = geometry_manual_rebuild_refined_qr_cache_lookups(
-            cache_data,
-            build_simulated_lookup,
-        )
-        cache_data = _attach_source_snapshot_diagnostics(cache_data)
-        if isinstance(next_cache_data, dict):
-            next_cache_data = geometry_manual_refine_qr_sim_candidates_in_cache(
-                next_cache_data,
-                detector_simulation_image=_resolve_runtime_value(detector_simulation_image),
-                caked_simulation_image=_resolve_runtime_value(caked_simulation_image),
-                radial_axis=_resolve_runtime_value(radial_axis),
-                azimuth_axis=_resolve_runtime_value(azimuth_axis),
+        same_next_cache = isinstance(next_cache_data, dict) and next_cache_data is cache_data
+
+        def _refine_cache_once(raw_cache: Mapping[str, object] | None) -> dict[str, object]:
+            if not isinstance(raw_cache, Mapping):
+                return {}
+            refinement_signature = geometry_manual_qr_sim_refinement_signature(
+                raw_cache,
+                detector_simulation_image=detector_simulation_image_value,
+                caked_simulation_image=caked_simulation_image_value,
+                radial_axis=radial_axis_value,
+                azimuth_axis=azimuth_axis_value,
                 detector_display_to_native_coords=detector_display_to_native_coords,
                 native_detector_coords_to_caked_display_coords=(
                     native_detector_coords_to_caked_display_coords
                 ),
                 caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
             )
-            next_cache_data = geometry_manual_rebuild_refined_qr_cache_lookups(
-                next_cache_data,
-                build_simulated_lookup,
+            refined = geometry_manual_refine_qr_sim_candidates_in_cache(
+                raw_cache,
+                detector_simulation_image=detector_simulation_image_value,
+                caked_simulation_image=caked_simulation_image_value,
+                radial_axis=radial_axis_value,
+                azimuth_axis=azimuth_axis_value,
+                detector_display_to_native_coords=detector_display_to_native_coords,
+                native_detector_coords_to_caked_display_coords=(
+                    native_detector_coords_to_caked_display_coords
+                ),
+                caked_angles_to_detector_display_coords=caked_angles_to_detector_display_coords,
+                refinement_signature=refinement_signature,
             )
-            next_cache_data = _attach_source_snapshot_diagnostics(next_cache_data)
+            refined = geometry_manual_rebuild_refined_qr_cache_lookups(
+                refined,
+                build_simulated_lookup,
+                refinement_signature=refinement_signature,
+            )
+            return _attach_source_snapshot_diagnostics(refined)
+
+        cache_data = _refine_cache_once(cache_data)
+        if isinstance(next_cache_data, dict):
+            if same_next_cache:
+                next_cache_data = cache_data
+            else:
+                next_cache_data = _refine_cache_once(next_cache_data)
         replace_cache_state(
             next_signature,
             dict(next_cache_data) if isinstance(next_cache_data, dict) else {},
@@ -15425,7 +15594,7 @@ def geometry_manual_toggle_selection_at(
         next_session["tagged_candidate"] = dict(tagged_candidate)
         next_session["_tagged_candidate_requires_identity"] = True
     set_pick_session_fn(next_session)
-    if use_caked_space:
+    if use_caked_space and geometry_manual_live_caked_trace_enabled():
         geometry_manual_trace_live_caked_visual_source_event(
             "caked_qr_simulation_selection",
             manual_geometry_run_id=manual_run_id,
@@ -16425,7 +16594,7 @@ def geometry_manual_place_selection_at(
         profile_cache=profile_cache,
     )
     next_session["pending_entries"] = pending_entries
-    if use_caked_space:
+    if use_caked_space and geometry_manual_live_caked_trace_enabled():
         placement_branch = _geometry_manual_trace_branch(pair_entry)
         geometry_manual_trace_live_caked_visual_source_event(
             (
@@ -16479,7 +16648,7 @@ def geometry_manual_place_selection_at(
                 candidate_source_key=candidate_source_key,
                 profile_cache=profile_cache,
             )
-        if use_caked_space:
+        if use_caked_space and geometry_manual_live_caked_trace_enabled():
             geometry_manual_trace_live_caked_visual_source_event(
                 "completed_group_comparison",
                 manual_geometry_run_id=manual_run_id,

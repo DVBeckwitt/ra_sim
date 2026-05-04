@@ -219,6 +219,200 @@ def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_previe
     )
 
 
+def test_refine_qr_sim_candidates_in_cache_skips_when_refinement_signature_matches(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    signature = ("refinement", 1)
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return {**dict(candidate), "refined": True}
+
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+    warm_cache = {
+        "simulated_peaks": [dict(candidate)],
+        "qr_sim_refinement_signature": signature,
+        "qr_sim_refinement_complete": True,
+    }
+
+    skipped = mg.geometry_manual_refine_qr_sim_candidates_in_cache(
+        warm_cache,
+        refinement_signature=signature,
+    )
+    direct = mg.geometry_manual_refine_qr_sim_candidates_in_cache(warm_cache)
+
+    assert calls == ["detector"]
+    assert "refined" not in skipped["simulated_peaks"][0]
+    assert direct["simulated_peaks"][0]["refined"] is True
+
+
+def test_rebuild_refined_qr_cache_lookups_skips_when_refinement_signature_matches() -> None:
+    calls: list[int] = []
+    signature = ("refinement", 2)
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+    existing_lookup = _build_lookup([candidate])
+
+    def _count_build_lookup(entries):
+        calls.append(len(list(entries or ())))
+        return _build_lookup(entries)
+
+    skipped = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        {
+            "active_simulated_peaks": [dict(candidate)],
+            "simulated_lookup": existing_lookup,
+            "qr_sim_refinement_lookup_signature": signature,
+        },
+        _count_build_lookup,
+        refinement_signature=signature,
+    )
+    rebuilt_missing = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        {
+            "active_simulated_peaks": [dict(candidate)],
+            "qr_sim_refinement_lookup_signature": signature,
+        },
+        _count_build_lookup,
+        refinement_signature=signature,
+    )
+    rebuilt_direct = mg.geometry_manual_rebuild_refined_qr_cache_lookups(
+        {
+            "active_simulated_peaks": [dict(candidate)],
+            "simulated_lookup": existing_lookup,
+            "qr_sim_refinement_lookup_signature": signature,
+        },
+        _count_build_lookup,
+    )
+
+    assert calls == [1, 1]
+    assert skipped["simulated_lookup"] == existing_lookup
+    assert _source_key(candidate) in rebuilt_missing["simulated_lookup"]
+    assert _source_key(candidate) in rebuilt_direct["simulated_lookup"]
+
+
+def test_get_pick_cache_refines_same_next_cache_object_only_once(monkeypatch) -> None:
+    calls: list[str] = []
+    cache_state = {"signature": None, "data": {}}
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+    raw_cache = {"signature": ("manual-cache", 1), "simulated_peaks": [dict(candidate)]}
+
+    def _fake_build_pick_cache(**_kwargs):
+        return raw_cache, raw_cache["signature"], raw_cache
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return dict(candidate)
+
+    monkeypatch.setattr(mg, "build_geometry_manual_pick_cache", _fake_build_pick_cache)
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.zeros((4, 4), dtype=float),
+        use_caked_space=lambda: False,
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {},
+        pairs_for_index=lambda _idx: [],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+    )
+
+    cache_data = callbacks.get_pick_cache(prefer_cache=True)
+
+    assert calls == ["detector"]
+    assert cache_state["data"]["qr_sim_refinement_signature"] == cache_data[
+        "qr_sim_refinement_signature"
+    ]
+
+
+def test_get_pick_cache_skips_row_refinement_on_warm_cache(monkeypatch) -> None:
+    calls: list[str] = []
+    background = np.zeros((10, 10), dtype=float)
+    cache_state: dict[str, object] = {"signature": None, "data": {}}
+    candidate = {
+        "q_group_key": ("q_group", "primary", 1, 2),
+        "hkl": (-1, 0, 2),
+        "source_table_index": 4,
+        "source_row_index": 5,
+        "display_col": 5.0,
+        "display_row": 6.0,
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "native_col": 5.0,
+        "native_row": 6.0,
+        "weight": 1.0,
+    }
+
+    def _replace_cache_state(signature, data) -> None:
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    def _count_refine(candidate, *, view_mode, **_kwargs):
+        calls.append(str(view_mode))
+        return dict(candidate)
+
+    monkeypatch.setattr(mg, "geometry_manual_refine_qr_sim_peak_for_view", _count_refine)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background,
+        use_caked_space=lambda: False,
+        replace_cache_state=_replace_cache_state,
+        current_geometry_fit_params=lambda: {"a": 2.0},
+        pairs_for_index=lambda _idx: [],
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: [dict(candidate)],
+        build_grouped_candidates=_group_candidates,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+    )
+
+    first_cache = callbacks.get_pick_cache(param_set={"a": 2.0}, prefer_cache=True)
+    first_call_count = len(calls)
+    second_cache = callbacks.get_pick_cache(param_set={"a": 2.0}, prefer_cache=True)
+
+    assert first_call_count > 0
+    assert len(calls) == first_call_count
+    assert cache_state["data"]["qr_sim_refinement_signature"] == first_cache[
+        "qr_sim_refinement_signature"
+    ]
+    assert cache_state["data"]["qr_sim_refinement_lookup_signature"] == first_cache[
+        "qr_sim_refinement_signature"
+    ]
+    assert second_cache["qr_sim_refinement_signature"] == first_cache[
+        "qr_sim_refinement_signature"
+    ]
+
+
 def test_build_geometry_manual_pick_cache_reprojects_existing_rows_without_analytic_forward_path(
     monkeypatch,
 ) -> None:

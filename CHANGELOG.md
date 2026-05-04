@@ -79,6 +79,7 @@
 
 - **GUI and UX updates**
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and GUI Row/Col mapping to update the beam-center sliders and entries.
+  - Made live caked Qr/Qz visual-source ledger output opt-in and cached manual-pick simulated-candidate refinement by signature so repeated warm-cache caked clicks do not reprint trace rows or rerun full row refinement.
   - Fixed detector-view Selected-Qr rod ROI mode so it displays a detector-native Qr/Qz support mask, suppresses the legacy detector `2theta/phi` angular ROI while enabled, and sets Qz bounds from detector pixels during rod drags.
   - Fixed Selected-Qr rod ROI profiles so detector view uses detector-native masks only for overlay/drag, while plotted Qz profiles always integrate from caked `2theta/phi` data.
   - Added Selected-Qr rod multi-selection with a stable extended-selection rod list, union overlay/drag masks, and vertically stacked per-rod Qz subplots; saved GUI state now records both `selected_qr_rod_keys` and legacy `selected_qr_rod_key`.

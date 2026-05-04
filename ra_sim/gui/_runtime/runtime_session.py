@@ -8446,7 +8446,10 @@ def _refresh_geometry_manual_pick_session() -> dict[str, object]:
         candidate_source_key=_geometry_manual_candidate_source_key,
         profile_cache=simulation_runtime_state.profile_cache,
     )
-    if _geometry_manual_pick_uses_caked_space():
+    if (
+        _geometry_manual_pick_uses_caked_space()
+        and gui_manual_geometry.geometry_manual_live_caked_trace_enabled()
+    ):
         gui_manual_geometry.geometry_manual_trace_live_caked_visual_source_event(
             "pending_visual_map_built",
             manual_geometry_run_id=(

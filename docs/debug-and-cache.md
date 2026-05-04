@@ -200,6 +200,12 @@ native detector point, detector display point, caked visual point, and caked
 background point, but they must not override the simulated Qr/Qz marker for a
 source-backed saved pair.
 
+Live caked visual-source ledger rows are disabled by default. Set
+`RA_SIM_LIVE_CAKED_TRACE=1` to print `[ra-sim] live_caked_visual_source` rows,
+and add `RA_SIM_LIVE_CAKED_TRACE_ALL=1` to include unchanged duplicate rows.
+`RA_SIM_SUPPRESS_LIVE_CAKED_TRACE=1` suppresses the ledger regardless of the
+enable flags.
+
 The HKL picker intentionally shares the corrected Qr/manual picker candidate
 payload for hit testing and selected-marker placement. If either picker
 regresses, first check whether the failing path bypassed that shared candidate

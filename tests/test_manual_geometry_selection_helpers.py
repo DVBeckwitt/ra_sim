@@ -21567,9 +21567,8 @@ def test_manual_geometry_live_code_path_marker(capsys) -> None:
     assert "manual_geometry.py" in stamp
 
 
-def test_live_caked_visual_trace_without_run_id_stays_unattributed(capsys) -> None:
-    active_run_id = mg.geometry_manual_start_run_id()
-    legacy_entry = {
+def _live_caked_trace_target_entry() -> dict[str, object]:
+    return {
         "q_group_key": _QR_PICKER_TARGET_Q_GROUP_KEY,
         "hkl": _QR_PICKER_TARGET_HKL,
         "source_branch_index": 0,
@@ -21577,6 +21576,90 @@ def test_live_caked_visual_trace_without_run_id_stays_unattributed(capsys) -> No
         "source_row_index": 24,
         "sim_visual_deg": (40.237466, 36.527645),
     }
+
+
+def test_live_caked_visual_trace_is_disabled_by_default(capsys, monkeypatch) -> None:
+    monkeypatch.delenv("RA_SIM_LIVE_CAKED_TRACE", raising=False)
+    monkeypatch.delenv("RA_SIM_LIVE_CAKED_TRACE_ALL", raising=False)
+    monkeypatch.delenv("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", raising=False)
+    mg._LIVE_CAKED_TRACE_LAST.clear()
+
+    mg.geometry_manual_trace_live_caked_visual_source_event(
+        "default_disabled",
+        selected_candidate=_live_caked_trace_target_entry(),
+    )
+
+    assert capsys.readouterr().out == ""
+
+
+def test_live_caked_visual_trace_opt_in_emits_rows(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE", "1")
+    monkeypatch.delenv("RA_SIM_LIVE_CAKED_TRACE_ALL", raising=False)
+    monkeypatch.delenv("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", raising=False)
+    mg._LIVE_CAKED_TRACE_LAST.clear()
+
+    mg.geometry_manual_trace_live_caked_visual_source_event(
+        "opt_in",
+        selected_candidate=_live_caked_trace_target_entry(),
+    )
+
+    output = capsys.readouterr().out
+    assert "live_caked_visual_source" in output
+    assert "changed_since_previous_event=yes" in output
+
+
+def test_live_caked_visual_trace_suppress_env_wins_over_opt_in(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE", "1")
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE_ALL", "1")
+    monkeypatch.setenv("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", "1")
+    mg._LIVE_CAKED_TRACE_LAST.clear()
+
+    mg.geometry_manual_trace_live_caked_visual_source_event(
+        "suppressed",
+        selected_candidate=_live_caked_trace_target_entry(),
+    )
+
+    assert capsys.readouterr().out == ""
+
+
+def test_live_caked_visual_trace_skips_unchanged_rows_unless_all_enabled(
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE", "1")
+    monkeypatch.delenv("RA_SIM_LIVE_CAKED_TRACE_ALL", raising=False)
+    monkeypatch.delenv("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", raising=False)
+    mg._LIVE_CAKED_TRACE_LAST.clear()
+    entry = _live_caked_trace_target_entry()
+
+    mg.geometry_manual_trace_live_caked_visual_source_event("first", selected_candidate=entry)
+    mg.geometry_manual_trace_live_caked_visual_source_event("second", selected_candidate=entry)
+    output = capsys.readouterr().out
+
+    assert output.count("[ra-sim] live_caked_visual_source") == 1
+    assert "changed_since_previous_event=yes" in output
+    assert "changed_since_previous_event=no" not in output
+
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE_ALL", "1")
+    mg._LIVE_CAKED_TRACE_LAST.clear()
+    mg.geometry_manual_trace_live_caked_visual_source_event("first", selected_candidate=entry)
+    mg.geometry_manual_trace_live_caked_visual_source_event("second", selected_candidate=entry)
+    output = capsys.readouterr().out
+
+    assert output.count("[ra-sim] live_caked_visual_source") == 2
+    assert "changed_since_previous_event=no" in output
+
+
+def test_live_caked_visual_trace_without_run_id_stays_unattributed(
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE", "1")
+    monkeypatch.delenv("RA_SIM_LIVE_CAKED_TRACE_ALL", raising=False)
+    monkeypatch.delenv("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", raising=False)
+    mg._LIVE_CAKED_TRACE_LAST.clear()
+    active_run_id = mg.geometry_manual_start_run_id()
+    legacy_entry = _live_caked_trace_target_entry()
     mg.geometry_manual_trace_live_caked_visual_source_event(
         "legacy_projection_without_run_id",
         selected_candidate=legacy_entry,
@@ -22054,6 +22137,10 @@ def test_minus_1_0_10_live_source_ledger(tmp_path) -> None:
 
 
 def test_minus_1_0_10_live_caked_visual_source_ledger(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RA_SIM_LIVE_CAKED_TRACE", "1")
+    monkeypatch.delenv("RA_SIM_LIVE_CAKED_TRACE_ALL", raising=False)
+    monkeypatch.delenv("RA_SIM_SUPPRESS_LIVE_CAKED_TRACE", raising=False)
+    mg._LIVE_CAKED_TRACE_LAST.clear()
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     context, rows = _diag_startup_context_and_rows(tmp_path)
     profile_cache = rows["profile_cache"]
