@@ -77,6 +77,7 @@
   - Added New4 refined-center diagnostics proving observed caked centers and simulated refined caked centers are recomputed under trial geometry, while classifying the current objective as bin-limited because simulated caked refinement is integer-bin argmax without subpixel peak refinement.
   - Hardened the geometry-fit integration workflow tests and diagnostics by keeping in-memory source-resolution diagnostics dict-shaped, preserving raw-derived simulated native coordinates during orientation setup, routing optional New4 artifact tests through the shared skip gate, and refreshing synthetic New4 dynamic-source coverage fixtures without changing the production dynamic-source gate.
   - Fixed cold-start caked manual geometry-fit preflight so exact caked projection metadata is cached separately from display intensity images, allowing zero-support density NaNs without discarding the geometric projector.
+  - Fixed generated and noncurrent caked manual-fit projection payload handling so empty payloads can use generated fallback, invalid axes-only payloads fail closed, and caked row rebuilds never receive a missing exact projector.
 
 - **GUI and UX updates**
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and GUI Row/Col mapping to update the beam-center sliders and entries.

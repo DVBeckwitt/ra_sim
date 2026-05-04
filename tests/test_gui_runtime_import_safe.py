@@ -16440,9 +16440,7 @@ def test_worker_caked_manual_prepare_fails_closed_before_dataset_build(
     kinds = [str(event.get("kind")) for event in events]
 
     assert action_result.error_text is not None
-    assert "exact caked fit-space projector could not be prepared" in action_result.error_text
     assert "exact caked projector unavailable for background 1" in action_result.error_text
-    assert "source_cache_caked_view_failed" in kinds
     assert "preflight_failure" in kinds
 
 
@@ -16451,10 +16449,17 @@ def test_worker_caked_manual_rejects_axes_only_payload_before_dataset_build(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     job = _make_geometry_fit_worker_job(runtime_session)
+    axes_only_payload = _geometry_fit_worker_caked_payload(
+        runtime_session,
+        background_value=1.0,
+        radial_values=[1.0, 2.0],
+        azimuth_values=[3.0, 4.0],
+    )
+    axes_only_payload["transform_bundle"] = None
 
     job["var_names"] = ["zb"]
     job["projection_view_mode"] = "caked"
-    job["projection_payload_by_background"] = {}
+    job["projection_payload_by_background"] = {0: axes_only_payload}
     job["caked_views_by_background"] = {}
     job["pick_uses_caked_space"] = True
     job["manual_fit_space_by_background"] = {0: "caked"}
@@ -16491,6 +16496,14 @@ def test_worker_caked_manual_rejects_axes_only_payload_before_dataset_build(
     monkeypatch.setattr(runtime_session, "caking", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(
         runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda *_args, **_kwargs: pytest.fail(
+            "axes-only exact caked payload must fail closed without generated fallback"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
         "_prepare_caked_display_payload",
         lambda *_args, **_kwargs: {
             "image": np.ones((2, 2), dtype=float),
@@ -16513,7 +16526,6 @@ def test_worker_caked_manual_rejects_axes_only_payload_before_dataset_build(
     action_result = runtime_session._run_async_geometry_fit_worker_job(job)
 
     assert action_result.error_text is not None
-    assert "exact caked fit-space projector could not be prepared" in action_result.error_text
     assert "exact caked projector unavailable for background 1" in action_result.error_text
 
 
@@ -16655,6 +16667,18 @@ def test_worker_caked_manual_stores_projection_before_row_projection_with_zero_s
     stored_projection = job["projection_payload_by_background"][0]
     assert stored_projection["payload_kind"] == "projection"
     assert "background" not in stored_projection
+
+
+def test_geometry_fit_caked_projection_payload_empty_mapping_is_absent() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    assert runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload({}) is None
+    assert (
+        runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
+            {"detector_shape": (4, 4)}
+        )
+        is None
+    )
 
 
 def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load(
@@ -16904,8 +16928,7 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
                     background_value=float(background_index),
                     radial_values=[101.0, 102.0],
                     azimuth_values=[3.0, 4.0],
-                ),
-                "payload_marker": int(background_index),
+                )
             }
         ),
         raising=False,
@@ -16924,6 +16947,24 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
 
     def _fake_rebuild_geometry_fit_source_rows(**kwargs):
         seen_projection_payloads.append(kwargs.get("projection_payload"))
+        stage_callback = kwargs.get("stage_callback")
+        if callable(stage_callback):
+            stage_callback(
+                "source_cache_targeted_fresh_simulation_start",
+                {
+                    "background_index": int(kwargs["background_index"]),
+                    "status": "ambiguous_candidate",
+                    "cache_source": "fresh_simulation",
+                },
+            )
+            stage_callback(
+                "source_cache_project_rows_start",
+                {
+                    "background_index": int(kwargs["background_index"]),
+                    "cache_source": "projection",
+                    "row_count": 1,
+                },
+            )
         return runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
             background_index=int(kwargs["background_index"]),
             requested_signature=kwargs["requested_signature"],
@@ -16950,6 +16991,8 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
     )
 
     runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
 
     assert resolve_calls
     assert any(
@@ -16958,9 +17001,23 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
     )
     assert len(seen_projection_payloads) == 1
     assert isinstance(seen_projection_payloads[0], Mapping)
-    assert seen_projection_payloads[0]["payload_marker"] == 1
+    np.testing.assert_allclose(
+        np.asarray(seen_projection_payloads[0]["radial_axis"], dtype=float),
+        [101.0, 102.0],
+    )
     assert isinstance(job["projection_payload_by_background"], dict)
-    assert job["projection_payload_by_background"][1]["payload_marker"] == 1
+    assert 1 in job["projection_payload_by_background"]
+    assert isinstance(
+        job["projection_payload_by_background"][1]["transform_bundle"],
+        runtime_session.CakeTransformBundle,
+    )
+    assert "projection_payload_ready" in kinds
+    assert "source_cache_targeted_fresh_simulation_start" in kinds
+    assert "source_cache_project_rows_start" in kinds
+    assert kinds.index("projection_payload_ready") < kinds.index(
+        "source_cache_targeted_fresh_simulation_start"
+    )
+    assert kinds.index("projection_payload_ready") < kinds.index("source_cache_project_rows_start")
 
 
 def test_worker_does_not_call_current_view_projector_for_noncurrent_background(
@@ -17263,27 +17320,15 @@ def test_worker_uses_background_specific_caked_payload_for_projected_rows(
     assert projected_rows[0]["projected_payload_marker"] == 101.0
 
 
-def test_worker_caked_projection_hydrates_json_safe_payload_before_projection(
+def test_worker_caked_projection_rejects_json_safe_payload_without_exact_bundle(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     job = _make_geometry_fit_worker_job(runtime_session)
     projected_rows: list[dict[str, object]] = []
-    captured_bundles: list[object] = []
 
     radial_axis = np.asarray([101.0, 102.0], dtype=np.float64)
     azimuth_axis = np.asarray([3.0, 4.0], dtype=np.float64)
-    raw_azimuth_axis = np.asarray(
-        runtime_session.gui_geometry_fit.gui_phi_to_raw_phi(azimuth_axis),
-        dtype=np.float64,
-    )
-    exact_bundle = runtime_session.CakeTransformBundle(
-        detector_shape=(4, 4),
-        radial_deg=radial_axis,
-        raw_azimuth_deg=raw_azimuth_axis,
-        gui_azimuth_deg=azimuth_axis,
-        lut=object(),
-    )
     stale_payload = _geometry_fit_worker_caked_payload(
         runtime_session,
         background_value=1.0,
@@ -17319,34 +17364,26 @@ def test_worker_caked_projection_hydrates_json_safe_payload_before_projection(
         "_build_analysis_integrator",
         lambda *_args, **_kwargs: None,
     )
-
-    def _hydrate(payload, **_kwargs):
-        hydrated = dict(payload)
-        hydrated["transform_bundle"] = exact_bundle
-        return hydrated
-
     monkeypatch.setattr(
         runtime_session.gui_geometry_fit,
         "_geometry_fit_hydrate_exact_caked_payload",
-        _hydrate,
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid stored projection payload must fail before hydration"
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid stored projection payload must block generated fallback"
+        ),
+        raising=False,
     )
     monkeypatch.setattr(
         runtime_session.gui_manual_geometry,
         "make_runtime_geometry_manual_projection_callbacks",
-        lambda **kwargs: SimpleNamespace(
-            project_peaks_to_current_view=lambda rows: (
-                captured_bundles.append(kwargs["caked_transform_bundle"]())
-                or [
-                    dict(
-                        entry,
-                        projected_with_exact_bundle=(
-                            kwargs["caked_transform_bundle"]() is exact_bundle
-                        ),
-                    )
-                    for entry in rows or ()
-                    if isinstance(entry, Mapping)
-                ]
-            )
+        lambda **_kwargs: pytest.fail(
+            "invalid stored projection payload must fail before projector build"
         ),
     )
     monkeypatch.setattr(
@@ -17376,11 +17413,12 @@ def test_worker_caked_projection_hydrates_json_safe_payload_before_projection(
         ),
     )
 
-    runtime_session._run_async_geometry_fit_worker_job(job)
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
 
-    assert captured_bundles == [exact_bundle]
-    assert projected_rows[0]["projected_with_exact_bundle"] is True
-    assert job["projection_payload_by_background"][1]["transform_bundle"] is exact_bundle
+    assert projected_rows == []
+    assert action_result.error_text is not None
+    assert "exact caked projector unavailable for background 2" in action_result.error_text
+    assert job["projection_payload_by_background"][1]["transform_bundle"] == "json-safe-bundle"
 
 
 def test_worker_manual_dataset_projection_splits_mixed_background_rows(
@@ -18120,6 +18158,16 @@ def test_noncurrent_caked_signature_uses_generated_payload_when_available(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     resolve_calls: list[dict[str, object]] = []
+    radial_axis = np.asarray([101.0, 102.0], dtype=np.float64)
+    azimuth_axis = np.asarray([3.0, 4.0], dtype=np.float64)
+    raw_azimuth_axis = np.asarray([3.0, 4.0], dtype=np.float64)
+    transform_bundle = runtime_session.CakeTransformBundle(
+        detector_shape=(4, 4),
+        radial_deg=radial_axis,
+        raw_azimuth_deg=raw_azimuth_axis,
+        gui_azimuth_deg=azimuth_axis,
+        lut=object(),
+    )
 
     monkeypatch.setattr(
         runtime_session,
@@ -18134,11 +18182,11 @@ def test_noncurrent_caked_signature_uses_generated_payload_when_available(
             resolve_calls.append({"background_index": int(background_index), **dict(kwargs)})
             or {
                 "detector_shape": (4, 4),
-                "radial_axis": np.asarray([101.0, 102.0], dtype=np.float64),
-                "azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
-                "raw_azimuth_axis": np.asarray([3.0, 4.0], dtype=np.float64),
+                "radial_axis": radial_axis,
+                "azimuth_axis": azimuth_axis,
+                "raw_azimuth_axis": raw_azimuth_axis,
                 "raw_to_gui_row_permutation": np.asarray([0, 1], dtype=np.int32),
-                "transform_bundle": object(),
+                "transform_bundle": transform_bundle,
             }
         ),
         raising=False,
@@ -18156,10 +18204,12 @@ def test_noncurrent_caked_signature_uses_generated_payload_when_available(
     assert signature["background_index"] == 1
     assert signature["available"] is True
     assert signature["detector_shape"] == [4, 4]
-    assert signature["radial_axis"] == [101.0, 102.0]
-    assert signature["azimuth_axis"] == [3.0, 4.0]
-    assert signature["raw_azimuth_axis"] == [3.0, 4.0]
-    assert signature["raw_to_gui_row_permutation"] == [0, 1]
+    assert ("first", 101.0) in signature["radial_axis"]
+    assert ("last", 102.0) in signature["radial_axis"]
+    assert ("first", 3.0) in signature["azimuth_axis"]
+    assert ("last", 4.0) in signature["azimuth_axis"]
+    assert ("length", 2) in signature["raw_azimuth_axis"]
+    assert ("length", 2) in signature["raw_to_gui_row_permutation"]
     assert signature["projection_payload_digest"]
 
 

@@ -118,7 +118,7 @@ def geometry_fit_caked_projection_payload(
 
     if not isinstance(payload, Mapping):
         return None
-    return {
+    projection = {
         "payload_kind": "projection",
         "detector_shape": payload.get("detector_shape"),
         "radial_axis": payload.get("radial_axis", payload.get("radial")),
@@ -130,6 +130,15 @@ def geometry_fit_caked_projection_payload(
         "raw_to_gui_row_permutation": payload.get("raw_to_gui_row_permutation"),
         "transform_bundle": payload.get("transform_bundle"),
     }
+    meaningful_keys = (
+        "radial_axis",
+        "azimuth_axis",
+        "raw_azimuth_axis",
+        "transform_bundle",
+    )
+    if all(projection.get(key) is None for key in meaningful_keys):
+        return None
+    return projection
 
 
 def sanitize_geometry_fit_caked_display_payload(
