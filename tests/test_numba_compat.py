@@ -3,7 +3,12 @@ from __future__ import annotations
 import builtins
 from contextlib import contextmanager
 import importlib
+import os
+from pathlib import Path
+import subprocess
 import sys
+import textwrap
+from types import ModuleType, SimpleNamespace
 from typing import Any, Iterator
 
 import pytest
@@ -23,6 +28,7 @@ _CLEAR_FOR_FALLBACK = (
 )
 
 _OPTIONAL_DEP_NAMES = {"CifFile", "Dans_Diffraction", "xraydb", "spglib"}
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _snapshot_ra_sim_modules() -> dict[str, Any]:
@@ -60,6 +66,14 @@ def _block_numba_imports(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(builtins, "__import__", blocked_import)
 
 
+def _looks_like_plain_python_function(obj: Any) -> bool:
+    return (
+        callable(obj)
+        and getattr(obj, "__code__", None) is not None
+        and isinstance(getattr(obj, "__name__", None), str)
+    )
+
+
 @contextmanager
 def _blocked_numba_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     previous_modules = _snapshot_ra_sim_modules()
@@ -78,7 +92,84 @@ def _import_fallback_compat(monkeypatch: pytest.MonkeyPatch):
         compat = importlib.import_module("ra_sim.utils.numba_compat")
         assert compat.NUMBA_AVAILABLE is False
         assert compat.NUMBA_IMPORT_ERROR is not None
+        assert compat.NUMBA_JIT_DISABLED is False
+        assert compat.NUMBA_COMPILATION_AVAILABLE is False
         yield compat
+
+
+@contextmanager
+def _fake_raw_njit_numba_context(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    previous_modules = _snapshot_ra_sim_modules()
+
+    class _FakeNumbaType:
+        def __getattr__(self, _name: str):
+            return self
+
+        def __getitem__(self, _item):
+            return self
+
+        def __call__(self, *args, **kwargs):
+            del args, kwargs
+            return self
+
+    class _FakeList(list):
+        @classmethod
+        def empty_list(cls, _item_type=None):
+            del _item_type
+            return cls()
+
+    def fake_njit(*decorator_args, **decorator_kwargs):
+        if (
+            len(decorator_args) == 1
+            and not decorator_kwargs
+            and _looks_like_plain_python_function(decorator_args[0])
+        ):
+            return decorator_args[0]
+
+        def _decorate(fn):
+            return fn
+
+        return _decorate
+
+    fake_numba = ModuleType("numba")
+    fake_numba.njit = fake_njit
+    fake_numba.prange = range
+    fake_numba.types = _FakeNumbaType()
+    fake_numba.config = SimpleNamespace(DISABLE_JIT=True)
+    fake_numba.get_num_threads = lambda: 1
+    fake_numba.set_num_threads = lambda _value: None
+
+    fake_typed = ModuleType("numba.typed")
+    fake_typed.List = _FakeList
+
+    try:
+        _clear_ra_sim_modules()
+        _clear_fallback_modules()
+        monkeypatch.setitem(sys.modules, "numba", fake_numba)
+        monkeypatch.setitem(sys.modules, "numba.typed", fake_typed)
+        yield
+    finally:
+        _restore_ra_sim_modules(previous_modules)
+
+
+def _run_python_with_env(code: str, env_updates: dict[str, str]) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env.update(env_updates)
+    completed = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)],
+        cwd=str(_REPO_ROOT),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, (
+        f"subprocess failed with exit {completed.returncode}\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
+    return completed
 
 
 def _is_unrelated_optional_dependency_failure(exc: BaseException) -> bool:
@@ -170,6 +261,8 @@ def test_diffraction_imports_when_numba_import_fails(monkeypatch):
 
         assert compat.NUMBA_AVAILABLE is False
         assert compat.NUMBA_IMPORT_ERROR is not None
+        assert compat.NUMBA_JIT_DISABLED is False
+        assert compat.NUMBA_COMPILATION_AVAILABLE is False
         assert diffraction.NUMBA_AVAILABLE is False
         assert diffraction.NUMBA_IMPORT_ERROR is compat.NUMBA_IMPORT_ERROR
         assert diffraction.attenuation.py_func is diffraction.attenuation
@@ -198,7 +291,103 @@ def test_numba_direct_import_modules_import_with_fallback(monkeypatch):
 
         compat = importlib.import_module("ra_sim.utils.numba_compat")
         assert compat.NUMBA_AVAILABLE is False
+        assert compat.NUMBA_JIT_DISABLED is False
+        assert compat.NUMBA_COMPILATION_AVAILABLE is False
         assert imported_modules
+
+
+def test_numba_compat_raw_real_njit_results_get_py_func(monkeypatch):
+    with _fake_raw_njit_numba_context(monkeypatch):
+        compat = importlib.import_module("ra_sim.utils.numba_compat")
+
+        @compat.njit
+        def increment(value):
+            return value + 1
+
+        @compat.njit(cache=True, fastmath=True)
+        def add_two(value):
+            return value + 2
+
+        signature = compat.types.float64(compat.types.float64)
+
+        @compat.njit(signature)
+        def add_three(value):
+            return value + 3
+
+        def add_four(value):
+            return value + 4
+
+        compiled_add_four = compat.njit(cache=True)(add_four)
+
+        assert compat.NUMBA_AVAILABLE is True
+        assert compat.NUMBA_JIT_DISABLED is True
+        assert compat.NUMBA_COMPILATION_AVAILABLE is False
+        assert increment(1) == 2
+        assert increment.py_func is increment
+        assert add_two(1) == 3
+        assert add_two.py_func is add_two
+        assert add_three(1) == 4
+        assert add_three.py_func is add_three
+        assert compiled_add_four(1) == 5
+        assert compiled_add_four.py_func is compiled_add_four
+
+
+def test_numba_disable_jit_diffraction_decorated_functions_keep_py_func():
+    pytest.importorskip("numba")
+
+    completed = _run_python_with_env(
+        """
+        from ra_sim.simulation import diffraction
+        from ra_sim.utils import numba_compat
+
+        assert numba_compat.NUMBA_AVAILABLE is True
+        assert numba_compat.NUMBA_JIT_DISABLED is True
+        assert numba_compat.NUMBA_COMPILATION_AVAILABLE is False
+
+        for name in (
+            "compute_intensity_array_serial",
+            "_weighted_event_update_representative",
+        ):
+            fn = getattr(diffraction, name)
+            assert hasattr(fn, "py_func"), name
+            assert fn.py_func is fn, name
+
+        print("ok")
+        """,
+        {"NUMBA_DISABLE_JIT": "1"},
+    )
+
+    assert "ok" in completed.stdout
+
+
+def test_numba_disable_jit_exact_cake_engine_resolution():
+    pytest.importorskip("numba")
+
+    completed = _run_python_with_env(
+        """
+        from ra_sim.simulation import exact_cake
+        from ra_sim.utils import numba_compat
+
+        assert numba_compat.NUMBA_AVAILABLE is True
+        assert numba_compat.NUMBA_JIT_DISABLED is True
+        assert numba_compat.NUMBA_COMPILATION_AVAILABLE is False
+
+        assert exact_cake._resolve_engine("auto") == "python"
+        assert exact_cake._resolve_engine("python") == "python"
+
+        try:
+            exact_cake._resolve_engine("numba")
+        except RuntimeError as exc:
+            assert "JIT" in str(exc) or "disabled" in str(exc)
+        else:
+            raise AssertionError("engine='numba' should fail when NUMBA_DISABLE_JIT=1")
+
+        print("ok")
+        """,
+        {"NUMBA_DISABLE_JIT": "1"},
+    )
+
+    assert "ok" in completed.stdout
 
 
 def test_numba_compat_real_numba_path_when_available():
@@ -207,6 +396,8 @@ def test_numba_compat_real_numba_path_when_available():
         pytest.skip(f"Numba unavailable: {compat.NUMBA_IMPORT_ERROR!r}")
 
     assert compat.NUMBA_IMPORT_ERROR is None
+    assert compat.NUMBA_JIT_DISABLED is False
+    assert compat.NUMBA_COMPILATION_AVAILABLE is True
     assert callable(compat.njit)
     assert compat.prange is not None
     assert hasattr(compat.List, "empty_list")

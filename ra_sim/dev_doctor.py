@@ -180,11 +180,33 @@ def _check_tkinter() -> DoctorFinding:
 
 
 def _check_numba() -> DoctorFinding:
-    from ra_sim.utils.numba_compat import NUMBA_AVAILABLE, NUMBA_IMPORT_ERROR
+    from ra_sim.utils.numba_compat import (
+        NUMBA_AVAILABLE,
+        NUMBA_COMPILATION_AVAILABLE,
+        NUMBA_IMPORT_ERROR,
+        NUMBA_JIT_DISABLED,
+    )
 
     if NUMBA_AVAILABLE:
-        return DoctorFinding("OK", "numba", "available")
-    return DoctorFinding("WARN", "numba", f"unavailable; import error: {NUMBA_IMPORT_ERROR!r}")
+        return DoctorFinding(
+            "OK" if NUMBA_COMPILATION_AVAILABLE else "WARN",
+            "numba",
+            (
+                "available; "
+                f"jit_disabled={NUMBA_JIT_DISABLED}; "
+                f"compilation_available={NUMBA_COMPILATION_AVAILABLE}"
+            ),
+        )
+    return DoctorFinding(
+        "WARN",
+        "numba",
+        (
+            "unavailable; "
+            f"jit_disabled={NUMBA_JIT_DISABLED}; "
+            f"compilation_available={NUMBA_COMPILATION_AVAILABLE}; "
+            f"import error: {NUMBA_IMPORT_ERROR!r}"
+        ),
+    )
 
 
 def check_dev_tools() -> list[DoctorFinding]:

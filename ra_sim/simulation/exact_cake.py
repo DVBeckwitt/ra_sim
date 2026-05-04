@@ -12,8 +12,10 @@ from ra_sim.utils.parallel import (
     make_detached_thread_pool_executor,
     system_cpu_worker_count,
 )
-from ra_sim.utils.numba_compat import NUMBA_AVAILABLE as _HAS_NUMBA
+from ra_sim.utils.numba_compat import NUMBA_AVAILABLE as _NUMBA_PACKAGE_AVAILABLE
+from ra_sim.utils.numba_compat import NUMBA_COMPILATION_AVAILABLE as _HAS_NUMBA
 from ra_sim.utils.numba_compat import NUMBA_IMPORT_ERROR as _NUMBA_IMPORT_ERROR
+from ra_sim.utils.numba_compat import NUMBA_JIT_DISABLED as _NUMBA_JIT_DISABLED
 from ra_sim.utils.numba_compat import njit
 
 try:  # pragma: no cover - optional dependency
@@ -24,13 +26,9 @@ except Exception:  # pragma: no cover - optional dependency
     _scipy_sparse = None
     _HAS_SCIPY = False
 
-def _optional_njit(*jit_args, **jit_kwargs):
-    def _decorate(fn):
-        if not _HAS_NUMBA:
-            return fn
-        return njit(*jit_args, **jit_kwargs)(fn)
 
-    return _decorate
+def _optional_njit(*jit_args, **jit_kwargs):
+    return njit(*jit_args, **jit_kwargs)
 
 
 EXACT_CAKE_DEFAULT_WORKERS = 8
@@ -165,12 +163,14 @@ def _resolve_engine(engine: str) -> str:
     if engine_name not in {"python", "numba"}:
         raise ValueError("engine must be one of: auto, python, numba.")
     if engine_name == "numba" and not numba_available:
-        detail = (
-            f" Import error: {_NUMBA_IMPORT_ERROR!r}"
-            if _NUMBA_IMPORT_ERROR is not None
-            else ""
-        )
-        raise RuntimeError(f"engine='numba' requested, but numba is unavailable.{detail}")
+        if _NUMBA_JIT_DISABLED:
+            raise RuntimeError("engine='numba' requested, but Numba JIT is disabled.")
+        if not _NUMBA_PACKAGE_AVAILABLE:
+            raise RuntimeError(
+                f"engine='numba' requested, but Numba is unavailable: "
+                f"{_NUMBA_IMPORT_ERROR!r}"
+            )
+        raise RuntimeError("engine='numba' requested, but numba is unavailable.")
     return engine_name
 
 

@@ -12,7 +12,8 @@ Last updated: 2026-05-04
 RA-SIM no longer hard-fails while importing core simulation modules when Numba
 is missing or when Numba itself fails during import. This covers dependency
 mismatches such as Numba/Coverage import failures before any simulation code can
-select a Python path.
+select a Python path. Follow-up cleanup also handles `NUMBA_DISABLE_JIT=1`,
+where Numba imports successfully but returns raw Python functions from `@njit`.
 
 ## Root cause
 
@@ -42,6 +43,21 @@ Numba is unavailable, while `engine="auto"` falls back to Python and
 availability and import-error details without printing warnings during normal
 imports.
 
+Disabled-JIT cleanup in `ra_sim/utils/numba_compat.py`:
+
+- added `NUMBA_JIT_DISABLED` and `NUMBA_COMPILATION_AVAILABLE`;
+- wrapped real `numba.njit` so raw Python functions returned under
+  `NUMBA_DISABLE_JIT=1` get `.py_func`;
+- preserved real Numba dispatcher behavior when JIT is enabled;
+- kept the blocked-import fallback behavior unchanged.
+
+Disabled-JIT cleanup in `ra_sim/simulation/exact_cake.py`:
+
+- `engine="auto"` falls back to Python when compilation is unavailable;
+- `engine="numba"` raises a clear JIT-disabled error when Numba imported but
+  JIT is disabled;
+- import failures and disabled-JIT cases report distinct errors.
+
 ## Status
 
 - Bug status: fixed.
@@ -51,6 +67,9 @@ imports.
   internal compatibility module only.
 - Performance status: real Numba fast paths are preserved when Numba imports
   successfully.
+- Disabled-JIT status: fixed. Decorated diffraction functions keep `.py_func`
+  when `NUMBA_DISABLE_JIT=1`, and exact-cake no longer selects the Numba engine
+  automatically when compilation is disabled.
 - Compatibility status: no dependency pins, algorithms, simulation parameters,
   weighted-event memory policy, fitting objective, or Qr resolver behavior were
   changed.
@@ -76,3 +95,30 @@ Results:
 - targeted diffraction regression trio: 98 passed.
 - parallel/exact-cake regression slice: 48 passed.
 - production direct-import grep only reports `ra_sim/utils/numba_compat.py`.
+
+2026-05-04 disabled-JIT cleanup validation:
+
+```powershell
+python -m compileall -q ra_sim tests
+python -m pytest -q tests/test_numba_compat.py
+$env:NUMBA_DISABLE_JIT='1'; python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py tests/test_ctr_fast_attenuation.py
+$env:NUMBA_DISABLE_JIT='1'; python -m pytest -q tests/test_parallel_utils.py
+python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py tests/test_ctr_fast_attenuation.py
+python -m pytest -q tests/test_exact_cake_portable.py tests/test_parallel_utils.py
+python -m ruff check ra_sim/utils/numba_compat.py ra_sim/simulation/exact_cake.py ra_sim/dev_doctor.py tests/test_numba_compat.py
+rg -n "from numba|import numba" ra_sim tests
+git diff --check -- ra_sim/utils/numba_compat.py ra_sim/simulation/exact_cake.py ra_sim/dev_doctor.py tests/test_numba_compat.py
+```
+
+Results:
+
+- `tests/test_numba_compat.py`: 13 passed.
+- disabled-JIT diffraction regression trio: 98 passed; no
+  `AttributeError: 'function' object has no attribute 'py_func'`.
+- disabled-JIT parallel utility tests: 4 passed.
+- normal diffraction regression trio: 98 passed.
+- normal exact-cake/parallel regression slice: 48 passed.
+- disabled-JIT exact-cake full slice still has 3 expected strict-engine
+  conflicts in tests that directly require Numba LUT/`engine="numba"` while the
+  current contract requires strict `"numba"` requests to fail when JIT is
+  disabled.
