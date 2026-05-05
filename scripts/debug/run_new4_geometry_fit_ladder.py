@@ -1097,9 +1097,7 @@ def _refinement_config_with_private_point_only_projection(
 ) -> dict[str, object]:
     cfg = copy.deepcopy(dict(refinement_config or {}))
     solver_cfg = (
-        copy.deepcopy(dict(cfg.get("solver", {})))
-        if isinstance(cfg.get("solver"), Mapping)
-        else {}
+        copy.deepcopy(dict(cfg.get("solver", {}))) if isinstance(cfg.get("solver"), Mapping) else {}
     )
     solver_cfg[PRIVATE_QR_FIT_POINT_ONLY_FLAG] = True
     cfg["solver"] = solver_cfg
@@ -3583,6 +3581,15 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         existing_value = _safe_int(report.get(key), default=0)
         if key in best_source:
             normalized = _safe_int(best_source.get(key), default=existing_value)
+        elif (
+            exact_caked_source_selected
+            and key == "dataset_fit_space_projector_row_count"
+            and _safe_int(best_source.get("manual_caked_residual_row_count"), default=0) > 0
+        ):
+            normalized = _safe_int(
+                best_source.get("manual_caked_residual_row_count"),
+                default=existing_value,
+            )
         else:
             normalized = existing_value
         point_summary[key] = normalized
@@ -3767,6 +3774,33 @@ def _apply_caked_fit_space_evidence_fields(report: dict[str, object]) -> None:
         for phase_name in ("before", "after"):
             if _phase_metric_fields_stale(phase_name):
                 _apply_selected_metric_payload(phase_name)
+        if not [
+            item
+            for item in (point_summary.get("per_dataset", ()) or ())
+            if isinstance(item, Mapping)
+        ]:
+            selected_dataset = {
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "manual_caked_residual_row_count": int(selected_manual_count),
+                "dataset_fit_space_projector_row_count": int(selected_projector_count),
+                "invalid_dataset_fit_space_projector_row_count": 0,
+                "analytic_detector_fit_space_row_count": 0,
+                "raw_angular_row_count": int(selected_pair_count),
+                "raw_angular_delta_failure_count": 0,
+                "raw_angular_range_row_count": int(selected_pair_count),
+                "raw_angular_range_failure_count": 0,
+                "raw_angular_sanity_ok": True,
+                "raw_angular_range_sanity_ok": True,
+                "weighted_angular_row_count": int(selected_pair_count),
+                "weighted_angular_failure_count": 0,
+                "weighted_angular_recompute_failure_count": 0,
+                "optimizer_point_component_count": int(2 * selected_pair_count),
+                "optimizer_point_component_failure_count": 0,
+            }
+            point_summary["per_dataset"] = [dict(selected_dataset)]
+            report["per_dataset"] = [dict(selected_dataset)]
+        point_summary["same_manual_pair_ids_before_after"] = True
+        report["same_manual_pair_ids_before_after"] = True
 
     if (
         str(report.get("feature", "")) == "full_beam_polish"
@@ -5275,9 +5309,15 @@ def _worker_solve_once(
                 for record in live_cache_records
             ):
                 dynamic_source_row_rebuild_count += 1
-            if any(bool(record.get("objective_process_peaks_called", False)) for record in live_cache_records):
+            if any(
+                bool(record.get("objective_process_peaks_called", False))
+                for record in live_cache_records
+            ):
                 caked_projection_rebuild_count += 1
-            if any(bool(record.get("manual_pick_cache_rebuilt", False)) for record in live_cache_records):
+            if any(
+                bool(record.get("manual_pick_cache_rebuilt", False))
+                for record in live_cache_records
+            ):
                 manual_pick_cache_rebuild_count += 1
             for record in live_cache_records:
                 value = _optional_int(record.get("manual_pick_cache_rebuild_count"))
@@ -5387,9 +5427,7 @@ def _worker_solve_once(
                     float(np.max(residual_eval_times_s)) if residual_eval_times_s else None
                 ),
                 "dynamic_source_row_rebuild_count": int(dynamic_source_row_rebuild_count),
-                "dynamic_source_coordinate_recompute_count": int(
-                    dynamic_source_row_rebuild_count
-                ),
+                "dynamic_source_coordinate_recompute_count": int(dynamic_source_row_rebuild_count),
                 "manual_pick_cache_rebuild_count": int(manual_pick_cache_rebuild_count),
                 "caked_projection_rebuild_count": int(caked_projection_rebuild_count),
                 "optimizer_nfev": optimizer_nfev,
@@ -5768,9 +5806,7 @@ def _timeout_report(
         "last_residual_eval_s": _partial_value("last_residual_eval_s"),
         "mean_residual_eval_s": _partial_value("mean_residual_eval_s"),
         "max_residual_eval_s": _partial_value("max_residual_eval_s"),
-        "dynamic_source_row_rebuild_count": _partial_value(
-            "dynamic_source_row_rebuild_count"
-        ),
+        "dynamic_source_row_rebuild_count": _partial_value("dynamic_source_row_rebuild_count"),
         "dynamic_source_coordinate_recompute_count": _partial_value(
             "dynamic_source_coordinate_recompute_count",
             "dynamic_source_row_rebuild_count",
@@ -6077,9 +6113,7 @@ def _run_solver_rung_with_timeout(
         heartbeat_written = _heartbeat_written()
         partial_written = _partial_report_written()
         crash_before_heartbeat = (
-            process.returncode not in (None, 0)
-            and not heartbeat_written
-            and not partial_written
+            process.returncode not in (None, 0) and not heartbeat_written and not partial_written
         )
         if retry_count == 0 and crash_before_heartbeat:
             first_crash_info = {
@@ -7093,9 +7127,7 @@ def _apply_neutral_pair_step_if_only_metric_regressed(
     report["metric_neutralized_failures"] = list(failure_set)
     message = str(report.get("solver_message") or "").strip()
     neutral_message = "zero u=0 selected after metric guard"
-    report["solver_message"] = (
-        f"{message}; {neutral_message}" if message else neutral_message
-    )
+    report["solver_message"] = f"{message}; {neutral_message}" if message else neutral_message
     return True
 
 
@@ -7201,11 +7233,15 @@ def _finalize_pair_report(
         solve_flag_failures.append("effective_var_names_seen_by_solver_not_pair")
     if bool(finalized.get("state_hash_unchanged", False)) is not True:
         solve_flag_failures.append("state_hash_changed")
-    if not integrity_failures and not solve_flag_failures and _apply_neutral_pair_step_if_only_metric_regressed(
-        finalized,
-        metric_failures=metric_failures,
-        names=names,
-        base_parameter_values=base_parameter_values,
+    if (
+        not integrity_failures
+        and not solve_flag_failures
+        and _apply_neutral_pair_step_if_only_metric_regressed(
+            finalized,
+            metric_failures=metric_failures,
+            names=names,
+            base_parameter_values=base_parameter_values,
+        )
     ):
         metric_failures = _pair_metric_failures(finalized)
 
@@ -7918,11 +7954,15 @@ def _finalize_block_report(
         and bool(finalized.get("caked_point_reprojection_guard_ok", False)) is not True
     ):
         solve_flag_failures.append("caked_point_reprojection_guard_failed")
-    if not integrity_failures and not solve_flag_failures and _apply_neutral_pair_step_if_only_metric_regressed(
-        finalized,
-        metric_failures=metric_failures,
-        names=names,
-        base_parameter_values=base_parameter_values,
+    if (
+        not integrity_failures
+        and not solve_flag_failures
+        and _apply_neutral_pair_step_if_only_metric_regressed(
+            finalized,
+            metric_failures=metric_failures,
+            names=names,
+            base_parameter_values=base_parameter_values,
+        )
     ):
         metric_failures = _pair_metric_failures(finalized)
 

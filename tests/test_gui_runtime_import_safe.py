@@ -152,6 +152,10 @@ def _make_geometry_fit_worker_job(runtime_session) -> dict[str, object]:
     }
 
 
+def _stable_geometry_fit_test_lut(seed: float = 1.0) -> np.ndarray:
+    return np.asarray([[float(seed)]], dtype=np.float64)
+
+
 def _geometry_fit_worker_caked_payload(
     runtime_session,
     *,
@@ -180,7 +184,7 @@ def _geometry_fit_worker_caked_payload(
             radial_deg=radial_axis,
             raw_azimuth_deg=raw_azimuth_axis,
             gui_azimuth_deg=azimuth_axis,
-            lut=object(),
+            lut=_stable_geometry_fit_test_lut(float(background_value)),
         ),
         "detector_shape": (4, 4),
     }
@@ -14897,7 +14901,7 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
         radial_deg=radial_axis,
         raw_azimuth_deg=raw_azimuth_axis,
         gui_azimuth_deg=azimuth_axis,
-        lut=object(),
+        lut=_stable_geometry_fit_test_lut(),
     )
     caked_payload = {
         "background": np.ones((4, 4), dtype=np.float64),
@@ -15253,7 +15257,7 @@ def test_headless_hydrated_caked_payload_projects_rows_per_background(
                 dtype=np.float64,
             ),
             gui_azimuth_deg=np.asarray([1.0, 2.0], dtype=np.float64),
-            lut=object(),
+            lut=_stable_geometry_fit_test_lut(1.0),
         ),
         1: geometry_fit.CakeTransformBundle(
             detector_shape=(4, 4),
@@ -15263,7 +15267,7 @@ def test_headless_hydrated_caked_payload_projects_rows_per_background(
                 dtype=np.float64,
             ),
             gui_azimuth_deg=np.asarray([3.0, 4.0], dtype=np.float64),
-            lut=object(),
+            lut=_stable_geometry_fit_test_lut(2.0),
         ),
     }
 
@@ -15403,8 +15407,37 @@ def test_headless_hydrated_caked_payload_projects_rows_per_background(
 
     monkeypatch.setattr(headless, "_build_headless_geometry_fit_caked_view_payload", _payload)
 
+    def _projection_payload(detector_shape, **kwargs):
+        marker = int(kwargs["background_index"])
+        bundle = exact_bundles[int(marker)]
+        return {
+            "radial_axis": np.asarray(bundle.radial_deg, dtype=np.float64),
+            "azimuth_axis": np.asarray(bundle.gui_azimuth_deg, dtype=np.float64),
+            "raw_azimuth_axis": np.asarray(bundle.raw_azimuth_deg, dtype=np.float64),
+            "raw_to_gui_row_permutation": np.arange(
+                int(bundle.gui_azimuth_deg.size),
+                dtype=np.int32,
+            ),
+            "detector_shape": tuple(int(v) for v in tuple(detector_shape)[:2]),
+            "projection_view_mode": "caked",
+            "transform_bundle": "json-safe-bundle",
+        }
+
+    monkeypatch.setattr(
+        headless,
+        "_build_headless_geometry_fit_caked_projection_payload",
+        _projection_payload,
+    )
+
     def _hydrate(payload, **_kwargs):
-        marker = int(float(np.asarray(payload["background"], dtype=np.float64)[0, 0]))
+        if "background" in payload:
+            marker = int(float(np.asarray(payload["background"], dtype=np.float64)[0, 0]))
+        else:
+            marker = (
+                0
+                if float(np.asarray(payload["radial_axis"], dtype=np.float64)[0]) < 100.0
+                else 1
+            )
         hydrated = dict(payload)
         hydrated["transform_bundle"] = exact_bundles[marker]
         return hydrated
@@ -15443,8 +15476,12 @@ def test_headless_hydrated_caked_payload_projects_rows_per_background(
     def _prepare_runtime_geometry_fit_run(*, bindings, **_kwargs):
         dataset_bindings = bindings.manual_dataset_bindings
         for background_idx in (0, 1):
-            cached = dataset_bindings.geometry_manual_caked_view_for_index(background_idx)
+            cached = dataset_bindings.geometry_manual_caked_projection_for_index(
+                background_idx
+            )
             assert cached["transform_bundle"] is exact_bundles[background_idx]
+            assert "background" not in cached
+            assert "background_image" not in cached
             cached["transform_bundle"] = "json-safe-bundle"
         rows = [
             {"background_index": 0, "row_id": "first"},
@@ -15509,7 +15546,7 @@ def test_cli_hydrated_caked_payload_projects_rows_per_background(
                 dtype=np.float64,
             ),
             gui_azimuth_deg=np.asarray([1.0, 2.0], dtype=np.float64),
-            lut=object(),
+            lut=_stable_geometry_fit_test_lut(1.0),
         ),
         1: geometry_fit.CakeTransformBundle(
             detector_shape=(4, 4),
@@ -15519,7 +15556,7 @@ def test_cli_hydrated_caked_payload_projects_rows_per_background(
                 dtype=np.float64,
             ),
             gui_azimuth_deg=np.asarray([3.0, 4.0], dtype=np.float64),
-            lut=object(),
+            lut=_stable_geometry_fit_test_lut(2.0),
         ),
     }
 
@@ -16681,7 +16718,7 @@ def test_geometry_fit_caked_projection_payload_empty_mapping_is_absent() -> None
     )
 
 
-def test_geometry_fit_caked_projection_payload_preserves_signature() -> None:
+def test_geometry_fit_caked_projection_payload_strips_legacy_signature() -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
     projection = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
@@ -16697,34 +16734,248 @@ def test_geometry_fit_caked_projection_payload_preserves_signature() -> None:
 
     assert projection is not None
     assert projection["payload_kind"] == "projection"
-    assert projection["signature"] == ("projection", "stable")
+    assert "signature" not in projection
+
+
+def test_normalize_caked_projection_payload_strips_legacy_signature() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = _runtime_projection_digest_payload(
+        runtime_session,
+        signature=("projection", "stable"),
+        permutation=np.arange(4, dtype=np.int32),
+    )
+    projection = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
+
+    normalized = runtime_session.gui_geometry_fit.normalize_geometry_fit_caked_view_payload(
+        projection,
+        detector_shape=(4, 5),
+        ai=None,
+    )
+
+    assert normalized is not None
+    assert normalized["payload_kind"] == "projection"
+    assert "signature" not in normalized
+
+
+def _runtime_projection_digest_payload(
+    runtime_session,
+    *,
+    signature: object = ("projection", "stale"),
+    radial_axis: np.ndarray | None = None,
+    azimuth_axis: np.ndarray | None = None,
+    raw_azimuth_axis: np.ndarray | None = None,
+    permutation: np.ndarray | None = None,
+    lut_seed: float = 1.0,
+) -> dict[str, object]:
+    radial = (
+        np.asarray(radial_axis, dtype=np.float64).copy()
+        if radial_axis is not None
+        else np.linspace(0.0, 1.0, 5, dtype=np.float64)
+    )
+    azimuth = (
+        np.asarray(azimuth_axis, dtype=np.float64).copy()
+        if azimuth_axis is not None
+        else np.linspace(-1.0, 1.0, 4, dtype=np.float64)
+    )
+    raw_azimuth = (
+        np.asarray(raw_azimuth_axis, dtype=np.float64).copy()
+        if raw_azimuth_axis is not None
+        else np.asarray(
+            runtime_session.gui_geometry_fit.gui_phi_to_raw_phi(azimuth),
+            dtype=np.float64,
+        )
+        .reshape(-1)
+        .copy()
+    )
+    payload = {
+        "signature": signature,
+        "detector_shape": (4, 5),
+        "radial_axis": radial,
+        "azimuth_axis": azimuth,
+        "raw_azimuth_axis": raw_azimuth,
+        "transform_bundle": runtime_session.CakeTransformBundle(
+            detector_shape=(4, 5),
+            radial_deg=radial.copy(),
+            raw_azimuth_deg=raw_azimuth.copy(),
+            gui_azimuth_deg=azimuth.copy(),
+            lut=_stable_geometry_fit_test_lut(lut_seed),
+        ),
+    }
+    if permutation is not None:
+        payload["raw_to_gui_row_permutation"] = np.asarray(
+            permutation,
+            dtype=np.int64,
+        ).copy()
+    return payload
 
 
 def test_geometry_fit_projection_payload_digest_stable_for_equivalent_normalized_payloads() -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    payload = {
-        "signature": ("projection", "stable"),
-        "detector_shape": (4, 5),
-        "radial_axis": np.linspace(0.0, 1.0, 5),
-        "azimuth_axis": np.linspace(-1.0, 1.0, 4),
-        "raw_azimuth_axis": np.linspace(-1.0, 1.0, 4),
-        "raw_to_gui_row_permutation": np.array([3, 2, 1, 0], dtype=np.int32),
-    }
-    copied_payload = {
-        key: (np.asarray(value).copy() if isinstance(value, np.ndarray) else value)
-        for key, value in payload.items()
-    }
-    normalized = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
-    copied_normalized = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
-        copied_payload
+    payload = _runtime_projection_digest_payload(
+        runtime_session,
+        signature=("projection", "stable"),
+        permutation=np.arange(4, dtype=np.int32),
+        lut_seed=1.0,
+    )
+    copied_payload = _runtime_projection_digest_payload(
+        runtime_session,
+        signature=("projection", "stable"),
+        permutation=np.arange(4, dtype=np.int32),
+        lut_seed=1.0,
     )
 
-    assert normalized is not None
-    assert copied_normalized is not None
-    assert id(normalized["radial_axis"]) != id(copied_normalized["radial_axis"])
+    def _round_trip_digest(raw_payload: Mapping[str, object]) -> str | None:
+        projection = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
+            raw_payload
+        )
+        normalized = runtime_session.gui_geometry_fit.normalize_geometry_fit_caked_view_payload(
+            projection,
+            detector_shape=(4, 5),
+            ai=None,
+        )
+        hydrated = runtime_session.gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            normalized,
+            detector_shape=(4, 5),
+            params={},
+            require_background=False,
+        )
+        round_tripped = runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
+            hydrated
+        )
+        assert round_tripped is not None
+        assert "signature" not in round_tripped
+        return runtime_session._geometry_fit_projection_payload_digest(round_tripped)
+
+    assert id(payload["radial_axis"]) != id(copied_payload["radial_axis"])
+    assert _round_trip_digest(payload) == _round_trip_digest(copied_payload)
+
+
+def test_geometry_fit_projection_payload_digest_tracks_middle_axis_value() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = _runtime_projection_digest_payload(runtime_session)
+    changed = _runtime_projection_digest_payload(runtime_session)
+    changed["radial_axis"][2] = 9.0
+    changed["transform_bundle"] = runtime_session.CakeTransformBundle(
+        detector_shape=(4, 5),
+        radial_deg=np.asarray(changed["radial_axis"], dtype=np.float64).copy(),
+        raw_azimuth_deg=np.asarray(changed["raw_azimuth_axis"], dtype=np.float64).copy(),
+        gui_azimuth_deg=np.asarray(changed["azimuth_axis"], dtype=np.float64).copy(),
+        lut=_stable_geometry_fit_test_lut(1.0),
+    )
+
     assert runtime_session._geometry_fit_projection_payload_digest(
-        normalized
-    ) == runtime_session._geometry_fit_projection_payload_digest(copied_normalized)
+        payload
+    ) != runtime_session._geometry_fit_projection_payload_digest(changed)
+
+
+def test_geometry_fit_projection_payload_digest_tracks_verified_projection_token() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    first = _runtime_projection_digest_payload(runtime_session, lut_seed=1.0)
+    changed = _runtime_projection_digest_payload(runtime_session, lut_seed=1.0)
+    changed["projection_token_schema"] = "geometry_fit_projection_content_v3"
+    changed["projection_content_token_v3"] = "changed-token"
+
+    assert runtime_session._geometry_fit_projection_payload_digest(
+        first
+    ) != runtime_session._geometry_fit_projection_payload_digest(changed)
+
+
+def test_geometry_fit_projection_payload_digest_ignores_legacy_signature() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    first = _runtime_projection_digest_payload(
+        runtime_session,
+        signature=("projection", "old-a"),
+        lut_seed=1.0,
+    )
+    changed = _runtime_projection_digest_payload(
+        runtime_session,
+        signature=("projection", "old-b"),
+        lut_seed=1.0,
+    )
+
+    assert runtime_session._geometry_fit_projection_payload_digest(
+        first
+    ) == runtime_session._geometry_fit_projection_payload_digest(changed)
+
+
+def test_geometry_fit_projection_payload_digest_distinguishes_missing_permutation() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    missing = _runtime_projection_digest_payload(runtime_session, permutation=None)
+    explicit_identity = _runtime_projection_digest_payload(
+        runtime_session,
+        permutation=np.arange(4, dtype=np.int32),
+    )
+
+    assert runtime_session._geometry_fit_projection_payload_digest(
+        missing
+    ) != runtime_session._geometry_fit_projection_payload_digest(explicit_identity)
+
+
+def test_geometry_fit_projection_payload_digest_rejects_opaque_transform_content() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = _runtime_projection_digest_payload(runtime_session)
+    payload["transform_bundle"] = runtime_session.CakeTransformBundle(
+        detector_shape=(4, 5),
+        radial_deg=np.asarray(payload["radial_axis"], dtype=np.float64).copy(),
+        raw_azimuth_deg=np.asarray(payload["raw_azimuth_axis"], dtype=np.float64).copy(),
+        gui_azimuth_deg=np.asarray(payload["azimuth_axis"], dtype=np.float64).copy(),
+        lut=object(),
+    )
+
+    assert runtime_session._geometry_fit_projection_payload_digest(payload) is None
+
+
+def test_geometry_fit_projection_payload_storage_copy_is_projection_only() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = _runtime_projection_digest_payload(runtime_session)
+    payload["background"] = np.ones((4, 5), dtype=np.float64)
+    payload["sum_signal"] = np.ones((4, 5), dtype=np.float64)
+    payload["sum_normalization"] = np.ones((4, 5), dtype=np.float64)
+    payload["count"] = np.ones((4, 5), dtype=np.int64)
+
+    stored = runtime_session._geometry_fit_projection_payload_storage_copy(payload)
+
+    assert stored is not None
+    assert stored["transform_bundle"] is payload["transform_bundle"]
+    assert "signature" not in stored
+    assert stored["projection_token_schema"] == "geometry_fit_projection_content_v3"
+    assert stored["projection_content_token_v3"]
+    assert stored["radial_axis"] is not payload["radial_axis"]
+    assert np.array_equal(stored["radial_axis"], payload["radial_axis"])
+    assert "background" not in stored
+    assert "sum_signal" not in stored
+    assert "sum_normalization" not in stored
+    assert "count" not in stored
+
+
+def test_geometry_fit_caked_projection_for_index_uses_projection_only_payload(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    payload = _runtime_projection_digest_payload(
+        runtime_session,
+        signature=("projection", "main-thread"),
+        permutation=np.arange(4, dtype=np.int32),
+    )
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_caked_view_for_index",
+        lambda _idx: (_ for _ in ()).throw(AssertionError("image accessor used")),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda *_args, **_kwargs: dict(payload),
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {})
+
+    projection = runtime_session._geometry_fit_caked_projection_for_index(0)
+
+    assert projection is not None
+    assert projection["payload_kind"] == "projection"
+    assert "signature" not in projection
+    assert "background" not in projection
 
 
 def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_table_load(
@@ -16892,7 +17143,7 @@ def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_t
         if str(event.get("kind")) == "source_cache_logged_intersection_cache_miss"
     )
 
-    assert dataset_calls == []
+    assert dataset_calls == [0]
     assert miss_payload["status"] == "params_mismatch"
     assert miss_payload["expected_signature_digest"]
     assert miss_payload["actual_signature_digest"] == "logged-digest"
@@ -18212,7 +18463,7 @@ def test_noncurrent_caked_signature_uses_generated_payload_when_available(
         radial_deg=radial_axis,
         raw_azimuth_deg=raw_azimuth_axis,
         gui_azimuth_deg=azimuth_axis,
-        lut=object(),
+        lut=_stable_geometry_fit_test_lut(2.0),
     )
 
     monkeypatch.setattr(
@@ -18250,12 +18501,20 @@ def test_noncurrent_caked_signature_uses_generated_payload_when_available(
     assert signature["background_index"] == 1
     assert signature["available"] is True
     assert signature["detector_shape"] == [4, 4]
-    assert ("first", 101.0) in signature["radial_axis"]
-    assert ("last", 102.0) in signature["radial_axis"]
-    assert ("first", 3.0) in signature["azimuth_axis"]
-    assert ("last", 4.0) in signature["azimuth_axis"]
-    assert ("length", 2) in signature["raw_azimuth_axis"]
-    assert ("length", 2) in signature["raw_to_gui_row_permutation"]
+    radial_axis_token = list(signature["radial_axis"])
+    azimuth_axis_token = list(signature["azimuth_axis"])
+    assert radial_axis_token[0] == "axis_content_v3"
+    assert radial_axis_token[1] == 2
+    assert azimuth_axis_token[0] == "axis_content_v3"
+    assert azimuth_axis_token[1] == 2
+    assert list(signature["raw_azimuth_axis"])[:2] == [
+        "axis_content_v3",
+        2,
+    ]
+    assert list(signature["raw_to_gui_row_permutation"])[:2] == [
+        "perm_content_v3",
+        2,
+    ]
     assert signature["projection_payload_digest"]
 
 
@@ -22811,6 +23070,7 @@ def test_runtime_session_selected_qr_rod_component_cache_invalidates_base_inputs
 
     changed_qz = dict(shared)
     changed_qz["qz_map"] = np.asarray(shared["qz_map"], dtype=float).copy()
+    changed_qz["qz_map"][0, 0] += 1.0
     runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
         changed_qz,
         {},
@@ -22819,6 +23079,7 @@ def test_runtime_session_selected_qr_rod_component_cache_invalidates_base_inputs
 
     changed_signal = dict(shared)
     changed_signal["signal_sum"] = signal_sum.copy()
+    changed_signal["signal_sum"][0, 0] += 1.0
     runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
         changed_signal,
         {},

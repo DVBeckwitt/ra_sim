@@ -3221,7 +3221,7 @@ def _build_parser() -> argparse.ArgumentParser:
     fit_geometry_parser.add_argument(
         "--seed-policy",
         dest="seed_policy",
-        choices=("ladder-multistart",),
+        choices=("direct", "ladder-multistart"),
         default=None,
         help="Optional headless seed policy override.",
     )

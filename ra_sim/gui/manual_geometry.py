@@ -1,6 +1,7 @@
 """Helpers for manual geometry selection, caching, and serialization."""
 
 from __future__ import annotations
+import hashlib
 import os
 import subprocess
 import sys
@@ -71,6 +72,254 @@ _GEOMETRY_MANUAL_CAKED_QR_ID_FIELDS = (
     "source_ray_id",
     "branch_id",
 )
+
+
+def _geometry_manual_projection_blake2b_hex(*parts: bytes | str) -> str:
+    hasher = hashlib.blake2b(digest_size=16)
+    for part in parts:
+        if isinstance(part, str):
+            raw = part.encode("utf-8", "backslashreplace")
+        else:
+            raw = bytes(part)
+        hasher.update(len(raw).to_bytes(8, "little", signed=False))
+        hasher.update(raw)
+    return hasher.hexdigest()
+
+
+def geometry_manual_stable_axis_value_token(values: object) -> tuple[object, ...] | None:
+    """Return a deterministic content token for projection axes."""
+
+    try:
+        arr = np.asarray(values, dtype=np.dtype("<f8")).reshape(-1)
+    except Exception:
+        return None
+    if arr.size <= 0 or not np.all(np.isfinite(arr)):
+        return None
+    arr = np.ascontiguousarray(arr)
+    return (
+        "axis_content_v3",
+        int(arr.size),
+        "<f8",
+        _geometry_manual_projection_blake2b_hex(arr.tobytes(order="C")),
+    )
+
+
+def geometry_manual_stable_permutation_value_token(
+    values: object,
+) -> tuple[object, ...] | None:
+    """Return a deterministic content token for row permutations."""
+
+    try:
+        arr = np.asarray(values, dtype=np.dtype("<i8")).reshape(-1)
+    except Exception:
+        return None
+    if arr.size <= 0:
+        return None
+    arr = np.ascontiguousarray(arr)
+    return (
+        "perm_content_v3",
+        int(arr.size),
+        "<i8",
+        _geometry_manual_projection_blake2b_hex(arr.tobytes(order="C")),
+    )
+
+
+def _geometry_manual_projection_axis_token(values: object) -> tuple[object, ...] | None:
+    return geometry_manual_stable_axis_value_token(values)
+
+
+def _geometry_manual_projection_permutation_token(values: object) -> tuple[object, ...] | None:
+    return geometry_manual_stable_permutation_value_token(values)
+
+
+def _geometry_manual_projection_dense_token(
+    values: object,
+    *,
+    kind: str,
+    allow_empty: bool = True,
+) -> tuple[object, ...] | None:
+    try:
+        raw = np.asarray(values)
+    except Exception:
+        return None
+    if raw.dtype.kind == "O":
+        return None
+    if raw.dtype.kind in {"f", "c"}:
+        try:
+            arr = np.asarray(values, dtype=np.dtype("<f8"))
+        except Exception:
+            return None
+        if not np.all(np.isfinite(arr)):
+            return None
+    elif raw.dtype.kind in {"i", "u"}:
+        try:
+            arr = np.asarray(values, dtype=np.dtype("<i8"))
+        except Exception:
+            return None
+    elif raw.dtype.kind == "b":
+        arr = np.asarray(values, dtype=np.dtype("u1"))
+    else:
+        return None
+    if arr.size <= 0 and not bool(allow_empty):
+        return None
+    arr = np.ascontiguousarray(arr)
+    return (
+        "manual_projection_dense_content_v3",
+        str(kind),
+        tuple(int(v) for v in arr.shape),
+        str(arr.dtype),
+        _geometry_manual_projection_blake2b_hex(
+            "manual_projection_dense_content_v3",
+            str(kind),
+            repr(tuple(int(v) for v in arr.shape)),
+            str(arr.dtype),
+            arr.tobytes(order="C"),
+        ),
+    )
+
+
+def _geometry_manual_projection_sparse_token(
+    values: object,
+    *,
+    kind: str,
+) -> tuple[object, ...] | None:
+    if not hasattr(values, "tocsr"):
+        return None
+    try:
+        csr = values.tocsr(copy=True)  # type: ignore[attr-defined]
+    except TypeError:
+        try:
+            csr = values.tocsr()  # type: ignore[attr-defined]
+        except Exception:
+            return None
+    except Exception:
+        return None
+    try:
+        csr.sort_indices()
+    except Exception:
+        pass
+    try:
+        shape = tuple(int(v) for v in tuple(csr.shape)[:2])
+        indptr = np.ascontiguousarray(np.asarray(csr.indptr, dtype=np.dtype("<i8")).reshape(-1))
+        indices = np.ascontiguousarray(np.asarray(csr.indices, dtype=np.dtype("<i8")).reshape(-1))
+        data_raw = np.asarray(csr.data)
+    except Exception:
+        return None
+    if len(shape) < 2 or shape[0] < 0 or shape[1] < 0 or data_raw.dtype.kind == "O":
+        return None
+    if data_raw.dtype.kind in {"f", "c"}:
+        data = np.asarray(csr.data, dtype=np.dtype("<f8")).reshape(-1)
+        if not np.all(np.isfinite(data)):
+            return None
+    elif data_raw.dtype.kind in {"i", "u", "b"}:
+        data = np.asarray(csr.data, dtype=np.dtype("<i8")).reshape(-1)
+    else:
+        return None
+    data = np.ascontiguousarray(data)
+    return (
+        "manual_projection_sparse_csr_content_v3",
+        str(kind),
+        shape,
+        int(indptr.size),
+        int(indices.size),
+        int(data.size),
+        str(data.dtype),
+        _geometry_manual_projection_blake2b_hex(
+            "manual_projection_sparse_csr_content_v3",
+            str(kind),
+            repr(shape),
+            indptr.tobytes(order="C"),
+            indices.tobytes(order="C"),
+            str(data.dtype),
+            data.tobytes(order="C"),
+        ),
+    )
+
+
+def _geometry_manual_projection_transform_token(
+    values: object,
+    *,
+    kind: str,
+) -> tuple[object, ...] | None:
+    if values is None:
+        return ("manual_projection_transform_none_v3", str(kind))
+    if all(
+        hasattr(values, attr) for attr in ("image_shape", "n_rad", "n_az", "matrix", "count_flat")
+    ):
+        try:
+            image_shape = tuple(int(v) for v in tuple(values.image_shape)[:2])
+            n_rad = int(values.n_rad)
+            n_az = int(values.n_az)
+        except Exception:
+            return None
+        matrix_token = _geometry_manual_projection_transform_token(
+            values.matrix,
+            kind=f"{kind}.matrix",
+        )
+        count_token = _geometry_manual_projection_dense_token(
+            values.count_flat,
+            kind=f"{kind}.count_flat",
+            allow_empty=True,
+        )
+        if matrix_token is None or count_token is None:
+            return None
+        return (
+            "manual_projection_detector_cake_lut_content_v3",
+            str(kind),
+            image_shape,
+            int(n_rad),
+            int(n_az),
+            matrix_token,
+            count_token,
+        )
+    sparse_token = _geometry_manual_projection_sparse_token(values, kind=kind)
+    if sparse_token is not None:
+        return sparse_token
+    return _geometry_manual_projection_dense_token(values, kind=kind, allow_empty=True)
+
+
+def _geometry_manual_projection_bundle_token(bundle: object) -> tuple[object, ...] | None:
+    if not isinstance(bundle, CakeTransformBundle):
+        return None
+    detector_shape = _geometry_manual_detector_shape_token(getattr(bundle, "detector_shape", None))
+    radial_token = _geometry_manual_projection_axis_token(getattr(bundle, "radial_deg", None))
+    gui_token = _geometry_manual_projection_axis_token(getattr(bundle, "gui_azimuth_deg", None))
+    raw_token = _geometry_manual_projection_axis_token(getattr(bundle, "raw_azimuth_deg", None))
+    lut_token = _geometry_manual_projection_transform_token(
+        getattr(bundle, "lut", None), kind="lut"
+    )
+    lut_t_token = _geometry_manual_projection_transform_token(
+        getattr(bundle, "lut_t", None),
+        kind="lut_t",
+    )
+    if (
+        detector_shape is None
+        or radial_token is None
+        or gui_token is None
+        or raw_token is None
+        or lut_token is None
+        or lut_t_token is None
+    ):
+        return None
+    return (
+        "manual_projection_cake_transform_bundle_content_v3",
+        detector_shape,
+        radial_token,
+        gui_token,
+        raw_token,
+        lut_token,
+        lut_t_token,
+    )
+
+
+def _geometry_manual_detector_shape_token(values: object) -> tuple[int, int] | None:
+    try:
+        shape = tuple(int(value) for value in tuple(values)[:2])  # type: ignore[arg-type]
+    except Exception:
+        return None
+    if len(shape) < 2 or shape[0] <= 0 or shape[1] <= 0:
+        return None
+    return int(shape[0]), int(shape[1])
 
 
 def geometry_manual_normalize_auto_refine_search_radius_px(
@@ -5092,6 +5341,10 @@ def _geometry_manual_real_q_group_key(value: object) -> tuple[object, ...] | Non
     if isinstance(value, Mapping):
         candidate = value.get("q_group_key")
         value = candidate if candidate is not None else value.get("key")
+    if isinstance(value, (list, tuple)) and len(value) >= 4:
+        plain = gui_mosaic_top.normalize_q_group_key(value)
+        if plain is not None:
+            return plain
     normalized = gui_controllers.normalize_geometry_q_group_key(value)
     if normalized is not None:
         source_label, m_index, gz_index = normalized
@@ -7652,8 +7905,8 @@ def geometry_manual_qr_sim_refinement_signature(
         _geometry_manual_generation_token(metadata),
         _geometry_manual_array_token(detector_simulation_image),
         _geometry_manual_array_token(caked_simulation_image),
-        _geometry_manual_array_token(radial_axis),
-        _geometry_manual_array_token(azimuth_axis),
+        geometry_manual_stable_axis_value_token(radial_axis),
+        geometry_manual_stable_axis_value_token(azimuth_axis),
         id(detector_display_to_native_coords),
         id(native_detector_coords_to_caked_display_coords),
         id(caked_angles_to_detector_display_coords),
@@ -14698,58 +14951,13 @@ def make_runtime_geometry_manual_projection_callbacks(
         return lookup
 
     def _axis_signature(values: object) -> tuple[object, ...] | None:
-        try:
-            arr = np.asarray(values).reshape(-1)
-        except Exception:
-            return None
-        if arr.size == 0:
-            return None
-        try:
-            middle = arr[int(arr.size // 2)]
-            return (
-                "axis_v2",
-                int(arr.size),
-                str(arr.dtype),
-                float(arr[0]),
-                float(middle),
-                float(arr[-1]),
-            )
-        except Exception:
-            return ("axis_v2", int(arr.size), str(arr.dtype), repr(arr[0]), repr(arr[-1]))
+        return _geometry_manual_projection_axis_token(values)
 
     def _permutation_signature(values: object) -> tuple[object, ...] | None:
-        try:
-            arr = np.asarray(values).reshape(-1)
-        except Exception:
-            return None
-        if arr.size == 0:
-            return None
-        modulo = 1_000_000_007
-        checksum = 0
-        try:
-            for idx, value in enumerate(arr.tolist()):
-                checksum = (checksum + (idx + 1) * int(value)) % modulo
-            middle = arr[int(arr.size // 2)]
-            return (
-                "perm_v2",
-                int(arr.size),
-                str(arr.dtype),
-                int(arr[0]),
-                int(middle),
-                int(arr[-1]),
-                int(checksum),
-            )
-        except Exception:
-            return ("perm_v2", int(arr.size), str(arr.dtype), repr(arr[0]), repr(arr[-1]))
+        return _geometry_manual_projection_permutation_token(values)
 
     def _detector_shape_signature(values: object) -> tuple[int, int] | None:
-        try:
-            shape = tuple(int(value) for value in tuple(values)[:2])  # type: ignore[arg-type]
-        except Exception:
-            return None
-        if len(shape) < 2 or shape[0] <= 0 or shape[1] <= 0:
-            return None
-        return int(shape[0]), int(shape[1])
+        return _geometry_manual_detector_shape_token(values)
 
     def _background_index_signature() -> int | None:
         try:
@@ -14762,25 +14970,18 @@ def make_runtime_geometry_manual_projection_callbacks(
         return payload if isinstance(payload, Mapping) else None
 
     def _bundle_signature(bundle: object) -> tuple[object, ...] | None:
-        if not isinstance(bundle, CakeTransformBundle):
-            return None
-        lut = getattr(bundle, "lut", None)
-        lut_t = getattr(bundle, "lut_t", None)
-        return (
-            "cake_transform_bundle",
-            id(bundle),
-            _detector_shape_signature(bundle.detector_shape),
-            _axis_signature(bundle.radial_deg),
-            _axis_signature(bundle.gui_azimuth_deg),
-            _axis_signature(bundle.raw_azimuth_deg),
-            id(lut) if lut is not None else None,
-            id(lut_t) if lut_t is not None else None,
-        )
+        return _geometry_manual_projection_bundle_token(bundle)
 
     def _caked_projection_signature() -> object:
         if not _pick_uses_caked_space():
             return None
         payload = _projection_payload_mapping()
+        verified_projection_token = None
+        if isinstance(payload, Mapping) and (
+            str(payload.get("projection_token_schema") or "").strip()
+            == "geometry_fit_projection_content_v3"
+        ):
+            verified_projection_token = payload.get("projection_content_token_v3")
         bundle = (
             payload.get("transform_bundle")
             if isinstance(payload, Mapping)
@@ -14813,24 +15014,26 @@ def make_runtime_geometry_manual_projection_callbacks(
             if isinstance(payload, Mapping)
             else _resolve_runtime_value(last_caked_raw_to_gui_row_permutation)
         )
-        payload_signature = payload.get("signature") if isinstance(payload, Mapping) else None
-        bundle_signature = None if payload_signature is not None else _bundle_signature(bundle)
+        if isinstance(bundle, CakeTransformBundle) and verified_projection_token is None:
+            return None
+        try:
+            display_rotate_token = int(display_rotate_k)
+        except Exception:
+            display_rotate_token = None
+        try:
+            image_size_token = int(_resolve_runtime_value(image_size))
+        except Exception:
+            image_size_token = None
         return (
-            "caked_qr_projection_v2",
+            "caked_qr_projection_v3",
             _background_index_signature(),
             _detector_shape_signature(detector_shape),
             _axis_signature(radial_axis),
             _axis_signature(azimuth_axis),
             _axis_signature(raw_azimuth_axis),
             _permutation_signature(raw_to_gui),
-            payload_signature,
-            bundle_signature,
-            id(native_detector_coords_to_bundle_detector_coords)
-            if callable(native_detector_coords_to_bundle_detector_coords)
-            else None,
-            id(simulation_native_detector_coords_to_caked_display_coords)
-            if callable(simulation_native_detector_coords_to_caked_display_coords)
-            else None,
+            ("projection_content_token_v3", verified_projection_token),
+            ("display_transform_v3", display_rotate_token, image_size_token),
         )
 
     return GeometryManualRuntimeProjectionCallbacks(

@@ -31,6 +31,10 @@ NEW4_STATE_PATH = REPO_ROOT / NEW4_STATE_LABEL
 ALLOW_UNTRACKED_NEW4_ENV = "RA_SIM_ALLOW_UNTRACKED_NEW4"
 
 
+def _stable_geometry_fit_workflow_test_lut(seed: float = 1.0) -> np.ndarray:
+    return np.asarray([[float(seed)]], dtype=np.float64)
+
+
 def _new4_state_is_tracked_or_allowed() -> bool:
     if os.environ.get(ALLOW_UNTRACKED_NEW4_ENV) == "1":
         return True
@@ -281,7 +285,7 @@ def _make_stub_caked_bundle(
         radial_deg=radial_vec,
         raw_azimuth_deg=np.asarray(raw_azimuth_vec, dtype=np.float64).copy(),
         gui_azimuth_deg=np.asarray(gui_azimuth_vec, dtype=np.float64).copy(),
-        lut=object(),
+        lut=_stable_geometry_fit_workflow_test_lut(),
     )
 
 
@@ -5674,6 +5678,8 @@ def test_new4_ladder_sensitivity_real_new4_cli_smoke(
     monkeypatch,
     tmp_path,
 ) -> None:
+    if os.environ.get("RA_SIM_RUN_NEW4_LADDER_SMOKE") != "1":
+        pytest.skip("real New4 ladder sensitivity smoke is opt-in")
     ladder = _load_new4_ladder_module()
     state_path = require_new4_state()
     missing_paths = _missing_new4_local_headless_paths(state_path)
@@ -12722,9 +12728,33 @@ def test_dynamic_reanchor_recovers_stale_peak_index_by_provider_branch(
         lambda _tables: np.zeros((1, 6), dtype=np.float64),
     )
 
+    dataset_ctx = _dynamic_reanchor_provider_recovery_context(_callback)
+
+    def _sim_caked_image_builder(_sim_buffer, *, local_params=None, axes_only=False):
+        del local_params
+        radial_axis = np.linspace(0.0, 180.0, 361, dtype=np.float64)
+        azimuth_axis = np.linspace(-180.0, 180.0, 721, dtype=np.float64)
+        if axes_only:
+            return {
+                "available": True,
+                "axes_only": True,
+                "radial_axis": radial_axis,
+                "azimuth_axis": azimuth_axis,
+            }
+        return {
+            "available": True,
+            "image": np.ones((azimuth_axis.size, radial_axis.size), dtype=np.float64),
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+            "caked_simulation_signature": "provider-branch-test",
+        }
+
+    dataset_ctx.sim_caked_image_builder = _sim_caked_image_builder
+    dataset_ctx.sim_caked_image_builder_kind = "test_builder"
+
     _residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
         _dynamic_reanchor_eval_local(),
-        _dynamic_reanchor_provider_recovery_context(_callback),
+        dataset_ctx,
         image_size=64,
         missing_pair_penalty_deg=1.0,
         theta_value=0.0,
@@ -13332,14 +13362,14 @@ def test_new4_ladder_caked_evidence_prefers_clean_selected_summary_over_stale_re
     ladder._apply_caked_fit_space_evidence_fields(report)
 
     assert report["manual_caked_residual_row_count"] == 7
-    assert report["dataset_fit_space_projector_row_count"] == 6
+    assert report["dataset_fit_space_projector_row_count"] == 7
     assert report["matched_pair_count"] == 7
     assert report["missing_pair_count"] == 0
     assert report["fallback_entry_count"] == 0
     assert report["branch_mismatch_count"] == 0
     assert report["fixed_source_resolved_count"] == 7
     assert report["point_match_summary"]["manual_caked_residual_row_count"] == 7
-    assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 6
+    assert report["point_match_summary"]["dataset_fit_space_projector_row_count"] == 7
     assert report["point_match_summary"]["matched_pair_count"] == 7
     assert report["point_match_summary"]["missing_pair_count"] == 0
     assert report["point_match_summary"]["fallback_entry_count"] == 0
@@ -13640,6 +13670,90 @@ def test_new4_ladder_full_beam_finalizer_accepts_sparse_exact_caked_summary(
     assert finalized["point_match_summary"]["dataset_fit_space_projector_row_count"] == 7
     assert finalized["point_match_summary"]["exact_fit_space_projector_available"] is True
     assert finalized["point_match_summary"]["fit_space_projector_kind"] == "exact_caked_bundle"
+
+
+def test_new4_ladder_full_beam_finalizer_keeps_real_missing_pairs_failed(
+    tmp_path,
+) -> None:
+    ladder = _load_new4_ladder_module()
+    state_path = tmp_path / "new4.json"
+    state_path.write_text('{"state": {"value": 1}}\n', encoding="utf-8")
+    caked_path = tmp_path / "rung_03b.json"
+    caked_path.write_text("{}\n", encoding="utf-8")
+    names = list(ladder.RUNG7_BASE_CANDIDATE)
+    base_parameter_values = {str(name): 0.0 for name in names}
+    report = _full_beam_polish_gate_report(
+        ladder,
+        names,
+        matched_after=6,
+        missing_after=1,
+        lost_pair_ids=["pair-6"],
+    )
+    report.update(
+        {
+            "requires_caked_manual_exact_fit_space": True,
+            "exact_fit_space_projector_available": True,
+            "manual_caked_residual_row_count": 6,
+            "dataset_fit_space_projector_row_count": 6,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "same_manual_pair_ids_before_after": False,
+            "last_point_match_summary": {
+                "matched_pair_count": 6,
+                "missing_pair_count": 1,
+                "branch_mismatch_count": 0,
+                "fallback_entry_count": 0,
+                "fixed_source_resolved_count": 6,
+                "fixed_source_resolution_fallback_count": 0,
+                "missing_fixed_source_count": 1,
+                "manual_caked_residual_row_count": 6,
+                "dataset_fit_space_projector_row_count": 6,
+                "invalid_dataset_fit_space_projector_row_count": 0,
+                "analytic_detector_fit_space_row_count": 0,
+                "exact_fit_space_projector_available": True,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "expected_saved_caked_manual_pair_count": 7,
+                "metric_name": "raw_angular_rms_deg",
+                "metric_unit": "deg",
+                "raw_angular_rms_deg": 37.94181761069639,
+                "raw_angular_max_deg": 99.26056304870461,
+                "raw_angular_row_count": 6,
+                "raw_angular_range_row_count": 6,
+                "raw_angular_delta_failure_count": 0,
+                "raw_angular_range_failure_count": 0,
+                "raw_angular_sanity_ok": True,
+                "raw_angular_range_sanity_ok": True,
+                "weighted_angular_row_count": 6,
+                "weighted_angular_failure_count": 0,
+                "weighted_angular_recompute_failure_count": 0,
+                "optimizer_point_component_count": 12,
+                "optimizer_point_component_failure_count": 0,
+            },
+        }
+    )
+
+    finalized = ladder._finalize_feature_report(
+        report,
+        feature="full_beam_polish",
+        candidate=names,
+        state_path=state_path,
+        state_hash_before=_hash_file(state_path),
+        timeout_seconds=120.0,
+        base_parameter_values=base_parameter_values,
+        provider_after={
+            "provider_guard_ok": True,
+            "classification": "point_provider_parity_ok",
+        },
+        caked_point_reprojection_report_path=caked_path,
+    )
+
+    assert finalized["status"] == "failed"
+    assert finalized["pass"] is False
+    assert finalized["failure_reason"] == "full_beam_polish_incompatible_with_fixed_manual_pairs"
+    assert (
+        "full_beam_polish_incompatible_with_fixed_manual_pairs"
+        in finalized["feature_guard_failures"]
+    )
+    assert finalized["polish_missing_pair_ids"] == ["pair-6"]
 
 
 def test_new4_ladder_full_beam_finalizer_repairs_stale_metrics_for_accepted_candidate(
@@ -16690,6 +16804,113 @@ def test_optimizer_request_preserves_local_provider_source_identity() -> None:
         assert row["source_peak_index"] == index % 2
 
 
+def test_optimizer_request_prefers_local_fixed_source_for_q_group_full_identity() -> None:
+    context = _new4_ladder_context_with_provider_rows(full_source=True)
+    prepared_run = context["prepared_run"]
+    dataset = prepared_run.current_dataset
+    provider_pairs = dataset["provider_pairs"]
+    manual_pairs = dataset["manual_point_pairs"]
+    measured_rows = dataset["measured_for_fit"]
+    for index, (provider_pair, manual_pair, measured_row) in enumerate(
+        zip(provider_pairs, manual_pairs, measured_rows)
+    ):
+        q_group_key = ("q_group", "primary", int(index), 1)
+        branch_group_key = ("branch", int(index), int(index % 2))
+        for raw_pair in (provider_pair, manual_pair):
+            identity = raw_pair["selected_source_identity_canonical"]
+            identity["q_group_key"] = q_group_key
+            identity["branch_group_key"] = branch_group_key
+        measured_row["q_group_key"] = q_group_key
+        measured_row["branch_group_key"] = branch_group_key
+
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["center_x"],
+        solver_inputs=context["solver_inputs"],
+    )
+
+    summary = dict(request.refinement_config["optimizer_request_handoff_summary"])
+    request_rows = list(request.dataset_specs[0]["measured_peaks"])
+    assert summary["fixed_source_pair_count"] == 7
+    assert summary["fallback_row_count"] == 0
+    for index, row in enumerate(request_rows):
+        assert row["fit_source_resolution_kind"] == "provider_fixed_source_local"
+        assert row["optimizer_request_has_fixed_source"] is True
+        assert row["source_reflection_index"] == index
+        assert row["source_table_index"] == index
+        assert row["source_row_index"] == 0
+        assert row["source_peak_index"] == index % 2
+
+
+def test_optimizer_request_rewrites_each_joint_dataset_spec_source_identity() -> None:
+    base_prepared_run, _postprocess_config = _make_prepared_run(joint_background_mode=True)
+    datasets: list[dict[str, object]] = []
+    for dataset_index in range(2):
+        provider_pairs = []
+        manual_pairs = []
+        measured_rows = []
+        for pair_index in range(2):
+            source_index = dataset_index * 10 + pair_index
+            provider_pair, manual_pair, measured_row = _new4_ladder_provider_identity_pair(
+                source_index,
+                full_source=False,
+            )
+            measured_row.pop("source_table_index", None)
+            measured_row.pop("source_row_index", None)
+            measured_row.pop("source_peak_index", None)
+            provider_pairs.append(provider_pair)
+            manual_pairs.append(manual_pair)
+            measured_rows.append(measured_row)
+        datasets.append(
+            {
+                "dataset_index": dataset_index,
+                "provider_pairs": provider_pairs,
+                "manual_point_pairs": manual_pairs,
+                "measured_for_fit": measured_rows,
+                "pair_count": len(measured_rows),
+            }
+        )
+    prepared_run = replace(
+        base_prepared_run,
+        current_dataset=datasets[0],
+        dataset_infos=datasets,
+        dataset_specs=[
+            {
+                "dataset_index": int(dataset["dataset_index"]),
+                "theta_initial": 3.0 + int(dataset["dataset_index"]),
+                "measured_peaks": list(dataset["measured_for_fit"]),
+            }
+            for dataset in datasets
+        ],
+    )
+
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["center_x"],
+        solver_inputs=geometry_fit.GeometryFitRuntimeSolverInputs(
+            miller=np.asarray([[idx, 0, 1] for idx in range(20)], dtype=float),
+            intensities=np.ones(20, dtype=float),
+            image_size=64,
+        ),
+    )
+
+    summary = dict(request.refinement_config["optimizer_request_handoff_summary"])
+    assert summary["optimizer_request_pair_count"] == 4
+    assert summary["fixed_source_pair_count"] == 4
+    assert summary["fallback_row_count"] == 0
+    assert len(summary["dataset_summaries"]) == 2
+    for dataset_index, spec in enumerate(request.dataset_specs):
+        rows = spec["measured_peaks"]
+        assert len(rows) == 2
+        for pair_index, row in enumerate(rows):
+            source_index = dataset_index * 10 + pair_index
+            assert row["fit_source_resolution_kind"] == "provider_fixed_source_local"
+            assert row["optimizer_request_has_fixed_source"] is True
+            assert row["source_table_index"] == source_index
+            assert row["source_row_index"] == 0
+            assert row["source_peak_index"] == source_index % 2
+
+
 def test_optimizer_request_rejects_inconsistent_local_provider_source() -> None:
     ladder = _load_new4_ladder_module()
     context = _new4_ladder_context_with_provider_rows(full_source=False)
@@ -17820,8 +18041,9 @@ def test_headless_geometry_fit_canonical_pairs_match_shared_preflight(
         ]
     headless_runtime_cfg = captured["geometry_runtime_cfg"]
     assert bool(headless_runtime_cfg["solver"]["manual_point_fit_mode"]) is True
-    assert "dynamic_point_geometry_fit" not in headless_runtime_cfg["solver"]
-    assert headless_runtime_cfg.get("projection_view_mode") != "caked"
+    assert bool(headless_runtime_cfg["solver"]["dynamic_point_geometry_fit"]) is True
+    assert bool(headless_runtime_cfg["solver"]["_qr_fit_point_only_projection"]) is True
+    assert headless_runtime_cfg.get("projection_view_mode") == "caked"
 
 
 def _run_headless_active_var_contract_capture(
@@ -24003,7 +24225,7 @@ def test_geometry_fit_dynamic_reanchor_projects_detector_click_into_caked_seed_w
                     dtype=np.float64,
                 ).copy(),
                 gui_azimuth_deg=np.asarray(azimuth_axis, dtype=np.float64).copy(),
-                lut=object(),
+                lut=_stable_geometry_fit_workflow_test_lut(),
             )
         ),
     ],
@@ -25539,7 +25761,7 @@ def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_
             source_peak_index=1,
         ),
         _targeted_source_row(
-            hkl=(1, 0, 16),
+            hkl=(-1, 0, 16),
             branch_index=1,
             q_group_key=q16_key,
             sim_col=44.0,
@@ -25918,6 +26140,27 @@ def test_stale_caked_fields_do_not_classify_or_override_detector_target() -> Non
         1083.7344,
         1152.3796,
     )
+
+
+def test_valid_caked_fields_classify_saved_bi_pair_as_caked_despite_detector_xy() -> None:
+    pair = _targeted_required_pair(
+        pair_id="bg0:pair0",
+        hkl=(-1, 0, 10),
+        branch_index=1,
+        q_group_key=("q_group", "primary", 1, 10),
+        x=1083.7344,
+        y=1152.3796,
+        extra={
+            "background_two_theta_deg": 40.85301991187549,
+            "background_phi_deg": -37.56585507558714,
+            "caked_x": 40.85301991187549,
+            "caked_y": -37.56585507558714,
+            "raw_caked_x": 40.528707046583065,
+            "raw_caked_y": -37.876694310683064,
+        },
+    )
+
+    assert geometry_fit.geometry_manual_pairs_use_caked_fit_space([pair]) is True
 
 
 def test_manual_fit_space_classification_scopes_caked_pairs_to_background() -> None:

@@ -13,12 +13,14 @@ The active sequence is:
 3. get the structure-factor fitter working,
 4. get the stacking-fault fitter working.
 
-The geometric fitter remains the primary recovery project. A first mosaic-fitter
-scaffold is now in progress, with a documented selected-pair profile math
-contract. GUI/headless wiring must stay geometry-locked and downstream of
-accepted geometry-cache provenance. The structure-factor fitter now has a
-planned global multi-image detector-ROI intensity contract, but remains
-downstream of green mosaic fitting.
+Geometric fitter active validation is green as of 2026-05-05. Exact-caked
+cold-start fitting, warm caked manual-pick cache stability, and Bi2Se3/Bi2Te3
+headless saved-state residual validation now pass with strict fixed-pair
+matching. A first mosaic-fitter scaffold is in progress, with a documented
+selected-pair profile math contract. GUI/headless wiring must stay
+geometry-locked and downstream of accepted geometry-cache provenance. The
+structure-factor fitter now has a planned global multi-image detector-ROI
+intensity contract, but remains downstream of green mosaic fitting.
 
 ## In progress
 

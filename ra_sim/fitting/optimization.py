@@ -1208,10 +1208,7 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 or "collect_hit_tables" in call_kwargs
                 or "accumulate_image" in call_kwargs
             ) and _is_unexpected_keyword_type_error(exc):
-                if (
-                    "accumulate_image" in call_kwargs
-                    and _rejects_keyword(exc, "accumulate_image")
-                ):
+                if "accumulate_image" in call_kwargs and _rejects_keyword(exc, "accumulate_image"):
                     narrow_kwargs = dict(call_kwargs)
                     narrow_kwargs.pop("accumulate_image", None)
                     narrow_args = _with_dense_retry_buffer_if_needed(call_args, call_kwargs)
@@ -5832,6 +5829,27 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         measured_two_theta = float(measured_fit_anchor[0])
         measured_phi = float(measured_fit_anchor[1])
         if sim_point is None:
+            if _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
+                qr_fit_missing_pairs.append(
+                    {
+                        "pair_index": int(idx),
+                        "pair_id": str(diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}"),
+                        "q_group_key": _dynamic_reanchor_jsonable(
+                            measured_entry.get("q_group_key")
+                        ),
+                        "hkl": _dynamic_reanchor_jsonable(measured_entry.get("hkl")),
+                        "source_branch_index": _nonnegative_index(
+                            measured_entry.get("source_branch_index")
+                        ),
+                        "source_table_index": _nonnegative_index(
+                            measured_entry.get("source_table_index")
+                        ),
+                        "source_row_index": _nonnegative_index(
+                            measured_entry.get("source_row_index")
+                        ),
+                        "unavailable_reason": str(sim_reason),
+                    }
+                )
             residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
@@ -17139,9 +17157,18 @@ def _build_trial_qr_source_rows_payload(
         cached.update(_prediction_source_rows_cache_stats(cache))
         return cached
     try:
-        payload = dataset_ctx.qr_fit_trial_source_rows_builder(local_params=trial_params)
+        payload = dataset_ctx.qr_fit_trial_source_rows_builder(
+            local_params=trial_params,
+            collect_diagnostics=False,
+        )
     except TypeError:
-        payload = dataset_ctx.qr_fit_trial_source_rows_builder(trial_params)
+        try:
+            payload = dataset_ctx.qr_fit_trial_source_rows_builder(local_params=trial_params)
+        except TypeError:
+            try:
+                payload = dataset_ctx.qr_fit_trial_source_rows_builder(trial_params)
+            except TypeError:
+                payload = dataset_ctx.qr_fit_trial_source_rows_builder()
     except Exception as exc:
         return {
             "available": False,
@@ -18313,6 +18340,48 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
     resolved = _unique_candidate(exact_table_row, "locked_fit_qr_branch_key_resolved")
     if resolved is not None:
         return resolved
+
+    stale_record_tables = table_candidates if table_candidates else list(range(len(hit_tables)))
+    stale_row_records: List[Dict[str, object]] = []
+    for table_idx in stale_record_tables:
+        if not (0 <= int(table_idx) < len(hit_tables)):
+            continue
+        for record in _valid_hit_row_records(hit_tables[int(table_idx)]):
+            normalized_record = dict(record)
+            normalized_record.setdefault("source_table_index", int(table_idx))
+            stale_row_records.append(normalized_record)
+    stale_row, stale_payload, stale_reason = _provider_local_resolve_stale_fixed_source_row(
+        locked_correspondence,
+        stale_row_records,
+        row_reason="source_row_provenance_not_found",
+    )
+    if stale_row is not None:
+        try:
+            sim_col = float(stale_row[1])
+            sim_row = float(stale_row[2])
+        except Exception:
+            sim_col = float("nan")
+            sim_row = float("nan")
+        if np.isfinite(sim_col) and np.isfinite(sim_row):
+            result = dict(payload)
+            result.update(dict(stale_payload))
+            result.update(
+                {
+                    "resolution_reason": "provider_local_branch_recovered_stale_peak_index",
+                    "resolution_subreason": str(stale_reason),
+                    "hit_table_row_count": int(len(stale_row_records)),
+                    "valid_row_count": int(len(stale_row_records)),
+                    "resolved_detector_point_input_frame": "native_detector",
+                    "resolved_detector_point_source": "provider_local_stale_hit_table_row",
+                    "resolved_detector_native_px": [float(sim_col), float(sim_row)],
+                    "resolved_detector_display_px": [float(sim_col), float(sim_row)],
+                    "locked_representative_intensity": _fit_qr_source_row_intensity(stale_row),
+                    "projection_available": True,
+                    "projection_finite": True,
+                    "off_detector": False,
+                }
+            )
+            return (float(sim_col), float(sim_row)), result
 
     result = dict(payload)
     if not candidates:

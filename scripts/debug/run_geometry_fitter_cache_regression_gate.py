@@ -12,9 +12,6 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-NEW4_STATE_PATH = Path("artifacts/geometry_fit_gui_states/new4.json")
-ALLOW_UNTRACKED_NEW4_ENV = "RA_SIM_ALLOW_UNTRACKED_NEW4"
-
 COMPILE_TARGETS = (
     "ra_sim/fitting/optimization.py",
     "ra_sim/fitting/geometry_objective_cache.py",
@@ -43,9 +40,7 @@ FAST_LOCAL_TESTS = (
     "tests/test_gui_runtime_mixed_update_regressions.py",
 )
 
-WORKFLOW_SLICE = (
-    "point_provider or new4_saved_state_without_running_optimizer"
-)
+WORKFLOW_SLICE = "point_provider or saved_state_without_running_optimizer"
 
 MANUAL_IDENTITY_SLICE = (
     "dynamic_identity_resolves_all_mode_a_branches "
@@ -97,37 +92,9 @@ def _existing_compile_targets(repo_root: Path) -> tuple[str, ...]:
     return tuple(target for target in COMPILE_TARGETS if (repo_root / target).exists())
 
 
-def _new4_unavailable_reason(repo_root: Path) -> str | None:
-    new4_path = repo_root / NEW4_STATE_PATH
-    if not new4_path.exists():
-        return f"missing optional artifact: {NEW4_STATE_PATH.as_posix()}"
-    if os.environ.get(ALLOW_UNTRACKED_NEW4_ENV) == "1":
-        return None
-    if not (repo_root / ".git").exists():
-        return None
-    completed = subprocess.run(
-        [
-            "git",
-            "ls-files",
-            "--error-unmatch",
-            NEW4_STATE_PATH.as_posix(),
-        ],
-        cwd=repo_root,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if completed.returncode == 0:
-        return None
-    return (
-        f"untracked optional artifact: {NEW4_STATE_PATH.as_posix()} "
-        f"(set {ALLOW_UNTRACKED_NEW4_ENV}=1 to include it)"
-    )
-
-
 def build_gate_commands(
     mode: str = "local",
     *,
-    require_new4: bool = False,
     repo_root: Path | str | None = None,
     skip_compile: bool = False,
     skip_workflow_slice: bool = False,
@@ -215,42 +182,11 @@ def build_gate_commands(
             GateCommand("slow_geometry gate", skip_reason="skipped local mode")
         )
 
-    reason = _new4_unavailable_reason(root)
-    if reason is not None:
-        if require_new4:
-            raise GateConfigurationError(reason)
-        commands.append(GateCommand("new4 preflight", skip_reason=reason))
-        commands.append(GateCommand("new4 ladder", skip_reason=reason))
-        return commands
-
     commands.append(
         GateCommand(
-            "new4 preflight",
+            "bi geometry baseline",
             _python_command(
-                "scripts/debug/validate_geometry_preflight_rebind.py",
-                "--state",
-                NEW4_STATE_PATH.as_posix(),
-                "--background-index",
-                "0",
-                "--point-provider-report-only",
-                "--report-path",
-                "artifacts/geometry_fit_gui_states/new4_point_provider_report.json",
-            ),
-        )
-    )
-    commands.append(
-        GateCommand(
-            "new4 ladder",
-            _python_command(
-                "scripts/debug/run_new4_geometry_fit_ladder.py",
-                "--state",
-                NEW4_STATE_PATH.as_posix(),
-                "--background-index",
-                "0",
-                "--output-root",
-                "artifacts/geometry_fit_ladder/new4",
-                "--max-rung",
-                "sensitivity",
+                "scripts/debug/run_geometry_fit_quality_baseline.py",
             ),
         )
     )
@@ -273,7 +209,6 @@ def _format_command(command: Sequence[str]) -> str:
 def run_gate(
     *,
     mode: str,
-    require_new4: bool,
     skip_compile: bool,
     skip_workflow_slice: bool,
     pytest_extra_args: Sequence[str],
@@ -283,7 +218,6 @@ def run_gate(
     try:
         commands = build_gate_commands(
             mode,
-            require_new4=require_new4,
             repo_root=root,
             skip_compile=skip_compile,
             skip_workflow_slice=skip_workflow_slice,
@@ -329,7 +263,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Run geometry fitter cache regression gates.",
     )
     parser.add_argument("--mode", choices=("local", "strict"), default="local")
-    parser.add_argument("--require-new4", action="store_true")
     parser.add_argument("--skip-compile", action="store_true")
     parser.add_argument("--skip-workflow-slice", action="store_true")
     parser.add_argument(
@@ -345,7 +278,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     return run_gate(
         mode=args.mode,
-        require_new4=bool(args.require_new4),
         skip_compile=bool(args.skip_compile),
         skip_workflow_slice=bool(args.skip_workflow_slice),
         pytest_extra_args=_split_pytest_extra_args(args.pytest_extra_args),

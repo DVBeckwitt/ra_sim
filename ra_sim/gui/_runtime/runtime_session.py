@@ -8741,25 +8741,47 @@ def _geometry_fit_caked_projection_for_index(
 ) -> dict[str, object] | None:
     """Return exact caked projection metadata without image-facing background data."""
 
-    payload = _geometry_fit_caked_view_for_index(int(index))
-    if not isinstance(payload, Mapping):
-        return None
-    projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
-    if not isinstance(projection_payload, Mapping):
-        return None
     try:
         params_for_payload = dict(_current_geometry_fit_params() or {})
     except Exception:
         params_for_payload = {}
-    hydrated = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
-        projection_payload,
-        detector_shape=projection_payload.get("detector_shape"),
-        params=params_for_payload,
-        require_background=False,
+
+    def _hydrate_projection_payload(
+        raw_payload: Mapping[str, object] | None,
+    ) -> dict[str, object] | None:
+        projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(raw_payload)
+        if not isinstance(projection_payload, Mapping):
+            return None
+        hydrated = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            projection_payload,
+            detector_shape=projection_payload.get("detector_shape"),
+            params=params_for_payload,
+            require_background=False,
+        )
+        if not isinstance(hydrated, Mapping):
+            return None
+        stored_projection = _geometry_fit_projection_payload_storage_copy(hydrated)
+        if isinstance(stored_projection, Mapping):
+            return stored_projection
+        return gui_geometry_fit.geometry_fit_caked_projection_payload(hydrated)
+
+    ai_value = (
+        simulation_runtime_state.ai_cache.get("ai")
+        if isinstance(getattr(simulation_runtime_state, "ai_cache", None), Mapping)
+        else None
     )
-    if not isinstance(hydrated, Mapping):
-        return None
-    return gui_geometry_fit.geometry_fit_caked_projection_payload(hydrated)
+    projection_only_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
+        int(index),
+        ai=ai_value,
+        analysis_preview_bins=getattr(simulation_runtime_state, "analysis_preview_bins", None),
+        allow_generated_payload=True,
+    )
+    hydrated_projection = _hydrate_projection_payload(projection_only_payload)
+    if isinstance(hydrated_projection, Mapping):
+        return hydrated_projection
+
+    image_payload = _geometry_fit_caked_view_for_index(int(index))
+    return _hydrate_projection_payload(image_payload)
 
 
 def _current_geometry_fit_caked_roi_enabled() -> bool:
@@ -10040,44 +10062,24 @@ def _selected_qr_rod_clear_bounded_caches() -> None:
 
 
 def _selected_qr_rod_axis_signature(value: object) -> tuple[object, ...] | None:
-    try:
-        array = np.asarray(value, dtype=np.float64).reshape(-1)
-    except Exception:
-        return None
-    if array.size <= 0:
-        return ("axis", 0)
-    finite = array[np.isfinite(array)]
-    try:
-        digest = hashlib.blake2b(
-            np.ascontiguousarray(array).view(np.uint8),
-            digest_size=16,
-        ).hexdigest()
-    except Exception:
-        digest = _timing_signature_digest(tuple(float(v) for v in array[:16]))
-    return (
-        "axis",
-        int(array.size),
-        float(array[0]),
-        float(array[-1]),
-        int(finite.size),
-        float(np.nanmin(finite)) if finite.size else None,
-        float(np.nanmax(finite)) if finite.size else None,
-        digest,
-    )
+    return gui_manual_geometry.geometry_manual_stable_axis_value_token(value)
 
 
-def _selected_qr_rod_array_identity_signature(value: object) -> tuple[object, ...] | None:
+def _selected_qr_rod_array_content_signature(value: object) -> tuple[object, ...] | None:
     if value is None:
         return None
-    try:
-        array = np.asarray(value)
-    except Exception:
-        return ("object", id(value))
+    token = _geometry_fit_projection_dense_content_token(
+        value,
+        kind="selected_qr_rod_array",
+        allow_empty=False,
+    )
+    if not isinstance(token, Mapping):
+        return None
     return (
-        "array_identity",
-        tuple(int(v) for v in array.shape),
-        str(array.dtype),
-        id(value),
+        "array_content_v3",
+        tuple(int(v) for v in token.get("shape", ()) or ()),
+        str(token.get("dtype", "")),
+        str(token.get("digest", "")),
     )
 
 
@@ -16218,16 +16220,14 @@ def _selected_qr_rod_caked_projection_signature(
     detector_shape: object,
 ) -> tuple[object, ...]:
     transform_bundle = payload.get("transform_bundle")
-    lut = getattr(transform_bundle, "lut", None) if transform_bundle is not None else None
     return (
-        "selected_qr_rod_caked_projection",
-        _timing_signature_digest(payload.get("signature")),
+        "selected_qr_rod_caked_projection_v3",
+        None,
         tuple(int(v) for v in detector_shape) if detector_shape is not None else None,
-        id(transform_bundle) if transform_bundle is not None else None,
-        id(lut) if lut is not None else None,
+        _geometry_fit_projection_bundle_content_token(transform_bundle),
         _selected_qr_rod_axis_signature(radial_axis),
         _selected_qr_rod_axis_signature(azimuth_axis),
-        _selected_qr_rod_array_identity_signature(qz_map),
+        _selected_qr_rod_array_content_signature(qz_map),
     )
 
 
@@ -16251,8 +16251,8 @@ def _selected_qr_rod_profile_cache_signature(
         str(selected_key or ""),
         _timing_signature_digest(mask_signature),
         mask_shape,
-        _selected_qr_rod_array_identity_signature(shared.get("caked_image")),
-        _selected_qr_rod_array_identity_signature(shared.get("qz_map")),
+        _selected_qr_rod_array_content_signature(shared.get("caked_image")),
+        _selected_qr_rod_array_content_signature(shared.get("qz_map")),
         _selected_qr_rod_axis_signature(shared.get("qz_edges")),
         _selected_qr_rod_axis_signature(shared.get("radial_axis")),
         _selected_qr_rod_axis_signature(shared.get("azimuth_axis")),
@@ -16267,9 +16267,9 @@ def _selected_qr_rod_profile_cache_signature(
         _normalize_rod_profile_intensity_mode(shared.get("rod_profile_intensity_mode")),
         _normalize_caked_intensity_mode(shared.get("caked_intensity_mode", "density")),
         shared.get("result_identity"),
-        _selected_qr_rod_array_identity_signature(shared.get("signal_sum")),
-        _selected_qr_rod_array_identity_signature(shared.get("normalization_sum")),
-        _selected_qr_rod_array_identity_signature(shared.get("acceptance")),
+        _selected_qr_rod_array_content_signature(shared.get("signal_sum")),
+        _selected_qr_rod_array_content_signature(shared.get("normalization_sum")),
+        _selected_qr_rod_array_content_signature(shared.get("acceptance")),
     )
 
 
@@ -16294,8 +16294,8 @@ def _selected_qr_rod_profile_component_cache_signature(
         "selected_qr_rod_profile_components",
         str(selected_key or ""),
         tuple(int(v) for v in mask_shape),
-        _selected_qr_rod_array_identity_signature(shared.get("caked_image")),
-        _selected_qr_rod_array_identity_signature(shared.get("qz_map")),
+        _selected_qr_rod_array_content_signature(shared.get("caked_image")),
+        _selected_qr_rod_array_content_signature(shared.get("qz_map")),
         _selected_qr_rod_axis_signature(shared.get("qz_edges")),
         _selected_qr_rod_axis_signature(shared.get("radial_axis")),
         _selected_qr_rod_axis_signature(shared.get("azimuth_axis")),
@@ -16304,9 +16304,9 @@ def _selected_qr_rod_profile_component_cache_signature(
         _timing_signature_digest(shared.get("stored_hit_table_signature")),
         _normalize_caked_intensity_mode(shared.get("caked_intensity_mode", "density")),
         shared.get("result_identity"),
-        _selected_qr_rod_array_identity_signature(shared.get("signal_sum")),
-        _selected_qr_rod_array_identity_signature(shared.get("normalization_sum")),
-        _selected_qr_rod_array_identity_signature(shared.get("acceptance")),
+        _selected_qr_rod_array_content_signature(shared.get("signal_sum")),
+        _selected_qr_rod_array_content_signature(shared.get("normalization_sum")),
+        _selected_qr_rod_array_content_signature(shared.get("acceptance")),
     )
 
 
@@ -30182,37 +30182,220 @@ def _geometry_fit_load_targeted_projected_cache_entry(
     return copy.deepcopy(dict(payload))
 
 
+def _geometry_fit_projection_content_hash(*parts: bytes | str) -> str:
+    hasher = hashlib.blake2b(digest_size=16)
+    for part in parts:
+        raw = part.encode("utf-8", "backslashreplace") if isinstance(part, str) else bytes(part)
+        hasher.update(len(raw).to_bytes(8, "little", signed=False))
+        hasher.update(raw)
+    return hasher.hexdigest()
+
+
+def _geometry_fit_projection_dense_content_token(
+    value: object,
+    *,
+    kind: str,
+    allow_empty: bool = True,
+) -> dict[str, object] | None:
+    try:
+        raw = np.asarray(value)
+    except Exception:
+        return None
+    if raw.dtype.kind == "O":
+        return None
+    if raw.dtype.kind in {"f", "c"}:
+        try:
+            arr = np.asarray(value, dtype=np.dtype("<f8"))
+        except Exception:
+            return None
+        if not np.all(np.isfinite(arr)):
+            return None
+    elif raw.dtype.kind in {"i", "u"}:
+        try:
+            arr = np.asarray(value, dtype=np.dtype("<i8"))
+        except Exception:
+            return None
+    elif raw.dtype.kind == "b":
+        arr = np.asarray(value, dtype=np.dtype("u1"))
+    else:
+        return None
+    if arr.size <= 0 and not bool(allow_empty):
+        return None
+    arr = np.ascontiguousarray(arr)
+    shape = [int(v) for v in arr.shape]
+    dtype_text = str(arr.dtype)
+    return {
+        "kind": "dense_content_v3",
+        "content_kind": str(kind),
+        "shape": shape,
+        "dtype": dtype_text,
+        "digest": _geometry_fit_projection_content_hash(
+            "dense_content_v3",
+            str(kind),
+            repr(shape),
+            dtype_text,
+            arr.tobytes(order="C"),
+        ),
+    }
+
+
+def _geometry_fit_projection_sparse_content_token(
+    value: object,
+    *,
+    kind: str,
+) -> dict[str, object] | None:
+    if not hasattr(value, "tocsr"):
+        return None
+    try:
+        csr = value.tocsr(copy=True)  # type: ignore[attr-defined]
+    except TypeError:
+        try:
+            csr = value.tocsr()  # type: ignore[attr-defined]
+        except Exception:
+            return None
+    except Exception:
+        return None
+    try:
+        csr.sort_indices()
+    except Exception:
+        pass
+    try:
+        shape = [int(v) for v in tuple(csr.shape)[:2]]
+        indptr = np.ascontiguousarray(np.asarray(csr.indptr, dtype=np.dtype("<i8")).reshape(-1))
+        indices = np.ascontiguousarray(np.asarray(csr.indices, dtype=np.dtype("<i8")).reshape(-1))
+        raw_data = np.asarray(csr.data)
+    except Exception:
+        return None
+    if len(shape) < 2 or shape[0] < 0 or shape[1] < 0 or raw_data.dtype.kind == "O":
+        return None
+    if raw_data.dtype.kind in {"f", "c"}:
+        data = np.asarray(csr.data, dtype=np.dtype("<f8")).reshape(-1)
+        if not np.all(np.isfinite(data)):
+            return None
+    elif raw_data.dtype.kind in {"i", "u", "b"}:
+        data = np.asarray(csr.data, dtype=np.dtype("<i8")).reshape(-1)
+    else:
+        return None
+    data = np.ascontiguousarray(data)
+    dtype_text = str(data.dtype)
+    return {
+        "kind": "sparse_csr_content_v3",
+        "content_kind": str(kind),
+        "shape": shape,
+        "indptr_length": int(indptr.size),
+        "indices_length": int(indices.size),
+        "data_length": int(data.size),
+        "data_dtype": dtype_text,
+        "digest": _geometry_fit_projection_content_hash(
+            "sparse_csr_content_v3",
+            str(kind),
+            repr(shape),
+            indptr.tobytes(order="C"),
+            indices.tobytes(order="C"),
+            dtype_text,
+            data.tobytes(order="C"),
+        ),
+    }
+
+
+def _geometry_fit_projection_transform_content_token(
+    value: object,
+    *,
+    kind: str,
+) -> dict[str, object] | None:
+    if value is None:
+        return {"kind": "transform_none_v3", "content_kind": str(kind)}
+    if all(
+        hasattr(value, attr) for attr in ("image_shape", "n_rad", "n_az", "matrix", "count_flat")
+    ):
+        try:
+            image_shape = [int(v) for v in tuple(value.image_shape)[:2]]
+            n_rad = int(value.n_rad)
+            n_az = int(value.n_az)
+        except Exception:
+            return None
+        return {
+            "kind": "detector_cake_lut_generation_v3",
+            "content_kind": str(kind),
+            "image_shape": image_shape,
+            "n_rad": int(n_rad),
+            "n_az": int(n_az),
+        }
+    sparse_token = _geometry_fit_projection_sparse_content_token(value, kind=kind)
+    if sparse_token is not None:
+        return sparse_token
+    return _geometry_fit_projection_dense_content_token(value, kind=kind, allow_empty=True)
+
+
+def _geometry_fit_projection_bundle_content_token(
+    bundle: object,
+) -> dict[str, object] | None:
+    if not isinstance(bundle, CakeTransformBundle):
+        return None
+    detector_shape = _geometry_fit_projection_shape_token(getattr(bundle, "detector_shape", None))
+    radial_axis = _geometry_fit_projection_axis_token(getattr(bundle, "radial_deg", None))
+    azimuth_axis = _geometry_fit_projection_axis_token(getattr(bundle, "gui_azimuth_deg", None))
+    raw_azimuth_axis = _geometry_fit_projection_axis_token(getattr(bundle, "raw_azimuth_deg", None))
+    lut = _geometry_fit_projection_transform_content_token(getattr(bundle, "lut", None), kind="lut")
+    lut_t = _geometry_fit_projection_transform_content_token(
+        getattr(bundle, "lut_t", None),
+        kind="lut_t",
+    )
+    if (
+        detector_shape is None
+        or radial_axis is None
+        or azimuth_axis is None
+        or raw_azimuth_axis is None
+        or lut is None
+        or lut_t is None
+    ):
+        return None
+    return {
+        "kind": "cake_transform_bundle_content_v3",
+        "detector_shape": detector_shape,
+        "radial_axis": radial_axis,
+        "azimuth_axis": azimuth_axis,
+        "raw_azimuth_axis": raw_azimuth_axis,
+        "lut": lut,
+        "lut_t": lut_t,
+    }
+
+
 def _geometry_fit_projection_payload_digest(
     payload: Mapping[str, object] | None,
 ) -> str | None:
     if not isinstance(payload, Mapping):
         return None
-    payload_signature = payload.get("signature")
-    transform_bundle = payload.get("transform_bundle")
-    lut = getattr(transform_bundle, "lut", None) if transform_bundle is not None else None
-    lut_t = getattr(transform_bundle, "lut_t", None) if transform_bundle is not None else None
-    transform_token = None
-    if payload_signature is None:
-        transform_token = (
-            id(transform_bundle) if transform_bundle is not None else None,
-            id(lut) if lut is not None else None,
-            id(lut_t) if lut_t is not None else None,
-        )
-    return gui_geometry_fit._geometry_fit_digest_payload(
-        {
-            "detector_shape": _geometry_fit_projection_shape_token(payload.get("detector_shape")),
-            "radial_axis": _geometry_fit_projection_axis_token(payload.get("radial_axis")),
-            "azimuth_axis": _geometry_fit_projection_axis_token(payload.get("azimuth_axis")),
-            "raw_azimuth_axis": _geometry_fit_projection_axis_token(
-                payload.get("raw_azimuth_axis")
-            ),
-            "raw_to_gui_row_permutation": _geometry_fit_projection_permutation_token(
-                payload.get("raw_to_gui_row_permutation")
-            ),
-            "payload_signature": gui_geometry_fit._geometry_fit_cache_jsonable(payload_signature),
-            "transform_bundle": transform_token,
-        }
+    existing_schema = str(payload.get("projection_token_schema") or "").strip()
+    existing_token = payload.get("projection_content_token_v3")
+    if (
+        existing_schema == "geometry_fit_projection_content_v3"
+        and isinstance(existing_token, str)
+        and existing_token
+    ):
+        return str(existing_token)
+    transform_bundle_token = _geometry_fit_projection_bundle_content_token(
+        payload.get("transform_bundle")
     )
+    if transform_bundle_token is None:
+        return None
+    token_payload = {
+        "kind": "geometry_fit_projection_payload_content_v3",
+        "detector_shape": _geometry_fit_projection_shape_token(payload.get("detector_shape")),
+        "radial_axis": _geometry_fit_projection_axis_token(payload.get("radial_axis")),
+        "azimuth_axis": _geometry_fit_projection_axis_token(payload.get("azimuth_axis")),
+        "raw_azimuth_axis": _geometry_fit_projection_axis_token(payload.get("raw_azimuth_axis")),
+        "raw_to_gui_row_permutation": _geometry_fit_projection_permutation_token(
+            payload.get("raw_to_gui_row_permutation")
+        ),
+        "transform_bundle": transform_bundle_token,
+    }
+    if any(
+        token_payload.get(key) is None
+        for key in ("detector_shape", "radial_axis", "azimuth_axis", "raw_azimuth_axis")
+    ):
+        return None
+    return gui_geometry_fit._geometry_fit_digest_payload(token_payload)
 
 
 def _geometry_fit_projection_shape_token(value: object) -> list[int] | None:
@@ -30225,63 +30408,58 @@ def _geometry_fit_projection_shape_token(value: object) -> list[int] | None:
     return shape[:2]
 
 
-def _geometry_fit_projection_axis_token(value: object) -> dict[str, object] | None:
-    try:
-        arr = np.asarray(value).reshape(-1)
-    except Exception:
-        return None
-    if arr.size == 0:
-        return None
-    try:
-        middle = arr[int(arr.size // 2)]
-        return {
-            "kind": "axis_v2",
-            "length": int(arr.size),
-            "dtype": str(arr.dtype),
-            "first": float(arr[0]),
-            "middle": float(middle),
-            "last": float(arr[-1]),
-        }
-    except Exception:
-        return {
-            "kind": "axis_v2",
-            "length": int(arr.size),
-            "dtype": str(arr.dtype),
-            "first": repr(arr[0]),
-            "last": repr(arr[-1]),
-        }
+def _geometry_fit_projection_axis_token(value: object) -> tuple[object, ...] | None:
+    token = gui_manual_geometry.geometry_manual_stable_axis_value_token(value)
+    return tuple(token) if token is not None else None
 
 
-def _geometry_fit_projection_permutation_token(value: object) -> dict[str, object] | None:
-    try:
-        arr = np.asarray(value).reshape(-1)
-    except Exception:
+def _geometry_fit_projection_permutation_token(value: object) -> tuple[object, ...] | None:
+    return gui_manual_geometry.geometry_manual_stable_permutation_value_token(value)
+
+
+def _geometry_fit_projection_payload_storage_copy(
+    payload: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    projection = gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
+    if not isinstance(projection, Mapping):
         return None
-    if arr.size == 0:
-        return None
-    modulo = 1_000_000_007
-    checksum = 0
-    try:
-        for idx, item in enumerate(arr.tolist()):
-            checksum = (checksum + (idx + 1) * int(item)) % modulo
-        middle = arr[int(arr.size // 2)]
-        return {
-            "kind": "perm_v2",
-            "length": int(arr.size),
-            "dtype": str(arr.dtype),
-            "first": int(arr[0]),
-            "middle": int(middle),
-            "last": int(arr[-1]),
-            "weighted_sum_mod": int(checksum),
-        }
-    except Exception:
-        return {
-            "kind": "perm_v2",
-            "length": int(arr.size),
-            "dtype": str(arr.dtype),
-            "first": repr(arr[0]),
-            "last": repr(arr[-1]),
-        }
+    stored: dict[str, object] = {"payload_kind": "projection"}
+    if (
+        str(projection.get("projection_token_schema") or "").strip()
+        == "geometry_fit_projection_content_v3"
+        and projection.get("projection_content_token_v3") is not None
+    ):
+        stored["projection_token_schema"] = "geometry_fit_projection_content_v3"
+        stored["projection_content_token_v3"] = str(projection.get("projection_content_token_v3"))
+    detector_shape = _geometry_fit_projection_shape_token(projection.get("detector_shape"))
+    if detector_shape is not None:
+        stored["detector_shape"] = tuple(int(v) for v in detector_shape[:2])
+    for key in ("radial_axis", "azimuth_axis", "raw_azimuth_axis"):
+        value = projection.get(key)
+        if value is None:
+            continue
+        try:
+            stored[key] = np.asarray(value, dtype=np.dtype("<f8")).reshape(-1).copy()
+        except Exception:
+            return None
+    permutation = projection.get("raw_to_gui_row_permutation")
+    if permutation is not None:
+        try:
+            stored["raw_to_gui_row_permutation"] = (
+                np.asarray(permutation, dtype=np.dtype("<i8")).reshape(-1).copy()
+            )
+        except Exception:
+            return None
+    transform_bundle = projection.get("transform_bundle")
+    if transform_bundle is not None:
+        stored["transform_bundle"] = transform_bundle
+    projection_token = _geometry_fit_projection_payload_digest(stored)
+    if projection_token is None:
+        projection_token = _geometry_fit_projection_payload_digest(projection)
+    if projection_token is not None:
+        stored["projection_token_schema"] = "geometry_fit_projection_content_v3"
+        stored["projection_content_token_v3"] = str(projection_token)
+    return stored
 
 
 def _geometry_fit_targeted_projection_view_mode() -> str:
@@ -30457,6 +30635,12 @@ def _geometry_fit_targeted_projection_view_signature(
             allow_generated_payload=True,
         )
         if isinstance(normalized_payload, Mapping):
+            projection_payload_digest = _geometry_fit_projection_payload_digest(normalized_payload)
+            if projection_payload_digest is None:
+                signature["available"] = False
+                signature["reason"] = "invalid_background_caked_payload"
+                signature["projection_payload_digest"] = None
+                return _geometry_fit_projection_signature_public(signature)
             signature.update(
                 {
                     "available": True,
@@ -30473,9 +30657,7 @@ def _geometry_fit_targeted_projection_view_signature(
                     "raw_to_gui_row_permutation": _geometry_fit_projection_permutation_token(
                         normalized_payload.get("raw_to_gui_row_permutation")
                     ),
-                    "projection_payload_digest": _geometry_fit_projection_payload_digest(
-                        normalized_payload
-                    ),
+                    "projection_payload_digest": projection_payload_digest,
                 }
             )
         else:
@@ -40783,7 +40965,7 @@ def _geometry_fit_normalized_q_group_key(value: object) -> tuple[object, ...] | 
     if not isinstance(value, (list, tuple)) or len(value) < 4:
         return None
     if str(value[0]) != "q_group":
-        return None
+        return tuple(value)
     return tuple(value)
 
 
@@ -41583,9 +41765,13 @@ def _build_geometry_fit_async_job(
                         caked_view_payload
                     )
                 if isinstance(projection_payload, Mapping):
-                    projection_payload_by_background[int(current_background_index)] = copy.deepcopy(
-                        dict(projection_payload)
+                    stored_projection_payload = _geometry_fit_projection_payload_storage_copy(
+                        projection_payload
                     )
+                    if isinstance(stored_projection_payload, Mapping):
+                        projection_payload_by_background[int(current_background_index)] = (
+                            stored_projection_payload
+                        )
                 sanitized_payload, _sanitize_diag = (
                     gui_geometry_fit.sanitize_geometry_fit_caked_display_payload(caked_view_payload)
                 )
@@ -42207,9 +42393,12 @@ def _run_async_geometry_fit_worker_job(
             projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
                 hydrated_payload
             )
-            if isinstance(projection_payload, Mapping):
-                job_data.setdefault("projection_payload_by_background", {})[int(index)] = dict(
-                    projection_payload
+            stored_projection_payload = _geometry_fit_projection_payload_storage_copy(
+                projection_payload
+            )
+            if isinstance(stored_projection_payload, Mapping):
+                job_data.setdefault("projection_payload_by_background", {})[int(index)] = (
+                    stored_projection_payload
                 )
         return hydrated_payload
 
@@ -42243,6 +42432,8 @@ def _run_async_geometry_fit_worker_job(
         ):
             return "projection_payload_axis_mismatch"
         if not isinstance(payload.get("transform_bundle"), CakeTransformBundle):
+            return "missing_exact_caked_bundle"
+        if _geometry_fit_projection_payload_digest(payload) is None:
             return "missing_exact_caked_bundle"
         return "projection_payload_ready"
 
@@ -42311,12 +42502,15 @@ def _run_async_geometry_fit_worker_job(
             stored_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
                 hydrated_payload
             )
+            stored_payload = _geometry_fit_projection_payload_storage_copy(stored_payload)
             if not isinstance(stored_payload, Mapping) or not isinstance(
                 stored_payload.get("transform_bundle"),
                 CakeTransformBundle,
             ):
                 return None
-            payload_map[background_idx] = dict(stored_payload)
+            if _geometry_fit_projection_payload_digest(stored_payload) is None:
+                return None
+            payload_map[background_idx] = stored_payload
             return dict(stored_payload)
 
         projection_payload, state = _projection_candidate_state(
@@ -42586,8 +42780,11 @@ def _run_async_geometry_fit_worker_job(
             stored_projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
                 hydrated_caked_payload
             )
+            stored_projection_payload = _geometry_fit_projection_payload_storage_copy(
+                stored_projection_payload
+            )
             if isinstance(stored_projection_payload, Mapping):
-                payload_map[int(background_index)] = dict(stored_projection_payload)
+                payload_map[int(background_index)] = stored_projection_payload
 
         center_value = params_local.get("center")
         if isinstance(center_value, Sequence) and len(center_value) >= 2:
@@ -43289,9 +43486,21 @@ def _run_async_geometry_fit_worker_job(
                 roi_half_width_px=float(roi_half_width_px),
             )
 
-        projection_payload_by_background[int(bundle.background_index)] = copy.deepcopy(
-            dict(projection_payload)
+        stored_projection_payload = _geometry_fit_projection_payload_storage_copy(
+            projection_payload
         )
+        if not isinstance(stored_projection_payload, Mapping):
+            return _caked_result(
+                "missing_exact_caked_bundle",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="missing_exact_caked_bundle",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        projection_payload_by_background[int(bundle.background_index)] = stored_projection_payload
         _emit_caked_stage(
             "projection_payload_ready",
             status="projection_payload_ready",
@@ -43716,10 +43925,13 @@ def _run_async_geometry_fit_worker_job(
             and candidate_state == "absent"
             and isinstance(ensured_projection_payload, Mapping)
         ):
-            projection_payload = dict(ensured_projection_payload)
-            job_data.setdefault("projection_payload_by_background", {})[int(background_idx)] = dict(
-                projection_payload
+            projection_payload = _geometry_fit_projection_payload_storage_copy(
+                ensured_projection_payload
             )
+            if isinstance(projection_payload, Mapping):
+                job_data.setdefault("projection_payload_by_background", {})[int(background_idx)] = (
+                    projection_payload
+                )
         if (
             projection_view_mode == "caked"
             and candidate_state == "absent"
@@ -43738,9 +43950,13 @@ def _run_async_geometry_fit_worker_job(
                 require_background=False,
             )
             if isinstance(projection_payload, Mapping):
-                job_data.setdefault("projection_payload_by_background", {})[int(background_idx)] = (
-                    dict(projection_payload)
+                stored_projection_payload = _geometry_fit_projection_payload_storage_copy(
+                    projection_payload
                 )
+                if isinstance(stored_projection_payload, Mapping):
+                    job_data.setdefault("projection_payload_by_background", {})[
+                        int(background_idx)
+                    ] = stored_projection_payload
         if projection_view_mode == "caked" and (
             not isinstance(projection_payload, Mapping)
             or not isinstance(projection_payload.get("transform_bundle"), CakeTransformBundle)

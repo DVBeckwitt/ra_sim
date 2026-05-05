@@ -566,12 +566,12 @@ def test_build_quality_report_extracts_decision_row_and_overlay_preview(tmp_path
     } == compact
 
 
-def test_validate_manual_caked_fit_space_provenance_rejects_empty_new4_exact_proof() -> None:
+def test_validate_manual_caked_fit_space_provenance_rejects_empty_fixed_manual_caked_proof() -> None:
     module = _load_baseline_module()
 
     violations = module.validate_manual_caked_fit_space_provenance(
         {
-            "state_name": "new4_fresh_all",
+            "state_name": "Bi2Se3",
             "manual_caked_residual_row_count": 0,
             "dataset_fit_space_projector_row_count": 0,
             "invalid_dataset_fit_space_projector_row_count": 0,
@@ -582,9 +582,9 @@ def test_validate_manual_caked_fit_space_provenance_rejects_empty_new4_exact_pro
         }
     )
 
-    assert "new4 manual_caked_residual_row_count is empty" in violations
-    assert "new4 exact_fit_space_projector_available is false" in violations
-    assert "new4 dataset_fit_space_projector_row_count is empty" in violations
+    assert "manual_caked_residual_row_count is empty" in violations
+    assert "exact_fit_space_projector_available is false" in violations
+    assert "dataset_fit_space_projector_row_count is empty" in violations
 
 
 def test_validate_manual_caked_fit_space_provenance_accepts_exact_projector_row() -> None:
@@ -592,7 +592,7 @@ def test_validate_manual_caked_fit_space_provenance_accepts_exact_projector_row(
 
     violations = module.validate_manual_caked_fit_space_provenance(
         {
-            "state_name": "new4_fresh_all",
+            "state_name": "Bi2Se3",
             "manual_caked_residual_row_count": 1,
             "dataset_fit_space_projector_row_count": 1,
             "invalid_dataset_fit_space_projector_row_count": 0,
@@ -645,6 +645,42 @@ def test_validate_manual_caked_fit_space_provenance_accepts_rows_only_exact_row(
                 "cake_bundle_signature": "sig-rows-only",
             }
         ]
+    )
+
+    assert violations == []
+
+
+def test_validate_manual_caked_fit_space_provenance_accepts_point_only_dynamic_row() -> None:
+    module = _load_baseline_module()
+
+    violations = module.validate_manual_caked_fit_space_provenance(
+        {
+            "state_name": "Bi2Se3",
+            "manual_caked_residual_row_count": 1,
+            "dataset_fit_space_projector_row_count": 1,
+            "invalid_dataset_fit_space_projector_row_count": 0,
+            "analytic_detector_fit_space_row_count": 0,
+            "exact_fit_space_projector_available": True,
+            "exact_fit_space_projection_reason": "point_only_dynamic_source_row",
+            "pair_alignment_rows": [
+                {
+                    "pair_id": "pair[point-only]",
+                    "selected_is_minimum_background_distance": False,
+                    "fit_space_projector_kind": "point_only_dynamic_source_row",
+                    "fit_space_anchor_override": False,
+                    "measured_fit_space_source": "cached_fit_space_anchor",
+                    "simulated_fit_space_source": "sim_visual_caked_deg",
+                    "measured_detector_input_frame": "explicit_override",
+                    "simulated_detector_input_frame": "sim_visual_caked_deg",
+                    "measured_native_frame_conversion_count": 0,
+                    "simulated_native_frame_conversion_count": 0,
+                    "measured_invalid_projection_reason": None,
+                    "simulated_invalid_projection_reason": None,
+                    "invalid_projection_reason": None,
+                    "cake_bundle_signature": None,
+                }
+            ],
+        }
     )
 
     assert violations == []

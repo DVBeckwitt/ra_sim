@@ -59,17 +59,8 @@ HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET = set(
     HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES
 )
 _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DEFAULT_ACTIVE_VAR_NAMES = (
-    "center_x",
-    "center_y",
-    "gamma",
-    "Gamma",
-    "chi",
-    "cor_angle",
-    "theta_initial",
-    "corto_detector",
-    "zs",
-    "zb",
     "a",
+    "theta_offset",
     "psi_z",
 )
 
@@ -951,6 +942,66 @@ def _build_headless_geometry_fit_caked_view_payload(
     payload["ai"] = ai
     payload["background_image"] = np.asarray(payload.get("background"), dtype=np.float64)
     return payload
+
+
+def _build_headless_geometry_fit_caked_projection_payload(
+    detector_shape: object,
+    *,
+    params: Mapping[str, object],
+    pixel_size_m: float,
+    background_index: int | None = None,
+    npt_rad: int = HEADLESS_GEOMETRY_CAKED_RADIAL_BINS,
+    npt_azim: int = HEADLESS_GEOMETRY_CAKED_AZIMUTH_BINS,
+) -> dict[str, object] | None:
+    """Build exact caked projector payload without integrating a display image."""
+
+    del background_index
+    try:
+        normalized_shape = tuple(int(v) for v in tuple(detector_shape)[:2])
+    except Exception:
+        return None
+    if len(normalized_shape) < 2 or min(normalized_shape) <= 0:
+        return None
+    center = _headless_geometry_fit_center(params)
+    if center is None:
+        return None
+    try:
+        distance_m = float(params.get("corto_detector", np.nan))
+        pixel_size = float(pixel_size_m)
+        wavelength_m = float(params.get("lambda", np.nan)) * 1.0e-10
+    except Exception:
+        return None
+    if not (
+        np.isfinite(distance_m)
+        and distance_m > 0.0
+        and np.isfinite(pixel_size)
+        and pixel_size > 0.0
+    ):
+        return None
+
+    exact_cake = _load_exact_cake_portable_module()
+    try:
+        ai = exact_cake.FastAzimuthalIntegrator(
+            dist=float(distance_m),
+            poni1=float(center[0]) * float(pixel_size),
+            poni2=float(center[1]) * float(pixel_size),
+            rot1=0.0,
+            rot2=0.0,
+            rot3=0.0,
+            wavelength=float(wavelength_m) if np.isfinite(wavelength_m) else None,
+            pixel1=float(pixel_size),
+            pixel2=float(pixel_size),
+        )
+    except Exception:
+        return None
+    payload = gui_geometry_fit.build_geometry_fit_exact_caked_projection_view(
+        detector_shape=normalized_shape,
+        ai=ai,
+        npt_rad=int(max(2, npt_rad)),
+        npt_azim=int(max(2, npt_azim)),
+    )
+    projection = gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
+    return dict(projection) if isinstance(projection, Mapping) else None
 
 
 def _ensure_triplet(raw_value: object, fallback: list[float]) -> list[float]:
@@ -1883,9 +1934,13 @@ def _logged_cache_matches_params(
     return matched_checks > 0
 
 
+HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT = "direct"
 HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART = "ladder-multistart"
 _HEADLESS_GEOMETRY_FIT_SEED_POLICIES = frozenset(
-    {HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART}
+    {
+        HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT,
+        HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+    }
 )
 _HEADLESS_GEOMETRY_FIT_LADDER_SEED_SEARCH = {
     "prescore_top_k": 4,
@@ -1900,7 +1955,10 @@ _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH = {
     "min_seed_separation_u": 0.5,
     "_reuse_generation_for_prescore": True,
 }
-_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_MAX_NFEV = 60
+# Point-only direct solves converge within this cap for saved Bi caked states; higher
+# finite-difference probes can enter unstable generated-row territory on Windows.
+_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV = 29
+_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_LADDER_MAX_NFEV = 60
 _HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG = "_qr_fit_point_only_projection"
 _HEADLESS_GEOMETRY_FIT_PROGRESS_PHASES = frozenset(
     {
@@ -2177,6 +2235,8 @@ def _apply_headless_geometry_fit_seed_policy(
 
     if seed_policy is None:
         return
+    if seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT:
+        return
     if seed_policy != HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
         raise ValueError(f"Unsupported headless geometry-fit seed policy {seed_policy!r}.")
     seed_search_cfg = runtime_cfg.get("seed_search")
@@ -2292,7 +2352,7 @@ def _infer_headless_saved_manual_caked_defaults(
     resolved_seed_policy = (
         seed_policy
         if seed_policy is not None
-        else HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+        else HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT
     )
     return resolved_active, resolved_seed_policy, True
 
@@ -2334,10 +2394,13 @@ def _apply_headless_saved_manual_caked_lean_runtime(
     runtime_cfg: dict[str, object],
     *,
     max_nfev: int,
+    seed_multistart: bool,
 ) -> None:
     solver = _headless_runtime_solver_mapping(runtime_cfg)
     solver["manual_point_fit_mode"] = True
     solver["dynamic_point_geometry_fit"] = True
+    solver["seed_multistart"] = bool(seed_multistart)
+    solver["seed_multistart_enabled"] = bool(seed_multistart)
     solver[_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG] = True
     solver["max_nfev"] = int(max_nfev)
     solver["min_max_nfev"] = 1
@@ -2354,6 +2417,10 @@ def _apply_headless_saved_manual_caked_lean_runtime(
     solver["worker_numba_threads"] = 0
     runtime_cfg["solver"] = solver
     runtime_cfg["optimizer"] = dict(solver)
+    seed_search_cfg = runtime_cfg.get("seed_search")
+    seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
+    seed_search["enabled"] = bool(seed_multistart)
+    runtime_cfg["seed_search"] = seed_search
     runtime_cfg["projection_view_mode"] = "caked"
     runtime_cfg["use_numba"] = bool(runtime_cfg.get("use_numba", False))
     runtime_cfg["allow_unsafe_runtime"] = False
@@ -2410,16 +2477,30 @@ def _apply_headless_saved_manual_caked_budget(
     )
     row_count = max(int(prepared_row_count), int(manual_row_count))
     _enforce_headless_gamma_bounds(runtime_cfg, active_var_names)
-    if seed_policy != HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
-        return False, int(row_count)
     if row_count <= 0:
         return False, int(row_count)
-    if not _headless_geometry_runtime_is_saved_manual_caked_candidate(runtime_cfg):
+    if seed_policy not in {
+        HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT,
+        HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+    }:
+        if not _headless_geometry_runtime_is_saved_manual_caked_candidate(runtime_cfg):
+            return False, int(row_count)
         return False, int(row_count)
     _apply_headless_saved_manual_caked_lean_runtime(
         runtime_cfg,
-        max_nfev=_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_MAX_NFEV,
+        max_nfev=(
+            _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_LADDER_MAX_NFEV
+            if seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+            else _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV
+        ),
+        seed_multistart=(
+            seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+        ),
     )
+    if seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT:
+        return True, int(row_count)
+    if seed_policy != HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
+        return False, int(row_count)
     seed_search_cfg = runtime_cfg.get("seed_search")
     seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
     seed_search.update(_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH)
@@ -2820,6 +2901,7 @@ def run_headless_geometry_fit(
         return float(col_val), float(row_val)
 
     caked_views_by_background: dict[int, dict[str, object]] = {}
+    caked_projection_payloads_by_background: dict[int, dict[str, object]] = {}
     background_subtraction_diagnostics_written: set[tuple[object, ...]] = set()
 
     def _manual_current_background_uses_caked_space() -> bool:
@@ -2886,6 +2968,48 @@ def run_headless_geometry_fit(
             ),
             source_signature,
         )
+
+    def _headless_geometry_fit_projection_payload_token(
+        payload: Mapping[str, object],
+        *,
+        signature: tuple[object, ...],
+    ) -> str | None:
+        radial_token = gui_manual_geometry.geometry_manual_stable_axis_value_token(
+            payload.get("radial_axis")
+        )
+        azimuth_token = gui_manual_geometry.geometry_manual_stable_axis_value_token(
+            payload.get("azimuth_axis")
+        )
+        raw_azimuth_token = gui_manual_geometry.geometry_manual_stable_axis_value_token(
+            payload.get("raw_azimuth_axis")
+        )
+        permutation_token = gui_manual_geometry.geometry_manual_stable_permutation_value_token(
+            payload.get("raw_to_gui_row_permutation")
+        )
+        try:
+            detector_shape = tuple(int(v) for v in tuple(payload.get("detector_shape"))[:2])
+        except Exception:
+            detector_shape = ()
+        if (
+            len(detector_shape) < 2
+            or min(detector_shape) <= 0
+            or radial_token is None
+            or azimuth_token is None
+            or raw_azimuth_token is None
+            or permutation_token is None
+        ):
+            return None
+        token_payload = {
+            "kind": "headless_exact_caked_projection_content_v3",
+            "signature": signature,
+            "detector_shape": detector_shape,
+            "radial_axis": tuple(radial_token),
+            "azimuth_axis": tuple(azimuth_token),
+            "raw_azimuth_axis": tuple(raw_azimuth_token),
+            "raw_to_gui_row_permutation": tuple(permutation_token),
+            "transform_bundle_generation": payload.get("transform_bundle_generation"),
+        }
+        return gui_geometry_fit._geometry_fit_digest_payload(token_payload)
 
     def _headless_geometry_fit_hydrate_caked_payload(
         payload: object,
@@ -2966,6 +3090,76 @@ def run_headless_geometry_fit(
         hydrated_payload["projection_view_mode"] = "caked"
         hydrated_payload["headless_caked_payload_signature"] = signature
         return hydrated_payload
+
+    def _headless_geometry_fit_hydrate_caked_projection_payload(
+        payload: object,
+        *,
+        signature: tuple[object, ...],
+        detector_shape: Sequence[object],
+        params_local: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        if not isinstance(payload, Mapping):
+            return None
+        if payload.get("headless_caked_payload_signature") != signature:
+            return None
+        if str(payload.get("projection_view_mode") or "").strip().lower() != "caked":
+            return None
+        expected_shape = tuple(int(v) for v in tuple(detector_shape)[:2])
+        try:
+            payload_shape = tuple(int(v) for v in tuple(payload.get("detector_shape"))[:2])
+        except Exception:
+            return None
+        if payload_shape != expected_shape:
+            return None
+        normalized_payload = gui_geometry_fit.normalize_geometry_fit_caked_view_payload(
+            payload,
+            detector_shape=expected_shape,
+        )
+        if not isinstance(normalized_payload, dict):
+            return None
+        hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
+            normalized_payload,
+            detector_shape=expected_shape,
+            params=params_local,
+            require_background=False,
+        )
+        projection = gui_geometry_fit.geometry_fit_caked_projection_payload(hydrated_payload)
+        if not isinstance(projection, Mapping):
+            return None
+        transform_bundle = projection.get("transform_bundle")
+        exact_cake = _load_exact_cake_portable_module()
+        if not isinstance(transform_bundle, exact_cake.CakeTransformBundle):
+            return None
+        stored = dict(projection)
+        for key in (
+            "background_index",
+            "source_cache_signature",
+            "geometry_projection_params_signature",
+            "projection_parameter_signature",
+            "transform_bundle_generation",
+            "caked_axis_shape",
+        ):
+            if key in payload:
+                stored[key] = payload[key]
+        stored["payload_kind"] = "projection"
+        stored["projection_view_mode"] = "caked"
+        stored["headless_caked_payload_signature"] = signature
+        projection_token = stored.get("projection_content_token_v3")
+        if (
+            str(stored.get("projection_token_schema") or "").strip()
+            != "geometry_fit_projection_content_v3"
+            or not isinstance(projection_token, str)
+            or not projection_token
+        ):
+            projection_token = _headless_geometry_fit_projection_payload_token(
+                stored,
+                signature=signature,
+            )
+        if projection_token is None:
+            return None
+        stored["projection_token_schema"] = "geometry_fit_projection_content_v3"
+        stored["projection_content_token_v3"] = str(projection_token)
+        return stored
 
     def _headless_geometry_fit_caked_payload_is_fresh(
         payload: object,
@@ -3102,10 +3296,93 @@ def run_headless_geometry_fit(
         caked_views_by_background[background_idx] = hydrated_payload
         return hydrated_payload
 
+    def _geometry_fit_caked_projection_for_index(index: int) -> dict[str, object] | None:
+        background_idx = int(index)
+        native_background, _display_background = _load_background_by_index(background_idx)
+        backend_background = gui_background.apply_background_backend_orientation(
+            np.asarray(native_background, dtype=np.float64),
+            flip_x=background_state.backend_flip_x,
+            flip_y=background_state.backend_flip_y,
+            rotation_k=background_state.backend_rotation_k,
+        )
+        if backend_background is None:
+            backend_background = native_background
+        raw_backend_image = np.asarray(backend_background, dtype=np.float64)
+        if raw_backend_image.ndim != 2:
+            caked_projection_payloads_by_background.pop(background_idx, None)
+            return None
+        detector_shape = tuple(int(v) for v in raw_backend_image.shape[:2])
+        params_local = dict(value_callbacks.current_params())
+        payload_signature = _headless_geometry_fit_caked_payload_signature(
+            background_idx,
+            detector_shape,
+            params_local,
+        )
+        cached = caked_projection_payloads_by_background.get(background_idx)
+        hydrated_cached = _headless_geometry_fit_hydrate_caked_projection_payload(
+            cached,
+            signature=payload_signature,
+            detector_shape=detector_shape,
+            params_local=params_local,
+        )
+        if isinstance(hydrated_cached, dict):
+            caked_projection_payloads_by_background[background_idx] = hydrated_cached
+            return hydrated_cached
+        payload = _build_headless_geometry_fit_caked_projection_payload(
+            detector_shape,
+            params=params_local,
+            pixel_size_m=float(defaults.pixel_size_m),
+            background_index=int(background_idx),
+        )
+        if not isinstance(payload, dict):
+            caked_projection_payloads_by_background.pop(background_idx, None)
+            return None
+        payload.update(
+            {
+                "background_index": int(background_idx),
+                "payload_kind": "projection",
+                "projection_view_mode": "caked",
+                "headless_caked_payload_signature": payload_signature,
+                "source_cache_signature": payload_signature[-1],
+                "geometry_projection_params_signature": payload_signature,
+                "projection_parameter_signature": payload_signature,
+                "transform_bundle_generation": _signature_summary(
+                    (
+                        detector_shape,
+                        int(np.asarray(payload.get("radial_axis")).size),
+                        int(np.asarray(payload.get("raw_azimuth_axis")).size),
+                        payload_signature,
+                    )
+                ),
+                "caked_axis_shape": (
+                    int(np.asarray(payload.get("azimuth_axis")).size),
+                    int(np.asarray(payload.get("radial_axis")).size),
+                ),
+            }
+        )
+        projection_token = _headless_geometry_fit_projection_payload_token(
+            payload,
+            signature=payload_signature,
+        )
+        if projection_token is not None:
+            payload["projection_token_schema"] = "geometry_fit_projection_content_v3"
+            payload["projection_content_token_v3"] = str(projection_token)
+        hydrated_payload = _headless_geometry_fit_hydrate_caked_projection_payload(
+            payload,
+            signature=payload_signature,
+            detector_shape=detector_shape,
+            params_local=params_local,
+        )
+        if not isinstance(hydrated_payload, dict):
+            caked_projection_payloads_by_background.pop(background_idx, None)
+            return None
+        caked_projection_payloads_by_background[background_idx] = hydrated_payload
+        return hydrated_payload
+
     def _native_detector_coords_to_caked_coords_for_background(
         background_index: int,
     ):
-        payload = _geometry_fit_caked_view_for_index(int(background_index))
+        payload = _geometry_fit_caked_projection_for_index(int(background_index))
         if not isinstance(payload, Mapping):
             return None
         exact_cake = _load_exact_cake_portable_module()
@@ -3228,7 +3505,7 @@ def run_headless_geometry_fit(
                     _pairs_for_index(int(background_idx))
                 ):
                     continue
-                if _geometry_fit_caked_view_for_index(int(background_idx)) is None:
+                if _geometry_fit_caked_projection_for_index(int(background_idx)) is None:
                     raise RuntimeError(
                         "exact caked projector unavailable for "
                         f"background {int(background_idx) + 1}"
@@ -3240,7 +3517,7 @@ def run_headless_geometry_fit(
                 except Exception:
                     pass
 
-    def _headless_current_caked_view_for_callbacks() -> dict[str, object] | None:
+    def _headless_current_caked_projection_for_callbacks() -> dict[str, object] | None:
         try:
             background_idx = int(background_state.current_background_index)
         except Exception:
@@ -3249,11 +3526,11 @@ def run_headless_geometry_fit(
             _pairs_for_index(background_idx)
         ):
             return None
-        payload = _geometry_fit_caked_view_for_index(background_idx)
+        payload = _geometry_fit_caked_projection_for_index(background_idx)
         return payload if isinstance(payload, dict) else None
 
     def _headless_caked_payload_value(key: str) -> object:
-        payload = _headless_current_caked_view_for_callbacks()
+        payload = _headless_current_caked_projection_for_callbacks()
         if not isinstance(payload, Mapping):
             return None
         return payload.get(key)
@@ -3263,15 +3540,15 @@ def run_headless_geometry_fit(
 
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: isinstance(
-            _headless_current_caked_view_for_callbacks(),
+            _headless_current_caked_projection_for_callbacks(),
             Mapping,
         ),
-        last_caked_background_image_unscaled=lambda: _headless_caked_payload_value("background"),
+        last_caked_background_image_unscaled=lambda: None,
         last_caked_radial_values=lambda: _headless_caked_payload_value("radial_axis"),
         last_caked_azimuth_values=lambda: _headless_caked_payload_value("azimuth_axis"),
         current_background_display=_current_background_display,
         current_background_native=_current_background_native,
-        ai=lambda: _headless_caked_payload_value("ai"),
+        ai=lambda: None,
         center=lambda: [
             _coerce_float(var_store["center_x_var"].get(), defaults.defaults["center_x"]),
             _coerce_float(var_store["center_y_var"].get(), defaults.defaults["center_y"]),
@@ -3282,6 +3559,14 @@ def run_headless_geometry_fit(
         ),
         pixel_size=float(defaults.pixel_size_m),
         caked_transform_bundle=lambda: _headless_caked_payload_value("transform_bundle"),
+        current_background_index=lambda: int(background_state.current_background_index),
+        caked_projection_payload=_headless_current_caked_projection_for_callbacks,
+        last_caked_raw_azimuth_values=lambda: _headless_caked_payload_value(
+            "raw_azimuth_axis"
+        ),
+        last_caked_raw_to_gui_row_permutation=lambda: _headless_caked_payload_value(
+            "raw_to_gui_row_permutation"
+        ),
         wrap_phi_range=_headless_wrap_phi_range,
         rotate_point_for_display=gui_geometry_overlay.rotate_point_for_display,
         display_rotate_k=DISPLAY_ROTATE_K,
@@ -3325,7 +3610,7 @@ def run_headless_geometry_fit(
             ]
         previous_background_idx = int(background_state.current_background_index)
         try:
-            payload = _geometry_fit_caked_view_for_index(background_idx)
+            payload = _geometry_fit_caked_projection_for_index(background_idx)
             if not isinstance(payload, Mapping):
                 raise RuntimeError(
                     f"exact caked projector unavailable for background {int(background_idx) + 1}"
@@ -3349,12 +3634,12 @@ def run_headless_geometry_fit(
             background_projection_callbacks = (
                 gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
                     caked_view_enabled=lambda: True,
-                    last_caked_background_image_unscaled=lambda: payload.get("background"),
+                    last_caked_background_image_unscaled=lambda: None,
                     last_caked_radial_values=lambda: payload.get("radial_axis"),
                     last_caked_azimuth_values=lambda: payload.get("azimuth_axis"),
                     current_background_display=lambda: display_background,
                     current_background_native=lambda: native_background,
-                    ai=lambda: payload.get("ai"),
+                    ai=lambda: None,
                     center=lambda: [
                         _coerce_float(
                             var_store["center_x_var"].get(),
@@ -3371,6 +3656,12 @@ def run_headless_geometry_fit(
                     ),
                     pixel_size=float(defaults.pixel_size_m),
                     caked_transform_bundle=lambda: payload.get("transform_bundle"),
+                    current_background_index=lambda: int(background_idx),
+                    caked_projection_payload=lambda: payload,
+                    last_caked_raw_azimuth_values=lambda: payload.get("raw_azimuth_axis"),
+                    last_caked_raw_to_gui_row_permutation=lambda: payload.get(
+                        "raw_to_gui_row_permutation"
+                    ),
                     wrap_phi_range=_headless_wrap_phi_range,
                     rotate_point_for_display=gui_geometry_overlay.rotate_point_for_display,
                     display_rotate_k=DISPLAY_ROTATE_K,
@@ -4165,7 +4456,8 @@ def run_headless_geometry_fit(
             gui_manual_geometry.current_geometry_manual_match_config(headless_fit_config)
         ),
         pick_uses_caked_space=_manual_current_background_uses_caked_space,
-        geometry_manual_caked_view_for_index=_geometry_fit_caked_view_for_index,
+        geometry_manual_caked_view_for_index=None,
+        geometry_manual_caked_projection_for_index=_geometry_fit_caked_projection_for_index,
         geometry_manual_entry_display_coords=projection_callbacks.entry_display_coords,
         geometry_manual_project_peaks_to_current_view=(_project_peaks_to_current_view_for_dataset),
         geometry_manual_project_peaks_for_background_view=(_project_peaks_for_background_view),

@@ -68,25 +68,9 @@ def test_saved_manual_caked_defaults_infer_bounded_point_only_policy() -> None:
     )
 
     assert inferred is True
-    assert active_vars == [
-        "center_x",
-        "center_y",
-        "gamma",
-        "Gamma",
-        "chi",
-        "cor_angle",
-        "theta_initial",
-        "corto_detector",
-        "zs",
-        "zb",
-        "a",
-        "psi_z",
-    ]
+    assert active_vars == ["a", "theta_offset", "psi_z"]
     assert "c" not in active_vars
-    assert (
-        seed_policy
-        == headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
-    )
+    assert seed_policy == headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT
 
 
 def test_saved_manual_caked_defaults_preserve_explicit_policy() -> None:
@@ -966,6 +950,17 @@ def test_cli_build_parser_accepts_fit_geometry_seed_policy_option() -> None:
     )
 
     assert args.seed_policy == "ladder-multistart"
+
+    direct_args = parser.parse_args(
+        [
+            "fit-geometry",
+            "saved_state.json",
+            "--seed-policy",
+            "direct",
+        ]
+    )
+
+    assert direct_args.seed_policy == "direct"
 
 
 def test_cmd_fit_geometry_passes_seed_policy_to_runner(monkeypatch, tmp_path) -> None:

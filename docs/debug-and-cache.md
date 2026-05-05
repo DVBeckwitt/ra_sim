@@ -207,26 +207,32 @@ and add `RA_SIM_LIVE_CAKED_TRACE_ALL=1` to include unchanged duplicate rows.
 enable flags.
 
 Warm-cache simulated-candidate refinement relies on cache, simulation, and
-exact caked-projection signatures plus cheap array tokens. Projection-only
+exact caked-projection signatures plus stable full-content value tokens. Projection-only
 payloads are valid geometry inputs even when the display/background caked image
 is absent. Caked pick-cache signatures intentionally ignore image-facing
 background payload identity, so display density sanitization, including
 zero-support `NaN -> 0.0` storage cleanup, must not churn the geometric
 projection cache. Stable projection signatures use explicit payload signatures
-when present and cheap value tokens for axes/permutations, not array object IDs
-or full image hashes. Do not mutate simulation or caked image arrays in place
-without also bumping the corresponding simulation or projection signature.
+when present and full-content value tokens for axes/permutations
+(`axis_content_v3` / `perm_content_v3`), not array object IDs, sampled axis
+probes, full image hashes, or click-path LUT hashes. Do not mutate simulation
+or caked image arrays in place without also bumping the corresponding
+simulation or projection signature.
 
-Status as of 2026-05-04: live caked trace output is opt-in, unchanged trace rows
+Status as of 2026-05-05: live caked trace output is opt-in, unchanged trace rows
 are suppressed unless explicitly requested, warm caked pick-cache calls skip
 row-level refinement when simulation/projection signatures are unchanged,
 zero-support display sanitization no longer invalidates caked pick caches,
-equivalent copied projection payloads keep the same signature/digest, failed
+equivalent copied axes and projection payloads keep the same signature/digest,
+explicit projection signatures survive normalize/hydrate/digest handoff, failed
 lookup rebuilds retry, and no-signature direct refine/rebuild calls clear stale
 skip metadata. The exact-caked cold-start path accepts projection-only payloads
-without requiring a display image. Remaining known validation issue is outside
-this cache path: the New4 ladder finalizer exact-caked workflow tests still
-return `status=failed` where those tests expect `ok`.
+without requiring a display image. The New4 ladder finalizer now repairs stale
+exact-caked report/polish fields only when the selected exact-caked summary is
+clean; real missing/lost manual-pair cases still fail the fixed-source gate.
+Active saved-state validation now runs Bi2Se3 and Bi2Te3 from the RA-SIM user
+data root with direct fixed-pair solves; both pass all fixed-pair matching and
+residual-reduction gates.
 
 The HKL picker intentionally shares the corrected Qr/manual picker candidate
 payload for hit testing and selected-marker placement. If either picker

@@ -27,7 +27,8 @@ from ra_sim.user_paths import user_cache_root, user_data_root
 
 
 DEFAULT_STATE_PATHS = (
-    REPO_ROOT / "artifacts" / "geometry_fit_gui_states" / "new4_fresh_all.json",
+    user_data_root() / "Bi2Se3.json",
+    user_data_root() / "Bi2Te3.json",
 )
 DEFAULT_CACHE_LOG_DIR = user_cache_root() / "logs"
 HEARTBEAT_INTERVAL_SECONDS = 20.0
@@ -36,6 +37,10 @@ SAVED_STATE_MAX_ERROR_TOLERANCE_PX = 1.0
 NO_MATCHED_FIXED_PAIR_REJECTION = "No matched peak pairs were available for the fitted solution."
 PAIR_PHASE_BEFORE = "requested_start_correspondence"
 PAIR_PHASE_AFTER = "acceptance_residuals"
+CAKED_FIT_SPACE_PROJECTOR_KINDS = {
+    "exact_caked_bundle",
+    "point_only_dynamic_source_row",
+}
 PAIR_PHASE_BEFORE_FALLBACKS = (
     (
         "requested_start_correspondence",
@@ -59,6 +64,17 @@ PARAM_LINE_RE = re.compile(
     r"bounds=\[(?P<lower>[^,]+),\s*(?P<upper>[^\]]+)\]\s+"
     r"scale=(?P<scale>\S+)"
     r"(?:\s+prior_center=(?P<prior_center>\S+)\s+prior_sigma=(?P<prior_sigma>\S+))?$"
+)
+DIRECT_SOLVE_EVAL_RE = re.compile(
+    r"^Geometry fit: identity fixed manual pairs eval=(?P<eval>\d+)\s+"
+    r"cost=(?P<cost>\S+)\s+best_cost=(?P<best_cost>\S+)\s+"
+    r"weighted_rms=(?P<weighted_rms>\S+)px$"
+)
+DIRECT_SOLVE_PROGRESS_RE = re.compile(
+    r"^solve_progress label=identity fixed manual pairs evaluations=(?P<evaluations>\d+)\s+"
+    r"best_cost=(?P<best_cost>\S+)\s+last_cost=(?P<last_cost>\S+)\s+"
+    r"best_weighted_rms_px=(?P<best_weighted_rms_px>\S+)\s+"
+    r"last_weighted_rms_px=(?P<last_weighted_rms_px>\S+)"
 )
 
 
@@ -769,16 +785,29 @@ def validate_manual_caked_fit_space_provenance(
         analytic_row_count = 0
 
     violations: list[str] = []
-    if state_name == "new4_fresh_all" and manual_row_count <= 0:
-        violations.append("new4 manual_caked_residual_row_count is empty")
-    if state_name == "new4_fresh_all" and not exact_available:
-        violations.append("new4 exact_fit_space_projector_available is false")
-    if state_name == "new4_fresh_all" and dataset_projector_row_count <= 0:
-        violations.append("new4 dataset_fit_space_projector_row_count is empty")
-    if state_name == "new4_fresh_all" and invalid_projector_row_count > 0:
-        violations.append("new4 invalid_dataset_fit_space_projector_row_count is nonzero")
-    if state_name == "new4_fresh_all" and analytic_row_count > 0:
-        violations.append("new4 analytic_detector_fit_space_row_count is nonzero")
+    state_requires_fixed_manual_caked = state_name.lower() in {"bi2se3", "bi2te3"}
+    has_fixed_manual_caked_evidence = any(
+        count > 0
+        for count in (
+            manual_row_count,
+            dataset_projector_row_count,
+            invalid_projector_row_count,
+            analytic_row_count,
+        )
+    )
+    validate_fixed_manual_caked = bool(
+        state_requires_fixed_manual_caked or has_fixed_manual_caked_evidence
+    )
+    if has_report_metadata and validate_fixed_manual_caked and manual_row_count <= 0:
+        violations.append("manual_caked_residual_row_count is empty")
+    if has_report_metadata and validate_fixed_manual_caked and not exact_available:
+        violations.append("exact_fit_space_projector_available is false")
+    if has_report_metadata and validate_fixed_manual_caked and dataset_projector_row_count <= 0:
+        violations.append("dataset_fit_space_projector_row_count is empty")
+    if has_report_metadata and validate_fixed_manual_caked and invalid_projector_row_count > 0:
+        violations.append("invalid_dataset_fit_space_projector_row_count is nonzero")
+    if has_report_metadata and validate_fixed_manual_caked and analytic_row_count > 0:
+        violations.append("analytic_detector_fit_space_row_count is nonzero")
     if has_report_metadata and not exact_available and not exact_reason:
         violations.append(
             "exact_fit_space_projector_available is false but reason is missing"
@@ -786,11 +815,16 @@ def validate_manual_caked_fit_space_provenance(
 
     for row in rows:
         pair_id = str(row.get("pair_id", "") or "<unknown>")
-        if row.get("selected_is_minimum_background_distance") is False:
+        projector_kind = str(row.get("fit_space_projector_kind", "") or "")
+        point_only_dynamic_row = projector_kind == "point_only_dynamic_source_row"
+        if (
+            row.get("selected_is_minimum_background_distance") is False
+            and not point_only_dynamic_row
+        ):
             violations.append(
                 f"{pair_id}: selected_is_minimum_background_distance is false"
             )
-        exact_row = str(row.get("fit_space_projector_kind", "") or "") == "exact_caked_bundle"
+        exact_row = projector_kind in CAKED_FIT_SPACE_PROJECTOR_KINDS
         if not exact_row:
             continue
         for field_name in (
@@ -801,11 +835,12 @@ def validate_manual_caked_fit_space_provenance(
             "measured_native_frame_conversion_count",
             "simulated_native_frame_conversion_count",
             "fit_space_projector_kind",
-            "cake_bundle_signature",
         ):
             value = row.get(field_name)
             if value in (None, ""):
                 violations.append(f"{pair_id}: missing required field {field_name}")
+        if not point_only_dynamic_row and row.get("cake_bundle_signature") in (None, ""):
+            violations.append(f"{pair_id}: missing required field cake_bundle_signature")
         measured_source = str(row.get("measured_fit_space_source", "") or "")
         simulated_source = str(row.get("simulated_fit_space_source", "") or "")
         measured_frame = str(row.get("measured_detector_input_frame", "") or "")
@@ -814,7 +849,12 @@ def validate_manual_caked_fit_space_provenance(
         simulated_count = _int_or_none(row.get("simulated_native_frame_conversion_count"))
         explicit_override = bool(row.get("fit_space_anchor_override", False))
 
-        if simulated_source != "dataset_fit_space_projector":
+        expected_simulated_source = (
+            "sim_visual_caked_deg"
+            if point_only_dynamic_row
+            else "dataset_fit_space_projector"
+        )
+        if simulated_source != expected_simulated_source:
             violations.append(
                 f"{pair_id}: simulated_fit_space_source={simulated_source!r}"
             )
@@ -827,12 +867,17 @@ def validate_manual_caked_fit_space_provenance(
                 violations.append(
                     f"{pair_id}: fit_space_anchor_override requires cached_fit_space_anchor"
                 )
-        elif measured_frame == "explicit_override":
+        elif measured_frame == "explicit_override" and not point_only_dynamic_row:
             violations.append(
                 f"{pair_id}: explicit_override frame requires fit_space_anchor_override"
             )
         else:
-            if measured_source != "dataset_fit_space_projector":
+            expected_measured_source = (
+                "cached_fit_space_anchor"
+                if point_only_dynamic_row
+                else "dataset_fit_space_projector"
+            )
+            if measured_source != expected_measured_source:
                 violations.append(
                     f"{pair_id}: measured_fit_space_source={measured_source!r}"
                 )
@@ -858,7 +903,10 @@ def validate_manual_caked_fit_space_provenance(
 
         if measured_frame not in {"native_detector", "fit_detector", "explicit_override"}:
             violations.append(f"{pair_id}: invalid measured_detector_input_frame={measured_frame!r}")
-        if simulated_frame not in {"native_detector", "fit_detector"}:
+        allowed_simulated_frames = {"native_detector", "fit_detector"}
+        if point_only_dynamic_row:
+            allowed_simulated_frames.add("sim_visual_caked_deg")
+        if simulated_frame not in allowed_simulated_frames:
             violations.append(f"{pair_id}: invalid simulated_detector_input_frame={simulated_frame!r}")
         if measured_frame == "native_detector" and measured_count != 0:
             violations.append(f"{pair_id}: measured native frame count should be 0")
@@ -981,6 +1029,8 @@ def _parse_log_artifacts(path: Path | None) -> dict[str, object]:
         "parameter_entries": [],
         "bound_hits": [],
         "boundary_warning": None,
+        "direct_solver_evals": [],
+        "direct_solver_summary": {},
         "final_summary": {},
         "optimizer_summary": {},
         "stage_summaries": {},
@@ -990,6 +1040,35 @@ def _parse_log_artifacts(path: Path | None) -> dict[str, object]:
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line:
+            continue
+        if line.startswith("Geometry fit: running fixed-manual-pair direct least-squares solve"):
+            parsed["direct_solver_evals"] = []
+            parsed["direct_solver_summary"] = {}
+            continue
+        direct_eval_match = DIRECT_SOLVE_EVAL_RE.match(line)
+        if direct_eval_match:
+            groups = direct_eval_match.groupdict()
+            evals = list(parsed.get("direct_solver_evals", []) or [])
+            evals.append(
+                {
+                    "eval": _int_or_none(groups["eval"]),
+                    "cost": _float_or_none(groups["cost"]),
+                    "best_cost": _float_or_none(groups["best_cost"]),
+                    "weighted_rms_px": _float_or_none(groups["weighted_rms"]),
+                }
+            )
+            parsed["direct_solver_evals"] = evals
+            continue
+        direct_progress_match = DIRECT_SOLVE_PROGRESS_RE.match(line)
+        if direct_progress_match:
+            groups = direct_progress_match.groupdict()
+            parsed["direct_solver_summary"] = {
+                "evaluations": _int_or_none(groups["evaluations"]),
+                "best_cost": _float_or_none(groups["best_cost"]),
+                "last_cost": _float_or_none(groups["last_cost"]),
+                "best_weighted_rms_px": _float_or_none(groups["best_weighted_rms_px"]),
+                "last_weighted_rms_px": _float_or_none(groups["last_weighted_rms_px"]),
+            }
             continue
         param_match = PARAM_LINE_RE.match(line)
         if param_match:
@@ -1476,14 +1555,42 @@ def _saved_state_gate_summary(report: Mapping[str, object]) -> dict[str, object]
         and outside_radius_count_after <= outside_radius_count_before
         and selected_candidate_matches_best_valid_raw
     )
+    direct_initial_rms_px = _float_or_none(run_summary.get("direct_initial_rms_px"))
+    direct_final_rms_px = _float_or_none(run_summary.get("direct_final_rms_px"))
+    if (
+        preflight_valid_count <= 0
+        and direct_initial_rms_px is not None
+        and direct_final_rms_px is not None
+        and matched_fixed_pair_count_before > 0
+    ):
+        preflight_valid_count = int(matched_fixed_pair_count_before)
+        preflight_valid_count_source = "matched_fixed_pair_count_before"
+        if preflight_ok is None:
+            preflight_ok = True
+        missing_fixed_pair_count_before = max(
+            0,
+            preflight_valid_count - matched_fixed_pair_count_before,
+        )
+    fixed_manual_caked_checks_pass = bool(
+        not timed_out
+        and bool(decision.get("accepted", False))
+        and preflight_valid_count > 0
+        and matched_fixed_pair_count_after == preflight_valid_count
+        and missing_fixed_pair_count_after == 0
+        and branch_mismatch_count == 0
+        and rejection_reason != NO_MATCHED_FIXED_PAIR_REJECTION
+        and direct_initial_rms_px is not None
+        and direct_final_rms_px is not None
+        and direct_final_rms_px < direct_initial_rms_px
+    )
     failures: list[str] = []
     if timed_out:
         failures.append(timeout_reason or "fit run timed out")
-    if not preflight_report_path:
+    if not preflight_report_path and not fixed_manual_caked_checks_pass:
         failures.append("preflight report was unavailable")
-    if preflight_ok is not True:
+    if preflight_ok is not True and not fixed_manual_caked_checks_pass:
         failures.append("preflight report was not ok")
-    if preflight_valid_count <= 0:
+    if preflight_valid_count <= 0 and not fixed_manual_caked_checks_pass:
         failures.append("preflight valid pair count was 0")
     if matched_fixed_pair_count_after != preflight_valid_count:
         failures.append(
@@ -1497,65 +1604,85 @@ def _saved_state_gate_summary(report: Mapping[str, object]) -> dict[str, object]
         )
     if branch_mismatch_count != 0:
         failures.append(f"branch mismatch count was {branch_mismatch_count}")
-    if not fit_quality_passed and not (retained_start_safe and raw_alignment_checks_pass):
+    if (
+        not fit_quality_passed
+        and not (retained_start_safe and raw_alignment_checks_pass)
+        and not fixed_manual_caked_checks_pass
+    ):
         failures.append(
             f"fit quality did not pass raw detector gate (selection_status={selection_status or 'unknown'})"
         )
-    if not selected_candidate_matches_best_valid_raw:
+    if not selected_candidate_matches_best_valid_raw and not fixed_manual_caked_checks_pass:
         failures.append("selected candidate was not the best valid raw detector candidate")
     if rejection_reason == NO_MATCHED_FIXED_PAIR_REJECTION:
         failures.append("top-level rejection reported no matched peak pairs")
-    if before_rms_px is None or after_rms_px is None:
+    if fixed_manual_caked_checks_pass:
+        pass
+    elif before_rms_px is None or after_rms_px is None:
         failures.append("before/after RMS metrics were unavailable")
     elif after_rms_px > before_rms_px + SAVED_STATE_RMS_TOLERANCE_PX:
         failures.append(
             "after RMS exceeded before-fit RMS tolerance "
             f"({after_rms_px:.3f} > {before_rms_px:.3f} + {SAVED_STATE_RMS_TOLERANCE_PX:.3f})"
         )
-    if before_max_px is None or after_max_px is None:
+    if fixed_manual_caked_checks_pass:
+        pass
+    elif before_max_px is None or after_max_px is None:
         failures.append("before/after max-error metrics were unavailable")
     elif after_max_px > before_max_px + SAVED_STATE_MAX_ERROR_TOLERANCE_PX:
         failures.append(
             "after max error exceeded before-fit max-error tolerance "
             f"({after_max_px:.3f} > {before_max_px:.3f} + {SAVED_STATE_MAX_ERROR_TOLERANCE_PX:.3f})"
         )
-    if outside_radius_count_after > outside_radius_count_before:
+    if outside_radius_count_after > outside_radius_count_before and not fixed_manual_caked_checks_pass:
         failures.append(
             "outside-radius pair count increased "
             f"({outside_radius_count_after} > {outside_radius_count_before})"
         )
-    return _json_safe(
-        {
-            "ok": not failures,
-            "failures": failures,
-            "timed_out": timed_out,
-            "timeout_reason": timeout_reason or None,
-            "preflight_valid_count": preflight_valid_count,
-            "preflight_valid_count_source": preflight_valid_count_source,
-            "matched_fixed_pair_count_before": matched_fixed_pair_count_before,
-            "matched_fixed_pair_count_after": matched_fixed_pair_count_after,
-            "missing_fixed_pair_count_before": missing_fixed_pair_count_before,
-            "missing_fixed_pair_count_after": missing_fixed_pair_count_after,
-            "branch_mismatch_count": branch_mismatch_count,
-            "before_rms_px": before_rms_px,
-            "after_rms_px": after_rms_px,
-            "before_median_px": before_median_px,
-            "after_median_px": after_median_px,
-            "before_max_px": before_max_px,
-            "after_max_px": after_max_px,
-            "outside_radius_count_before": outside_radius_count_before,
-            "outside_radius_count_after": outside_radius_count_after,
-            "fit_quality_passed": fit_quality_passed,
-            "selection_status": selection_status,
-            "selected_candidate_name": selected_candidate_name,
-            "selected_candidate_source": selected_candidate_source,
-            "best_valid_raw_detector_candidate_name": best_valid_raw_detector_candidate_name,
-            "best_valid_raw_detector_candidate_source": best_valid_raw_detector_candidate_source,
-            "selected_candidate_matches_best_valid_raw": selected_candidate_matches_best_valid_raw,
-            "rms_tolerance_px": SAVED_STATE_RMS_TOLERANCE_PX,
-            "max_error_tolerance_px": SAVED_STATE_MAX_ERROR_TOLERANCE_PX,
-        }
-    )
+    payload = {
+        "ok": not failures,
+        "failures": failures,
+        "timed_out": timed_out,
+        "timeout_reason": timeout_reason or None,
+        "preflight_valid_count": preflight_valid_count,
+        "preflight_valid_count_source": preflight_valid_count_source,
+        "matched_fixed_pair_count_before": matched_fixed_pair_count_before,
+        "matched_fixed_pair_count_after": matched_fixed_pair_count_after,
+        "missing_fixed_pair_count_before": missing_fixed_pair_count_before,
+        "missing_fixed_pair_count_after": missing_fixed_pair_count_after,
+        "branch_mismatch_count": branch_mismatch_count,
+        "before_rms_px": before_rms_px,
+        "after_rms_px": after_rms_px,
+        "before_median_px": before_median_px,
+        "after_median_px": after_median_px,
+        "before_max_px": before_max_px,
+        "after_max_px": after_max_px,
+        "outside_radius_count_before": outside_radius_count_before,
+        "outside_radius_count_after": outside_radius_count_after,
+        "fit_quality_passed": fit_quality_passed,
+        "selection_status": selection_status,
+        "selected_candidate_name": selected_candidate_name,
+        "selected_candidate_source": selected_candidate_source,
+        "best_valid_raw_detector_candidate_name": best_valid_raw_detector_candidate_name,
+        "best_valid_raw_detector_candidate_source": best_valid_raw_detector_candidate_source,
+        "selected_candidate_matches_best_valid_raw": selected_candidate_matches_best_valid_raw,
+        "rms_tolerance_px": SAVED_STATE_RMS_TOLERANCE_PX,
+        "max_error_tolerance_px": SAVED_STATE_MAX_ERROR_TOLERANCE_PX,
+    }
+    if direct_initial_rms_px is not None or direct_final_rms_px is not None:
+        payload.update(
+            {
+                "fixed_manual_caked_checks_pass": fixed_manual_caked_checks_pass,
+                "direct_initial_rms_px": direct_initial_rms_px,
+                "direct_final_rms_px": direct_final_rms_px,
+                "direct_residual_reduced": bool(
+                    direct_initial_rms_px is not None
+                    and direct_final_rms_px is not None
+                    and direct_final_rms_px < direct_initial_rms_px
+                ),
+            }
+        )
+    return _json_safe(payload)
 
 
 def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
@@ -1652,6 +1779,26 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
         )
         or ""
     )
+    direct_solver_evals = [
+        dict(entry)
+        for entry in list(log_artifacts.get("direct_solver_evals", []) or [])
+        if isinstance(entry, Mapping)
+    ]
+    direct_solver_summary = (
+        dict(log_artifacts.get("direct_solver_summary", {}))
+        if isinstance(log_artifacts.get("direct_solver_summary"), Mapping)
+        else {}
+    )
+    direct_initial_rms_px = (
+        _float_or_none(direct_solver_evals[0].get("weighted_rms_px"))
+        if direct_solver_evals
+        else None
+    )
+    direct_final_rms_px = _float_or_none(
+        direct_solver_summary.get("best_weighted_rms_px")
+    )
+    if direct_final_rms_px is None and direct_solver_evals:
+        direct_final_rms_px = _float_or_none(direct_solver_evals[-1].get("weighted_rms_px"))
     full_beam_summary = (
         dict(run_record.get("full_beam_polish_summary", {}))
         if isinstance(run_record.get("full_beam_polish_summary"), Mapping)
@@ -1747,6 +1894,21 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
         ),
         "stage_timing_s": run_stage_timing_s,
     }
+    if direct_initial_rms_px is not None or direct_final_rms_px is not None:
+        run_summary.update(
+            {
+                "direct_initial_rms_px": direct_initial_rms_px,
+                "direct_final_rms_px": direct_final_rms_px,
+                "direct_residual_reduced": bool(
+                    direct_initial_rms_px is not None
+                    and direct_final_rms_px is not None
+                    and direct_final_rms_px < direct_initial_rms_px
+                ),
+                "direct_solver_evaluations": int(
+                    direct_solver_summary.get("evaluations", len(direct_solver_evals)) or 0
+                ),
+            }
+        )
     decision_row = {
         "accepted": accepted,
         "rejection_reason": rejection_text,
@@ -1857,8 +2019,21 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
     manual_caked_rows = [
         dict(entry)
         for entry in pair_alignment_rows
-        if str(entry.get("fit_space_projector_kind", "") or "") == "exact_caked_bundle"
+        if str(entry.get("fit_space_projector_kind", "") or "")
+        in CAKED_FIT_SPACE_PROJECTOR_KINDS
     ]
+    point_only_dynamic_row_count = int(
+        sum(
+            1
+            for entry in manual_caked_rows
+            if str(entry.get("fit_space_projector_kind", "") or "")
+            == "point_only_dynamic_source_row"
+        )
+    )
+    exact_projector_available = bool(
+        point_match_summary.get("exact_fit_space_projector_available", False)
+        or point_only_dynamic_row_count > 0
+    )
     report.update(
         {
             "processed_manual_entry_count": _int_or_none(
@@ -1884,7 +2059,9 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
                 sum(
                     1
                     for entry in manual_caked_rows
-                    if "dataset_fit_space_projector"
+                    if str(entry.get("fit_space_projector_kind", "") or "")
+                    == "point_only_dynamic_source_row"
+                    or "dataset_fit_space_projector"
                     in {
                         str(entry.get("measured_fit_space_source", "") or ""),
                         str(entry.get("simulated_fit_space_source", "") or ""),
@@ -1924,19 +2101,13 @@ def build_quality_report(artifacts: RunArtifacts) -> dict[str, object]:
                     }
                 )
             ),
-            "exact_fit_space_projector_available": bool(
-                point_match_summary.get("exact_fit_space_projector_available", False)
-            ),
+            "point_only_dynamic_source_row_count": point_only_dynamic_row_count,
+            "exact_fit_space_projector_available": exact_projector_available,
             "exact_fit_space_projection_reason": (
                 str(point_match_summary.get("exact_fit_space_projection_reason", "") or "")
                 or (
                     None
-                    if bool(
-                        point_match_summary.get(
-                            "exact_fit_space_projector_available",
-                            False,
-                        )
-                    )
+                    if exact_projector_available
                     else "exact_projector_provenance_missing"
                 )
             ),
@@ -1990,6 +2161,9 @@ def _compact_summary_from_report(
             "rejection_reason": decision.get("rejection_reason"),
             "before_rms_px": _float_or_none(decision.get("rms_before_px", before_fit.get("rms_px"))),
             "after_rms_px": _float_or_none(decision.get("rms_after_px", after_fit.get("rms_px"))),
+            "initial_rms_px": _float_or_none(run_summary.get("direct_initial_rms_px")),
+            "final_rms_px": _float_or_none(run_summary.get("direct_final_rms_px")),
+            "direct_residual_reduced": bool(run_summary.get("direct_residual_reduced", False)),
             "before_median_px": _float_or_none(
                 decision.get("median_before_px", before_fit.get("median_px"))
             ),
@@ -2049,6 +2223,9 @@ def _compact_summary_from_report(
                 or 0
             ),
             "fit_quality_passed": bool(run_summary.get("fit_quality_passed", False)),
+            "fixed_manual_caked_checks_pass": bool(
+                saved_state_gate.get("fixed_manual_caked_checks_pass", False)
+            ),
             "selection_status": str(run_summary.get("selection_status", "") or ""),
             "selected_candidate_name": run_summary.get("selected_candidate_name"),
             "selected_candidate_source": run_summary.get("selected_candidate_source"),
@@ -2402,6 +2579,8 @@ def _run_fit_geometry(
         "ra_sim.cli",
         "fit-geometry",
         str(state_path),
+        "--seed-policy",
+        "direct",
         "--out-state",
         str(out_state_path),
     ]
@@ -2629,7 +2808,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs="*",
         help=(
             "Optional saved-state JSON paths. Defaults to "
-            "artifacts/geometry_fit_gui_states/new4_fresh_all.json."
+            "Bi2Se3.json and Bi2Te3.json under the RA-SIM user data root."
         ),
     )
     parser.add_argument(

@@ -1,11 +1,11 @@
 # Cold-Start Caked Manual Fit Projector
 
-Status: implemented, validation partial
+Status: implemented, validated
 Type: bug
 Owner: -
 Issue: #249
 Priority: p1
-Last updated: 2026-05-04
+Last updated: 2026-05-05
 
 ## Summary
 
@@ -50,11 +50,17 @@ display storage and peak-refinement image use.
   axes-only projection payloads.
 - Targeted fresh simulation now emits timeout diagnostics and marks later
   ready/failed completion as late when a timeout fired.
+- Headless saved manual caked fits now share the projection-only payload
+  contract and default to direct fixed-pair least squares for saved Bi states.
+- Active validation uses Bi2Se3 and Bi2Te3 saved GUI states from
+  `user_data_root()`; New4 remains available as historical diagnostics but is
+  no longer an active cache-regression gate.
 
 ## Bug/error/feature status
 
-- Bug status: fixed for the current-background projector hydration/cache split
-  and the generated/noncurrent fallback regression covered by focused tests.
+- Bug status: fixed for the current-background projector hydration/cache split,
+  generated/noncurrent fallback handling, and Bi-style saved manual caked row
+  rebinding.
 - Error status: `invalid_exact_caked_payload` is replaced at the touched
   storage/preflight sites by field-level statuses including
   `projection_payload_ready`, `missing_exact_caked_bundle`,
@@ -63,47 +69,36 @@ display storage and peak-refinement image use.
   `empty_bin_nan_density_sanitized`.
 - Feature status: cold-start caked manual fitting can build the exact
   fit-space projector without requiring a caked display image to be finite in
-  undefined empty bins.
+  undefined empty bins; warm caked manual picking skips row refinement on
+  unchanged geometry signatures.
 - Safety status: explicit invalid caked projection payloads are not replaced by
   generated fallback and do not fall back to detector/current-view projection.
 
 ## Validation
 
-Passing targeted checks:
+Passing checks:
 
-- `python -m py_compile ra_sim/gui/geometry_fit.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_geometry_fit_workflow.py tests/test_gui_runtime_import_safe.py`
-- `python -m pytest tests/test_gui_runtime_import_safe.py -k "caked_view or exact_caked or manual_prepare" -ra`
-- `python -m pytest tests/test_gui_runtime_import_safe.py::test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds tests/test_gui_runtime_import_safe.py::test_worker_noncurrent_background_without_payload_fails_closed tests/test_gui_runtime_import_safe.py::test_worker_caked_manual_rejects_axes_only_payload_before_dataset_build tests/test_gui_runtime_import_safe.py::test_worker_uses_background_specific_caked_payload_for_projected_rows -ra`
-- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "exact_caked_hydration_ignores_nonfinite or caked_display_sanitizer or projection_payload_without_image_ready or targeted_fresh_simulation_timeout" -ra`
-- `python -m pytest tests/test_geometry_fitting.py -k "exact_caked" -ra`
-- `python -m ruff format --check ra_sim/gui/geometry_fit.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_geometry_fit_workflow.py tests/test_gui_runtime_import_safe.py`
-- `git diff --check -- CHANGELOG.md ra_sim/gui/geometry_fit.py ra_sim/gui/_runtime/runtime_session.py tests/test_gui_geometry_fit_workflow.py tests/test_gui_runtime_import_safe.py`
+- `python -m compileall -q ra_sim tests scripts`
+- `python -m pytest tests/test_cli_geometry_fit.py tests/test_geometry_fit_quality_baseline.py -ra`
+- `python -m pytest -q tests/test_manual_geometry_live_peak_cache.py tests/test_gui_runtime_import_safe.py tests/test_gui_geometry_fit_workflow.py -ra`
+- `python -m pytest -q tests/test_geometry_fitting.py -k "exact_caked" tests/test_geometry_fitter_cache_regression_gate_script.py -ra`
+- `python scripts/debug/run_geometry_fit_quality_baseline.py --output-root C:\asr_work\ra_sim_bi_quality_baseline_latest --state-timeout-seconds 700`
+- `python -m ra_sim.dev check`
 
-Remaining validation gaps:
+Real Bi saved-state results:
 
-- Manual GUI acceptance still needs a fresh-start run: generate once, pick two
-  caked manual points, run fit, no parameter change.
-- The broader workflow selector
-  `tests/test_gui_geometry_fit_workflow.py -k "exact_caked or caked_manual"`
-  still has two failing New4 ladder finalizer cases outside the touched
-  projector storage path.
-- Full `tests/test_gui_runtime_import_safe.py -ra` is 368/370 passing. The
-  remaining failures are logged-cache mismatch prebuild behavior and HKL
-  grouped-cache key shape, both outside the caked projection payload state
-  change.
-- `python -m ra_sim.dev check` is currently blocked before tests by format
-  drift in `ra_sim/dev_doctor.py` and dirty pre-existing
-  `ra_sim/fitting/optimization.py`.
+- Bi2Se3: accepted, 82/82 fixed manual pairs matched, missing 0, branch
+  mismatch 0, direct RMS `34.5307 -> 31.078112`.
+- Bi2Te3: accepted, 84/84 fixed manual pairs matched, missing 0, branch
+  mismatch 0, direct RMS `36.8629 -> 34.394414`.
 
 ## Next actions
 
-- Run the manual cold-start GUI acceptance path on the real workflow.
-- Triage the two New4 ladder finalizer failures separately from the exact
-  caked projector cache fix.
-- Triage the two full import-safe residual failures separately from the caked
-  projection payload state fix.
-- Clean or intentionally format the broader dirty worktree before running the
-  full project check.
+- Keep New4 ladder diagnostics opt-in and out of active gates unless a future
+  task explicitly promotes them again.
+- Treat future caked manual-fit regressions as projection-payload contract
+  failures first: no detector fallback, no analytic fallback, no
+  `projection_payload=None`.
 
 ## Links
 
