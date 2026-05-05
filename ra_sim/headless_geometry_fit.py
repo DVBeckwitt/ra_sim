@@ -2023,18 +2023,14 @@ def _headless_runtime_solver_mapping(runtime_cfg: Mapping[str, object]) -> dict[
 def normalize_headless_geometry_fit_seed_policy(seed_policy: object | None) -> str | None:
     """Normalize one optional headless seed-policy override."""
 
-    if seed_policy is None:
-        return None
-    seed_policy_text = str(seed_policy).strip()
-    if not seed_policy_text:
-        raise ValueError("Headless geometry-fit seed policy cannot be empty.")
-    if seed_policy_text not in _HEADLESS_GEOMETRY_FIT_SEED_POLICIES:
+    try:
+        return gui_geometry_fit.normalize_geometry_fit_seed_policy(seed_policy)
+    except ValueError as exc:
         allowed = ", ".join(sorted(_HEADLESS_GEOMETRY_FIT_SEED_POLICIES))
         raise ValueError(
-            f"Unsupported headless geometry-fit seed policy {seed_policy_text!r}; "
+            f"Unsupported headless geometry-fit seed policy {str(seed_policy).strip()!r}; "
             f"expected one of: {allowed}."
-        )
-    return seed_policy_text
+        ) from exc
 
 
 def _apply_headless_geometry_fit_seed_policy(
@@ -2043,19 +2039,7 @@ def _apply_headless_geometry_fit_seed_policy(
 ) -> None:
     """Apply one opt-in headless seed policy without changing saved-state defaults."""
 
-    if seed_policy is None:
-        return
-    if seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT:
-        return
-    if seed_policy != HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
-        raise ValueError(f"Unsupported headless geometry-fit seed policy {seed_policy!r}.")
-    seed_search_cfg = runtime_cfg.get("seed_search")
-    if isinstance(seed_search_cfg, Mapping):
-        seed_search = dict(seed_search_cfg)
-    else:
-        seed_search = {}
-    seed_search.update(_HEADLESS_GEOMETRY_FIT_LADDER_SEED_SEARCH)
-    runtime_cfg["seed_search"] = seed_search
+    gui_geometry_fit.apply_geometry_fit_seed_policy(runtime_cfg, seed_policy)
 
 
 def _headless_geometry_runtime_is_saved_manual_caked_candidate(
@@ -2091,52 +2075,7 @@ def _headless_geometry_dataset_entries(prepared_run: object) -> list[dict[str, o
 
 
 def _headless_geometry_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) -> bool:
-    source = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
-    row_origin = str(entry.get("row_origin", "") or "").strip().lower()
-    target_source = str(
-        entry.get("target_anchor_source")
-        or entry.get("manual_target_anchor_source")
-        or entry.get("fit_target_anchor_source")
-        or ""
-    ).strip().lower()
-    sim_source = str(
-        entry.get("simulated_source")
-        or entry.get("sim_source")
-        or entry.get("source_coordinate_source")
-        or ""
-    ).strip().lower()
-    fixed_source = bool(
-        entry.get("optimizer_request_has_fixed_source", False)
-        or entry.get("fixed_source_resolved", False)
-        or source.startswith("provider_fixed_source")
-        or "fixed_source" in source
-        or entry.get("source_reflection_index") is not None
-        or entry.get("source_row_index") is not None
-        or entry.get("source_table_index") is not None
-    )
-    cached_target = bool(
-        "cached_fit_space_anchor" in target_source
-        or "cached_fit_space_anchor" in entry
-        or "cached_two_theta_deg" in entry
-        or "cached_phi_deg" in entry
-        or "background_two_theta_deg" in entry
-        or "background_phi_deg" in entry
-        or "caked_x" in entry
-        or "caked_y" in entry
-        or "raw_caked_x" in entry
-        or "raw_caked_y" in entry
-        or "manual_caked" in row_origin
-        or "fit_space" in row_origin
-    )
-    dynamic_sim = bool(
-        sim_source in {"", "sim_visual_caked_deg"}
-        or entry.get("sim_visual_caked_deg") is not None
-        or entry.get("sim_two_theta_deg") is not None
-        or entry.get("sim_phi_deg") is not None
-        or entry.get("q_group_key") is not None
-        or entry.get("hkl") is not None
-    )
-    return bool(fixed_source and cached_target and dynamic_sim)
+    return gui_geometry_fit.geometry_fit_entry_has_fixed_manual_caked_qr(entry)
 
 
 def _infer_headless_saved_manual_caked_defaults(
@@ -2168,10 +2107,9 @@ def _infer_headless_saved_manual_caked_defaults(
 
 
 def _headless_geometry_fixed_manual_caked_qr_row_count(prepared_run: object) -> int:
-    return sum(
-        1
-        for entry in _headless_geometry_dataset_entries(prepared_run)
-        if _headless_geometry_entry_has_fixed_manual_caked_qr(entry)
+    return gui_geometry_fit.geometry_fit_fixed_manual_caked_qr_row_count(
+        current_dataset=getattr(prepared_run, "current_dataset", None),
+        dataset_infos=getattr(prepared_run, "dataset_infos", None),
     )
 
 
@@ -2278,44 +2216,14 @@ def _apply_headless_saved_manual_caked_budget(
     active_var_names: Sequence[object],
     manual_pair_rows: Sequence[Mapping[str, object]] | None = None,
 ) -> tuple[bool, int]:
-    prepared_row_count = _headless_geometry_fixed_manual_caked_qr_row_count(prepared_run)
-    manual_row_count = sum(
-        1
-        for entry in (manual_pair_rows or ())
-        if isinstance(entry, Mapping)
-        and _headless_geometry_entry_has_fixed_manual_caked_qr(entry)
-    )
-    row_count = max(int(prepared_row_count), int(manual_row_count))
-    _enforce_headless_gamma_bounds(runtime_cfg, active_var_names)
-    if row_count <= 0:
-        return False, int(row_count)
-    if seed_policy not in {
-        HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT,
-        HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
-    }:
-        if not _headless_geometry_runtime_is_saved_manual_caked_candidate(runtime_cfg):
-            return False, int(row_count)
-        return False, int(row_count)
-    _apply_headless_saved_manual_caked_lean_runtime(
+    return gui_geometry_fit.apply_saved_manual_caked_geometry_fit_budget(
         runtime_cfg,
-        max_nfev=(
-            _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_LADDER_MAX_NFEV
-            if seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
-            else _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV
-        ),
-        seed_multistart=(
-            seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
-        ),
+        seed_policy=seed_policy,
+        active_var_names=active_var_names,
+        current_dataset=getattr(prepared_run, "current_dataset", None),
+        dataset_infos=getattr(prepared_run, "dataset_infos", None),
+        manual_pair_rows=manual_pair_rows,
     )
-    if seed_policy == HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT:
-        return True, int(row_count)
-    if seed_policy != HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
-        return False, int(row_count)
-    seed_search_cfg = runtime_cfg.get("seed_search")
-    seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
-    seed_search.update(_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH)
-    runtime_cfg["seed_search"] = seed_search
-    return True, int(row_count)
 
 
 def run_headless_geometry_fit(

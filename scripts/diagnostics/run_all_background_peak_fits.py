@@ -113,6 +113,8 @@ def _execute_notebook(
     repo_root: Path,
     fit_workers: int | None,
     numba_threads: int | None,
+    fit_backend: str | None,
+    process_numba_threads: int | None,
 ) -> None:
     old_cwd = Path.cwd()
     old_path = list(sys.path)
@@ -131,6 +133,11 @@ def _execute_notebook(
         ),
         "BACKGROUND_FIT_WORKERS": _set_env_if_value("BACKGROUND_FIT_WORKERS", fit_workers),
         "NUMBA_NUM_THREADS": _set_env_if_value("NUMBA_NUM_THREADS", numba_threads),
+        "BACKGROUND_FIT_BACKEND": _set_env_if_value("BACKGROUND_FIT_BACKEND", fit_backend),
+        "BACKGROUND_PROCESS_NUMBA_THREADS": _set_env_if_value(
+            "BACKGROUND_PROCESS_NUMBA_THREADS",
+            process_numba_threads,
+        ),
     }
 
     namespace = {
@@ -211,6 +218,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Override NUMBA_NUM_THREADS for the notebook run.",
     )
     parser.add_argument(
+        "--fit-backend",
+        choices=("auto", "process", "thread", "serial"),
+        default=None,
+        help="Override BACKGROUND_FIT_BACKEND for notebooks that support it.",
+    )
+    parser.add_argument(
+        "--process-numba-threads",
+        type=_positive_int,
+        default=None,
+        help="Override BACKGROUND_PROCESS_NUMBA_THREADS for process-pool workers.",
+    )
+    parser.add_argument(
         "--keep-going",
         action="store_true",
         help="Continue to the next state after a failed notebook execution.",
@@ -254,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=repo_root,
         )
         print(f"[{run_name}] state={state_path}")
+        print(f"[{run_name}] notebook={notebook_path}")
         if out_dir is not None:
             print(f"[{run_name}] out={out_dir}")
         start = time.perf_counter()
@@ -266,6 +286,8 @@ def main(argv: list[str] | None = None) -> int:
                 repo_root=repo_root,
                 fit_workers=args.fit_workers,
                 numba_threads=args.numba_threads,
+                fit_backend=args.fit_backend,
+                process_numba_threads=args.process_numba_threads,
             )
         except Exception as exc:
             message = _format_exception(exc, exc.__traceback__)

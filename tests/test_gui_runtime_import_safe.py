@@ -3796,9 +3796,10 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "def _rebuild_source_rows_for_background_worker(" in source
     assert "geometry_manual_rebuild_source_rows_for_background=(" in source
     assert "_rebuild_source_rows_for_background_worker" in source
-    assert helper_source.count("raise RuntimeError(") == 2
+    assert helper_source.count("raise RuntimeError(") == 3
     assert "exact caked projector unavailable" in helper_source
     assert "mixed detector/caked manual fit spaces are not supported" in helper_source
+    assert "Geometry fit preflight timed out" in helper_source
 
 
 def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
@@ -14642,19 +14643,55 @@ def test_runtime_impl_source_cache_build_ready_no_longer_inlines_caked_store() -
     assert '"source_cache_caked_view_timeout"' in source
 
 
+def test_runtime_impl_backfills_detector_origin_two_tilt_pairs_before_fit_space() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+
+    marker = "detector_qr_rows_need_auto_caked_backfill"
+    backfill_call = "_backfill_geometry_manual_pair_caked_coordinate_cache()"
+    classifier_call = "geometry_manual_fit_space_by_background("
+
+    assert marker in source
+    assert source.index(marker) < source.index(classifier_call)
+    assert source.index(backfill_call) < source.index(classifier_call)
+    assert "geometry_fit_active_vars_include_detector_tilts(var_names)" in source
+    assert "manual_caked_geometry_fit_observed_anchor_preflight_error" in source
+
+
 def test_manual_caked_runtime_override_keeps_dynamic_exact_caked_path() -> None:
     geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
 
+    manual_caked_row = {
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 1.0,
+        "hkl": (0, 0, 3),
+        "q_group_key": ("q_group", "primary", 0, 3),
+        "source_reflection_index": 10,
+        "source_row_index": 24,
+    }
     caked_cfg = geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
         {"solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4}},
         joint_background_mode=False,
+        active_var_names=["gamma", "Gamma"],
+        manual_pair_rows=[manual_caked_row],
     )
     caked_solver = caked_cfg["solver"]
 
     assert caked_solver["manual_point_fit_mode"] is True
     assert caked_solver["dynamic_point_geometry_fit"] is True
     assert caked_cfg["projection_view_mode"] == "caked"
-    assert caked_solver["max_nfev"] == 30
+    assert caked_solver["max_nfev"] == 60
+    assert caked_solver["_qr_fit_point_only_projection"] is True
+    assert caked_solver["_headless_accept_caked_angular_metric_without_pixel_threshold"] is True
+    assert caked_cfg["seed_search"]["prescore_top_k"] == 1
+    assert caked_cfg["seed_search"]["n_global"] == 4
+    assert caked_cfg["bounds"]["gamma"] == [-90.0, 90.0]
+    assert caked_cfg["bounds"]["Gamma"] == [-90.0, 90.0]
+
+    direct_caked_cfg = geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
+        {"solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4}},
+        joint_background_mode=False,
+    )
+    assert direct_caked_cfg["solver"]["max_nfev"] == 30
 
     detector_cfg = geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
         {"solver": {"dynamic_point_geometry_fit": True, "max_nfev": 99}},

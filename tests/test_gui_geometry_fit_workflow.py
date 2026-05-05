@@ -393,7 +393,7 @@ def test_targeted_fresh_simulation_timeout_emits_late_completion(monkeypatch) ->
             [0],
         )
 
-    geometry_fit.rebuild_geometry_fit_source_rows(
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
         background_index=0,
         background_label="bg0.osc",
         params_local={"theta_initial": 0.0},
@@ -420,16 +420,17 @@ def test_targeted_fresh_simulation_timeout_emits_late_completion(monkeypatch) ->
 
     names = [name for name, _payload in events]
     assert "source_cache_targeted_fresh_simulation_timeout" in names
-    assert "source_cache_targeted_fresh_simulation_ready" in names
+    assert "source_cache_targeted_fresh_simulation_failed" in names
     assert names.index("source_cache_targeted_fresh_simulation_timeout") < names.index(
-        "source_cache_targeted_fresh_simulation_ready"
+        "source_cache_targeted_fresh_simulation_failed"
     )
-    ready_payload = next(
+    failed_payload = next(
         payload
         for name, payload in events
-        if name == "source_cache_targeted_fresh_simulation_ready"
+        if name == "source_cache_targeted_fresh_simulation_failed"
     )
-    assert ready_payload["late"] is True
+    assert failed_payload["late"] is True
+    assert result.diagnostics["status"] == "targeted_fresh_simulation_timeout"
 
 
 def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_first() -> None:
@@ -27201,6 +27202,7 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
     assert [stage for stage, _payload in stage_events] == [
         "source_cache_target_collection_start",
         "source_cache_target_collection_ready",
+        "source_cache_preflight_lookup_start",
         "source_cache_targeted_projected_cache_start",
         "source_cache_targeted_projected_cache_miss",
         "source_cache_memory_intersection_cache_start",

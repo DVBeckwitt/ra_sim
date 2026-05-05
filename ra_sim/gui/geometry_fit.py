@@ -86,6 +86,30 @@ GEOMETRY_FIT_EXACT_CAKE_AXIS_TOLERANCE = 1.0e-9
 GEOMETRY_FIT_STORED_POINT_ABS_TOLERANCE_PX = 1.0e-6
 GEOMETRY_FIT_RECOMPUTED_REFINEMENT_TOLERANCE_PX = 1.0e-3
 GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S = 30.0
+GEOMETRY_FIT_SEED_POLICY_DIRECT = "direct"
+GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART = "ladder-multistart"
+GEOMETRY_FIT_SEED_POLICIES = frozenset(
+    {
+        GEOMETRY_FIT_SEED_POLICY_DIRECT,
+        GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+    }
+)
+GEOMETRY_FIT_LADDER_SEED_SEARCH = {
+    "prescore_top_k": 4,
+    "n_global": 4,
+    "n_jitter": 2,
+    "min_seed_separation_u": 0.5,
+}
+GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH = {
+    "prescore_top_k": 1,
+    "n_global": 4,
+    "n_jitter": 2,
+    "min_seed_separation_u": 0.5,
+    "_reuse_generation_for_prescore": True,
+}
+GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV = 29
+GEOMETRY_FIT_SAVED_MANUAL_CAKED_LADDER_MAX_NFEV = 60
+GEOMETRY_FIT_POINT_ONLY_PROJECTION_FLAG = "_qr_fit_point_only_projection"
 
 
 def _geometry_fit_float64_vector(
@@ -8085,33 +8109,55 @@ def rebuild_geometry_fit_source_rows(
     targeted_simulation_fallback_reason: str | None = None
     fresh_required_source_missing: list[str] = []
     fresh_timeout_fired = threading.Event()
-    fresh_simulation_done = threading.Event()
-    fresh_timeout_timer: threading.Timer | None = None
-    if targeted_preflight_enabled:
-        timeout_s = float(GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S)
+    timeout_s = float(GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S)
 
-        def _emit_targeted_fresh_timeout() -> None:
-            if fresh_simulation_done.is_set():
-                return
-            fresh_timeout_fired.set()
-            _emit_rebuild_stage(
-                "source_cache_targeted_fresh_simulation_timeout",
-                cache_source="fresh_simulation",
-                preflight_mode=normalized_preflight_mode,
-                status="timeout",
-                timeout_s=float(timeout_s),
-            )
-            _emit_rebuild_stage(
-                "source_cache_targeted_fresh_simulation_still_running_late",
-                cache_source="fresh_simulation",
-                preflight_mode=normalized_preflight_mode,
-                status="still_running_late",
-                timeout_s=float(timeout_s),
-            )
+    def _emit_targeted_fresh_timeout() -> None:
+        if fresh_timeout_fired.is_set():
+            return
+        fresh_timeout_fired.set()
+        _emit_rebuild_stage(
+            "source_cache_targeted_fresh_simulation_timeout",
+            cache_source="fresh_simulation",
+            preflight_mode=normalized_preflight_mode,
+            status="timeout",
+            timeout_s=float(timeout_s),
+        )
+        _emit_rebuild_stage(
+            "source_cache_targeted_fresh_simulation_still_running_late",
+            cache_source="fresh_simulation",
+            preflight_mode=normalized_preflight_mode,
+            status="still_running_late",
+            timeout_s=float(timeout_s),
+        )
 
-        fresh_timeout_timer = threading.Timer(timeout_s, _emit_targeted_fresh_timeout)
-        fresh_timeout_timer.daemon = True
-        fresh_timeout_timer.start()
+    def _call_fresh_simulation(call: Callable[[], Sequence[object]]) -> Sequence[object]:
+        if not targeted_preflight_enabled:
+            return call()
+        result_box: dict[str, object] = {}
+        done = threading.Event()
+
+        def _run() -> None:
+            try:
+                result_box["value"] = call()
+            except Exception as exc:
+                result_box["exception"] = exc
+            finally:
+                done.set()
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        if not done.wait(timeout_s):
+            _emit_targeted_fresh_timeout()
+            raise TimeoutError(
+                "Targeted fresh simulation exceeded "
+                f"{float(timeout_s):.1f}s while rebuilding source cache for "
+                f"{resolved_background_label}. Refresh the caked/source cache or reduce "
+                "the fit simulation grid before rerunning geometry fit."
+            )
+        exception = result_box.get("exception")
+        if isinstance(exception, Exception):
+            raise exception
+        return list(result_box.get("value") or ())
     if callable(simulate_hit_tables):
         try:
             if targeted_preflight_enabled and collected_required_branch_group_keys:
@@ -8132,9 +8178,11 @@ def rebuild_geometry_fit_source_rows(
                 full_fallback_already_loaded = False
                 if targeted_keyword_support:
                     try:
-                        fresh_hit_tables = simulate_hit_tables(
-                            normalized_params,
-                            **accepted_simulation_kwargs,
+                        fresh_hit_tables = _call_fresh_simulation(
+                            lambda: simulate_hit_tables(
+                                normalized_params,
+                                **accepted_simulation_kwargs,
+                            )
                         )
                     except TypeError as exc:
                         error_text = str(exc)
@@ -8143,7 +8191,9 @@ def rebuild_geometry_fit_source_rows(
                             or "positional argument" in error_text
                             or "got an unexpected keyword" in error_text
                         ):
-                            fresh_hit_tables = simulate_hit_tables(normalized_params)
+                            fresh_hit_tables = _call_fresh_simulation(
+                                lambda: simulate_hit_tables(normalized_params)
+                            )
                             full_fallback_already_loaded = True
                             targeted_keyword_support = False
                         else:
@@ -8196,7 +8246,9 @@ def rebuild_geometry_fit_source_rows(
                         preflight_mode=normalized_preflight_mode,
                     )
                     if not full_fallback_already_loaded:
-                        fresh_hit_tables = simulate_hit_tables(normalized_params)
+                        fresh_hit_tables = _call_fresh_simulation(
+                            lambda: simulate_hit_tables(normalized_params)
+                        )
                     _emit_rebuild_stage(
                         "source_cache_full_simulation_fallback_ready",
                         stage_started_at=fallback_started_at,
@@ -8212,14 +8264,18 @@ def rebuild_geometry_fit_source_rows(
                         cache_source="fresh_simulation",
                     )
             else:
-                fresh_hit_tables = simulate_hit_tables(normalized_params)
+                fresh_hit_tables = _call_fresh_simulation(
+                    lambda: simulate_hit_tables(normalized_params)
+                )
         except Exception as exc:
             fresh_simulation_exception = exc
             fresh_hit_tables = []
-    fresh_simulation_done.set()
-    if fresh_timeout_timer is not None:
-        fresh_timeout_timer.cancel()
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
+    if targeted_preflight_enabled and fresh_timeout_fired.is_set():
+        runtime_simulation_diagnostics = dict(runtime_simulation_diagnostics or {})
+        runtime_simulation_diagnostics["status"] = "targeted_fresh_simulation_timeout"
+        runtime_simulation_diagnostics["timeout_s"] = float(timeout_s)
+        runtime_simulation_diagnostics["targeted_simulation_timeout"] = True
     if targeted_preflight_enabled and isinstance(runtime_simulation_diagnostics, Mapping):
         _update_targeted_runtime_flags(
             **{
@@ -8257,12 +8313,18 @@ def rebuild_geometry_fit_source_rows(
         ),
         late=bool(fresh_timeout_fired.is_set()),
     )
-    fresh_rows, fresh_lattice, fresh_hit_tables, fresh_source_reflection_indices = (
-        _build_source_rows_result(
-            fresh_hit_tables,
-            cache_source="fresh_simulation",
+    if fresh_simulation_exception is None:
+        fresh_rows, fresh_lattice, fresh_hit_tables, fresh_source_reflection_indices = (
+            _build_source_rows_result(
+                fresh_hit_tables,
+                cache_source="fresh_simulation",
+            )
         )
-    )
+    else:
+        fresh_rows = []
+        fresh_lattice = None
+        fresh_hit_tables = []
+        fresh_source_reflection_indices = None
     if fresh_rows:
         required_source_labels = _required_pair_source_labels()
         fresh_source_counts = _source_counts_from_rows(fresh_rows)
@@ -16698,6 +16760,7 @@ def prepare_geometry_fit_run(
         geometry_manual_pairs_for_index,
         pick_uses_caked_space=bool(manual_fit_pick_uses_caked_space),
         current_background_index=int(current_index),
+        active_var_names=selected_var_names,
     )
     fit_space_error = manual_geometry_fit_space_preflight_error(
         selected_manual_fit_space_by_background,
@@ -16818,16 +16881,33 @@ def prepare_geometry_fit_run(
 
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
     manual_fit_uses_caked_space = bool(
-        manual_pairs_use_caked_space or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
+        manual_pairs_use_caked_space
+        or geometry_fit_datasets_use_caked_fit_space(
+            dataset_infos,
+            active_var_names=selected_var_names,
+        )
     )
     base_runtime_cfg = apply_joint_geometry_fit_runtime_safety_overrides(
         build_runtime_config(fit_params),
         joint_background_mode=joint_background_mode,
     )
     if manual_fit_uses_caked_space:
+        caked_anchor_error = manual_caked_geometry_fit_observed_anchor_preflight_error(
+            dataset_infos
+        )
+        if caked_anchor_error:
+            return _failure_result(
+                caked_anchor_error,
+                dataset_infos=dataset_infos,
+                current_dataset=current_dataset,
+                selected_background_indices=selected_background_indices,
+                joint_background_mode=joint_background_mode,
+            )
         geometry_runtime_cfg = apply_manual_caked_point_geometry_fit_runtime_overrides(
             base_runtime_cfg,
             joint_background_mode=joint_background_mode,
+            active_var_names=selected_var_names,
+            dataset_infos=dataset_infos,
         )
         projector_error = manual_caked_geometry_fit_projector_preflight_error(dataset_specs)
         if projector_error:
@@ -16965,6 +17045,89 @@ def _geometry_fit_finite_float(value: object) -> float | None:
     return float(out)
 
 
+def geometry_fit_active_vars_include_detector_tilts(
+    active_var_names: Sequence[object] | None,
+) -> bool:
+    """Return whether the two detector tilts are both active in one fit."""
+
+    active_names = {str(name) for name in (active_var_names or ())}
+    return {"gamma", "Gamma"}.issubset(active_names)
+
+
+def geometry_fit_entry_has_observed_caked_anchor(entry: object) -> bool:
+    """Return whether one manual row has finite observed caked 2theta/phi."""
+
+    if not isinstance(entry, Mapping):
+        return False
+    for x_key, y_key in (
+        ("background_two_theta_deg", "background_phi_deg"),
+        ("refined_background_two_theta_deg", "refined_background_phi_deg"),
+        ("cached_two_theta_deg", "cached_phi_deg"),
+        ("caked_x", "caked_y"),
+        ("raw_caked_x", "raw_caked_y"),
+        ("raw_caked_two_theta_deg", "raw_caked_phi_deg"),
+    ):
+        x_value = _geometry_fit_finite_float(entry.get(x_key))
+        y_value = _geometry_fit_finite_float(entry.get(y_key))
+        if x_value is not None and y_value is not None:
+            return True
+    caked_deg = entry.get("geometry_caked_deg", entry.get("raw_caked_deg"))
+    if isinstance(caked_deg, (list, tuple, np.ndarray)) and len(caked_deg) >= 2:
+        x_value = _geometry_fit_finite_float(caked_deg[0])
+        y_value = _geometry_fit_finite_float(caked_deg[1])
+        if x_value is not None and y_value is not None:
+            return True
+    return False
+
+
+def geometry_fit_entry_is_auto_caked_detector_manual_qr(
+    entry: object,
+    *,
+    require_observed_caked_anchor: bool = True,
+) -> bool:
+    """Return whether a detector-origin manual QR row can use caked objective."""
+
+    if not isinstance(entry, Mapping):
+        return False
+    origin = str(entry.get("manual_background_input_origin") or "").strip().lower()
+    if origin != "detector":
+        return False
+    has_qr_identity = bool(
+        entry.get("q_group_key") is not None
+        or entry.get("source_q_group_key") is not None
+        or entry.get("hkl") is not None
+        or entry.get("normalized_hkl") is not None
+        or entry.get("source_reflection_index") is not None
+        or entry.get("source_row_index") is not None
+        or entry.get("source_table_index") is not None
+    )
+    if not has_qr_identity:
+        return False
+    if bool(require_observed_caked_anchor) and not geometry_fit_entry_has_observed_caked_anchor(
+        entry
+    ):
+        return False
+    return True
+
+
+def geometry_fit_manual_pairs_have_auto_caked_detector_qr(
+    manual_pairs: object,
+    *,
+    require_observed_caked_anchor: bool = True,
+) -> bool:
+    """Return whether any selected manual pair is auto-caked detector QR eligible."""
+
+    if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
+        return False
+    return any(
+        geometry_fit_entry_is_auto_caked_detector_manual_qr(
+            entry,
+            require_observed_caked_anchor=require_observed_caked_anchor,
+        )
+        for entry in manual_pairs
+    )
+
+
 def _geometry_manual_entry_uses_caked_fit_space(entry: object) -> bool:
     if not isinstance(entry, Mapping):
         return False
@@ -17005,22 +17168,38 @@ def _geometry_manual_entry_uses_caked_fit_space(entry: object) -> bool:
 
 def geometry_manual_pairs_use_caked_fit_space(
     manual_pairs: object,
+    *,
+    auto_caked_detector_origin: bool = False,
 ) -> bool:
     """Return whether saved manual pairs carry caked fit-space anchors."""
 
     if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
         return False
-    return any(_geometry_manual_entry_uses_caked_fit_space(entry) for entry in manual_pairs)
+    return any(
+        _geometry_manual_entry_uses_caked_fit_space(entry)
+        or (
+            bool(auto_caked_detector_origin)
+            and geometry_fit_entry_is_auto_caked_detector_manual_qr(entry)
+        )
+        for entry in manual_pairs
+    )
 
 
-def _geometry_manual_pair_fit_space_kinds(manual_pairs: object) -> set[str]:
+def _geometry_manual_pair_fit_space_kinds(
+    manual_pairs: object,
+    *,
+    auto_caked_detector_origin: bool = False,
+) -> set[str]:
     if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
         return set()
     kinds: set[str] = set()
     for entry in manual_pairs:
         if not isinstance(entry, Mapping):
             continue
-        if _geometry_manual_entry_uses_caked_fit_space(entry):
+        if _geometry_manual_entry_uses_caked_fit_space(entry) or (
+            bool(auto_caked_detector_origin)
+            and geometry_fit_entry_is_auto_caked_detector_manual_qr(entry)
+        ):
             kinds.add("caked")
         else:
             kinds.add("detector")
@@ -17032,14 +17211,20 @@ def geometry_manual_pairs_fit_space_kind(
     *,
     pick_uses_caked_space: bool = False,
     pick_applies_to_background: bool = False,
+    auto_caked_detector_origin: bool = False,
 ) -> str:
     """Classify one manual-pair set as detector-pixel or caked fit-space."""
 
-    pair_kinds = _geometry_manual_pair_fit_space_kinds(manual_pairs)
+    pair_kinds = _geometry_manual_pair_fit_space_kinds(
+        manual_pairs,
+        auto_caked_detector_origin=bool(auto_caked_detector_origin),
+    )
     if len(pair_kinds) > 1:
         return "mixed"
     if pair_kinds == {"caked"}:
         return "caked"
+    if pair_kinds == {"detector"}:
+        return "detector"
     if bool(pick_uses_caked_space) and bool(pick_applies_to_background):
         return "caked"
     return "detector"
@@ -17051,11 +17236,15 @@ def geometry_manual_fit_space_by_background(
     *,
     pick_uses_caked_space: bool = False,
     current_background_index: int | None = None,
+    active_var_names: Sequence[object] | None = None,
 ) -> dict[int, str]:
     """Return detector/caked manual fit-space classification per background."""
 
     indices = [int(idx) for idx in (background_indices or ())]
     result: dict[int, str] = {}
+    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(
+        active_var_names
+    )
     for idx in indices:
         if callable(pairs_for_index):
             pairs = pairs_for_index(int(idx))
@@ -17074,6 +17263,7 @@ def geometry_manual_fit_space_by_background(
             pairs,
             pick_uses_caked_space=bool(pick_uses_caked_space),
             pick_applies_to_background=bool(pick_applies),
+            auto_caked_detector_origin=bool(auto_caked_detector_origin),
         )
     return result
 
@@ -17130,9 +17320,14 @@ def manual_geometry_fit_space_preflight_error(
 
 def geometry_fit_datasets_use_caked_fit_space(
     dataset_infos: Sequence[Mapping[str, object]] | None,
+    *,
+    active_var_names: Sequence[object] | None = None,
 ) -> bool:
     """Classify prepared manual datasets before applying runtime overrides."""
 
+    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(
+        active_var_names
+    )
     for info in dataset_infos or ():
         if not isinstance(info, Mapping):
             continue
@@ -17145,13 +17340,58 @@ def geometry_fit_datasets_use_caked_fit_space(
             "manual_picker_truth_pairs",
             "manual_point_pairs",
         ):
-            if geometry_manual_pairs_use_caked_fit_space(info.get(key)):
+            if geometry_manual_pairs_use_caked_fit_space(
+                info.get(key),
+                auto_caked_detector_origin=bool(auto_caked_detector_origin),
+            ):
                 return True
         spec = info.get("spec")
         if isinstance(spec, Mapping):
-            if geometry_manual_pairs_use_caked_fit_space(spec.get("measured_peaks")):
+            if geometry_manual_pairs_use_caked_fit_space(
+                spec.get("measured_peaks"),
+                auto_caked_detector_origin=bool(auto_caked_detector_origin),
+            ):
                 return True
     return False
+
+
+def manual_caked_geometry_fit_observed_anchor_preflight_error(
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+) -> str | None:
+    """Fail closed when caked objective rows lack observed caked targets."""
+
+    missing_labels: list[str] = []
+    for idx, dataset in enumerate(dataset_infos or ()):
+        if not isinstance(dataset, Mapping):
+            continue
+        label = str(dataset.get("label", f"dataset {idx + 1}"))
+        rows = [
+            entry
+            for entry in (dataset.get("measured_for_fit", ()) or ())
+            if isinstance(entry, Mapping)
+        ]
+        if not rows:
+            spec = dataset.get("spec")
+            if isinstance(spec, Mapping):
+                rows = [
+                    entry
+                    for entry in (spec.get("measured_peaks", ()) or ())
+                    if isinstance(entry, Mapping)
+                ]
+        missing_count = sum(
+            1 for entry in rows if not geometry_fit_entry_has_observed_caked_anchor(entry)
+        )
+        if missing_count > 0:
+            missing_labels.append(f"{label} ({int(missing_count)} missing)")
+    if not missing_labels:
+        return None
+    return (
+        "Geometry fit unavailable: caked manual Qr/Qz fitting needs observed "
+        "caked coordinates for every selected manual pair. Rebuild the exact "
+        "caked projection and rerun the fit. Missing observed caked anchors: "
+        + ", ".join(missing_labels)
+        + "."
+    )
 
 
 def manual_caked_geometry_fit_projector_preflight_error(
@@ -17178,6 +17418,275 @@ def manual_caked_geometry_fit_projector_preflight_error(
         "caked/source cache and rerun the fit. exact caked projector unavailable "
         "for caked-origin background pair: " + ", ".join(missing_labels) + "."
     )
+
+
+def normalize_geometry_fit_seed_policy(seed_policy: object | None) -> str | None:
+    """Normalize one optional geometry-fit seed policy override."""
+
+    if seed_policy is None:
+        return None
+    seed_policy_text = str(seed_policy).strip()
+    if not seed_policy_text:
+        raise ValueError("Geometry-fit seed policy cannot be empty.")
+    if seed_policy_text not in GEOMETRY_FIT_SEED_POLICIES:
+        allowed = ", ".join(sorted(GEOMETRY_FIT_SEED_POLICIES))
+        raise ValueError(
+            f"Unsupported geometry-fit seed policy {seed_policy_text!r}; "
+            f"expected one of: {allowed}."
+        )
+    return seed_policy_text
+
+
+def apply_geometry_fit_seed_policy(
+    runtime_cfg: dict[str, object],
+    seed_policy: object | None,
+) -> None:
+    """Apply an opt-in seed policy to a mutable runtime config."""
+
+    normalized = normalize_geometry_fit_seed_policy(seed_policy)
+    if normalized is None or normalized == GEOMETRY_FIT_SEED_POLICY_DIRECT:
+        return
+    if normalized != GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
+        raise ValueError(f"Unsupported geometry-fit seed policy {normalized!r}.")
+    seed_search_cfg = runtime_cfg.get("seed_search")
+    seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
+    seed_search.update(GEOMETRY_FIT_LADDER_SEED_SEARCH)
+    runtime_cfg["seed_search"] = seed_search
+
+
+def geometry_fit_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) -> bool:
+    """Return whether one manual-pair row is a fixed-source caked QR target."""
+
+    has_observed_caked_anchor = geometry_fit_entry_has_observed_caked_anchor(entry)
+    source = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
+    row_origin = str(entry.get("row_origin", "") or "").strip().lower()
+    target_source = str(
+        entry.get("target_anchor_source")
+        or entry.get("manual_target_anchor_source")
+        or entry.get("fit_target_anchor_source")
+        or ""
+    ).strip().lower()
+    sim_source = str(
+        entry.get("simulated_source")
+        or entry.get("sim_source")
+        or entry.get("source_coordinate_source")
+        or ""
+    ).strip().lower()
+    fixed_source = bool(
+        entry.get("optimizer_request_has_fixed_source", False)
+        or entry.get("fixed_source_resolved", False)
+        or source.startswith("provider_fixed_source")
+        or "fixed_source" in source
+        or entry.get("source_reflection_index") is not None
+        or entry.get("source_row_index") is not None
+        or entry.get("source_table_index") is not None
+    )
+    legacy_caked_marker = bool(
+        "cached_fit_space_anchor" in target_source
+        or "cached_fit_space_anchor" in entry
+        or "cached_two_theta_deg" in entry
+        or "cached_phi_deg" in entry
+        or "background_two_theta_deg" in entry
+        or "background_phi_deg" in entry
+        or "caked_x" in entry
+        or "caked_y" in entry
+        or "raw_caked_x" in entry
+        or "raw_caked_y" in entry
+        or "manual_caked" in row_origin
+        or "fit_space" in row_origin
+    )
+    cached_target = bool(has_observed_caked_anchor or legacy_caked_marker)
+    dynamic_sim = bool(
+        sim_source in {"", "sim_visual_caked_deg"}
+        or entry.get("sim_visual_caked_deg") is not None
+        or entry.get("sim_two_theta_deg") is not None
+        or entry.get("sim_phi_deg") is not None
+        or entry.get("q_group_key") is not None
+        or entry.get("hkl") is not None
+    )
+    return bool(fixed_source and cached_target and dynamic_sim)
+
+
+def _geometry_fit_dataset_entries(
+    *,
+    current_dataset: Mapping[str, object] | None = None,
+    dataset_infos: Sequence[Mapping[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    datasets: list[Mapping[str, object]] = []
+    if isinstance(current_dataset, Mapping):
+        datasets.append(current_dataset)
+    datasets.extend(info for info in (dataset_infos or ()) if isinstance(info, Mapping))
+    for dataset in datasets:
+        for row_key in (
+            "measured_for_fit",
+            "initial_pairs_display",
+            "manual_point_pairs",
+            "provider_pairs",
+        ):
+            for entry in dataset.get(row_key, ()) or ():
+                if isinstance(entry, Mapping):
+                    entries.append(dict(entry))
+    return entries
+
+
+def geometry_fit_fixed_manual_caked_qr_row_count(
+    *,
+    current_dataset: Mapping[str, object] | None = None,
+    dataset_infos: Sequence[Mapping[str, object]] | None = None,
+    manual_pair_rows: Sequence[Mapping[str, object]] | None = None,
+) -> int:
+    """Count fixed-source caked manual QR rows across prepared/manual inputs."""
+
+    prepared_row_count = sum(
+        1
+        for entry in _geometry_fit_dataset_entries(
+            current_dataset=current_dataset,
+            dataset_infos=dataset_infos,
+        )
+        if geometry_fit_entry_has_fixed_manual_caked_qr(entry)
+    )
+    manual_row_count = sum(
+        1
+        for entry in (manual_pair_rows or ())
+        if isinstance(entry, Mapping) and geometry_fit_entry_has_fixed_manual_caked_qr(entry)
+    )
+    return max(int(prepared_row_count), int(manual_row_count))
+
+
+def _geometry_fit_runtime_solver_mapping(runtime_cfg: Mapping[str, object]) -> dict[str, object]:
+    solver_cfg = runtime_cfg.get("solver")
+    return dict(solver_cfg) if isinstance(solver_cfg, Mapping) else {}
+
+
+def _geometry_fit_runtime_is_saved_manual_caked_candidate(
+    runtime_cfg: Mapping[str, object],
+) -> bool:
+    if str(runtime_cfg.get("projection_view_mode", "")).strip().lower() != "caked":
+        return False
+    solver = _geometry_fit_runtime_solver_mapping(runtime_cfg)
+    return bool(
+        solver.get("manual_point_fit_mode", False)
+        and solver.get("dynamic_point_geometry_fit", False)
+    )
+
+
+def enforce_geometry_fit_gamma_bounds(
+    runtime_cfg: dict[str, object],
+    active_var_names: Sequence[object],
+) -> None:
+    """Use wide tilt bounds when either detector tilt is active."""
+
+    active_names = {str(name) for name in active_var_names}
+    gamma_names = [name for name in ("gamma", "Gamma") if name in active_names]
+    if not gamma_names:
+        return
+    bounds_cfg = runtime_cfg.get("bounds")
+    bounds = dict(bounds_cfg) if isinstance(bounds_cfg, Mapping) else {}
+    for name in gamma_names:
+        bounds[name] = [-90.0, 90.0]
+    runtime_cfg["bounds"] = bounds
+
+
+def _apply_saved_manual_caked_geometry_fit_lean_runtime(
+    runtime_cfg: dict[str, object],
+    *,
+    max_nfev: int,
+    seed_multistart: bool,
+) -> None:
+    solver = _geometry_fit_runtime_solver_mapping(runtime_cfg)
+    solver["manual_point_fit_mode"] = True
+    solver["dynamic_point_geometry_fit"] = True
+    solver["seed_multistart"] = bool(seed_multistart)
+    solver["seed_multistart_enabled"] = bool(seed_multistart)
+    solver[GEOMETRY_FIT_POINT_ONLY_PROJECTION_FLAG] = True
+    solver["max_nfev"] = int(max_nfev)
+    solver["min_max_nfev"] = 1
+    solver["loss"] = "linear"
+    solver["f_scale_px"] = 1.0
+    solver["weighted_matching"] = False
+    solver["use_measurement_uncertainty"] = False
+    solver["anisotropic_measurement_uncertainty"] = False
+    solver["q_group_line_constraints"] = False
+    solver["q_group_line_constraints_enabled"] = False
+    solver["_headless_accept_caked_angular_metric_without_pixel_threshold"] = True
+    solver["workers"] = solver.get("workers", "auto")
+    solver["parallel_mode"] = "off"
+    solver["worker_numba_threads"] = 0
+    runtime_cfg["solver"] = solver
+    runtime_cfg["optimizer"] = dict(solver)
+    seed_search_cfg = runtime_cfg.get("seed_search")
+    seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
+    seed_search["enabled"] = bool(seed_multistart)
+    runtime_cfg["seed_search"] = seed_search
+    runtime_cfg["projection_view_mode"] = "caked"
+    runtime_cfg["use_numba"] = bool(runtime_cfg.get("use_numba", False))
+    runtime_cfg["allow_unsafe_runtime"] = False
+    for feature_key in ("full_beam_polish", "ridge_refinement", "image_refinement"):
+        runtime_cfg.pop(feature_key, None)
+    discrete_cfg = (
+        dict(runtime_cfg.get("discrete_modes", {}))
+        if isinstance(runtime_cfg.get("discrete_modes"), Mapping)
+        else {}
+    )
+    discrete_cfg["enabled"] = False
+    runtime_cfg["discrete_modes"] = discrete_cfg
+    ident_cfg = (
+        dict(runtime_cfg.get("identifiability", {}))
+        if isinstance(runtime_cfg.get("identifiability"), Mapping)
+        else {}
+    )
+    ident_cfg["enabled"] = False
+    ident_cfg.pop("auto_freeze", None)
+    ident_cfg.pop("selective_thaw", None)
+    ident_cfg.pop("adaptive_regularization", None)
+    runtime_cfg["identifiability"] = ident_cfg
+
+
+def apply_saved_manual_caked_geometry_fit_budget(
+    runtime_cfg: dict[str, object],
+    *,
+    seed_policy: object | None,
+    active_var_names: Sequence[object],
+    current_dataset: Mapping[str, object] | None = None,
+    dataset_infos: Sequence[Mapping[str, object]] | None = None,
+    manual_pair_rows: Sequence[Mapping[str, object]] | None = None,
+) -> tuple[bool, int]:
+    """Apply the narrow exact-caked manual runtime budget shared by GUI/headless."""
+
+    normalized_seed_policy = normalize_geometry_fit_seed_policy(seed_policy)
+    row_count = geometry_fit_fixed_manual_caked_qr_row_count(
+        current_dataset=current_dataset,
+        dataset_infos=dataset_infos,
+        manual_pair_rows=manual_pair_rows,
+    )
+    enforce_geometry_fit_gamma_bounds(runtime_cfg, active_var_names)
+    if row_count <= 0:
+        return False, int(row_count)
+    if normalized_seed_policy not in {
+        GEOMETRY_FIT_SEED_POLICY_DIRECT,
+        GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+    }:
+        if not _geometry_fit_runtime_is_saved_manual_caked_candidate(runtime_cfg):
+            return False, int(row_count)
+        return False, int(row_count)
+    _apply_saved_manual_caked_geometry_fit_lean_runtime(
+        runtime_cfg,
+        max_nfev=(
+            GEOMETRY_FIT_SAVED_MANUAL_CAKED_LADDER_MAX_NFEV
+            if normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+            else GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV
+        ),
+        seed_multistart=(
+            normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+        ),
+    )
+    if normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
+        seed_search_cfg = runtime_cfg.get("seed_search")
+        seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
+        seed_search.update(GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH)
+        runtime_cfg["seed_search"] = seed_search
+    return True, int(row_count)
 
 
 def apply_joint_geometry_fit_runtime_safety_overrides(
@@ -17342,6 +17851,11 @@ def apply_manual_caked_point_geometry_fit_runtime_overrides(
     runtime_cfg: Mapping[str, object] | None,
     *,
     joint_background_mode: bool,
+    active_var_names: Sequence[object] | None = None,
+    current_dataset: Mapping[str, object] | None = None,
+    dataset_infos: Sequence[Mapping[str, object]] | None = None,
+    manual_pair_rows: Sequence[Mapping[str, object]] | None = None,
+    seed_policy: object | None = None,
 ) -> dict[str, object]:
     """Build the manual profile for caked fit-space point fitting."""
 
@@ -17356,6 +17870,27 @@ def apply_manual_caked_point_geometry_fit_runtime_overrides(
     cfg["optimizer"] = optimizer_cfg
     cfg["solver"] = optimizer_cfg
     cfg["projection_view_mode"] = "caked"
+    active_names = [str(name) for name in (active_var_names or ())]
+    resolved_seed_policy = normalize_geometry_fit_seed_policy(seed_policy)
+    if resolved_seed_policy is None and {"gamma", "Gamma"}.issubset(set(active_names)):
+        row_count = geometry_fit_fixed_manual_caked_qr_row_count(
+            current_dataset=current_dataset,
+            dataset_infos=dataset_infos,
+            manual_pair_rows=manual_pair_rows,
+        )
+        if row_count > 0:
+            resolved_seed_policy = GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+    if resolved_seed_policy is not None:
+        apply_saved_manual_caked_geometry_fit_budget(
+            cfg,
+            seed_policy=resolved_seed_policy,
+            active_var_names=active_names,
+            current_dataset=current_dataset,
+            dataset_infos=dataset_infos,
+            manual_pair_rows=manual_pair_rows,
+        )
+    elif active_names:
+        enforce_geometry_fit_gamma_bounds(cfg, active_names)
     return cfg
 
 

@@ -8,6 +8,9 @@ def _detector_origin_pair() -> dict[str, object]:
         "pair_id": "detector-origin",
         "manual_background_input_origin": "detector",
         "background_detector_frame_provenance": "detector_to_caked_refresh",
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_row_index": 42,
         "detector_display_x": 300.0,
         "detector_display_y": 400.0,
         "detector_native_x": 300.0,
@@ -23,6 +26,9 @@ def _caked_origin_pair() -> dict[str, object]:
     return {
         "pair_id": "caked-origin",
         "manual_background_input_origin": "caked",
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_row_index": 42,
         "background_two_theta_deg": 21.0,
         "background_phi_deg": 22.0,
         "caked_x": 21.0,
@@ -36,6 +42,7 @@ def _prepare_with_pair(
     ensure_geometry_fit_caked_view,
     projector_kind: str | None = None,
     projector=None,
+    var_names: list[str] | None = None,
 ):
     def _build_dataset(background_index, **_kwargs):
         return {
@@ -61,7 +68,7 @@ def _prepare_with_pair(
 
     return geometry_fit.prepare_geometry_fit_run(
         params={"theta_initial": 0.0},
-        var_names=["gamma"],
+        var_names=list(var_names or ["gamma"]),
         fit_config={},
         osc_files=["bg0.osc"],
         current_background_index=0,
@@ -86,6 +93,18 @@ def test_detector_origin_pair_with_backfilled_caked_fields_uses_detector_fit_spa
     )
 
 
+def test_detector_origin_pair_with_backfilled_caked_fields_can_auto_cake_for_two_tilts() -> None:
+    spaces = geometry_fit.geometry_manual_fit_space_by_background(
+        [0],
+        {0: [_detector_origin_pair()]},
+        pick_uses_caked_space=False,
+        current_background_index=0,
+        active_var_names=["gamma", "Gamma"],
+    )
+
+    assert spaces == {0: "caked"}
+
+
 def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
     result = _prepare_with_pair(
         _detector_origin_pair(),
@@ -97,6 +116,59 @@ def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
     assert result.error_text is None
     assert result.prepared_run is not None
     assert result.prepared_run.geometry_runtime_cfg.get("projection_view_mode") != "caked"
+
+
+def test_auto_caked_detector_origin_two_tilt_fit_gets_ladder_runtime() -> None:
+    calls: list[str] = []
+
+    def _projector(cols, rows, **_kwargs):
+        return {
+            "two_theta_deg": cols,
+            "phi_deg": rows,
+            "valid": True,
+            "fit_space_projector_kind": "exact_caked_bundle",
+        }
+
+    result = _prepare_with_pair(
+        _detector_origin_pair(),
+        ensure_geometry_fit_caked_view=lambda: calls.append("ensure"),
+        projector_kind="exact_caked_bundle",
+        projector=_projector,
+        var_names=["gamma", "Gamma"],
+    )
+
+    assert calls == ["ensure"]
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    cfg = result.prepared_run.geometry_runtime_cfg
+    assert cfg["projection_view_mode"] == "caked"
+    assert cfg["solver"]["max_nfev"] == 60
+    assert cfg["solver"]["_qr_fit_point_only_projection"] is True
+    assert cfg["solver"]["_headless_accept_caked_angular_metric_without_pixel_threshold"] is True
+    assert cfg["bounds"]["gamma"] == [-90.0, 90.0]
+    assert cfg["bounds"]["Gamma"] == [-90.0, 90.0]
+
+
+def test_caked_objective_missing_observed_anchor_fails_preflight() -> None:
+    error = geometry_fit.manual_caked_geometry_fit_observed_anchor_preflight_error(
+        [
+            {
+                "label": "bg0.osc",
+                "measured_for_fit": [
+                    {
+                        "manual_background_input_origin": "detector",
+                        "q_group_key": ("q_group", "primary", 1, 10),
+                        "hkl": (-1, 0, 10),
+                        "source_row_index": 42,
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert error is not None
+    assert "needs observed caked coordinates" in error
+    assert "bg0.osc (1 missing)" in error
 
 
 def test_caked_origin_pair_requires_exact_caked_projector() -> None:

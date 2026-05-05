@@ -149,9 +149,12 @@ def _bindings(
     *,
     q_group_entries=None,
     picker_cache=None,
+    selected_indices=None,
+    shared_theta=False,
 ):
+    resolved_indices = [int(idx) for idx in (selected_indices or [0])]
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
-        osc_files=["bg0.osc"],
+        osc_files=[f"bg{idx}.osc" for idx in resolved_indices],
         current_background_index=0,
         image_size=4,
         display_rotate_k=0,
@@ -175,10 +178,10 @@ def _bindings(
         fit_config={"geometry": {"solver": {"dynamic_point_geometry_fit": False}}},
         theta_initial=0.0,
         apply_geometry_fit_background_selection=lambda **_kwargs: True,
-        current_geometry_fit_background_indices=lambda **_kwargs: [0],
-        geometry_fit_uses_shared_theta_offset=lambda _indices: False,
+        current_geometry_fit_background_indices=lambda **_kwargs: list(resolved_indices),
+        geometry_fit_uses_shared_theta_offset=lambda _indices: bool(shared_theta),
         apply_background_theta_metadata=lambda **_kwargs: True,
-        current_background_theta_values=lambda **_kwargs: [0.0],
+        current_background_theta_values=lambda **_kwargs: [0.0 for _idx in resolved_indices],
         current_geometry_theta_offset=lambda **_kwargs: 0.0,
         ensure_geometry_fit_caked_view=lambda: None,
         manual_dataset_bindings=manual_dataset_bindings,
@@ -340,6 +343,39 @@ def test_geometry_fit_job_uses_q_group_snapshot_when_live_rows_empty(
         "q_group_snapshot"
     )
     assert job["live_rows_signature_by_background"][0] == ("requested", 0)
+
+
+def test_geometry_fit_job_builds_q_group_rows_for_noncurrent_required_background(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _patch_job_build(monkeypatch, runtime_session, live_rows=[])
+    q_group_entries = [
+        {
+            "key": ("q_group", "primary", 1, 0),
+            "source_label": "primary",
+            "rows": [_live_row("primary", x=25.0)],
+        },
+    ]
+
+    job = runtime_session._build_geometry_fit_async_job(
+        _bindings(
+            monkeypatch,
+            runtime_session,
+            tmp_path,
+            q_group_entries=q_group_entries,
+            selected_indices=[0, 1],
+            shared_theta=True,
+        )
+    )
+
+    assert sorted(job["live_rows_by_background"]) == [0, 1]
+    assert len(job["live_rows_by_background"][1]) == 1
+    assert job["live_rows_cache_metadata_by_background"][1]["job_local_fallback_source"] == (
+        "q_group_snapshot"
+    )
+    assert job["live_rows_signature_by_background"][1] == ("requested", 1)
 
 
 def test_geometry_fit_job_snapshot_preserves_disordered_source_rows(

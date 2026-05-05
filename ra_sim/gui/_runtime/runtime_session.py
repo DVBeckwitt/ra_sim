@@ -41333,11 +41333,79 @@ def _build_geometry_fit_async_job(
     except Exception:
         pick_uses_caked_space = False
 
+    active_vars_include_detector_tilts = (
+        gui_geometry_fit.geometry_fit_active_vars_include_detector_tilts(var_names)
+    )
+    detector_qr_rows_need_auto_caked_backfill = bool(
+        active_vars_include_detector_tilts
+        and any(
+            gui_geometry_fit.geometry_fit_manual_pairs_have_auto_caked_detector_qr(
+                [
+                    entry
+                    for entry in (rows or ())
+                    if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
+                ],
+                require_observed_caked_anchor=False,
+            )
+            for rows in manual_pairs_by_background.values()
+        )
+    )
+    if detector_qr_rows_need_auto_caked_backfill:
+        if callable(prepare_bindings.ensure_geometry_fit_caked_view):
+            try:
+                prepare_bindings.ensure_geometry_fit_caked_view()
+            except Exception as exc:
+                detail = str(exc).strip()
+                message = (
+                    "Geometry fit unavailable: detector-origin gamma/Gamma manual "
+                    "Qr/Qz pairs need exact caked projection before angular fitting. "
+                    "Rebuild the caked/source cache and rerun the fit."
+                )
+                if detail:
+                    message = f"{message} Details: {detail}"
+                raise RuntimeError(message) from exc
+        changed_backfill_count = 0
+        try:
+            changed_backfill_count = int(
+                _backfill_geometry_manual_pair_caked_coordinate_cache()
+            )
+        except Exception:
+            changed_backfill_count = 0
+        if changed_backfill_count > 0:
+            for idx in required_indices:
+                manual_pairs_by_background[int(idx)] = [
+                    dict(entry)
+                    for entry in (
+                        manual_dataset_bindings.geometry_manual_pairs_for_index(int(idx)) or ()
+                    )
+                    if isinstance(entry, Mapping)
+                ]
+        caked_anchor_error = (
+            gui_geometry_fit.manual_caked_geometry_fit_observed_anchor_preflight_error(
+                [
+                    {
+                        "label": background_labels.get(int(idx), f"background {int(idx) + 1}"),
+                        "measured_for_fit": [
+                            entry
+                            for entry in manual_pairs_by_background.get(int(idx), ())
+                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(
+                                entry
+                            )
+                        ],
+                    }
+                    for idx in required_indices
+                ]
+            )
+        )
+        if caked_anchor_error:
+            raise RuntimeError(caked_anchor_error)
+
     manual_fit_space_by_background = gui_geometry_fit.geometry_manual_fit_space_by_background(
         required_indices,
         manual_pairs_by_background,
         pick_uses_caked_space=bool(pick_uses_caked_space),
         current_background_index=int(current_background_index),
+        active_var_names=var_names,
     )
     fit_space_error = gui_geometry_fit.manual_geometry_fit_space_preflight_error(
         manual_fit_space_by_background,
@@ -41361,10 +41429,38 @@ def _build_geometry_fit_async_job(
         joint_background_mode=joint_background_mode,
     )
     if manual_fit_uses_caked_space:
+        selected_manual_pair_rows = [
+            dict(entry)
+            for rows in manual_pairs_by_background.values()
+            for entry in (rows or ())
+            if isinstance(entry, Mapping)
+            and gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
+        ]
+        caked_anchor_error = (
+            gui_geometry_fit.manual_caked_geometry_fit_observed_anchor_preflight_error(
+                [
+                    {
+                        "label": background_labels.get(int(idx), f"background {int(idx) + 1}"),
+                        "measured_for_fit": [
+                            entry
+                            for entry in manual_pairs_by_background.get(int(idx), ())
+                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(
+                                entry
+                            )
+                        ],
+                    }
+                    for idx in required_indices
+                ]
+            )
+        )
+        if caked_anchor_error:
+            raise RuntimeError(caked_anchor_error)
         geometry_runtime_cfg = (
             gui_geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
                 geometry_runtime_cfg,
                 joint_background_mode=joint_background_mode,
+                active_var_names=var_names,
+                manual_pair_rows=selected_manual_pair_rows,
             )
         )
     else:
@@ -41519,6 +41615,80 @@ def _build_geometry_fit_async_job(
                 ),
             }
         )
+    for required_background_idx in required_indices:
+        background_idx = int(required_background_idx)
+        if live_rows_by_background.get(background_idx):
+            continue
+        background_payload = dict(background_images.get(background_idx) or {})
+        fallback_params = dict(fit_params_snapshot)
+        fallback_params["theta_initial"] = float(
+            theta_initial_by_background.get(
+                background_idx,
+                fit_params_snapshot.get("theta_initial", theta_initial_value),
+            )
+        )
+        fallback_rows, fallback_diag = (
+            _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
+                background_index=background_idx,
+                params_local=fallback_params,
+                display_background=background_payload.get("display"),
+            )
+        )
+        live_rows_handoff_diagnostics.update(dict(fallback_diag))
+        if not fallback_rows:
+            continue
+        live_rows_by_background[background_idx] = [dict(row) for row in fallback_rows]
+        metadata = dict(live_rows_cache_metadata_by_background.get(background_idx) or {})
+        metadata.update(
+            {
+                "background_index": int(background_idx),
+                "cache_source": str(
+                    fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
+                ),
+                "live_rows_cache_source": str(
+                    fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
+                ),
+                "live_rows_raw_count": int(len(fallback_rows)),
+                "live_rows_payload_count": int(len(fallback_rows)),
+                "live_rows_signature_match": True,
+                "live_rows_signature_reason": "matched_job_local_snapshot",
+                "live_rows_source_counts": _geometry_fit_live_row_source_counts(fallback_rows),
+                "geometry_fit_live_handoff_patch_marker": GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
+                "job_local_fallback_rows": int(len(fallback_rows)),
+                "job_local_fallback_source": str(
+                    fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
+                ),
+            }
+        )
+        live_rows_cache_metadata_by_background[background_idx] = metadata
+        live_rows_signature_by_background[background_idx] = requested_signatures.get(background_idx)
+        _append_runtime_update_trace(
+            "geometry_fit_job_live_rows_from_q_group_snapshot",
+            geometry_fit_live_handoff_patch_marker=GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
+            background_index=int(background_idx),
+            rows=int(len(fallback_rows)),
+            sources=_geometry_fit_live_row_source_counts(fallback_rows),
+            job_local_fallback_source=str(
+                fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
+            ),
+        )
+    live_rows_handoff_diagnostics.update(
+        {
+            "live_rows_by_background_keys": sorted(int(key) for key in live_rows_by_background),
+            "live_rows_by_background_current_count": int(
+                len(live_rows_by_background.get(int(current_background_index), ()))
+            ),
+            "live_rows_current_background_count": int(
+                len(live_rows_by_background.get(int(current_background_index), ()))
+            ),
+            "live_rows_signature_by_background_keys": sorted(
+                int(key) for key in live_rows_signature_by_background
+            ),
+        }
+    )
+    for background_idx, metadata in list(live_rows_cache_metadata_by_background.items()):
+        metadata["live_rows_handoff_diagnostics"] = dict(live_rows_handoff_diagnostics)
+        live_rows_cache_metadata_by_background[int(background_idx)] = metadata
     if manual_fit_uses_caked_space and int(current_background_index) in set(required_indices):
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
         if isinstance(caked_view_payload, Mapping):
@@ -44323,6 +44493,12 @@ def _run_async_geometry_fit_worker_job(
                         ),
                     },
                 )
+                if failure_status == "targeted_fresh_simulation_timeout":
+                    raise RuntimeError(
+                        "Geometry fit preflight timed out while rebuilding source cache "
+                        f"for background {int(background_idx) + 1}. Refresh the "
+                        "caked/source cache or reduce the fit simulation grid before rerunning."
+                    )
                 continue
             bundle_row_count = int(len(bundle.projected_rows or bundle.stored_rows or ()))
             source_cache_generation_id = int(_current_source_cache_generation(int(background_idx)))
@@ -44445,6 +44621,7 @@ def _run_async_geometry_fit_worker_job(
             ],
             pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
             current_background_index=int(job_data.get("current_background_index", 0)),
+            active_var_names=job_data.get("var_names", ()),
         )
 
     def _worker_caked_view_payload_ready(background_index: int) -> bool:
