@@ -107,6 +107,7 @@
   - Fixed the Analyze caked intensity toggle so switching density/raw modes repaints the main caked figure raster instead of reusing stale projected pixels.
   - Changed Analyze peak-fit results from compact summary lines to a monospaced table showing Gaussian FWHM, Lorentzian FWHM, Gaussian/Lorentzian mix percent, center, and RMSE for radial and azimuthal fits.
   - Added Analyze-only `Subtract linear background` peak fitting, enabled by default, using one local 2D plane per selected source box without mutating cached detector or caked images.
+  - Cropped standard Analyze radial/azimuthal 1D integration curves to the selected integration box and made the existing Analyze `Log display` toggle switch those 1D y-axes between linear and log intensity.
   - Fixed Analyze pseudo-Voigt peak fitting to use area-normalized Gaussian and Lorentzian equations, so the reported Lorentzian percentage reflects fitted Lorentzian area instead of a height-weighted mix.
   - Kept the Analyze main caked figure intensity scale fixed during integration-region changes while radial and azimuthal 1D plots still rescale to the selected region.
   - Added an Analyze selected-Qr rod `Rod profile intensity` control with density-first default and raw accumulated intensity opt-in, saved as `analysis_range.rod_profile_intensity_mode`.

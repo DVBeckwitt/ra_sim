@@ -21035,6 +21035,81 @@ def test_runtime_session_caked_profiles_from_sum_fields_supports_raw_sum_mode() 
     np.testing.assert_allclose(density_phi, np.array([10.0, 140.0 / 11.0]))
 
 
+def test_runtime_session_caked_profiles_crop_to_rectangular_integration_box() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    res2 = SimpleNamespace(
+        intensity=np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float),
+        radial=np.asarray([10.0, 20.0, 30.0], dtype=float),
+        azimuthal=np.asarray([90.0, 270.0], dtype=float),
+    )
+
+    i2t, i_phi, azimuth, radial = runtime_session._caked_profiles_from_sum_fields(
+        res2,
+        tth_min=15.0,
+        tth_max=25.0,
+        phi_min=-10.0,
+        phi_max=10.0,
+        intensity_mode="density",
+    )
+
+    np.testing.assert_allclose(radial, np.asarray([20.0]))
+    np.testing.assert_allclose(azimuth, np.asarray([0.0]))
+    np.testing.assert_allclose(i2t, np.asarray([5.0]))
+    np.testing.assert_allclose(i_phi, np.asarray([5.0]))
+
+
+def test_runtime_session_1d_log_toggle_updates_radial_and_azimuth_axes(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value) -> None:
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class _Axis:
+        def __init__(self) -> None:
+            self.yscale_calls: list[tuple[str, dict[str, object]]] = []
+            self.relim_count = 0
+            self.autoscale_count = 0
+
+        def set_yscale(self, scale, **kwargs) -> None:
+            self.yscale_calls.append((scale, dict(kwargs)))
+
+        def relim(self) -> None:
+            self.relim_count += 1
+
+        def autoscale_view(self) -> None:
+            self.autoscale_count += 1
+
+    radial_axis = _Axis()
+    azimuth_axis = _Axis()
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(log_display_var=_Var(True)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "ax_1d_radial", radial_axis, raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_azim", azimuth_axis, raising=False)
+    monkeypatch.setattr(runtime_session, "fig_1d", None, raising=False)
+    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
+
+    runtime_session._apply_1d_plot_log_scale(redraw=True)
+
+    assert radial_axis.yscale_calls[-1] == ("log", {"nonpositive": "clip"})
+    assert azimuth_axis.yscale_calls[-1] == ("log", {"nonpositive": "clip"})
+    assert radial_axis.relim_count == 1
+    assert azimuth_axis.autoscale_count == 1
+
+    runtime_session.analysis_view_controls_view_state.log_display_var.value = False
+    runtime_session._apply_1d_plot_log_scale(redraw=False)
+
+    assert radial_axis.yscale_calls[-1] == ("linear", {"nonpositive": "clip"})
+    assert azimuth_axis.yscale_calls[-1] == ("linear", {"nonpositive": "clip"})
+
+
 def test_runtime_session_prepare_caked_display_payload_supports_raw_sum_mode() -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     res2 = SimpleNamespace(

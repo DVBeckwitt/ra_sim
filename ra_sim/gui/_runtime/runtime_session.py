@@ -12454,6 +12454,7 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
 
 def _refresh_display_from_controls() -> None:
     _refresh_current_intensity_display_scaling(redraw=True)
+    _apply_1d_plot_log_scale(redraw=True)
 
 
 def _initialize_runtime_controls_block_14() -> None:
@@ -12657,7 +12658,8 @@ def _apply_background_transparency():
 
 
 def _log_display_enabled() -> bool:
-    log_display_var = getattr(analysis_view_controls_view_state, "log_display_var", None)
+    view_state = globals().get("analysis_view_controls_view_state")
+    log_display_var = getattr(view_state, "log_display_var", None)
     getter = getattr(log_display_var, "get", None)
     if not callable(getter):
         return False
@@ -15087,6 +15089,11 @@ def _caked_profiles_from_sum_fields(
         intensity_vs_2theta, intensity_vs_phi = _fallback_profiles()
 
     azimuth_axis_used = np.asarray(gui_azimuth, dtype=float)
+    azimuth_plot_mask = (
+        np.asarray(mask_az, dtype=bool)
+        if use_rectangular_roi
+        else np.ones(azimuth_axis_used.shape, dtype=bool)
+    )
     if phi_max < phi_min and azimuth_axis_used.size:
         azimuth_axis_used = np.where(
             azimuth_axis_used < phi_min,
@@ -15096,6 +15103,13 @@ def _caked_profiles_from_sum_fields(
         azimuth_order = np.argsort(azimuth_axis_used, kind="stable")
         azimuth_axis_used = azimuth_axis_used[azimuth_order]
         intensity_vs_phi = intensity_vs_phi[azimuth_order]
+        azimuth_plot_mask = azimuth_plot_mask[azimuth_order]
+
+    if use_rectangular_roi:
+        intensity_vs_2theta = np.asarray(intensity_vs_2theta, dtype=float)[mask_rad]
+        radial_axis_used = np.asarray(radial_axis_used, dtype=float)[mask_rad]
+        intensity_vs_phi = np.asarray(intensity_vs_phi, dtype=float)[azimuth_plot_mask]
+        azimuth_axis_used = np.asarray(azimuth_axis_used, dtype=float)[azimuth_plot_mask]
 
     return intensity_vs_2theta, intensity_vs_phi, azimuth_axis_used, radial_axis_used
 
@@ -16220,6 +16234,41 @@ def _set_1d_axes_for_standard_caked_profiles(y_label: str = "Intensity") -> None
     ax_1d_azim.set_ylabel(y_label)
 
 
+def _apply_1d_plot_log_scale(*, redraw: bool = False) -> None:
+    use_log = bool(_log_display_enabled())
+    axes = []
+    figure = globals().get("fig_1d")
+    if figure is not None:
+        try:
+            axes = list(getattr(figure, "axes", []) or [])
+        except Exception:
+            axes = []
+    if not axes:
+        axes = [globals().get("ax_1d_radial"), globals().get("ax_1d_azim")]
+    for axis_obj in axes:
+        if axis_obj is None:
+            continue
+        try:
+            axis_obj.set_yscale("log" if use_log else "linear", nonpositive="clip")
+        except TypeError:
+            try:
+                axis_obj.set_yscale("log" if use_log else "linear")
+            except Exception:
+                continue
+        except Exception:
+            continue
+        try:
+            axis_obj.relim()
+            axis_obj.autoscale_view()
+        except Exception:
+            pass
+    if redraw and canvas_1d is not None:
+        try:
+            canvas_1d.draw_idle()
+        except Exception:
+            pass
+
+
 def _set_1d_axes_for_selected_qr_rod_profile(y_label: str) -> None:
     _set_1d_layout_for_selected_qr_rod()
     ax_1d_radial.set_xlabel("Qz (A^-1)")
@@ -16449,6 +16498,7 @@ def _update_1d_plots_from_selected_qr_rods_caked(
             "x_axis_label": "Qz (A^-1)",
         }
     )
+    _apply_1d_plot_log_scale(redraw=False)
     _render_analysis_peak_overlays(redraw=False)
     if canvas_1d is not None:
         canvas_1d.draw_idle()
@@ -16526,12 +16576,7 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
         simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = None
         simulation_runtime_state.last_1d_integration_data["intensities_azimuth_bg"] = None
 
-    ax_1d_radial.set_yscale("linear")
-    ax_1d_azim.set_yscale("linear")
-    ax_1d_radial.relim()
-    ax_1d_radial.autoscale_view()
-    ax_1d_azim.relim()
-    ax_1d_azim.autoscale_view()
+    _apply_1d_plot_log_scale(redraw=False)
     _render_analysis_peak_overlays(redraw=False)
     if canvas_1d is not None:
         canvas_1d.draw_idle()

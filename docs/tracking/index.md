@@ -250,6 +250,7 @@ still failing. Full fitter validation is not claimed.
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
 | Analyze dual-source box peak fit | feature | - | none | p1 | 2026-04-20 | [analyze-dual-source-box-peak-fit.md](archive/analyze-dual-source-box-peak-fit.md) |
+| Analyze integration crop and log view | bug/feature | Codex | none | p2 | 2026-05-05 | [analyze-integration-crop-log.md](archive/analyze-integration-crop-log.md) |
 | Analyze overlay hardening | bug | - | none | p2 | 2026-04-20 | [analyze-overlay-hardening.md](archive/analyze-overlay-hardening.md) |
 | Analyze peak-fit table and ROI scale | bug/feature | - | none | p2 | 2026-04-30 | [analyze-peak-fit-table-roi-scale.md](archive/analyze-peak-fit-table-roi-scale.md) |
 | Background peak-fit diagnostics | bug/feature | - | none | p2 | 2026-04-30 | [background-peak-fit-diagnostics.md](archive/background-peak-fit-diagnostics.md) |
