@@ -20603,6 +20603,133 @@ def test_runtime_refine_pair_entry_with_source_entry_does_not_call_full_pick_cac
     assert cache_calls == []
 
 
+def test_runtime_click_source_entry_refinement_preserves_warm_manual_pick_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=np.arange(8, dtype=float),
+        last_caked_azimuth_values=np.arange(8, dtype=float),
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+    )
+    geometry_state = SimpleNamespace(
+        manual_pick_cache_signature=("warm",),
+        manual_pick_cache_data={"cache_ready": True},
+    )
+    cache_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: cache_calls.append(dict(kwargs)) or {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_match_config",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda _image, cfg: (dict(cfg), None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda **_kwargs: (3.25, 4.5),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda tth, phi: (float(tth), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+
+    updated = runtime_session._refine_geometry_manual_pair_entry_from_cache(
+        {"label": "1,0,0"},
+        source_entry={"hkl": (1, 0, 0), "caked_x": 3.0, "caked_y": 4.0},
+        reuse_only=True,
+        invalidate_pick_cache=False,
+    )
+
+    assert updated["refined_sim_caked_x"] == 3.25
+    assert updated["refined_sim_caked_y"] == 4.5
+    assert cache_calls == []
+    assert geometry_state.manual_pick_cache_signature == ("warm",)
+    assert geometry_state.manual_pick_cache_data["cache_ready"] is True
+
+
+def test_runtime_refine_pair_entry_default_invalidates_pick_cache_after_success(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=np.arange(8, dtype=float),
+        last_caked_azimuth_values=np.arange(8, dtype=float),
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+    )
+    geometry_state = SimpleNamespace(
+        manual_pick_cache_signature=("warm",),
+        manual_pick_cache_data={"cache_ready": True},
+    )
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_match_config",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda _image, cfg: (dict(cfg), None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda **_kwargs: (3.25, 4.5),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda tth, phi: (float(tth), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+
+    updated = runtime_session._refine_geometry_manual_pair_entry_from_cache(
+        {"label": "1,0,0"},
+        source_entry={"hkl": (1, 0, 0), "caked_x": 3.0, "caked_y": 4.0},
+    )
+
+    assert updated["refined_sim_caked_x"] == 3.25
+    assert geometry_state.manual_pick_cache_signature is None
+    assert geometry_state.manual_pick_cache_data == {}
+
+
 def test_runtime_refine_pair_entry_reuse_only_absent_source_miss_does_not_build(
     monkeypatch,
 ) -> None:

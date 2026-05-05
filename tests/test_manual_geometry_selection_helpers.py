@@ -12957,6 +12957,7 @@ def _make_runtime_qr_click_callbacks(
     set_sessions: list[dict[str, object]] | None = None,
     build_initial_pairs_display=None,
     session_initial_pairs_display=None,
+    refine_saved_pair_entry=None,
 ):
     group_key = ("q_group", "primary", 1, 0)
     status_messages = status_messages if status_messages is not None else []
@@ -13009,6 +13010,7 @@ def _make_runtime_qr_click_callbacks(
             6.0,
         ),
         refresh_pick_session=refresh_pick_session,
+        refine_saved_pair_entry=refine_saved_pair_entry,
     )
     return callbacks, group_key, saved_entry_sets, set_sessions, status_messages
 
@@ -13148,6 +13150,7 @@ def test_runtime_placement_callback_source_entry_refinement_does_not_call_pick_c
                 entry,
                 source_entry=source,
                 reuse_only=True,
+                invalidate_pick_cache=False,
             )
         ),
     )
@@ -13156,6 +13159,127 @@ def test_runtime_placement_callback_source_entry_refinement_does_not_call_pick_c
     assert saved_sets[-1]
     assert refine_sources and isinstance(refine_sources[-1], dict)
     assert cache_calls == []
+
+
+def test_place_then_next_toggle_uses_existing_warm_cache_without_rebuild(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    expensive_calls = {
+        "build_geometry_manual_pick_cache": 0,
+        "geometry_manual_refine_qr_sim_candidates_in_cache": 0,
+        "geometry_manual_rebuild_refined_qr_cache_lookups": 0,
+        "geometry_manual_simulated_peaks_from_callback": 0,
+    }
+    for name in tuple(expensive_calls):
+        monkeypatch.setattr(
+            mg,
+            name,
+            lambda *_args, _name=name, **_kwargs: (
+                expensive_calls.__setitem__(_name, expensive_calls[_name] + 1)
+                or (_ for _ in ()).throw(AssertionError(f"{_name} called"))
+            ),
+        )
+
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key, col=5.0, row=6.0)
+    candidate["caked_x"] = 3.0
+    candidate["caked_y"] = 4.0
+    pick_session_state: dict[str, object] = {
+        "session": _runtime_qr_click_session(group_key, candidate)
+    }
+    runtime_state = SimpleNamespace(
+        last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=np.arange(8, dtype=float),
+        last_caked_azimuth_values=np.arange(8, dtype=float),
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+    )
+    geometry_state = SimpleNamespace(
+        manual_pick_cache_signature=("warm",),
+        manual_pick_cache_data={"cache_ready": True},
+    )
+    runtime_cache_calls: list[dict[str, object]] = []
+    provider_calls: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: runtime_cache_calls.append(dict(kwargs)) or {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_match_config",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda _image, cfg: (dict(cfg), None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda **_kwargs: (3.25, 4.5),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda tth, phi: (float(tth), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+
+    def _get_cache(**kwargs):
+        provider_calls.append(dict(kwargs))
+        if not kwargs.get("reuse_only"):
+            raise AssertionError("full picker cache requested")
+        return {
+            "cache_ready": True,
+            "signature": ("warm",),
+            "cache_metadata": {"reuse_only": True},
+            "grouped_candidates": {group_key: [dict(candidate)]},
+            "match_config": {},
+        }
+
+    callbacks, _key, saved_sets, set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=_get_cache,
+        refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
+        status_messages=status_messages,
+        refine_saved_pair_entry=(
+            lambda entry, source=None: runtime_session._refine_geometry_manual_pair_entry_from_cache(
+                entry,
+                source_entry=source,
+                reuse_only=True,
+                invalidate_pick_cache=False,
+            )
+        ),
+    )
+
+    assert callbacks.place_selection_at(4.8, 5.9) is True
+    assert saved_sets[-1]
+    assert geometry_state.manual_pick_cache_signature == ("warm",)
+    assert geometry_state.manual_pick_cache_data["cache_ready"] is True
+    assert runtime_cache_calls == []
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is True
+    assert set_sessions[-1]["group_key"] == group_key
+    assert provider_calls and all(call.get("reuse_only") is True for call in provider_calls)
+    assert runtime_cache_calls == []
+    assert expensive_calls == {key: 0 for key in expensive_calls}
+    assert not any("cache is not ready" in message for message in status_messages)
 
 
 def test_runtime_place_click_redraw_build_initial_pairs_display_reuse_only() -> None:

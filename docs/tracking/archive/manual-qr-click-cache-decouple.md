@@ -38,13 +38,17 @@ reference placement and redraw no longer require simulated Qr inventory.
   branch, group, and HKL identity before coordinate fallback.
 - Added end-to-end guards proving warm QR selection/placement clicks do not
   call cache build, fresh simulation, QR refinement, or lookup rebuild.
+- Added placement-refinement invalidation control so source-entry mouse-click
+  placement preserves the already warm picker cache for the next QR/Qz group
+  click while non-click/bulk refinement keeps invalidating by default.
 
 ## Status
 
 - Bug status: fixed for the targeted 30 s manual Qr/Qz click-latency path.
 - Error status: fixed after follow-up hardening. Click-triggered session refresh,
   saved-pair redraw, active-session redraw, and saved-pair refinement now stay
-  reuse-only/no-build during mouse clicks.
+  reuse-only/no-build during mouse clicks, and source-entry click placement no
+  longer clears the warm picker cache afterward.
 - Feature status: implemented. Prewarm/update paths own cache construction;
   QR/Qz click paths consume warm cache only; background Qr references avoid
   simulated inventory for placement and redraw.
@@ -63,6 +67,9 @@ reference placement and redraw no longer require simulated Qr inventory.
 - Saved-pair refinement accepts an explicit `reuse_only` mode. Mouse-click
   placement passes `reuse_only=True`, and provided source entries bypass picker
   cache access entirely, including empty source-entry dicts.
+- Mouse-click placement passes `invalidate_pick_cache=False`, preserving warm
+  QR/Qz picker cache state across a successful placement so the next group click
+  can still reuse it.
 - Detector-mode prewarm still warms the detector cache when the optional hidden
   caked sidecar is unavailable, but prewarm skips active, queued, or pending
   simulation/integration updates.
@@ -75,11 +82,11 @@ Passed:
 - `python -m pytest tests/test_manual_geometry_live_peak_cache.py -q`
   (`61 passed`)
 - `python -m pytest -p no:ddtrace tests/test_manual_geometry_selection_helpers.py -k "(reuse_only or toggle or sidecar or placement or caked_picker) and not headless_replay" -q`
-  (`38 passed, 489 deselected`)
+  (`39 passed, 489 deselected`)
 - `python -m pytest -p no:ddtrace tests/test_gui_runtime_geometry_interaction.py tests/test_runtime_qr_selector_cache_policy.py -q`
   (`23 passed`)
 - `python -m pytest -p no:ddtrace tests/test_gui_runtime_import_safe.py -k "prewarm or reuse_only or source_entry or sidecar" -q`
-  (`12 passed, 391 deselected`)
+  (`13 passed, 394 deselected`)
 
 Not run:
 

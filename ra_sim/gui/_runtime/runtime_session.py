@@ -4786,6 +4786,7 @@ def _refine_geometry_manual_pair_entry_from_cache(
     *,
     source_entry: dict[str, object] | None = None,
     reuse_only: bool = False,
+    invalidate_pick_cache: bool = True,
 ) -> dict[str, object] | None:
     """Refine one saved manual-pair simulation point from the cached caked peak map."""
 
@@ -4824,8 +4825,9 @@ def _refine_geometry_manual_pair_entry_from_cache(
         native_image_shape = (int(image_size), int(image_size))
 
     placement_refine_cache: dict[str, object] = {}
-    resolved_source_entry = dict(source_entry) if isinstance(source_entry, dict) else None
-    if resolved_source_entry is not None:
+    resolved_source_entry = dict(source_entry) if source_entry is not None else None
+    has_source_entry = resolved_source_entry is not None
+    if has_source_entry:
         try:
             sim_match_cfg = dict(_current_geometry_manual_match_config())
         except Exception:
@@ -4855,7 +4857,7 @@ def _refine_geometry_manual_pair_entry_from_cache(
         "background_context": sim_background_context,
     }
 
-    if resolved_source_entry is None:
+    if not has_source_entry:
         simulated_lookup = dict(placement_refine_cache.get("simulated_lookup", {}))
         resolved_source_entry = gui_manual_geometry.geometry_manual_lookup_source_entry(
             simulated_lookup,
@@ -4967,8 +4969,9 @@ def _refine_geometry_manual_pair_entry_from_cache(
             updated_entry["refined_sim_x"] = float(refined_display[0])
             updated_entry["refined_sim_y"] = float(refined_display[1])
 
-    geometry_runtime_state.manual_pick_cache_signature = None
-    geometry_runtime_state.manual_pick_cache_data = {}
+    if bool(invalidate_pick_cache):
+        geometry_runtime_state.manual_pick_cache_signature = None
+        geometry_runtime_state.manual_pick_cache_data = {}
     return updated_entry
 
 
@@ -12092,6 +12095,7 @@ def _initialize_runtime_controls_block_10() -> None:
                     entry,
                     source_entry=candidate,
                     reuse_only=True,
+                    invalidate_pick_cache=False,
                 )
             ),
             show_preview=_show_geometry_manual_preview,
@@ -38420,20 +38424,6 @@ def _render_analysis_peak_tools_controls(
         on_fit_selected_peaks=_fit_selected_analysis_peaks,
         on_toggle_fit_axes_log_y=lambda: _apply_1d_plot_log_scale(redraw=True),
         pick_enabled=bool(analysis_peak_selection_state.pick_armed),
-        fit_gaussian=bool(
-            getattr(
-                analysis_peak_tools_view_state.fit_gaussian_var,
-                "get",
-                lambda: False,
-            )()
-        ),
-        fit_lorentzian=bool(
-            getattr(
-                analysis_peak_tools_view_state.fit_lorentzian_var,
-                "get",
-                lambda: False,
-            )()
-        ),
         fit_pseudo_voigt=bool(
             getattr(
                 analysis_peak_tools_view_state.fit_pseudo_voigt_var,
@@ -38897,24 +38887,14 @@ def _fit_selected_analysis_peaks() -> None:
             return
 
     analysis_peak_tools = _get_analysis_peak_tools_module()
-    model_specs = (
-        (
-            getattr(analysis_peak_tools_view_state.fit_gaussian_var, "get", lambda: False)(),
-            _ANALYSIS_PEAK_PROFILE_GAUSSIAN,
-        ),
-        (
-            getattr(analysis_peak_tools_view_state.fit_lorentzian_var, "get", lambda: False)(),
-            _ANALYSIS_PEAK_PROFILE_LORENTZIAN,
-        ),
-        (
-            getattr(analysis_peak_tools_view_state.fit_pseudo_voigt_var, "get", lambda: True)(),
-            _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT,
-        ),
+    models = (
+        [_ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT]
+        if bool(getattr(analysis_peak_tools_view_state.fit_pseudo_voigt_var, "get", lambda: True)())
+        else []
     )
-    models = [model for enabled, model in model_specs if bool(enabled)]
     if not models:
         try:
-            progress_label_positions.config(text="Choose at least one peak-profile model to fit.")
+            progress_label_positions.config(text="Enable Pseudo-Voigt before fitting peaks.")
         except Exception:
             pass
         return
