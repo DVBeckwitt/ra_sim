@@ -49,6 +49,7 @@ class RuntimeGeometryManualCacheWorkflow:
     current_match_config: Callable[..., Any]
     pick_cache_signature: Callable[..., Any]
     get_pick_cache: Callable[..., Any]
+    prewarm_pick_cache: Callable[..., Any]
     build_initial_pairs_display: Callable[..., Any]
 
 
@@ -205,6 +206,7 @@ def build_runtime_geometry_manual_cache_workflow(
         current_match_config=callbacks.current_match_config,
         pick_cache_signature=callbacks.pick_cache_signature,
         get_pick_cache=callbacks.get_pick_cache,
+        prewarm_pick_cache=callbacks.prewarm_pick_cache,
         build_initial_pairs_display=callbacks.build_initial_pairs_display,
     )
 

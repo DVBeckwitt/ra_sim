@@ -181,6 +181,35 @@ Detector picker diagnostics should distinguish these cases:
 - source rows present but missing detector display pixels
 - detector candidates present by source row family
 
+Manual Qr/Qz mouse clicks are no-build paths. Selection clicks call the
+manual-pick cache with `reuse_only=True` and may use only a warm cache whose
+picker signature, grouped candidates, refinement signature, and refined lookup
+signature all match the current simulation/projection state. A reuse-only miss
+returns a non-persisted `cache_ready=False` payload and must not replace or
+erase the previous warm cache. Placement clicks use the selected session's
+`remaining_candidates`; if the reuse-only cache is cold, local measured-peak
+refinement receives a `manual_no_build_cache` sentinel so the shared refiner
+cannot call the picker-cache builder indirectly.
+
+Background Qr reference placement and redraw are background-only paths. `Place
+Background Qr Set` saves a fit-disabled manual reference with measured
+background coordinates and no HKL/Qr group identity. Placement uses a non-empty
+no-build sentinel, not simulated picker inventory. Redraw renders
+background-only references directly from saved coordinates and preserves mixed
+saved-entry order with indexed placeholders, so simulation lookup runs only for
+simulation-backed entries.
+
+Manual-pick cache diagnostics now attach optional timing/count fields to
+`cache_metadata` instead of printing by default. The main fields are
+`build_pick_cache_wall_ms`, `get_pick_cache_total_wall_ms`,
+`get_pick_cache_build_wall_ms`, `qr_sim_refinement_wall_ms`,
+`qr_lookup_rebuild_wall_ms`, `source_rows_provider_calls`,
+`fresh_simulation_prefer_cache_false_attempted`,
+`qr_refinement_unique_candidate_count`,
+`qr_refinement_reused_candidate_count`, and
+`qr_refinement_total_row_count`. These fields are diagnostics only and are not
+part of the persisted manual-pair schema.
+
 Caked manual picking uses two different coordinate responsibilities:
 
 - simulated Qr/Qz and HKL seed positions start from simulation-native detector

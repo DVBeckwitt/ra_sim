@@ -7210,6 +7210,7 @@ def _geometry_manual_refine_preview_point(
     display_background: np.ndarray | None = None,
     cache_data: dict[str, object] | None = None,
     force_detector_space: bool = False,
+    allow_cache_build: bool = True,
 ) -> tuple[float, float]:
     """Refine one manual raw click/release position to the best background peak."""
     background_local = (
@@ -7366,6 +7367,7 @@ def _geometry_manual_refine_preview_point(
             prefer_cache=True,
             background_image=background_local,
         ),
+        allow_cache_build=bool(allow_cache_build),
         use_caked_space=use_caked_space,
         radial_axis=np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float),
         azimuth_axis=np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float),
@@ -8661,7 +8663,7 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
         project_peaks_to_caked_view=_project_rows_to_hidden_caked_view,
     )
 
-    return bool(
+    warmed_sidecar = bool(
         isinstance(cache_data, Mapping)
         and (
             cache_data.get("caked_qr_projection_grouped_candidates")
@@ -8669,6 +8671,37 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
             or cache_data.get("caked_qr_projection_entries")
         )
     )
+    return bool(warmed_sidecar or _prewarm_geometry_manual_pick_cache_if_ready())
+
+
+def _prewarm_geometry_manual_pick_cache_if_ready() -> bool:
+    """Warm manual picker cache only when runtime state is stable."""
+
+    prewarm = globals().get("_prewarm_geometry_manual_pick_cache")
+    if not callable(prewarm):
+        return False
+    if bool(
+        simulation_runtime_state.update_running
+        or simulation_runtime_state.worker_active_job is not None
+        or simulation_runtime_state.worker_queued_job is not None
+    ):
+        return False
+    try:
+        background_image = _current_geometry_manual_pick_background_image()
+    except Exception:
+        background_image = None
+    if background_image is None:
+        return False
+    try:
+        cache_data = prewarm(
+            param_set=dict(_current_geometry_fit_params() or {}),
+            background_index=int(background_runtime_state.current_background_index),
+            background_image=background_image,
+            build_caked_projection_sidecar=bool(_geometry_manual_pick_uses_caked_space()),
+        )
+    except Exception:
+        return False
+    return bool(isinstance(cache_data, Mapping) and cache_data)
 
 
 def _geometry_fit_caked_view_for_index(
@@ -11649,6 +11682,7 @@ def _initialize_runtime_controls_block_04() -> None:
         _current_geometry_manual_match_config, \
         _geometry_manual_pick_cache_signature, \
         _get_geometry_manual_pick_cache, \
+        _prewarm_geometry_manual_pick_cache, \
         _build_geometry_manual_initial_pairs_display
 
     geometry_manual_projection_workflow = (
@@ -11845,6 +11879,7 @@ def _initialize_runtime_controls_block_04() -> None:
     _current_geometry_manual_match_config = geometry_manual_cache_workflow.current_match_config
     _geometry_manual_pick_cache_signature = geometry_manual_cache_workflow.pick_cache_signature
     _get_geometry_manual_pick_cache = geometry_manual_cache_workflow.get_pick_cache
+    _prewarm_geometry_manual_pick_cache = geometry_manual_cache_workflow.prewarm_pick_cache
     _build_geometry_manual_initial_pairs_display = (
         geometry_manual_cache_workflow.build_initial_pairs_display
     )

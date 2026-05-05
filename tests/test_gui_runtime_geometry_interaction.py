@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
+
+from ra_sim.gui import manual_geometry as mg
 from ra_sim.gui import runtime_geometry_interaction
 
 
@@ -125,6 +128,7 @@ def test_build_runtime_geometry_manual_cache_workflow_exposes_callbacks() -> Non
         current_match_config="current-match-config",
         pick_cache_signature="pick-cache-signature",
         get_pick_cache="get-pick-cache",
+        prewarm_pick_cache="prewarm-pick-cache",
         build_initial_pairs_display="build-initial-pairs-display",
     )
     runtime_obj = SimpleNamespace(callbacks=callbacks)
@@ -147,6 +151,7 @@ def test_build_runtime_geometry_manual_cache_workflow_exposes_callbacks() -> Non
     assert workflow.current_match_config == "current-match-config"
     assert workflow.pick_cache_signature == "pick-cache-signature"
     assert workflow.get_pick_cache == "get-pick-cache"
+    assert workflow.prewarm_pick_cache == "prewarm-pick-cache"
     assert workflow.build_initial_pairs_display == "build-initial-pairs-display"
     assert calls == [
         (
@@ -159,6 +164,178 @@ def test_build_runtime_geometry_manual_cache_workflow_exposes_callbacks() -> Non
             },
         )
     ]
+
+
+def _group_manual_candidates(entries):
+    grouped = {}
+    for entry in entries or ():
+        if isinstance(entry, dict) and isinstance(entry.get("q_group_key"), tuple):
+            grouped.setdefault(entry["q_group_key"], []).append(dict(entry))
+    return grouped
+
+
+def _manual_lookup(entries):
+    lookup = {}
+    for entry in entries or ():
+        if not isinstance(entry, dict):
+            continue
+        key = mg.geometry_manual_candidate_source_key(entry)
+        if key is not None:
+            lookup[key] = dict(entry)
+    return lookup
+
+
+def test_runtime_geometry_manual_cache_workflow_exposes_prewarm_pick_cache() -> None:
+    callbacks = SimpleNamespace(
+        current_match_config="current-match-config",
+        pick_cache_signature="pick-cache-signature",
+        get_pick_cache="get-pick-cache",
+        prewarm_pick_cache="prewarm-pick-cache",
+        build_initial_pairs_display="build-initial-pairs-display",
+    )
+    runtime_obj = SimpleNamespace(callbacks=callbacks)
+    bootstrap_module = SimpleNamespace(
+        build_runtime_geometry_manual_cache_bootstrap=lambda **_kwargs: runtime_obj
+    )
+
+    workflow = runtime_geometry_interaction.build_runtime_geometry_manual_cache_workflow(
+        bootstrap_module=bootstrap_module,
+        manual_geometry_module="manual-geometry-module",
+    )
+
+    assert workflow.prewarm_pick_cache == "prewarm-pick-cache"
+
+
+def test_prewarm_pick_cache_builds_detector_cache_once() -> None:
+    replace_calls = 0
+    cache_state = {"signature": None, "data": {}}
+    entry = {
+        "display_col": 4.0,
+        "display_row": 5.0,
+        "sim_col": 4.0,
+        "sim_row": 5.0,
+        "sim_col_raw": 4.0,
+        "sim_row_raw": 5.0,
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "qr": 1.0,
+        "qz": 0.0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "branch_id": "branch-0",
+        "hkl": (1, 0, 0),
+    }
+
+    def _replace(signature, data):
+        nonlocal replace_calls
+        replace_calls += 1
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.zeros((16, 16), dtype=float),
+        use_caked_space=lambda: False,
+        replace_cache_state=_replace,
+        current_geometry_fit_params=lambda: {},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [entry],
+        build_grouped_candidates=_group_manual_candidates,
+        build_simulated_lookup=_manual_lookup,
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+    )
+
+    cache_data = callbacks.prewarm_pick_cache()
+
+    assert replace_calls == 1
+    assert cache_data["detector_picker_grouped_candidates"]
+
+
+def test_prewarm_pick_cache_builds_caked_sidecar_when_caked_pick_mode() -> None:
+    cache_state = {"signature": None, "data": {}}
+    entry = {
+        "display_col": 4.0,
+        "display_row": 5.0,
+        "sim_col": 4.0,
+        "sim_row": 5.0,
+        "sim_col_raw": 4.0,
+        "sim_row_raw": 5.0,
+        "native_col": 4.0,
+        "native_row": 5.0,
+        "caked_x": 4.0,
+        "caked_y": 5.0,
+        "raw_caked_x": 4.0,
+        "raw_caked_y": 5.0,
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "qr": 1.0,
+        "qz": 0.0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "branch_id": "branch-0",
+        "hkl": (1, 0, 0),
+        "weight": 1.0,
+    }
+
+    def _replace(signature, data):
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.zeros((16, 16), dtype=float),
+        use_caked_space=lambda: True,
+        replace_cache_state=_replace,
+        current_geometry_fit_params=lambda: {},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [entry],
+        build_grouped_candidates=_group_manual_candidates,
+        build_simulated_lookup=_manual_lookup,
+        project_peaks_to_current_view=lambda rows: [dict(row) for row in rows or ()],
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+    )
+
+    cache_data = callbacks.prewarm_pick_cache(
+        project_peaks_to_caked_view=lambda rows: [
+            {
+                **dict(row),
+                "display_col": 4.0,
+                "display_row": 5.0,
+                "caked_x": 4.0,
+                "caked_y": 5.0,
+            }
+            for row in rows or ()
+        ],
+    )
+
+    assert cache_data["cache_metadata"]["caked_qr_projection_sidecar_requested"] is True
+    assert cache_data["caked_qr_projection_grouped_candidates"]
+
+
+def test_prewarm_pick_cache_returns_empty_without_background_image() -> None:
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: None,
+        use_caked_space=lambda: False,
+        replace_cache_state=lambda _signature, _data: None,
+        current_geometry_fit_params=lambda: {},
+        pairs_for_index=lambda _idx: [],
+        build_grouped_candidates=_group_manual_candidates,
+        build_simulated_lookup=_manual_lookup,
+        entry_display_coords=lambda _entry: None,
+    )
+
+    assert callbacks.prewarm_pick_cache() == {}
 
 
 def test_build_runtime_geometry_manual_workflow_exposes_callbacks() -> None:

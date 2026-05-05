@@ -8966,7 +8966,7 @@ def test_manual_pick_cache_trace_reports_snapshot_status_when_final_cache_empty(
         fit_config={},
         last_simulation_signature=lambda: ("sim", 7),
         current_background_index=lambda: 0,
-        current_background_image=lambda: np.zeros((8, 8), dtype=float),
+        current_background_image=lambda: np.zeros((32, 32), dtype=float),
         use_caked_space=lambda: False,
         replace_cache_state=_replace_cache,
         current_geometry_fit_params=lambda: {},
@@ -9319,6 +9319,127 @@ def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None
             "sim_display": (13.5, 15.5),
         }
     ]
+
+
+def test_initial_pairs_display_skips_sim_lookup_for_background_qr_reference() -> None:
+    background_entry = mg.geometry_manual_background_qr_reference_pair_entry(
+        peak_col=5.0,
+        peak_row=6.0,
+        raw_col=4.8,
+        raw_row=5.9,
+        caked_col=10.5,
+        caked_row=20.6,
+    )
+
+    measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [background_entry],
+        get_cache_data=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no cache")),
+        source_rows_for_background=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("no source rows")
+        ),
+        simulated_peaks_for_params=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("no simulated peaks")
+        ),
+        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(
+            AssertionError("no lookup")
+        ),
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert len(measured) == 1
+    assert displayed[0]["background_qr_set_reference"] is True
+    assert displayed[0]["manual_background_reference"] is True
+    assert displayed[0]["bg_display"] == (5.0, 6.0)
+    assert displayed[0]["overlay_match_index"] == 0
+    assert "sim_display" not in displayed[0]
+    assert "hkl" not in displayed[0]
+
+
+def test_initial_pairs_display_mixed_background_qr_reference_and_sim_entry_uses_lookup_only_for_sim_entry() -> None:
+    sim_entry = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "x": 4.0,
+        "y": 5.0,
+    }
+    sim_source = {
+        **dict(sim_entry),
+        "sim_col": 7.0,
+        "sim_row": 8.0,
+        "sim_col_raw": 7.0,
+        "sim_row_raw": 8.0,
+    }
+    background_entry = mg.geometry_manual_background_qr_reference_pair_entry(
+        peak_col=11.0,
+        peak_row=12.0,
+        caked_col=21.0,
+        caked_row=22.0,
+    )
+    lookup_calls = 0
+
+    def _build_lookup(_rows):
+        nonlocal lookup_calls
+        lookup_calls += 1
+        return {}
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [background_entry, sim_entry],
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {_source_key(sim_entry): dict(sim_source)}
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("source rows should not be needed")
+        ),
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert lookup_calls == 0
+    assert displayed[0]["manual_background_reference"] is True
+    assert displayed[0]["overlay_match_index"] == 0
+    assert displayed[1]["hkl"] == (1, 0, 0)
+    assert displayed[1]["sim_display"] == (7.0, 8.0)
+    assert displayed[1]["overlay_match_index"] == 1
+
+
+def test_initial_pairs_display_saved_background_qr_reference_redraw_does_not_call_get_cache_data() -> None:
+    background_entry = mg.geometry_manual_background_qr_reference_pair_entry(
+        peak_col=2.0,
+        peak_row=3.0,
+        caked_col=12.0,
+        caked_row=13.0,
+    )
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [background_entry],
+        get_cache_data=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no cache")),
+        source_rows_for_background=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("no source rows")
+        ),
+        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(
+            AssertionError("no lookup")
+        ),
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert displayed[0]["bg_display"] == (12.0, 13.0)
+    assert displayed[0]["manual_background_reference"] is True
+    assert "sim_display" not in displayed[0]
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_saved_refined_caked_coords() -> None:
@@ -11099,6 +11220,7 @@ def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when
     status_messages: list[str] = []
     forwarded_prefer_cache: list[bool] = []
     group_key = ("q_group", "primary", 1, 0)
+    background_image = np.zeros((32, 32), dtype=float)
 
     def _replace_cache_state(signature, data) -> None:
         cache_state["signature"] = signature
@@ -11119,7 +11241,7 @@ def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when
         fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
         last_simulation_signature=lambda: ("sim", 3),
         current_background_index=lambda: 0,
-        current_background_image=lambda: np.zeros((8, 8), dtype=float),
+        current_background_image=lambda: background_image,
         use_caked_space=lambda: False,
         replace_cache_state=_replace_cache_state,
         current_geometry_fit_params=lambda: {"gamma": 1.25},
@@ -11155,14 +11277,17 @@ def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when
         },
         entry_display_coords=lambda _entry: None,
         peak_records=lambda: [],
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
     )
+    callbacks.get_pick_cache(prefer_cache=True)
 
     handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
         10.0,
         20.0,
         pick_session={},
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=background_image,
         get_cache_data=lambda **kwargs: callbacks.get_pick_cache(**kwargs),
         pairs_for_index=lambda _idx: [],
         set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
@@ -12733,6 +12858,389 @@ def test_geometry_manual_toggle_selection_at_starts_session() -> None:
     assert "Selected selected group" in status_messages[-1]
 
 
+def test_manual_qr_toggle_uses_reuse_only_cache() -> None:
+    forwarded_kwargs: list[dict[str, object]] = []
+    group_key = ("q_group", "primary", 1, 0)
+
+    handled, next_session, _suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **kwargs: (
+            forwarded_kwargs.append(dict(kwargs))
+            or {
+                "cache_ready": True,
+                "signature": ("cache",),
+                "grouped_candidates": {
+                    group_key: [
+                        {
+                            "label": "1,0,0",
+                            "hkl": (1, 0, 0),
+                            "sim_col": 10.0,
+                            "sim_row": 20.0,
+                            "source_table_index": 1,
+                            "source_row_index": 2,
+                        }
+                    ]
+                },
+            }
+        ),
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert next_session["group_key"] == group_key
+    assert forwarded_kwargs[-1]["reuse_only"] is True
+    assert forwarded_kwargs[-1]["build_caked_projection_sidecar"] is False
+
+
+def test_manual_qr_toggle_cold_cache_fails_fast_without_build() -> None:
+    status_messages: list[str] = []
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **kwargs: {
+            "cache_ready": False,
+            "manual_no_build_cache": True,
+            "cache_metadata": {
+                "cache_action": "miss",
+                "reuse_only": kwargs.get("reuse_only"),
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [],
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is False
+    assert next_session == {}
+    assert suppress_drag is False
+    assert "cache is not ready" in status_messages[-1]
+
+
+def test_manual_qr_place_cold_cache_uses_no_build_sentinel() -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    cache_payloads: list[dict[str, object]] = []
+    group_key = ("q_group", "primary", 1, 0)
+    session = {
+        "group_key": group_key,
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "hkl": (1, 0, 0),
+                "q_group_key": group_key,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        "pending_entries": [],
+        "target_count": 1,
+        "base_entries": [],
+        "q_label": "selected group",
+        "background_index": 0,
+    }
+
+    def _refine(_candidate, _col, _row, **kwargs):
+        cache_payloads.append(dict(kwargs.get("cache_data") or {}))
+        assert kwargs.get("allow_cache_build") is False
+        return 5.0, 6.0
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=session,
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "cache_ready": False,
+            "manual_no_build_cache": True,
+            "match_config": {"search_radius_px": 12.0},
+            "cache_metadata": {"cache_action": "miss", "reuse_only": True},
+        },
+        refine_preview_point=_refine,
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert cache_payloads[-1]["manual_no_build_cache"] is True
+    assert saved_entry_sets[-1][0]["x"] == 5.0
+    assert saved_entry_sets[-1][0]["y"] == 6.0
+
+
+def test_warm_manual_qr_selection_click_does_not_build_or_refine_cache(monkeypatch) -> None:
+    group_key = ("q_group", "primary", 1, 0)
+    cache_data = {
+        "cache_ready": True,
+        "signature": ("warm",),
+        "cache_metadata": {"reuse_only": True},
+        "grouped_candidates": {
+            group_key: [
+                {
+                    "label": "1,0,0",
+                    "hkl": (1, 0, 0),
+                    "q_group_key": group_key,
+                    "sim_col": 10.0,
+                    "sim_row": 20.0,
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ]
+        },
+    }
+
+    for name in (
+        "build_geometry_manual_pick_cache",
+        "geometry_manual_refine_qr_sim_candidates_in_cache",
+        "geometry_manual_rebuild_refined_qr_cache_lookups",
+    ):
+        monkeypatch.setattr(
+            mg,
+            name,
+            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(f"{_name} called")
+            ),
+        )
+
+    def _get_warm_cache(**kwargs):
+        assert kwargs["reuse_only"] is True
+        return dict(cache_data)
+
+    handled, next_session, _suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=_get_warm_cache,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert next_session["group_key"] == group_key
+
+
+def test_warm_manual_qr_placement_click_does_not_rebuild_cache(monkeypatch) -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    group_key = ("q_group", "primary", 1, 0)
+    session = {
+        "group_key": group_key,
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "hkl": (1, 0, 0),
+                "q_group_key": group_key,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        "pending_entries": [],
+        "target_count": 1,
+        "base_entries": [],
+        "q_label": "selected group",
+        "background_index": 0,
+    }
+
+    for name in (
+        "build_geometry_manual_pick_cache",
+        "geometry_manual_refine_qr_sim_candidates_in_cache",
+        "geometry_manual_rebuild_refined_qr_cache_lookups",
+    ):
+        monkeypatch.setattr(
+            mg,
+            name,
+            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(f"{_name} called")
+            ),
+        )
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=session,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **kwargs: {
+            "cache_ready": True,
+            "match_config": {},
+            "cache_metadata": {"reuse_only": kwargs.get("reuse_only")},
+        },
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert saved_entry_sets[-1][0]["x"] == 5.0
+
+
+def test_background_qr_reference_click_never_calls_picker_cache() -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    session = mg.start_geometry_manual_background_qr_reference_session(
+        current_background_index=0,
+        base_entries=[],
+        manual_run_id="manual-test",
+    )
+
+    handled, _next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=session,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("picker cache")),
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (col + 100.0, row + 200.0),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (col / 10.0, row / 10.0),
+    )
+
+    assert handled is True
+    assert saved_entry_sets[-1][0]["manual_background_reference"] is True
+
+
+def test_manual_click_paths_do_not_call_prefer_cache_false_simulation(monkeypatch) -> None:
+    def _raise_simulation(*_args, **_kwargs):
+        raise AssertionError("click path must not call simulated peak callback")
+
+    monkeypatch.setattr(mg, "geometry_manual_simulated_peaks_from_callback", _raise_simulation)
+    group_key = ("q_group", "primary", 1, 0)
+    cache_data = {
+        "cache_ready": True,
+        "signature": ("warm",),
+        "grouped_candidates": {
+            group_key: [
+                {
+                    "label": "1,0,0",
+                    "hkl": (1, 0, 0),
+                    "q_group_key": group_key,
+                    "sim_col": 10.0,
+                    "sim_row": 20.0,
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ]
+        },
+    }
+
+    handled, next_session, _suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: dict(cache_data),
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+    assert handled is True
+
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    handled_place, _next_place = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=next_session,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {"cache_ready": True, "match_config": {}},
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled_place is True
+    assert saved_entry_sets[-1][0]["x"] == 5.0
+
+
 def test_geometry_manual_toggle_selection_at_starts_two_branch_session_for_qr_qz_group() -> None:
     set_sessions: list[dict[str, object]] = []
     status_messages: list[str] = []
@@ -13743,6 +14251,170 @@ def test_geometry_manual_place_selection_at_saves_background_qr_reference_withou
     assert "hkl" not in serialized
     assert serialized["background_qr_set_reference"] is True
     assert serialized["geometry_fit_disabled"] is True
+
+
+def test_background_qr_reference_place_does_not_build_manual_pick_cache() -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    background_image = np.zeros((16, 16), dtype=float)
+    session = mg.start_geometry_manual_background_qr_reference_session(
+        current_background_index=0,
+        base_entries=[],
+        manual_run_id="manual-test",
+    )
+
+    def _raise_cache_build(**_kwargs):
+        raise AssertionError("background reference must not build picker cache")
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=session,
+        current_background_index=0,
+        display_background=background_image,
+        get_cache_data=_raise_cache_build,
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) / 10.0,
+            float(row) / 10.0,
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    saved = saved_entry_sets[-1][0]
+    assert saved["background_qr_set_reference"] is True
+    assert saved["manual_background_reference"] is True
+    assert saved["geometry_fit_disabled"] is True
+    assert "hkl" not in saved
+    assert np.isfinite(float(saved["background_two_theta_deg"]))
+    assert np.isfinite(float(saved["background_phi_deg"]))
+
+
+def test_background_qr_reference_detector_place_still_refines_peak() -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    cache_payloads: list[dict[str, object]] = []
+    background_image = np.zeros((16, 16), dtype=float)
+    session = mg.start_geometry_manual_background_qr_reference_session(
+        current_background_index=0,
+        base_entries=[],
+        manual_run_id="manual-test",
+    )
+
+    def _refine(_candidate, _col, _row, **kwargs):
+        cache_payloads.append(dict(kwargs.get("cache_data") or {}))
+        assert kwargs.get("allow_cache_build") is False
+        return 5.25, 6.5
+
+    handled, _next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=session,
+        current_background_index=0,
+        display_background=background_image,
+        get_cache_data=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no cache")),
+        refine_preview_point=_refine,
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) / 10.0,
+            float(row) / 10.0,
+        ),
+    )
+
+    assert handled is True
+    assert cache_payloads[-1]["manual_background_reference"] is True
+    saved = saved_entry_sets[-1][0]
+    assert saved["x"] == 5.25
+    assert saved["y"] == 6.5
+    assert saved["background_two_theta_deg"] == 10.525
+    assert saved["background_phi_deg"] == 20.65
+
+
+def test_background_qr_reference_caked_place_still_back_projects_to_detector() -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    session = mg.start_geometry_manual_background_qr_reference_session(
+        current_background_index=0,
+        base_entries=[],
+        manual_run_id="manual-test",
+    )
+
+    handled, _next_session = mg.geometry_manual_place_selection_at(
+        3.0,
+        4.0,
+        pick_session=session,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no cache")),
+        refine_preview_point=lambda *_args, **_kwargs: (3.0, 4.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda tth, phi: (
+            float(tth) + 10.0,
+            float(phi) + 20.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) / 10.0,
+            float(row) / 10.0,
+        ),
+        radial_axis=np.arange(8, dtype=float),
+        azimuth_axis=np.arange(8, dtype=float),
+    )
+
+    assert handled is True
+    saved = saved_entry_sets[-1][0]
+    assert saved["manual_background_input_origin"] == "caked"
+    assert saved["background_qr_set_reference"] is True
+    assert saved["manual_background_reference"] is True
+    assert saved["geometry_fit_disabled"] is True
+    assert "hkl" not in saved
+    assert np.isfinite(float(saved["background_two_theta_deg"]))
+    assert np.isfinite(float(saved["background_phi_deg"]))
+    assert np.isfinite(float(saved["detector_x"]))
+    assert np.isfinite(float(saved["detector_y"]))
 
 
 def test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callback() -> None:
