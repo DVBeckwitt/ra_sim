@@ -79,6 +79,7 @@
   - Fixed cold-start caked manual geometry-fit preflight so exact caked projection metadata is cached separately from display intensity images, allowing zero-support density NaNs without discarding the geometric projector.
   - Fixed generated and noncurrent caked manual-fit projection payload handling so empty payloads can use generated fallback, invalid axes-only payloads fail closed, and caked row rebuilds never receive a missing exact projector.
   - Fixed runtime exact-caked projection digests to hash DetectorCakeLUT matrix/count content and recompute stored `projection_content_token_v3` values instead of trusting stale incoming tokens.
+  - Hardened exact-caked projection-token trust so token-only payloads are absent, stored projection bundles are private read-only copies, and manual caked warm-cache reuse accepts only runtime-sourced verified tokens.
   - Fixed Bi2Se3/Bi2Te3 saved manual caked geometry fitting so provider-backed fixed pairs rebind without HKL fallback, run direct fixed-pair least squares by default, match all fixed pairs, and reduce the saved-state residuals in the active quality baseline.
 
 - **GUI and UX updates**

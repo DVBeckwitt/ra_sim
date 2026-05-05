@@ -135,13 +135,15 @@ def geometry_fit_caked_projection_payload(
     if token_schema == "geometry_fit_projection_content_v3" and token_value is not None:
         projection["projection_token_schema"] = token_schema
         projection["projection_content_token_v3"] = token_value
+        token_source = payload.get("projection_content_token_source")
+        if token_source is not None:
+            projection["projection_content_token_source"] = token_source
     meaningful_keys = (
         "radial_axis",
         "azimuth_axis",
         "raw_azimuth_axis",
         "raw_to_gui_row_permutation",
         "transform_bundle",
-        "projection_content_token_v3",
     )
     if all(projection.get(key) is None for key in meaningful_keys):
         return None
@@ -350,6 +352,10 @@ def normalize_geometry_fit_caked_view_payload(
         normalized_payload["projection_content_token_v3"] = payload.get(
             "projection_content_token_v3"
         )
+        if payload.get("projection_content_token_source") is not None:
+            normalized_payload["projection_content_token_source"] = payload.get(
+                "projection_content_token_source"
+            )
     if background is not None:
         normalized_payload["background"] = background
     return normalized_payload

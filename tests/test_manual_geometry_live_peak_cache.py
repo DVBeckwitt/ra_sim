@@ -88,6 +88,7 @@ def _caked_projection_payload(
     *,
     signature: object,
     projection_token: object | None = None,
+    projection_token_source: object | None = "runtime_projection_storage_copy_v3",
 ) -> dict[str, object]:
     if projection_token is None:
         projection_token = mg._geometry_manual_projection_blake2b_hex(
@@ -99,7 +100,7 @@ def _caked_projection_payload(
             "test_projection_content_v3_override",
             repr(projection_token),
         )
-    return {
+    payload: dict[str, object] = {
         "payload_kind": "projection",
         "signature": signature,
         "projection_token_schema": "geometry_fit_projection_content_v3",
@@ -111,6 +112,9 @@ def _caked_projection_payload(
         "raw_to_gui_row_permutation": np.arange(len(bundle.gui_azimuth_deg), dtype=np.int32),
         "transform_bundle": bundle,
     }
+    if projection_token_source is not None:
+        payload["projection_content_token_source"] = projection_token_source
+    return payload
 
 
 def _copy_caked_projection_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -1273,6 +1277,49 @@ def test_caked_projection_signature_tracks_bundle_content_not_identity() -> None
 
     assert first_signature == same_content_signature
     assert first_signature != changed_content_signature
+
+
+def test_caked_projection_signature_rejects_sourceless_stale_token() -> None:
+    first_bundle = _caked_projection_bundle()
+    changed_bundle = mg.CakeTransformBundle(
+        detector_shape=first_bundle.detector_shape,
+        radial_deg=first_bundle.radial_deg.copy(),
+        raw_azimuth_deg=first_bundle.raw_azimuth_deg.copy(),
+        gui_azimuth_deg=first_bundle.gui_azimuth_deg.copy(),
+        lut=_stable_manual_geometry_test_lut(2.0),
+    )
+    payload_state = {
+        "payload": _caked_projection_payload(
+            first_bundle,
+            signature=("projection", "stale"),
+            projection_token="same-stale-token",
+            projection_token_source=None,
+        )
+    }
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: payload_state["payload"]["radial_axis"],
+        last_caked_azimuth_values=lambda: payload_state["payload"]["azimuth_axis"],
+        current_background_display=lambda: np.zeros((10, 10), dtype=float),
+        current_background_native=lambda: np.ones((10, 10), dtype=float),
+        current_background_index=lambda: 0,
+        caked_projection_payload=lambda: payload_state["payload"],
+        caked_transform_bundle=lambda: payload_state["payload"]["transform_bundle"],
+        image_size=lambda: 10,
+    )
+
+    first_signature = callbacks.caked_projection_signature()
+    payload_state["payload"] = _caked_projection_payload(
+        changed_bundle,
+        signature=("projection", "stale"),
+        projection_token="same-stale-token",
+        projection_token_source=None,
+    )
+    changed_signature = callbacks.caked_projection_signature()
+
+    assert first_signature is None
+    assert changed_signature is None
 
 
 def test_projection_payload_background_index_is_not_cross_reused() -> None:

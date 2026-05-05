@@ -61,6 +61,8 @@ DEFAULT_GUI_ENTRYPOINT = "python -m ra_sim gui"
 MANUAL_GEOMETRY_SOURCE_PATH_MARKER = "manual_preview_visual_distance_patch_v1"
 MANUAL_GEOMETRY_TRACE_VERSION = MANUAL_GEOMETRY_SOURCE_PATH_MARKER
 MANUAL_GEOMETRY_UNATTRIBUTED_RUN_ID = "legacy_unattributed"
+_GEOMETRY_MANUAL_TRUSTED_PROJECTION_TOKEN_SCHEMA = "geometry_fit_projection_content_v3"
+_GEOMETRY_MANUAL_TRUSTED_PROJECTION_TOKEN_SOURCE = "runtime_projection_storage_copy_v3"
 _GEOMETRY_MANUAL_LIVE_CODE_PATH_STAMP_PRINTED = False
 _GEOMETRY_MANUAL_RUN_COUNTER = 0
 _GEOMETRY_MANUAL_ACTIVE_RUN_ID = "<no-active-manual-geometry-run>"
@@ -14977,9 +14979,12 @@ def make_runtime_geometry_manual_projection_callbacks(
             return None
         payload = _projection_payload_mapping()
         verified_projection_token = None
-        if isinstance(payload, Mapping) and (
-            str(payload.get("projection_token_schema") or "").strip()
-            == "geometry_fit_projection_content_v3"
+        if (
+            isinstance(payload, Mapping)
+            and str(payload.get("projection_token_schema") or "").strip()
+            == _GEOMETRY_MANUAL_TRUSTED_PROJECTION_TOKEN_SCHEMA
+            and str(payload.get("projection_content_token_source") or "").strip()
+            == _GEOMETRY_MANUAL_TRUSTED_PROJECTION_TOKEN_SOURCE
         ):
             verified_projection_token = payload.get("projection_content_token_v3")
         bundle = (

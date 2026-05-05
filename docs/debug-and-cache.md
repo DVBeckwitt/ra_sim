@@ -219,9 +219,11 @@ storage/hydration, plus full-content value tokens for axes/permutations
 probes, legacy `signature` fields, full image hashes, or click-path LUT hashes.
 DetectorCakeLUT-style projection tokens include `image_shape`, `n_rad`, `n_az`,
 the detector-to-cake matrix content, and `count_flat` content. Projection
-payloads and their referenced `CakeTransformBundle` objects are treated as
-logically immutable after storage; this path does not freeze shared arrays in
-place. Do not mutate simulation or caked image arrays in place without also
+payload storage copies axes, permutations, and `CakeTransformBundle` LUT content
+into private read-only objects before attaching a trusted
+`projection_content_token_source`. Shared incoming bundles are not frozen.
+Source-less or legacy projection tokens are not correctness keys for warm-cache
+reuse. Do not mutate simulation or caked image arrays in place without also
 bumping the corresponding simulation or projection signature.
 
 Status as of 2026-05-05: live caked trace output is opt-in, unchanged trace rows
@@ -229,7 +231,9 @@ are suppressed unless explicitly requested, warm caked pick-cache calls skip
 row-level refinement when simulation/projection signatures are unchanged,
 zero-support display sanitization no longer invalidates caked pick caches,
 equivalent copied axes and projection payloads keep the same signature/digest,
-explicit projection signatures survive normalize/hydrate/digest handoff, failed
+token-only projection payloads are absent and can still generate fallback
+payloads, explicit trusted projection signatures survive
+normalize/hydrate/digest handoff, failed
 lookup rebuilds retry, and no-signature direct refine/rebuild calls clear stale
 skip metadata. The exact-caked cold-start path accepts projection-only payloads
 without requiring a display image. The New4 ladder finalizer now repairs stale

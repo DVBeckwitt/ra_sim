@@ -16733,6 +16733,18 @@ def test_geometry_fit_caked_projection_payload_empty_mapping_is_absent() -> None
         )
         is None
     )
+    assert (
+        runtime_session.gui_geometry_fit.geometry_fit_caked_projection_payload(
+            {
+                "projection_token_schema": "geometry_fit_projection_content_v3",
+                "projection_content_token_v3": "token-only",
+                "projection_content_token_source": (
+                    runtime_session._GEOMETRY_FIT_PROJECTION_TOKEN_SOURCE
+                ),
+            }
+        )
+        is None
+    )
 
 
 def test_geometry_fit_caked_projection_payload_strips_legacy_signature() -> None:
@@ -17001,19 +17013,29 @@ def test_geometry_fit_projection_payload_digest_rejects_opaque_transform_content
 
 def test_geometry_fit_projection_payload_storage_copy_is_projection_only() -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    payload = _runtime_projection_digest_payload(runtime_session)
+    payload = _runtime_projection_digest_payload(
+        runtime_session,
+        permutation=np.arange(4, dtype=np.int32),
+        lut=_StableDetectorCakeLUT(
+            matrix=np.asarray([[1.0, 2.0]], dtype=np.float64),
+            count_flat=np.asarray([1.0, 2.0], dtype=np.float64),
+        ),
+    )
     payload["background"] = np.ones((4, 5), dtype=np.float64)
     payload["image"] = np.full((4, 5), 2.0, dtype=np.float64)
+    payload["display_image"] = np.full((4, 5), 3.0, dtype=np.float64)
     payload["sum_signal"] = np.ones((4, 5), dtype=np.float64)
     payload["sum_normalization"] = np.ones((4, 5), dtype=np.float64)
     payload["count"] = np.ones((4, 5), dtype=np.int64)
+    payload["density"] = np.ones((4, 5), dtype=np.float64)
+    payload["intensity"] = np.ones((4, 5), dtype=np.float64)
     payload["projection_token_schema"] = "geometry_fit_projection_content_v3"
     payload["projection_content_token_v3"] = "incoming-stale-token"
 
     stored = runtime_session._geometry_fit_projection_payload_storage_copy(payload)
 
     assert stored is not None
-    assert stored["transform_bundle"] is payload["transform_bundle"]
+    assert stored["transform_bundle"] is not payload["transform_bundle"]
     assert "signature" not in stored
     assert stored["projection_token_schema"] == "geometry_fit_projection_content_v3"
     assert stored["projection_content_token_v3"]
@@ -17024,11 +17046,99 @@ def test_geometry_fit_projection_payload_storage_copy_is_projection_only() -> No
     )
     assert stored["radial_axis"] is not payload["radial_axis"]
     assert np.array_equal(stored["radial_axis"], payload["radial_axis"])
+    assert not np.asarray(stored["radial_axis"]).flags.writeable
+    assert not np.asarray(stored["raw_to_gui_row_permutation"]).flags.writeable
+    stored_bundle = stored["transform_bundle"]
+    assert not np.asarray(stored_bundle.radial_deg).flags.writeable
+    assert not np.asarray(stored_bundle.raw_azimuth_deg).flags.writeable
+    assert not np.asarray(stored_bundle.gui_azimuth_deg).flags.writeable
+    assert not np.asarray(stored_bundle.lut.matrix).flags.writeable
+    assert not np.asarray(stored_bundle.lut.count_flat).flags.writeable
     assert "background" not in stored
     assert "image" not in stored
+    assert "display_image" not in stored
     assert "sum_signal" not in stored
     assert "sum_normalization" not in stored
     assert "count" not in stored
+    assert "density" not in stored
+    assert "intensity" not in stored
+
+
+def test_geometry_fit_projection_payload_storage_copy_uses_private_frozen_bundle() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    matrix = np.zeros((20, 20), dtype=np.float64)
+    matrix[0, 0] = 1.0
+    count_flat = np.ones(20, dtype=np.float64)
+    payload = _runtime_projection_digest_payload(
+        runtime_session,
+        permutation=np.arange(4, dtype=np.int32),
+        lut=_StableDetectorCakeLUT(matrix=matrix, count_flat=count_flat),
+    )
+
+    stored = runtime_session._geometry_fit_projection_payload_storage_copy(payload)
+
+    assert stored is not None
+    stored_bundle = stored["transform_bundle"]
+    source_bundle = payload["transform_bundle"]
+    assert stored_bundle is not source_bundle
+    stored_digest = runtime_session._geometry_fit_projection_payload_digest(stored)
+    stored_recomputed_digest = runtime_session._geometry_fit_projection_payload_digest(
+        stored,
+        trust_stored_token=False,
+    )
+    source_bundle.lut.matrix[0, 0] = 9.0
+    source_bundle.lut.count_flat[0] = 9.0
+    source_bundle.radial_deg[0] = 9.0
+
+    assert runtime_session._geometry_fit_projection_payload_digest(stored) == stored_digest
+    assert (
+        runtime_session._geometry_fit_projection_payload_digest(
+            stored,
+            trust_stored_token=False,
+        )
+        == stored_recomputed_digest
+    )
+    with pytest.raises(ValueError):
+        stored_bundle.radial_deg[0] = 5.0
+    with pytest.raises(ValueError):
+        stored_bundle.lut.matrix[0, 0] = 5.0
+    with pytest.raises(ValueError):
+        stored_bundle.lut.count_flat[0] = 5.0
+
+
+def test_geometry_fit_projection_payload_private_frozen_bundle_projects_lazily() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    matrix = np.zeros((20, 20), dtype=np.float64)
+    matrix[0, 0] = 1.0
+    payload = _runtime_projection_digest_payload(
+        runtime_session,
+        permutation=np.arange(4, dtype=np.int32),
+        lut=_StableDetectorCakeLUT(
+            matrix=matrix,
+            count_flat=np.ones(20, dtype=np.float64),
+        ),
+    )
+
+    stored = runtime_session._geometry_fit_projection_payload_storage_copy(payload)
+
+    assert stored is not None
+    stored_bundle = stored["transform_bundle"]
+    assert stored_bundle.lut_t is None
+    radial_deg, gui_phi_deg = runtime_session.detector_pixel_to_caked_bin(
+        stored_bundle,
+        0.0,
+        0.0,
+    )
+
+    assert radial_deg is not None
+    assert gui_phi_deg is not None
+    assert np.isfinite(radial_deg)
+    assert np.isfinite(gui_phi_deg)
+    assert stored_bundle.lut_t is not None
+    if hasattr(stored_bundle.lut_t, "data"):
+        assert not np.asarray(stored_bundle.lut_t.data).flags.writeable
+    else:
+        assert not np.asarray(stored_bundle.lut_t).flags.writeable
 
 
 def test_geometry_fit_caked_projection_for_index_uses_projection_only_payload(
@@ -17277,7 +17387,13 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
         "display": np.ones((4, 4), dtype=np.float64),
     }
     job["projection_view_mode"] = "caked"
-    job["projection_payload_by_background"] = {}
+    job["projection_payload_by_background"] = {
+        1: {
+            "projection_token_schema": "geometry_fit_projection_content_v3",
+            "projection_content_token_v3": "token-only",
+            "projection_content_token_source": runtime_session._GEOMETRY_FIT_PROJECTION_TOKEN_SOURCE,
+        }
+    }
     job["osc_files"] = ["bg0.osc", "bg1.osc"]
 
     monkeypatch.setattr(
@@ -17391,6 +17507,7 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
         job["projection_payload_by_background"][1]["transform_bundle"],
         runtime_session.CakeTransformBundle,
     )
+    assert job["projection_payload_by_background"][1]["projection_content_token_v3"] != "token-only"
     assert "projection_payload_ready" in kinds
     assert "source_cache_targeted_fresh_simulation_start" in kinds
     assert "source_cache_project_rows_start" in kinds

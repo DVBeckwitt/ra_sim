@@ -30300,6 +30300,175 @@ def _geometry_fit_projection_sparse_content_token(
     }
 
 
+def _geometry_fit_projection_freeze_array(array: np.ndarray) -> np.ndarray:
+    array.setflags(write=False)
+    return array
+
+
+def _geometry_fit_projection_dense_storage_copy(
+    value: object,
+    *,
+    allow_empty: bool = True,
+) -> np.ndarray | None:
+    try:
+        raw = np.asarray(value)
+    except Exception:
+        return None
+    if raw.dtype.kind == "O":
+        return None
+    if raw.dtype.kind in {"f", "c"}:
+        try:
+            copied = np.asarray(value, dtype=np.dtype("<f8"))
+        except Exception:
+            return None
+        if not np.all(np.isfinite(copied)):
+            return None
+    elif raw.dtype.kind in {"i", "u"}:
+        try:
+            copied = np.asarray(value, dtype=np.dtype("<i8"))
+        except Exception:
+            return None
+    elif raw.dtype.kind == "b":
+        copied = np.asarray(value, dtype=np.dtype("u1"))
+    else:
+        return None
+    if copied.size <= 0 and not bool(allow_empty):
+        return None
+    return _geometry_fit_projection_freeze_array(np.ascontiguousarray(copied).copy())
+
+
+def _geometry_fit_projection_sparse_storage_copy(value: object) -> object | None:
+    if not hasattr(value, "tocsr"):
+        return None
+    try:
+        csr = value.tocsr(copy=True)  # type: ignore[attr-defined]
+    except TypeError:
+        try:
+            csr = value.tocsr()  # type: ignore[attr-defined]
+        except Exception:
+            return None
+    except Exception:
+        return None
+    try:
+        csr.sort_indices()
+    except Exception:
+        pass
+    try:
+        shape = tuple(int(v) for v in tuple(csr.shape)[:2])
+        indptr = np.ascontiguousarray(np.asarray(csr.indptr, dtype=np.dtype("<i8")).reshape(-1))
+        indices = np.ascontiguousarray(np.asarray(csr.indices, dtype=np.dtype("<i8")).reshape(-1))
+        raw_data = np.asarray(csr.data)
+    except Exception:
+        return None
+    if len(shape) < 2 or shape[0] < 0 or shape[1] < 0 or raw_data.dtype.kind == "O":
+        return None
+    if raw_data.dtype.kind in {"f", "c"}:
+        data = np.asarray(csr.data, dtype=np.dtype("<f8")).reshape(-1)
+        if not np.all(np.isfinite(data)):
+            return None
+    elif raw_data.dtype.kind in {"i", "u", "b"}:
+        data = np.asarray(csr.data, dtype=np.dtype("<i8")).reshape(-1)
+    else:
+        return None
+    data = np.ascontiguousarray(data)
+    try:
+        csr.indptr = indptr.copy()
+        csr.indices = indices.copy()
+        csr.data = data.copy()
+        csr.sort_indices()
+        csr.indptr.setflags(write=False)
+        csr.indices.setflags(write=False)
+        csr.data.setflags(write=False)
+    except Exception:
+        return None
+    return csr
+
+
+def _geometry_fit_projection_transform_storage_copy(value: object) -> object | None:
+    if value is None:
+        return None
+    if all(
+        hasattr(value, attr) for attr in ("image_shape", "n_rad", "n_az", "matrix", "count_flat")
+    ):
+        try:
+            image_shape = tuple(int(v) for v in tuple(value.image_shape)[:2])
+            n_rad = int(value.n_rad)
+            n_az = int(value.n_az)
+        except Exception:
+            return None
+        matrix = _geometry_fit_projection_transform_storage_copy(value.matrix)
+        count_flat = _geometry_fit_projection_dense_storage_copy(
+            value.count_flat,
+            allow_empty=True,
+        )
+        if matrix is None or count_flat is None:
+            return None
+        try:
+            return type(value)(
+                image_shape=image_shape,
+                n_rad=n_rad,
+                n_az=n_az,
+                matrix=matrix,
+                count_flat=count_flat,
+            )
+        except Exception:
+            return SimpleNamespace(
+                image_shape=image_shape,
+                n_rad=n_rad,
+                n_az=n_az,
+                matrix=matrix,
+                count_flat=count_flat,
+            )
+    sparse = _geometry_fit_projection_sparse_storage_copy(value)
+    if sparse is not None:
+        return sparse
+    return _geometry_fit_projection_dense_storage_copy(value, allow_empty=True)
+
+
+def _geometry_fit_projection_bundle_storage_copy(
+    bundle: object,
+) -> CakeTransformBundle | None:
+    if not isinstance(bundle, CakeTransformBundle):
+        return None
+    detector_shape = _geometry_fit_projection_shape_token(getattr(bundle, "detector_shape", None))
+    radial = _geometry_fit_projection_dense_storage_copy(
+        getattr(bundle, "radial_deg", None),
+        allow_empty=False,
+    )
+    raw_azimuth = _geometry_fit_projection_dense_storage_copy(
+        getattr(bundle, "raw_azimuth_deg", None),
+        allow_empty=False,
+    )
+    gui_azimuth = _geometry_fit_projection_dense_storage_copy(
+        getattr(bundle, "gui_azimuth_deg", None),
+        allow_empty=False,
+    )
+    lut = _geometry_fit_projection_transform_storage_copy(getattr(bundle, "lut", None))
+    lut_t_value = getattr(bundle, "lut_t", None)
+    lut_t = (
+        None
+        if lut_t_value is None
+        else _geometry_fit_projection_transform_storage_copy(lut_t_value)
+    )
+    if (
+        detector_shape is None
+        or radial is None
+        or raw_azimuth is None
+        or gui_azimuth is None
+        or lut is None
+        or (lut_t_value is not None and lut_t is None)
+    ):
+        return None
+    return CakeTransformBundle(
+        detector_shape=tuple(int(v) for v in detector_shape[:2]),
+        radial_deg=radial,
+        raw_azimuth_deg=raw_azimuth,
+        gui_azimuth_deg=gui_azimuth,
+        lut=lut,
+        lut_t=lut_t,
+    )
+
+
 def _geometry_fit_projection_transform_content_token(
     value: object,
     *,
@@ -30451,21 +30620,29 @@ def _geometry_fit_projection_payload_storage_copy(
         value = projection.get(key)
         if value is None:
             continue
-        try:
-            stored[key] = np.asarray(value, dtype=np.dtype("<f8")).reshape(-1).copy()
-        except Exception:
+        axis_copy = _geometry_fit_projection_dense_storage_copy(value, allow_empty=False)
+        if axis_copy is None:
             return None
+        stored[key] = axis_copy
     permutation = projection.get("raw_to_gui_row_permutation")
     if permutation is not None:
         try:
-            stored["raw_to_gui_row_permutation"] = (
-                np.asarray(permutation, dtype=np.dtype("<i8")).reshape(-1).copy()
-            )
+            permutation_copy = np.asarray(permutation, dtype=np.dtype("<i8")).reshape(-1)
         except Exception:
             return None
+        if permutation_copy.size <= 0:
+            return None
+        stored["raw_to_gui_row_permutation"] = _geometry_fit_projection_freeze_array(
+            np.ascontiguousarray(permutation_copy).copy()
+        )
     transform_bundle = projection.get("transform_bundle")
     if transform_bundle is not None:
-        stored["transform_bundle"] = transform_bundle
+        copied_bundle = _geometry_fit_projection_bundle_storage_copy(transform_bundle)
+        if copied_bundle is None:
+            return None
+        stored["transform_bundle"] = copied_bundle
+        if "detector_shape" not in stored:
+            stored["detector_shape"] = tuple(int(v) for v in copied_bundle.detector_shape[:2])
     projection_token = _geometry_fit_projection_payload_digest(stored, trust_stored_token=False)
     if projection_token is not None:
         stored["projection_token_schema"] = _GEOMETRY_FIT_PROJECTION_TOKEN_SCHEMA
