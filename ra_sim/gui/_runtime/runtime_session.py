@@ -42094,17 +42094,6 @@ def _build_geometry_fit_async_job(
     current_hit_table_cache_by_background: dict[int, dict[str, object]] = {}
     if int(current_background_index) in set(required_indices):
         current_background_idx = int(current_background_index)
-        current_source_tables: list[object] = list(memory_intersection_cache or ())
-        current_table_kind = "intersection_cache"
-        if not current_source_tables:
-            try:
-                current_source_tables = _copy_hit_tables(
-                    getattr(simulation_runtime_state, "stored_max_positions_local", None) or []
-                )
-                current_table_kind = "hit_tables"
-            except Exception:
-                current_source_tables = []
-                current_table_kind = "unavailable"
         requested_signature = requested_signatures.get(current_background_idx)
         requested_base_signature = _geometry_source_snapshot_base_simulation_signature(
             requested_signature
@@ -42112,9 +42101,28 @@ def _build_geometry_fit_async_job(
         current_base_signature = getattr(
             simulation_runtime_state, "last_simulation_signature", None
         )
-        base_signature_match = bool(
+        source_signature_match = bool(
             current_base_signature is not None
             and requested_base_signature == current_base_signature
+        )
+        current_source_tables: list[object] = []
+        current_hit_table_reason = "base_simulation_signature_mismatch"
+        if source_signature_match:
+            try:
+                current_source_tables = _copy_hit_tables(
+                    getattr(simulation_runtime_state, "stored_max_positions_local", None) or []
+                )
+                current_hit_table_reason = (
+                    "matched" if current_source_tables else "missing_stored_max_positions_local"
+                )
+            except Exception:
+                current_source_tables = []
+                current_hit_table_reason = "stored_max_positions_local_unavailable"
+        requested_base_signature_json = gui_geometry_fit._geometry_fit_cache_jsonable(
+            requested_base_signature
+        )
+        current_base_signature_json = gui_geometry_fit._geometry_fit_cache_jsonable(
+            current_base_signature
         )
         current_hit_table_cache_by_background[current_background_idx] = {
             "hit_tables": copy.deepcopy(list(current_source_tables or ())),
@@ -42135,19 +42143,27 @@ def _build_geometry_fit_async_job(
                 "requested_signature_summary": requested_signature_summaries.get(
                     int(current_background_idx)
                 ),
-                "base_simulation_signature_match": bool(base_signature_match),
+                "base_simulation_signature_match": bool(source_signature_match),
+                "source_signature_match": bool(source_signature_match),
+                "table_source_kind": "stored_max_positions_local",
+                "table_base_signature": current_base_signature_json,
+                "requested_base_signature": requested_base_signature_json,
                 "requested_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
-                    gui_geometry_fit._geometry_fit_cache_jsonable(requested_base_signature)
+                    requested_base_signature_json
+                ),
+                "table_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
+                    current_base_signature_json
                 ),
                 "current_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
-                    gui_geometry_fit._geometry_fit_cache_jsonable(current_base_signature)
+                    current_base_signature_json
                 ),
                 "projection_view_signature": copy.deepcopy(
                     projection_view_signature_by_background.get(int(current_background_idx))
                 ),
-                "table_kind": str(current_table_kind),
+                "table_kind": "hit_tables" if current_source_tables else "unavailable",
                 "hit_table_count": int(len(current_source_tables or ())),
                 "cache_source": "current_hit_table_cache",
+                "current_hit_table_cache_reason": str(current_hit_table_reason),
             },
         }
     _append_runtime_update_trace(

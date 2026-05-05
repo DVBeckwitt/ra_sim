@@ -24839,8 +24839,6 @@ def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live
         "source_cache_target_collection_start",
         "source_cache_target_collection_ready",
         "source_cache_preflight_lookup_start",
-        "source_cache_targeted_projected_cache_start",
-        "source_cache_targeted_projected_cache_miss",
         "source_cache_live_runtime_cache_validation_start",
         "source_cache_live_runtime_cache_validation_ready",
         "source_cache_live_runtime_cache_accepted",
@@ -24852,7 +24850,7 @@ def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live
     assert preflight_payload["background_label_number"] == 1
     assert preflight_payload["required_pair_count"] == 1
     assert preflight_payload["manual_pair_backgrounds"] == [0]
-    accepted_payload = stage_events[7][1]
+    accepted_payload = stage_events[5][1]
     assert accepted_payload["row_count"] == 1
     assert accepted_payload["required_pair_count"] == 1
     assert accepted_payload["validated_pair_count"] == 1
@@ -24983,7 +24981,7 @@ def test_rebuild_geometry_fit_source_rows_stage_callback_failure_does_not_abort(
     )
 
     assert result.rebuild_source == "live_runtime_cache"
-    assert result.diagnostics["stage_callback_failure_count"] == 10
+    assert result.diagnostics["stage_callback_failure_count"] == 8
     assert (
         result.diagnostics["stage_callback_last_failed_stage"] == "source_cache_project_rows_ready"
     )
@@ -25059,7 +25057,8 @@ def _workflow_test_cake_bundle() -> CakeTransformBundle:
 def test_current_hit_table_cache_used_after_observed_miss_sequence_before_fresh_simulation() -> (
     None
 ):
-    requested_signature = ("sig", "bg1")
+    requested_signature = ("sig", "base", "bg1", "projection")
+    table_base_signature = ("sig", "base")
     projection_signature = {
         "mode": "caked",
         "available": True,
@@ -25140,6 +25139,15 @@ def test_current_hit_table_cache_used_after_observed_miss_sequence_before_fresh_
                     requested_signature
                 ),
                 "base_simulation_signature_match": True,
+                "source_signature_match": True,
+                "table_source_kind": "stored_max_positions_local",
+                "table_kind": "hit_tables",
+                "table_base_signature": geometry_fit._geometry_fit_cache_jsonable(
+                    table_base_signature
+                ),
+                "requested_base_signature": geometry_fit._geometry_fit_cache_jsonable(
+                    table_base_signature
+                ),
                 "projection_view_mode": "caked",
                 "fit_space": "caked",
                 "projection_view_signature": dict(projection_signature),
@@ -25188,7 +25196,7 @@ def test_current_hit_table_cache_used_after_observed_miss_sequence_before_fresh_
 
 
 def test_current_hit_table_cache_rejects_stale_signature_before_fresh_simulation() -> None:
-    requested_signature = ("sig", "fresh")
+    requested_signature = ("sig", "base", "fresh", "projection")
     stage_events: list[tuple[str, dict[str, object]]] = []
     fresh_calls: list[str] = []
 
@@ -25225,9 +25233,18 @@ def test_current_hit_table_cache_rejects_stale_signature_before_fresh_simulation
             "cache_metadata": {
                 "background_index": 0,
                 "requested_signature": geometry_fit._geometry_fit_cache_jsonable(
-                    ("sig", "stale")
+                    ("sig", "base", "stale", "projection")
                 ),
                 "base_simulation_signature_match": True,
+                "source_signature_match": True,
+                "table_source_kind": "stored_max_positions_local",
+                "table_kind": "hit_tables",
+                "table_base_signature": geometry_fit._geometry_fit_cache_jsonable(
+                    ("sig", "base")
+                ),
+                "requested_base_signature": geometry_fit._geometry_fit_cache_jsonable(
+                    ("sig", "base")
+                ),
                 "projection_view_mode": "detector",
                 "projection_view_signature": {
                     "mode": "detector",
@@ -25257,6 +25274,88 @@ def test_current_hit_table_cache_rejects_stale_signature_before_fresh_simulation
         if stage == "source_cache_current_hit_table_cache_miss"
     )
     assert miss_payload["current_hit_table_reject_reason"] == "requested_signature_mismatch"
+
+
+def test_current_hit_table_cache_rejects_forged_intersection_cache_payload() -> None:
+    requested_signature = ("sig", "base", "fresh", "projection")
+    stage_events: list[tuple[str, dict[str, object]]] = []
+    fresh_calls: list[str] = []
+
+    def _build_source_rows(
+        tables: object,
+        **_kwargs: object,
+    ) -> tuple[list[dict[str, object]], None, list[object], None]:
+        if tables:
+            pytest.fail("forged intersection cache must not build source rows")
+        return [], None, [], None
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        current_background_index=0,
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=requested_signature,
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        memory_cache_signature=("stale",),
+        load_logged_intersection_cache_metadata=lambda: {"status": "missing_metadata"},
+        load_logged_intersection_cache=lambda: ([], {}),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "status": "missing_metadata",
+        },
+        build_source_rows_from_hit_tables=_build_source_rows,
+        get_current_hit_table_cache=lambda: {
+            "hit_tables": [object()],
+            "cache_metadata": {
+                "background_index": 0,
+                "requested_signature": geometry_fit._geometry_fit_cache_jsonable(
+                    requested_signature
+                ),
+                "base_simulation_signature_match": True,
+                "source_signature_match": True,
+                "table_source_kind": "last_intersection_cache",
+                "table_kind": "intersection_cache",
+                "table_base_signature": geometry_fit._geometry_fit_cache_jsonable(
+                    ("sig", "base")
+                ),
+                "requested_base_signature": geometry_fit._geometry_fit_cache_jsonable(
+                    ("sig", "base")
+                ),
+                "projection_view_mode": "detector",
+                "fit_space": "detector",
+                "projection_view_signature": {
+                    "mode": "detector",
+                    "available": True,
+                    "background_index": 0,
+                },
+            },
+        },
+        simulate_hit_tables=lambda _params, **_kwargs: fresh_calls.append("fresh") or [],
+        required_pairs=[
+            _targeted_required_pair(
+                pair_id="bg0:pair0",
+                hkl=(1, 0, 0),
+                branch_index=1,
+                q_group_key=("q", 1),
+                extra={"background_index": 0},
+            )
+        ],
+        stage_callback=lambda stage, payload: stage_events.append((str(stage), dict(payload))),
+    )
+
+    assert result.rebuild_source is None
+    assert fresh_calls == ["fresh"]
+    miss_payload = next(
+        payload
+        for stage, payload in stage_events
+        if stage == "source_cache_current_hit_table_cache_miss"
+    )
+    assert miss_payload["current_hit_table_reject_reason"] == "forbidden_intersection_cache"
 
 
 def test_targeted_preflight_collects_required_hkl_branch_keys() -> None:

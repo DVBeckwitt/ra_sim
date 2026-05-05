@@ -14971,6 +14971,8 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
         manual_dataset_bindings=manual_dataset_bindings,
         build_runtime_config=lambda _params: {"solver": {"dynamic_point_geometry_fit": False}},
     )
+    stored_hit_table = np.full((1, 17), 7.0, dtype=np.float64)
+    stale_intersection_table = np.full((1, 17), -9.0, dtype=np.float64)
     execution_bindings = SimpleNamespace(
         downloads_dir=tmp_path,
         log_dir=tmp_path,
@@ -14978,7 +14980,8 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
             geometry_fit_job_counter=0,
             geometry_fit_event_queue=runtime_session.queue.Queue(),
             source_row_snapshots={},
-            last_simulation_signature=("sig",),
+            last_simulation_signature=("sig", "base"),
+            stored_max_positions_local=[stored_hit_table],
         ),
         solver_inputs=SimpleNamespace(miller=[], intensities=[], image_size=4),
         background_runtime_state=SimpleNamespace(current_background_index=0),
@@ -15011,7 +15014,7 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
     monkeypatch.setattr(
         runtime_session,
         "_geometry_source_snapshot_signature_for_background",
-        lambda idx, params: ("sig", int(idx)),
+        lambda idx, params: ("sig", "base", int(idx), "projection"),
         raising=False,
     )
     monkeypatch.setattr(
@@ -15066,6 +15069,24 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
         lambda: {},
         raising=False,
     )
+    monkeypatch.setattr(
+        runtime_session,
+        "get_last_intersection_cache",
+        lambda: [stale_intersection_table],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "last_simulation_signature",
+        ("sig", "base"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.simulation_runtime_state,
+        "stored_max_positions_local",
+        [stored_hit_table],
+        raising=False,
+    )
 
     job = runtime_session._build_geometry_fit_async_job(bindings)
 
@@ -15077,6 +15098,15 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
     assert (
         job["caked_views_by_background"][0]["transform_bundle"] is caked_payload["transform_bundle"]
     )
+    assert float(np.asarray(job["memory_intersection_cache"][0])[0, 0]) == -9.0
+    current_hit_payload = job["current_hit_table_cache_by_background"][0]
+    assert float(np.asarray(current_hit_payload["hit_tables"][0])[0, 0]) == 7.0
+    current_hit_metadata = current_hit_payload["cache_metadata"]
+    assert current_hit_metadata["table_source_kind"] == "stored_max_positions_local"
+    assert current_hit_metadata["table_kind"] == "hit_tables"
+    assert current_hit_metadata["source_signature_match"] is True
+    assert current_hit_metadata["table_base_signature"] == ["sig", "base"]
+    assert current_hit_metadata["requested_base_signature"] == ["sig", "base"]
 
     manual_pairs[:] = [{"pair_id": "detector-0", "x": 10.0, "y": 20.0}]
     ensure_calls.clear()

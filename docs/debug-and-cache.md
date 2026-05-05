@@ -247,20 +247,24 @@ Live GUI source-row fallback status as of 2026-05-05: after
 `projection_payload_ready`, caked geometry-fit preflight now logs both
 `background_index_internal` and a 1-based background label, records manual-pair
 backgrounds and required/matched pair counts, and reports reject reasons for
-live, targeted, memory, logged, and current-hit-table cache paths. Live rows and
-current hit/intersection tables are accepted only when the requested background,
-fit space, exact caked projection payload, simulation signature, source IDs,
-q-group keys, branch IDs, and fixed-pair count all validate without ambiguous
-candidate expansion. If current live rows or signature-matched current hit
-tables are usable, fresh simulation must not start. If the slow fresh-simulation
-fallback does run, timeout now emits a visible late/still-running status before
-the eventual ready or failed terminal event.
+live, targeted, memory, logged, and current-hit-table cache paths. Current
+background live rows are validated before targeted-cache lookup. The
+current-hit-table fallback accepts only `stored_max_positions_local` provenance
+with matching table/requested base signatures, background, fit space, trusted
+projection signature, source IDs, q-group keys, branch IDs, and fixed-pair
+count. `last_intersection_cache` remains memory/logged-cache-only and must not
+be rewrapped as current-hit metadata. If current live rows or signature-matched
+current hit tables are usable, fresh simulation must not start. If the slow
+fresh-simulation fallback does run, timeout now emits a visible
+late/still-running status before the eventual ready or failed terminal event.
 
 Validation status: runtime-level regressions cover the observed miss sequence
 (`projection_payload_ready`, targeted projected miss, memory miss, logged miss)
-and prove current hit tables are consumed before `simulate_hit_tables`. A
-background-index regression covers manual pairs on UI background 2 building
-internal index 1 and not background 1. The current Bi quality baseline ran the
+and prove trusted current hit tables are consumed before `simulate_hit_tables`.
+Forged `intersection_cache`/`last_intersection_cache` current-hit payloads are
+rejected before source-row build. A background-index regression covers manual
+pairs on UI background 2 building internal index 1 and not background 1. The
+current Bi quality baseline ran the
 same direct fixed-manual path as the smokes: Bi2Se3 accepted with 82/82 fixed
 pairs matched, 0 missing, 0 branch mismatches, and direct RMS 34.5307 -> 31.078112;
 Bi2Te3 accepted with 84/84 fixed pairs matched, 0 missing, 0 branch mismatches,

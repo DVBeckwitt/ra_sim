@@ -6552,6 +6552,36 @@ def rebuild_geometry_fit_source_rows(
         metadata_dict = dict(metadata_local or {})
         if not metadata_dict:
             return {"matches": False, "reason": "missing_metadata"}
+        metadata_table_kind = str(metadata_dict.get("table_kind") or "").strip().lower()
+        metadata_table_source_kind = str(
+            metadata_dict.get("table_source_kind") or ""
+        ).strip().lower()
+        if metadata_table_kind == "intersection_cache":
+            return {"matches": False, "reason": "forbidden_intersection_cache"}
+        if metadata_table_source_kind == "last_intersection_cache":
+            return {"matches": False, "reason": "forbidden_last_intersection_cache"}
+        if not metadata_table_source_kind:
+            return {"matches": False, "reason": "missing_table_source_kind"}
+        if metadata_table_source_kind != "stored_max_positions_local":
+            return {
+                "matches": False,
+                "reason": "unsupported_table_source_kind",
+                "table_source_kind": metadata_table_source_kind,
+            }
+        if "table_base_signature" not in metadata_dict or metadata_dict.get(
+            "table_base_signature"
+        ) is None:
+            return {"matches": False, "reason": "missing_table_base_signature"}
+        if metadata_dict.get("source_signature_match") is not True:
+            return {
+                "matches": False,
+                "reason": "source_signature_mismatch",
+                "actual_signature_digest": metadata_dict.get("table_base_signature_digest")
+                or metadata_dict.get("current_base_signature_digest"),
+                "expected_signature_digest": metadata_dict.get(
+                    "requested_base_signature_digest"
+                ),
+            }
         try:
             metadata_background_index = int(metadata_dict.get("background_index"))
         except Exception:
@@ -6577,6 +6607,30 @@ def rebuild_geometry_fit_source_rows(
                     normalized_requested_signature
                 ),
             }
+        expected_base_signature = normalized_requested_signature
+        if (
+            isinstance(normalized_requested_signature, Sequence)
+            and not isinstance(normalized_requested_signature, (str, bytes))
+            and len(normalized_requested_signature) >= 2
+        ):
+            expected_base_signature = tuple(normalized_requested_signature[:-2])
+        normalized_expected_base_signature = _geometry_fit_cache_jsonable(
+            expected_base_signature
+        )
+        metadata_table_base_signature = _geometry_fit_cache_jsonable(
+            metadata_dict.get("table_base_signature")
+        )
+        if metadata_table_base_signature != normalized_expected_base_signature:
+            return {
+                "matches": False,
+                "reason": "table_base_signature_mismatch",
+                "actual_signature_digest": _geometry_fit_digest_payload(
+                    metadata_table_base_signature
+                ),
+                "expected_signature_digest": _geometry_fit_digest_payload(
+                    normalized_expected_base_signature
+                ),
+            }
         if not bool(metadata_dict.get("base_simulation_signature_match", True)):
             return {
                 "matches": False,
@@ -6593,6 +6647,20 @@ def rebuild_geometry_fit_source_rows(
                 "reason": "projection_view_mode_mismatch",
                 "actual_projection_view_mode": metadata_projection_mode,
                 "expected_projection_view_mode": normalized_projection_view_mode,
+            }
+        metadata_fit_space = str(
+            metadata_dict.get("fit_space") or metadata_projection_mode or ""
+        ).strip().lower()
+        expected_fit_space = str(normalized_projection_view_mode or "").strip().lower()
+        allowed_fit_spaces = {expected_fit_space}
+        if expected_fit_space == "caked":
+            allowed_fit_spaces.add("exact_caked_bundle")
+        if metadata_fit_space and metadata_fit_space not in allowed_fit_spaces:
+            return {
+                "matches": False,
+                "reason": "fit_space_mismatch",
+                "actual_fit_space": metadata_fit_space,
+                "expected_fit_space": expected_fit_space,
             }
         metadata_projection_signature = metadata_dict.get("projection_view_signature")
         if _geometry_fit_stable_projection_view_signature(
@@ -7310,137 +7378,6 @@ def rebuild_geometry_fit_source_rows(
             metadata=cache_metadata,
         )
 
-    if targeted_preflight_enabled and not force_fresh_simulation:
-        rebuild_attempts.append("targeted_projected_cache")
-        targeted_cache_started_at = perf_counter()
-        _emit_rebuild_stage(
-            "source_cache_targeted_projected_cache_start",
-            cache_source="targeted_projected_cache",
-            preflight_mode=normalized_preflight_mode,
-            required_hkl_branch_keys_digest=str(required_branch_group_keys_digest),
-        )
-        targeted_cache_payload: Mapping[str, object] | None = None
-        if callable(get_targeted_projected_cache):
-            try:
-                targeted_cache_payload = get_targeted_projected_cache(
-                    str(required_branch_group_keys_digest)
-                )
-            except Exception:
-                targeted_cache_payload = None
-        targeted_cache_rows: list[dict[str, object]] = []
-        if isinstance(targeted_cache_payload, Mapping):
-            requested_signature_matches = (
-                targeted_cache_payload.get("requested_signature") == normalized_requested_signature
-            )
-            projection_signature_matches = _geometry_fit_stable_projection_view_signature(
-                targeted_cache_payload.get("projection_view_signature")
-            ) == _geometry_fit_stable_projection_view_signature(
-                normalized_projection_view_signature
-            )
-            projected_payload = targeted_cache_payload.get("projected_rows")
-            targeted_cache_rows = _copy_rows(projected_payload)
-            if (
-                requested_signature_matches
-                and projection_signature_matches
-                and _geometry_fit_projected_rows_cacheable(
-                    background_index=int(background_idx),
-                    projected_rows=targeted_cache_rows,
-                    projection_view_signature=targeted_cache_payload.get(
-                        "projection_view_signature"
-                    ),
-                    requested_projection_view_signature=normalized_projection_view_signature,
-                    consumer=str(targeted_cache_payload.get("consumer") or ""),
-                )
-            ):
-                _update_targeted_runtime_flags(
-                    targeted_cache_hit=True,
-                    cache_source="targeted_projected_cache",
-                    total_source_rows_available=int(len(targeted_cache_rows)),
-                    source_rows_considered_for_rebinding=int(len(targeted_cache_rows)),
-                    candidate_rows_after_hkl_filter=int(len(targeted_cache_rows)),
-                    candidate_rows_after_branch_filter=int(len(targeted_cache_rows)),
-                    candidate_rows_scored_for_background_distance=int(len(targeted_cache_rows)),
-                    unrelated_scored_row_count_for_rebinding=0,
-                    source_rows_projected_for_rebinding=0,
-                    unrelated_projected_row_count_for_rebinding=0,
-                    full_source_rows_built_for_rebinding=False,
-                    full_source_rows_projected_for_rebinding=False,
-                )
-                _emit_rebuild_stage(
-                    "source_cache_targeted_projected_cache_ready",
-                    stage_started_at=targeted_cache_started_at,
-                    cache_source="targeted_projected_cache",
-                    preflight_mode=normalized_preflight_mode,
-                    targeted_cache_hit=True,
-                    row_count=int(len(targeted_cache_rows)),
-                )
-                diagnostics = _finalize_diagnostics(
-                    {
-                        "source": "source_snapshot",
-                        "cache_family": "source_snapshot",
-                        "action": "rebuild",
-                        "consumer": lookup_context,
-                        "status": "snapshot_hit",
-                        "background_index": int(background_idx),
-                        "background_label": resolved_background_label,
-                        "requested_signature": requested_signature,
-                        "requested_signature_summary": requested_signature_summary,
-                        "snapshot_signature": requested_signature,
-                        "stored_signature_summary": requested_signature_summary,
-                        "raw_peak_count": int(len(targeted_cache_rows)),
-                        "projected_peak_count": int(len(targeted_cache_rows)),
-                        "created_from": "targeted_projected_cache",
-                        "cache_source": "targeted_projected_cache",
-                        "rebuild_source": "targeted_projected_cache",
-                        "signature_match": True,
-                        "rebuild_attempts": list(rebuild_attempts),
-                        "cache_metadata": {
-                            "required_branch_group_keys_digest": str(
-                                required_branch_group_keys_digest
-                            ),
-                            "manual_target_scoring_digest": str(manual_target_scoring_digest),
-                            "preflight_mode": str(normalized_preflight_mode),
-                        },
-                        "live_cache_inventory": _resolve_live_cache_inventory(),
-                    }
-                )
-                return GeometryFitSourceRowRebuildResult(
-                    background_index=int(background_idx),
-                    requested_signature=requested_signature,
-                    requested_signature_summary=requested_signature_summary,
-                    projected_rows=_copy_rows(targeted_cache_rows),
-                    stored_rows=_copy_rows(
-                        targeted_cache_payload.get("stored_rows") or targeted_cache_rows
-                    ),
-                    rebuild_source="targeted_projected_cache",
-                    rebuild_attempts=list(rebuild_attempts),
-                    diagnostics=diagnostics,
-                    metadata={
-                        "required_branch_group_keys_digest": str(required_branch_group_keys_digest),
-                        "manual_target_scoring_digest": str(manual_target_scoring_digest),
-                        "preflight_mode": str(normalized_preflight_mode),
-                    },
-                )
-        targeted_cache_reject_reason = "missing_cache_payload"
-        if isinstance(targeted_cache_payload, Mapping):
-            if not targeted_cache_payload.get("projected_rows"):
-                targeted_cache_reject_reason = "empty_projected_rows"
-            elif not requested_signature_matches:
-                targeted_cache_reject_reason = "requested_signature_mismatch"
-            elif not projection_signature_matches:
-                targeted_cache_reject_reason = "projection_signature_mismatch"
-            else:
-                targeted_cache_reject_reason = "not_cacheable"
-        _emit_rebuild_stage(
-            "source_cache_targeted_projected_cache_miss",
-            stage_started_at=targeted_cache_started_at,
-            cache_source="targeted_projected_cache",
-            preflight_mode=normalized_preflight_mode,
-            targeted_cache_hit=False,
-            row_count=int(len(targeted_cache_rows)),
-            targeted_cache_reject_reason=str(targeted_cache_reject_reason),
-        )
-
     if can_use_live_runtime_cache and callable(build_live_rows) and not force_fresh_simulation:
         rebuild_attempts.append("live_runtime_cache")
         validation_started_at = perf_counter()
@@ -7639,6 +7576,137 @@ def rebuild_geometry_fit_source_rows(
                 ),
                 **live_runtime_cache_diag,
             )
+
+    if targeted_preflight_enabled and not force_fresh_simulation:
+        rebuild_attempts.append("targeted_projected_cache")
+        targeted_cache_started_at = perf_counter()
+        _emit_rebuild_stage(
+            "source_cache_targeted_projected_cache_start",
+            cache_source="targeted_projected_cache",
+            preflight_mode=normalized_preflight_mode,
+            required_hkl_branch_keys_digest=str(required_branch_group_keys_digest),
+        )
+        targeted_cache_payload: Mapping[str, object] | None = None
+        if callable(get_targeted_projected_cache):
+            try:
+                targeted_cache_payload = get_targeted_projected_cache(
+                    str(required_branch_group_keys_digest)
+                )
+            except Exception:
+                targeted_cache_payload = None
+        targeted_cache_rows: list[dict[str, object]] = []
+        if isinstance(targeted_cache_payload, Mapping):
+            requested_signature_matches = (
+                targeted_cache_payload.get("requested_signature") == normalized_requested_signature
+            )
+            projection_signature_matches = _geometry_fit_stable_projection_view_signature(
+                targeted_cache_payload.get("projection_view_signature")
+            ) == _geometry_fit_stable_projection_view_signature(
+                normalized_projection_view_signature
+            )
+            projected_payload = targeted_cache_payload.get("projected_rows")
+            targeted_cache_rows = _copy_rows(projected_payload)
+            if (
+                requested_signature_matches
+                and projection_signature_matches
+                and _geometry_fit_projected_rows_cacheable(
+                    background_index=int(background_idx),
+                    projected_rows=targeted_cache_rows,
+                    projection_view_signature=targeted_cache_payload.get(
+                        "projection_view_signature"
+                    ),
+                    requested_projection_view_signature=normalized_projection_view_signature,
+                    consumer=str(targeted_cache_payload.get("consumer") or ""),
+                )
+            ):
+                _update_targeted_runtime_flags(
+                    targeted_cache_hit=True,
+                    cache_source="targeted_projected_cache",
+                    total_source_rows_available=int(len(targeted_cache_rows)),
+                    source_rows_considered_for_rebinding=int(len(targeted_cache_rows)),
+                    candidate_rows_after_hkl_filter=int(len(targeted_cache_rows)),
+                    candidate_rows_after_branch_filter=int(len(targeted_cache_rows)),
+                    candidate_rows_scored_for_background_distance=int(len(targeted_cache_rows)),
+                    unrelated_scored_row_count_for_rebinding=0,
+                    source_rows_projected_for_rebinding=0,
+                    unrelated_projected_row_count_for_rebinding=0,
+                    full_source_rows_built_for_rebinding=False,
+                    full_source_rows_projected_for_rebinding=False,
+                )
+                _emit_rebuild_stage(
+                    "source_cache_targeted_projected_cache_ready",
+                    stage_started_at=targeted_cache_started_at,
+                    cache_source="targeted_projected_cache",
+                    preflight_mode=normalized_preflight_mode,
+                    targeted_cache_hit=True,
+                    row_count=int(len(targeted_cache_rows)),
+                )
+                diagnostics = _finalize_diagnostics(
+                    {
+                        "source": "source_snapshot",
+                        "cache_family": "source_snapshot",
+                        "action": "rebuild",
+                        "consumer": lookup_context,
+                        "status": "snapshot_hit",
+                        "background_index": int(background_idx),
+                        "background_label": resolved_background_label,
+                        "requested_signature": requested_signature,
+                        "requested_signature_summary": requested_signature_summary,
+                        "snapshot_signature": requested_signature,
+                        "stored_signature_summary": requested_signature_summary,
+                        "raw_peak_count": int(len(targeted_cache_rows)),
+                        "projected_peak_count": int(len(targeted_cache_rows)),
+                        "created_from": "targeted_projected_cache",
+                        "cache_source": "targeted_projected_cache",
+                        "rebuild_source": "targeted_projected_cache",
+                        "signature_match": True,
+                        "rebuild_attempts": list(rebuild_attempts),
+                        "cache_metadata": {
+                            "required_branch_group_keys_digest": str(
+                                required_branch_group_keys_digest
+                            ),
+                            "manual_target_scoring_digest": str(manual_target_scoring_digest),
+                            "preflight_mode": str(normalized_preflight_mode),
+                        },
+                        "live_cache_inventory": _resolve_live_cache_inventory(),
+                    }
+                )
+                return GeometryFitSourceRowRebuildResult(
+                    background_index=int(background_idx),
+                    requested_signature=requested_signature,
+                    requested_signature_summary=requested_signature_summary,
+                    projected_rows=_copy_rows(targeted_cache_rows),
+                    stored_rows=_copy_rows(
+                        targeted_cache_payload.get("stored_rows") or targeted_cache_rows
+                    ),
+                    rebuild_source="targeted_projected_cache",
+                    rebuild_attempts=list(rebuild_attempts),
+                    diagnostics=diagnostics,
+                    metadata={
+                        "required_branch_group_keys_digest": str(required_branch_group_keys_digest),
+                        "manual_target_scoring_digest": str(manual_target_scoring_digest),
+                        "preflight_mode": str(normalized_preflight_mode),
+                    },
+                )
+        targeted_cache_reject_reason = "missing_cache_payload"
+        if isinstance(targeted_cache_payload, Mapping):
+            if not targeted_cache_payload.get("projected_rows"):
+                targeted_cache_reject_reason = "empty_projected_rows"
+            elif not requested_signature_matches:
+                targeted_cache_reject_reason = "requested_signature_mismatch"
+            elif not projection_signature_matches:
+                targeted_cache_reject_reason = "projection_signature_mismatch"
+            else:
+                targeted_cache_reject_reason = "not_cacheable"
+        _emit_rebuild_stage(
+            "source_cache_targeted_projected_cache_miss",
+            stage_started_at=targeted_cache_started_at,
+            cache_source="targeted_projected_cache",
+            preflight_mode=normalized_preflight_mode,
+            targeted_cache_hit=False,
+            row_count=int(len(targeted_cache_rows)),
+            targeted_cache_reject_reason=str(targeted_cache_reject_reason),
+        )
 
     if force_fresh_simulation:
         rebuild_attempts.append("fresh_simulation_required_for_trial_source_rows")
