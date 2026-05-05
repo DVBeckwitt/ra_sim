@@ -1,11 +1,11 @@
 # Cold-Start Caked Manual Fit Projector
 
-Status: implemented, validated
+Status: complete
 Type: bug
 Owner: -
 Issue: #249
 Priority: p1
-Last updated: 2026-05-05
+Completed: 2026-05-05
 
 ## Summary
 
@@ -55,6 +55,9 @@ display storage and peak-refinement image use.
 - Active validation uses Bi2Se3 and Bi2Te3 saved GUI states from
   `user_data_root()`; New4 remains available as historical diagnostics but is
   no longer an active cache-regression gate.
+- Final projection-token trust hardening stores private read-only exact-caked
+  projection bundles, treats token-only payloads as absent, and lets warm
+  caked pick-cache reuse consume only runtime-sourced verified tokens.
 
 ## Bug/error/feature status
 
@@ -73,6 +76,10 @@ display storage and peak-refinement image use.
   unchanged geometry signatures.
 - Safety status: explicit invalid caked projection payloads are not replaced by
   generated fallback and do not fall back to detector/current-view projection.
+- Validation status: structured Bi2Se3/Bi2Te3 progress reports confirm
+  `seed_policy=direct`, `active_fit_mode=fixed_manual_pair_direct_least_squares`,
+  `fit_space_projector_kind=exact_caked_bundle`, all fixed pairs matched, and
+  direct RMS reduction.
 
 ## Validation
 
@@ -102,5 +109,5 @@ Real Bi saved-state results:
 
 ## Links
 
-- Related tracker: [new4-geometric-fitter-recovery-handoff.md](new4-geometric-fitter-recovery-handoff.md)
-- Related tracker: [deterministic-geometry-runtime-fix-pass.md](deterministic-geometry-runtime-fix-pass.md)
+- Related tracker: [new4-geometric-fitter-recovery-handoff.md](../in-progress/new4-geometric-fitter-recovery-handoff.md)
+- Related tracker: [deterministic-geometry-runtime-fix-pass.md](../in-progress/deterministic-geometry-runtime-fix-pass.md)

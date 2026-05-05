@@ -39,6 +39,34 @@ mismatches, and a lower final residual.
 - Gate status: New4 is removed from active regression gates and default quality
   baseline state selection. New4 diagnostics remain historical/opt-in.
 
+## Final Token-Trust Follow-Up
+
+The final merge blocker was stale or malformed exact-caked projection tokens.
+Runtime projection storage now recomputes `projection_content_token_v3` from
+the stored projection fields and a private `CakeTransformBundle` copy, then
+marks the token with
+`projection_content_token_source="runtime_projection_storage_copy_v3"`.
+Token-only payloads are classified as absent, so they do not block generated
+fallback. Source-less or legacy projection tokens are not manual warm-cache
+correctness keys.
+
+Dense LUT arrays are copied into deterministic contiguous dtypes. Sparse LUTs
+are canonicalized as sorted CSR content for hashing/copying. Only private
+stored arrays are read-only; shared incoming bundles remain mutable and are not
+silently frozen.
+
+Bug/error/feature status after this follow-up:
+
+- Bug status: fixed. Stored projection digests no longer trust stale incoming
+  tokens, and mutating the original bundle after storage cannot change the
+  stored projector digest.
+- Error status: fixed. Token-only projection payloads are absent, explicit
+  invalid axes-only payloads still fail closed, and caked row rebuilds require
+  an exact `CakeTransformBundle`.
+- Feature status: complete. Warm caked picking remains fast because repeated
+  `get_pick_cache()` calls consume the trusted stored token instead of hashing
+  LUT content in the click path.
+
 ## Validation
 
 - `python -m compileall -q ra_sim tests scripts`
@@ -51,9 +79,13 @@ mismatches, and a lower final residual.
 Real Bi results:
 
 - Bi2Se3: accepted, 82/82 fixed manual pairs matched, missing 0, branch
-  mismatch 0, direct RMS `34.5307 -> 31.078112`.
+  mismatch 0, direct RMS `34.5307 -> 31.078112`,
+  `seed_policy=direct`, `active_fit_mode=fixed_manual_pair_direct_least_squares`,
+  `fit_space_projector_kind=exact_caked_bundle`.
 - Bi2Te3: accepted, 84/84 fixed manual pairs matched, missing 0, branch
-  mismatch 0, direct RMS `36.8629 -> 34.394414`.
+  mismatch 0, direct RMS `36.8629 -> 34.394414`,
+  `seed_policy=direct`, `active_fit_mode=fixed_manual_pair_direct_least_squares`,
+  `fit_space_projector_kind=exact_caked_bundle`.
 
 ## Compatibility
 
