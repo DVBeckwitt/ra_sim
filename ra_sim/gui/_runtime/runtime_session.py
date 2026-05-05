@@ -2798,11 +2798,8 @@ def _backend_background_to_native_detector_coords(
 
 
 def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k: int):
-    """Rotate a single (col, row) pair by ``k`` using the same rule as ``np.rot90``.
+    """Rotate one point using the same orientation rule as ``np.rot90``."""
 
-    The transformation mirrors what ``np.rot90`` does to the underlying image so
-    point overlays stay aligned with whichever orientation we render.
-    """
     return gui_geometry_overlay.rotate_point_for_display(col, row, shape, k)
 
 
@@ -4659,6 +4656,7 @@ def _geometry_manual_position_error_px(
     refined_row: float,
 ) -> float:
     """Return the click-to-refined placement error in display pixels."""
+
     return gui_manual_geometry.geometry_manual_position_error_px(
         raw_col,
         raw_row,
@@ -4673,6 +4671,7 @@ def _geometry_manual_position_sigma_px(
     floor_px: float | None = None,
 ) -> float:
     """Convert a manual click-placement error into a fit sigma in pixels."""
+
     if floor_px is None:
         floor_px = float(globals().get("GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX", 0.75))
     return gui_manual_geometry.geometry_manual_position_sigma_px(
@@ -4685,6 +4684,7 @@ def _normalize_geometry_manual_pair_entry(
     entry: dict[str, object] | None,
 ) -> dict[str, object] | None:
     """Normalize one saved manual geometry-pair entry."""
+
     return gui_manual_geometry.normalize_geometry_manual_pair_entry(
         entry,
         normalize_hkl_key=_normalize_hkl_key,
@@ -4785,6 +4785,7 @@ def _refine_geometry_manual_pair_entry_from_cache(
     entry: dict[str, object] | None,
     *,
     source_entry: dict[str, object] | None = None,
+    reuse_only: bool = False,
 ) -> dict[str, object] | None:
     """Refine one saved manual-pair simulation point from the cached caked peak map."""
 
@@ -4823,15 +4824,24 @@ def _refine_geometry_manual_pair_entry_from_cache(
         native_image_shape = (int(image_size), int(image_size))
 
     placement_refine_cache: dict[str, object] = {}
-    try:
-        placement_refine_cache = _get_geometry_manual_pick_cache(
-            param_set=dict(_current_geometry_fit_params()),
-            prefer_cache=True,
-            background_image=_current_geometry_manual_pick_background_image(),
-        )
-        sim_match_cfg = dict(placement_refine_cache.get("match_config", {}))
-    except Exception:
-        sim_match_cfg = {}
+    resolved_source_entry = dict(source_entry) if isinstance(source_entry, dict) else None
+    if resolved_source_entry is not None:
+        try:
+            sim_match_cfg = dict(_current_geometry_manual_match_config())
+        except Exception:
+            sim_match_cfg = {}
+    else:
+        try:
+            placement_refine_cache = _get_geometry_manual_pick_cache(
+                param_set=dict(_current_geometry_fit_params()),
+                prefer_cache=True,
+                reuse_only=bool(reuse_only),
+                background_image=_current_geometry_manual_pick_background_image(),
+            )
+            sim_match_cfg = dict(placement_refine_cache.get("match_config", {}))
+        except Exception:
+            placement_refine_cache = {}
+            sim_match_cfg = {}
     try:
         resolved_sim_match_cfg, sim_background_context = _auto_match_background_context(
             caked_sim_image,
@@ -4845,15 +4855,14 @@ def _refine_geometry_manual_pair_entry_from_cache(
         "background_context": sim_background_context,
     }
 
-    resolved_source_entry = dict(source_entry) if isinstance(source_entry, dict) else None
-    if not isinstance(resolved_source_entry, dict):
+    if resolved_source_entry is None:
         simulated_lookup = dict(placement_refine_cache.get("simulated_lookup", {}))
         resolved_source_entry = gui_manual_geometry.geometry_manual_lookup_source_entry(
             simulated_lookup,
             updated_entry,
             normalize_hkl_key=_normalize_hkl_key,
         )
-    if not isinstance(resolved_source_entry, dict):
+    if resolved_source_entry is None:
         return updated_entry
     try:
         seed_tth = float(
@@ -5975,6 +5984,14 @@ def _invalidate_geometry_manual_pick_cache() -> None:
     """Drop cached manual-pick simulation/background state."""
 
     _invalidate_peak_picker_caches(clear_source_snapshot=False)
+
+
+def _invalidate_geometry_manual_pick_cache_and_schedule_prewarm_if_armed() -> None:
+    """Invalidate manual picker cache, then prewarm only for armed stable UI paths."""
+
+    _invalidate_geometry_manual_pick_cache()
+    if bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
+        _schedule_geometry_manual_pick_cache_prewarm()
 
 
 def _set_geometry_manual_pick_cache_state(
@@ -7428,7 +7445,7 @@ def _toggle_beam_center_pick_mode() -> bool:
     )
 
 
-def _refresh_geometry_manual_pick_session() -> dict[str, object]:
+def _refresh_geometry_manual_pick_session(*, reuse_only: bool = False) -> dict[str, object]:
     """Refresh the active manual Qr/Qz pick session against the latest simulation."""
 
     current_session = geometry_manual_state.pick_session
@@ -7446,12 +7463,15 @@ def _refresh_geometry_manual_pick_session() -> dict[str, object]:
         cache_data = _get_geometry_manual_pick_cache(
             param_set=dict(_current_geometry_fit_params()),
             prefer_cache=True,
+            reuse_only=bool(reuse_only),
             background_index=int(background_runtime_state.current_background_index),
             background_image=background_image,
         )
     except Exception:
         return current_session
     if not isinstance(cache_data, dict):
+        return current_session
+    if bool(reuse_only) and cache_data.get("cache_ready") is False:
         return current_session
 
     if _geometry_manual_pick_uses_caked_space():
@@ -7507,9 +7527,27 @@ def _refresh_geometry_manual_pick_session() -> dict[str, object]:
     return current_session
 
 
-def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
+def _geometry_manual_session_initial_pairs_display(
+    *,
+    reuse_only: bool = False,
+) -> list[dict[str, object]]:
     """Return overlay-ready display entries for the in-progress manual pick session."""
-    _refresh_geometry_manual_pick_session()
+    try:
+        _refresh_geometry_manual_pick_session(reuse_only=bool(reuse_only))
+    except TypeError as exc:
+        mismatch_check = getattr(
+            gui_manual_geometry,
+            "_geometry_manual_type_error_is_keyword_arity_mismatch",
+            None,
+        )
+        if callable(mismatch_check):
+            is_keyword_mismatch = bool(mismatch_check(exc, "reuse_only"))
+        else:
+            message = str(exc).lower()
+            is_keyword_mismatch = "reuse_only" in message and "unexpected keyword" in message
+        if not is_keyword_mismatch:
+            raise
+        _refresh_geometry_manual_pick_session()
     projection_workflow = globals().get("geometry_manual_projection_workflow")
     refresh_entry_geometry = getattr(
         projection_workflow,
@@ -7584,9 +7622,19 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
 
     if _current_app_shell_view_mode() != "detector":
         return False
+
+    def _warm_detector() -> bool:
+        try:
+            prewarm = globals().get("_prewarm_geometry_manual_pick_cache_if_ready")
+            if not callable(prewarm):
+                return False
+            return bool(prewarm())
+        except Exception:
+            return False
+
     get_cache = globals().get("_get_geometry_manual_pick_cache")
     if not callable(get_cache):
-        return False
+        return _warm_detector()
 
     try:
         background_index = int(background_runtime_state.current_background_index)
@@ -7624,7 +7672,7 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
         allow_generated_payload=True,
     )
     if not isinstance(caked_payload, Mapping):
-        return False
+        return _warm_detector()
 
     try:
         params_for_payload = dict(_current_geometry_fit_params() or {})
@@ -7638,9 +7686,11 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
             require_background=False,
         )
     except Exception:
-        hydrated_payload = caked_payload
+        return _warm_detector()
     if isinstance(hydrated_payload, Mapping):
         caked_payload = dict(hydrated_payload)
+    else:
+        return _warm_detector()
 
     transform_bundle = caked_payload.get("transform_bundle")
     if isinstance(transform_bundle, CakeTransformBundle):
@@ -7678,15 +7728,18 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
             background_display=display_background,
         )
 
-    cache_data = get_cache(
-        param_set=dict(_current_geometry_fit_params()),
-        prefer_cache=True,
-        background_index=background_index,
-        background_image=display_background,
-        build_caked_projection_sidecar=True,
-        caked_projection_signature_override=caked_signature,
-        project_peaks_to_caked_view=_project_rows_to_hidden_caked_view,
-    )
+    try:
+        cache_data = get_cache(
+            param_set=dict(_current_geometry_fit_params()),
+            prefer_cache=True,
+            background_index=background_index,
+            background_image=display_background,
+            build_caked_projection_sidecar=True,
+            caked_projection_signature_override=caked_signature,
+            project_peaks_to_caked_view=_project_rows_to_hidden_caked_view,
+        )
+    except Exception:
+        return _warm_detector()
 
     warmed_sidecar = bool(
         isinstance(cache_data, Mapping)
@@ -7696,7 +7749,36 @@ def _warm_detector_mode_qr_caked_coordinate_cache() -> bool:
             or cache_data.get("caked_qr_projection_entries")
         )
     )
-    return bool(warmed_sidecar or _prewarm_geometry_manual_pick_cache_if_ready())
+    normal_warmed = _warm_detector()
+    return bool(warmed_sidecar or normal_warmed)
+
+
+def _schedule_geometry_manual_pick_cache_prewarm() -> bool:
+    """Schedule a manual picker cache warm after runtime state becomes stable."""
+
+    if not callable(globals().get("_prewarm_geometry_manual_pick_cache")):
+        return False
+    root_obj = globals().get("root")
+    after_idle = getattr(root_obj, "after_idle", None) if root_obj is not None else None
+    if callable(after_idle):
+        try:
+            after_idle(_prewarm_geometry_manual_pick_cache_if_ready)
+        except Exception:
+            return False
+        return True
+    try:
+        return bool(_prewarm_geometry_manual_pick_cache_if_ready())
+    except Exception:
+        return False
+
+
+def _complete_simulation_update_and_schedule_geometry_manual_prewarm() -> bool:
+    """Mark simulation update stable, then queue manual picker cache prewarm."""
+
+    simulation_runtime_state.update_running = False
+    if not bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
+        return False
+    return _schedule_geometry_manual_pick_cache_prewarm()
 
 
 def _prewarm_geometry_manual_pick_cache_if_ready() -> bool:
@@ -7710,6 +7792,10 @@ def _prewarm_geometry_manual_pick_cache_if_ready() -> bool:
         or simulation_runtime_state.worker_active_job is not None
         or simulation_runtime_state.worker_queued_job is not None
     ):
+        return False
+    if getattr(simulation_runtime_state, "update_pending", None) is not None:
+        return False
+    if getattr(simulation_runtime_state, "integration_update_pending", None) is not None:
         return False
     try:
         background_image = _current_geometry_manual_pick_background_image()
@@ -12005,6 +12091,7 @@ def _initialize_runtime_controls_block_10() -> None:
                 lambda entry, candidate=None: _refine_geometry_manual_pair_entry_from_cache(
                     entry,
                     source_entry=candidate,
+                    reuse_only=True,
                 )
             ),
             show_preview=_show_geometry_manual_preview,
@@ -12118,8 +12205,27 @@ def _initialize_runtime_controls_block_11() -> None:
         _clear_current_geometry_manual_pairs, \
         _render_current_geometry_manual_pairs_base
 
-    _set_geometry_manual_pick_mode = geometry_tool_action_workflow.set_manual_pick_mode
-    _toggle_geometry_manual_pick_mode = geometry_tool_action_workflow.toggle_manual_pick_mode
+    base_set_manual_pick_mode = geometry_tool_action_workflow.set_manual_pick_mode
+    base_toggle_manual_pick_mode = geometry_tool_action_workflow.toggle_manual_pick_mode
+
+    def _set_geometry_manual_pick_mode_with_prewarm(
+        enabled: bool,
+        message: str | None = None,
+    ) -> object:
+        result = base_set_manual_pick_mode(enabled, message=message)
+        if bool(enabled):
+            _schedule_geometry_manual_pick_cache_prewarm()
+        return result
+
+    def _toggle_geometry_manual_pick_mode_with_prewarm() -> object:
+        was_armed = bool(getattr(geometry_runtime_state, "manual_pick_armed", False))
+        result = base_toggle_manual_pick_mode()
+        if not was_armed and bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
+            _schedule_geometry_manual_pick_cache_prewarm()
+        return result
+
+    _set_geometry_manual_pick_mode = _set_geometry_manual_pick_mode_with_prewarm
+    _toggle_geometry_manual_pick_mode = _toggle_geometry_manual_pick_mode_with_prewarm
     _clear_current_geometry_manual_pairs = geometry_tool_action_workflow.clear_current_manual_pairs
     _render_current_geometry_manual_pairs_base = geometry_manual_workflow.render_current_pairs
 
@@ -12450,6 +12556,8 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
             _sync_center_marker(redraw=True)
             return
     _render_analysis_peak_overlays(redraw=True)
+    if bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
+        _invalidate_geometry_manual_pick_cache_and_schedule_prewarm_if_armed()
 
 
 def _refresh_display_from_controls() -> None:
@@ -14666,9 +14774,7 @@ def caking(
     cols=None,
     correct_solid_angle: bool | None = None,
 ):
-    resolved_correct_solid_angle = resolve_gui_caked_view_correct_solid_angle(
-        correct_solid_angle
-    )
+    resolved_correct_solid_angle = resolve_gui_caked_view_correct_solid_angle(correct_solid_angle)
     integrate_kwargs = {
         "npt_rad": int(max(1, npt_rad)),
         "npt_azim": int(max(1, npt_azim)),
@@ -16428,8 +16534,6 @@ def _update_1d_plots_from_selected_qr_rods_caked(
         else:
             bg_line.set_data([], [])
         axis.legend()
-        axis.relim()
-        axis.autoscale_view()
 
         profiles_by_key[key] = {
             "qz": qz_center,
@@ -26350,7 +26454,7 @@ def do_update():
         _schedule_forward_simulation_numba_warmup_once()
         _schedule_qr_rod_simulation_numba_warmup_once()
     _flush_pending_detector_to_caked_manual_trace("do_update_complete")
-    simulation_runtime_state.update_running = False
+    _complete_simulation_update_and_schedule_geometry_manual_prewarm()
     if "progress_label" in globals() and progress_label is not None:
         try:
             current_progress_text = str(progress_label.cget("text"))
@@ -37581,8 +37685,8 @@ def _analysis_linear_background_corrected_curves(
     subtract_plane = getattr(analysis_peak_tools, "subtract_linear_background_plane", None)
     if not callable(subtract_plane):
         return None
-    corrected = np.full(source_image.shape, np.nan, dtype=float)
     fit_metadata: list[dict[str, object]] = []
+    fit_failures: list[dict[str, object]] = []
     selected_peaks: list[dict[str, object]] = []
     for item in selected_items or ():
         if not isinstance(item, Mapping):
@@ -37592,9 +37696,43 @@ def _analysis_linear_background_corrected_curves(
             selected_peaks.append(dict(peak_entry))
         else:
             selected_peaks.append(dict(item))
-    col_start_values: list[int] = []
-    col_stop_values: list[int] = []
-    row_ranges: list[tuple[int, int]] = []
+    radial_parts: list[tuple[np.ndarray, np.ndarray]] = []
+    azimuth_parts: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def _combine_local_profile_parts(
+        parts: Sequence[tuple[np.ndarray, np.ndarray]],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        x_arrays: list[np.ndarray] = []
+        y_arrays: list[np.ndarray] = []
+        for x_values, y_values in parts:
+            x_arr = np.asarray(x_values, dtype=float).reshape(-1)
+            y_arr = np.asarray(y_values, dtype=float).reshape(-1)
+            if x_arr.size <= 0 or x_arr.size != y_arr.size:
+                continue
+            finite_mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+            if not np.any(finite_mask):
+                continue
+            x_arrays.append(np.asarray(x_arr[finite_mask], dtype=float))
+            y_arrays.append(np.asarray(y_arr[finite_mask], dtype=float))
+        if not x_arrays:
+            return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+
+        x_all = np.concatenate(x_arrays).astype(float, copy=False)
+        y_all = np.concatenate(y_arrays).astype(float, copy=False)
+        order = np.argsort(x_all)
+        x_sorted = np.asarray(x_all[order], dtype=float)
+        y_sorted = np.asarray(y_all[order], dtype=float)
+        unique_x, inverse = np.unique(x_sorted, return_inverse=True)
+        y_combined = np.empty(unique_x.shape, dtype=float)
+        for index in range(int(unique_x.size)):
+            samples = y_sorted[inverse == index]
+            y_combined[index] = float(np.nanmean(samples))
+        finite_combined = np.isfinite(unique_x) & np.isfinite(y_combined)
+        return (
+            np.asarray(unique_x[finite_combined], dtype=float),
+            np.asarray(y_combined[finite_combined], dtype=float),
+        )
+
     for window in windows:
         try:
             row_start = int(window["row_start"])
@@ -37604,6 +37742,16 @@ def _analysis_linear_background_corrected_curves(
         except Exception:
             continue
         if row_stop <= row_start or col_stop <= col_start:
+            fit_failures.append(
+                {
+                    "success": False,
+                    "error": "Selected-box window has no caked pixels.",
+                    "row_start": int(row_start),
+                    "row_stop": int(row_stop),
+                    "col_start": int(col_start),
+                    "col_stop": int(col_stop),
+                }
+            )
             continue
         roi = np.asarray(source_image[row_start:row_stop, col_start:col_stop], dtype=float)
         theta_values = np.asarray(radial_axis[col_start:col_stop], dtype=float)
@@ -37615,22 +37763,55 @@ def _analysis_linear_background_corrected_curves(
             selected_peaks,
         )
         if not bool(result.get("success", False)):
+            fit_failures.append(
+                {
+                    "success": False,
+                    "error": str(result.get("error", "linear background fit failed")),
+                    "row_start": int(row_start),
+                    "row_stop": int(row_stop),
+                    "col_start": int(col_start),
+                    "col_stop": int(col_stop),
+                    "fit_sample_count": int(result.get("fit_sample_count", 0)),
+                    "finite_sample_count": int(result.get("finite_sample_count", 0)),
+                    "peak_mask_sample_count": int(result.get("peak_mask_sample_count", 0)),
+                    "used_edge_fit_mask": bool(result.get("used_edge_fit_mask", False)),
+                    "fallback_mode": str(result.get("fallback_mode", "none")),
+                }
+            )
             continue
         corrected_roi = np.asarray(result.get("corrected"), dtype=float)
         if corrected_roi.shape != roi.shape:
+            fit_failures.append(
+                {
+                    "success": False,
+                    "error": "Linear background correction returned a mismatched ROI shape.",
+                    "row_start": int(row_start),
+                    "row_stop": int(row_stop),
+                    "col_start": int(col_start),
+                    "col_stop": int(col_stop),
+                }
+            )
             continue
-        corrected[row_start:row_stop, col_start:col_stop] = corrected_roi
-        col_start_values.append(col_start)
-        col_stop_values.append(col_stop)
-        row_ranges.append((row_start, row_stop))
+
+        with np.errstate(invalid="ignore"):
+            radial_y = np.nanmean(corrected_roi, axis=0)
+            azimuth_y = np.nanmean(corrected_roi, axis=1)
+        radial_parts.append((theta_values, np.asarray(radial_y, dtype=float)))
+        azimuth_parts.append((phi_values, np.asarray(azimuth_y, dtype=float)))
         fit_metadata.append(
             {
+                "success": True,
                 "coefficients": list(result.get("coefficients", [])),
                 "theta_ref": float(result.get("theta_ref", np.nan)),
                 "phi_ref": float(result.get("phi_ref", np.nan)),
                 "fit_sample_count": int(result.get("fit_sample_count", 0)),
+                "initial_fit_sample_count": int(result.get("initial_fit_sample_count", 0)),
                 "finite_sample_count": int(result.get("finite_sample_count", 0)),
+                "peak_mask_sample_count": int(result.get("peak_mask_sample_count", 0)),
                 "used_fallback_fit_mask": bool(result.get("used_fallback_fit_mask", False)),
+                "used_edge_fit_mask": bool(result.get("used_edge_fit_mask", False)),
+                "fallback_mode": str(result.get("fallback_mode", "none")),
+                "clipped_sample_count": int(result.get("clipped_sample_count", 0)),
                 "row_start": int(row_start),
                 "row_stop": int(row_stop),
                 "col_start": int(col_start),
@@ -37638,49 +37819,34 @@ def _analysis_linear_background_corrected_curves(
             }
         )
 
-    if not fit_metadata or not col_start_values or not row_ranges:
-        return None
+    metadata: dict[str, object] = {
+        "enabled": True,
+        "applied": False,
+        "method": "local_2d_linear_plane",
+        "windows": fit_metadata,
+        "failures": fit_failures,
+    }
+    if fit_failures or not fit_metadata:
+        metadata["error"] = "Linear background subtraction failed for the selected box."
+        return {"metadata": metadata}
 
-    col_start = max(0, min(col_start_values))
-    col_stop = min(int(source_image.shape[1]), max(col_stop_values))
-    row_mask = np.zeros(int(source_image.shape[0]), dtype=bool)
-    for row_start, row_stop in row_ranges:
-        row_mask[row_start:row_stop] = True
-    if col_stop <= col_start or not np.any(row_mask):
-        return None
+    radial_x, radial_y = _combine_local_profile_parts(radial_parts)
+    azimuth_x, azimuth_y = _combine_local_profile_parts(azimuth_parts)
+    if radial_x.size <= 0 or azimuth_x.size <= 0:
+        metadata["error"] = "Linear background subtraction produced no finite 1D curves."
+        return {"metadata": metadata}
 
-    radial_roi = corrected[row_mask, col_start:col_stop]
-    with np.errstate(invalid="ignore"):
-        radial_y = np.nanmean(radial_roi, axis=0)
-    radial_x = np.asarray(radial_axis[col_start:col_stop], dtype=float)
-
-    azimuth_x_parts: list[np.ndarray] = []
-    azimuth_y_parts: list[np.ndarray] = []
-    for row_start, row_stop in row_ranges:
-        az_roi = corrected[row_start:row_stop, col_start:col_stop]
-        if az_roi.size <= 0:
-            continue
-        with np.errstate(invalid="ignore"):
-            az_y = np.nanmean(az_roi, axis=1)
-        azimuth_x_parts.append(np.asarray(azimuth_axis[row_start:row_stop], dtype=float))
-        azimuth_y_parts.append(np.asarray(az_y, dtype=float))
-    if not azimuth_x_parts or not azimuth_y_parts:
-        return None
-
+    metadata["applied"] = True
     return {
         "radial": (
             np.asarray(radial_x, dtype=float),
             np.asarray(radial_y, dtype=float),
         ),
         "azimuth": (
-            np.concatenate(azimuth_x_parts).astype(float, copy=False),
-            np.concatenate(azimuth_y_parts).astype(float, copy=False),
+            np.asarray(azimuth_x, dtype=float),
+            np.asarray(azimuth_y, dtype=float),
         ),
-        "metadata": {
-            "enabled": True,
-            "method": "local_2d_linear_plane",
-            "windows": fit_metadata,
-        },
+        "metadata": metadata,
     }
 
 
@@ -38711,6 +38877,7 @@ def _fit_selected_analysis_peaks() -> None:
                 allow_fallback=False,
             )
             linear_background_metadata: Mapping[str, object] | None = None
+            linear_background_applied = False
             if use_linear_background and resolved_source == source_name:
                 if source_name not in linear_background_by_source:
                     linear_background_by_source[source_name] = (
@@ -38721,6 +38888,9 @@ def _fit_selected_analysis_peaks() -> None:
                     )
                 linear_payload = linear_background_by_source.get(source_name)
                 if isinstance(linear_payload, Mapping):
+                    metadata = linear_payload.get("metadata")
+                    if isinstance(metadata, Mapping):
+                        linear_background_metadata = dict(metadata)
                     corrected_pair = linear_payload.get(axis_kind)
                     if isinstance(corrected_pair, (list, tuple)) and len(corrected_pair) >= 2:
                         corrected_x = np.asarray(corrected_pair[0], dtype=float)
@@ -38728,9 +38898,11 @@ def _fit_selected_analysis_peaks() -> None:
                         if corrected_x.size > 0 and corrected_x.size == corrected_y.size:
                             x_curve = corrected_x
                             y_curve = corrected_y
-                            metadata = linear_payload.get("metadata")
-                            if isinstance(metadata, Mapping):
-                                linear_background_metadata = dict(metadata)
+                            linear_background_applied = bool(
+                                linear_background_metadata.get("applied", True)
+                                if isinstance(linear_background_metadata, Mapping)
+                                else True
+                            )
             if resolved_source != source_name:
                 for model in models:
                     label = str(model_label_resolver(model))
@@ -38951,7 +39123,9 @@ def _fit_selected_analysis_peaks() -> None:
                             )
                             plotted_group = True
                         if isinstance(linear_background_metadata, Mapping):
-                            fit_entry["background_subtracted"] = True
+                            fit_entry["background_subtracted"] = bool(
+                                linear_background_applied
+                            )
                             fit_entry["linear_background"] = dict(linear_background_metadata)
                         axis_results.append(fit_entry)
                         emitted_guess_indices.add(int(center_guess_index))

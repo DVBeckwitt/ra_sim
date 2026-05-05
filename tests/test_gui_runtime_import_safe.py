@@ -1304,6 +1304,7 @@ def test_runtime_caking_does_not_call_exact_integrator(monkeypatch) -> None:
         np.array([2, 3], dtype=np.int32),
     )
 
+
 def test_runtime_caking_can_override_detector_count_density_policy() -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     calls: list[dict[str, object]] = []
@@ -1371,6 +1372,7 @@ def test_gui_phi_two_theta_call_sites_do_not_force_solid_angle_correction() -> N
     assert "correctSolidAngle=True" not in peak_source.replace(" ", "")
     assert "correctSolidAngle=GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE" in geometry_source
     assert "correctSolidAngle=GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE" in peak_source
+
 
 def test_runtime_session_live_manual_peak_cache_update_uses_branch_aware_keys(
     monkeypatch,
@@ -15554,9 +15556,7 @@ def test_headless_hydrated_caked_payload_projects_rows_per_background(
             marker = int(float(np.asarray(payload["background"], dtype=np.float64)[0, 0]))
         else:
             marker = (
-                0
-                if float(np.asarray(payload["radial_axis"], dtype=np.float64)[0]) < 100.0
-                else 1
+                0 if float(np.asarray(payload["radial_axis"], dtype=np.float64)[0]) < 100.0 else 1
             )
         hydrated = dict(payload)
         hydrated["transform_bundle"] = exact_bundles[marker]
@@ -15596,9 +15596,7 @@ def test_headless_hydrated_caked_payload_projects_rows_per_background(
     def _prepare_runtime_geometry_fit_run(*, bindings, **_kwargs):
         dataset_bindings = bindings.manual_dataset_bindings
         for background_idx in (0, 1):
-            cached = dataset_bindings.geometry_manual_caked_projection_for_index(
-                background_idx
-            )
+            cached = dataset_bindings.geometry_manual_caked_projection_for_index(background_idx)
             assert cached["transform_bundle"] is exact_bundles[background_idx]
             assert "background" not in cached
             assert "background_image" not in cached
@@ -17064,9 +17062,9 @@ def test_geometry_fit_projection_payload_storage_copy_recomputes_stale_token() -
     assert stored_changed is not None
     assert stored_base["projection_content_token_v3"] != stale_token
     assert stored_changed["projection_content_token_v3"] != stale_token
-    assert stored_base["projection_content_token_v3"] != stored_changed[
-        "projection_content_token_v3"
-    ]
+    assert (
+        stored_base["projection_content_token_v3"] != stored_changed["projection_content_token_v3"]
+    )
 
 
 def test_geometry_fit_projection_payload_digest_ignores_legacy_signature() -> None:
@@ -20124,6 +20122,583 @@ def test_source_snapshot_signature_survives_manual_pick_arming(monkeypatch) -> N
     cache_data = callbacks.get_pick_cache(param_set={"a": 5.0, "c": 6.0}, prefer_cache=True)
 
     assert cache_data["grouped_candidates"]
+
+
+def test_manual_pick_arming_schedules_pick_cache_prewarm(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_state = SimpleNamespace(manual_pick_armed=False)
+    scheduled: list[str] = []
+
+    def _set_mode(enabled, message=None):
+        del message
+        geometry_state.manual_pick_armed = bool(enabled)
+        return "set-result"
+
+    def _toggle_mode():
+        geometry_state.manual_pick_armed = not bool(geometry_state.manual_pick_armed)
+        return "toggle-result"
+
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_tool_action_workflow",
+        SimpleNamespace(
+            set_manual_pick_mode=_set_mode,
+            toggle_manual_pick_mode=_toggle_mode,
+            clear_current_manual_pairs=lambda: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_manual_workflow",
+        SimpleNamespace(render_current_pairs=lambda **_kwargs: False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_geometry_manual_pick_cache_prewarm",
+        lambda: scheduled.append("prewarm") or True,
+        raising=False,
+    )
+
+    runtime_session._initialize_runtime_controls_block_11()
+
+    assert runtime_session._set_geometry_manual_pick_mode(True, message="armed") == "set-result"
+    assert scheduled == ["prewarm"]
+    assert runtime_session._set_geometry_manual_pick_mode(False) == "set-result"
+    assert scheduled == ["prewarm"]
+    assert runtime_session._toggle_geometry_manual_pick_mode() == "toggle-result"
+    assert scheduled == ["prewarm", "prewarm"]
+    assert runtime_session._toggle_geometry_manual_pick_mode() == "toggle-result"
+    assert scheduled == ["prewarm", "prewarm"]
+
+
+def test_simulation_ready_does_not_schedule_prewarm_when_manual_pick_disarmed(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(update_running=True)
+    geometry_state = SimpleNamespace(manual_pick_armed=False)
+    scheduled: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_geometry_manual_pick_cache_prewarm",
+        lambda: scheduled.append("prewarm") or True,
+        raising=False,
+    )
+
+    assert not runtime_session._complete_simulation_update_and_schedule_geometry_manual_prewarm()
+    assert runtime_state.update_running is False
+    assert scheduled == []
+
+
+def test_simulation_ready_schedules_prewarm_when_manual_pick_armed(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(update_running=True)
+    geometry_state = SimpleNamespace(manual_pick_armed=True)
+    scheduled: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        runtime_state,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_geometry_manual_pick_cache_prewarm",
+        lambda: scheduled.append("prewarm") or True,
+        raising=False,
+    )
+
+    assert runtime_session._complete_simulation_update_and_schedule_geometry_manual_prewarm()
+    assert runtime_state.update_running is False
+    assert scheduled == ["prewarm"]
+
+
+def test_prewarm_pick_cache_skips_when_update_pending(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        update_running=False,
+        worker_active_job=None,
+        worker_queued_job=None,
+        update_pending=object(),
+        integration_update_pending=None,
+    )
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_prewarm_geometry_manual_pick_cache",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("prewarm called")),
+        raising=False,
+    )
+
+    assert runtime_session._prewarm_geometry_manual_pick_cache_if_ready() is False
+
+
+def test_prewarm_pick_cache_skips_when_integration_update_pending(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        update_running=False,
+        worker_active_job=None,
+        worker_queued_job=None,
+        update_pending=None,
+        integration_update_pending=object(),
+    )
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_prewarm_geometry_manual_pick_cache",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("prewarm called")),
+        raising=False,
+    )
+
+    assert runtime_session._prewarm_geometry_manual_pick_cache_if_ready() is False
+
+
+def test_reuse_only_refresh_miss_preserves_active_pick_session_exactly(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": group_key,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+    }
+    session = {
+        "group_key": group_key,
+        "group_entries": [dict(candidate)],
+        "remaining_candidates": [dict(candidate)],
+        "pending_entries": [{"label": "pending", "x": 1.0, "y": 2.0}],
+        "target_count": 2,
+        "base_entries": [{"label": "base"}],
+        "q_label": "selected group",
+        "background_index": 0,
+        "tagged_candidate": dict(candidate),
+        "candidate_order": ["first"],
+        "labels": ["selected group"],
+        "session_metadata": {"keep": "yes"},
+    }
+    original = {
+        key: (
+            [dict(item) if isinstance(item, Mapping) else item for item in value]
+            if isinstance(value, list)
+            else (dict(value) if isinstance(value, Mapping) else value)
+        )
+        for key, value in session.items()
+    }
+    cache_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_manual_state",
+        SimpleNamespace(pick_session=session),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_pick_session_active",
+        lambda _session, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((8, 8), dtype=float),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: (
+            cache_calls.append(dict(kwargs))
+            or {"cache_ready": False, "cache_metadata": {"reuse_only": True}}
+        ),
+        raising=False,
+    )
+
+    result = runtime_session._refresh_geometry_manual_pick_session(reuse_only=True)
+
+    assert result is session
+    assert result == original
+    assert cache_calls[-1]["reuse_only"] is True
+
+
+def test_manual_pick_cache_invalidation_schedules_prewarm_when_armed(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    invalidated: list[str] = []
+    scheduled: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(manual_pick_armed=True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_peak_picker_caches",
+        lambda **_kwargs: invalidated.append("invalidate"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_geometry_manual_pick_cache_prewarm",
+        lambda: scheduled.append("prewarm") or True,
+        raising=False,
+    )
+
+    runtime_session._invalidate_geometry_manual_pick_cache_and_schedule_prewarm_if_armed()
+
+    assert invalidated == ["invalidate"]
+    assert scheduled == ["prewarm"]
+
+
+def test_manual_pick_cache_invalidation_does_not_schedule_when_disarmed(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    invalidated: list[str] = []
+    scheduled: list[str] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(manual_pick_armed=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_peak_picker_caches",
+        lambda **_kwargs: invalidated.append("invalidate"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_schedule_geometry_manual_pick_cache_prewarm",
+        lambda: scheduled.append("prewarm") or True,
+        raising=False,
+    )
+
+    runtime_session._invalidate_geometry_manual_pick_cache_and_schedule_prewarm_if_armed()
+
+    assert invalidated == ["invalidate"]
+    assert scheduled == []
+
+
+def test_detector_mode_sidecar_warm_also_warms_detector_reuse_signature(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    sidecar_calls: list[dict[str, object]] = []
+    normal_calls: list[str] = []
+
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
+    monkeypatch.setattr(runtime_session, "_get_current_background_native", lambda: np.zeros((8, 8)))
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((8, 8)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(ai_cache={}, unscaled_image=np.zeros((8, 8))),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_detector_shape_2d",
+        lambda _shape: (8, 8),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda *_args, **_kwargs: {
+            "radial_axis": np.arange(2, dtype=float),
+            "azimuth_axis": np.arange(2, dtype=float),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "_geometry_fit_hydrate_exact_caked_payload",
+        lambda payload, **_kwargs: dict(payload),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda *_args, **_kwargs: ("caked", "sig"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_project_peaks_for_background",
+        lambda *_args, **_kwargs: [],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: (
+            sidecar_calls.append(dict(kwargs))
+            or {"caked_qr_projection_grouped_candidates": {("q_group", "primary", 1, 0): [{}]}}
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prewarm_geometry_manual_pick_cache_if_ready",
+        lambda: normal_calls.append("normal") or True,
+    )
+
+    assert runtime_session._warm_detector_mode_qr_caked_coordinate_cache() is True
+    assert sidecar_calls[-1]["build_caked_projection_sidecar"] is True
+    assert normal_calls == ["normal"]
+
+
+def test_detector_mode_sidecar_unavailable_still_warms_detector_cache(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    normal_calls: list[str] = []
+    sidecar_calls: list[str] = []
+
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
+    monkeypatch.setattr(runtime_session, "_get_current_background_native", lambda: np.zeros((8, 8)))
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((8, 8)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(ai_cache={}, unscaled_image=np.zeros((8, 8)), analysis_preview_bins=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_detector_shape_2d",
+        lambda _shape: (8, 8),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_resolve_targeted_caked_projection_payload",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: (
+            sidecar_calls.append("sidecar")
+            or (_ for _ in ()).throw(AssertionError("sidecar should not build"))
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prewarm_geometry_manual_pick_cache_if_ready",
+        lambda: normal_calls.append("normal") or True,
+    )
+
+    assert runtime_session._warm_detector_mode_qr_caked_coordinate_cache() is True
+    assert normal_calls == ["normal"]
+    assert sidecar_calls == []
+
+
+def test_runtime_refine_pair_entry_with_source_entry_does_not_call_full_pick_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=np.arange(8, dtype=float),
+        last_caked_azimuth_values=np.arange(8, dtype=float),
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+    )
+    geometry_state = SimpleNamespace(
+        manual_pick_cache_signature=("warm",), manual_pick_cache_data={}
+    )
+    cache_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "geometry_runtime_state", geometry_state, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: cache_calls.append(dict(kwargs)) or {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_match_config",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda _image, cfg: (dict(cfg), None),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda **_kwargs: (3.25, 4.5),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda tth, phi: (float(tth), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+
+    updated = runtime_session._refine_geometry_manual_pair_entry_from_cache(
+        {"label": "1,0,0"},
+        source_entry={"hkl": (1, 0, 0), "caked_x": 3.0, "caked_y": 4.0},
+    )
+
+    assert updated["refined_sim_caked_x"] == 3.25
+    assert updated["refined_sim_caked_y"] == 4.5
+    assert cache_calls == []
+
+
+def test_runtime_refine_pair_entry_reuse_only_absent_source_miss_does_not_build(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=np.arange(8, dtype=float),
+        last_caked_azimuth_values=np.arange(8, dtype=float),
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+    )
+    cache_calls: list[dict[str, object]] = []
+    entry = {"label": "1,0,0", "refined_sim_caked_x": 3.0, "refined_sim_caked_y": 4.0}
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((8, 8), dtype=float),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: (
+            cache_calls.append(dict(kwargs))
+            or {"cache_ready": False, "simulated_lookup": {}, "match_config": {}}
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_simulated_peaks_from_callback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fresh simulation")),
+        raising=False,
+    )
+
+    updated = runtime_session._refine_geometry_manual_pair_entry_from_cache(
+        dict(entry),
+        source_entry=None,
+        reuse_only=True,
+    )
+
+    assert updated == entry
+    assert cache_calls
+    assert cache_calls[-1]["reuse_only"] is True
+
+
+def test_runtime_refine_pair_entry_empty_source_entry_does_not_call_pick_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=np.arange(8, dtype=float),
+        last_caked_azimuth_values=np.arange(8, dtype=float),
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+    )
+    cache_calls: list[dict[str, object]] = []
+    entry = {"label": "1,0,0", "refined_sim_caked_x": 3.0, "refined_sim_caked_y": 4.0}
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: cache_calls.append(dict(kwargs)) or {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_match_config",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda _image, cfg: (dict(cfg), None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda **_kwargs: (float("nan"), float("nan")),
+    )
+
+    updated = runtime_session._refine_geometry_manual_pair_entry_from_cache(
+        dict(entry),
+        source_entry={},
+        reuse_only=True,
+    )
+
+    assert updated == entry
+    assert cache_calls == []
 
 
 def test_runtime_targeted_projected_cache_reuses_detector_entry_when_current_background_drifts(
@@ -25582,6 +26157,82 @@ def test_fit_selected_analysis_peaks_uses_selected_integration_window_only(monke
     assert fit_entry["plot_fit"] is True
     assert np.all(np.asarray(fit_entry["x_fit"], dtype=float) >= 10.0)
     assert np.all(np.asarray(fit_entry["x_fit"], dtype=float) <= 12.0)
+
+
+def test_analysis_linear_background_projects_each_corrected_roi_own_bounds(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    radial_axis = np.arange(10, dtype=float)
+    azimuth_axis = np.arange(6, dtype=float)
+    source_image = np.zeros((azimuth_axis.size, radial_axis.size), dtype=float)
+    windows = [
+        {"row_start": 0, "row_stop": 2, "col_start": 1, "col_stop": 4},
+        {"row_start": 3, "row_stop": 5, "col_start": 6, "col_stop": 9},
+    ]
+    calls: list[dict[str, object]] = []
+
+    def _subtract_plane(theta_values, phi_values, roi, peak_centers):
+        theta_arr = np.asarray(theta_values, dtype=float)
+        phi_arr = np.asarray(phi_values, dtype=float)
+        roi_arr = np.asarray(roi, dtype=float)
+        calls.append(
+            {
+                "theta": theta_arr.copy(),
+                "phi": phi_arr.copy(),
+                "roi_shape": tuple(roi_arr.shape),
+                "peak_centers": list(peak_centers),
+            }
+        )
+        marker = 10.0 if float(theta_arr[0]) < 5.0 else 20.0
+        return {
+            "success": True,
+            "corrected": np.full(roi_arr.shape, marker, dtype=float),
+            "coefficients": [marker, 0.0, 0.0],
+            "theta_ref": float(np.nanmedian(theta_arr)),
+            "phi_ref": float(np.nanmedian(phi_arr)),
+            "fit_sample_count": int(roi_arr.size),
+            "initial_fit_sample_count": int(roi_arr.size),
+            "finite_sample_count": int(roi_arr.size),
+            "peak_mask_sample_count": 0,
+            "used_fallback_fit_mask": False,
+            "used_edge_fit_mask": False,
+            "fallback_mode": "none",
+            "clipped_sample_count": 0,
+        }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_analysis_selected_box_index_windows",
+        lambda *_args, **_kwargs: [dict(window) for window in windows],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_analysis_peak_tools_module",
+        lambda: SimpleNamespace(subtract_linear_background_plane=_subtract_plane),
+        raising=False,
+    )
+
+    result = runtime_session._analysis_linear_background_corrected_curves(
+        {
+            "source": "background",
+            "image": source_image,
+            "radial_axis": radial_axis,
+            "azimuth_axis": azimuth_axis,
+        },
+        [{"peak_entry": {"two_theta_deg": 2.0, "phi_deg": 1.0}}],
+    )
+
+    assert isinstance(result, dict)
+    radial_x, radial_y = result["radial"]
+    azimuth_x, azimuth_y = result["azimuth"]
+    assert np.allclose(radial_x, np.array([1.0, 2.0, 3.0, 6.0, 7.0, 8.0]))
+    assert np.allclose(radial_y, np.array([10.0, 10.0, 10.0, 20.0, 20.0, 20.0]))
+    assert np.allclose(azimuth_x, np.array([0.0, 1.0, 3.0, 4.0]))
+    assert np.allclose(azimuth_y, np.array([10.0, 10.0, 20.0, 20.0]))
+    assert result["metadata"]["applied"] is True
+    assert [call["roi_shape"] for call in calls] == [(2, 3), (2, 3)]
 
 
 def test_analysis_caked_peak_sources_returns_background_and_simulated_when_both_available(

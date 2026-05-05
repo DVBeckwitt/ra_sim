@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import hashlib
+import inspect
 import os
 import subprocess
 import sys
@@ -690,6 +691,39 @@ def _resolve_runtime_value(value_or_callable: object) -> object:
         except Exception:
             return None
     return value_or_callable
+
+
+def _geometry_manual_callable_accepts_keyword(
+    callback: Callable[..., object] | None,
+    keyword: str,
+) -> bool | None:
+    if not callable(callback):
+        return False
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        return None
+    parameters = signature.parameters
+    return str(keyword) in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
+def _geometry_manual_type_error_is_keyword_arity_mismatch(
+    exc: TypeError,
+    keyword: str,
+) -> bool:
+    message = str(exc).lower()
+    keyword_lower = str(keyword).lower()
+    return bool(
+        keyword_lower in message
+        and (
+            "unexpected keyword" in message
+            or "got an unexpected" in message
+            or "invalid keyword" in message
+        )
+    )
 
 
 def geometry_manual_position_error_px(
@@ -6921,7 +6955,9 @@ def _geometry_manual_cache_metadata_update(
 
     cache = cache_data if isinstance(cache_data, Mapping) else {}
     metadata = (
-        dict(cache.get("cache_metadata")) if isinstance(cache.get("cache_metadata"), Mapping) else {}
+        dict(cache.get("cache_metadata"))
+        if isinstance(cache.get("cache_metadata"), Mapping)
+        else {}
     )
     metadata.update(fields)
     return metadata
@@ -7969,6 +8005,22 @@ def _geometry_manual_sampled_array_content_token(
     return ("samples", int(flat.size), tuple(samples))
 
 
+def _geometry_manual_array_content_or_identity_token(
+    arr: np.ndarray,
+    source_object: object,
+    generation_token: object,
+    *,
+    max_samples: int = 32,
+) -> tuple[object, ...]:
+    content_token = _geometry_manual_sampled_array_content_token(
+        arr,
+        max_samples=max_samples,
+    )
+    if arr.size > int(max_samples) and not generation_token:
+        return ("identity_plus_samples", id(source_object), content_token)
+    return content_token
+
+
 def _geometry_manual_array_token(value: object) -> tuple[object, ...]:
     generation_token = _geometry_manual_generation_token(value)
     if isinstance(value, np.ndarray):
@@ -7978,7 +8030,7 @@ def _geometry_manual_array_token(value: object) -> tuple[object, ...]:
             str(value.dtype),
             tuple(value.strides),
             generation_token,
-            _geometry_manual_sampled_array_content_token(value),
+            _geometry_manual_array_content_or_identity_token(value, value, generation_token),
         )
     try:
         arr = np.asarray(value)
@@ -8005,7 +8057,7 @@ def _geometry_manual_array_token(value: object) -> tuple[object, ...]:
         str(arr.dtype),
         tuple(arr.strides),
         generation_token,
-        _geometry_manual_sampled_array_content_token(arr),
+        _geometry_manual_array_content_or_identity_token(arr, value, generation_token),
     )
 
 
@@ -10360,9 +10412,7 @@ def build_geometry_manual_pick_cache(
     )
     cache_metadata["active_simulated_peak_count"] = int(len(active_simulated_peaks))
     cache_metadata["detector_picker_candidate_count"] = int(len(detector_picker_rows))
-    cache_metadata["caked_qr_projection_candidate_count"] = int(
-        len(caked_qr_projection_entries)
-    )
+    cache_metadata["caked_qr_projection_candidate_count"] = int(len(caked_qr_projection_entries))
     cache_metadata["build_pick_cache_wall_ms"] = _geometry_manual_elapsed_ms(build_start)
     listed_picker_q_group_keys = _listed_picker_q_group_keys()
     if listed_picker_q_group_keys:
@@ -13127,6 +13177,7 @@ def build_geometry_manual_initial_pairs_display(
     param_set: dict[str, object] | None = None,
     current_background_index: object = None,
     prefer_cache: bool = False,
+    reuse_only: bool = False,
     use_caked_display: bool | None = None,
     pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
@@ -13516,6 +13567,8 @@ def build_geometry_manual_initial_pairs_display(
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
 
     def _rebuild_caked_qr_projection_lookup() -> GeometryManualLookupMap:
+        if bool(reuse_only):
+            return {}
         source_rows = _call_source_rows_for_projection_rebuild()
         if not source_rows:
             source_rows = geometry_manual_simulated_peaks_from_callback(
@@ -13544,6 +13597,8 @@ def build_geometry_manual_initial_pairs_display(
         )
         if projected is not None:
             return projected
+        if bool(reuse_only):
+            return None
         if rebuilt_caked_qr_projection_lookup is None:
             rebuilt_caked_qr_projection_lookup = _rebuild_caked_qr_projection_lookup()
         return _geometry_manual_lookup_caked_qr_projection_entry(
@@ -13555,6 +13610,7 @@ def build_geometry_manual_initial_pairs_display(
         cache_data = get_cache_data(
             param_set=params_local,
             prefer_cache=True,
+            reuse_only=bool(reuse_only),
             background_index=background_index,
         )
         if not isinstance(cache_data, Mapping):
@@ -13563,10 +13619,11 @@ def build_geometry_manual_initial_pairs_display(
         raw_caked_qr_projection_lookup = _geometry_manual_copy_lookup(
             cache_data.get("caked_qr_projection_lookup", {})
         )
-        cache_data = geometry_manual_rebuild_refined_qr_cache_lookups(
-            cache_data,
-            build_simulated_lookup,
-        )
+        if not bool(reuse_only):
+            cache_data = geometry_manual_rebuild_refined_qr_cache_lookups(
+                cache_data,
+                build_simulated_lookup,
+            )
         simulated_lookup = _geometry_manual_copy_lookup(cache_data.get("simulated_lookup", {}))
         caked_qr_projection_lookup = _geometry_manual_copy_lookup(
             cache_data.get("caked_qr_projection_lookup", {})
@@ -13574,27 +13631,30 @@ def build_geometry_manual_initial_pairs_display(
     else:
         simulated_lookup: GeometryManualLookupMap = {}
     if not simulated_lookup:
-        source_rows = (
-            [
-                dict(entry)
-                for entry in source_rows_for_background(
-                    int(background_index),
-                    params_local,
-                    consumer="initial_pairs_display",
-                )
-                if isinstance(entry, Mapping)
-            ]
-            if callable(source_rows_for_background)
-            else []
-        )
-        if not source_rows:
-            source_rows = geometry_manual_simulated_peaks_from_callback(
-                simulated_peaks_for_params,
-                param_set=params_local,
-                prefer_cache=bool(
-                    prefer_cache and int(background_index) == int(current_background_index)
-                ),
+        if bool(reuse_only):
+            source_rows = []
+        else:
+            source_rows = (
+                [
+                    dict(entry)
+                    for entry in source_rows_for_background(
+                        int(background_index),
+                        params_local,
+                        consumer="initial_pairs_display",
+                    )
+                    if isinstance(entry, Mapping)
+                ]
+                if callable(source_rows_for_background)
+                else []
             )
+            if not source_rows:
+                source_rows = geometry_manual_simulated_peaks_from_callback(
+                    simulated_peaks_for_params,
+                    param_set=params_local,
+                    prefer_cache=bool(
+                        prefer_cache and int(background_index) == int(current_background_index)
+                    ),
+                )
         if source_rows:
             normalized_source_rows = [
                 dict(entry) for entry in source_rows if isinstance(entry, Mapping)
@@ -13621,6 +13681,7 @@ def build_geometry_manual_initial_pairs_display(
     projected_detector_source_lookup: GeometryManualLookupMap | None = None
     needs_projected_detector_source_lookup = (
         not bool(use_caked_display)
+        and not bool(reuse_only)
         and callable(source_rows_for_background)
         and callable(project_peaks_to_current_view)
         and any(
@@ -13660,9 +13721,7 @@ def build_geometry_manual_initial_pairs_display(
                     raw_rows = []
             except Exception:
                 raw_rows = []
-            source_rows = [
-                dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)
-            ]
+            source_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
         if source_rows and callable(project_peaks_to_current_view):
             try:
                 projected_rows = project_peaks_to_current_view(source_rows)
@@ -14257,8 +14316,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             refinement_ready = bool(
                 existing_cache.get("qr_sim_refinement_signature") == refinement_signature
                 and existing_cache.get("qr_sim_refinement_complete") is True
-                and existing_cache.get("qr_sim_refinement_lookup_signature")
-                == refinement_signature
+                and existing_cache.get("qr_sim_refinement_lookup_signature") == refinement_signature
                 and existing_cache.get("qr_sim_refinement_lookup_complete") is True
             )
             if not refinement_ready:
@@ -14387,12 +14445,14 @@ def make_runtime_geometry_manual_cache_callbacks(
         *,
         param_set: dict[str, object] | None = None,
         prefer_cache: bool = False,
+        reuse_only: bool = False,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         return build_geometry_manual_initial_pairs_display(
             background_index,
             param_set=param_set,
             current_background_index=_background_index(),
             prefer_cache=prefer_cache,
+            reuse_only=bool(reuse_only),
             use_caked_display=_manual_pick_uses_caked_space(),
             pairs_for_index=pairs_for_index,
             current_geometry_fit_params=current_geometry_fit_params,
@@ -15754,7 +15814,7 @@ def render_current_geometry_manual_pairs(
         ...,
         tuple[list[dict[str, object]], list[dict[str, object]]],
     ],
-    session_initial_pairs_display: Callable[[], Sequence[dict[str, object]]],
+    session_initial_pairs_display: Callable[..., Sequence[dict[str, object]]],
     clear_geometry_pick_artists: Callable[..., None],
     draw_initial_geometry_pairs_overlay: Callable[..., None],
     update_button_label_fn: Callable[[], None],
@@ -15762,6 +15822,7 @@ def render_current_geometry_manual_pairs(
     pair_group_count: Callable[[int], int],
     set_status_text: Callable[[str], None] | None = None,
     update_status: bool = False,
+    reuse_only: bool = False,
 ) -> bool:
     """Redraw the saved manual geometry-pair overlay for the current background."""
 
@@ -15769,11 +15830,44 @@ def render_current_geometry_manual_pairs(
         clear_geometry_pick_artists()
         return False
 
-    measured_display, initial_pairs_display = build_initial_pairs_display(
-        int(current_background_index),
-        prefer_cache=True,
+    build_accepts_reuse_only = _geometry_manual_callable_accepts_keyword(
+        build_initial_pairs_display,
+        "reuse_only",
     )
-    pending_pairs_display = list(session_initial_pairs_display())
+    if build_accepts_reuse_only is False:
+        measured_display, initial_pairs_display = build_initial_pairs_display(
+            int(current_background_index),
+            prefer_cache=True,
+        )
+    else:
+        try:
+            measured_display, initial_pairs_display = build_initial_pairs_display(
+                int(current_background_index),
+                prefer_cache=True,
+                reuse_only=bool(reuse_only),
+            )
+        except TypeError as exc:
+            if not _geometry_manual_type_error_is_keyword_arity_mismatch(exc, "reuse_only"):
+                raise
+            measured_display, initial_pairs_display = build_initial_pairs_display(
+                int(current_background_index),
+                prefer_cache=True,
+            )
+    session_accepts_reuse_only = _geometry_manual_callable_accepts_keyword(
+        session_initial_pairs_display,
+        "reuse_only",
+    )
+    if session_accepts_reuse_only is False:
+        pending_pairs_display = list(session_initial_pairs_display())
+    else:
+        try:
+            pending_pairs_display = list(
+                session_initial_pairs_display(reuse_only=bool(reuse_only))
+            )
+        except TypeError as exc:
+            if not _geometry_manual_type_error_is_keyword_arity_mismatch(exc, "reuse_only"):
+                raise
+            pending_pairs_display = list(session_initial_pairs_display())
     combined_pairs_display = list(initial_pairs_display) + list(pending_pairs_display)
 
     if not measured_display and not combined_pairs_display:
@@ -15850,7 +15944,7 @@ def make_runtime_geometry_manual_callbacks(
         ...,
         tuple[list[dict[str, object]], list[dict[str, object]]],
     ],
-    session_initial_pairs_display: Callable[[], Sequence[dict[str, object]]],
+    session_initial_pairs_display: Callable[..., Sequence[dict[str, object]]],
     clear_geometry_pick_artists: Callable[..., None],
     draw_initial_geometry_pairs_overlay: Callable[..., None],
     update_button_label: Callable[[], None],
@@ -15922,8 +16016,7 @@ def make_runtime_geometry_manual_callbacks(
     ]
     | None = None,
     show_preview: Callable[..., None] | None = None,
-    refresh_pick_session: Callable[[dict[str, object] | None], dict[str, object] | None]
-    | None = None,
+    refresh_pick_session: Callable[..., dict[str, object] | None] | None = None,
     profile_cache: Callable[[], Mapping[str, object] | None] | Mapping[str, object] | None = None,
 ) -> GeometryManualRuntimeCallbacks:
     """Build live manual-geometry callbacks around the shared helper surface."""
@@ -15937,15 +16030,80 @@ def make_runtime_geometry_manual_callbacks(
     def _background_image() -> object | None:
         return _resolve_runtime_value(current_background_image)
 
-    def _pick_session() -> dict[str, object] | None:
+    def _refresh_pick_session_signature_capabilities() -> tuple[bool, bool] | None:
+        if not callable(refresh_pick_session):
+            return (False, False)
+        try:
+            signature = inspect.signature(refresh_pick_session)
+        except (TypeError, ValueError):
+            return None
+        parameters = signature.parameters
+        accepts_reuse_only = "reuse_only" in parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+        accepts_session = any(
+            parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            )
+            for parameter in parameters.values()
+        )
+        return (accepts_session, accepts_reuse_only)
+
+    def _refresh_pick_session_type_error_is_arity_mismatch(exc: TypeError) -> bool:
+        message = str(exc)
+        if "reuse_only" in message and (
+            "unexpected keyword" in message
+            or "got an unexpected" in message
+            or "invalid keyword" in message
+        ):
+            return True
+        return bool(
+            "positional argument" in message
+            or "required positional" in message
+            or "takes" in message and "argument" in message
+        )
+
+    def _call_refresh_pick_session(
+        session: dict[str, object],
+        *,
+        reuse_only: bool,
+    ) -> dict[str, object] | None:
+        if not callable(refresh_pick_session):
+            return session
+        capabilities = _refresh_pick_session_signature_capabilities()
+        if capabilities is not None:
+            accepts_session, accepts_reuse_only = capabilities
+            if accepts_session and accepts_reuse_only:
+                return refresh_pick_session(session, reuse_only=bool(reuse_only))
+            if accepts_session:
+                return refresh_pick_session(session)
+            if accepts_reuse_only:
+                return refresh_pick_session(reuse_only=bool(reuse_only))
+            return refresh_pick_session()
+        try:
+            return refresh_pick_session(session, reuse_only=bool(reuse_only))
+        except TypeError as exc:
+            if not _refresh_pick_session_type_error_is_arity_mismatch(exc):
+                raise
+            try:
+                return refresh_pick_session(session)
+            except TypeError as one_arg_exc:
+                if not _refresh_pick_session_type_error_is_arity_mismatch(one_arg_exc):
+                    raise
+                return refresh_pick_session()
+
+    def _pick_session(*, click_path: bool = False) -> dict[str, object] | None:
         session = _resolve_runtime_value(pick_session)
         if not isinstance(session, dict):
             return None
         if callable(refresh_pick_session):
-            try:
-                refreshed = refresh_pick_session(session)
-            except Exception:
-                refreshed = session
+            refreshed = _call_refresh_pick_session(
+                session,
+                reuse_only=bool(click_path),
+            )
             if isinstance(refreshed, dict):
                 session = refreshed
         return session
@@ -15957,12 +16115,16 @@ def make_runtime_geometry_manual_callbacks(
         cache = _resolve_runtime_value(profile_cache)
         return cache if isinstance(cache, Mapping) else None
 
-    def _render_current_pairs(*, update_status: bool = False) -> bool:
+    def _render_current_pairs(
+        *,
+        update_status: bool = False,
+        click_path: bool = False,
+    ) -> bool:
         return render_current_geometry_manual_pairs(
             background_visible=bool(_resolve_runtime_value(background_visible)),
             current_background_index=_background_index(),
             current_background_image=_background_image(),
-            pick_session=_pick_session(),
+            pick_session=_pick_session(click_path=bool(click_path)),
             build_initial_pairs_display=build_initial_pairs_display,
             session_initial_pairs_display=session_initial_pairs_display,
             clear_geometry_pick_artists=clear_geometry_pick_artists,
@@ -15972,6 +16134,7 @@ def make_runtime_geometry_manual_callbacks(
             pair_group_count=pair_group_count,
             set_status_text=set_status_text,
             update_status=update_status,
+            reuse_only=bool(click_path),
         )
 
     def _toggle_selection_at(
@@ -15984,7 +16147,7 @@ def make_runtime_geometry_manual_callbacks(
         handled, _next_session, suppress_drag = geometry_manual_toggle_selection_at(
             float(col),
             float(row),
-            pick_session=_pick_session(),
+            pick_session=_pick_session(click_path=True),
             current_background_index=_background_index(),
             display_background=_background_image(),
             get_cache_data=get_cache_data,
@@ -15993,7 +16156,9 @@ def make_runtime_geometry_manual_callbacks(
             set_pick_session_fn=set_pick_session,
             restore_view_fn=restore_view,
             clear_preview_artists_fn=clear_preview_artists,
-            render_current_pairs_fn=_render_current_pairs,
+            render_current_pairs_fn=(
+                lambda **kwargs: _render_current_pairs(click_path=True, **kwargs)
+            ),
             update_button_label_fn=update_button_label,
             set_status_text=set_status_text,
             push_undo_state_fn=push_undo_state,
@@ -16017,7 +16182,7 @@ def make_runtime_geometry_manual_callbacks(
         handled, _next_session = geometry_manual_place_selection_at(
             float(col),
             float(row),
-            pick_session=_pick_session(),
+            pick_session=_pick_session(click_path=True),
             current_background_index=_background_index(),
             display_background=_background_image(),
             get_cache_data=get_cache_data,
@@ -16026,7 +16191,9 @@ def make_runtime_geometry_manual_callbacks(
             set_pick_session_fn=set_pick_session,
             clear_preview_artists_fn=clear_preview_artists,
             restore_view_fn=restore_view,
-            render_current_pairs_fn=_render_current_pairs,
+            render_current_pairs_fn=(
+                lambda **kwargs: _render_current_pairs(click_path=True, **kwargs)
+            ),
             update_button_label_fn=update_button_label,
             set_status_text=set_status_text,
             push_undo_state_fn=push_undo_state,
@@ -16249,32 +16416,73 @@ def geometry_manual_toggle_selection_at(
         )
         if isinstance(caked_grouped_candidates, Mapping) and caked_grouped_candidates:
             grouped_candidates = dict(caked_grouped_candidates)
-        elif (
-            isinstance(cache_data, Mapping)
-            and "caked_qr_projection_grouped_candidates" in cache_data
-        ):
-            grouped_candidates = {}
         else:
-            caked_projection_fallback_note = (
-                "Exact caked Qr projection unavailable; using detector-space Qr picking. "
+            cache_metadata = (
+                cache_data.get("cache_metadata")
+                if isinstance(cache_data, Mapping)
+                and isinstance(cache_data.get("cache_metadata"), Mapping)
+                else {}
             )
-            grouped_candidates = geometry_manual_detector_picker_grouped_candidates_from_cache(
-                cache_data,
-                display_background=display_background,
-                profile_cache=profile_cache,
+            caked_authoritative = bool(
+                isinstance(caked_grouped_candidates, Mapping)
+                and not caked_grouped_candidates
+                and (
+                    cache_metadata.get("caked_qr_projection_authoritative") is True
+                    or cache_metadata.get("exact_caked_projection_authoritative") is True
+                )
+                and (
+                    cache_metadata.get("caked_qr_projection_suppress_detector_fallback")
+                    is True
+                    or cache_metadata.get("exact_caked_projection_suppress_detector_fallback")
+                    is True
+                    or cache_metadata.get("suppress_detector_fallback") is True
+                )
             )
-            picker_trace = geometry_manual_detector_picker_input_trace(
-                cache_data,
-                view_mode="detector",
-                background_index=int(current_background_index),
-                display_background=display_background,
-                grouped_candidates=grouped_candidates,
-                profile_cache=profile_cache,
+            detector_grouped_candidates = (
+                {}
+                if caked_authoritative
+                else geometry_manual_detector_picker_grouped_candidates_from_cache(
+                    cache_data,
+                    display_background=display_background,
+                    profile_cache=profile_cache,
+                )
             )
-            if callable(trace_picker_input_fn):
-                trace_picker_input_fn(dict(picker_trace))
-            if grouped_candidates:
+            if detector_grouped_candidates:
+                caked_projection_fallback_note = (
+                    "Exact caked Qr projection unavailable; using detector-space Qr picking. "
+                )
+                grouped_candidates = detector_grouped_candidates
+                picker_trace = geometry_manual_detector_picker_input_trace(
+                    cache_data,
+                    view_mode="detector",
+                    background_index=int(current_background_index),
+                    display_background=display_background,
+                    grouped_candidates=grouped_candidates,
+                    profile_cache=profile_cache,
+                )
+                if callable(trace_picker_input_fn):
+                    trace_picker_input_fn(dict(picker_trace))
                 picker_uses_caked_space = False
+            elif (
+                isinstance(cache_data, Mapping)
+                and "caked_qr_projection_grouped_candidates" in cache_data
+            ):
+                grouped_candidates = {}
+            else:
+                caked_projection_fallback_note = (
+                    "Exact caked Qr projection unavailable; using detector-space Qr picking. "
+                )
+                grouped_candidates = detector_grouped_candidates
+                picker_trace = geometry_manual_detector_picker_input_trace(
+                    cache_data,
+                    view_mode="detector",
+                    background_index=int(current_background_index),
+                    display_background=display_background,
+                    grouped_candidates=grouped_candidates,
+                    profile_cache=profile_cache,
+                )
+                if callable(trace_picker_input_fn):
+                    trace_picker_input_fn(dict(picker_trace))
     else:
         grouped_candidates = geometry_manual_detector_picker_grouped_candidates_from_cache(
             cache_data,
@@ -16379,9 +16587,7 @@ def geometry_manual_toggle_selection_at(
     if bool(saved_pair_move_only):
         return False, current_session, False
 
-    cache_ready = not (
-        isinstance(cache_data, Mapping) and cache_data.get("cache_ready") is False
-    )
+    cache_ready = not (isinstance(cache_data, Mapping) and cache_data.get("cache_ready") is False)
     if not grouped_candidates:
         if not bool(use_caked_space) and picker_trace is not None:
             print(geometry_manual_format_detector_picker_diagnostic_block(picker_trace))

@@ -88,13 +88,11 @@ def test_build_runtime_geometry_manual_projection_workflow_exposes_callbacks() -
         )
     )
 
-    workflow = (
-        runtime_geometry_interaction.build_runtime_geometry_manual_projection_workflow(
-            bootstrap_module=bootstrap_module,
-            manual_geometry_module="manual-geometry-module",
-            display_rotate_k=3,
-            pixel_size=1.5e-4,
-        )
+    workflow = runtime_geometry_interaction.build_runtime_geometry_manual_projection_workflow(
+        bootstrap_module=bootstrap_module,
+        manual_geometry_module="manual-geometry-module",
+        display_rotate_k=3,
+        pixel_size=1.5e-4,
     )
 
     assert workflow.runtime is runtime_obj
@@ -338,6 +336,61 @@ def test_prewarm_pick_cache_returns_empty_without_background_image() -> None:
     assert callbacks.prewarm_pick_cache() == {}
 
 
+def test_update_listed_qr_peaks_leaves_reuse_only_click_cache_ready(monkeypatch) -> None:
+    cache_state = {"signature": None, "data": {}}
+    background_image = np.zeros((16, 16), dtype=float)
+    entry = {
+        "display_col": 4.0,
+        "display_row": 5.0,
+        "sim_col": 4.0,
+        "sim_row": 5.0,
+        "sim_col_raw": 4.0,
+        "sim_row_raw": 5.0,
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "qr": 1.0,
+        "qz": 0.0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "branch_id": "branch-0",
+        "hkl": (1, 0, 0),
+    }
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background_image,
+        use_caked_space=lambda: False,
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [entry],
+        build_grouped_candidates=_group_manual_candidates,
+        build_simulated_lookup=_manual_lookup,
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+    )
+
+    warmed = callbacks.prewarm_pick_cache()
+    assert warmed.get("cache_ready", True) is not False
+
+    monkeypatch.setattr(
+        mg,
+        "build_geometry_manual_pick_cache",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("click build")),
+    )
+
+    reuse = callbacks.get_pick_cache(reuse_only=True)
+
+    assert reuse["cache_ready"] is True
+    assert reuse["cache_metadata"]["reuse_only"] is True
+    assert reuse["detector_picker_grouped_candidates"]
+
+
 def test_build_runtime_geometry_manual_workflow_exposes_callbacks() -> None:
     calls: list[tuple[str, object]] = []
     callbacks = SimpleNamespace(
@@ -405,12 +458,8 @@ def test_build_runtime_geometry_tool_action_workflow_exposes_callbacks() -> None
 
     assert workflow.runtime is runtime_obj
     assert workflow.callbacks is callbacks
-    assert workflow.update_fit_history_button_state == (
-        "update-fit-history-button-state"
-    )
-    assert workflow.update_manual_pick_button_label == (
-        "update-manual-pick-button-label"
-    )
+    assert workflow.update_fit_history_button_state == ("update-fit-history-button-state")
+    assert workflow.update_manual_pick_button_label == ("update-manual-pick-button-label")
     assert workflow.set_manual_pick_mode == "set-manual-pick-mode"
     assert workflow.toggle_manual_pick_mode == "toggle-manual-pick-mode"
     assert workflow.clear_current_manual_pairs == "clear-current-manual-pairs"
@@ -435,13 +484,11 @@ def test_build_runtime_geometry_tool_action_controls_runtime_delegates_to_bootst
         )
     )
 
-    result = (
-        runtime_geometry_interaction.build_runtime_geometry_tool_action_controls_runtime(
-            bootstrap_module=bootstrap_module,
-            views_module="views-module",
-            view_state="geometry-tool-view-state",
-            on_toggle_manual_pick="toggle-pick",
-        )
+    result = runtime_geometry_interaction.build_runtime_geometry_tool_action_controls_runtime(
+        bootstrap_module=bootstrap_module,
+        views_module="views-module",
+        view_state="geometry-tool-view-state",
+        on_toggle_manual_pick="toggle-pick",
     )
 
     assert result is runtime_obj
@@ -457,7 +504,9 @@ def test_build_runtime_geometry_tool_action_controls_runtime_delegates_to_bootst
     ]
 
 
-def test_initialize_runtime_geometry_interaction_controls_creates_controls_and_refreshes_labels() -> None:
+def test_initialize_runtime_geometry_interaction_controls_creates_controls_and_refreshes_labels() -> (
+    None
+):
     events: list[tuple[str, object | None]] = []
     geometry_tool_actions_runtime = SimpleNamespace(
         create_controls=lambda parent: events.append(("geometry", parent))
@@ -504,9 +553,7 @@ def test_refresh_runtime_peak_selection_after_update_uses_maintenance_bundle() -
 def test_apply_restored_runtime_selected_hkl_target_uses_maintenance_bundle() -> None:
     calls: list[object] = []
     maintenance_callbacks = SimpleNamespace(
-        apply_restored_selected_hkl_target=lambda target: (
-            calls.append(target) or (1, 2, 3)
-        )
+        apply_restored_selected_hkl_target=lambda target: calls.append(target) or (1, 2, 3)
     )
 
     result = runtime_geometry_interaction.apply_restored_runtime_selected_hkl_target(

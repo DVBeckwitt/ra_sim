@@ -61,6 +61,7 @@ def _single_caked_candidate() -> dict[str, object]:
         "weight": 1.0,
     }
 
+
 def _assert_finite_nonnegative(value: object) -> None:
     numeric = float(value)
     assert np.isfinite(numeric)
@@ -511,7 +512,7 @@ def test_make_runtime_geometry_manual_cache_callbacks_prefers_shared_live_previe
 
 def test_equivalent_copied_arrays_share_qr_refinement_signature() -> None:
     cache = {"signature": ("cache", 1), "placed_signature": ("placed", 1)}
-    image = np.arange(64, dtype=float).reshape(8, 8)
+    image = np.arange(32, dtype=float).reshape(4, 8)
 
     first = mg.geometry_manual_qr_sim_refinement_signature(
         cache,
@@ -571,6 +572,58 @@ def test_changed_array_content_changes_qr_refinement_signature() -> None:
     )
 
     assert first != second
+
+
+def test_replaced_unsampled_large_array_changes_qr_refinement_signature() -> None:
+    cache = {"signature": ("cache", 1), "placed_signature": ("placed", 1)}
+    image = np.arange(4096, dtype=float).reshape(64, 64)
+    changed = np.array(image, copy=True)
+    sampled_indices = set(np.linspace(0, image.size - 1, 32, dtype=np.int64).tolist())
+    unsampled_index = next(idx for idx in range(image.size) if idx not in sampled_indices)
+    changed.reshape(-1)[unsampled_index] = -12345.0
+
+    first = mg.geometry_manual_qr_sim_refinement_signature(
+        cache,
+        simulation_signature=("sim", 1),
+        detector_simulation_image=image,
+    )
+    second = mg.geometry_manual_qr_sim_refinement_signature(
+        cache,
+        simulation_signature=("sim", 1),
+        detector_simulation_image=changed,
+    )
+
+    assert first != second
+
+
+def test_in_place_unsampled_large_array_mutation_requires_generation_or_signature_change() -> (
+    None
+):
+    cache = {"signature": ("cache", 1), "placed_signature": ("placed", 1)}
+    image = np.arange(4096, dtype=float).reshape(64, 64)
+
+    sampled_indices = set(np.linspace(0, image.size - 1, 32, dtype=np.int64).tolist())
+    unsampled_index = next(idx for idx in range(image.size) if idx not in sampled_indices)
+    first = mg.geometry_manual_qr_sim_refinement_signature(
+        cache,
+        simulation_signature=("sim", 1),
+        detector_simulation_image=image,
+    )
+
+    image.reshape(-1)[unsampled_index] = -12345.0
+    same_signature = mg.geometry_manual_qr_sim_refinement_signature(
+        cache,
+        simulation_signature=("sim", 1),
+        detector_simulation_image=image,
+    )
+    changed_sim_signature = mg.geometry_manual_qr_sim_refinement_signature(
+        cache,
+        simulation_signature=("sim", 2),
+        detector_simulation_image=image,
+    )
+
+    assert same_signature == first
+    assert changed_sim_signature != first
 
 
 def test_changed_simulation_signature_changes_qr_refinement_signature() -> None:

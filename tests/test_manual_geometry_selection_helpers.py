@@ -9344,9 +9344,7 @@ def test_initial_pairs_display_skips_sim_lookup_for_background_qr_reference() ->
         simulated_peaks_for_params=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("no simulated peaks")
         ),
-        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(
-            AssertionError("no lookup")
-        ),
+        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(AssertionError("no lookup")),
         entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
     )
 
@@ -9359,7 +9357,9 @@ def test_initial_pairs_display_skips_sim_lookup_for_background_qr_reference() ->
     assert "hkl" not in displayed[0]
 
 
-def test_initial_pairs_display_mixed_background_qr_reference_and_sim_entry_uses_lookup_only_for_sim_entry() -> None:
+def test_initial_pairs_display_mixed_background_qr_reference_and_sim_entry_uses_lookup_only_for_sim_entry() -> (
+    None
+):
     sim_entry = {
         "label": "1,0,0",
         "hkl": (1, 0, 0),
@@ -9413,7 +9413,9 @@ def test_initial_pairs_display_mixed_background_qr_reference_and_sim_entry_uses_
     assert displayed[1]["overlay_match_index"] == 1
 
 
-def test_initial_pairs_display_saved_background_qr_reference_redraw_does_not_call_get_cache_data() -> None:
+def test_initial_pairs_display_saved_background_qr_reference_redraw_does_not_call_get_cache_data() -> (
+    None
+):
     background_entry = mg.geometry_manual_background_qr_reference_pair_entry(
         peak_col=2.0,
         peak_row=3.0,
@@ -9431,9 +9433,7 @@ def test_initial_pairs_display_saved_background_qr_reference_redraw_does_not_cal
         source_rows_for_background=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("no source rows")
         ),
-        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(
-            AssertionError("no lookup")
-        ),
+        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(AssertionError("no lookup")),
         entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
     )
 
@@ -12907,6 +12907,669 @@ def test_manual_qr_toggle_uses_reuse_only_cache() -> None:
     assert forwarded_kwargs[-1]["build_caked_projection_sidecar"] is False
 
 
+def _runtime_qr_click_candidate(
+    group_key: tuple[object, ...],
+    *,
+    col: float = 10.0,
+    row: float = 20.0,
+) -> dict[str, object]:
+    return {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": group_key,
+        "sim_col": float(col),
+        "sim_row": float(row),
+        "display_col": float(col),
+        "display_row": float(row),
+        "source_table_index": 1,
+        "source_row_index": 2,
+    }
+
+
+def _runtime_qr_click_session(
+    group_key: tuple[object, ...],
+    candidate: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "group_key": group_key,
+        "group_entries": [dict(candidate)],
+        "remaining_candidates": [dict(candidate)],
+        "pending_entries": [{"label": "pending", "x": 1.0, "y": 2.0}],
+        "target_count": 1,
+        "base_entries": [],
+        "q_label": "selected group",
+        "background_index": 0,
+        "tagged_candidate": dict(candidate),
+        "candidate_order": ["first"],
+        "labels": ["selected group"],
+        "session_metadata": {"keep": "yes"},
+    }
+
+
+def _make_runtime_qr_click_callbacks(
+    *,
+    pick_session_state: dict[str, object],
+    get_cache_data,
+    refresh_pick_session=None,
+    use_caked_space: bool = False,
+    status_messages: list[str] | None = None,
+    saved_entry_sets: list[list[dict[str, object]]] | None = None,
+    set_sessions: list[dict[str, object]] | None = None,
+    build_initial_pairs_display=None,
+    session_initial_pairs_display=None,
+):
+    group_key = ("q_group", "primary", 1, 0)
+    status_messages = status_messages if status_messages is not None else []
+    saved_entry_sets = saved_entry_sets if saved_entry_sets is not None else []
+    set_sessions = set_sessions if set_sessions is not None else []
+
+    def _set_pairs(_idx, entries):
+        saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+        return list(entries or [])
+
+    def _set_pick_session(session):
+        set_sessions.append(dict(session))
+        pick_session_state["session"] = dict(session)
+
+    callbacks = mg.make_runtime_geometry_manual_callbacks(
+        background_visible=True,
+        current_background_index=0,
+        current_background_image=lambda: np.zeros((32, 32), dtype=float),
+        pick_session=lambda: pick_session_state.get("session"),
+        build_initial_pairs_display=(
+            build_initial_pairs_display
+            if callable(build_initial_pairs_display)
+            else (lambda *_args, **_kwargs: ([], []))
+        ),
+        session_initial_pairs_display=(
+            session_initial_pairs_display
+            if callable(session_initial_pairs_display)
+            else (lambda **_kwargs: [])
+        ),
+        clear_geometry_pick_artists=lambda **_kwargs: None,
+        draw_initial_geometry_pairs_overlay=lambda *_args, **_kwargs: None,
+        update_button_label=lambda: None,
+        set_background_file_status_text=lambda: None,
+        pair_group_count=lambda _idx: 0,
+        set_status_text=status_messages.append,
+        get_cache_data=get_cache_data,
+        set_pairs_for_index=_set_pairs,
+        pairs_for_index=lambda _idx: [],
+        set_pick_session=_set_pick_session,
+        restore_view=lambda **_kwargs: None,
+        clear_preview_artists=lambda **_kwargs: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=bool(use_caked_space),
+        pick_search_window_px=50.0,
+        refine_preview_point=lambda _candidate, _col, _row, **kwargs: (
+            5.0
+            if kwargs.get("allow_cache_build") is False
+            else (_ for _ in ()).throw(AssertionError("cache build allowed")),
+            6.0,
+        ),
+        refresh_pick_session=refresh_pick_session,
+    )
+    return callbacks, group_key, saved_entry_sets, set_sessions, status_messages
+
+
+def test_runtime_place_selection_refreshes_session_reuse_only_and_does_not_build_cache() -> None:
+    refresh_reuse_only: list[bool] = []
+    cache_reuse_only: list[bool] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key, col=5.0, row=6.0)
+    original_session = _runtime_qr_click_session(group_key, candidate)
+    pick_session_state: dict[str, object] = {"session": dict(original_session)}
+
+    def _refresh(session, *, reuse_only=False):
+        refresh_reuse_only.append(bool(reuse_only))
+        if not reuse_only:
+            raise AssertionError("full refresh requested")
+        return dict(session)
+
+    def _get_cache(**kwargs):
+        cache_reuse_only.append(bool(kwargs.get("reuse_only")))
+        if not kwargs.get("reuse_only"):
+            raise AssertionError("full cache requested")
+        return mg.geometry_manual_no_build_cache_sentinel(match_config={})
+
+    callbacks, _key, saved_sets, _set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=_get_cache,
+        refresh_pick_session=_refresh,
+    )
+
+    assert callbacks.place_selection_at(4.8, 5.9) is True
+    assert refresh_reuse_only
+    assert all(refresh_reuse_only)
+    assert cache_reuse_only == [True]
+    assert any(entry.get("x") == 5.0 for entry in saved_sets[-1])
+
+
+def test_runtime_placement_callback_source_entry_refinement_does_not_call_pick_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    cache_calls: list[dict[str, object]] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key, col=5.0, row=6.0)
+    candidate["caked_x"] = 3.0
+    candidate["caked_y"] = 4.0
+    pick_session_state: dict[str, object] = {
+        "session": _runtime_qr_click_session(group_key, candidate)
+    }
+    runtime_state = SimpleNamespace(
+        last_caked_image_unscaled=np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=np.arange(8, dtype=float),
+        last_caked_azimuth_values=np.arange(8, dtype=float),
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+        profile_cache={},
+    )
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(manual_pick_cache_signature=("warm",), manual_pick_cache_data={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: cache_calls.append(dict(kwargs)) or {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_match_config",
+        lambda: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_auto_match_background_context",
+        lambda _image, cfg: (dict(cfg), None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "geometry_manual_refine_preview_point",
+        lambda **_kwargs: (3.25, 4.5),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_caked_angles_to_background_display_coords",
+        lambda tth, phi: (float(tth), float(phi)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_background_display_to_native_detector_coords",
+        lambda col, row: (float(col), float(row)),
+        raising=False,
+    )
+
+    saved_sets: list[list[dict[str, object]]] = []
+    refine_sources: list[dict[str, object] | None] = []
+    callbacks = mg.make_runtime_geometry_manual_callbacks(
+        background_visible=True,
+        current_background_index=0,
+        current_background_image=lambda: np.zeros((32, 32), dtype=float),
+        pick_session=lambda: pick_session_state.get("session"),
+        build_initial_pairs_display=lambda *_args, **_kwargs: ([], []),
+        session_initial_pairs_display=lambda **_kwargs: [],
+        clear_geometry_pick_artists=lambda **_kwargs: None,
+        draw_initial_geometry_pairs_overlay=lambda *_args, **_kwargs: None,
+        update_button_label=lambda: None,
+        set_background_file_status_text=lambda: None,
+        pair_group_count=lambda _idx: 0,
+        set_status_text=lambda _text: None,
+        get_cache_data=lambda **_kwargs: mg.geometry_manual_no_build_cache_sentinel(
+            match_config={}
+        ),
+        set_pairs_for_index=lambda _idx, entries: (
+            saved_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        pairs_for_index=lambda _idx: [],
+        set_pick_session=lambda session: pick_session_state.__setitem__("session", dict(session)),
+        restore_view=lambda **_kwargs: None,
+        clear_preview_artists=lambda **_kwargs: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+        refine_preview_point=lambda _candidate, _col, _row, **_kwargs: (5.0, 6.0),
+        refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
+        refine_saved_pair_entry=lambda entry, source=None: (
+            refine_sources.append(dict(source) if isinstance(source, dict) else None)
+            or runtime_session._refine_geometry_manual_pair_entry_from_cache(
+                entry,
+                source_entry=source,
+                reuse_only=True,
+            )
+        ),
+    )
+
+    assert callbacks.place_selection_at(4.8, 5.9) is True
+    assert saved_sets[-1]
+    assert refine_sources and isinstance(refine_sources[-1], dict)
+    assert cache_calls == []
+
+
+def test_runtime_place_click_redraw_build_initial_pairs_display_reuse_only() -> None:
+    build_reuse_only: list[bool] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key, col=5.0, row=6.0)
+    pick_session_state: dict[str, object] = {
+        "session": _runtime_qr_click_session(group_key, candidate)
+    }
+
+    def _build(_index, *, prefer_cache=False, reuse_only=False):
+        assert prefer_cache is True
+        build_reuse_only.append(bool(reuse_only))
+        if not reuse_only:
+            raise AssertionError("click redraw requested build-capable initial pairs")
+        return ([{"measured": True}], [{"saved": True}])
+
+    callbacks, _key, _saved_sets, _set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=lambda **_kwargs: mg.geometry_manual_no_build_cache_sentinel(
+            match_config={}
+        ),
+        refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
+        build_initial_pairs_display=_build,
+    )
+
+    assert callbacks.place_selection_at(4.8, 5.9) is True
+    assert build_reuse_only and all(build_reuse_only)
+
+
+def test_runtime_toggle_selection_refreshes_session_reuse_only_and_does_not_build_cache() -> None:
+    refresh_reuse_only: list[bool] = []
+    cache_reuse_only: list[bool] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key)
+    pick_session_state: dict[str, object] = {"session": {}}
+
+    def _refresh(session, *, reuse_only=False):
+        refresh_reuse_only.append(bool(reuse_only))
+        if not reuse_only:
+            raise AssertionError("full refresh requested")
+        return dict(session)
+
+    def _get_cache(**kwargs):
+        cache_reuse_only.append(bool(kwargs.get("reuse_only")))
+        if not kwargs.get("reuse_only"):
+            raise AssertionError("full cache requested")
+        return {
+            "cache_ready": True,
+            "signature": ("warm",),
+            "cache_metadata": {"reuse_only": True},
+            "grouped_candidates": {group_key: [dict(candidate)]},
+        }
+
+    callbacks, _key, _saved_sets, set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=_get_cache,
+        refresh_pick_session=_refresh,
+    )
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is True
+    assert refresh_reuse_only
+    assert all(refresh_reuse_only)
+    assert cache_reuse_only == [True]
+    assert set_sessions[-1]["group_key"] == group_key
+
+
+def test_runtime_toggle_click_redraw_build_initial_pairs_display_reuse_only() -> None:
+    build_reuse_only: list[bool] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key)
+    pick_session_state: dict[str, object] = {"session": {}}
+
+    def _build(_index, *, prefer_cache=False, reuse_only=False):
+        assert prefer_cache is True
+        build_reuse_only.append(bool(reuse_only))
+        if not reuse_only:
+            raise AssertionError("click redraw requested build-capable initial pairs")
+        return ([{"measured": True}], [{"saved": True}])
+
+    callbacks, _key, _saved_sets, _set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=lambda **kwargs: {
+            "cache_ready": True,
+            "signature": ("warm",),
+            "cache_metadata": {"reuse_only": kwargs.get("reuse_only")},
+            "grouped_candidates": {group_key: [dict(candidate)]},
+        },
+        refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
+        build_initial_pairs_display=_build,
+    )
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is True
+    assert build_reuse_only and all(build_reuse_only)
+
+
+def test_runtime_place_click_redraw_session_initial_pairs_display_reuse_only() -> None:
+    session_reuse_only: list[bool] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key, col=5.0, row=6.0)
+    pick_session_state: dict[str, object] = {
+        "session": _runtime_qr_click_session(group_key, candidate)
+    }
+
+    def _session_display(*, reuse_only=False):
+        session_reuse_only.append(bool(reuse_only))
+        if not reuse_only:
+            raise AssertionError("click redraw requested build-capable session display")
+        return [{"pending": True}]
+
+    callbacks, _key, _saved_sets, _set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=lambda **_kwargs: mg.geometry_manual_no_build_cache_sentinel(
+            match_config={}
+        ),
+        refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
+        session_initial_pairs_display=_session_display,
+    )
+
+    assert callbacks.place_selection_at(4.8, 5.9) is True
+    assert session_reuse_only and all(session_reuse_only)
+
+
+def test_runtime_toggle_click_redraw_session_initial_pairs_display_reuse_only() -> None:
+    session_reuse_only: list[bool] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key)
+    pick_session_state: dict[str, object] = {"session": {}}
+
+    def _session_display(*, reuse_only=False):
+        session_reuse_only.append(bool(reuse_only))
+        if not reuse_only:
+            raise AssertionError("click redraw requested build-capable session display")
+        return [{"pending": True}]
+
+    callbacks, _key, _saved_sets, _set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=lambda **kwargs: {
+            "cache_ready": True,
+            "signature": ("warm",),
+            "cache_metadata": {"reuse_only": kwargs.get("reuse_only")},
+            "grouped_candidates": {group_key: [dict(candidate)]},
+        },
+        refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
+        session_initial_pairs_display=_session_display,
+    )
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is True
+    assert session_reuse_only and all(session_reuse_only)
+
+
+def test_runtime_warm_qr_reuse_only_click_succeeds_without_build_refine_or_fresh_simulation(
+    monkeypatch,
+) -> None:
+    calls = {
+        "build_geometry_manual_pick_cache": 0,
+        "geometry_manual_refine_qr_sim_candidates_in_cache": 0,
+        "geometry_manual_rebuild_refined_qr_cache_lookups": 0,
+        "geometry_manual_simulated_peaks_from_callback": 0,
+    }
+    for name in tuple(calls):
+        monkeypatch.setattr(
+            mg,
+            name,
+            lambda *_args, _name=name, **_kwargs: (
+                calls.__setitem__(_name, calls[_name] + 1)
+                or (_ for _ in ()).throw(AssertionError(f"{_name} called"))
+            ),
+        )
+
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key)
+    pick_session_state: dict[str, object] = {"session": {}}
+    build_reuse_only: list[bool] = []
+    session_reuse_only: list[bool] = []
+
+    callbacks, _key, _saved_sets, set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=lambda **kwargs: {
+            "cache_ready": True,
+            "signature": ("warm",),
+            "cache_metadata": {"reuse_only": kwargs.get("reuse_only")},
+            "grouped_candidates": {group_key: [dict(candidate)]},
+        },
+        refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
+        build_initial_pairs_display=lambda _idx, *, prefer_cache=False, reuse_only=False: (
+            build_reuse_only.append(bool(reuse_only)) or ([{"measured": True}], [])
+        ),
+        session_initial_pairs_display=lambda *, reuse_only=False: (
+            session_reuse_only.append(bool(reuse_only)) or []
+        ),
+    )
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is True
+    assert set_sessions[-1]["group_key"] == group_key
+    assert calls == {key: 0 for key in calls}
+    assert build_reuse_only and all(build_reuse_only)
+    assert session_reuse_only and all(session_reuse_only)
+
+
+def test_runtime_cold_qr_reuse_only_click_fails_fast_without_clearing_active_session() -> None:
+    status_messages: list[str] = []
+    set_sessions: list[dict[str, object]] = []
+    group_key = ("q_group", "primary", 1, 0)
+    candidate = _runtime_qr_click_candidate(group_key)
+    original_session = _runtime_qr_click_session(group_key, candidate)
+    pick_session_state: dict[str, object] = {"session": dict(original_session)}
+    refresh_reuse_only: list[bool] = []
+
+    def _refresh(session, *, reuse_only=False):
+        refresh_reuse_only.append(bool(reuse_only))
+        return dict(session)
+
+    callbacks, _key, _saved_sets, _set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=lambda **kwargs: {
+            "cache_ready": False,
+            "manual_no_build_cache": True,
+            "cache_metadata": {"reuse_only": kwargs.get("reuse_only")},
+        },
+        refresh_pick_session=_refresh,
+        status_messages=status_messages,
+        set_sessions=set_sessions,
+    )
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is False
+    assert refresh_reuse_only == [True]
+    assert set_sessions == []
+    assert pick_session_state["session"] == original_session
+    assert "cache is not ready" in status_messages[-1]
+
+
+def test_initial_pairs_display_reuse_only_miss_does_not_call_source_rows_or_fresh_simulation() -> (
+    None
+):
+    cache_kwargs: list[dict[str, object]] = []
+    saved_entry = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "x": 4.0,
+        "y": 5.0,
+        "refined_sim_x": 10.0,
+        "refined_sim_y": 11.0,
+    }
+
+    measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        reuse_only=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_entry)],
+        get_cache_data=lambda **kwargs: (
+            cache_kwargs.append(dict(kwargs))
+            or {"cache_ready": False, "cache_metadata": {"reuse_only": True}}
+        ),
+        source_rows_for_background=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("source-row provider called")
+        ),
+        simulated_peaks_for_params=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh simulation fallback called")
+        ),
+        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(
+            AssertionError("lookup rebuild called")
+        ),
+        project_peaks_to_current_view=None,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert cache_kwargs[-1]["reuse_only"] is True
+    assert measured[0]["overlay_match_index"] == 0
+    assert displayed[0]["overlay_match_index"] == 0
+    assert displayed[0]["bg_display"] == (4.0, 5.0)
+    assert displayed[0]["sim_display"] == (10.0, 11.0)
+
+
+def test_initial_pairs_display_reuse_only_miss_does_not_rebuild_caked_projection() -> (
+    None
+):
+    saved_entry = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "background_two_theta_deg": 4.0,
+        "background_phi_deg": 5.0,
+        "raw_caked_x": 4.0,
+        "raw_caked_y": 5.0,
+    }
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        reuse_only=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved_entry)],
+        get_cache_data=lambda **_kwargs: {
+            "cache_ready": False,
+            "cache_metadata": {"reuse_only": True},
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked projection source-row rebuild called")
+        ),
+        simulated_peaks_for_params=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("caked projection fresh simulation fallback called")
+        ),
+        build_simulated_lookup=lambda _rows: (_ for _ in ()).throw(
+            AssertionError("caked projection lookup rebuild called")
+        ),
+        project_peaks_to_current_view=lambda _rows: (_ for _ in ()).throw(
+            AssertionError("caked projection rebuild called")
+        ),
+        entry_display_coords=lambda entry: (
+            float(entry["background_two_theta_deg"]),
+            float(entry["background_phi_deg"]),
+        ),
+    )
+
+    assert displayed[0]["overlay_match_index"] == 0
+    assert displayed[0]["bg_display"] == (4.0, 5.0)
+    assert displayed[0]["sim_display_unresolved"] is True
+
+
+def test_caked_picker_empty_sidecar_falls_back_to_detector_candidates() -> None:
+    status_messages: list[str] = []
+    group_key = ("q_group", "primary", 1, 0)
+    detector_entry = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": group_key,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+        "display_col": 10.0,
+        "display_row": 20.0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+    }
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "cache_ready": True,
+            "signature": ("cache",),
+            "caked_qr_projection_grouped_candidates": {},
+            "grouped_candidates": {group_key: [dict(detector_entry)]},
+            "cache_metadata": {"caked_qr_projection_sidecar_requested": True},
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["tagged_candidate"]["q_group_key"] == group_key
+    assert "using detector-space Qr picking" in status_messages[-1]
+
+
+def test_caked_picker_empty_authoritative_sidecar_suppresses_detector_fallback() -> None:
+    status_messages: list[str] = []
+    group_key = ("q_group", "primary", 1, 0)
+    detector_entry = _runtime_qr_click_candidate(group_key)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "cache_ready": True,
+            "signature": ("cache",),
+            "caked_qr_projection_grouped_candidates": {},
+            "grouped_candidates": {group_key: [dict(detector_entry)]},
+            "cache_metadata": {
+                "exact_caked_projection_authoritative": True,
+                "caked_qr_projection_suppress_detector_fallback": True,
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=True,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is False
+    assert next_session == {}
+    assert suppress_drag is False
+    assert "No simulated Qr/Qz groups" in status_messages[-1]
+
+
 def test_manual_qr_toggle_cold_cache_fails_fast_without_build() -> None:
     status_messages: list[str] = []
     handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
@@ -13115,6 +13778,73 @@ def test_warm_manual_qr_placement_click_does_not_rebuild_cache(monkeypatch) -> N
             "cache_metadata": {"reuse_only": kwargs.get("reuse_only")},
         },
         refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entry_sets.append([dict(entry) for entry in (entries or [])])
+            or list(entries or [])
+        ),
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert saved_entry_sets[-1][0]["x"] == 5.0
+
+
+def test_manual_qr_placement_runtime_callback_does_not_build_picker_cache(
+    monkeypatch,
+) -> None:
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    group_key = ("q_group", "primary", 1, 0)
+    session = {
+        "group_key": group_key,
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "hkl": (1, 0, 0),
+                "q_group_key": group_key,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+                "source_table_index": 1,
+                "source_row_index": 2,
+            }
+        ],
+        "pending_entries": [],
+        "target_count": 1,
+        "base_entries": [],
+        "q_label": "selected group",
+        "background_index": 0,
+    }
+
+    monkeypatch.setattr(
+        mg,
+        "build_geometry_manual_pick_cache",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("picker build")),
+    )
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session=session,
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "cache_ready": False,
+            "manual_no_build_cache": True,
+            "match_config": {},
+            "cache_metadata": {"reuse_only": True},
+        },
+        refine_preview_point=lambda *_args, **kwargs: (
+            5.0
+            if kwargs.get("allow_cache_build") is False
+            else (_ for _ in ()).throw(AssertionError("cache build allowed")),
+            6.0,
+        ),
         set_pairs_for_index_fn=lambda _idx, entries: (
             saved_entry_sets.append([dict(entry) for entry in (entries or [])])
             or list(entries or [])
@@ -16853,6 +17583,10 @@ def test_manual_qr_caked_toggle_requires_projection_cache_without_grouped_fallba
         "signature": ("manual-cache",),
         "grouped_candidates": _group_by_q_group([dict(stale_entry)]),
         "caked_qr_projection_grouped_candidates": {},
+        "cache_metadata": {
+            "exact_caked_projection_authoritative": True,
+            "caked_qr_projection_suppress_detector_fallback": True,
+        },
     }
     status_messages: list[str] = []
 
