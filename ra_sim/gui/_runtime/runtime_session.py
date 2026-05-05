@@ -62,6 +62,8 @@ from ra_sim.io.osc_reader import read_osc
 
 _QR_ROD_PROFILE_TIMINGS_MAX_RECORDS = 512
 _QR_ROD_PROFILE_TIMINGS: list[dict[str, object]] = []
+_GEOMETRY_FIT_PROJECTION_TOKEN_SCHEMA = "geometry_fit_projection_content_v3"
+_GEOMETRY_FIT_PROJECTION_TOKEN_SOURCE = "runtime_projection_storage_copy_v3"
 
 
 def clear_qr_rod_profile_timings() -> None:
@@ -30314,12 +30316,25 @@ def _geometry_fit_projection_transform_content_token(
             n_az = int(value.n_az)
         except Exception:
             return None
+        matrix_token = _geometry_fit_projection_transform_content_token(
+            value.matrix,
+            kind=f"{kind}.matrix",
+        )
+        count_token = _geometry_fit_projection_dense_content_token(
+            value.count_flat,
+            kind=f"{kind}.count_flat",
+            allow_empty=True,
+        )
+        if matrix_token is None or count_token is None:
+            return None
         return {
-            "kind": "detector_cake_lut_generation_v3",
+            "kind": "detector_cake_lut_content_v3",
             "content_kind": str(kind),
             "image_shape": image_shape,
             "n_rad": int(n_rad),
             "n_az": int(n_az),
+            "matrix": matrix_token,
+            "count_flat": count_token,
         }
     sparse_token = _geometry_fit_projection_sparse_content_token(value, kind=kind)
     if sparse_token is not None:
@@ -30363,13 +30378,18 @@ def _geometry_fit_projection_bundle_content_token(
 
 def _geometry_fit_projection_payload_digest(
     payload: Mapping[str, object] | None,
+    *,
+    trust_stored_token: bool = True,
 ) -> str | None:
     if not isinstance(payload, Mapping):
         return None
     existing_schema = str(payload.get("projection_token_schema") or "").strip()
     existing_token = payload.get("projection_content_token_v3")
+    existing_source = str(payload.get("projection_content_token_source") or "").strip()
     if (
-        existing_schema == "geometry_fit_projection_content_v3"
+        bool(trust_stored_token)
+        and existing_schema == _GEOMETRY_FIT_PROJECTION_TOKEN_SCHEMA
+        and existing_source == _GEOMETRY_FIT_PROJECTION_TOKEN_SOURCE
         and isinstance(existing_token, str)
         and existing_token
     ):
@@ -30424,13 +30444,6 @@ def _geometry_fit_projection_payload_storage_copy(
     if not isinstance(projection, Mapping):
         return None
     stored: dict[str, object] = {"payload_kind": "projection"}
-    if (
-        str(projection.get("projection_token_schema") or "").strip()
-        == "geometry_fit_projection_content_v3"
-        and projection.get("projection_content_token_v3") is not None
-    ):
-        stored["projection_token_schema"] = "geometry_fit_projection_content_v3"
-        stored["projection_content_token_v3"] = str(projection.get("projection_content_token_v3"))
     detector_shape = _geometry_fit_projection_shape_token(projection.get("detector_shape"))
     if detector_shape is not None:
         stored["detector_shape"] = tuple(int(v) for v in detector_shape[:2])
@@ -30453,12 +30466,11 @@ def _geometry_fit_projection_payload_storage_copy(
     transform_bundle = projection.get("transform_bundle")
     if transform_bundle is not None:
         stored["transform_bundle"] = transform_bundle
-    projection_token = _geometry_fit_projection_payload_digest(stored)
-    if projection_token is None:
-        projection_token = _geometry_fit_projection_payload_digest(projection)
+    projection_token = _geometry_fit_projection_payload_digest(stored, trust_stored_token=False)
     if projection_token is not None:
-        stored["projection_token_schema"] = "geometry_fit_projection_content_v3"
+        stored["projection_token_schema"] = _GEOMETRY_FIT_PROJECTION_TOKEN_SCHEMA
         stored["projection_content_token_v3"] = str(projection_token)
+        stored["projection_content_token_source"] = _GEOMETRY_FIT_PROJECTION_TOKEN_SOURCE
     return stored
 
 

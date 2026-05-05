@@ -156,6 +156,23 @@ def _stable_geometry_fit_test_lut(seed: float = 1.0) -> np.ndarray:
     return np.asarray([[float(seed)]], dtype=np.float64)
 
 
+class _StableDetectorCakeLUT:
+    def __init__(
+        self,
+        *,
+        matrix: object,
+        count_flat: object,
+        image_shape: tuple[int, int] = (4, 5),
+        n_rad: int = 5,
+        n_az: int = 4,
+    ) -> None:
+        self.image_shape = tuple(image_shape)
+        self.n_rad = int(n_rad)
+        self.n_az = int(n_az)
+        self.matrix = matrix
+        self.count_flat = count_flat
+
+
 def _geometry_fit_worker_caked_payload(
     runtime_session,
     *,
@@ -16766,6 +16783,7 @@ def _runtime_projection_digest_payload(
     raw_azimuth_axis: np.ndarray | None = None,
     permutation: np.ndarray | None = None,
     lut_seed: float = 1.0,
+    lut: object | None = None,
 ) -> dict[str, object]:
     radial = (
         np.asarray(radial_axis, dtype=np.float64).copy()
@@ -16798,7 +16816,7 @@ def _runtime_projection_digest_payload(
             radial_deg=radial.copy(),
             raw_azimuth_deg=raw_azimuth.copy(),
             gui_azimuth_deg=azimuth.copy(),
-            lut=_stable_geometry_fit_test_lut(lut_seed),
+            lut=lut if lut is not None else _stable_geometry_fit_test_lut(lut_seed),
         ),
     }
     if permutation is not None:
@@ -16868,7 +16886,7 @@ def test_geometry_fit_projection_payload_digest_tracks_middle_axis_value() -> No
     ) != runtime_session._geometry_fit_projection_payload_digest(changed)
 
 
-def test_geometry_fit_projection_payload_digest_tracks_verified_projection_token() -> None:
+def test_geometry_fit_projection_payload_digest_ignores_unverified_projection_token() -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     first = _runtime_projection_digest_payload(runtime_session, lut_seed=1.0)
     changed = _runtime_projection_digest_payload(runtime_session, lut_seed=1.0)
@@ -16877,7 +16895,63 @@ def test_geometry_fit_projection_payload_digest_tracks_verified_projection_token
 
     assert runtime_session._geometry_fit_projection_payload_digest(
         first
-    ) != runtime_session._geometry_fit_projection_payload_digest(changed)
+    ) == runtime_session._geometry_fit_projection_payload_digest(changed)
+
+
+def test_geometry_fit_projection_payload_digest_tracks_detector_cake_lut_content() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    base_lut = _StableDetectorCakeLUT(
+        matrix=np.asarray([[0.0, 1.0], [2.0, 3.0]], dtype=np.float64),
+        count_flat=np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+    )
+    matrix_changed_lut = _StableDetectorCakeLUT(
+        matrix=np.asarray([[0.0, 1.0], [2.0, 9.0]], dtype=np.float64),
+        count_flat=np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+    )
+    count_changed_lut = _StableDetectorCakeLUT(
+        matrix=np.asarray([[0.0, 1.0], [2.0, 3.0]], dtype=np.float64),
+        count_flat=np.asarray([1.0, 2.0, 3.0, 9.0], dtype=np.float64),
+    )
+    base = _runtime_projection_digest_payload(runtime_session, lut=base_lut)
+    matrix_changed = _runtime_projection_digest_payload(runtime_session, lut=matrix_changed_lut)
+    count_changed = _runtime_projection_digest_payload(runtime_session, lut=count_changed_lut)
+    base_digest = runtime_session._geometry_fit_projection_payload_digest(base)
+
+    assert base_digest != runtime_session._geometry_fit_projection_payload_digest(matrix_changed)
+    assert base_digest != runtime_session._geometry_fit_projection_payload_digest(count_changed)
+
+
+def test_geometry_fit_projection_payload_storage_copy_recomputes_stale_token() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    stale_token = "stale-projection-token"
+    base = _runtime_projection_digest_payload(
+        runtime_session,
+        lut=_StableDetectorCakeLUT(
+            matrix=np.asarray([[1.0, 2.0]], dtype=np.float64),
+            count_flat=np.asarray([1.0, 2.0], dtype=np.float64),
+        ),
+    )
+    changed = _runtime_projection_digest_payload(
+        runtime_session,
+        lut=_StableDetectorCakeLUT(
+            matrix=np.asarray([[1.0, 8.0]], dtype=np.float64),
+            count_flat=np.asarray([1.0, 2.0], dtype=np.float64),
+        ),
+    )
+    for payload in (base, changed):
+        payload["projection_token_schema"] = "geometry_fit_projection_content_v3"
+        payload["projection_content_token_v3"] = stale_token
+
+    stored_base = runtime_session._geometry_fit_projection_payload_storage_copy(base)
+    stored_changed = runtime_session._geometry_fit_projection_payload_storage_copy(changed)
+
+    assert stored_base is not None
+    assert stored_changed is not None
+    assert stored_base["projection_content_token_v3"] != stale_token
+    assert stored_changed["projection_content_token_v3"] != stale_token
+    assert stored_base["projection_content_token_v3"] != stored_changed[
+        "projection_content_token_v3"
+    ]
 
 
 def test_geometry_fit_projection_payload_digest_ignores_legacy_signature() -> None:
@@ -16929,9 +17003,12 @@ def test_geometry_fit_projection_payload_storage_copy_is_projection_only() -> No
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     payload = _runtime_projection_digest_payload(runtime_session)
     payload["background"] = np.ones((4, 5), dtype=np.float64)
+    payload["image"] = np.full((4, 5), 2.0, dtype=np.float64)
     payload["sum_signal"] = np.ones((4, 5), dtype=np.float64)
     payload["sum_normalization"] = np.ones((4, 5), dtype=np.float64)
     payload["count"] = np.ones((4, 5), dtype=np.int64)
+    payload["projection_token_schema"] = "geometry_fit_projection_content_v3"
+    payload["projection_content_token_v3"] = "incoming-stale-token"
 
     stored = runtime_session._geometry_fit_projection_payload_storage_copy(payload)
 
@@ -16940,9 +17017,15 @@ def test_geometry_fit_projection_payload_storage_copy_is_projection_only() -> No
     assert "signature" not in stored
     assert stored["projection_token_schema"] == "geometry_fit_projection_content_v3"
     assert stored["projection_content_token_v3"]
+    assert stored["projection_content_token_v3"] != "incoming-stale-token"
+    assert (
+        stored["projection_content_token_source"]
+        == runtime_session._GEOMETRY_FIT_PROJECTION_TOKEN_SOURCE
+    )
     assert stored["radial_axis"] is not payload["radial_axis"]
     assert np.array_equal(stored["radial_axis"], payload["radial_axis"])
     assert "background" not in stored
+    assert "image" not in stored
     assert "sum_signal" not in stored
     assert "sum_normalization" not in stored
     assert "count" not in stored

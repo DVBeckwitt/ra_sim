@@ -212,12 +212,17 @@ payloads are valid geometry inputs even when the display/background caked image
 is absent. Caked pick-cache signatures intentionally ignore image-facing
 background payload identity, so display density sanitization, including
 zero-support `NaN -> 0.0` storage cleanup, must not churn the geometric
-projection cache. Stable projection signatures use explicit payload signatures
-when present and full-content value tokens for axes/permutations
+projection cache. Stable projection signatures use the verified
+`projection_content_token_v3` recomputed during projection-payload
+storage/hydration, plus full-content value tokens for axes/permutations
 (`axis_content_v3` / `perm_content_v3`), not array object IDs, sampled axis
-probes, full image hashes, or click-path LUT hashes. Do not mutate simulation
-or caked image arrays in place without also bumping the corresponding
-simulation or projection signature.
+probes, legacy `signature` fields, full image hashes, or click-path LUT hashes.
+DetectorCakeLUT-style projection tokens include `image_shape`, `n_rad`, `n_az`,
+the detector-to-cake matrix content, and `count_flat` content. Projection
+payloads and their referenced `CakeTransformBundle` objects are treated as
+logically immutable after storage; this path does not freeze shared arrays in
+place. Do not mutate simulation or caked image arrays in place without also
+bumping the corresponding simulation or projection signature.
 
 Status as of 2026-05-05: live caked trace output is opt-in, unchanged trace rows
 are suppressed unless explicitly requested, warm caked pick-cache calls skip
