@@ -392,9 +392,7 @@ _TK_FIGURE_CANVAS_CLS = None
 _ANALYSIS_PEAK_TOOLS_MODULE = None
 _ORDERED_STRUCTURE_FIT_MODULE = None
 _STRUCTURE_MODEL_MODULE = None
-_ANALYSIS_PEAK_PROFILE_GAUSSIAN = "gaussian"
-_ANALYSIS_PEAK_PROFILE_LORENTZIAN = "lorentzian"
-_ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT = "pseudo_voigt"
+_ANALYSIS_PEAK_PROFILE_MOSAIC_MIX = "mosaic_mix"
 
 
 class _LazyModuleProxy:
@@ -36823,9 +36821,7 @@ def _initialize_runtime_controls_block_43() -> None:
 
     _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT = "Fit results will appear here."
     _ANALYSIS_PEAK_MODEL_COLORS = {
-        _ANALYSIS_PEAK_PROFILE_GAUSSIAN: "#2a9d8f",
-        _ANALYSIS_PEAK_PROFILE_LORENTZIAN: "#f4a261",
-        _ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT: "#d62828",
+        _ANALYSIS_PEAK_PROFILE_MOSAIC_MIX: "#d62828",
     }
 
 
@@ -38424,13 +38420,6 @@ def _render_analysis_peak_tools_controls(
         on_fit_selected_peaks=_fit_selected_analysis_peaks,
         on_toggle_fit_axes_log_y=lambda: _apply_1d_plot_log_scale(redraw=True),
         pick_enabled=bool(analysis_peak_selection_state.pick_armed),
-        fit_pseudo_voigt=bool(
-            getattr(
-                analysis_peak_tools_view_state.fit_pseudo_voigt_var,
-                "get",
-                lambda: True,
-            )()
-        ),
         fit_radial=bool(
             getattr(
                 analysis_peak_tools_view_state.fit_radial_var,
@@ -38887,17 +38876,7 @@ def _fit_selected_analysis_peaks() -> None:
             return
 
     analysis_peak_tools = _get_analysis_peak_tools_module()
-    models = (
-        [_ANALYSIS_PEAK_PROFILE_PSEUDO_VOIGT]
-        if bool(getattr(analysis_peak_tools_view_state.fit_pseudo_voigt_var, "get", lambda: True)())
-        else []
-    )
-    if not models:
-        try:
-            progress_label_positions.config(text="Enable Pseudo-Voigt before fitting peaks.")
-        except Exception:
-            pass
-        return
+    models = [_ANALYSIS_PEAK_PROFILE_MOSAIC_MIX]
 
     axes_to_fit = []
     if bool(getattr(analysis_peak_tools_view_state.fit_radial_var, "get", lambda: True)()):
@@ -39209,6 +39188,7 @@ def _fit_selected_analysis_peaks() -> None:
                             "amplitude": float(component.get("amplitude", np.nan)),
                             "rmse": float(fit_result.get("rmse", np.nan)),
                             "rss": float(fit_result.get("rss", np.nan)),
+                            "weighted_rmse": float(fit_result.get("weighted_rmse", np.nan)),
                             "baseline": float(fit_result.get("baseline", np.nan)),
                             "model": str(fit_result.get("model", model)),
                             "label": str(fit_result.get("label", label)),
@@ -39216,7 +39196,15 @@ def _fit_selected_analysis_peaks() -> None:
                             "component_index": int(component_index),
                             "plot_fit": not plotted_group,
                         }
-                        for component_field in ("sigma", "gamma", "eta"):
+                        if "residual_mode" in fit_result:
+                            fit_entry["residual_mode"] = str(fit_result.get("residual_mode", ""))
+                        for component_field in (
+                            "sigma",
+                            "gamma",
+                            "eta",
+                            "gaussian_fwhm",
+                            "lorentzian_fwhm",
+                        ):
                             if component_field in component:
                                 fit_entry[component_field] = float(component[component_field])
                         if not plotted_group:

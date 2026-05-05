@@ -3050,9 +3050,6 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
         on_fit_selected_peaks=lambda: calls.append("fit"),
         on_toggle_fit_axes_log_y=lambda: calls.append("log-y"),
         pick_enabled=True,
-        fit_gaussian=True,
-        fit_lorentzian=False,
-        fit_pseudo_voigt=True,
         fit_radial=True,
         fit_azimuth=False,
         fit_axes_log_y=True,
@@ -3070,23 +3067,17 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
     assert view_state.clear_button.kwargs["text"] == "Clear Peaks and Fits"
     assert view_state.fit_button.kwargs["text"] == "Fit Selected Peaks"
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
-        "Gaussian",
-        "Lorentzian",
-        "Pseudo-Voigt (eta)",
         "Subtract linear background",
         "Radial (2θ)",
         "Azimuth (φ)",
         "Log y-scale",
     ]
-    assert view_state.fit_gaussian_var.get() is True
-    assert view_state.fit_lorentzian_var.get() is False
-    assert view_state.fit_pseudo_voigt_var.get() is True
     assert view_state.subtract_linear_background_var.get() is True
-    assert view_state.subtract_linear_background_checkbutton is _FakeCheckbutton.created[3]
+    assert view_state.subtract_linear_background_checkbutton is _FakeCheckbutton.created[0]
     assert view_state.fit_radial_var.get() is True
     assert view_state.fit_azimuth_var.get() is False
     assert view_state.fit_axes_log_y_var.get() is True
-    assert view_state.fit_axes_log_y_checkbutton is _FakeCheckbutton.created[6]
+    assert view_state.fit_axes_log_y_checkbutton is _FakeCheckbutton.created[3]
     assert view_state.selection_status_var.get() == "Selected peaks: 2"
     assert view_state.fit_results_var.get() == "Radial fits ready."
     assert view_state.fit_results_label.kwargs["font"] == "TkFixedFont"

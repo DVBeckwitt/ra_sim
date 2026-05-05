@@ -11,12 +11,11 @@ from scipy.optimize import least_squares
 
 PROFILE_GAUSSIAN = "gaussian"
 PROFILE_LORENTZIAN = "lorentzian"
-PROFILE_PSEUDO_VOIGT = "pseudo_voigt"
+PROFILE_MOSAIC_MIX = "mosaic_mix"
 SUPPORTED_PROFILE_MODELS = (
-    PROFILE_GAUSSIAN,
-    PROFILE_LORENTZIAN,
-    PROFILE_PSEUDO_VOIGT,
+    PROFILE_MOSAIC_MIX,
 )
+_GAUSSIAN_FWHM_PER_SIGMA = 2.0 * math.sqrt(2.0 * math.log(2.0))
 
 
 def wrap_angle_degrees(value: float) -> float:
@@ -394,8 +393,8 @@ def profile_model_label(model: str) -> str:
         return "Gaussian"
     if normalized == PROFILE_LORENTZIAN:
         return "Lorentzian"
-    if normalized == PROFILE_PSEUDO_VOIGT:
-        return "Pseudo-Voigt"
+    if normalized == PROFILE_MOSAIC_MIX:
+        return "Mosaic mix"
     return str(model)
 
 
@@ -556,25 +555,27 @@ def lorentzian_profile(
     )
 
 
-def pseudo_voigt_profile(
+def mosaic_mix_profile(
     x_values: Sequence[float] | np.ndarray,
     baseline: float,
     amplitude: float,
     center: float,
-    fwhm: float,
+    sigma: float,
+    gamma: float,
     eta: float,
 ) -> np.ndarray:
-    """Return one area-normalized pseudo-Voigt peak.
+    """Return one area-normalized independent Gaussian/Lorentzian mosaic mix.
 
     ``amplitude`` is the integrated peak area, and ``eta`` is the Lorentzian
     area fraction.
     """
 
     x_arr = np.asarray(x_values, dtype=float)
-    return float(baseline) + float(amplitude) * _pseudo_voigt_unit_profile(
+    return float(baseline) + float(amplitude) * _mosaic_mix_unit_profile(
         x_arr,
         center=float(center),
-        fwhm=float(fwhm),
+        sigma=float(sigma),
+        gamma=float(gamma),
         eta=float(eta),
     )
 
@@ -592,14 +593,15 @@ def evaluate_profile(
         return gaussian_profile(x_values, params[0], params[1], params[2], params[3])
     if normalized == PROFILE_LORENTZIAN and params.size >= 4:
         return lorentzian_profile(x_values, params[0], params[1], params[2], params[3])
-    if normalized == PROFILE_PSEUDO_VOIGT and params.size >= 5:
-        return pseudo_voigt_profile(
+    if normalized == PROFILE_MOSAIC_MIX and params.size >= 6:
+        return mosaic_mix_profile(
             x_values,
             params[0],
             params[1],
             params[2],
             params[3],
             params[4],
+            params[5],
         )
     raise ValueError(f"Unsupported peak profile model: {model!r}")
 
@@ -645,6 +647,21 @@ def _gaussian_unit_area_profile(
     return coefficient * _gaussian_unit_profile(x_values, center=center, fwhm=fwhm_value)
 
 
+def _gaussian_sigma_unit_area_profile(
+    x_values: Sequence[float] | np.ndarray,
+    *,
+    center: float,
+    sigma: float,
+) -> np.ndarray:
+    """Return one baseline-free, unit-area Gaussian parameterized by sigma."""
+
+    x_arr = np.asarray(x_values, dtype=float)
+    sigma_value = max(abs(float(sigma)), 1.0e-9)
+    delta = x_arr - float(center)
+    coefficient = 1.0 / (sigma_value * math.sqrt(2.0 * math.pi))
+    return np.asarray(coefficient * np.exp(-0.5 * (delta / sigma_value) ** 2), dtype=float)
+
+
 def _lorentzian_unit_area_profile(
     x_values: Sequence[float] | np.ndarray,
     *,
@@ -658,18 +675,36 @@ def _lorentzian_unit_area_profile(
     return coefficient * _lorentzian_unit_profile(x_values, center=center, fwhm=fwhm_value)
 
 
-def _pseudo_voigt_unit_profile(
+def _lorentzian_gamma_unit_area_profile(
     x_values: Sequence[float] | np.ndarray,
     *,
     center: float,
-    fwhm: float,
+    gamma: float,
+) -> np.ndarray:
+    """Return one baseline-free, unit-area Lorentzian parameterized by HWHM gamma."""
+
+    x_arr = np.asarray(x_values, dtype=float)
+    gamma_value = max(abs(float(gamma)), 1.0e-9)
+    delta = x_arr - float(center)
+    return np.asarray(
+        (gamma_value / math.pi) / (delta**2 + gamma_value**2),
+        dtype=float,
+    )
+
+
+def _mosaic_mix_unit_profile(
+    x_values: Sequence[float] | np.ndarray,
+    *,
+    center: float,
+    sigma: float,
+    gamma: float,
     eta: float,
 ) -> np.ndarray:
-    """Return one baseline-free, unit-area pseudo-Voigt profile."""
+    """Return one baseline-free, unit-area independent-width mosaic profile."""
 
     eta_value = float(np.clip(float(eta), 0.0, 1.0))
-    gaussian = _gaussian_unit_area_profile(x_values, center=center, fwhm=fwhm)
-    lorentzian = _lorentzian_unit_area_profile(x_values, center=center, fwhm=fwhm)
+    gaussian = _gaussian_sigma_unit_area_profile(x_values, center=center, sigma=sigma)
+    lorentzian = _lorentzian_gamma_unit_area_profile(x_values, center=center, gamma=gamma)
     return np.asarray((1.0 - eta_value) * gaussian + eta_value * lorentzian, dtype=float)
 
 
@@ -677,17 +712,26 @@ def _profile_unit_peak_height(
     model: str,
     *,
     fwhm: float,
+    sigma: float | None = None,
+    gamma: float | None = None,
     eta: float = 0.5,
 ) -> float:
     """Return model value at peak center for one unit-amplitude/unit-area peak."""
 
     normalized_model = str(model or "").strip().lower()
-    if normalized_model != PROFILE_PSEUDO_VOIGT:
+    if normalized_model != PROFILE_MOSAIC_MIX:
         return 1.0
-    fwhm_value = max(abs(float(fwhm)), 1.0e-9)
+    if sigma is None:
+        sigma_value = max(abs(float(fwhm)) / _GAUSSIAN_FWHM_PER_SIGMA, 1.0e-9)
+    else:
+        sigma_value = max(abs(float(sigma)), 1.0e-9)
+    if gamma is None:
+        gamma_value = max(0.5 * abs(float(fwhm)), 1.0e-9)
+    else:
+        gamma_value = max(abs(float(gamma)), 1.0e-9)
     eta_value = float(np.clip(float(eta), 0.0, 1.0))
-    gaussian_peak = 2.0 * math.sqrt(math.log(2.0)) / (math.sqrt(math.pi) * fwhm_value)
-    lorentzian_peak = 2.0 / (math.pi * fwhm_value)
+    gaussian_peak = 1.0 / (sigma_value * math.sqrt(2.0 * math.pi))
+    lorentzian_peak = 1.0 / (math.pi * gamma_value)
     return float((1.0 - eta_value) * gaussian_peak + eta_value * lorentzian_peak)
 
 
@@ -696,11 +740,16 @@ def _profile_amplitude_from_peak_height(
     peak_height: float,
     *,
     fwhm: float,
+    sigma: float | None = None,
+    gamma: float | None = None,
     eta: float = 0.5,
 ) -> float:
     """Convert desired peak height into the fitted amplitude parameter."""
 
-    unit_peak_height = max(_profile_unit_peak_height(model, fwhm=fwhm, eta=eta), 1.0e-12)
+    unit_peak_height = max(
+        _profile_unit_peak_height(model, fwhm=fwhm, sigma=sigma, gamma=gamma, eta=eta),
+        1.0e-12,
+    )
     return float(max(float(peak_height), 1.0e-12) / unit_peak_height)
 
 
@@ -710,6 +759,8 @@ def _profile_unit_values(
     *,
     center: float,
     fwhm: float,
+    sigma: float | None = None,
+    gamma: float | None = None,
     eta: float = 0.5,
 ) -> np.ndarray:
     """Return one baseline-free profile for the chosen family."""
@@ -719,11 +770,20 @@ def _profile_unit_values(
         return _gaussian_unit_profile(x_values, center=center, fwhm=fwhm)
     if normalized_model == PROFILE_LORENTZIAN:
         return _lorentzian_unit_profile(x_values, center=center, fwhm=fwhm)
-    if normalized_model == PROFILE_PSEUDO_VOIGT:
-        return _pseudo_voigt_unit_profile(
+    if normalized_model == PROFILE_MOSAIC_MIX:
+        sigma_value = max(
+            abs(float(sigma)) if sigma is not None else abs(float(fwhm)) / _GAUSSIAN_FWHM_PER_SIGMA,
+            1.0e-9,
+        )
+        gamma_value = max(
+            abs(float(gamma)) if gamma is not None else 0.5 * abs(float(fwhm)),
+            1.0e-9,
+        )
+        return _mosaic_mix_unit_profile(
             x_values,
             center=center,
-            fwhm=fwhm,
+            sigma=sigma_value,
+            gamma=gamma_value,
             eta=eta,
         )
     raise ValueError(f"Unsupported peak profile model: {model!r}")
@@ -746,7 +806,7 @@ def _axis_step_from_values(axis_values: Sequence[float] | np.ndarray) -> float:
 def _component_parameter_count(model: str, component_count: int) -> int:
     """Return one flattened parameter count for a composite fit."""
 
-    per_component = 4 if str(model or "").strip().lower() == PROFILE_PSEUDO_VOIGT else 3
+    per_component = 5 if str(model or "").strip().lower() == PROFILE_MOSAIC_MIX else 3
     return int(1 + per_component * max(int(component_count), 0))
 
 
@@ -879,21 +939,61 @@ def _evaluate_composite_profile(
     params = np.asarray(parameters, dtype=float)
     x_arr = np.asarray(x_values, dtype=float)
     profile = np.full(x_arr.shape, float(params[0]), dtype=float)
-    stride = 4 if normalized_model == PROFILE_PSEUDO_VOIGT else 3
+    stride = 5 if normalized_model == PROFILE_MOSAIC_MIX else 3
     for component_index in range(max(int(component_count), 0)):
         offset = 1 + component_index * stride
         amplitude = float(params[offset])
         center = float(params[offset + 1])
-        fwhm = float(params[offset + 2])
-        eta = float(params[offset + 3]) if stride == 4 else 0.5
-        profile += amplitude * _profile_unit_values(
-            normalized_model,
-            x_arr,
-            center=center,
-            fwhm=fwhm,
-            eta=eta,
-        )
+        if normalized_model == PROFILE_MOSAIC_MIX:
+            sigma = float(params[offset + 2])
+            gamma = float(params[offset + 3])
+            eta = float(params[offset + 4])
+            profile += amplitude * _profile_unit_values(
+                normalized_model,
+                x_arr,
+                center=center,
+                fwhm=float(sigma) * _GAUSSIAN_FWHM_PER_SIGMA,
+                sigma=sigma,
+                gamma=gamma,
+                eta=eta,
+            )
+        else:
+            fwhm = float(params[offset + 2])
+            profile += amplitude * _profile_unit_values(
+                normalized_model,
+                x_arr,
+                center=center,
+                fwhm=fwhm,
+                eta=0.5,
+            )
     return np.asarray(profile, dtype=float)
+
+
+def _tail_weight_floor(data_y: Sequence[float] | np.ndarray, baseline: float) -> float:
+    """Return a positive variance floor for tail-aware profile residuals."""
+
+    signal = np.abs(np.asarray(data_y, dtype=float) - float(baseline))
+    finite_signal = signal[np.isfinite(signal)]
+    if finite_signal.size <= 0:
+        return 1.0e-6
+    percentile_floor = float(np.nanpercentile(finite_signal, 25.0))
+    max_floor = 0.02 * float(np.nanmax(finite_signal))
+    return float(max(1.0e-6, percentile_floor, max_floor))
+
+
+def _tail_weighted_profile_residual(
+    model_y: Sequence[float] | np.ndarray,
+    data_y: Sequence[float] | np.ndarray,
+    *,
+    baseline: float,
+    floor: float,
+) -> np.ndarray:
+    """Return residuals weighted to keep low-intensity tails visible."""
+
+    model_arr = np.asarray(model_y, dtype=float)
+    data_arr = np.asarray(data_y, dtype=float)
+    denom = np.sqrt(np.abs(data_arr - float(baseline)) + max(float(floor), 1.0e-12))
+    return np.asarray((model_arr - data_arr) / denom, dtype=float)
 
 
 def fit_composite_peak_profile(
@@ -1012,8 +1112,10 @@ def fit_composite_peak_profile(
     initial = [baseline0]
     lower = [y_min - y_span]
     upper = [y_max + y_span]
-    stride = 4 if normalized_model == PROFILE_PSEUDO_VOIGT else 3
+    stride = 5 if normalized_model == PROFILE_MOSAIC_MIX else 3
     min_fwhm = max(2.0 * float(axis_step), 1.0e-6)
+    min_sigma = min_fwhm / _GAUSSIAN_FWHM_PER_SIGMA
+    min_gamma = 0.5 * min_fwhm
 
     for component_index, selected_axis_value in enumerate(collapsed_centers):
         center_lower = float(fit_axis_arr[0])
@@ -1051,6 +1153,18 @@ def fit_composite_peak_profile(
         fwhm_max = min(float(full_span), float(max_candidate))
         if not np.isfinite(fwhm_max) or fwhm_max <= min_fwhm:
             fwhm_max = max(min_fwhm * 4.0, float(full_span), 10.0 * float(axis_step))
+        sigma_max = max(float(fwhm_max) / _GAUSSIAN_FWHM_PER_SIGMA, min_sigma * 4.0)
+        if component_count > 1:
+            gamma_candidate = max(
+                10.0 * float(axis_step),
+                0.5 * float(full_span),
+                1.5 * float(nearest_neighbor_spacing),
+            )
+            gamma_max = min(float(full_span), float(gamma_candidate))
+        else:
+            gamma_max = float(full_span)
+        if not np.isfinite(gamma_max) or gamma_max <= min_gamma:
+            gamma_max = max(min_gamma * 4.0, float(full_span), 10.0 * float(axis_step))
 
         center0 = float(np.clip(float(selected_axis_value), center_lower, center_upper))
         sample_y = float(np.interp(center0, fit_axis_arr, fit_curve_arr))
@@ -1063,16 +1177,22 @@ def fit_composite_peak_profile(
             ),
         )
         fwhm0 = float(np.clip(width_seed, min_fwhm, fwhm_max))
+        sigma0 = float(np.clip(fwhm0 / _GAUSSIAN_FWHM_PER_SIGMA, min_sigma, sigma_max))
+        gamma0 = float(np.clip(0.5 * fwhm0, min_gamma, gamma_max))
         amplitude0 = _profile_amplitude_from_peak_height(
             normalized_model,
             peak_height0,
             fwhm=fwhm0,
+            sigma=sigma0,
+            gamma=gamma0,
             eta=0.5,
         )
         widest_lorentzian_area_scale = 1.0 / max(
             _profile_unit_peak_height(
                 normalized_model,
                 fwhm=fwhm_max,
+                sigma=sigma_max,
+                gamma=gamma_max,
                 eta=1.0,
             ),
             1.0e-12,
@@ -1083,24 +1203,32 @@ def fit_composite_peak_profile(
             1.0e-6,
         )
 
-        initial.extend([amplitude0, center0, fwhm0])
-        lower.extend([0.0, center_lower, min_fwhm])
-        upper.extend([amplitude_upper, center_upper, fwhm_max])
-        if stride == 4:
-            initial.append(0.5)
-            lower.append(0.0)
-            upper.append(1.0)
+        if normalized_model == PROFILE_MOSAIC_MIX:
+            initial.extend([amplitude0, center0, sigma0, gamma0, 0.5])
+            lower.extend([0.0, center_lower, min_sigma, min_gamma, 0.0])
+            upper.extend([amplitude_upper, center_upper, sigma_max, gamma_max, 1.0])
+        else:
+            initial.extend([amplitude0, center0, fwhm0])
+            lower.extend([0.0, center_lower, min_fwhm])
+            upper.extend([amplitude_upper, center_upper, fwhm_max])
+
+    residual_floor = _tail_weight_floor(fit_curve_arr, baseline0)
 
     def _residual(parameters: np.ndarray) -> np.ndarray:
-        return (
-            _evaluate_composite_profile(
-                normalized_model,
-                fit_axis_arr,
-                parameters,
-                component_count=component_count,
-            )
-            - fit_curve_arr
+        model_y = _evaluate_composite_profile(
+            normalized_model,
+            fit_axis_arr,
+            parameters,
+            component_count=component_count,
         )
+        if normalized_model == PROFILE_MOSAIC_MIX:
+            return _tail_weighted_profile_residual(
+                model_y,
+                fit_curve_arr,
+                baseline=baseline0,
+                floor=residual_floor,
+            )
+        return model_y - fit_curve_arr
 
     try:
         result = least_squares(
@@ -1108,6 +1236,8 @@ def fit_composite_peak_profile(
             np.asarray(initial, dtype=float),
             bounds=(np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)),
             max_nfev=max(25, int(max_nfev)),
+            loss=("soft_l1" if normalized_model == PROFILE_MOSAIC_MIX else "linear"),
+            f_scale=1.0,
         )
     except Exception as exc:
         return {
@@ -1125,6 +1255,12 @@ def fit_composite_peak_profile(
         component_count=component_count,
     )
     residual = fitted - fit_curve_arr
+    weighted_residual = _tail_weighted_profile_residual(
+        fitted,
+        fit_curve_arr,
+        baseline=baseline0,
+        floor=residual_floor,
+    )
     fitted_output = _evaluate_composite_profile(
         normalized_model,
         fit_axis_unsorted,
@@ -1142,7 +1278,6 @@ def fit_composite_peak_profile(
     ]
     for component_index, group in enumerate(collapsed_groups):
         offset = 1 + component_index * stride
-        fwhm_value = float(abs(params[offset + 2]))
         display_selected_axis_value = float(group["selected_axis_value"])
         display_center = _display_coordinate_from_fit_value(
             float(params[offset + 1]),
@@ -1155,14 +1290,25 @@ def fit_composite_peak_profile(
             "selected_axis_value": display_selected_axis_value,
             "amplitude": float(params[offset]),
             "center": display_center,
-            "fwhm": fwhm_value,
         }
+        if normalized_model == PROFILE_MOSAIC_MIX:
+            sigma_value = float(abs(params[offset + 2]))
+            gamma_value = float(abs(params[offset + 3]))
+            gaussian_fwhm = float(_GAUSSIAN_FWHM_PER_SIGMA * sigma_value)
+            lorentzian_fwhm = float(2.0 * gamma_value)
+            component["sigma"] = sigma_value
+            component["gamma"] = gamma_value
+            component["eta"] = float(np.clip(float(params[offset + 4]), 0.0, 1.0))
+            component["gaussian_fwhm"] = gaussian_fwhm
+            component["lorentzian_fwhm"] = lorentzian_fwhm
+            component["fwhm"] = gaussian_fwhm
+        else:
+            fwhm_value = float(abs(params[offset + 2]))
+            component["fwhm"] = fwhm_value
         if normalized_model == PROFILE_GAUSSIAN:
             component["sigma"] = float(fwhm_value / (2.0 * math.sqrt(2.0 * math.log(2.0))))
         elif normalized_model == PROFILE_LORENTZIAN:
             component["gamma"] = float(0.5 * fwhm_value)
-        else:
-            component["eta"] = float(np.clip(float(params[offset + 3]), 0.0, 1.0))
         components.append(component)
 
     fit_result: dict[str, object] = {
@@ -1174,6 +1320,10 @@ def fit_composite_peak_profile(
         "component_groups": component_groups,
         "rmse": float(np.sqrt(np.mean(residual**2))),
         "rss": float(np.sum(residual**2)),
+        "weighted_rmse": float(np.sqrt(np.mean(weighted_residual**2))),
+        "residual_mode": "hybrid_tail"
+        if normalized_model == PROFILE_MOSAIC_MIX
+        else "linear",
         "x_fit": np.asarray(axis_arr, dtype=float),
         "y_fit": np.asarray(fitted_output, dtype=float),
         "x_window": np.asarray(axis_arr, dtype=float),
@@ -1250,36 +1400,51 @@ def fit_peak_profile(
     min_fwhm = max(step * 2.0, span / max(4.0 * float(x_window.size), 1.0), 1.0e-6)
     max_fwhm = max(min_fwhm * 4.0, min(max(span * 1.25, min_fwhm * 4.0), 2.0 * half_width))
     fwhm0 = float(np.clip(max(span / 4.0, min_fwhm * 1.5), min_fwhm, max_fwhm))
+    min_sigma = min_fwhm / _GAUSSIAN_FWHM_PER_SIGMA
+    sigma_max = max(max_fwhm / _GAUSSIAN_FWHM_PER_SIGMA, min_sigma * 4.0)
+    sigma0 = float(np.clip(fwhm0 / _GAUSSIAN_FWHM_PER_SIGMA, min_sigma, sigma_max))
+    min_gamma = 0.5 * min_fwhm
+    gamma_max = max(min_gamma * 4.0, span)
+    gamma0 = float(np.clip(0.5 * fwhm0, min_gamma, gamma_max))
     amplitude0 = _profile_amplitude_from_peak_height(
         normalized_model,
         peak_height0,
         fwhm=fwhm0,
+        sigma=sigma0,
+        gamma=gamma0,
         eta=0.5,
     )
     widest_lorentzian_area_scale = 1.0 / max(
         _profile_unit_peak_height(
             normalized_model,
             fwhm=max_fwhm,
+            sigma=sigma_max,
+            gamma=gamma_max,
             eta=1.0,
         ),
         1.0e-12,
     )
 
-    initial = [baseline0, amplitude0, center0, fwhm0]
-    lower = [y_min - y_span, 0.0, lower_bound, min_fwhm]
+    initial = [baseline0, amplitude0, center0, sigma0, gamma0, 0.5]
+    lower = [y_min - y_span, 0.0, lower_bound, min_sigma, min_gamma, 0.0]
     upper = [
         y_max + y_span,
         max(4.0 * y_span * widest_lorentzian_area_scale, amplitude0 * 4.0),
         upper_bound,
-        max_fwhm,
+        sigma_max,
+        gamma_max,
+        1.0,
     ]
-    if normalized_model == PROFILE_PSEUDO_VOIGT:
-        initial.append(0.5)
-        lower.append(0.0)
-        upper.append(1.0)
+    residual_floor = _tail_weight_floor(y_window, baseline0)
 
     def _residual(parameters: np.ndarray) -> np.ndarray:
-        return evaluate_profile(normalized_model, x_window, parameters) - y_window
+        model_y = evaluate_profile(normalized_model, x_window, parameters)
+        return _tail_weighted_profile_residual(
+            model_y,
+            y_window,
+            baseline=baseline0,
+            floor=residual_floor,
+        )
 
     try:
         result = least_squares(
@@ -1290,6 +1455,8 @@ def fit_peak_profile(
                 np.asarray(upper, dtype=float),
             ),
             max_nfev=max(25, int(max_nfev)),
+            loss="soft_l1",
+            f_scale=1.0,
         )
     except Exception as exc:
         return {
@@ -1302,7 +1469,17 @@ def fit_peak_profile(
     params = np.asarray(result.x, dtype=float)
     fitted = evaluate_profile(normalized_model, x_window, params)
     residual = fitted - y_window
-    fwhm_value = float(abs(params[3]))
+    weighted_residual = _tail_weighted_profile_residual(
+        fitted,
+        y_window,
+        baseline=baseline0,
+        floor=residual_floor,
+    )
+    sigma_value = float(abs(params[3]))
+    gamma_value = float(abs(params[4]))
+    eta_value = float(np.clip(float(params[5]), 0.0, 1.0))
+    gaussian_fwhm = float(_GAUSSIAN_FWHM_PER_SIGMA * sigma_value)
+    lorentzian_fwhm = float(2.0 * gamma_value)
     fit_result: dict[str, object] = {
         "success": bool(result.success),
         "model": normalized_model,
@@ -1310,21 +1487,22 @@ def fit_peak_profile(
         "baseline": float(params[0]),
         "amplitude": float(params[1]),
         "center": float(params[2]),
-        "fwhm": fwhm_value,
+        "fwhm": gaussian_fwhm,
+        "sigma": sigma_value,
+        "gamma": gamma_value,
+        "eta": eta_value,
+        "gaussian_fwhm": gaussian_fwhm,
+        "lorentzian_fwhm": lorentzian_fwhm,
         "rmse": float(np.sqrt(np.mean(residual**2))),
         "rss": float(np.sum(residual**2)),
+        "weighted_rmse": float(np.sqrt(np.mean(weighted_residual**2))),
+        "residual_mode": "hybrid_tail",
         "window_half_width": float(half_width),
         "x_window": np.asarray(x_window, dtype=float),
         "y_window": np.asarray(y_window, dtype=float),
         "y_fit": np.asarray(fitted, dtype=float),
         "nfev": int(getattr(result, "nfev", 0)),
     }
-    if normalized_model == PROFILE_GAUSSIAN:
-        fit_result["sigma"] = float(fwhm_value / (2.0 * math.sqrt(2.0 * math.log(2.0))))
-    elif normalized_model == PROFILE_LORENTZIAN:
-        fit_result["gamma"] = float(0.5 * fwhm_value)
-    else:
-        fit_result["eta"] = float(np.clip(float(params[4]), 0.0, 1.0))
     return fit_result
 
 
@@ -1433,8 +1611,8 @@ def _fit_entry_model(entry: Mapping[str, object]) -> str:
     if model in SUPPORTED_PROFILE_MODELS:
         return model
     label = str(entry.get("label", "") or "").strip().lower()
-    if "pseudo" in label or "voigt" in label:
-        return PROFILE_PSEUDO_VOIGT
+    if "mosaic" in label:
+        return PROFILE_MOSAIC_MIX
     if "lorentz" in label:
         return PROFILE_LORENTZIAN
     if "gauss" in label:
@@ -1448,8 +1626,8 @@ def _fit_entry_short_model_label(entry: Mapping[str, object]) -> str:
         return "Gaussian"
     if model == PROFILE_LORENTZIAN:
         return "Lorentz"
-    if model == PROFILE_PSEUDO_VOIGT:
-        return "P-Voigt"
+    if model == PROFILE_MOSAIC_MIX:
+        return "Mosaic"
     label = str(entry.get("label", "") or profile_model_label(model)).strip()
     return label[:8] if label else "-"
 
@@ -1462,9 +1640,9 @@ def _fit_entry_table_sort_key(entry: Mapping[str, object]) -> tuple[object, ...]
         "unknown": 2,
     }.get(source_name, 3)
     model_order = {
-        PROFILE_GAUSSIAN: 0,
-        PROFILE_LORENTZIAN: 1,
-        PROFILE_PSEUDO_VOIGT: 2,
+        PROFILE_MOSAIC_MIX: 0,
+        PROFILE_GAUSSIAN: 1,
+        PROFILE_LORENTZIAN: 2,
     }.get(_fit_entry_model(entry), 9)
     try:
         source_peak_index = int(entry.get("source_peak_index", 0))
@@ -1518,6 +1696,47 @@ def _fit_entry_width_mix_cells(entry: Mapping[str, object]) -> tuple[str, str, s
         return "-".rjust(7), "-".rjust(7), "-".rjust(10)
 
     model = _fit_entry_model(entry)
+    if model == PROFILE_MOSAIC_MIX:
+        try:
+            gaussian_fwhm = float(entry.get("gaussian_fwhm", np.nan))
+        except Exception:
+            gaussian_fwhm = float("nan")
+        if not np.isfinite(gaussian_fwhm):
+            try:
+                gaussian_fwhm = _GAUSSIAN_FWHM_PER_SIGMA * float(entry.get("sigma", np.nan))
+            except Exception:
+                gaussian_fwhm = float("nan")
+        if not np.isfinite(gaussian_fwhm):
+            try:
+                gaussian_fwhm = float(entry.get("fwhm", np.nan))
+            except Exception:
+                gaussian_fwhm = float("nan")
+
+        try:
+            lorentzian_fwhm = float(entry.get("lorentzian_fwhm", np.nan))
+        except Exception:
+            lorentzian_fwhm = float("nan")
+        if not np.isfinite(lorentzian_fwhm):
+            try:
+                lorentzian_fwhm = 2.0 * float(entry.get("gamma", np.nan))
+            except Exception:
+                lorentzian_fwhm = float("nan")
+
+        try:
+            eta = float(entry.get("eta", np.nan))
+        except Exception:
+            eta = float("nan")
+        if np.isfinite(eta):
+            eta = float(np.clip(eta, 0.0, 1.0))
+            mix_text = _format_peak_fit_percent_pair((1.0 - eta) * 100.0, eta * 100.0)
+        else:
+            mix_text = "-".rjust(10)
+        return (
+            _format_peak_fit_numeric_cell(gaussian_fwhm),
+            _format_peak_fit_numeric_cell(lorentzian_fwhm),
+            mix_text,
+        )
+
     try:
         fwhm = float(entry.get("fwhm", np.nan))
     except Exception:
@@ -1537,19 +1756,6 @@ def _fit_entry_width_mix_cells(entry: Mapping[str, object]) -> tuple[str, str, s
             _format_peak_fit_numeric_cell(fwhm),
             _format_peak_fit_percent_pair(0.0, 100.0),
         )
-    if model == PROFILE_PSEUDO_VOIGT:
-        try:
-            eta = float(entry.get("eta", np.nan))
-        except Exception:
-            eta = float("nan")
-        if np.isfinite(eta):
-            eta = float(np.clip(eta, 0.0, 1.0))
-            mix_text = _format_peak_fit_percent_pair((1.0 - eta) * 100.0, eta * 100.0)
-        else:
-            mix_text = "-".rjust(10)
-        fwhm_text = _format_peak_fit_numeric_cell(fwhm)
-        return fwhm_text, fwhm_text, mix_text
-
     return _format_peak_fit_numeric_cell(fwhm), "-".rjust(7), "-".rjust(10)
 
 

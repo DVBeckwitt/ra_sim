@@ -5297,9 +5297,6 @@ def create_analysis_peak_tools_controls(
     on_fit_selected_peaks: Callable[[], None],
     on_toggle_fit_axes_log_y: Callable[[], None] | None = None,
     pick_enabled: bool = False,
-    fit_gaussian: bool = False,
-    fit_lorentzian: bool = False,
-    fit_pseudo_voigt: bool = True,
     subtract_linear_background: bool = True,
     fit_radial: bool = True,
     fit_azimuth: bool = True,
@@ -5350,32 +5347,11 @@ def create_analysis_peak_tools_controls(
     option_row.columnconfigure(0, weight=1)
     option_row.columnconfigure(1, weight=1)
 
-    model_frame = ttk.LabelFrame(option_row, text="Profiles", padding=(6, 4))
-    model_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-    fit_gaussian_var = tk.BooleanVar(value=bool(fit_gaussian))
-    fit_gaussian_checkbutton = ttk.Checkbutton(
-        model_frame,
-        text="Gaussian",
-        variable=fit_gaussian_var,
-    )
-    fit_gaussian_checkbutton.pack(anchor=tk.W)
-    fit_lorentzian_var = tk.BooleanVar(value=bool(fit_lorentzian))
-    fit_lorentzian_checkbutton = ttk.Checkbutton(
-        model_frame,
-        text="Lorentzian",
-        variable=fit_lorentzian_var,
-    )
-    fit_lorentzian_checkbutton.pack(anchor=tk.W)
-    fit_pseudo_voigt_var = tk.BooleanVar(value=bool(fit_pseudo_voigt))
-    fit_pseudo_voigt_checkbutton = ttk.Checkbutton(
-        model_frame,
-        text="Pseudo-Voigt (eta)",
-        variable=fit_pseudo_voigt_var,
-    )
-    fit_pseudo_voigt_checkbutton.pack(anchor=tk.W)
+    fit_options_frame = ttk.LabelFrame(option_row, text="Fit Options", padding=(6, 4))
+    fit_options_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
     subtract_linear_background_var = tk.BooleanVar(value=bool(subtract_linear_background))
     subtract_linear_background_checkbutton = ttk.Checkbutton(
-        model_frame,
+        fit_options_frame,
         text="Subtract linear background",
         variable=subtract_linear_background_var,
     )
@@ -5437,12 +5413,6 @@ def create_analysis_peak_tools_controls(
     view_state.pick_button = pick_button
     view_state.clear_button = clear_button
     view_state.fit_button = fit_button
-    view_state.fit_gaussian_var = fit_gaussian_var
-    view_state.fit_gaussian_checkbutton = fit_gaussian_checkbutton
-    view_state.fit_lorentzian_var = fit_lorentzian_var
-    view_state.fit_lorentzian_checkbutton = fit_lorentzian_checkbutton
-    view_state.fit_pseudo_voigt_var = fit_pseudo_voigt_var
-    view_state.fit_pseudo_voigt_checkbutton = fit_pseudo_voigt_checkbutton
     view_state.subtract_linear_background_var = subtract_linear_background_var
     view_state.subtract_linear_background_checkbutton = subtract_linear_background_checkbutton
     view_state.fit_radial_var = fit_radial_var

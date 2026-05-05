@@ -26315,7 +26315,7 @@ def test_fit_selected_analysis_peaks_uses_selected_integration_window_only(monke
         return {
             "success": True,
             "model": model,
-            "label": "Gaussian",
+            "label": "Mosaic mix",
             "baseline": 0.5,
             "components": [
                 {
@@ -26342,7 +26342,7 @@ def test_fit_selected_analysis_peaks_uses_selected_integration_window_only(monke
         recommended_peak_window_half_width=lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("Analyze fit must not use local-window width helper.")
         ),
-        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        profile_model_label=lambda model: "Mosaic mix" if model == "mosaic_mix" else str(model),
     )
 
     monkeypatch.setattr(
@@ -26359,9 +26359,6 @@ def test_fit_selected_analysis_peaks_uses_selected_integration_window_only(monke
         runtime_session,
         "analysis_peak_tools_view_state",
         SimpleNamespace(
-            fit_gaussian_var=_Var(True),
-            fit_lorentzian_var=_Var(False),
-            fit_pseudo_voigt_var=_Var(False),
             fit_radial_var=_Var(True),
             fit_azimuth_var=_Var(False),
         ),
@@ -26405,7 +26402,7 @@ def test_fit_selected_analysis_peaks_uses_selected_integration_window_only(monke
     assert fit_calls[0]["center_guesses"] == [11.2]
     assert len(runtime_session.analysis_peak_selection_state.radial_fit_results) == 1
     fit_entry = runtime_session.analysis_peak_selection_state.radial_fit_results[0]
-    assert fit_entry["fit_group_id"] == "radial:simulated:gaussian"
+    assert fit_entry["fit_group_id"] == "radial:simulated:mosaic_mix"
     assert fit_entry["plot_fit"] is True
     assert np.all(np.asarray(fit_entry["x_fit"], dtype=float) >= 10.0)
     assert np.all(np.asarray(fit_entry["x_fit"], dtype=float) <= 12.0)
@@ -26723,7 +26720,7 @@ def test_fit_selected_analysis_peaks_fits_both_sources_for_both_axes(monkeypatch
         return {
             "success": True,
             "model": model,
-            "label": "Gaussian",
+            "label": "Mosaic mix",
             "baseline": 0.5,
             "components": [
                 {
@@ -26747,7 +26744,7 @@ def test_fit_selected_analysis_peaks_fits_both_sources_for_both_axes(monkeypatch
 
     fake_peak_tools = SimpleNamespace(
         fit_composite_peak_profile=_fit_composite_peak_profile,
-        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        profile_model_label=lambda model: "Mosaic mix" if model == "mosaic_mix" else str(model),
         align_angle_to_axis=lambda value, _axis_values: float(value),
     )
 
@@ -26779,9 +26776,6 @@ def test_fit_selected_analysis_peaks_fits_both_sources_for_both_axes(monkeypatch
         runtime_session,
         "analysis_peak_tools_view_state",
         SimpleNamespace(
-            fit_gaussian_var=_Var(True),
-            fit_lorentzian_var=_Var(False),
-            fit_pseudo_voigt_var=_Var(False),
             fit_radial_var=_Var(True),
             fit_azimuth_var=_Var(True),
         ),
@@ -26848,7 +26842,7 @@ def test_fit_selected_analysis_peaks_does_not_fallback_between_sources(monkeypat
     curve_calls: list[tuple[str, str, bool]] = []
     fake_peak_tools = SimpleNamespace(
         fit_composite_peak_profile=lambda *_args, **_kwargs: fit_calls.append("fit"),
-        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        profile_model_label=lambda model: "Mosaic mix" if model == "mosaic_mix" else str(model),
         align_angle_to_axis=lambda value, _axis_values: float(value),
     )
 
@@ -26872,9 +26866,6 @@ def test_fit_selected_analysis_peaks_does_not_fallback_between_sources(monkeypat
         runtime_session,
         "analysis_peak_tools_view_state",
         SimpleNamespace(
-            fit_gaussian_var=_Var(True),
-            fit_lorentzian_var=_Var(False),
-            fit_pseudo_voigt_var=_Var(False),
             fit_radial_var=_Var(True),
             fit_azimuth_var=_Var(False),
         ),
@@ -26945,7 +26936,7 @@ def test_fit_selected_analysis_peaks_auto_discovers_both_sources_when_none_selec
         return {
             "success": True,
             "model": model,
-            "label": "Gaussian",
+            "label": "Mosaic mix",
             "baseline": 0.0,
             "components": [
                 {
@@ -26969,7 +26960,7 @@ def test_fit_selected_analysis_peaks_auto_discovers_both_sources_when_none_selec
 
     fake_peak_tools = SimpleNamespace(
         fit_composite_peak_profile=_fit_composite_peak_profile,
-        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        profile_model_label=lambda model: "Mosaic mix" if model == "mosaic_mix" else str(model),
         align_angle_to_axis=lambda value, _axis_values: float(value),
     )
 
@@ -26984,9 +26975,6 @@ def test_fit_selected_analysis_peaks_auto_discovers_both_sources_when_none_selec
         runtime_session,
         "analysis_peak_tools_view_state",
         SimpleNamespace(
-            fit_gaussian_var=_Var(True),
-            fit_lorentzian_var=_Var(False),
-            fit_pseudo_voigt_var=_Var(False),
             fit_radial_var=_Var(True),
             fit_azimuth_var=_Var(True),
         ),
@@ -27045,7 +27033,7 @@ def test_fit_selected_analysis_peaks_fails_visible_for_unknown_source(monkeypatc
         fit_composite_peak_profile=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("unknown-source peaks should not reach composite fitting")
         ),
-        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        profile_model_label=lambda model: "Mosaic mix" if model == "mosaic_mix" else str(model),
         align_angle_to_axis=lambda value, _axis_values: float(value),
     )
 
@@ -27063,9 +27051,6 @@ def test_fit_selected_analysis_peaks_fails_visible_for_unknown_source(monkeypatc
         runtime_session,
         "analysis_peak_tools_view_state",
         SimpleNamespace(
-            fit_gaussian_var=_Var(True),
-            fit_lorentzian_var=_Var(False),
-            fit_pseudo_voigt_var=_Var(False),
             fit_radial_var=_Var(True),
             fit_azimuth_var=_Var(False),
         ),
@@ -27101,7 +27086,7 @@ def test_fit_selected_analysis_peaks_fails_visible_for_unknown_source(monkeypatc
     failure = runtime_session.analysis_peak_selection_state.radial_fit_results[0]
     assert failure["success"] is False
     assert failure["source"] == "unknown"
-    assert failure["fit_group_id"] == "radial:unknown:gaussian"
+    assert failure["fit_group_id"] == "radial:unknown:mosaic_mix"
     assert "could not be resolved" in failure["error"]
 
 
@@ -27122,7 +27107,7 @@ def test_fit_group_ids_include_source(monkeypatch) -> None:
         return {
             "success": True,
             "model": model,
-            "label": "Gaussian",
+            "label": "Mosaic mix",
             "baseline": 0.0,
             "components": [
                 {
@@ -27146,7 +27131,7 @@ def test_fit_group_ids_include_source(monkeypatch) -> None:
 
     fake_peak_tools = SimpleNamespace(
         fit_composite_peak_profile=_fit_composite_peak_profile,
-        profile_model_label=lambda model: "Gaussian" if model == "gaussian" else str(model),
+        profile_model_label=lambda model: "Mosaic mix" if model == "mosaic_mix" else str(model),
         align_angle_to_axis=lambda value, _axis_values: float(value),
     )
 
@@ -27167,9 +27152,6 @@ def test_fit_group_ids_include_source(monkeypatch) -> None:
         runtime_session,
         "analysis_peak_tools_view_state",
         SimpleNamespace(
-            fit_gaussian_var=_Var(True),
-            fit_lorentzian_var=_Var(False),
-            fit_pseudo_voigt_var=_Var(False),
             fit_radial_var=_Var(True),
             fit_azimuth_var=_Var(True),
         ),
@@ -27220,10 +27202,10 @@ def test_fit_group_ids_include_source(monkeypatch) -> None:
         )
     }
     assert {
-        "radial:background:gaussian",
-        "radial:simulated:gaussian",
-        "azimuth:background:gaussian",
-        "azimuth:simulated:gaussian",
+        "radial:background:mosaic_mix",
+        "radial:simulated:mosaic_mix",
+        "azimuth:background:mosaic_mix",
+        "azimuth:simulated:mosaic_mix",
     } <= fit_group_ids
 
 

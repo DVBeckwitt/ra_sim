@@ -1,27 +1,29 @@
 import numpy as np
+import pytest
 
 from ra_sim.gui import analysis_peak_tools
 
 
-def _area_normalized_pseudo_voigt(
+def _mosaic_mix_profile(
     x_values,
     *,
     baseline: float,
     area: float,
     center: float,
-    fwhm: float,
+    sigma: float,
+    gamma: float,
     eta: float,
 ):
     x_arr = np.asarray(x_values, dtype=float)
-    fwhm_value = max(abs(float(fwhm)), 1.0e-12)
+    sigma_value = max(abs(float(sigma)), 1.0e-12)
+    gamma_value = max(abs(float(gamma)), 1.0e-12)
     delta = x_arr - float(center)
     gaussian = (
-        2.0
-        * np.sqrt(np.log(2.0))
-        / (np.sqrt(np.pi) * fwhm_value)
-        * np.exp(-4.0 * np.log(2.0) * (delta / fwhm_value) ** 2)
+        1.0
+        / (sigma_value * np.sqrt(2.0 * np.pi))
+        * np.exp(-0.5 * (delta / sigma_value) ** 2)
     )
-    lorentzian = 2.0 / (np.pi * fwhm_value) / (1.0 + 4.0 * (delta / fwhm_value) ** 2)
+    lorentzian = (gamma_value / np.pi) / (delta**2 + gamma_value**2)
     eta_value = float(np.clip(float(eta), 0.0, 1.0))
     return float(baseline) + float(area) * ((1.0 - eta_value) * gaussian + eta_value * lorentzian)
 
@@ -106,14 +108,14 @@ def test_subtract_linear_background_plane_recovers_peak_profile_from_sloped_roi(
         theta_axis,
         radial_profile,
         [theta_center],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     assert result["success"] is True
     assert abs(float(np.nanmedian(corrected[off_peak]))) < 0.05
     assert fit["success"] is True
     assert abs(float(fit["components"][0]["center"]) - theta_center) < 0.03
-    assert abs(float(fit["components"][0]["fwhm"]) - theta_fwhm) < 0.07
+    assert abs(float(fit["components"][0]["gaussian_fwhm"]) - theta_fwhm) < 0.07
 
 
 def test_subtract_linear_background_plane_rejects_broad_peak_wings_by_default() -> None:
@@ -152,7 +154,7 @@ def test_subtract_linear_background_plane_rejects_broad_peak_wings_by_default() 
         theta_axis,
         radial_profile,
         [theta_center],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     assert result["success"] is True
@@ -160,7 +162,7 @@ def test_subtract_linear_background_plane_rejects_broad_peak_wings_by_default() 
     assert result["fit_sample_count"] <= result["initial_fit_sample_count"]
     assert fit["success"] is True
     assert abs(float(fit["components"][0]["center"]) - theta_center) < 0.03
-    assert abs(float(fit["components"][0]["fwhm"]) - theta_fwhm) < 0.08
+    assert abs(float(fit["components"][0]["gaussian_fwhm"]) - theta_fwhm) < 0.08
 
 
 def test_subtract_linear_background_plane_fails_when_peak_mask_consumes_roi() -> None:
@@ -238,7 +240,7 @@ def test_format_peak_fit_axis_summary_reports_best_success_from_mixed_results() 
             {
                 "success": True,
                 "peak_index": 2,
-                "label": "Pseudo-Voigt",
+                "label": "Mosaic mix",
                 "selected_axis_value": 18.25,
                 "center": 18.2,
                 "fwhm": 0.34,
@@ -248,7 +250,7 @@ def test_format_peak_fit_axis_summary_reports_best_success_from_mixed_results() 
     )
 
     assert (
-        summary == "Radial: 2/3 fits; best P2 Pseudo-Voigt @ 18.2500 deg; "
+        summary == "Radial: 2/3 fits; best P2 Mosaic mix @ 18.2500 deg; "
         "center 18.2000, FWHM 0.3400, RMSE 0.05"
     )
 
@@ -334,10 +336,11 @@ def test_format_peak_fit_axis_table_reports_widths_and_mixture_percent() -> None
             {
                 "success": True,
                 "peak_index": 3,
-                "model": analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
+                "model": analysis_peak_tools.PROFILE_MOSAIC_MIX,
                 "selected_axis_value": 19.0,
                 "center": 18.95,
-                "fwhm": 0.38,
+                "gaussian_fwhm": 0.38,
+                "lorentzian_fwhm": 1.6,
                 "eta": 0.65,
                 "rmse": 0.03,
             },
@@ -357,85 +360,66 @@ def test_format_peak_fit_axis_table_reports_widths_and_mixture_percent() -> None
     assert "G/L%" in table
     assert "P1   Gaussian" in table
     assert "P2   Lorentz" in table
-    assert "P3   P-Voigt" in table
+    assert "P3   Mosaic" in table
     assert "100.0/ 0.0" in table
     assert " 0.0/100.0" in table
-    assert "35.0/65.0" in table
+    assert " 0.3800  1.6000 35.0/65.0" in table
     assert "Failures:" in table
     assert "P4 Gaussian @ 19.5000 deg: window too small" in table
 
 
-def test_fit_peak_profile_recovers_gaussian_center_and_fwhm() -> None:
-    x_values = np.linspace(10.0, 20.0, 400)
-    y_values = analysis_peak_tools.gaussian_profile(
+def test_fit_peak_profile_recovers_mosaic_mix_core_tail_and_eta() -> None:
+    x_values = np.linspace(-6.0, 6.0, 700)
+    y_values = _mosaic_mix_profile(
         x_values,
         baseline=0.6,
-        amplitude=7.5,
-        center=15.25,
-        fwhm=0.42,
+        area=7.5,
+        center=-0.3,
+        sigma=0.25,
+        gamma=1.5,
+        eta=0.35,
     )
 
     fit = analysis_peak_tools.fit_peak_profile(
         x_values,
         y_values,
-        center_guess=15.2,
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
-        window_half_width=0.9,
+        center_guess=-0.25,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
+        window_half_width=4.5,
     )
 
     assert fit["success"] is True
-    assert fit["label"] == "Gaussian"
-    assert abs(float(fit["center"]) - 15.25) < 0.01
-    assert abs(float(fit["fwhm"]) - 0.42) < 0.03
-    assert abs(float(fit["sigma"]) - (0.42 / (2.0 * np.sqrt(2.0 * np.log(2.0))))) < 0.03
+    assert fit["label"] == "Mosaic mix"
+    assert abs(float(fit["center"]) + 0.3) < 0.03
+    assert abs(float(fit["sigma"]) - 0.25) / 0.25 < 0.15
+    assert abs(float(fit["gamma"]) - 1.5) / 1.5 < 0.20
+    assert abs(float(fit["eta"]) - 0.35) < 0.08
+    assert fit["residual_mode"] == "hybrid_tail"
+    assert np.isfinite(float(fit["weighted_rmse"]))
 
 
-def test_fit_peak_profile_recovers_pseudo_voigt_eta() -> None:
-    x_values = np.linspace(-5.0, 5.0, 500)
-    y_values = _area_normalized_pseudo_voigt(
-        x_values,
-        baseline=1.2,
-        area=5.0,
-        center=-0.4,
-        fwhm=1.3,
-        eta=0.65,
-    )
-
-    fit = analysis_peak_tools.fit_peak_profile(
-        x_values,
-        y_values,
-        center_guess=-0.3,
-        model=analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
-        window_half_width=2.4,
-    )
-
-    assert fit["success"] is True
-    assert fit["label"] == "Pseudo-Voigt"
-    assert abs(float(fit["center"]) + 0.4) < 0.03
-    assert abs(float(fit["fwhm"]) - 1.3) < 0.08
-    assert abs(float(fit["eta"]) - 0.65) < 0.08
-
-
-def test_pseudo_voigt_profile_integrates_to_area_and_eta_is_lorentzian_fraction() -> None:
+def test_mosaic_mix_unit_profiles_integrate_to_area_and_eta_fraction() -> None:
     x_values = np.linspace(-250.0, 250.0, 50001)
-    fwhm = 1.4
+    sigma = 0.35
+    gamma = 1.4
     eta = 0.7
-    gaussian = analysis_peak_tools._gaussian_unit_area_profile(
+    gaussian = analysis_peak_tools._gaussian_sigma_unit_area_profile(
         x_values,
         center=0.0,
-        fwhm=fwhm,
+        sigma=sigma,
     )
-    lorentzian = analysis_peak_tools._lorentzian_unit_area_profile(
+    lorentzian = analysis_peak_tools._lorentzian_gamma_unit_area_profile(
         x_values,
         center=0.0,
-        fwhm=fwhm,
+        gamma=gamma,
     )
-    mixed = analysis_peak_tools.pseudo_voigt_profile(
+    mixed = analysis_peak_tools.mosaic_mix_profile(
         x_values,
         baseline=0.0,
         amplitude=6.5,
         center=0.0,
-        fwhm=fwhm,
+        sigma=sigma,
+        gamma=gamma,
         eta=eta,
     )
 
@@ -445,6 +429,20 @@ def test_pseudo_voigt_profile_integrates_to_area_and_eta_is_lorentzian_fraction(
     assert float(np.trapezoid(eta * lorentzian, x_values)) > float(
         np.trapezoid((1.0 - eta) * gaussian, x_values)
     )
+
+
+def test_fit_peak_profile_rejects_removed_pseudo_voigt_model() -> None:
+    x_values = np.linspace(-1.0, 1.0, 21)
+    y_values = np.ones_like(x_values)
+
+    with pytest.raises(ValueError, match="Unsupported peak profile model"):
+        analysis_peak_tools.fit_peak_profile(
+            x_values,
+            y_values,
+            center_guess=0.0,
+            model="pseudo_voigt",
+            window_half_width=0.5,
+        )
 
 
 def test_fit_composite_peak_profile_single_peak_uses_full_curve() -> None:
@@ -461,7 +459,7 @@ def test_fit_composite_peak_profile_single_peak_uses_full_curve() -> None:
         x_values,
         y_values,
         [1.3],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     assert fit["success"] is True
@@ -470,7 +468,7 @@ def test_fit_composite_peak_profile_single_peak_uses_full_curve() -> None:
     assert np.isclose(float(fit["x_fit"][0]), float(x_values[0]))
     assert np.isclose(float(fit["x_fit"][-1]), float(x_values[-1]))
     assert abs(float(fit["components"][0]["center"]) - 1.35) < 0.03
-    assert abs(float(fit["components"][0]["fwhm"]) - 0.62) < 0.08
+    assert abs(float(fit["components"][0]["gaussian_fwhm"]) - 0.62) < 0.08
 
 
 def test_fit_composite_peak_profile_two_gaussians_sums_components() -> None:
@@ -497,7 +495,7 @@ def test_fit_composite_peak_profile_two_gaussians_sums_components() -> None:
         x_values,
         y_values,
         [-1.35, 1.75],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     fitted_centers = [float(component["center"]) for component in fit["components"]]
@@ -511,30 +509,33 @@ def test_fit_composite_peak_profile_two_gaussians_sums_components() -> None:
     assert float(fit["rmse"]) < 0.1
 
 
-def test_fit_composite_peak_profile_pseudo_voigt_returns_eta_and_full_curve() -> None:
-    x_values = np.linspace(-4.0, 4.0, 480)
-    y_values = _area_normalized_pseudo_voigt(
+def test_fit_composite_peak_profile_mosaic_mix_returns_independent_widths() -> None:
+    x_values = np.linspace(-6.0, 6.0, 700)
+    y_values = _mosaic_mix_profile(
         x_values,
         baseline=0.9,
-        area=4.2,
-        center=-0.6,
-        fwhm=1.1,
-        eta=0.72,
+        area=6.0,
+        center=-0.3,
+        sigma=0.25,
+        gamma=1.5,
+        eta=0.35,
     )
 
     fit = analysis_peak_tools.fit_composite_peak_profile(
         x_values,
         y_values,
-        [-0.55],
-        model=analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
+        [-0.25],
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     assert fit["success"] is True
     assert len(fit["components"]) == 1
     assert len(fit["x_fit"]) == len(x_values)
-    assert abs(float(fit["components"][0]["center"]) + 0.6) < 0.05
-    assert abs(float(fit["components"][0]["fwhm"]) - 1.1) < 0.12
-    assert abs(float(fit["components"][0]["eta"]) - 0.72) < 0.1
+    assert abs(float(fit["components"][0]["center"]) + 0.3) < 0.03
+    assert abs(float(fit["components"][0]["sigma"]) - 0.25) / 0.25 < 0.15
+    assert abs(float(fit["components"][0]["gamma"]) - 1.5) / 1.5 < 0.20
+    assert abs(float(fit["components"][0]["eta"]) - 0.35) < 0.08
+    assert np.isfinite(float(fit["weighted_rmse"]))
 
 
 def test_fit_composite_peak_profile_collapses_near_duplicate_centers() -> None:
@@ -551,7 +552,7 @@ def test_fit_composite_peak_profile_collapses_near_duplicate_centers() -> None:
         x_values,
         y_values,
         [0.12, 0.125],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     assert fit["success"] is True
@@ -576,7 +577,7 @@ def test_fit_composite_peak_profile_does_not_use_samples_outside_selected_window
         selected_x,
         selected_y,
         [1.05],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     assert fit["success"] is True
@@ -604,7 +605,7 @@ def test_fit_composite_peak_profile_handles_wrapped_selected_azimuth_window() ->
         x_values,
         y_values,
         [178.8],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     fit_center = float(fit["components"][0]["center"])
@@ -617,7 +618,7 @@ def test_fit_composite_peak_profile_handles_wrapped_selected_azimuth_window() ->
     assert np.all(np.asarray(fit["x_fit"], dtype=float) <= np.max(x_values))
     assert abs(wrapped_center_error) < 0.3
     assert np.min(np.abs(np.asarray(fit["x_fit"], dtype=float) - fit_center)) < 0.25
-    assert abs(float(fit["components"][0]["fwhm"]) - fwhm) < 0.5
+    assert abs(float(fit["components"][0]["gaussian_fwhm"]) - fwhm) < 0.5
 
 
 def test_fit_composite_peak_profile_reports_wrapped_center_on_selected_axis_domain() -> None:
@@ -639,7 +640,7 @@ def test_fit_composite_peak_profile_reports_wrapped_center_on_selected_axis_doma
         x_values,
         y_values,
         [179.0],
-        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+        model=analysis_peak_tools.PROFILE_MOSAIC_MIX,
     )
 
     fit_center = float(fit["components"][0]["center"])
@@ -648,4 +649,4 @@ def test_fit_composite_peak_profile_reports_wrapped_center_on_selected_axis_doma
     assert fit["success"] is True
     assert abs(wrapped_center_error) < 0.3
     assert np.min(np.abs(np.asarray(fit["x_fit"], dtype=float) - fit_center)) < 0.25
-    assert abs(float(fit["components"][0]["fwhm"]) - fwhm) < 0.5
+    assert abs(float(fit["components"][0]["gaussian_fwhm"]) - fwhm) < 0.5

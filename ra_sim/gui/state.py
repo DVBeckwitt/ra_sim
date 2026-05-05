@@ -508,12 +508,6 @@ class AnalysisPeakToolsViewState:
     pick_button: Any = None
     clear_button: Any = None
     fit_button: Any = None
-    fit_gaussian_var: Any = None
-    fit_gaussian_checkbutton: Any = None
-    fit_lorentzian_var: Any = None
-    fit_lorentzian_checkbutton: Any = None
-    fit_pseudo_voigt_var: Any = None
-    fit_pseudo_voigt_checkbutton: Any = None
     subtract_linear_background_var: Any = None
     subtract_linear_background_checkbutton: Any = None
     fit_radial_var: Any = None
