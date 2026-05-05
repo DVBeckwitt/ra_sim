@@ -7777,8 +7777,6 @@ def _complete_simulation_update_and_schedule_geometry_manual_prewarm() -> bool:
     """Mark simulation update stable, then queue manual picker cache prewarm."""
 
     simulation_runtime_state.update_running = False
-    if not bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
-        return False
     return _schedule_geometry_manual_pick_cache_prewarm()
 
 
@@ -7809,7 +7807,7 @@ def _prewarm_geometry_manual_pick_cache_if_ready() -> bool:
             param_set=dict(_current_geometry_fit_params() or {}),
             background_index=int(background_runtime_state.current_background_index),
             background_image=background_image,
-            build_caked_projection_sidecar=bool(_geometry_manual_pick_uses_caked_space()),
+            build_caked_projection_sidecar=True,
         )
     except Exception:
         return False
@@ -10772,6 +10770,7 @@ def _initialize_runtime_controls_block_04() -> None:
     global \
         _native_detector_coords_to_caked_display_coords, \
         _project_geometry_manual_peaks_to_current_view, \
+        _project_geometry_manual_peaks_to_caked_view, \
         _geometry_manual_simulated_peaks_for_params, \
         _geometry_manual_last_simulation_diagnostics, \
         _geometry_manual_pick_candidates, \
@@ -10879,6 +10878,9 @@ def _initialize_runtime_controls_block_04() -> None:
     _project_geometry_manual_peaks_to_current_view = (
         geometry_manual_projection_workflow.project_peaks_to_current_view
     )
+    _project_geometry_manual_peaks_to_caked_view = (
+        geometry_manual_projection_workflow.project_peaks_to_caked_view
+    )
     _geometry_manual_simulated_peaks_for_params = (
         geometry_manual_projection_workflow.simulated_peaks_for_params
     )
@@ -10959,6 +10961,7 @@ def _initialize_runtime_controls_block_04() -> None:
             build_grouped_candidates=_geometry_manual_pick_candidates,
             build_simulated_lookup=_geometry_manual_simulated_lookup,
             project_peaks_to_current_view=_project_geometry_manual_peaks_to_current_view,
+            project_peaks_to_caked_view=_project_geometry_manual_peaks_to_caked_view,
             project_peaks_for_background_view=(
                 lambda background_index, rows: _geometry_manual_project_peaks_for_background(
                     int(background_index),
@@ -12518,6 +12521,7 @@ def toggle_caked_2d(requested_mode: str | None = None) -> None:
         _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
     _apply_main_caked_view_toggle()
     if target_view_mode == "caked":
+        _schedule_geometry_manual_pick_cache_prewarm()
         _emit_or_defer_detector_to_caked_manual_trace("toggle_caked_2d")
     _sync_selected_qr_rod_controls_state()
     _sync_center_marker(redraw=False)

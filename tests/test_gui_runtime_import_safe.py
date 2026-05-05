@@ -20174,7 +20174,7 @@ def test_manual_pick_arming_schedules_pick_cache_prewarm(monkeypatch) -> None:
     assert scheduled == ["prewarm", "prewarm"]
 
 
-def test_simulation_ready_does_not_schedule_prewarm_when_manual_pick_disarmed(
+def test_simulation_ready_schedules_prewarm_when_manual_pick_disarmed(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -20196,9 +20196,9 @@ def test_simulation_ready_does_not_schedule_prewarm_when_manual_pick_disarmed(
         raising=False,
     )
 
-    assert not runtime_session._complete_simulation_update_and_schedule_geometry_manual_prewarm()
+    assert runtime_session._complete_simulation_update_and_schedule_geometry_manual_prewarm()
     assert runtime_state.update_running is False
-    assert scheduled == []
+    assert scheduled == ["prewarm"]
 
 
 def test_simulation_ready_schedules_prewarm_when_manual_pick_armed(monkeypatch) -> None:

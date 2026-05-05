@@ -16679,6 +16679,57 @@ def _build_detector_cross_view_pick_cache(
     return cache_data
 
 
+def _make_runtime_cache_callbacks_for_existing_cache(
+    *,
+    use_caked,
+    background,
+    state,
+    caked_projection_signature=None,
+    last_simulation_signature=("sim", 8),
+):
+    return mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={},
+        last_simulation_signature=lambda: last_simulation_signature,
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background,
+        use_caked_space=lambda: bool(use_caked),
+        replace_cache_state=lambda signature, cache_data: state.update(
+            {"signature": signature, "cache": dict(cache_data)}
+        ),
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        pairs_for_index=lambda _idx: [],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reuse-only path built cache")
+        ),
+        build_grouped_candidates=_group_by_q_group,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (
+            float(entry["display_col"]),
+            float(entry["display_row"]),
+        ),
+        current_cache_signature=lambda: state["signature"],
+        current_cache_data=lambda: state["cache"],
+        caked_projection_signature=lambda: caked_projection_signature,
+    )
+
+
+def _mark_runtime_cache_qr_refinement_ready(
+    cache_data,
+    *,
+    simulation_signature=("sim", 8),
+    caked_projection_signature=None,
+):
+    refinement_signature = mg.geometry_manual_qr_sim_refinement_signature(
+        cache_data,
+        simulation_signature=simulation_signature,
+        caked_projection_signature=caked_projection_signature,
+    )
+    cache_data["qr_sim_refinement_signature"] = refinement_signature
+    cache_data["qr_sim_refinement_complete"] = True
+    cache_data["qr_sim_refinement_lookup_signature"] = refinement_signature
+    cache_data["qr_sim_refinement_lookup_complete"] = True
+
+
 def _cross_view_caked_projection_lookup_entry(cache_data, oracle):
     projection_lookup = cache_data["caked_qr_projection_lookup"]
     key = tuple(oracle["identity"])
@@ -17523,6 +17574,154 @@ def test_detector_manual_pick_cache_reuses_warmed_sidecar_for_detector_reads() -
     assert cache_data["caked_qr_projection_grouped_candidates"][group_key]
 
 
+def test_caked_reuse_only_sidecar_misses_when_projection_signature_changes() -> None:
+    background = np.zeros((256, 256), dtype=float)
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "native_col": 2.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks({"value": False}, raw_rows)
+    warmed_cache = _build_detector_cross_view_pick_cache(
+        callbacks,
+        raw_rows,
+        build_caked_projection_sidecar=True,
+    )
+    state = {"signature": warmed_cache["signature"], "cache": warmed_cache}
+    runtime_callbacks = _make_runtime_cache_callbacks_for_existing_cache(
+        use_caked=True,
+        background=background,
+        state=state,
+        caked_projection_signature=("caked", 99.0, 20.0),
+    )
+
+    cache_data = runtime_callbacks.get_pick_cache(
+        prefer_cache=True,
+        reuse_only=True,
+        build_caked_projection_sidecar=True,
+    )
+
+    assert cache_data["manual_no_build_cache"] is True
+    assert cache_data["cache_ready"] is False
+    assert cache_data["cache_metadata"]["cache_action"] == "miss"
+
+
+def test_caked_reuse_only_sidecar_misses_when_projection_signature_unavailable() -> None:
+    background = np.zeros((256, 256), dtype=float)
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "native_col": 2.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks({"value": False}, raw_rows)
+    warmed_cache = _build_detector_cross_view_pick_cache(
+        callbacks,
+        raw_rows,
+        build_caked_projection_sidecar=True,
+    )
+    state = {"signature": warmed_cache["signature"], "cache": warmed_cache}
+    runtime_callbacks = _make_runtime_cache_callbacks_for_existing_cache(
+        use_caked=True,
+        background=background,
+        state=state,
+        caked_projection_signature=None,
+    )
+
+    cache_data = runtime_callbacks.get_pick_cache(
+        prefer_cache=True,
+        reuse_only=True,
+        build_caked_projection_sidecar=True,
+    )
+
+    assert cache_data["manual_no_build_cache"] is True
+    assert cache_data["cache_ready"] is False
+    assert cache_data["cache_metadata"]["cache_action"] == "miss"
+
+
+def test_detector_only_reuse_succeeds_when_caked_projection_signature_unavailable() -> None:
+    background = np.zeros((256, 256), dtype=float)
+    group_key = ("q_group", "primary", 3, 4)
+    candidate = {
+        "label": "3,0,4",
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_table_index": 0,
+        "source_row_index": 0,
+        "source_branch_index": 0,
+        "source_reflection_index": 16,
+        "source_ray_id": "plus-ray",
+        "hkl": (3, 0, 4),
+        "native_col": 2.0,
+        "native_row": 4.0,
+        "display_col": 102.0,
+        "display_row": 204.0,
+        "sim_col": 102.0,
+        "sim_row": 204.0,
+    }
+    placed_signature = mg.geometry_manual_pick_placed_cache_signature(
+        source_snapshot_signature=("sim", 8),
+        background_index=0,
+        background_image=background,
+        use_caked_space=False,
+    )
+    signature = mg.geometry_manual_pick_cache_signature(
+        placed_cache_signature=placed_signature,
+        disabled_qr_sets=[],
+        disabled_qz_sections=[],
+    )
+    cache = {
+        "signature": signature,
+        "placed_signature": placed_signature,
+        "detector_picker_rows": [dict(candidate)],
+        "detector_picker_source_rows": [dict(candidate)],
+        "detector_picker_grouped_candidates": {group_key: [dict(candidate)]},
+        "grouped_candidates": {group_key: [dict(candidate)]},
+        "simulated_lookup": _build_lookup([dict(candidate)]),
+        "match_config": {},
+        "cache_metadata": {},
+    }
+    _mark_runtime_cache_qr_refinement_ready(cache)
+    state = {"signature": signature, "cache": cache}
+    runtime_callbacks = _make_runtime_cache_callbacks_for_existing_cache(
+        use_caked=False,
+        background=background,
+        state=state,
+        caked_projection_signature=None,
+    )
+
+    cache_data = runtime_callbacks.get_pick_cache(
+        prefer_cache=True,
+        reuse_only=True,
+        build_caked_projection_sidecar=False,
+    )
+
+    assert cache_data["cache_ready"] is True
+    assert "manual_no_build_cache" not in cache_data
+    assert cache_data["detector_picker_grouped_candidates"][group_key]
+
+
 def test_caked_qr_selection_session_has_detector_projection_fields() -> None:
     use_caked = {"value": True}
     group_key = ("q_group", "primary", 3, 4)
@@ -17914,6 +18113,9 @@ def test_manual_qr_caked_saved_replay_uses_projection_cache_without_reprojection
         saved_pairs[0]["sim_display"],
         (projected_entry["display_col"], projected_entry["display_row"]),
     )
+    assert tuple(saved_pairs[0].get(field) for field in _CROSS_VIEW_ID_FIELDS) == tuple(
+        projected_entry.get(field) for field in _CROSS_VIEW_ID_FIELDS
+    )
 
 
 def test_manual_qr_caked_saved_redraw_unresolved_without_projection_lookup() -> None:
@@ -18210,6 +18412,9 @@ def test_manual_qr_caked_saved_background_redraw_uses_refined_caked_image_peak()
         saved_pairs[0]["sim_display"],
         (projected_entry["display_col"], projected_entry["display_row"]),
     )
+    assert tuple(saved_pairs[0].get(field) for field in _CROSS_VIEW_ID_FIELDS) == tuple(
+        projected_entry.get(field) for field in _CROSS_VIEW_ID_FIELDS
+    )
 
 
 def test_manual_qr_caked_direct_pick_matches_detector_origin_caked_baseline() -> None:
@@ -18380,6 +18585,39 @@ def test_manual_qr_caked_projection_signature_tracks_detector_display_transform(
     assert first != rotated
 
 
+def test_caked_qr_projection_entry_accepts_native_without_detector_raw() -> None:
+    entry = mg._geometry_manual_caked_qr_projection_entry(
+        {
+            "label": "-3,0,4",
+            "q_group_key": ("q_group", "primary", 3, 4),
+            "branch_id": "-x",
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "source_reflection_index": 17,
+            "source_branch_index": 1,
+            "source_ray_id": "minus-ray",
+            "native_col": 3.0,
+            "native_row": 4.0,
+            "caked_x": 23.0,
+            "caked_y": -26.0,
+            "display_col": 999.0,
+            "display_row": 888.0,
+            "current_view_frame": "detector_display",
+        }
+    )
+
+    assert entry is not None
+    assert entry["display_frame"] == "caked_display"
+    assert entry["current_view_frame"] == "caked_display"
+    assert entry["display_col"] == 23.0
+    assert entry["display_row"] == -26.0
+    assert entry["caked_x"] == 23.0
+    assert entry["caked_y"] == -26.0
+    assert entry["two_theta_deg"] == 23.0
+    assert entry["phi_deg"] == -26.0
+    assert "sim_col_raw" not in entry
+
+
 def test_manual_qr_caked_saved_replay_matches_detector_origin_caked_baseline() -> None:
     use_caked = {"value": False}
     group_key = ("q_group", "primary", 3, 4)
@@ -18520,6 +18758,9 @@ def test_manual_qr_caked_saved_replay_matches_detector_origin_caked_baseline() -
 
     assert saved_pairs[0]["bg_display"] == clicked_caked
     _assert_pair_close(saved_pairs[0]["sim_display"], detector_to_caked["caked_sim_display"])
+    assert tuple(saved_pairs[0].get(field) for field in _CROSS_VIEW_ID_FIELDS) == (
+        detector_to_caked["identity"]
+    )
 
 
 def test_manual_qr_caked_saved_detector_replay_matches_detector_origin_baseline_after_finish() -> (

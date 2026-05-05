@@ -229,6 +229,20 @@ native detector point, detector display point, caked visual point, and caked
 background point, but they must not override the simulated Qr/Qz marker for a
 source-backed saved pair.
 
+Caked projection sidecars are view projections of the source cache, not source
+truth. A detector-warmed manual-pick cache may satisfy a caked reuse-only click
+only when the source/mask signature matches, the caked sidecar exists, and the
+current caked projection token matches the cached sidecar token. If a caked
+sidecar is requested and the current token is unavailable, the reuse-only path
+must fail closed. Detector-only reuse does not require a caked token.
+
+Saved caked redraw must resolve simulated overlay points in this order:
+source-matched projected caked row, source-matched resolved caked row, saved
+simulation-only caked fields, then detector/native fallback only if no caked
+simulated point exists. Measured/background caked fields such as
+`background_two_theta_deg`, `background_phi_deg`, `caked_x`, or `caked_y`
+belong to the background marker and must not contaminate the simulated marker.
+
 Live caked visual-source ledger rows are disabled by default. Set
 `RA_SIM_LIVE_CAKED_TRACE=1` to print `[ra-sim] live_caked_visual_source` rows,
 and add `RA_SIM_LIVE_CAKED_TRACE_ALL=1` to include unchanged duplicate rows.

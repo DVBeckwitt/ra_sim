@@ -265,6 +265,7 @@ still failing. Full fitter validation is not claimed.
 | Hit-table-only fit simulation | optimization | - | none | p2 | 2026-05-04 | [hit-table-only-fit-simulation.md](archive/hit-table-only-fit-simulation.md) |
 | Lazy best-sample and Qr selection hardening | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [lazy-best-sample-and-qr-selection-hardening.md](archive/lazy-best-sample-and-qr-selection-hardening.md) |
 | Main figure right-drag pan regression | bug | - | none | p2 | 2026-04-29 | [main-figure-right-drag-pan.md](archive/main-figure-right-drag-pan.md) |
+| Manual Qr/Qz caked picker cache projection | bug | Codex | none | p1 | 2026-05-05 | [manual-qr-caked-picker-cache-projection.md](archive/manual-qr-caked-picker-cache-projection.md) |
 | Match peak tools layout | bug | - | none | p2 | 2026-04-30 | [match-peak-tools-layout.md](archive/match-peak-tools-layout.md) |
 | Mosaic mass conservation validation | feature | - | none | p1 | 2026-04-22 | [mosaic-mass-conservation-validation.md](archive/mosaic-mass-conservation-validation.md) |
 | Numba import fallback | bug | - | none | p2 | 2026-05-04 | [numba-import-fallback.md](archive/numba-import-fallback.md) |

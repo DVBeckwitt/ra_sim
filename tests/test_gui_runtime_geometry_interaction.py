@@ -77,6 +77,7 @@ def test_build_runtime_geometry_manual_projection_workflow_exposes_callbacks() -
         background_display_to_native_detector_coords="display-to-native",
         native_detector_coords_to_caked_display_coords="native-to-caked",
         project_peaks_to_current_view="project-peaks",
+        project_peaks_to_caked_view="project-peaks-caked",
         simulated_peaks_for_params="simulated-peaks",
         pick_candidates="pick-candidates",
         simulated_lookup="simulated-lookup",
@@ -105,6 +106,7 @@ def test_build_runtime_geometry_manual_projection_workflow_exposes_callbacks() -
     assert workflow.background_display_to_native_detector_coords == "display-to-native"
     assert workflow.native_detector_coords_to_caked_display_coords == "native-to-caked"
     assert workflow.project_peaks_to_current_view == "project-peaks"
+    assert workflow.project_peaks_to_caked_view == "project-peaks-caked"
     assert workflow.simulated_peaks_for_params == "simulated-peaks"
     assert workflow.pick_candidates == "pick-candidates"
     assert workflow.simulated_lookup == "simulated-lookup"
@@ -316,6 +318,69 @@ def test_prewarm_pick_cache_builds_caked_sidecar_when_caked_pick_mode() -> None:
 
     assert cache_data["cache_metadata"]["caked_qr_projection_sidecar_requested"] is True
     assert cache_data["caked_qr_projection_grouped_candidates"]
+
+
+def test_detector_warmed_sidecar_satisfies_caked_reuse_only_cache() -> None:
+    use_caked = {"value": False}
+    cache_state = {"signature": None, "data": {}}
+    background = np.zeros((16, 16), dtype=float)
+    entry = {
+        "display_col": 104.0,
+        "display_row": 205.0,
+        "sim_col": 104.0,
+        "sim_row": 205.0,
+        "sim_col_raw": 104.0,
+        "sim_row_raw": 205.0,
+        "native_col": 4.0,
+        "native_row": 5.0,
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "branch_id": "branch-0",
+        "hkl": (1, 0, 0),
+    }
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background,
+        use_caked_space=lambda: use_caked["value"],
+        replace_cache_state=lambda signature, data: cache_state.update(
+            {"signature": signature, "data": dict(data)}
+        ),
+        current_geometry_fit_params=lambda: {},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=lambda *_args, **_kwargs: [entry],
+        build_grouped_candidates=_group_manual_candidates,
+        build_simulated_lookup=_manual_lookup,
+        project_peaks_to_current_view=lambda rows: [dict(row) for row in rows or ()],
+        project_peaks_to_caked_view=lambda rows: [
+            {
+                **dict(row),
+                "display_col": 14.0,
+                "display_row": 25.0,
+                "caked_x": 14.0,
+                "caked_y": 25.0,
+            }
+            for row in rows or ()
+        ],
+        caked_projection_signature=lambda: ("caked", "sig"),
+        entry_display_coords=lambda _entry: None,
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+    )
+
+    warmed = callbacks.prewarm_pick_cache(build_caked_projection_sidecar=True)
+    assert warmed["caked_qr_projection_grouped_candidates"]
+
+    use_caked["value"] = True
+    reused = callbacks.get_pick_cache(reuse_only=True, build_caked_projection_sidecar=True)
+
+    assert reused["cache_ready"] is True
+    assert reused["cache_metadata"]["reuse_only"] is True
+    assert reused["caked_qr_projection_grouped_candidates"]
 
 
 def test_prewarm_pick_cache_returns_empty_without_background_image() -> None:

@@ -33,6 +33,7 @@ class RuntimeGeometryManualProjectionWorkflow:
     background_display_to_native_detector_coords: Callable[..., Any]
     native_detector_coords_to_caked_display_coords: Callable[..., Any]
     project_peaks_to_current_view: Callable[..., Any]
+    project_peaks_to_caked_view: Callable[..., Any]
     simulated_peaks_for_params: Callable[..., Any]
     last_simulation_diagnostics: Callable[..., Any]
     pick_candidates: Callable[..., Any]
@@ -175,6 +176,7 @@ def build_runtime_geometry_manual_projection_workflow(
             callbacks.native_detector_coords_to_caked_display_coords
         ),
         project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
+        project_peaks_to_caked_view=callbacks.project_peaks_to_caked_view,
         simulated_peaks_for_params=callbacks.simulated_peaks_for_params,
         last_simulation_diagnostics=last_simulation_diagnostics,
         pick_candidates=callbacks.pick_candidates,
