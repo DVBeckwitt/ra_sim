@@ -29817,6 +29817,14 @@ def _geometry_source_snapshot_signature_for_background(
     return image_signature + (row_content_signature, sf_picker_inventory_signature)
 
 
+def _geometry_source_snapshot_base_simulation_signature(signature: object) -> object:
+    if isinstance(signature, tuple) and len(signature) >= 2:
+        return tuple(signature[:-2])
+    if isinstance(signature, list) and len(signature) >= 2:
+        return tuple(signature[:-2])
+    return signature
+
+
 def _geometry_source_snapshot_payload(
     *,
     background_index: int,
@@ -42082,6 +42090,66 @@ def _build_geometry_fit_async_job(
             ),
         }
     )
+    memory_intersection_cache = _copy_intersection_cache_tables(get_last_intersection_cache())
+    current_hit_table_cache_by_background: dict[int, dict[str, object]] = {}
+    if int(current_background_index) in set(required_indices):
+        current_background_idx = int(current_background_index)
+        current_source_tables: list[object] = list(memory_intersection_cache or ())
+        current_table_kind = "intersection_cache"
+        if not current_source_tables:
+            try:
+                current_source_tables = _copy_hit_tables(
+                    getattr(simulation_runtime_state, "stored_max_positions_local", None) or []
+                )
+                current_table_kind = "hit_tables"
+            except Exception:
+                current_source_tables = []
+                current_table_kind = "unavailable"
+        requested_signature = requested_signatures.get(current_background_idx)
+        requested_base_signature = _geometry_source_snapshot_base_simulation_signature(
+            requested_signature
+        )
+        current_base_signature = getattr(
+            simulation_runtime_state, "last_simulation_signature", None
+        )
+        base_signature_match = bool(
+            current_base_signature is not None
+            and requested_base_signature == current_base_signature
+        )
+        current_hit_table_cache_by_background[current_background_idx] = {
+            "hit_tables": copy.deepcopy(list(current_source_tables or ())),
+            "cache_metadata": {
+                "background_index": int(current_background_idx),
+                "background_label": background_labels.get(
+                    int(current_background_idx),
+                    f"background {int(current_background_idx) + 1}",
+                ),
+                "projection_view_mode": str(projection_view_mode),
+                "fit_space": str(
+                    manual_fit_space_by_background.get(int(current_background_idx), "")
+                    or projection_view_mode
+                ),
+                "requested_signature": gui_geometry_fit._geometry_fit_cache_jsonable(
+                    requested_signature
+                ),
+                "requested_signature_summary": requested_signature_summaries.get(
+                    int(current_background_idx)
+                ),
+                "base_simulation_signature_match": bool(base_signature_match),
+                "requested_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
+                    gui_geometry_fit._geometry_fit_cache_jsonable(requested_base_signature)
+                ),
+                "current_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
+                    gui_geometry_fit._geometry_fit_cache_jsonable(current_base_signature)
+                ),
+                "projection_view_signature": copy.deepcopy(
+                    projection_view_signature_by_background.get(int(current_background_idx))
+                ),
+                "table_kind": str(current_table_kind),
+                "hit_table_count": int(len(current_source_tables or ())),
+                "cache_source": "current_hit_table_cache",
+            },
+        }
     _append_runtime_update_trace(
         "geometry_fit_job_live_rows_build",
         **dict(live_rows_handoff_diagnostics),
@@ -42148,8 +42216,9 @@ def _build_geometry_fit_async_job(
             lambda: {},
         )(),
         "live_cache_inventory": _live_cache_inventory_snapshot(),
-        "memory_intersection_cache": _copy_intersection_cache_tables(get_last_intersection_cache()),
+        "memory_intersection_cache": memory_intersection_cache,
         "memory_intersection_cache_signature": (simulation_runtime_state.last_simulation_signature),
+        "current_hit_table_cache_by_background": current_hit_table_cache_by_background,
         "live_rows_by_background": live_rows_by_background,
         "live_rows_cache_metadata_by_background": live_rows_cache_metadata_by_background,
         "live_rows_signature_by_background": live_rows_signature_by_background,
@@ -44068,6 +44137,28 @@ def _run_async_geometry_fit_worker_job(
                 "cache_metadata": payload_metadata,
             }
 
+        def _worker_current_hit_table_cache_payload() -> dict[str, object]:
+            cache_payload = _geometry_fit_int_keyed_mapping(
+                job_data.get("current_hit_table_cache_by_background", {})
+            ).get(int(background_idx))
+            if not isinstance(cache_payload, Mapping):
+                return {
+                    "hit_tables": [],
+                    "cache_metadata": {
+                        "background_index": int(background_idx),
+                        "reason": "missing_current_hit_table_cache",
+                    },
+                }
+            raw_metadata = cache_payload.get("cache_metadata")
+            metadata = (
+                copy.deepcopy(dict(raw_metadata)) if isinstance(raw_metadata, Mapping) else {}
+            )
+            metadata.setdefault("background_index", int(background_idx))
+            return {
+                "hit_tables": copy.deepcopy(list(cache_payload.get("hit_tables") or ())),
+                "cache_metadata": metadata,
+            }
+
         projection_view_mode = (
             str(job_data.get("projection_view_mode") or "detector").strip().lower() or "detector"
         )
@@ -44233,6 +44324,8 @@ def _run_async_geometry_fit_worker_job(
                     payload=payload,
                 )
             ),
+            get_current_hit_table_cache=_worker_current_hit_table_cache_payload,
+            current_background_index=int(job_data.get("current_background_index", -1)),
             stage_callback=stage_callback,
         )
         _set_worker_source_snapshot_diagnostics(**dict(rebuild_result.diagnostics or {}))

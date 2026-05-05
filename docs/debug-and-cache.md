@@ -243,6 +243,32 @@ Active saved-state validation now runs Bi2Se3 and Bi2Te3 from the RA-SIM user
 data root with direct fixed-pair solves; both pass all fixed-pair matching and
 residual-reduction gates.
 
+Live GUI source-row fallback status as of 2026-05-05: after
+`projection_payload_ready`, caked geometry-fit preflight now logs both
+`background_index_internal` and a 1-based background label, records manual-pair
+backgrounds and required/matched pair counts, and reports reject reasons for
+live, targeted, memory, logged, and current-hit-table cache paths. Live rows and
+current hit/intersection tables are accepted only when the requested background,
+fit space, exact caked projection payload, simulation signature, source IDs,
+q-group keys, branch IDs, and fixed-pair count all validate without ambiguous
+candidate expansion. If current live rows or signature-matched current hit
+tables are usable, fresh simulation must not start. If the slow fresh-simulation
+fallback does run, timeout now emits a visible late/still-running status before
+the eventual ready or failed terminal event.
+
+Validation status: runtime-level regressions cover the observed miss sequence
+(`projection_payload_ready`, targeted projected miss, memory miss, logged miss)
+and prove current hit tables are consumed before `simulate_hit_tables`. A
+background-index regression covers manual pairs on UI background 2 building
+internal index 1 and not background 1. The current Bi quality baseline ran the
+same direct fixed-manual path as the smokes: Bi2Se3 accepted with 82/82 fixed
+pairs matched, 0 missing, 0 branch mismatches, and direct RMS 34.5307 -> 31.078112;
+Bi2Te3 accepted with 84/84 fixed pairs matched, 0 missing, 0 branch mismatches,
+and direct RMS 36.8629 -> 34.394414. The live GUI manual acceptance smoke still
+requires operator verification on a fresh session: import a Bi state, generate
+once, run Fit Geometry without changing parameters, and confirm no first-fit
+timeout, `invalid_exact_caked_payload`, or `exact caked projector unavailable`.
+
 The HKL picker intentionally shares the corrected Qr/manual picker candidate
 payload for hit testing and selected-marker placement. If either picker
 regresses, first check whether the failing path bypassed that shared candidate

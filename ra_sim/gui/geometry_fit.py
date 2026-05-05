@@ -6086,6 +6086,8 @@ def rebuild_geometry_fit_source_rows(
     live_cache_inventory: Mapping[str, object] | Callable[[], Mapping[str, object]] | None = None,
     get_targeted_projected_cache: Callable[[str], Mapping[str, object] | None] | None = None,
     store_targeted_projected_cache: (Callable[[str, Mapping[str, object]], None] | None) = None,
+    get_current_hit_table_cache: Callable[[], object] | None = None,
+    current_background_index: int | None = None,
     stage_callback: GeometryFitStageCallback | None = None,
 ) -> GeometryFitSourceRowRebuildResult:
     """Rebuild source rows without mutating runtime state."""
@@ -6096,6 +6098,10 @@ def rebuild_geometry_fit_source_rows(
         str(background_label).strip()
         if background_label is not None and str(background_label).strip()
         else f"background {int(background_idx) + 1}"
+    )
+    background_label_number = int(background_idx) + 1
+    current_background_idx = (
+        int(current_background_index) if current_background_index is not None else None
     )
     normalized_params = dict(params_local or {})
     normalized_preflight_mode = str(preflight_mode or "full").strip().lower() or "full"
@@ -6143,6 +6149,22 @@ def rebuild_geometry_fit_source_rows(
         normalized_preflight_mode == "manual_geometry_targeted"
         and collected_required_branch_group_keys
     )
+    manual_pair_background_index_set: set[int] = set()
+    for _manual_pair_entry in (
+        collected_required_manual_fit_targets
+        if collected_required_manual_fit_targets
+        else required_pairs or ()
+    ):
+        if not isinstance(_manual_pair_entry, Mapping):
+            continue
+        if _manual_pair_entry.get("background_index") is None:
+            continue
+        try:
+            manual_pair_background_index_set.add(int(_manual_pair_entry.get("background_index")))
+        except Exception:
+            continue
+    manual_pair_background_indices = sorted(manual_pair_background_index_set)
+    manual_pair_background_labels = [int(idx) + 1 for idx in manual_pair_background_indices]
     force_fresh_simulation = lookup_context == "geometry_fit_trial_source_rows"
     required_branch_group_keys_digest = _geometry_fit_required_branch_group_keys_digest(
         collected_required_branch_group_keys,
@@ -6211,7 +6233,19 @@ def rebuild_geometry_fit_source_rows(
             return
         event_payload = {
             "background_index": int(background_idx),
+            "background_index_internal": int(background_idx),
             "background_label": resolved_background_label,
+            "background_label_number": int(background_label_number),
+            "background_number": int(background_label_number),
+            "current_background_index_internal": current_background_idx,
+            "current_background_label_number": (
+                int(current_background_idx) + 1 if current_background_idx is not None else None
+            ),
+            "manual_pair_backgrounds": list(manual_pair_background_indices),
+            "manual_pair_background_labels": list(manual_pair_background_labels),
+            "required_pair_count": int(len(collected_required_manual_fit_targets)),
+            "required_hkl_branch_group_count": int(len(collected_required_branch_group_keys)),
+            "matched_pair_count": 0,
             "elapsed_s": float(max(0.0, perf_counter() - rebuild_started_at)),
             **payload,
         }
@@ -6435,6 +6469,148 @@ def rebuild_geometry_fit_source_rows(
         if isinstance(rows_source, Mapping):
             rows_source = ()
         return _copy_rows(rows_source), cache_metadata_local
+
+    def _resolve_current_hit_table_cache_payload(
+        raw_payload: object,
+    ) -> tuple[list[object], dict[str, object]]:
+        hit_tables_source = raw_payload
+        cache_metadata_local: dict[str, object] = {}
+        if isinstance(raw_payload, Mapping):
+            for metadata_key in ("cache_metadata", "metadata"):
+                raw_metadata = raw_payload.get(metadata_key)
+                if isinstance(raw_metadata, Mapping):
+                    cache_metadata_local = copy.deepcopy(dict(raw_metadata))
+                    break
+            for table_key in (
+                "hit_tables",
+                "intersection_cache",
+                "tables",
+                "source_tables",
+            ):
+                if table_key in raw_payload:
+                    hit_tables_source = raw_payload.get(table_key)
+                    break
+        elif isinstance(raw_payload, tuple) and len(raw_payload) == 2:
+            hit_tables_source = raw_payload[0]
+            if isinstance(raw_payload[1], Mapping):
+                cache_metadata_local = copy.deepcopy(dict(raw_payload[1]))
+        if isinstance(hit_tables_source, Mapping):
+            hit_tables_source = ()
+        return [copy.deepcopy(entry) for entry in (hit_tables_source or ())], cache_metadata_local
+
+    def _projection_payload_ready_for_rebuild() -> bool:
+        if normalized_projection_view_mode != "caked":
+            return bool(
+                normalized_projection_view_mode != "q_space"
+                or _geometry_fit_projection_signature_available(normalized_projection_view_signature)
+            )
+        return bool(
+            isinstance(normalized_projection_payload, Mapping)
+            and isinstance(normalized_projection_payload.get("transform_bundle"), CakeTransformBundle)
+            and _geometry_fit_projection_signature_available(normalized_projection_view_signature)
+        )
+
+    def _row_background_mismatch(rows: Sequence[object] | None) -> str | None:
+        for row in rows or ():
+            if not isinstance(row, Mapping) or "background_index" not in row:
+                continue
+            try:
+                if int(row.get("background_index")) != int(background_idx):
+                    return "background_mismatch"
+            except Exception:
+                return "background_mismatch"
+        return None
+
+    def _live_cache_context_reject_reason(
+        rows: Sequence[object] | None,
+        metadata_local: Mapping[str, object] | None,
+    ) -> str | None:
+        metadata_dict = dict(metadata_local or {})
+        row_background_reason = _row_background_mismatch(rows)
+        if row_background_reason is not None:
+            return row_background_reason
+        metadata_background = metadata_dict.get("background_index")
+        if metadata_background is not None:
+            try:
+                if int(metadata_background) != int(background_idx):
+                    return "background_mismatch"
+            except Exception:
+                return "background_mismatch"
+        if normalized_projection_view_mode == "caked" and not _projection_payload_ready_for_rebuild():
+            return "missing_exact_caked_projection_payload"
+        if normalized_projection_view_mode == "caked":
+            metadata_fit_space = str(
+                metadata_dict.get("fit_space") or metadata_dict.get("projection_view_mode") or "caked"
+            ).strip().lower()
+            if metadata_fit_space and metadata_fit_space not in {"caked", "exact_caked_bundle"}:
+                return "fit_space_mismatch"
+        return None
+
+    def _current_hit_table_cache_match_payload(
+        metadata_local: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        metadata_dict = dict(metadata_local or {})
+        if not metadata_dict:
+            return {"matches": False, "reason": "missing_metadata"}
+        try:
+            metadata_background_index = int(metadata_dict.get("background_index"))
+        except Exception:
+            return {"matches": False, "reason": "missing_background_index"}
+        if metadata_background_index != int(background_idx):
+            return {
+                "matches": False,
+                "reason": "background_mismatch",
+                "actual_background_index": int(metadata_background_index),
+                "expected_background_index": int(background_idx),
+            }
+        metadata_requested_signature = _geometry_fit_cache_jsonable(
+            metadata_dict.get("requested_signature")
+        )
+        if metadata_requested_signature != normalized_requested_signature:
+            return {
+                "matches": False,
+                "reason": "requested_signature_mismatch",
+                "actual_signature_digest": _geometry_fit_digest_payload(
+                    metadata_requested_signature
+                ),
+                "expected_signature_digest": _geometry_fit_digest_payload(
+                    normalized_requested_signature
+                ),
+            }
+        if not bool(metadata_dict.get("base_simulation_signature_match", True)):
+            return {
+                "matches": False,
+                "reason": "base_simulation_signature_mismatch",
+                "actual_signature_digest": metadata_dict.get("current_base_signature_digest"),
+                "expected_signature_digest": metadata_dict.get("requested_base_signature_digest"),
+            }
+        metadata_projection_mode = str(metadata_dict.get("projection_view_mode") or "").strip().lower()
+        if metadata_projection_mode and metadata_projection_mode != str(
+            normalized_projection_view_mode or ""
+        ):
+            return {
+                "matches": False,
+                "reason": "projection_view_mode_mismatch",
+                "actual_projection_view_mode": metadata_projection_mode,
+                "expected_projection_view_mode": normalized_projection_view_mode,
+            }
+        metadata_projection_signature = metadata_dict.get("projection_view_signature")
+        if _geometry_fit_stable_projection_view_signature(
+            metadata_projection_signature
+        ) != _geometry_fit_stable_projection_view_signature(normalized_projection_view_signature):
+            return {
+                "matches": False,
+                "reason": "projection_signature_mismatch",
+                "actual_projection_signature_digest": _geometry_fit_digest_payload(
+                    _geometry_fit_cache_jsonable(metadata_projection_signature)
+                ),
+                "expected_projection_signature_digest": _geometry_fit_digest_payload(
+                    normalized_projection_view_signature
+                ),
+            }
+        if normalized_projection_view_mode == "caked" and not _projection_payload_ready_for_rebuild():
+            return {"matches": False, "reason": "missing_exact_caked_projection_payload"}
+        return {"matches": True, "reason": "matched"}
 
     def _copy_optional_sequence(
         raw_values: Sequence[object] | None,
@@ -6933,6 +7109,29 @@ def rebuild_geometry_fit_source_rows(
         return raw_result, None, None, None
 
     _emit_target_collection_events()
+    _emit_rebuild_stage(
+        "source_cache_preflight_lookup_start",
+        cache_source="source_row_cache_preflight",
+        requested_background_index_internal=int(background_idx),
+        requested_background_label=int(background_label_number),
+        requested_background_label_text=resolved_background_label,
+        current_background_index_internal=current_background_idx,
+        current_background_label=(
+            int(current_background_idx) + 1 if current_background_idx is not None else None
+        ),
+        current_background_label_text=(
+            f"background {int(current_background_idx) + 1}"
+            if current_background_idx is not None
+            else None
+        ),
+        can_use_live_runtime_cache=bool(can_use_live_runtime_cache),
+        build_live_rows_available=bool(callable(build_live_rows)),
+        projection_payload_ready=bool(_projection_payload_ready_for_rebuild()),
+        live_cache_reject_reason=None,
+        current_hit_table_reject_reason=None,
+        targeted_cache_reject_reason=None,
+        required_manual_pair_count=int(len(collected_required_manual_fit_targets)),
+    )
 
     def _success_result(
         raw_rows: Sequence[object] | None,
@@ -7222,6 +7421,16 @@ def rebuild_geometry_fit_source_rows(
                         "preflight_mode": str(normalized_preflight_mode),
                     },
                 )
+        targeted_cache_reject_reason = "missing_cache_payload"
+        if isinstance(targeted_cache_payload, Mapping):
+            if not targeted_cache_payload.get("projected_rows"):
+                targeted_cache_reject_reason = "empty_projected_rows"
+            elif not requested_signature_matches:
+                targeted_cache_reject_reason = "requested_signature_mismatch"
+            elif not projection_signature_matches:
+                targeted_cache_reject_reason = "projection_signature_mismatch"
+            else:
+                targeted_cache_reject_reason = "not_cacheable"
         _emit_rebuild_stage(
             "source_cache_targeted_projected_cache_miss",
             stage_started_at=targeted_cache_started_at,
@@ -7229,6 +7438,7 @@ def rebuild_geometry_fit_source_rows(
             preflight_mode=normalized_preflight_mode,
             targeted_cache_hit=False,
             row_count=int(len(targeted_cache_rows)),
+            targeted_cache_reject_reason=str(targeted_cache_reject_reason),
         )
 
     if can_use_live_runtime_cache and callable(build_live_rows) and not force_fresh_simulation:
@@ -7263,9 +7473,25 @@ def rebuild_geometry_fit_source_rows(
                         "validator_failure_reason": "signature_mismatch",
                     }
                 )
+            live_context_reject_reason = _live_cache_context_reject_reason(
+                live_rows,
+                live_runtime_cache_metadata,
+            )
+            if live_context_reject_reason is not None:
+                live_cache_validation.update(
+                    {
+                        "valid": False,
+                        "status": "invalid",
+                        "reason": str(live_context_reject_reason),
+                        "validator_failure_reason": str(live_context_reject_reason),
+                    }
+                )
             live_validation_event_payload = {
                 **live_runtime_cache_diag,
                 "reason": str(live_cache_validation.get("reason") or "missing_canonical_candidate"),
+                "live_cache_reject_reason": live_cache_validation.get(
+                    "validator_failure_reason"
+                ),
                 "validator_failure_reason": live_cache_validation.get("validator_failure_reason"),
                 "validator_rows_nonempty": bool(
                     live_cache_validation.get("validator_rows_nonempty", False)
@@ -7308,6 +7534,11 @@ def rebuild_geometry_fit_source_rows(
                 ),
                 row_count=int(len(live_rows)),
                 validated_pair_count=int(live_cache_validation.get("validated_pair_count", 0) or 0),
+                matched_pair_count=max(
+                    0,
+                    int(live_cache_validation.get("validated_pair_count", 0) or 0)
+                    - int(live_cache_validation.get("missing_required_pair_count", 0) or 0),
+                ),
                 missing_required_pair_count=int(
                     live_cache_validation.get("missing_required_pair_count", 0) or 0
                 ),
@@ -7338,6 +7569,11 @@ def rebuild_geometry_fit_source_rows(
                     validated_pair_count=int(
                         live_cache_validation.get("validated_pair_count", 0) or 0
                     ),
+                    matched_pair_count=max(
+                        0,
+                        int(live_cache_validation.get("validated_pair_count", 0) or 0)
+                        - int(live_cache_validation.get("missing_required_pair_count", 0) or 0),
+                    ),
                     source_counts=dict(live_source_counts),
                     live_rows_source_counts=dict(live_source_counts),
                     reason="ready",
@@ -7353,6 +7589,11 @@ def rebuild_geometry_fit_source_rows(
                 row_count=int(len(live_rows)),
                 required_pair_count=int(live_cache_validation.get("required_pair_count", 0) or 0),
                 validated_pair_count=int(live_cache_validation.get("validated_pair_count", 0) or 0),
+                matched_pair_count=max(
+                    0,
+                    int(live_cache_validation.get("validated_pair_count", 0) or 0)
+                    - int(live_cache_validation.get("missing_required_pair_count", 0) or 0),
+                ),
                 missing_required_pair_count=int(
                     live_cache_validation.get("missing_required_pair_count", 0) or 0
                 ),
@@ -7363,6 +7604,9 @@ def rebuild_geometry_fit_source_rows(
                     live_cache_validation.get("hkl_missing_candidate_count", 0) or 0
                 ),
                 reason=str(live_cache_validation.get("reason") or "validation_failed"),
+                live_cache_reject_reason=str(
+                    live_cache_validation.get("validator_failure_reason") or "validation_failed"
+                ),
             )
             rebuild_attempts.append("live_runtime_cache_validation_failed")
         else:
@@ -7376,6 +7620,9 @@ def rebuild_geometry_fit_source_rows(
                 missing_required_pair_count=0,
                 branch_mismatch_count=0,
                 hkl_missing_candidate_count=0,
+                live_cache_reject_reason=str(
+                    live_runtime_cache_diag.get("reason") or "empty_live_runtime_cache"
+                ),
                 **live_runtime_cache_diag,
             )
             _emit_rebuild_stage(
@@ -7387,6 +7634,9 @@ def rebuild_geometry_fit_source_rows(
                 missing_required_pair_count=0,
                 branch_mismatch_count=0,
                 hkl_missing_candidate_count=0,
+                live_cache_reject_reason=str(
+                    live_runtime_cache_diag.get("reason") or "empty_live_runtime_cache"
+                ),
                 **live_runtime_cache_diag,
             )
 
@@ -7593,6 +7843,160 @@ def rebuild_geometry_fit_source_rows(
                         metadata=logged_metadata,
                     )
 
+    if not force_fresh_simulation and callable(get_current_hit_table_cache):
+        rebuild_attempts.append("current_hit_table_cache")
+        current_hit_started_at = perf_counter()
+        _emit_rebuild_stage(
+            "source_cache_current_hit_table_cache_start",
+            cache_source="current_hit_table_cache",
+            preflight_mode=normalized_preflight_mode,
+        )
+        current_hit_tables: list[object] = []
+        current_hit_metadata: dict[str, object] = {}
+        try:
+            current_hit_tables, current_hit_metadata = _resolve_current_hit_table_cache_payload(
+                get_current_hit_table_cache()
+            )
+        except Exception:
+            current_hit_tables, current_hit_metadata = [], {"reason": "cache_payload_exception"}
+        current_match_payload = _current_hit_table_cache_match_payload(current_hit_metadata)
+        if not bool(current_match_payload.get("matches", False)):
+            _emit_rebuild_stage(
+                "source_cache_current_hit_table_cache_miss",
+                stage_started_at=current_hit_started_at,
+                cache_source="current_hit_table_cache",
+                row_count=0,
+                hit_table_count=int(len(current_hit_tables or ())),
+                status=str(current_match_payload.get("reason") or "signature_mismatch"),
+                current_hit_table_reject_reason=str(
+                    current_match_payload.get("reason") or "signature_mismatch"
+                ),
+                **{
+                    key: value
+                    for key, value in current_match_payload.items()
+                    if key not in {"matches", "reason"}
+                },
+            )
+        elif not current_hit_tables:
+            _emit_rebuild_stage(
+                "source_cache_current_hit_table_cache_miss",
+                stage_started_at=current_hit_started_at,
+                cache_source="current_hit_table_cache",
+                row_count=0,
+                hit_table_count=0,
+                status="empty_cache",
+                current_hit_table_reject_reason="empty_cache",
+            )
+        else:
+            current_rows, current_lattice, current_hit_tables_built, current_source_indices = (
+                _build_source_rows_result(
+                    current_hit_tables,
+                    cache_source="current_hit_table_cache",
+                )
+            )
+            current_validation = validate_geometry_fit_live_source_rows(
+                current_rows,
+                required_pairs=required_pairs,
+                require_canonical_required_pairs=True,
+            )
+            current_validation = dict(current_validation)
+            current_context_reason = _live_cache_context_reject_reason(
+                current_rows,
+                {
+                    **dict(current_hit_metadata),
+                    "fit_space": normalized_projection_view_mode,
+                },
+            )
+            if current_context_reason is not None:
+                current_validation.update(
+                    {
+                        "valid": False,
+                        "status": "invalid",
+                        "reason": str(current_context_reason),
+                        "validator_failure_reason": str(current_context_reason),
+                    }
+                )
+            current_matched_count = max(
+                0,
+                int(current_validation.get("validated_pair_count", 0) or 0)
+                - int(current_validation.get("missing_required_pair_count", 0) or 0),
+            )
+            _emit_rebuild_stage(
+                "source_cache_current_hit_table_cache_ready",
+                stage_started_at=current_hit_started_at,
+                cache_source="current_hit_table_cache",
+                row_count=int(len(current_rows or ())),
+                hit_table_count=int(len(current_hit_tables or ())),
+                status=str(
+                    current_validation.get("status")
+                    or ("valid" if current_validation.get("valid") else "invalid")
+                ),
+                required_pair_count=int(current_validation.get("required_pair_count", 0) or 0),
+                validated_pair_count=int(current_validation.get("validated_pair_count", 0) or 0),
+                matched_pair_count=int(current_matched_count),
+                missing_required_pair_count=int(
+                    current_validation.get("missing_required_pair_count", 0) or 0
+                ),
+                branch_mismatch_count=int(
+                    current_validation.get("branch_mismatch_count", 0) or 0
+                ),
+                current_hit_table_reject_reason=current_validation.get(
+                    "validator_failure_reason"
+                ),
+            )
+            if bool(current_validation.get("valid", False)) and current_rows:
+                if targeted_preflight_enabled:
+                    _update_targeted_runtime_flags(
+                        targeted_cache_hit=True,
+                        cache_source="current_hit_table_cache",
+                        full_source_rows_built_for_rebinding=False,
+                    )
+                _emit_rebuild_stage(
+                    "source_cache_current_hit_table_cache_accepted",
+                    cache_source="current_hit_table_cache",
+                    status="accepted",
+                    row_count=int(len(current_rows or ())),
+                    hit_table_count=int(len(current_hit_tables or ())),
+                    required_pair_count=int(current_validation.get("required_pair_count", 0) or 0),
+                    validated_pair_count=int(
+                        current_validation.get("validated_pair_count", 0) or 0
+                    ),
+                    matched_pair_count=int(current_matched_count),
+                    reason="ready",
+                )
+                return _success_result(
+                    current_rows,
+                    rebuild_source="current_hit_table_cache",
+                    peak_table_lattice=current_lattice,
+                    hit_tables_local=current_hit_tables_built,
+                    source_reflection_indices=current_source_indices,
+                    intersection_cache_local=current_hit_tables,
+                    metadata={
+                        **dict(current_hit_metadata),
+                        "current_hit_table_cache_validation": copy.deepcopy(current_validation),
+                    },
+                )
+            _emit_rebuild_stage(
+                "source_cache_current_hit_table_cache_rejected",
+                cache_source="current_hit_table_cache",
+                status=str(current_validation.get("status") or "validation_failed"),
+                row_count=int(len(current_rows or ())),
+                hit_table_count=int(len(current_hit_tables or ())),
+                required_pair_count=int(current_validation.get("required_pair_count", 0) or 0),
+                validated_pair_count=int(current_validation.get("validated_pair_count", 0) or 0),
+                matched_pair_count=int(current_matched_count),
+                missing_required_pair_count=int(
+                    current_validation.get("missing_required_pair_count", 0) or 0
+                ),
+                branch_mismatch_count=int(
+                    current_validation.get("branch_mismatch_count", 0) or 0
+                ),
+                reason=str(current_validation.get("reason") or "validation_failed"),
+                current_hit_table_reject_reason=str(
+                    current_validation.get("validator_failure_reason") or "validation_failed"
+                ),
+            )
+
     rebuild_attempts.append("fresh_simulation")
     fresh_started_at = perf_counter()
     fresh_stage_name = (
@@ -7626,6 +8030,13 @@ def rebuild_geometry_fit_source_rows(
                 cache_source="fresh_simulation",
                 preflight_mode=normalized_preflight_mode,
                 status="timeout",
+                timeout_s=float(timeout_s),
+            )
+            _emit_rebuild_stage(
+                "source_cache_targeted_fresh_simulation_still_running_late",
+                cache_source="fresh_simulation",
+                preflight_mode=normalized_preflight_mode,
+                status="still_running_late",
                 timeout_s=float(timeout_s),
             )
 
