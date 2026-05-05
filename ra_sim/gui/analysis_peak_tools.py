@@ -139,15 +139,51 @@ def subtract_linear_background_plane(
     def _wrapped_delta(values: np.ndarray, center: float) -> np.ndarray:
         return ((np.asarray(values, dtype=float) - float(center) + 180.0) % 360.0) - 180.0
 
+    finite_theta_axis = theta_axis[np.isfinite(theta_axis)]
+    finite_phi_axis = phi_axis[np.isfinite(phi_axis)]
+    theta_span = (
+        float(np.nanmax(finite_theta_axis) - np.nanmin(finite_theta_axis))
+        if finite_theta_axis.size >= 2
+        else 0.0
+    )
+    phi_span = (
+        float(np.nanmax(finite_phi_axis) - np.nanmin(finite_phi_axis))
+        if finite_phi_axis.size >= 2
+        else 0.0
+    )
     theta_step = _axis_step(theta_axis, 0.03)
     phi_step = _axis_step(phi_axis, 0.25)
+
+    def _default_half_width(
+        *,
+        axis_step: float,
+        axis_span: float,
+        floor: float,
+        span_fraction: float,
+    ) -> float:
+        half_width = max(8.0 * float(axis_step), float(floor))
+        if np.isfinite(axis_span) and axis_span > 0.0:
+            half_width = max(half_width, float(span_fraction) * float(axis_span))
+            half_width = min(half_width, 0.48 * float(axis_span))
+        return float(max(half_width, 0.0))
+
     theta_half = (
-        max(3.0 * theta_step, 0.08)
+        _default_half_width(
+            axis_step=theta_step,
+            axis_span=theta_span,
+            floor=0.12,
+            span_fraction=0.20,
+        )
         if theta_exclusion_half_width is None
         else max(float(theta_exclusion_half_width), 0.0)
     )
     phi_half = (
-        max(3.0 * phi_step, 0.5)
+        _default_half_width(
+            axis_step=phi_step,
+            axis_span=phi_span,
+            floor=1.0,
+            span_fraction=0.25,
+        )
         if phi_exclusion_half_width is None
         else max(float(phi_exclusion_half_width), 0.0)
     )
@@ -168,39 +204,137 @@ def subtract_linear_background_plane(
             & (np.abs(_wrapped_delta(phi_grid, phi_center)) <= phi_half)
         )
 
-    fit_mask = finite & ~peak_mask
-    used_fallback = False
-    minimum_fit_count = max(6, min(finite_count, int(math.ceil(0.20 * finite_count))))
-    if int(np.count_nonzero(fit_mask)) < minimum_fit_count:
-        fit_mask = finite
-        used_fallback = True
-
     theta_ref = float(np.nanmedian(theta_grid[finite]))
     phi_ref = float(wrap_angle_degrees(np.nanmedian(phi_grid[finite])))
-    design = np.column_stack(
-        [
-            np.ones(int(np.count_nonzero(fit_mask)), dtype=float),
-            np.asarray(theta_grid[fit_mask] - theta_ref, dtype=float),
-            np.asarray(_wrapped_delta(phi_grid[fit_mask], phi_ref), dtype=float),
-        ]
-    )
-    y_fit = np.asarray(roi[fit_mask], dtype=float)
-    try:
-        coeff, *_ = np.linalg.lstsq(design, y_fit, rcond=None)
-    except Exception as exc:
+    minimum_fit_count = max(6, min(finite_count, int(math.ceil(0.15 * finite_count))))
+
+    def _edge_band_mask() -> np.ndarray:
+        row_count, col_count = roi.shape
+        row_width = max(1, min(row_count, int(math.ceil(0.15 * row_count))))
+        col_width = max(1, min(col_count, int(math.ceil(0.15 * col_count))))
+        row_indices = np.arange(row_count, dtype=int)[:, None]
+        col_indices = np.arange(col_count, dtype=int)[None, :]
+        return (
+            (row_indices < row_width)
+            | (row_indices >= row_count - row_width)
+            | (col_indices < col_width)
+            | (col_indices >= col_count - col_width)
+        )
+
+    def _failure_payload(error: str, *, fit_mask: np.ndarray, used_edge: bool) -> dict[str, object]:
         return {
             "success": False,
-            "error": str(exc),
+            "error": str(error),
+            "fit_mask": np.asarray(fit_mask, dtype=bool),
+            "peak_mask": np.asarray(peak_mask, dtype=bool),
+            "fit_sample_count": int(np.count_nonzero(fit_mask)),
+            "initial_fit_sample_count": int(np.count_nonzero(fit_mask)),
+            "finite_sample_count": int(finite_count),
+            "peak_mask_sample_count": int(np.count_nonzero(finite & peak_mask)),
+            "used_fallback_fit_mask": bool(used_edge),
+            "used_edge_fit_mask": bool(used_edge),
+            "fallback_mode": "edge_background" if used_edge else "none",
+            "clipped_sample_count": 0,
+            "theta_exclusion_half_width": float(theta_half),
+            "phi_exclusion_half_width": float(phi_half),
         }
-    coeff = np.asarray(coeff, dtype=float)
-    if coeff.size < 3 or not np.all(np.isfinite(coeff[:3])):
-        coeff = np.asarray([float(np.nanmedian(y_fit)), 0.0, 0.0], dtype=float)
 
-    plane = (
-        float(coeff[0])
-        + float(coeff[1]) * (theta_grid - theta_ref)
-        + float(coeff[2]) * _wrapped_delta(phi_grid, phi_ref)
-    )
+    background_mask = finite & ~peak_mask
+    edge_background_mask = background_mask & _edge_band_mask()
+    if int(np.count_nonzero(background_mask)) < minimum_fit_count:
+        return _failure_payload(
+            "Not enough background samples remain outside excluded peak cores.",
+            fit_mask=background_mask,
+            used_edge=False,
+        )
+
+    def _fit_plane_coefficients(mask: np.ndarray) -> np.ndarray:
+        sample_count = int(np.count_nonzero(mask))
+        if sample_count < 3:
+            raise ValueError("Not enough samples are available for a 2D background plane.")
+        design = np.column_stack(
+            [
+                np.ones(sample_count, dtype=float),
+                np.asarray(theta_grid[mask] - theta_ref, dtype=float),
+                np.asarray(_wrapped_delta(phi_grid[mask], phi_ref), dtype=float),
+            ]
+        )
+        y_fit = np.asarray(roi[mask], dtype=float)
+        coeff, *_ = np.linalg.lstsq(design, y_fit, rcond=None)
+        coeff = np.asarray(coeff, dtype=float)
+        if coeff.size < 3 or not np.all(np.isfinite(coeff[:3])):
+            raise ValueError("Linear background plane fit produced non-finite coefficients.")
+        return coeff[:3]
+
+    def _evaluate_plane(coeff: np.ndarray) -> np.ndarray:
+        return (
+            float(coeff[0])
+            + float(coeff[1]) * (theta_grid - theta_ref)
+            + float(coeff[2]) * _wrapped_delta(phi_grid, phi_ref)
+        )
+
+    def _robust_fit_plane(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, int, int]:
+        fit_mask = np.asarray(mask, dtype=bool)
+        initial_fit_sample_count = int(np.count_nonzero(fit_mask))
+        if initial_fit_sample_count < minimum_fit_count:
+            raise ValueError("Not enough background samples are available for clipping.")
+        clipped_sample_count = 0
+        for _iteration in range(3):
+            coeff = _fit_plane_coefficients(fit_mask)
+            residual = np.asarray(roi - _evaluate_plane(coeff), dtype=float)
+            sample_residual = np.asarray(residual[fit_mask], dtype=float)
+            sample_residual = sample_residual[np.isfinite(sample_residual)]
+            if sample_residual.size < minimum_fit_count:
+                break
+            residual_center = float(np.nanmedian(sample_residual))
+            mad = float(np.nanmedian(np.abs(sample_residual - residual_center)))
+            residual_scale = 1.4826 * mad
+            if not np.isfinite(residual_scale) or residual_scale <= 1.0e-12:
+                residual_scale = float(np.nanstd(sample_residual))
+            if not np.isfinite(residual_scale) or residual_scale <= 1.0e-12:
+                break
+            threshold = residual_center + 3.0 * residual_scale
+            high_residual = fit_mask & np.isfinite(residual) & (residual > threshold)
+            high_count = int(np.count_nonzero(high_residual))
+            if high_count <= 0:
+                break
+            proposed_mask = fit_mask & ~high_residual
+            if int(np.count_nonzero(proposed_mask)) < minimum_fit_count:
+                break
+            fit_mask = proposed_mask
+            clipped_sample_count += high_count
+        coeff = _fit_plane_coefficients(fit_mask)
+        return coeff, fit_mask, int(clipped_sample_count), int(initial_fit_sample_count)
+
+    used_edge = False
+    try:
+        coeff, fit_mask, clipped_sample_count, initial_fit_sample_count = _robust_fit_plane(
+            background_mask
+        )
+    except Exception as primary_exc:
+        if int(np.count_nonzero(edge_background_mask)) >= minimum_fit_count:
+            try:
+                (
+                    coeff,
+                    fit_mask,
+                    clipped_sample_count,
+                    initial_fit_sample_count,
+                ) = _robust_fit_plane(edge_background_mask)
+                used_edge = True
+            except Exception as edge_exc:
+                return _failure_payload(
+                    f"{primary_exc}; edge-band retry failed: {edge_exc}",
+                    fit_mask=edge_background_mask,
+                    used_edge=True,
+                )
+        else:
+            return _failure_payload(
+                str(primary_exc),
+                fit_mask=background_mask,
+                used_edge=False,
+            )
+
+    plane = _evaluate_plane(coeff)
     corrected = np.asarray(roi - plane, dtype=float)
     return {
         "success": True,
@@ -212,8 +346,13 @@ def subtract_linear_background_plane(
         "theta_ref": float(theta_ref),
         "phi_ref": float(phi_ref),
         "fit_sample_count": int(np.count_nonzero(fit_mask)),
+        "initial_fit_sample_count": int(initial_fit_sample_count),
         "finite_sample_count": int(finite_count),
-        "used_fallback_fit_mask": bool(used_fallback),
+        "peak_mask_sample_count": int(np.count_nonzero(finite & peak_mask)),
+        "used_fallback_fit_mask": bool(used_edge),
+        "used_edge_fit_mask": bool(used_edge),
+        "fallback_mode": "edge_background" if used_edge else "none",
+        "clipped_sample_count": int(clipped_sample_count),
         "theta_exclusion_half_width": float(theta_half),
         "phi_exclusion_half_width": float(phi_half),
     }

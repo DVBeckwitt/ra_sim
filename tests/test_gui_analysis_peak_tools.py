@@ -116,6 +116,73 @@ def test_subtract_linear_background_plane_recovers_peak_profile_from_sloped_roi(
     assert abs(float(fit["components"][0]["fwhm"]) - theta_fwhm) < 0.07
 
 
+def test_subtract_linear_background_plane_rejects_broad_peak_wings_by_default() -> None:
+    theta_axis = np.linspace(17.0, 19.0, 121)
+    phi_axis = np.linspace(-4.0, 4.0, 101)
+    theta_grid, phi_grid = np.meshgrid(theta_axis, phi_axis)
+    theta_center = 18.15
+    phi_center = 0.6
+    theta_fwhm = 0.42
+    phi_fwhm = 1.7
+    plane = 9.5 + 2.3 * (theta_grid - 18.0) - 0.55 * (phi_grid - 0.25)
+    peak = 32.0 * np.exp(
+        -4.0
+        * np.log(2.0)
+        * (
+            ((theta_grid - theta_center) / theta_fwhm) ** 2
+            + (((phi_grid - phi_center + 180.0) % 360.0 - 180.0) / phi_fwhm) ** 2
+        )
+    )
+    roi = plane + peak
+
+    result = analysis_peak_tools.subtract_linear_background_plane(
+        theta_axis,
+        phi_axis,
+        roi,
+        [{"two_theta_deg": theta_center, "phi_deg": phi_center}],
+    )
+
+    corrected = np.asarray(result["corrected"], dtype=float)
+    off_peak = (
+        (np.abs(theta_grid - theta_center) > 0.72)
+        | (np.abs(((phi_grid - phi_center + 180.0) % 360.0) - 180.0) > 2.6)
+    )
+    radial_profile = np.nanmean(corrected, axis=0)
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        theta_axis,
+        radial_profile,
+        [theta_center],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    assert result["success"] is True
+    assert abs(float(np.nanmedian(corrected[off_peak]))) < 0.08
+    assert result["fit_sample_count"] <= result["initial_fit_sample_count"]
+    assert fit["success"] is True
+    assert abs(float(fit["components"][0]["center"]) - theta_center) < 0.03
+    assert abs(float(fit["components"][0]["fwhm"]) - theta_fwhm) < 0.08
+
+
+def test_subtract_linear_background_plane_fails_when_peak_mask_consumes_roi() -> None:
+    theta_axis = np.linspace(10.0, 10.2, 9)
+    phi_axis = np.linspace(-0.2, 0.2, 9)
+    roi = np.ones((phi_axis.size, theta_axis.size), dtype=float)
+
+    result = analysis_peak_tools.subtract_linear_background_plane(
+        theta_axis,
+        phi_axis,
+        roi,
+        [{"two_theta_deg": 10.1, "phi_deg": 0.0}],
+        theta_exclusion_half_width=1.0,
+        phi_exclusion_half_width=1.0,
+    )
+
+    assert result["success"] is False
+    assert "Not enough background samples" in str(result["error"])
+    assert result["fit_sample_count"] == 0
+    assert result["used_fallback_fit_mask"] is False
+
+
 def test_match_selected_peak_index_uses_radial_and_azimuth_tolerances() -> None:
     peaks = [
         {"two_theta_deg": 12.34, "phi_deg": -8.7},

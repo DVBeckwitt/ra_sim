@@ -39123,9 +39123,7 @@ def _fit_selected_analysis_peaks() -> None:
                             )
                             plotted_group = True
                         if isinstance(linear_background_metadata, Mapping):
-                            fit_entry["background_subtracted"] = bool(
-                                linear_background_applied
-                            )
+                            fit_entry["background_subtracted"] = bool(linear_background_applied)
                             fit_entry["linear_background"] = dict(linear_background_metadata)
                         axis_results.append(fit_entry)
                         emitted_guess_indices.add(int(center_guess_index))
