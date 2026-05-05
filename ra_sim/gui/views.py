@@ -5295,6 +5295,7 @@ def create_analysis_peak_tools_controls(
     on_toggle_pick_mode: Callable[[], None],
     on_clear_selection: Callable[[], None],
     on_fit_selected_peaks: Callable[[], None],
+    on_toggle_fit_axes_log_y: Callable[[], None] | None = None,
     pick_enabled: bool = False,
     fit_gaussian: bool = False,
     fit_lorentzian: bool = False,
@@ -5302,6 +5303,7 @@ def create_analysis_peak_tools_controls(
     subtract_linear_background: bool = True,
     fit_radial: bool = True,
     fit_azimuth: bool = True,
+    fit_axes_log_y: bool = False,
     selection_status_text: str = "No peaks selected.",
     fit_results_text: str = "Fit results will appear here.",
 ) -> None:
@@ -5395,6 +5397,15 @@ def create_analysis_peak_tools_controls(
         variable=fit_azimuth_var,
     )
     fit_azimuth_checkbutton.pack(anchor=tk.W)
+    fit_axes_log_y_var = tk.BooleanVar(value=bool(fit_axes_log_y))
+    fit_axes_log_y_kwargs = {
+        "text": "Log y-scale",
+        "variable": fit_axes_log_y_var,
+    }
+    if on_toggle_fit_axes_log_y is not None:
+        fit_axes_log_y_kwargs["command"] = on_toggle_fit_axes_log_y
+    fit_axes_log_y_checkbutton = ttk.Checkbutton(axis_frame, **fit_axes_log_y_kwargs)
+    fit_axes_log_y_checkbutton.pack(anchor=tk.W)
 
     selection_frame = ttk.LabelFrame(frame, text="Selection", padding=(6, 4))
     selection_frame.pack(fill=tk.X, pady=(0, 6))
@@ -5438,6 +5449,8 @@ def create_analysis_peak_tools_controls(
     view_state.fit_radial_checkbutton = fit_radial_checkbutton
     view_state.fit_azimuth_var = fit_azimuth_var
     view_state.fit_azimuth_checkbutton = fit_azimuth_checkbutton
+    view_state.fit_axes_log_y_var = fit_axes_log_y_var
+    view_state.fit_axes_log_y_checkbutton = fit_axes_log_y_checkbutton
     view_state.selection_status_var = selection_status_var
     view_state.selection_status_label = selection_status_label
     view_state.fit_results_var = fit_results_var

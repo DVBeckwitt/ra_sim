@@ -520,6 +520,8 @@ class AnalysisPeakToolsViewState:
     fit_radial_checkbutton: Any = None
     fit_azimuth_var: Any = None
     fit_azimuth_checkbutton: Any = None
+    fit_axes_log_y_var: Any = None
+    fit_axes_log_y_checkbutton: Any = None
     selection_status_var: Any = None
     selection_status_label: Any = None
     fit_results_var: Any = None

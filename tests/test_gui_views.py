@@ -3048,12 +3048,14 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
         on_toggle_pick_mode=lambda: calls.append("pick"),
         on_clear_selection=lambda: calls.append("clear"),
         on_fit_selected_peaks=lambda: calls.append("fit"),
+        on_toggle_fit_axes_log_y=lambda: calls.append("log-y"),
         pick_enabled=True,
         fit_gaussian=True,
         fit_lorentzian=False,
         fit_pseudo_voigt=True,
         fit_radial=True,
         fit_azimuth=False,
+        fit_axes_log_y=True,
         selection_status_text="Selected peaks: 2",
         fit_results_text="Radial fits ready.",
     )
@@ -3074,6 +3076,7 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
         "Subtract linear background",
         "Radial (2θ)",
         "Azimuth (φ)",
+        "Log y-scale",
     ]
     assert view_state.fit_gaussian_var.get() is True
     assert view_state.fit_lorentzian_var.get() is False
@@ -3082,6 +3085,8 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
     assert view_state.subtract_linear_background_checkbutton is _FakeCheckbutton.created[3]
     assert view_state.fit_radial_var.get() is True
     assert view_state.fit_azimuth_var.get() is False
+    assert view_state.fit_axes_log_y_var.get() is True
+    assert view_state.fit_axes_log_y_checkbutton is _FakeCheckbutton.created[6]
     assert view_state.selection_status_var.get() == "Selected peaks: 2"
     assert view_state.fit_results_var.get() == "Radial fits ready."
     assert view_state.fit_results_label.kwargs["font"] == "TkFixedFont"
@@ -3091,7 +3096,8 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
     view_state.pick_button.command()
     view_state.clear_button.command()
     view_state.fit_button.command()
-    assert calls == ["find", "pick", "clear", "fit"]
+    view_state.fit_axes_log_y_checkbutton.command()
+    assert calls == ["find", "pick", "clear", "fit", "log-y"]
 
 
 def test_create_integration_range_controls_store_vars_bindings_and_commands(

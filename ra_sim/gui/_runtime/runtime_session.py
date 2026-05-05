@@ -12777,6 +12777,18 @@ def _log_display_enabled() -> bool:
         return False
 
 
+def _fit_axes_log_y_enabled() -> bool:
+    view_state = globals().get("analysis_peak_tools_view_state")
+    log_y_var = getattr(view_state, "fit_axes_log_y_var", None)
+    getter = getattr(log_y_var, "get", None)
+    if not callable(getter):
+        return False
+    try:
+        return bool(getter())
+    except Exception:
+        return False
+
+
 def _beam_center_spot_enabled() -> bool:
     beam_center_spot_var = getattr(
         analysis_view_controls_view_state,
@@ -16341,7 +16353,7 @@ def _set_1d_axes_for_standard_caked_profiles(y_label: str = "Intensity") -> None
 
 
 def _apply_1d_plot_log_scale(*, redraw: bool = False) -> None:
-    use_log = bool(_log_display_enabled())
+    use_log = bool(_fit_axes_log_y_enabled())
     axes = []
     figure = globals().get("fig_1d")
     if figure is not None:
@@ -36944,6 +36956,7 @@ def _clear_analysis_peak_fit_results(*, redraw: bool, update_text: bool) -> None
     _analysis_peak_state_list("azimuth_fit_results").clear()
     _remove_artist_refs(_analysis_peak_state_list("radial_fit_artists"))
     _remove_artist_refs(_analysis_peak_state_list("azimuth_fit_artists"))
+    _restore_analysis_1d_base_lines_visible()
     if update_text:
         _set_analysis_peak_fit_results_text(
             str(
@@ -36958,6 +36971,49 @@ def _clear_analysis_peak_fit_results(*, redraw: bool, update_text: bool) -> None
             canvas_1d.draw_idle()
         except Exception:
             pass
+
+
+def _analysis_1d_base_lines(axis_kind: str) -> tuple[object | None, object | None]:
+    if str(axis_kind) == "radial":
+        return globals().get("line_1d_rad"), globals().get("line_1d_rad_bg")
+    return globals().get("line_1d_az"), globals().get("line_1d_az_bg")
+
+
+def _set_analysis_1d_base_lines_visible(axis_kind: str, visible: bool) -> None:
+    for line in _analysis_1d_base_lines(axis_kind):
+        if line is None:
+            continue
+        set_visible = getattr(line, "set_visible", None)
+        if callable(set_visible):
+            try:
+                set_visible(bool(visible))
+            except Exception:
+                pass
+        get_label = getattr(line, "get_label", None)
+        set_label = getattr(line, "set_label", None)
+        if not callable(get_label) or not callable(set_label):
+            continue
+        try:
+            saved_label = getattr(line, "_ra_sim_analysis_base_label")
+            if visible:
+                set_label(str(saved_label))
+            else:
+                set_label("_nolegend_")
+            continue
+        except Exception:
+            pass
+        if visible:
+            continue
+        try:
+            setattr(line, "_ra_sim_analysis_base_label", str(get_label()))
+            set_label("_nolegend_")
+        except Exception:
+            pass
+
+
+def _restore_analysis_1d_base_lines_visible() -> None:
+    _set_analysis_1d_base_lines_visible("radial", True)
+    _set_analysis_1d_base_lines_visible("azimuth", True)
 
 
 def _normalize_analysis_peak_source(
@@ -38081,6 +38137,7 @@ def _analysis_cache_overlay_coords(
 
 def _render_analysis_peak_overlays(*, redraw: bool) -> None:
     _clear_analysis_peak_overlay_artists(redraw=False)
+    _restore_analysis_1d_base_lines_visible()
 
     if _resolved_primary_analysis_display_mode() != "caked":
         if redraw:
@@ -38173,14 +38230,79 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
         ),
     )
     for axis_kind, axis_obj, marker_store, fit_store, fit_results in axis_specs:
+        background_subtracted_fit_entries: list[Mapping[str, object]] = []
+        for fit_entry in fit_results:
+            if not bool(fit_entry.get("success", False)):
+                continue
+            if fit_entry.get("plot_fit") is False:
+                continue
+            if not bool(fit_entry.get("background_subtracted", False)):
+                continue
+            linear_background = fit_entry.get("linear_background")
+            if isinstance(linear_background, Mapping) and not bool(
+                linear_background.get("applied", True)
+            ):
+                continue
+            background_subtracted_fit_entries.append(fit_entry)
+        if background_subtracted_fit_entries:
+            _set_analysis_1d_base_lines_visible(axis_kind, False)
+
+        plotted_background_subtracted_group_ids: set[str] = set()
+        background_subtracted_curves_by_source: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for fit_entry in background_subtracted_fit_entries:
+            fit_group_id = str(fit_entry.get("fit_group_id", "") or "").strip()
+            if fit_group_id and fit_group_id in plotted_background_subtracted_group_ids:
+                continue
+            x_data = np.asarray(fit_entry.get("x_window"), dtype=float)
+            y_data = np.asarray(fit_entry.get("y_window"), dtype=float)
+            if x_data.size <= 0 or y_data.size <= 0 or x_data.size != y_data.size:
+                continue
+            x_data, y_data = _analysis_curve_with_gap_breaks(x_data, y_data)
+            if x_data.size <= 0 or y_data.size <= 0 or x_data.size != y_data.size:
+                continue
+            try:
+                data_artist = axis_obj.plot(
+                    x_data,
+                    y_data,
+                    color="#1f77b4",
+                    linewidth=1.2,
+                    alpha=0.9,
+                    zorder=4,
+                    label="Background-subtracted data",
+                )[0]
+                fit_store.append(data_artist)
+                source_name = _normalize_analysis_peak_source(
+                    fit_entry.get("source"),
+                    default="unknown",
+                )
+                background_subtracted_curves_by_source.setdefault(
+                    source_name,
+                    (
+                        np.asarray(x_data, dtype=float),
+                        np.asarray(y_data, dtype=float),
+                    ),
+                )
+                if fit_group_id:
+                    plotted_background_subtracted_group_ids.add(fit_group_id)
+            except Exception:
+                continue
+
         plotted_fit_group_ids: set[str] = set()
         for peak_entry, display_entry in zip(selected_peaks, display_entries, strict=False):
             source_name = str(display_entry.get("source", "unknown"))
-            x_curve, y_curve, _resolved_source = _analysis_curve_data(
-                axis_kind,
+            normalized_source = _normalize_analysis_peak_source(
                 source_name,
-                allow_fallback=False,
+                default="unknown",
             )
+            corrected_pair = background_subtracted_curves_by_source.get(normalized_source)
+            if corrected_pair is not None:
+                x_curve, y_curve = corrected_pair
+            else:
+                x_curve, y_curve, _resolved_source = _analysis_curve_data(
+                    axis_kind,
+                    source_name,
+                    allow_fallback=False,
+                )
             if x_curve.size <= 0 or y_curve.size <= 0:
                 continue
             axis_value = _analysis_peak_axis_value(
@@ -38265,6 +38387,11 @@ def _render_analysis_peak_overlays(*, redraw: bool) -> None:
             except Exception:
                 continue
 
+        try:
+            axis_obj.legend()
+        except Exception:
+            pass
+
     if redraw:
         try:
             canvas_1d.draw_idle()
@@ -38291,6 +38418,7 @@ def _render_analysis_peak_tools_controls(
         on_toggle_pick_mode=_toggle_analysis_peak_pick_mode,
         on_clear_selection=_clear_selected_analysis_peaks,
         on_fit_selected_peaks=_fit_selected_analysis_peaks,
+        on_toggle_fit_axes_log_y=lambda: _apply_1d_plot_log_scale(redraw=True),
         pick_enabled=bool(analysis_peak_selection_state.pick_armed),
         fit_gaussian=bool(
             getattr(
@@ -38327,6 +38455,7 @@ def _render_analysis_peak_tools_controls(
                 lambda: True,
             )()
         ),
+        fit_axes_log_y=_fit_axes_log_y_enabled(),
         subtract_linear_background=_analysis_linear_background_enabled(),
         selection_status_text=_analysis_peak_selection_status_text(),
         fit_results_text=_analysis_peak_fit_results_text(),

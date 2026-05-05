@@ -25,6 +25,10 @@ fit. If too few non-peak background samples remain, subtraction fails closed and
 the peak fit continues with the original uncorrected 1D curve while recording
 that background subtraction was not applied.
 
+When subtraction is applied, the radial and azimuthal fit axes hide the raw
+source/background 1D lines for that axis and draw the corrected data curve
+instead. The original detector and cached caked arrays are still not mutated.
+
 Bug/error status: fixed. Feature status: complete for the existing Analyze
 `Subtract linear background` workflow. No new GUI control was added.
 
@@ -40,6 +44,8 @@ to the selected caked ROI and avoid mutating detector or cached caked images.
 - `python -m pytest tests/test_gui_analysis_peak_tools.py tests/test_gui_runtime_import_safe.py -ra`
 - `python -m compileall ra_sim tests`
 - `python -m ra_sim.dev check`
+- `python -m pytest tests/test_gui_runtime_import_safe.py::test_render_analysis_peak_overlays_shows_only_corrected_data_when_subtracted -ra`
+- `python -m pytest tests/test_gui_views.py tests/test_gui_runtime_import_safe.py -ra`
 
 All commands passed on 2026-05-05.
 

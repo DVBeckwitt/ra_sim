@@ -21633,7 +21633,9 @@ def test_runtime_session_caked_profiles_crop_to_rectangular_integration_box() ->
     np.testing.assert_allclose(i_phi, np.asarray([5.0]))
 
 
-def test_runtime_session_1d_log_toggle_updates_radial_and_azimuth_axes(monkeypatch) -> None:
+def test_runtime_session_fit_axes_log_toggle_updates_radial_and_azimuth_axes(
+    monkeypatch,
+) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
     class _Var:
@@ -21662,8 +21664,8 @@ def test_runtime_session_1d_log_toggle_updates_radial_and_azimuth_axes(monkeypat
     azimuth_axis = _Axis()
     monkeypatch.setattr(
         runtime_session,
-        "analysis_view_controls_view_state",
-        SimpleNamespace(log_display_var=_Var(True)),
+        "analysis_peak_tools_view_state",
+        SimpleNamespace(fit_axes_log_y_var=_Var(True)),
         raising=False,
     )
     monkeypatch.setattr(runtime_session, "ax_1d_radial", radial_axis, raising=False)
@@ -21678,7 +21680,7 @@ def test_runtime_session_1d_log_toggle_updates_radial_and_azimuth_axes(monkeypat
     assert radial_axis.relim_count == 1
     assert azimuth_axis.autoscale_count == 1
 
-    runtime_session.analysis_view_controls_view_state.log_display_var.value = False
+    runtime_session.analysis_peak_tools_view_state.fit_axes_log_y_var.value = False
     runtime_session._apply_1d_plot_log_scale(redraw=False)
 
     assert radial_axis.yscale_calls[-1] == ("linear", {"nonpositive": "clip"})
@@ -25947,6 +25949,129 @@ def test_render_analysis_peak_overlays_prefers_x_fit_and_skips_duplicate_groups(
     plotted_x, plotted_y, _kwargs = radial_axis.plot_calls[0]
     assert np.allclose(plotted_x, full_x_fit)
     assert np.allclose(plotted_y, full_y_fit)
+
+
+def test_render_analysis_peak_overlays_shows_only_corrected_data_when_subtracted(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Axis:
+        def __init__(self) -> None:
+            self.plot_calls: list[tuple[np.ndarray, np.ndarray | None, dict[str, object]]] = []
+            self.legend_count = 0
+
+        def plot(self, x_values, y_values=None, **kwargs):
+            x_arr = np.asarray(x_values, dtype=float)
+            y_arr = None if y_values is None else np.asarray(y_values, dtype=float)
+            self.plot_calls.append((x_arr, y_arr, dict(kwargs)))
+            return [SimpleNamespace(remove=lambda: None)]
+
+        def axvline(self, x_value, **kwargs):
+            return SimpleNamespace(remove=lambda: None)
+
+        def text(self, x_value, y_value, text, **kwargs):
+            return SimpleNamespace(remove=lambda: None)
+
+        def legend(self):
+            self.legend_count += 1
+
+    class _Line:
+        def __init__(self, label: str) -> None:
+            self.visible = True
+            self.label = label
+
+        def set_visible(self, visible: bool) -> None:
+            self.visible = bool(visible)
+
+        def get_label(self) -> str:
+            return self.label
+
+        def set_label(self, label: str) -> None:
+            self.label = str(label)
+
+    corrected_x = np.linspace(12.0, 13.0, 9)
+    corrected_y = np.linspace(0.1, 1.4, 9)
+    fit_y = np.linspace(0.2, 1.3, 9)
+    radial_axis = _Axis()
+    azimuth_axis = _Axis()
+    caked_axis = _Axis()
+    radial_line = _Line("Simulated (2θ)")
+    radial_bg_line = _Line("Background (2θ)")
+    azimuth_line = _Line("Simulated (φ)")
+    azimuth_bg_line = _Line("Background (φ)")
+    state = SimpleNamespace(
+        selected_peaks=[],
+        caked_peak_artists=[],
+        radial_peak_artists=[],
+        azimuth_peak_artists=[],
+        radial_fit_artists=[],
+        azimuth_fit_artists=[],
+        radial_fit_results=[
+            {
+                "success": True,
+                "model": "gaussian",
+                "source": "background",
+                "fit_group_id": "radial:background:gaussian",
+                "plot_fit": True,
+                "background_subtracted": True,
+                "linear_background": {"applied": True},
+                "x_window": corrected_x,
+                "y_window": corrected_y,
+                "x_fit": corrected_x,
+                "y_fit": fit_y,
+            }
+        ],
+        azimuth_fit_results=[],
+    )
+
+    monkeypatch.setattr(runtime_session, "_resolved_primary_analysis_display_mode", lambda: "caked")
+    monkeypatch.setattr(runtime_session, "_analysis_cache_overlay_tables", lambda _show_caked: [])
+    monkeypatch.setattr(
+        runtime_session, "_request_overlay_canvas_redraw", lambda **_kwargs: None, raising=False
+    )
+    monkeypatch.setattr(
+        runtime_session, "canvas_1d", SimpleNamespace(draw_idle=lambda: None), raising=False
+    )
+    monkeypatch.setattr(runtime_session, "ax", caked_axis, raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_radial", radial_axis, raising=False)
+    monkeypatch.setattr(runtime_session, "ax_1d_azim", azimuth_axis, raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_rad", radial_line, raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_rad_bg", radial_bg_line, raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az", azimuth_line, raising=False)
+    monkeypatch.setattr(runtime_session, "line_1d_az_bg", azimuth_bg_line, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_ANALYSIS_PEAK_MODEL_COLORS",
+        {"gaussian": "#2a9d8f"},
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "analysis_peak_selection_state", state, raising=False)
+
+    runtime_session._render_analysis_peak_overlays(redraw=False)
+
+    assert radial_line.visible is False
+    assert radial_bg_line.visible is False
+    assert radial_line.label == "_nolegend_"
+    assert radial_bg_line.label == "_nolegend_"
+    assert azimuth_line.visible is True
+    assert azimuth_bg_line.visible is True
+    assert len(radial_axis.plot_calls) == 2
+    corrected_plot_x, corrected_plot_y, corrected_kwargs = radial_axis.plot_calls[0]
+    fit_plot_x, fit_plot_y, _fit_kwargs = radial_axis.plot_calls[1]
+    assert corrected_kwargs["label"] == "Background-subtracted data"
+    assert np.allclose(corrected_plot_x, corrected_x)
+    assert np.allclose(corrected_plot_y, corrected_y)
+    assert np.allclose(fit_plot_x, corrected_x)
+    assert np.allclose(fit_plot_y, fit_y)
+
+    state.radial_fit_results = []
+    runtime_session._render_analysis_peak_overlays(redraw=False)
+
+    assert radial_line.visible is True
+    assert radial_bg_line.visible is True
+    assert radial_line.label == "Simulated (2θ)"
+    assert radial_bg_line.label == "Background (2θ)"
 
 
 def test_render_analysis_peak_overlays_breaks_wrapped_fit_curve_gap(monkeypatch) -> None:
