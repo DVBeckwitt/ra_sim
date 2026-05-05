@@ -207,36 +207,6 @@ instrument:
         fit_iterations: 3
         min_matches: 12
         max_display_markers: 120
-      background_subtraction:
-        enabled: false
-        mode: radial_plus_caked_2d
-        apply_to_fit: true
-        apply_to_display: false
-        display_mode: raw
-        scale: 1.0
-        auto_scale: false
-        radial_bin_width_deg: 0.10
-        radial_quantile: 0.35
-        radial_smooth_sigma_deg: 0.50
-        caked_theta_window_deg: 1.5
-        caked_phi_window_deg: 15.0
-        caked_quantile: 0.35
-        phi_block_theta_bin_width_deg: 0.75
-        phi_block_phi_bin_width_deg: 12.0
-        phi_block_quantile: 0.50
-        phi_block_min_pixels: 20
-        phi_block_min_coverage: 0.05
-        phi_block_smooth_theta_bins: 0.75
-        phi_block_smooth_phi_bins: 0.50
-        phi_block_outlier_sigma: 6.0
-        phi_block_interpolation: nearest
-        phi_block_scale: 1.0
-        phi_block_preserve_block_edges: true
-        peak_mask_sigma: 4.0
-        peak_mask_radius_px: 10.0
-        direct_beam_mask_radius_px: 35.0
-        clip_for_display: true
-        diagnostics: true
       # GUI-only overrides:
       # - gui_use_numba: enable the numba-backed simulation kernel during the
       #   live geometry fit.

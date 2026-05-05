@@ -115,68 +115,6 @@ class BackgroundThetaControlsViewState:
 
 
 @dataclass
-class BackgroundSubtractionControlsViewState:
-    """Widget references and vars for diffuse-background subtraction controls."""
-
-    frame: Any = None
-    preset_buttons: dict[str, Any] = field(default_factory=dict)
-    enabled_var: Any = None
-    mode_var: Any = None
-    apply_to_fit_var: Any = None
-    apply_to_display_var: Any = None
-    display_mode_var: Any = None
-    scale_var: Any = None
-    scale_slider: Any = None
-    auto_scale_var: Any = None
-    radial_bin_width_deg_var: Any = None
-    radial_bin_width_deg_slider: Any = None
-    radial_quantile_var: Any = None
-    radial_quantile_slider: Any = None
-    radial_smooth_sigma_deg_var: Any = None
-    radial_smooth_sigma_deg_slider: Any = None
-    caked_theta_window_deg_var: Any = None
-    caked_theta_window_deg_slider: Any = None
-    caked_phi_window_deg_var: Any = None
-    caked_phi_window_deg_slider: Any = None
-    caked_quantile_var: Any = None
-    caked_quantile_slider: Any = None
-    phi_block_theta_bin_width_deg_var: Any = None
-    phi_block_theta_bin_width_deg_slider: Any = None
-    phi_block_phi_bin_width_deg_var: Any = None
-    phi_block_phi_bin_width_deg_slider: Any = None
-    phi_block_quantile_var: Any = None
-    phi_block_quantile_slider: Any = None
-    phi_block_min_pixels_var: Any = None
-    phi_block_min_pixels_slider: Any = None
-    phi_block_min_coverage_var: Any = None
-    phi_block_min_coverage_slider: Any = None
-    phi_block_smooth_theta_bins_var: Any = None
-    phi_block_smooth_theta_bins_slider: Any = None
-    phi_block_smooth_phi_bins_var: Any = None
-    phi_block_smooth_phi_bins_slider: Any = None
-    phi_block_outlier_sigma_var: Any = None
-    phi_block_outlier_sigma_slider: Any = None
-    phi_block_interpolation_var: Any = None
-    phi_block_interpolation_buttons: list[Any] = field(default_factory=list)
-    phi_block_scale_var: Any = None
-    phi_block_scale_slider: Any = None
-    phi_block_preserve_block_edges_var: Any = None
-    peak_mask_sigma_var: Any = None
-    peak_mask_sigma_slider: Any = None
-    peak_mask_radius_px_var: Any = None
-    peak_mask_radius_px_slider: Any = None
-    direct_beam_mask_radius_px_var: Any = None
-    direct_beam_mask_radius_px_slider: Any = None
-    clip_for_display_var: Any = None
-    diagnostics_var: Any = None
-    diagnostics_summary_var: Any = None
-    diagnostics_summary_label: Any = None
-    auto_preview_var: Any = None
-    auto_preview_checkbutton: Any = None
-    status_var: Any = None
-
-
-@dataclass
 class WorkspacePanelsViewState:
     """Widget references for the workspace action/background/session panels."""
 
@@ -576,6 +514,8 @@ class AnalysisPeakToolsViewState:
     fit_lorentzian_checkbutton: Any = None
     fit_pseudo_voigt_var: Any = None
     fit_pseudo_voigt_checkbutton: Any = None
+    subtract_linear_background_var: Any = None
+    subtract_linear_background_checkbutton: Any = None
     fit_radial_var: Any = None
     fit_radial_checkbutton: Any = None
     fit_azimuth_var: Any = None
@@ -848,7 +788,6 @@ class AppShellViewState:
     fit_health_secondary_label: Any = None
     controls_notebook: Any = None
     setup_tab: Any = None
-    background_tab: Any = None
     match_tab: Any = None
     refine_tab: Any = None
     simulation_tab: Any = None
@@ -868,8 +807,6 @@ class AppShellViewState:
     geometry_fit_caked_roi_preview_checkbutton: Any = None
     setup_body: Any = None
     setup_canvas: Any = None
-    background_body: Any = None
-    background_canvas: Any = None
     match_body: Any = None
     match_canvas: Any = None
     simulation_body: Any = None
@@ -954,12 +891,6 @@ class BackgroundRuntimeState:
     backend_rotation_k: int = 3
     backend_flip_x: bool = False
     backend_flip_y: bool = False
-    background_subtraction_result: dict[str, object] | None = None
-    background_subtraction_signature: object = None
-    background_subtraction_cache: dict[object, object] = field(default_factory=dict)
-    background_subtraction_fit_display_signature: object = None
-    background_subtraction_fit_display: np.ndarray | None = None
-    background_subtraction_preview_after_id: Any = None
 
 
 @dataclass
@@ -1271,9 +1202,6 @@ class AppState:
     )
     background_theta_controls_view: BackgroundThetaControlsViewState = field(
         default_factory=BackgroundThetaControlsViewState
-    )
-    background_subtraction_controls_view: BackgroundSubtractionControlsViewState = field(
-        default_factory=BackgroundSubtractionControlsViewState
     )
     workspace_panels_view: WorkspacePanelsViewState = field(
         default_factory=WorkspacePanelsViewState

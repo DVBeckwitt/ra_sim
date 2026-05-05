@@ -397,9 +397,6 @@ python -m ra_sim hbn-fit --load-bundle artifacts/hbn_ellipse_bundle.npz --highre
 # Fit detector geometry from a saved GUI state
 python -m ra_sim fit-geometry saved_state.json
 
-# Fit detector geometry using corrected background input
-python -m ra_sim fit-geometry saved_state.json --background-subtraction radial-plus-phi-blocks
-
 # Export geometry-fit parameter correlation artifacts
 python -m ra_sim fit-geometry-correlations saved_state.json --params active
 
@@ -410,14 +407,9 @@ python -m ra_sim fit-mosaic-shape saved_state.json
 python -m ra_sim fit-mosaic saved_state.json
 ```
 
-Headless geometry and mosaic-shape fitting accept diffuse-background overrides:
-
-- `saved`
-- `off`
-- `radial`
-- `radial-plus-caked-2d`
-- `radial-plus-phi-blocks`
-- `radial-plus-phi-blocks-plus-caked-2d`
+Legacy `--background-subtraction*` headless flags are still accepted for saved-script
+compatibility, but they are no-ops. Background correction now happens only in Analyze
+peak fitting through the local `Subtract linear background` checkbox.
 
 <details>
 <summary>Optics transport modes</summary>

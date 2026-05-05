@@ -56,7 +56,7 @@
   - Added a fast end-to-end QR selector to geometry-fitter handoff scenario covering fast-path invalidation sequencing, point-provider parity, projection-cache invalidation, and objective-cache reuse/reject behavior without requiring New4 artifacts.
   - Hardened geometry-objective cache signatures so center-only reuse is gated by unchanged physics, dataset, point-provider, QR branch identity, source-row identity, manual selection, refined peak, objective mode, and active fit-parameter signatures.
   - Avoided dense detector-image allocation in hit-table-only geometry fitting paths by using an empty simulation buffer, disabling image accumulation, and keeping locked-Qr detector-shape fallback behavior intact.
-  - Added diffuse-background `radial_plus_phi_blocks` and `radial_plus_phi_blocks_plus_caked_2d` modes with coarse phi/theta block residual modeling, component diagnostics, GUI controls, CLI mode support, and artifact exports.
+  - Removed the global diffuse/background-subtraction workflow from detector, caked, matching, geometry-fit, manual-pick, and headless fit inputs while keeping legacy CLI flags accepted as no-op compatibility options.
   - Expanded `hbn_fitter/fitter.py` with uncertainty-aware ellipse refinement and point-sigma handling.
   - Added projective tilt optimization path with fallback to legacy optimization.
   - Extracted hBN fitter bundle-payload assembly into a shared helper used by `save_bundle()`.
@@ -106,6 +106,7 @@
   - Fixed the main GUI `phi x 2theta` caked density convention so simulation/background caking and caked 1D profiles use detector-count density without solid-angle normalization, matching notebook `sum_signal / pixel_support` behavior while preserving raw-sum mode and Q-space conversion.
   - Fixed the Analyze caked intensity toggle so switching density/raw modes repaints the main caked figure raster instead of reusing stale projected pixels.
   - Changed Analyze peak-fit results from compact summary lines to a monospaced table showing Gaussian FWHM, Lorentzian FWHM, Gaussian/Lorentzian mix percent, center, and RMSE for radial and azimuthal fits.
+  - Added Analyze-only `Subtract linear background` peak fitting, enabled by default, using one local 2D plane per selected source box without mutating cached detector or caked images.
   - Fixed Analyze pseudo-Voigt peak fitting to use area-normalized Gaussian and Lorentzian equations, so the reported Lorentzian percentage reflects fitted Lorentzian area instead of a height-weighted mix.
   - Kept the Analyze main caked figure intensity scale fixed during integration-region changes while radial and azimuthal 1D plots still rescale to the selected region.
   - Added an Analyze selected-Qr rod `Rod profile intensity` control with density-first default and raw accumulated intensity opt-in, saved as `analysis_range.rod_profile_intensity_mode`.
@@ -125,7 +126,6 @@
   - Fixed caked-view manual Qr/Qz picking so normal pick mode ignores saved-placement move hits unless the explicit drag-move tool is enabled, preventing an already selected caked Qr set from stealing later clicks.
   - Saved detector-origin manual Qr/Qz placements with projected caked `(2theta, phi)` coordinates and backfilled those cache fields when importing legacy GUI state files that do not contain them.
   - Reduced Qr/HKL image tags to one smaller, more transparent label per Qr set so placed and candidate peaks remain visible.
-  - Routed enabled diffuse-background subtraction into manual/auto Qr picking through the existing `Use before fit/pick` option, preserving raw backgrounds and keeping subtraction off unless enabled.
   - Parallelized the post-placement geometry refinement pass for auto-added Qr/Qz peaks with a bounded CPU worker pool.
   - Added selected-Qr rod `Mirror +/-phi band` integration so caked high-azimuth lobes can be selected as a symmetric `|phi|` band without filling the central phi rows.
   - Fixed selected-Qr rod caked integration masks so valid high-`|phi|` bins are selected from detector Qr/Qz pixels through the exact-cake LUT instead of depending on finite forward-projected Qr trace samples; selected-Qr drag Qz bounds now use the LUT transpose from dragged caked bins back to detector contributors.
@@ -134,8 +134,6 @@
   - Hardened GUI detector-center remap cache handling so exact remaps retain QR/Qz identity, invalidate stale manual/caked/q-space projection caches, report projection and handoff trace state, and fall back to full simulation for missing secondary exact caches or center-plus-physics changes.
   - Fixed manual geometry refresh so detector-coordinate truth is not replaced by stale caked fields and refreshed caked coordinates update raw caked fields.
   - Hardened GUI runtime prune reuse/fill QR selector cache handling so explicit QR/Qz masks persist, stale source-row snapshots are not retained across incompatible hit-table identity, and runtime traces report selector retention/deferred refresh/fitter handoff validity.
-  - Tightened Background tab copy with shorter labels, buttons, hints, status text, presets, tooltips, and diagnostics wording without changing subtraction behavior or saved-state keys.
-  - Reworked the diffuse background-subtraction controls into a workflow-oriented Background tab with presets, explained sliders, diagnostics, and dirty/auto-preview status feedback while preserving saved-state and headless configuration keys.
   - Added linked GUI sampling controls: beam phase samples now default to 75 on startup and legacy state/parameter loads, events per beam phase tracks two events per sample by default, and an `Independent` toggle enables separate event-count control when needed.
   - Made simulation GUI startup default to diagnostics-off, with saved debug settings and one-run debug mode kept as explicit opt-in choices.
   - Stopped creating per-run debug bundles on default diagnostics-off launches; simulation now starts bundle capture only after the chosen normal/saved/debug startup mode is known.

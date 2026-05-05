@@ -68,6 +68,54 @@ def test_sample_curve_value_interpolates_sorted_curve() -> None:
     assert np.isnan(analysis_peak_tools.sample_curve_value(x_values, y_values, 0.5))
 
 
+def test_subtract_linear_background_plane_recovers_peak_profile_from_sloped_roi() -> None:
+    theta_axis = np.linspace(17.0, 19.0, 121)
+    phi_axis = np.linspace(-4.0, 4.0, 101)
+    theta_grid, phi_grid = np.meshgrid(theta_axis, phi_axis)
+    theta_center = 18.2
+    phi_center = -0.7
+    theta_fwhm = 0.36
+    phi_fwhm = 1.4
+    plane = 12.0 + 1.7 * (theta_grid - 18.0) - 0.35 * phi_grid
+    peak = 30.0 * np.exp(
+        -4.0
+        * np.log(2.0)
+        * (
+            ((theta_grid - theta_center) / theta_fwhm) ** 2
+            + (((phi_grid - phi_center + 180.0) % 360.0 - 180.0) / phi_fwhm) ** 2
+        )
+    )
+    roi = plane + peak
+
+    result = analysis_peak_tools.subtract_linear_background_plane(
+        theta_axis,
+        phi_axis,
+        roi,
+        [{"two_theta_deg": theta_center, "phi_deg": phi_center}],
+        theta_exclusion_half_width=0.45,
+        phi_exclusion_half_width=1.6,
+    )
+
+    corrected = np.asarray(result["corrected"], dtype=float)
+    off_peak = (
+        (np.abs(theta_grid - theta_center) > 0.65)
+        | (np.abs(((phi_grid - phi_center + 180.0) % 360.0) - 180.0) > 2.2)
+    )
+    radial_profile = np.nanmean(corrected, axis=0)
+    fit = analysis_peak_tools.fit_composite_peak_profile(
+        theta_axis,
+        radial_profile,
+        [theta_center],
+        model=analysis_peak_tools.PROFILE_GAUSSIAN,
+    )
+
+    assert result["success"] is True
+    assert abs(float(np.nanmedian(corrected[off_peak]))) < 0.05
+    assert fit["success"] is True
+    assert abs(float(fit["components"][0]["center"]) - theta_center) < 0.03
+    assert abs(float(fit["components"][0]["fwhm"]) - theta_fwhm) < 0.07
+
+
 def test_match_selected_peak_index_uses_radial_and_azimuth_tolerances() -> None:
     peaks = [
         {"two_theta_deg": 12.34, "phi_deg": -8.7},

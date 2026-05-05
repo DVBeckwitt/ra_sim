@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import re
 import tomllib
 import webbrowser
 from importlib.metadata import PackageNotFoundError, version as get_package_version
@@ -25,7 +24,6 @@ from .state import (
     AnalysisPeakToolsViewState,
     AnalysisPopoutViewState,
     BeamMosaicParameterSlidersViewState,
-    BackgroundSubtractionControlsViewState,
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
@@ -81,82 +79,6 @@ _VIEW_MODE_CHOICES = (
     ("caked", "Caked"),
     ("q_space", "Q Space"),
 )
-_BACKGROUND_SUBTRACTION_PRESETS: dict[str, dict[str, object]] = {
-    "conservative": {
-        "enabled": True,
-        "mode": "radial",
-        "scale": 0.80,
-        "radial_quantile": 0.25,
-        "radial_smooth_sigma_deg": 1.00,
-        "peak_mask_sigma": 3.0,
-        "peak_mask_radius_px": 16.0,
-        "direct_beam_mask_radius_px": 45.0,
-    },
-    "balanced": {
-        "enabled": True,
-        "mode": "radial_plus_caked_2d",
-        "scale": 1.00,
-        "radial_quantile": 0.35,
-        "radial_smooth_sigma_deg": 0.50,
-        "caked_theta_window_deg": 1.5,
-        "caked_phi_window_deg": 15.0,
-        "caked_quantile": 0.35,
-        "peak_mask_sigma": 4.0,
-        "peak_mask_radius_px": 10.0,
-        "direct_beam_mask_radius_px": 35.0,
-    },
-    "aggressive": {
-        "enabled": True,
-        "mode": "radial_plus_caked_2d",
-        "scale": 1.15,
-        "radial_quantile": 0.45,
-        "radial_smooth_sigma_deg": 0.35,
-        "caked_theta_window_deg": 1.0,
-        "caked_phi_window_deg": 10.0,
-        "caked_quantile": 0.45,
-        "peak_mask_sigma": 4.5,
-        "peak_mask_radius_px": 8.0,
-        "direct_beam_mask_radius_px": 35.0,
-    },
-    "protect_peaks": {
-        "enabled": True,
-        "mode": "radial_plus_caked_2d",
-        "scale": 0.90,
-        "radial_quantile": 0.25,
-        "radial_smooth_sigma_deg": 1.00,
-        "caked_theta_window_deg": 2.5,
-        "caked_phi_window_deg": 25.0,
-        "caked_quantile": 0.25,
-        "peak_mask_sigma": 2.5,
-        "peak_mask_radius_px": 18.0,
-        "direct_beam_mask_radius_px": 45.0,
-    },
-    "direct_beam_heavy": {
-        "enabled": True,
-        "mode": "radial",
-        "scale": 1.00,
-        "radial_quantile": 0.30,
-        "radial_smooth_sigma_deg": 1.25,
-        "peak_mask_sigma": 3.0,
-        "peak_mask_radius_px": 16.0,
-        "direct_beam_mask_radius_px": 70.0,
-    },
-}
-
-
-def _normalize_background_subtraction_preset_name(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower()).strip("_")
-
-
-def background_subtraction_preset_values(name: str) -> dict[str, object]:
-    """Return one diffuse-background subtraction preset mapping."""
-
-    key = _normalize_background_subtraction_preset_name(name)
-    if key not in _BACKGROUND_SUBTRACTION_PRESETS:
-        raise KeyError(name)
-    return dict(_BACKGROUND_SUBTRACTION_PRESETS[key])
-
-
 def _attach_tooltip(widget: object, text: str) -> None:
     """Attach a minimal hover tooltip when the widget supports Tk bindings."""
 
@@ -1277,14 +1199,12 @@ def create_app_shell(
     controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
 
     setup_tab = ttk.Frame(controls_notebook)
-    background_tab = ttk.Frame(controls_notebook)
     match_tab = ttk.Frame(controls_notebook)
     refine_tab = ttk.Frame(controls_notebook)
     simulation_tab = ttk.Frame(controls_notebook)
     analyze_tab = ttk.Frame(controls_notebook)
     help_tab = ttk.Frame(controls_notebook)
     controls_notebook.add(setup_tab, text="Setup")
-    controls_notebook.add(background_tab, text="Background")
     controls_notebook.add(match_tab, text="Match")
     controls_notebook.add(refine_tab, text="Refine")
     controls_notebook.add(simulation_tab, text="Simulation")
@@ -1293,10 +1213,6 @@ def create_app_shell(
 
     setup_scroll_frame, setup_body, setup_canvas = _create_scrolled_frame(setup_tab)
     setup_scroll_frame.pack(fill=tk.BOTH, expand=True)
-    background_scroll_frame, background_body, background_canvas = _create_scrolled_frame(
-        background_tab
-    )
-    background_scroll_frame.pack(fill=tk.BOTH, expand=True)
     match_scroll_frame, match_body, match_canvas = _create_scrolled_frame(match_tab)
     match_scroll_frame.pack(fill=tk.BOTH, expand=True)
     simulation_scroll_frame, simulation_body, simulation_canvas = _create_scrolled_frame(
@@ -1324,16 +1240,6 @@ def create_app_shell(
         key=("app-shell-scroll", id(view_state), "setup"),
         handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
             setup_canvas,
-            pointer_x=pointer_x,
-            pointer_y=pointer_y,
-            event=event,
-        ),
-    )
-    _register_pointer_mousewheel_handler(
-        root,
-        key=("app-shell-scroll", id(view_state), "background"),
-        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
-            background_canvas,
             pointer_x=pointer_x,
             pointer_y=pointer_y,
             event=event,
@@ -1387,7 +1293,6 @@ def create_app_shell(
         control_tab_var,
         {
             "setup": setup_tab,
-            "background": background_tab,
             "match": match_tab,
             "refine": refine_tab,
             "simulation": simulation_tab,
@@ -1699,7 +1604,6 @@ def create_app_shell(
     view_state.fit_health_secondary_label = fit_health_secondary_label
     view_state.controls_notebook = controls_notebook
     view_state.setup_tab = setup_tab
-    view_state.background_tab = background_tab
     view_state.match_tab = match_tab
     view_state.refine_tab = refine_tab
     view_state.simulation_tab = simulation_tab
@@ -1723,8 +1627,6 @@ def create_app_shell(
     )
     view_state.setup_body = setup_body
     view_state.setup_canvas = setup_canvas
-    view_state.background_body = background_body
-    view_state.background_canvas = background_canvas
     view_state.match_body = match_body
     view_state.match_canvas = match_canvas
     view_state.simulation_body = simulation_body
@@ -2491,866 +2393,6 @@ def create_background_file_controls(
 
     view_state.background_file_status_var = background_file_status_var
     view_state.background_file_status_label = background_file_status_label
-
-
-def create_background_subtraction_controls(
-    *,
-    parent: tk.Misc,
-    view_state: BackgroundSubtractionControlsViewState,
-    initial_values: Mapping[str, object],
-    on_fit_model: Callable[[], None],
-    on_apply: Callable[[], None],
-    on_reset: Callable[[], None],
-    on_export_diagnostics: Callable[[], None],
-    on_apply_preset: Callable[[str], None] | None = None,
-) -> None:
-    """Create diffuse-background subtraction controls for the Background tab."""
-
-    def _initial_bool(key: str, default: bool) -> bool:
-        value = initial_values.get(key, default) if isinstance(initial_values, Mapping) else default
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return bool(value)
-
-    def _initial_float(key: str, default: float) -> float:
-        value = initial_values.get(key, default) if isinstance(initial_values, Mapping) else default
-        try:
-            return float(value)
-        except Exception:
-            return float(default)
-
-    def _initial_text(key: str, default: str) -> str:
-        value = initial_values.get(key, default) if isinstance(initial_values, Mapping) else default
-        return str(value)
-
-    def _set_var_value(var: object, value: object) -> None:
-        setter = getattr(var, "set", None)
-        if callable(setter):
-            try:
-                setter(value)
-            except Exception:
-                pass
-
-    def _var_float(var: object, fallback: float) -> float:
-        getter = getattr(var, "get", None)
-        if not callable(getter):
-            return float(fallback)
-        try:
-            return float(getter())
-        except Exception:
-            return float(fallback)
-
-    def _var_text(var: object, fallback: str) -> str:
-        getter = getattr(var, "get", None)
-        if not callable(getter):
-            return str(fallback)
-        try:
-            return str(getter())
-        except Exception:
-            return str(fallback)
-
-    frame = ttk.LabelFrame(parent, text="Background subtraction", padding=(8, 6))
-    frame.pack(fill=tk.X, padx=5, pady=5)
-    visible_hint_wraplength = 420
-    status_wraplength = 420
-
-    enabled_var = tk.BooleanVar(value=_initial_bool("enabled", False))
-    mode_var = tk.StringVar(value=_initial_text("mode", "radial_plus_caked_2d"))
-    apply_to_fit_var = tk.BooleanVar(value=_initial_bool("apply_to_fit", True))
-    apply_to_display_var = tk.BooleanVar(value=_initial_bool("apply_to_display", False))
-    display_mode_var = tk.StringVar(value=_initial_text("display_mode", "raw"))
-    auto_scale_var = tk.BooleanVar(value=_initial_bool("auto_scale", False))
-    clip_for_display_var = tk.BooleanVar(value=_initial_bool("clip_for_display", True))
-    diagnostics_var = tk.BooleanVar(value=_initial_bool("diagnostics", True))
-    auto_preview_var = tk.BooleanVar(value=False)
-    initial_status = "Ready. Press Fit." if _initial_bool("enabled", False) else "Off."
-    status_var = tk.StringVar(value=initial_status)
-    diagnostics_summary_var = tk.StringVar(value="No fit yet.")
-    fit_usage_var = tk.StringVar(value="")
-
-    def _add_section(
-        parent_frame: tk.Misc,
-        title: str,
-        *,
-        expanded: bool = True,
-        summary: str = "",
-    ) -> CollapsibleFrame:
-        section = CollapsibleFrame(parent_frame, text=title, expanded=expanded)
-        section.pack(fill=tk.X, padx=6, pady=4)
-        if summary:
-            set_summary = getattr(section, "set_header_summary", None)
-            if callable(set_summary):
-                set_summary(summary)
-        return section
-
-    def _add_help_label(
-        parent_frame: tk.Misc,
-        text: str,
-        *,
-        wraplength: int = visible_hint_wraplength,
-    ) -> ttk.Label:
-        label = ttk.Label(
-            parent_frame,
-            text=text,
-            wraplength=wraplength,
-            justify=tk.LEFT,
-        )
-        label.pack(fill=tk.X, padx=6, pady=(2, 4))
-        return label
-
-    def _add_check(
-        parent_frame: tk.Misc,
-        text: str,
-        variable: object,
-        *,
-        tooltip: str = "",
-    ) -> object:
-        check = ttk.Checkbutton(parent_frame, text=text, variable=variable)
-        check.pack(anchor=tk.W, padx=6, pady=3)
-        _attach_tooltip(check, tooltip)
-        return check
-
-    def _add_radio_group(
-        parent_frame: tk.Misc,
-        label: str,
-        variable: object,
-        choices: Sequence[tuple[str, str]],
-        *,
-        tooltip: str = "",
-    ) -> list[object]:
-        ttk.Label(parent_frame, text=label).pack(anchor=tk.W, padx=6, pady=(6, 1))
-        row = ttk.Frame(parent_frame)
-        row.pack(fill=tk.X, padx=6, pady=(0, 4))
-        buttons = []
-        for value, text in choices:
-            button = ttk.Radiobutton(row, text=text, variable=variable, value=value)
-            button.pack(side=tk.LEFT, padx=(0, 10), pady=2)
-            _attach_tooltip(button, tooltip)
-            buttons.append(button)
-        return buttons
-
-    def _add_explained_slider(
-        *,
-        parent: tk.Misc,
-        label: str,
-        variable_key: str,
-        initial: float,
-        min_value: float,
-        max_value: float,
-        step: float,
-        explanation: str,
-        low_text: str,
-        high_text: str,
-        tooltip: str,
-        allow_range_expand: bool = False,
-    ) -> tuple[tk.DoubleVar, object]:
-        slider_var, slider = create_slider(
-            label,
-            min_value,
-            max_value,
-            _initial_float(variable_key, initial),
-            step,
-            parent,
-            allow_range_expand=allow_range_expand,
-        )
-        detail = _add_help_label(parent, explanation)
-        _attach_tooltip(slider, tooltip)
-        _attach_tooltip(detail, tooltip)
-        return slider_var, slider
-
-    quick_frame = ttk.Frame(frame)
-    quick_frame.pack(fill=tk.X, padx=6, pady=(2, 6))
-    _add_help_label(
-        quick_frame,
-        "Remove the smooth halo before matching or comparing.",
-    )
-    _add_help_label(
-        quick_frame,
-        "Preset -> Fit -> Preview -> Use before fit/pick",
-    )
-    status_label = ttk.Label(
-        quick_frame,
-        textvariable=status_var,
-        justify=tk.LEFT,
-        anchor=tk.W,
-        wraplength=status_wraplength,
-    )
-    status_label.pack(fill=tk.X, padx=6, pady=(2, 0))
-
-    presets = _add_section(
-        frame,
-        "Presets",
-        expanded=True,
-        summary="safe, balanced, strong",
-    )
-    _add_help_label(
-        presets.frame,
-        "Presets set controls. Press Fit.",
-    )
-    preset_row = ttk.Frame(presets.frame)
-    preset_row.pack(fill=tk.X, padx=6, pady=(0, 4))
-    preset_buttons: dict[str, object] = {}
-
-    def _preset_var_map() -> dict[str, object]:
-        return {
-            "enabled": enabled_var,
-            "mode": mode_var,
-            "scale": scale_var,
-            "radial_quantile": radial_quantile_var,
-            "radial_smooth_sigma_deg": radial_smooth_sigma_deg_var,
-            "caked_theta_window_deg": caked_theta_window_deg_var,
-            "caked_phi_window_deg": caked_phi_window_deg_var,
-            "caked_quantile": caked_quantile_var,
-            "phi_block_theta_bin_width_deg": phi_block_theta_bin_width_deg_var,
-            "phi_block_phi_bin_width_deg": phi_block_phi_bin_width_deg_var,
-            "phi_block_quantile": phi_block_quantile_var,
-            "phi_block_min_pixels": phi_block_min_pixels_var,
-            "phi_block_min_coverage": phi_block_min_coverage_var,
-            "phi_block_smooth_theta_bins": phi_block_smooth_theta_bins_var,
-            "phi_block_smooth_phi_bins": phi_block_smooth_phi_bins_var,
-            "phi_block_outlier_sigma": phi_block_outlier_sigma_var,
-            "phi_block_interpolation": phi_block_interpolation_var,
-            "phi_block_scale": phi_block_scale_var,
-            "phi_block_preserve_block_edges": phi_block_preserve_block_edges_var,
-            "peak_mask_sigma": peak_mask_sigma_var,
-            "peak_mask_radius_px": peak_mask_radius_px_var,
-            "direct_beam_mask_radius_px": direct_beam_mask_radius_px_var,
-        }
-
-    def _apply_preset(name: str) -> None:
-        values = background_subtraction_preset_values(name)
-        var_map = _preset_var_map()
-        for key, value in values.items():
-            _set_var_value(var_map.get(key), value)
-        _set_var_value(status_var, "Preset set. Press Fit.")
-        if on_apply_preset is not None:
-            on_apply_preset(name)
-
-    for preset_key, label, tooltip in (
-        (
-            "conservative",
-            "Safe",
-            "Leaves more halo; least likely to hollow peaks.",
-        ),
-        ("balanced", "Balanced", "Recommended starting point for most backgrounds."),
-        (
-            "aggressive",
-            "Strong",
-            "Removes more halo; inspect model and mask.",
-        ),
-        (
-            "protect_peaks",
-            "Protect peaks",
-            "Stronger peak masking with gentler baselines.",
-        ),
-        (
-            "direct_beam_heavy",
-            "Beam-heavy",
-            "Excludes a larger beam-center region.",
-        ),
-    ):
-        button = ttk.Button(
-            preset_row,
-            text=label,
-            command=lambda key=preset_key: _apply_preset(key),
-        )
-        button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-        _attach_tooltip(button, tooltip)
-        preset_buttons[preset_key] = button
-    reset_button = ttk.Button(preset_row, text="Reset", command=on_reset)
-    reset_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-    _attach_tooltip(reset_button, "Restore defaults without fitting.")
-    preset_buttons["reset_defaults"] = reset_button
-
-    basic = _add_section(
-        frame,
-        "Basic",
-        expanded=True,
-        summary="strength 1.00",
-    )
-    _add_check(
-        basic.frame,
-        "Enable",
-        enabled_var,
-        tooltip="Turn subtraction on. Off keeps the raw image.",
-    )
-    _add_radio_group(
-        basic.frame,
-        "Model",
-        mode_var,
-        (
-            ("off", "Off"),
-            ("radial", "Radial"),
-            ("radial_plus_caked_2d", "Radial + 2D"),
-            ("radial_plus_phi_blocks", "Radial + phi blocks"),
-            ("radial_plus_phi_blocks_plus_caked_2d", "Radial + phi blocks + 2D"),
-        ),
-        tooltip="Radial removes halo. Blocks handle module trends. 2D handles slow residuals.",
-    )
-    _add_check(
-        basic.frame,
-        "Use before fit/pick",
-        apply_to_fit_var,
-        tooltip=(
-            "When checked, manual/auto Qr picking, auto-match, and fit comparison "
-            "use the subtracted image."
-        ),
-    )
-    _add_check(
-        basic.frame,
-        "Auto scale",
-        auto_scale_var,
-        tooltip="Estimate strength automatically when fitting the model.",
-    )
-    fit_usage_label = ttk.Label(
-        basic.frame,
-        textvariable=fit_usage_var,
-        wraplength=status_wraplength,
-        justify=tk.LEFT,
-    )
-    fit_usage_label.pack(fill=tk.X, padx=6, pady=(0, 4))
-
-    scale_var, scale_slider = _add_explained_slider(
-        parent=basic.frame,
-        label="Strength",
-        variable_key="scale",
-        initial=1.00,
-        min_value=0.00,
-        max_value=2.00,
-        step=0.01,
-        explanation="More removes more halo; too much hollows peaks.",
-        low_text="Lower leaves more halo.",
-        high_text="Higher removes more halo but can make peaks hollow.",
-        tooltip="Model multiplier. Increase if halo remains. Decrease if peaks look hollow.",
-        allow_range_expand=True,
-    )
-    radial_smooth_sigma_deg_var, radial_smooth_sigma_deg_slider = _add_explained_slider(
-        parent=basic.frame,
-        label="Smoothness",
-        variable_key="radial_smooth_sigma_deg",
-        initial=0.50,
-        min_value=0.05,
-        max_value=5.00,
-        step=0.05,
-        explanation="Higher is smoother and safer.",
-        low_text="Follows local structure more closely.",
-        high_text="Produces a smoother safer halo model.",
-        tooltip="Smooths the radial halo model in 2θ.",
-    )
-    peak_mask_radius_px_var, peak_mask_radius_px_slider = _add_explained_slider(
-        parent=basic.frame,
-        label="Peak mask",
-        variable_key="peak_mask_radius_px",
-        initial=10.0,
-        min_value=1.0,
-        max_value=50.0,
-        step=1.0,
-        explanation="Higher protects peak shoulders.",
-        low_text="Uses more pixels but may let peaks leak into the background model.",
-        high_text="Protects peak shoulders but leaves less data for fitting.",
-        tooltip="Expands the mask around detected peaks.",
-    )
-    direct_beam_mask_radius_px_var, direct_beam_mask_radius_px_slider = _add_explained_slider(
-        parent=basic.frame,
-        label="Beam mask",
-        variable_key="direct_beam_mask_radius_px",
-        initial=35.0,
-        min_value=0.0,
-        max_value=150.0,
-        step=1.0,
-        explanation="Higher ignores more beam-center pixels.",
-        low_text="Fits closer to the beam center.",
-        high_text="Avoids beam streaks but discards more low-angle data.",
-        tooltip="Excludes the beam-center region from the model fit.",
-    )
-
-    preview = _add_section(
-        frame,
-        "Preview",
-        expanded=True,
-        summary="raw, model, subtracted, residual, mask",
-    )
-    _add_check(
-        preview.frame,
-        "Use for preview",
-        apply_to_display_var,
-        tooltip="When checked, the preview can show raw, model, subtracted, residual, or mask.",
-    )
-    _add_radio_group(
-        preview.frame,
-        "Preview",
-        display_mode_var,
-        (
-            ("raw", "Raw"),
-            ("model", "Model"),
-            ("subtracted", "Subtracted"),
-            ("residual", "Residual"),
-            ("mask", "Mask"),
-            ("radial_model", "Radial"),
-            ("phi_block_model", "Phi blocks"),
-            ("radial_plus_phi_block_model", "Radial + phi"),
-            ("slow_caked_model", "Slow 2D"),
-        ),
-        tooltip=(
-            "Choose what to display. This does not change picking or fitting unless "
-            "Use before fit/pick is checked."
-        ),
-    )
-    _add_help_label(
-        preview.frame,
-        "Raw, model, subtracted, residual, mask, or components.",
-    )
-    _add_check(
-        preview.frame,
-        "Clip preview",
-        clip_for_display_var,
-        tooltip="Only clips the displayed image. Fit data remains signed.",
-    )
-    auto_preview_checkbutton = _add_check(
-        preview.frame,
-        "Auto-preview",
-        auto_preview_var,
-        tooltip="Fit after slider changes using a short debounce.",
-    )
-
-    radial = _add_section(
-        frame,
-        "Radial",
-        expanded=False,
-        summary="base 0.35, smooth 0.50°",
-    )
-    radial_bin_width_deg_var, radial_bin_width_deg_slider = _add_explained_slider(
-        parent=radial.frame,
-        label="2θ bin",
-        variable_key="radial_bin_width_deg",
-        initial=0.10,
-        min_value=0.02,
-        max_value=1.00,
-        step=0.01,
-        explanation="Lower is detailed; higher is stable.",
-        low_text="More detail, noisier.",
-        high_text="Smoother, more stable.",
-        tooltip="Bin width for estimating the radial halo.",
-    )
-    radial_quantile_var, radial_quantile_slider = _add_explained_slider(
-        parent=radial.frame,
-        label="Baseline",
-        variable_key="radial_quantile",
-        initial=0.35,
-        min_value=0.05,
-        max_value=0.80,
-        step=0.01,
-        explanation="Lower preserves peaks; higher subtracts more.",
-        low_text="Safer for preserving peaks, may under-subtract.",
-        high_text="More aggressive subtraction, may absorb broad peaks.",
-        tooltip="Percentile used as the radial background level.",
-    )
-
-    caked = _add_section(
-        frame,
-        "2D residual",
-        expanded=False,
-        summary="slow 2θ/φ trends",
-    )
-    _add_help_label(
-        caked.frame,
-        "Use if radial leaves slow 2θ/φ residuals.",
-    )
-    caked_theta_window_deg_var, caked_theta_window_deg_slider = _add_explained_slider(
-        parent=caked.frame,
-        label="2D 2θ window",
-        variable_key="caked_theta_window_deg",
-        initial=1.5,
-        min_value=0.25,
-        max_value=8.00,
-        step=0.25,
-        explanation="Higher smooths residuals along 2θ.",
-        low_text="More adaptive, higher overfit risk.",
-        high_text="Smoother, safer.",
-        tooltip="Residual smoothing width along 2θ in caked space.",
-    )
-    caked_phi_window_deg_var, caked_phi_window_deg_slider = _add_explained_slider(
-        parent=caked.frame,
-        label="2D φ window",
-        variable_key="caked_phi_window_deg",
-        initial=15.0,
-        min_value=2.0,
-        max_value=60.0,
-        step=1.0,
-        explanation="Higher smooths residuals along φ.",
-        low_text="Follows angular artifacts more closely.",
-        high_text="Keeps only broad phi trends.",
-        tooltip="Residual smoothing width along φ in caked space.",
-    )
-    caked_quantile_var, caked_quantile_slider = _add_explained_slider(
-        parent=caked.frame,
-        label="2D baseline",
-        variable_key="caked_quantile",
-        initial=0.35,
-        min_value=0.05,
-        max_value=0.80,
-        step=0.01,
-        explanation="Lower preserves peaks; higher subtracts more.",
-        low_text="Preserves peaks.",
-        high_text="Removes more residual background.",
-        tooltip="Percentile used for the 2D residual model.",
-    )
-
-    phi_blocks = _add_section(
-        frame,
-        "Blocks",
-        expanded=False,
-        summary="12° x 0.75° median",
-    )
-    _add_help_label(
-        phi_blocks.frame,
-        "Use for broad blocky φ residuals.",
-    )
-    phi_block_theta_bin_width_deg_var, phi_block_theta_bin_width_deg_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block 2θ bin",
-        variable_key="phi_block_theta_bin_width_deg",
-        initial=0.75,
-        min_value=0.10,
-        max_value=5.00,
-        step=0.05,
-        explanation="Higher uses broader 2θ cells.",
-        low_text="Finer blocks.",
-        high_text="Coarser, safer blocks.",
-        tooltip="Bin width along 2θ for block residuals.",
-    )
-    phi_block_phi_bin_width_deg_var, phi_block_phi_bin_width_deg_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block phi bin",
-        variable_key="phi_block_phi_bin_width_deg",
-        initial=12.0,
-        min_value=2.0,
-        max_value=60.0,
-        step=1.0,
-        explanation="Higher uses broader φ sectors.",
-        low_text="Follows narrower module bands.",
-        high_text="Uses broader phi sectors.",
-        tooltip="Bin width along φ for block residuals.",
-    )
-    phi_block_quantile_var, phi_block_quantile_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block quantile",
-        variable_key="phi_block_quantile",
-        initial=0.50,
-        min_value=0.05,
-        max_value=0.95,
-        step=0.01,
-        explanation="Lower preserves peaks; higher subtracts more.",
-        low_text="Lower preserves positive residuals.",
-        high_text="Subtracts more positive residual.",
-        tooltip="Percentile used inside each φ/2θ block.",
-    )
-    phi_block_min_pixels_var, phi_block_min_pixels_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block min pixels",
-        variable_key="phi_block_min_pixels",
-        initial=20.0,
-        min_value=1.0,
-        max_value=500.0,
-        step=1.0,
-        explanation="Higher requires more support.",
-        low_text="Fills sparse cells.",
-        high_text="Requires stronger support.",
-        tooltip="Cells below this count are filled from neighboring cells.",
-    )
-    phi_block_min_coverage_var, phi_block_min_coverage_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block min coverage",
-        variable_key="phi_block_min_coverage",
-        initial=0.05,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        explanation="Higher skips sparse cells.",
-        low_text="Uses more sparse cells.",
-        high_text="Avoids poorly supported cells.",
-        tooltip="Cells below this support fraction are filled from neighbors.",
-    )
-    phi_block_smooth_theta_bins_var, phi_block_smooth_theta_bins_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block 2θ smoothing",
-        variable_key="phi_block_smooth_theta_bins",
-        initial=0.75,
-        min_value=0.0,
-        max_value=5.0,
-        step=0.05,
-        explanation="Higher smooths blocks along 2θ.",
-        low_text="Sharper block edges.",
-        high_text="Smoother block grid.",
-        tooltip="Gaussian smoothing in coarse 2θ bins.",
-    )
-    phi_block_smooth_phi_bins_var, phi_block_smooth_phi_bins_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block phi smoothing",
-        variable_key="phi_block_smooth_phi_bins",
-        initial=0.50,
-        min_value=0.0,
-        max_value=5.0,
-        step=0.05,
-        explanation="Higher smooths blocks along φ.",
-        low_text="Sharper sector edges.",
-        high_text="Smoother sector transitions.",
-        tooltip="Gaussian smoothing in coarse φ bins.",
-    )
-    phi_block_outlier_sigma_var, phi_block_outlier_sigma_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block outlier sigma",
-        variable_key="phi_block_outlier_sigma",
-        initial=6.0,
-        min_value=0.0,
-        max_value=20.0,
-        step=0.5,
-        explanation="Lower rejects more extremes.",
-        low_text="Rejects more extremes.",
-        high_text="Keeps more residual pixels.",
-        tooltip="MAD-scaled rejection threshold inside each block cell.",
-    )
-    phi_block_scale_var, phi_block_scale_slider = _add_explained_slider(
-        parent=phi_blocks.frame,
-        label="Phi-block strength",
-        variable_key="phi_block_scale",
-        initial=1.0,
-        min_value=0.0,
-        max_value=2.0,
-        step=0.01,
-        explanation="Multiplier for block residuals.",
-        low_text="Leaves more block residual.",
-        high_text="Subtracts stronger block residual.",
-        tooltip="Multiplier for the block residual model.",
-        allow_range_expand=True,
-    )
-    phi_block_interpolation_var = tk.StringVar(
-        value=_initial_text("phi_block_interpolation", "nearest")
-    )
-    phi_block_interpolation_buttons = _add_radio_group(
-        phi_blocks.frame,
-        "Interpolation",
-        phi_block_interpolation_var,
-        (
-            ("nearest", "Nearest"),
-            ("linear", "Linear"),
-        ),
-        tooltip="Nearest preserves block edges; linear smooths transitions.",
-    )
-    phi_block_preserve_block_edges_var = tk.BooleanVar(
-        value=_initial_bool("phi_block_preserve_block_edges", True)
-    )
-    _add_check(
-        phi_blocks.frame,
-        "Block edges",
-        phi_block_preserve_block_edges_var,
-        tooltip="Use nearest-neighbor upsampling for the block model.",
-    )
-
-    protection = _add_section(
-        frame,
-        "Masks",
-        expanded=False,
-        summary="peak 10 px, beam 35 px",
-    )
-    _add_help_label(
-        protection.frame,
-        "If peaks leak into the model, mask more here.",
-    )
-    peak_mask_sigma_var, peak_mask_sigma_slider = _add_explained_slider(
-        parent=protection.frame,
-        label="Peak sensitivity",
-        variable_key="peak_mask_sigma",
-        initial=4.0,
-        min_value=1.0,
-        max_value=10.0,
-        step=0.1,
-        explanation="Lower masks more bright pixels.",
-        low_text="Masks more peaks; safer but can mask too much.",
-        high_text="Masks fewer pixels; faster but may fit through peaks.",
-        tooltip="Threshold for detecting bright pixels to exclude from the fit.",
-    )
-
-    diagnostics = _add_section(
-        frame,
-        "Diagnostics",
-        expanded=True,
-        summary="status and tuning",
-    )
-    diagnostics_label = ttk.Label(
-        diagnostics.frame,
-        textvariable=diagnostics_summary_var,
-        wraplength=status_wraplength,
-        justify=tk.LEFT,
-    )
-    diagnostics_label.pack(fill=tk.X, padx=6, pady=(2, 4))
-    _attach_tooltip(
-        diagnostics_label,
-        "Updated after Fit.",
-    )
-    _add_help_label(
-        diagnostics.frame,
-        "Tuning guide:\n"
-        "• Halo remains: raise Strength or Baseline.\n"
-        "• Peaks hollow: lower Strength or Baseline.\n"
-        "• Model has peaks: lower Peak sensitivity or raise Peak mask.\n"
-        "• Model noisy: raise Smoothness or 2θ bin.\n"
-        "• Beam streak leaks: raise Beam mask.",
-    )
-
-    actions = _add_section(frame, "Actions", expanded=True, summary="fit, apply, export")
-    _add_check(
-        actions.frame,
-        "Save diagnostics",
-        diagnostics_var,
-        tooltip="Exports model, masks, profile, and summary metrics.",
-    )
-    action_row = ttk.Frame(actions.frame)
-    action_row.pack(fill=tk.X, padx=6, pady=(2, 4))
-    fit_button = ttk.Button(
-        action_row,
-        text="Fit",
-        command=on_fit_model,
-    )
-    fit_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-    apply_button = ttk.Button(action_row, text="Apply", command=on_apply)
-    apply_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-    export_button = ttk.Button(
-        action_row,
-        text="Export",
-        command=on_export_diagnostics,
-    )
-    export_button.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-    _attach_tooltip(fit_button, "Fit the model for this image and settings.")
-    _attach_tooltip(apply_button, "Refit and refresh fit/preview outputs.")
-    _attach_tooltip(export_button, "Export model, masks, profile, and metrics.")
-
-    def _update_fit_usage_label(*_args: object) -> None:
-        enabled = bool(getattr(enabled_var, "get", lambda: False)())
-        mode = _var_text(mode_var, "off")
-        apply_to_fit = bool(getattr(apply_to_fit_var, "get", lambda: False)())
-        if enabled and mode != "off" and apply_to_fit:
-            text = "Used before Qr picking, auto-match, and fit."
-        elif enabled and mode != "off":
-            text = "Preview only. Qr picking and fit use raw."
-        else:
-            text = "Off. Qr picking and fit use raw."
-        _set_var_value(fit_usage_var, text)
-
-    def _refresh_summaries(*_args: object) -> None:
-        for section, summary in (
-            (
-                basic,
-                (f"strength {_var_float(scale_var, 1.0):.2f}"),
-            ),
-            (
-                radial,
-                (
-                    f"base {_var_float(radial_quantile_var, 0.35):.2f}, "
-                    f"smooth {_var_float(radial_smooth_sigma_deg_var, 0.50):.2f}°"
-                ),
-            ),
-            (
-                protection,
-                (
-                    f"peak {_var_float(peak_mask_radius_px_var, 10.0):.0f} px, "
-                    f"beam {_var_float(direct_beam_mask_radius_px_var, 35.0):.0f} px"
-                ),
-            ),
-            (
-                phi_blocks,
-                (
-                    f"{_var_float(phi_block_phi_bin_width_deg_var, 12.0):.0f}° x "
-                    f"{_var_float(phi_block_theta_bin_width_deg_var, 0.75):.2f}° "
-                    f"q{_var_float(phi_block_quantile_var, 0.50):.2f}"
-                ),
-            ),
-        ):
-            set_summary = getattr(section, "set_header_summary", None)
-            if callable(set_summary):
-                set_summary(summary)
-
-    for traced_var in (
-        enabled_var,
-        mode_var,
-        apply_to_fit_var,
-        scale_var,
-        radial_quantile_var,
-        radial_smooth_sigma_deg_var,
-        peak_mask_radius_px_var,
-        direct_beam_mask_radius_px_var,
-        phi_block_theta_bin_width_deg_var,
-        phi_block_phi_bin_width_deg_var,
-        phi_block_quantile_var,
-    ):
-        trace_add = getattr(traced_var, "trace_add", None)
-        if callable(trace_add):
-            try:
-                trace_add(
-                    "write",
-                    lambda *_args: (_update_fit_usage_label(), _refresh_summaries()),
-                )
-            except Exception:
-                pass
-    _update_fit_usage_label()
-    _refresh_summaries()
-
-    view_state.frame = frame
-    view_state.preset_buttons = preset_buttons
-    view_state.enabled_var = enabled_var
-    view_state.mode_var = mode_var
-    view_state.apply_to_fit_var = apply_to_fit_var
-    view_state.apply_to_display_var = apply_to_display_var
-    view_state.display_mode_var = display_mode_var
-    view_state.scale_var = scale_var
-    view_state.scale_slider = scale_slider
-    view_state.auto_scale_var = auto_scale_var
-    view_state.radial_bin_width_deg_var = radial_bin_width_deg_var
-    view_state.radial_bin_width_deg_slider = radial_bin_width_deg_slider
-    view_state.radial_quantile_var = radial_quantile_var
-    view_state.radial_quantile_slider = radial_quantile_slider
-    view_state.radial_smooth_sigma_deg_var = radial_smooth_sigma_deg_var
-    view_state.radial_smooth_sigma_deg_slider = radial_smooth_sigma_deg_slider
-    view_state.caked_theta_window_deg_var = caked_theta_window_deg_var
-    view_state.caked_theta_window_deg_slider = caked_theta_window_deg_slider
-    view_state.caked_phi_window_deg_var = caked_phi_window_deg_var
-    view_state.caked_phi_window_deg_slider = caked_phi_window_deg_slider
-    view_state.caked_quantile_var = caked_quantile_var
-    view_state.caked_quantile_slider = caked_quantile_slider
-    view_state.phi_block_theta_bin_width_deg_var = phi_block_theta_bin_width_deg_var
-    view_state.phi_block_theta_bin_width_deg_slider = phi_block_theta_bin_width_deg_slider
-    view_state.phi_block_phi_bin_width_deg_var = phi_block_phi_bin_width_deg_var
-    view_state.phi_block_phi_bin_width_deg_slider = phi_block_phi_bin_width_deg_slider
-    view_state.phi_block_quantile_var = phi_block_quantile_var
-    view_state.phi_block_quantile_slider = phi_block_quantile_slider
-    view_state.phi_block_min_pixels_var = phi_block_min_pixels_var
-    view_state.phi_block_min_pixels_slider = phi_block_min_pixels_slider
-    view_state.phi_block_min_coverage_var = phi_block_min_coverage_var
-    view_state.phi_block_min_coverage_slider = phi_block_min_coverage_slider
-    view_state.phi_block_smooth_theta_bins_var = phi_block_smooth_theta_bins_var
-    view_state.phi_block_smooth_theta_bins_slider = phi_block_smooth_theta_bins_slider
-    view_state.phi_block_smooth_phi_bins_var = phi_block_smooth_phi_bins_var
-    view_state.phi_block_smooth_phi_bins_slider = phi_block_smooth_phi_bins_slider
-    view_state.phi_block_outlier_sigma_var = phi_block_outlier_sigma_var
-    view_state.phi_block_outlier_sigma_slider = phi_block_outlier_sigma_slider
-    view_state.phi_block_interpolation_var = phi_block_interpolation_var
-    view_state.phi_block_interpolation_buttons = phi_block_interpolation_buttons
-    view_state.phi_block_scale_var = phi_block_scale_var
-    view_state.phi_block_scale_slider = phi_block_scale_slider
-    view_state.phi_block_preserve_block_edges_var = phi_block_preserve_block_edges_var
-    view_state.peak_mask_sigma_var = peak_mask_sigma_var
-    view_state.peak_mask_sigma_slider = peak_mask_sigma_slider
-    view_state.peak_mask_radius_px_var = peak_mask_radius_px_var
-    view_state.peak_mask_radius_px_slider = peak_mask_radius_px_slider
-    view_state.direct_beam_mask_radius_px_var = direct_beam_mask_radius_px_var
-    view_state.direct_beam_mask_radius_px_slider = direct_beam_mask_radius_px_slider
-    view_state.clip_for_display_var = clip_for_display_var
-    view_state.diagnostics_var = diagnostics_var
-    view_state.diagnostics_summary_var = diagnostics_summary_var
-    view_state.diagnostics_summary_label = diagnostics_label
-    view_state.auto_preview_var = auto_preview_var
-    view_state.auto_preview_checkbutton = auto_preview_checkbutton
-    view_state.status_var = status_var
 
 
 def create_primary_cif_controls(
@@ -6257,6 +5299,7 @@ def create_analysis_peak_tools_controls(
     fit_gaussian: bool = False,
     fit_lorentzian: bool = False,
     fit_pseudo_voigt: bool = True,
+    subtract_linear_background: bool = True,
     fit_radial: bool = True,
     fit_azimuth: bool = True,
     selection_status_text: str = "No peaks selected.",
@@ -6328,6 +5371,13 @@ def create_analysis_peak_tools_controls(
         variable=fit_pseudo_voigt_var,
     )
     fit_pseudo_voigt_checkbutton.pack(anchor=tk.W)
+    subtract_linear_background_var = tk.BooleanVar(value=bool(subtract_linear_background))
+    subtract_linear_background_checkbutton = ttk.Checkbutton(
+        model_frame,
+        text="Subtract linear background",
+        variable=subtract_linear_background_var,
+    )
+    subtract_linear_background_checkbutton.pack(anchor=tk.W)
 
     axis_frame = ttk.LabelFrame(option_row, text="Fit Axes", padding=(6, 4))
     axis_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
@@ -6382,6 +5432,8 @@ def create_analysis_peak_tools_controls(
     view_state.fit_lorentzian_checkbutton = fit_lorentzian_checkbutton
     view_state.fit_pseudo_voigt_var = fit_pseudo_voigt_var
     view_state.fit_pseudo_voigt_checkbutton = fit_pseudo_voigt_checkbutton
+    view_state.subtract_linear_background_var = subtract_linear_background_var
+    view_state.subtract_linear_background_checkbutton = subtract_linear_background_checkbutton
     view_state.fit_radial_var = fit_radial_var
     view_state.fit_radial_checkbutton = fit_radial_checkbutton
     view_state.fit_azimuth_var = fit_azimuth_var

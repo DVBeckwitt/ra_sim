@@ -262,13 +262,6 @@ from ra_sim.simulation.types import (
     MosaicParams,
     SimulationRequest,
 )
-from ra_sim.fitting.diffuse_background import (
-    DiffuseBackgroundConfig,
-    diffuse_background_config_from_mapping,
-    diffuse_background_config_to_mapping,
-    fit_diffuse_background_native,
-    subtract_diffuse_background,
-)
 from ra_sim.fitting.rod_profiles import qz_profile_from_caked_mask
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
@@ -2177,42 +2170,11 @@ def _show_azimuthal_radial_plot_demo() -> None:
 app_shell_view_state = app_state.app_shell_view
 status_panel_view_state = app_state.status_panel_view
 background_theta_controls_view_state = app_state.background_theta_controls_view
-background_subtraction_controls_view_state = app_state.background_subtraction_controls_view
 workspace_panels_view_state = app_state.workspace_panels_view
 background_backend_debug_view_state = app_state.background_backend_debug_view
 background_theta_list_var = None
 geometry_theta_offset_var = None
 geometry_fit_background_selection_var = None
-background_subtraction_enabled_var = None
-background_subtraction_mode_var = None
-background_subtraction_apply_to_fit_var = None
-background_subtraction_apply_to_display_var = None
-background_subtraction_display_mode_var = None
-background_subtraction_scale_var = None
-background_subtraction_auto_scale_var = None
-background_subtraction_radial_bin_width_deg_var = None
-background_subtraction_radial_quantile_var = None
-background_subtraction_radial_smooth_sigma_deg_var = None
-background_subtraction_caked_theta_window_deg_var = None
-background_subtraction_caked_phi_window_deg_var = None
-background_subtraction_caked_quantile_var = None
-background_subtraction_phi_block_theta_bin_width_deg_var = None
-background_subtraction_phi_block_phi_bin_width_deg_var = None
-background_subtraction_phi_block_quantile_var = None
-background_subtraction_phi_block_min_pixels_var = None
-background_subtraction_phi_block_min_coverage_var = None
-background_subtraction_phi_block_smooth_theta_bins_var = None
-background_subtraction_phi_block_smooth_phi_bins_var = None
-background_subtraction_phi_block_outlier_sigma_var = None
-background_subtraction_phi_block_interpolation_var = None
-background_subtraction_phi_block_scale_var = None
-background_subtraction_phi_block_preserve_block_edges_var = None
-background_subtraction_peak_mask_sigma_var = None
-background_subtraction_peak_mask_radius_px_var = None
-background_subtraction_direct_beam_mask_radius_px_var = None
-background_subtraction_clip_for_display_var = None
-background_subtraction_diagnostics_var = None
-background_subtraction_status_var = None
 fit_theta_checkbutton = None
 _geometry_fit_runtime_value_callbacks = None
 _geometry_fit_var_map: dict[str, object] = {}
@@ -2779,85 +2741,6 @@ def _get_current_background_backend() -> np.ndarray | None:
     return _apply_background_backend_orientation(_get_current_background_native())
 
 
-def _background_subtraction_defaults() -> dict[str, object]:
-    """Return diffuse-background subtraction defaults from instrument config."""
-
-    geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
-    subtraction_cfg = (
-        geometry_cfg.get("background_subtraction", {}) if isinstance(geometry_cfg, Mapping) else {}
-    )
-    return diffuse_background_config_to_mapping(
-        diffuse_background_config_from_mapping(
-            subtraction_cfg if isinstance(subtraction_cfg, Mapping) else None
-        )
-    )
-
-
-def _background_subtraction_control_mapping() -> dict[str, object]:
-    view_state = background_subtraction_controls_view_state
-    return {
-        "enabled": _get_var_value(view_state.enabled_var, False),
-        "mode": _get_var_value(view_state.mode_var, "radial_plus_caked_2d"),
-        "apply_to_fit": _get_var_value(view_state.apply_to_fit_var, True),
-        "apply_to_display": _get_var_value(view_state.apply_to_display_var, False),
-        "display_mode": _get_var_value(view_state.display_mode_var, "raw"),
-        "scale": _get_var_value(view_state.scale_var, 1.0),
-        "auto_scale": _get_var_value(view_state.auto_scale_var, False),
-        "radial_bin_width_deg": _get_var_value(view_state.radial_bin_width_deg_var, 0.10),
-        "radial_quantile": _get_var_value(view_state.radial_quantile_var, 0.35),
-        "radial_smooth_sigma_deg": _get_var_value(
-            view_state.radial_smooth_sigma_deg_var,
-            0.50,
-        ),
-        "caked_theta_window_deg": _get_var_value(view_state.caked_theta_window_deg_var, 1.5),
-        "caked_phi_window_deg": _get_var_value(view_state.caked_phi_window_deg_var, 15.0),
-        "caked_quantile": _get_var_value(view_state.caked_quantile_var, 0.35),
-        "phi_block_theta_bin_width_deg": _get_var_value(
-            view_state.phi_block_theta_bin_width_deg_var,
-            0.75,
-        ),
-        "phi_block_phi_bin_width_deg": _get_var_value(
-            view_state.phi_block_phi_bin_width_deg_var,
-            12.0,
-        ),
-        "phi_block_quantile": _get_var_value(view_state.phi_block_quantile_var, 0.50),
-        "phi_block_min_pixels": _get_var_value(view_state.phi_block_min_pixels_var, 20),
-        "phi_block_min_coverage": _get_var_value(
-            view_state.phi_block_min_coverage_var,
-            0.05,
-        ),
-        "phi_block_smooth_theta_bins": _get_var_value(
-            view_state.phi_block_smooth_theta_bins_var,
-            0.75,
-        ),
-        "phi_block_smooth_phi_bins": _get_var_value(
-            view_state.phi_block_smooth_phi_bins_var,
-            0.50,
-        ),
-        "phi_block_outlier_sigma": _get_var_value(
-            view_state.phi_block_outlier_sigma_var,
-            6.0,
-        ),
-        "phi_block_interpolation": _get_var_value(
-            view_state.phi_block_interpolation_var,
-            "nearest",
-        ),
-        "phi_block_scale": _get_var_value(view_state.phi_block_scale_var, 1.0),
-        "phi_block_preserve_block_edges": _get_var_value(
-            view_state.phi_block_preserve_block_edges_var,
-            True,
-        ),
-        "peak_mask_sigma": _get_var_value(view_state.peak_mask_sigma_var, 4.0),
-        "peak_mask_radius_px": _get_var_value(view_state.peak_mask_radius_px_var, 10.0),
-        "direct_beam_mask_radius_px": _get_var_value(
-            view_state.direct_beam_mask_radius_px_var,
-            35.0,
-        ),
-        "clip_for_display": _get_var_value(view_state.clip_for_display_var, True),
-        "diagnostics": _get_var_value(view_state.diagnostics_var, True),
-    }
-
-
 def _get_var_value(var: object, fallback: object) -> object:
     getter = getattr(var, "get", None)
     if callable(getter):
@@ -2868,677 +2751,26 @@ def _get_var_value(var: object, fallback: object) -> object:
     return fallback
 
 
-def _set_background_subtraction_status(text: str) -> None:
-    var = background_subtraction_controls_view_state.status_var
-    setter = getattr(var, "set", None)
-    if callable(setter):
-        try:
-            setter(str(text))
-        except Exception:
-            pass
-
-
-def _set_background_subtraction_diagnostics_summary(text: str) -> None:
-    var = getattr(background_subtraction_controls_view_state, "diagnostics_summary_var", None)
-    setter = getattr(var, "set", None)
-    if callable(setter):
-        try:
-            setter(str(text))
-        except Exception:
-            pass
-
-
-def _set_background_subtraction_var(key: str, value: object) -> None:
-    view_state = background_subtraction_controls_view_state
-    var = {
-        "enabled": view_state.enabled_var,
-        "mode": view_state.mode_var,
-        "apply_to_fit": view_state.apply_to_fit_var,
-        "apply_to_display": view_state.apply_to_display_var,
-        "display_mode": view_state.display_mode_var,
-        "scale": view_state.scale_var,
-        "auto_scale": view_state.auto_scale_var,
-        "radial_bin_width_deg": view_state.radial_bin_width_deg_var,
-        "radial_quantile": view_state.radial_quantile_var,
-        "radial_smooth_sigma_deg": view_state.radial_smooth_sigma_deg_var,
-        "caked_theta_window_deg": view_state.caked_theta_window_deg_var,
-        "caked_phi_window_deg": view_state.caked_phi_window_deg_var,
-        "caked_quantile": view_state.caked_quantile_var,
-        "phi_block_theta_bin_width_deg": view_state.phi_block_theta_bin_width_deg_var,
-        "phi_block_phi_bin_width_deg": view_state.phi_block_phi_bin_width_deg_var,
-        "phi_block_quantile": view_state.phi_block_quantile_var,
-        "phi_block_min_pixels": view_state.phi_block_min_pixels_var,
-        "phi_block_min_coverage": view_state.phi_block_min_coverage_var,
-        "phi_block_smooth_theta_bins": view_state.phi_block_smooth_theta_bins_var,
-        "phi_block_smooth_phi_bins": view_state.phi_block_smooth_phi_bins_var,
-        "phi_block_outlier_sigma": view_state.phi_block_outlier_sigma_var,
-        "phi_block_interpolation": view_state.phi_block_interpolation_var,
-        "phi_block_scale": view_state.phi_block_scale_var,
-        "phi_block_preserve_block_edges": view_state.phi_block_preserve_block_edges_var,
-        "peak_mask_sigma": view_state.peak_mask_sigma_var,
-        "peak_mask_radius_px": view_state.peak_mask_radius_px_var,
-        "direct_beam_mask_radius_px": view_state.direct_beam_mask_radius_px_var,
-        "clip_for_display": view_state.clip_for_display_var,
-        "diagnostics": view_state.diagnostics_var,
-    }.get(str(key))
-    setter = getattr(var, "set", None)
-    if callable(setter):
-        try:
-            setter(value)
-        except Exception:
-            pass
-
-
-def _background_subtraction_auto_preview_enabled() -> bool:
-    return bool(
-        _get_var_value(
-            getattr(background_subtraction_controls_view_state, "auto_preview_var", None),
-            False,
-        )
-    )
-
-
-def _cancel_background_subtraction_preview() -> None:
-    token = getattr(background_runtime_state, "background_subtraction_preview_after_id", None)
-    gui_controllers.clear_tk_after_token(globals().get("root"), token)
-    background_runtime_state.background_subtraction_preview_after_id = None
-
-
-def _schedule_background_subtraction_preview(delay_ms: int = 400) -> None:
-    _cancel_background_subtraction_preview()
-    root_obj = globals().get("root")
-    after = getattr(root_obj, "after", None)
-
-    def _run_preview() -> None:
-        background_runtime_state.background_subtraction_preview_after_id = None
-        result = _fit_current_background_subtraction_model(force=True)
-        _refresh_background_subtraction_diagnostics_summary()
-        config = _current_background_subtraction_config()
-        if (
-            result is not None
-            and config.enabled
-            and (config.apply_to_display or config.apply_to_fit)
-            and not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False))
-        ):
-            schedule_update()
-
-    if not callable(after):
-        _run_preview()
-        return
-    try:
-        background_runtime_state.background_subtraction_preview_after_id = after(
-            int(delay_ms),
-            _run_preview,
-        )
-    except Exception:
-        background_runtime_state.background_subtraction_preview_after_id = None
-        _run_preview()
-
-
-def _mark_background_subtraction_dirty(reason: str) -> None:
-    _invalidate_background_subtraction_cache()
-    _set_background_subtraction_status(reason)
-    _set_background_subtraction_diagnostics_summary("Status: dirty\nNo fit yet.")
-    if _background_subtraction_auto_preview_enabled():
-        _schedule_background_subtraction_preview()
-    else:
-        _cancel_background_subtraction_preview()
-
-
-def _apply_background_subtraction_preset(name: str) -> None:
-    try:
-        values = gui_views.background_subtraction_preset_values(name)
-    except KeyError:
-        _set_background_subtraction_status(f"Unknown diffuse-background preset: {name}")
-        return
-    for key, value in values.items():
-        _set_background_subtraction_var(key, value)
-    _mark_background_subtraction_dirty("Preset set. Press Fit.")
-
-
-def _current_background_subtraction_config() -> DiffuseBackgroundConfig:
-    """Return the current diffuse-background subtraction GUI config."""
-
-    defaults_mapping = _background_subtraction_defaults()
-    defaults_mapping.update(_background_subtraction_control_mapping())
-    return diffuse_background_config_from_mapping(defaults_mapping)
-
-
-def _background_subtraction_geometry_signature(
-    *,
-    detector_shape: Sequence[object] | None = None,
-) -> tuple[object, ...]:
-    shape_signature = None
-    if detector_shape is not None:
-        try:
-            shape_signature = tuple(int(v) for v in tuple(detector_shape)[:2])
-        except Exception:
-            shape_signature = None
-    try:
-        distance = round(float(corto_detector_var.get()), 9)
-    except Exception:
-        distance = None
-    try:
-        center_x = round(float(center_x_var.get()), 6)
-        center_y = round(float(center_y_var.get()), 6)
-    except Exception:
-        center_x = center_y = None
-    try:
-        wavelength = round(float(lambda_) * 1.0e-10, 12)
-    except Exception:
-        wavelength = None
-    try:
-        pixel_size = round(float(pixel_size_m), 12)
-    except Exception:
-        pixel_size = None
-    return (
-        shape_signature,
-        center_x,
-        center_y,
-        distance,
-        pixel_size,
-        wavelength,
-    )
-
-
-def _background_subtraction_signature() -> tuple[object, ...]:
-    raw_background = background_runtime_state.current_background_image
-    try:
-        raw_shape = tuple(int(v) for v in np.asarray(raw_background).shape[:2])
-    except Exception:
-        raw_shape = None
-    config = _current_background_subtraction_config()
-    config_items = tuple(sorted(diffuse_background_config_to_mapping(config).items()))
-    return (
-        "background_subtraction",
-        int(background_runtime_state.current_background_index),
-        id(raw_background),
-        int(background_runtime_state.backend_rotation_k) % 4,
-        bool(background_runtime_state.backend_flip_x),
-        bool(background_runtime_state.backend_flip_y),
-        raw_shape,
-        _background_subtraction_geometry_signature(detector_shape=raw_shape),
-        config_items,
-    )
-
-
-def _invalidate_background_subtraction_cache() -> None:
-    background_runtime_state.background_subtraction_result = None
-    background_runtime_state.background_subtraction_signature = None
-    background_runtime_state.background_subtraction_fit_display_signature = None
-    background_runtime_state.background_subtraction_fit_display = None
-    background_runtime_state.background_subtraction_cache.clear()
-    simulation_runtime_state.last_res2_background = None
-    simulation_runtime_state.normalization_scale_cache["sig"] = None
-    simulation_runtime_state.caking_cache = _empty_caking_cache()
-    _invalidate_cached_analysis_space_payloads(clear_caked=True, clear_q_space=True)
-    try:
-        _invalidate_analysis_cache(clear_visuals=True)
-    except Exception:
-        pass
-    try:
-        _clear_geometry_fit_dataset_cache()
-    except Exception:
-        pass
-
-
-def _background_subtraction_fraction_text(label: str, value: object) -> str:
-    try:
-        return f"{label}: {float(value):.0%}"
-    except Exception:
-        return f"{label}: n/a"
-
-
-def _background_subtraction_number_text(label: str, value: object) -> str:
-    try:
-        number = float(value)
-    except Exception:
-        return f"{label}: n/a"
-    if not np.isfinite(number):
-        return f"{label}: n/a"
-    return f"{label}: {number:.4g}"
-
-
-def _refresh_background_subtraction_diagnostics_summary() -> None:
-    result = background_runtime_state.background_subtraction_result
-    if not isinstance(result, Mapping):
-        _set_background_subtraction_diagnostics_summary("No fit yet.")
-        return
-    diagnostics = result.get("diagnostics", {})
-    if not isinstance(diagnostics, Mapping):
-        _set_background_subtraction_diagnostics_summary("No fit yet.")
-        return
-    try:
-        current_signature = _background_subtraction_signature()
-    except Exception:
-        current_signature = None
-    model_status = (
-        "up to date"
-        if current_signature == background_runtime_state.background_subtraction_signature
-        else "dirty"
-    )
-    lines = [
-        f"Status: {model_status}",
-        _background_subtraction_fraction_text(
-            "Valid",
-            diagnostics.get("valid_fraction"),
-        ),
-        _background_subtraction_fraction_text(
-            "Masked",
-            diagnostics.get("masked_fraction"),
-        ),
-        _background_subtraction_fraction_text(
-            "Negative",
-            diagnostics.get("negative_fraction"),
-        ),
-        f"Bins: {int(diagnostics.get('radial_bin_count', 0) or 0)}",
-        _background_subtraction_number_text("Raw med.", diagnostics.get("raw_median")),
-        _background_subtraction_number_text(
-            "Corr. med.",
-            diagnostics.get("corrected_median"),
-        ),
-    ]
-    _set_background_subtraction_diagnostics_summary("\n".join(lines))
-
-
-def _background_subtraction_axes_for_image(
-    image: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
-    try:
-        ai = _get_azimuthal_integrator_cls()(
-            dist=float(corto_detector_var.get()),
-            poni1=float(center_x_var.get()) * float(pixel_size_m),
-            poni2=float(center_y_var.get()) * float(pixel_size_m),
-            rot1=0.0,
-            rot2=0.0,
-            rot3=0.0,
-            wavelength=float(lambda_) * 1.0e-10,
-            pixel1=float(pixel_size_m),
-            pixel2=float(pixel_size_m),
-        )
-    except Exception:
-        return None, None
-    detector_shape = tuple(int(v) for v in np.asarray(image).shape[:2])
-    try:
-        two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
-    except TypeError:
-        two_theta = np.rad2deg(ai.twoThetaArray(shape=detector_shape))
-    try:
-        raw_phi = ai.chiArray(shape=detector_shape, unit="deg")
-    except TypeError:
-        raw_phi = np.rad2deg(ai.chiArray(shape=detector_shape))
-    return np.asarray(two_theta, dtype=np.float64), np.asarray(
-        raw_phi_to_gui_phi(raw_phi), dtype=np.float64
-    )
-
-
-def _fit_current_background_subtraction_model(*, force: bool = False) -> dict[str, object] | None:
-    """Fit or retrieve the current diffuse-background subtraction model."""
-
-    config = _current_background_subtraction_config()
-    if not config.enabled or config.mode == "off":
-        background_runtime_state.background_subtraction_result = None
-        background_runtime_state.background_subtraction_signature = None
-        _set_background_subtraction_status("Off.")
-        _refresh_background_subtraction_diagnostics_summary()
-        return None
-    raw_background = _get_current_background_backend()
-    if raw_background is None:
-        _set_background_subtraction_status("No image loaded.")
-        _refresh_background_subtraction_diagnostics_summary()
-        return None
-    image = np.asarray(raw_background, dtype=np.float64)
-    signature = _background_subtraction_signature()
-    if not force:
-        cached = background_runtime_state.background_subtraction_cache.get(signature)
-        if isinstance(cached, dict):
-            background_runtime_state.background_subtraction_result = cached
-            background_runtime_state.background_subtraction_signature = signature
-            _refresh_background_subtraction_diagnostics_summary()
-            return cached
-
-    two_theta, phi = _background_subtraction_axes_for_image(image)
-    if two_theta is None or phi is None:
-        _set_background_subtraction_status("Cannot build angle maps.")
-        _refresh_background_subtraction_diagnostics_summary()
-        return None
-    radial_axis = getattr(simulation_runtime_state, "last_caked_radial_values", None)
-    azimuth_axis = getattr(simulation_runtime_state, "last_caked_azimuth_values", None)
-    if radial_axis is None or azimuth_axis is None:
-        finite_two_theta = two_theta[np.isfinite(two_theta)]
-        if finite_two_theta.size:
-            radial_axis = np.linspace(
-                float(np.nanmin(finite_two_theta)),
-                float(np.nanmax(finite_two_theta)),
-                500,
-            )
-        else:
-            radial_axis = None
-        azimuth_axis = np.linspace(-180.0, 180.0, 361)
-    try:
-        direct_center = (float(center_x_var.get()), float(center_y_var.get()))
-    except Exception:
-        direct_center = None
-    try:
-        result = fit_diffuse_background_native(
-            image,
-            two_theta_deg=two_theta,
-            phi_deg=phi,
-            caked_radial_axis_deg=radial_axis,
-            caked_azimuth_axis_deg=azimuth_axis,
-            config=config,
-            direct_beam_center_rc=direct_center,
-        )
-    except Exception as exc:
-        _set_background_subtraction_status(f"Fit failed: {exc}")
-        _refresh_background_subtraction_diagnostics_summary()
-        return None
-    background_runtime_state.background_subtraction_cache[signature] = result
-    background_runtime_state.background_subtraction_result = result
-    background_runtime_state.background_subtraction_signature = signature
-    diagnostics = result.get("diagnostics", {}) if isinstance(result, Mapping) else {}
-    valid_fraction = (
-        diagnostics.get("valid_fraction", None) if isinstance(diagnostics, Mapping) else None
-    )
-    valid_text = ""
-    if valid_fraction is not None:
-        try:
-            valid_text = f" valid={float(valid_fraction):.1%}"
-        except Exception:
-            valid_text = ""
-    _set_background_subtraction_status(f"Fit done.{valid_text}")
-    _refresh_background_subtraction_diagnostics_summary()
-    return result
-
-
 def _current_background_backend_for_comparison() -> np.ndarray | None:
-    """Return raw or corrected backend background according to fit settings."""
+    """Return the raw backend background for fitting/comparison paths."""
 
-    raw_background = _get_current_background_backend()
-    config = _current_background_subtraction_config()
-    if raw_background is None or not (config.enabled and config.apply_to_fit):
-        return raw_background
-    result = _fit_current_background_subtraction_model(force=False)
-    if isinstance(result, Mapping):
-        corrected = result.get("corrected")
-        try:
-            corrected_array = np.asarray(corrected, dtype=np.float64)
-        except Exception:
-            corrected_array = None
-        if (
-            isinstance(corrected_array, np.ndarray)
-            and corrected_array.shape == np.asarray(raw_background).shape
-        ):
-            return corrected_array
-    return raw_background
-
-
-def _background_subtraction_backend_array_to_display(array: object) -> np.ndarray | None:
-    try:
-        native_like = np.asarray(array, dtype=np.float64)
-    except Exception:
-        return None
-    if native_like.ndim != 2:
-        return None
-    try:
-        k_mod = int(background_runtime_state.backend_rotation_k) % 4
-    except Exception:
-        k_mod = 0
-    if k_mod:
-        native_like = np.rot90(native_like, -k_mod)
-    if bool(background_runtime_state.backend_flip_x):
-        native_like = np.flip(native_like, axis=1)
-    if bool(background_runtime_state.backend_flip_y):
-        native_like = np.flip(native_like, axis=0)
-    return np.rot90(native_like, int(DISPLAY_ROTATE_K))
+    return _get_current_background_backend()
 
 
 def _current_background_display_for_matching() -> np.ndarray | None:
-    """Return raw or corrected detector-display background for peak matching."""
+    """Return the raw detector-display background for peak matching."""
 
-    raw_display = _get_current_background_display()
-    config = _current_background_subtraction_config()
-    if raw_display is None or not (config.enabled and config.apply_to_fit):
-        return raw_display
-    raw_backend = _get_current_background_backend()
-    if raw_backend is None:
-        return raw_display
-    result = _fit_current_background_subtraction_model(force=False)
-    if not isinstance(result, Mapping):
-        return raw_display
-    corrected = result.get("corrected")
-    try:
-        corrected_array = np.asarray(corrected, dtype=np.float64)
-    except Exception:
-        corrected_array = None
-    if not (
-        isinstance(corrected_array, np.ndarray)
-        and corrected_array.shape == np.asarray(raw_backend).shape
-    ):
-        return raw_display
-    display_signature = (
-        "background_subtraction_fit_display",
-        background_runtime_state.background_subtraction_signature,
-        id(corrected),
-        tuple(int(v) for v in np.asarray(raw_display).shape),
-        str(np.asarray(raw_display).dtype),
-        int(DISPLAY_ROTATE_K),
-        int(background_runtime_state.backend_rotation_k) % 4,
-        bool(background_runtime_state.backend_flip_x),
-        bool(background_runtime_state.backend_flip_y),
-    )
-    cached_display = background_runtime_state.background_subtraction_fit_display
-    if (
-        display_signature == background_runtime_state.background_subtraction_fit_display_signature
-        and isinstance(cached_display, np.ndarray)
-        and cached_display.shape == np.asarray(raw_display).shape
-    ):
-        return cached_display
-    display_array = _background_subtraction_backend_array_to_display(corrected_array)
-    if (
-        isinstance(display_array, np.ndarray)
-        and display_array.shape == np.asarray(raw_display).shape
-    ):
-        background_runtime_state.background_subtraction_fit_display_signature = display_signature
-        background_runtime_state.background_subtraction_fit_display = display_array
-        return display_array
-    return raw_display
+    return _get_current_background_display()
 
 
 def _current_background_display_for_mode() -> np.ndarray | None:
-    """Return raw/model/corrected/mask background for detector display."""
+    """Return the raw detector-display background for the active view mode."""
 
-    raw_display = background_runtime_state.current_background_display
-    config = _current_background_subtraction_config()
-    if raw_display is None or not (config.enabled and config.apply_to_display):
-        return raw_display
-    display_mode = str(config.display_mode)
-    if display_mode == "raw":
-        return raw_display
-    result = _fit_current_background_subtraction_model(force=False)
-    if not isinstance(result, Mapping):
-        return raw_display
-    if display_mode == "model":
-        display_array = _background_subtraction_backend_array_to_display(result.get("model"))
-        return display_array if display_array is not None else raw_display
-    if display_mode == "radial_model":
-        display_array = _background_subtraction_backend_array_to_display(result.get("radial_model"))
-        return display_array if display_array is not None else raw_display
-    if display_mode == "phi_block_model":
-        display_array = _background_subtraction_backend_array_to_display(
-            result.get("phi_block_model_detector")
-        )
-        return display_array if display_array is not None else raw_display
-    if display_mode == "radial_plus_phi_block_model":
-        radial = result.get("radial_model")
-        phi_block = result.get("phi_block_model_detector")
-        try:
-            combined = np.asarray(radial, dtype=np.float64) + np.where(
-                np.isfinite(np.asarray(phi_block, dtype=np.float64)),
-                np.asarray(phi_block, dtype=np.float64),
-                0.0,
-            )
-        except Exception:
-            combined = radial
-        display_array = _background_subtraction_backend_array_to_display(combined)
-        return display_array if display_array is not None else raw_display
-    if display_mode == "slow_caked_model":
-        display_array = _background_subtraction_backend_array_to_display(
-            result.get("slow_caked_model_detector")
-        )
-        return display_array if display_array is not None else raw_display
-    if display_mode in {"subtracted", "residual"}:
-        corrected = np.asarray(result.get("corrected"), dtype=np.float64)
-        if display_mode == "subtracted" and bool(config.clip_for_display):
-            corrected = np.clip(corrected, 0.0, None)
-        display_array = _background_subtraction_backend_array_to_display(corrected)
-        return display_array if display_array is not None else raw_display
-    if display_mode == "mask":
-        valid = np.asarray(result.get("valid_mask"), dtype=bool)
-        excluded = np.asarray(result.get("exclusion_mask"), dtype=bool)
-        mask_display = np.where(valid & ~excluded, 1.0, np.where(valid, 0.35, np.nan))
-        display_array = _background_subtraction_backend_array_to_display(mask_display)
-        return display_array if display_array is not None else raw_display
-    return raw_display
+    return background_runtime_state.current_background_display
 
 
 def _current_background_for_q_space_restore() -> np.ndarray | None:
-    config = _current_background_subtraction_config()
-    if config.enabled and config.apply_to_fit:
-        return _current_background_backend_for_comparison()
     return _get_current_background_native()
-
-
-def _background_subtraction_json_safe(value: object) -> object:
-    if isinstance(value, DiffuseBackgroundConfig):
-        return diffuse_background_config_to_mapping(value)
-    if isinstance(value, Mapping):
-        return {str(k): _background_subtraction_json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_background_subtraction_json_safe(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return {
-            "shape": list(value.shape),
-            "dtype": str(value.dtype),
-        }
-    if isinstance(value, (np.integer, np.floating)):
-        return value.item()
-    if isinstance(value, np.bool_):
-        return bool(value)
-    return value
-
-
-def _write_background_subtraction_png(path: Path, value: object) -> None:
-    try:
-        arr = np.asarray(value, dtype=np.float64)
-    except Exception:
-        return
-    if arr.ndim != 2 or arr.size <= 0:
-        return
-    finite = arr[np.isfinite(arr)]
-    if finite.size <= 0:
-        return
-    try:
-        vmin, vmax = np.nanpercentile(finite, [1.0, 99.0])
-        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
-            vmin = float(np.nanmin(finite))
-            vmax = float(np.nanmax(finite))
-        from matplotlib import image as mpl_image
-
-        mpl_image.imsave(path, arr, cmap="turbo", vmin=float(vmin), vmax=float(vmax))
-    except Exception:
-        return
-
-
-def _write_background_phi_block_grid_csv(result: Mapping[str, object], outdir: Path) -> None:
-    try:
-        grid = np.asarray(result.get("phi_block_grid"), dtype=np.float64)
-        counts = np.asarray(result.get("phi_block_counts"), dtype=np.int64)
-        valid_fraction = np.asarray(
-            result.get("phi_block_valid_fraction_grid"),
-            dtype=np.float64,
-        )
-        phi_edges = np.asarray(result.get("phi_block_phi_edges_deg"), dtype=np.float64).reshape(-1)
-        theta_edges = np.asarray(result.get("phi_block_theta_edges_deg"), dtype=np.float64).reshape(
-            -1
-        )
-    except Exception:
-        return
-    if grid.ndim != 2 or counts.shape != grid.shape:
-        return
-    if valid_fraction.shape != grid.shape:
-        valid_fraction = np.full(grid.shape, np.nan, dtype=np.float64)
-    if phi_edges.size != grid.shape[0] + 1 or theta_edges.size != grid.shape[1] + 1:
-        return
-    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
-    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
-    with (outdir / "background_phi_block_grid.csv").open("w", encoding="utf-8") as handle:
-        handle.write("phi_bin_center_deg,theta_bin_center_deg,block_value,count,valid_fraction\n")
-        for pi, phi_value in enumerate(phi_centers):
-            for ti, theta_value in enumerate(theta_centers):
-                handle.write(
-                    f"{float(phi_value):.12g},"
-                    f"{float(theta_value):.12g},"
-                    f"{float(grid[pi, ti]):.12g},"
-                    f"{int(counts[pi, ti])},"
-                    f"{float(valid_fraction[pi, ti]):.12g}\n"
-                )
-
-
-def _export_current_background_subtraction_diagnostics() -> None:
-    result = _fit_current_background_subtraction_model(force=False)
-    if not isinstance(result, Mapping):
-        _set_background_subtraction_status("No fitted diffuse-background diagnostics to export.")
-        return
-    outdir = get_dir("downloads") / "background_subtraction"
-    outdir.mkdir(parents=True, exist_ok=True)
-    config = result.get("config")
-    diagnostics = dict(result.get("diagnostics", {}) or {})
-    diagnostics["cache_signature_summary"] = _live_cache_signature_summary(
-        background_runtime_state.background_subtraction_signature
-    )
-    (outdir / "background_subtraction_config.json").write_text(
-        json.dumps(_background_subtraction_json_safe(config), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    (outdir / "background_subtraction_diagnostics.json").write_text(
-        json.dumps(_background_subtraction_json_safe(diagnostics), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    radial_centers = np.asarray(result.get("radial_bin_centers_deg", []), dtype=np.float64)
-    radial_profile = np.asarray(result.get("radial_profile", []), dtype=np.float64)
-    with (outdir / "background_radial_profile.csv").open("w", encoding="utf-8") as handle:
-        handle.write("two_theta_deg,background\n")
-        for theta_value, profile_value in zip(radial_centers, radial_profile, strict=False):
-            handle.write(f"{float(theta_value):.12g},{float(profile_value):.12g}\n")
-    for key, filename in (
-        ("raw", "background_raw_native.npy"),
-        ("model", "background_model_native.npy"),
-        ("corrected", "background_subtracted_native.npy"),
-        ("valid_mask", "background_valid_mask.npy"),
-        ("exclusion_mask", "background_exclusion_mask.npy"),
-        ("phi_block_model_caked", "background_phi_block_model_caked.npy"),
-        ("phi_block_model_detector", "background_phi_block_model_detector.npy"),
-        ("phi_block_grid", "background_phi_block_grid.npy"),
-        ("phi_block_counts", "background_phi_block_counts.npy"),
-    ):
-        value = result.get(key)
-        if value is not None:
-            np.save(outdir / filename, np.asarray(value))
-    for key, filename in (
-        ("phi_block_model_caked", "background_phi_block_model_caked.png"),
-        ("phi_block_model_detector", "background_phi_block_model_detector.png"),
-        (
-            "after_radial_before_phi_blocks_caked",
-            "background_after_radial_before_phi_blocks_caked.png",
-        ),
-        ("after_phi_blocks_caked", "background_after_phi_blocks_caked.png"),
-    ):
-        value = result.get(key)
-        if value is not None:
-            _write_background_subtraction_png(outdir / filename, value)
-    _write_background_phi_block_grid_csv(result, outdir)
-    _set_background_subtraction_status(f"Exported diffuse-background diagnostics to {outdir}.")
 
 
 def _backend_background_to_native_detector_coords(
@@ -4226,7 +3458,6 @@ def _initialize_runtime_shell_block_01() -> None:
     )
     if (
         app_shell_view_state.workspace_body is None
-        or app_shell_view_state.background_body is None
         or app_shell_view_state.fit_body is None
         or app_shell_view_state.simulation_body is None
         or app_shell_view_state.analysis_views_frame is None
@@ -5419,216 +4650,6 @@ def _initialize_runtime_controls_block_01() -> None:
     GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S = 0.03
     GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
     GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
-
-
-def _initialize_runtime_controls_block_background_subtraction() -> None:
-    global background_subtraction_enabled_var
-    global background_subtraction_mode_var
-    global background_subtraction_apply_to_fit_var
-    global background_subtraction_apply_to_display_var
-    global background_subtraction_display_mode_var
-    global background_subtraction_scale_var
-    global background_subtraction_auto_scale_var
-    global background_subtraction_radial_bin_width_deg_var
-    global background_subtraction_radial_quantile_var
-    global background_subtraction_radial_smooth_sigma_deg_var
-    global background_subtraction_caked_theta_window_deg_var
-    global background_subtraction_caked_phi_window_deg_var
-    global background_subtraction_caked_quantile_var
-    global background_subtraction_phi_block_theta_bin_width_deg_var
-    global background_subtraction_phi_block_phi_bin_width_deg_var
-    global background_subtraction_phi_block_quantile_var
-    global background_subtraction_phi_block_min_pixels_var
-    global background_subtraction_phi_block_min_coverage_var
-    global background_subtraction_phi_block_smooth_theta_bins_var
-    global background_subtraction_phi_block_smooth_phi_bins_var
-    global background_subtraction_phi_block_outlier_sigma_var
-    global background_subtraction_phi_block_interpolation_var
-    global background_subtraction_phi_block_scale_var
-    global background_subtraction_phi_block_preserve_block_edges_var
-    global background_subtraction_peak_mask_sigma_var
-    global background_subtraction_peak_mask_radius_px_var
-    global background_subtraction_direct_beam_mask_radius_px_var
-    global background_subtraction_clip_for_display_var
-    global background_subtraction_diagnostics_var
-    global background_subtraction_status_var
-
-    def _fit_model_for_preview() -> None:
-        _cancel_background_subtraction_preview()
-        result = _fit_current_background_subtraction_model(force=True)
-        _refresh_background_subtraction_diagnostics_summary()
-        config = _current_background_subtraction_config()
-        if (
-            result is not None
-            and config.enabled
-            and (config.apply_to_display or config.apply_to_fit)
-            and not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False))
-        ):
-            schedule_update()
-
-    def _apply_and_recompute() -> None:
-        _cancel_background_subtraction_preview()
-        _invalidate_background_subtraction_cache()
-        _fit_current_background_subtraction_model(force=True)
-        _refresh_background_subtraction_diagnostics_summary()
-        schedule_update()
-
-    def _reset_defaults() -> None:
-        defaults_mapping = _background_subtraction_defaults()
-        for key in (
-            "enabled",
-            "mode",
-            "apply_to_fit",
-            "apply_to_display",
-            "display_mode",
-            "scale",
-            "auto_scale",
-            "radial_bin_width_deg",
-            "radial_quantile",
-            "radial_smooth_sigma_deg",
-            "caked_theta_window_deg",
-            "caked_phi_window_deg",
-            "caked_quantile",
-            "phi_block_theta_bin_width_deg",
-            "phi_block_phi_bin_width_deg",
-            "phi_block_quantile",
-            "phi_block_min_pixels",
-            "phi_block_min_coverage",
-            "phi_block_smooth_theta_bins",
-            "phi_block_smooth_phi_bins",
-            "phi_block_outlier_sigma",
-            "phi_block_interpolation",
-            "phi_block_scale",
-            "phi_block_preserve_block_edges",
-            "peak_mask_sigma",
-            "peak_mask_radius_px",
-            "direct_beam_mask_radius_px",
-            "clip_for_display",
-            "diagnostics",
-        ):
-            _set_background_subtraction_var(key, defaults_mapping.get(key))
-        _mark_background_subtraction_dirty("Reset. Press Fit.")
-
-    gui_views.create_background_subtraction_controls(
-        parent=app_shell_view_state.background_body,
-        view_state=background_subtraction_controls_view_state,
-        initial_values=_background_subtraction_defaults(),
-        on_fit_model=_fit_model_for_preview,
-        on_apply=_apply_and_recompute,
-        on_reset=_reset_defaults,
-        on_export_diagnostics=_export_current_background_subtraction_diagnostics,
-        on_apply_preset=_apply_background_subtraction_preset,
-    )
-    view_state = background_subtraction_controls_view_state
-    background_subtraction_enabled_var = view_state.enabled_var
-    background_subtraction_mode_var = view_state.mode_var
-    background_subtraction_apply_to_fit_var = view_state.apply_to_fit_var
-    background_subtraction_apply_to_display_var = view_state.apply_to_display_var
-    background_subtraction_display_mode_var = view_state.display_mode_var
-    background_subtraction_scale_var = view_state.scale_var
-    background_subtraction_auto_scale_var = view_state.auto_scale_var
-    background_subtraction_radial_bin_width_deg_var = view_state.radial_bin_width_deg_var
-    background_subtraction_radial_quantile_var = view_state.radial_quantile_var
-    background_subtraction_radial_smooth_sigma_deg_var = view_state.radial_smooth_sigma_deg_var
-    background_subtraction_caked_theta_window_deg_var = view_state.caked_theta_window_deg_var
-    background_subtraction_caked_phi_window_deg_var = view_state.caked_phi_window_deg_var
-    background_subtraction_caked_quantile_var = view_state.caked_quantile_var
-    background_subtraction_phi_block_theta_bin_width_deg_var = (
-        view_state.phi_block_theta_bin_width_deg_var
-    )
-    background_subtraction_phi_block_phi_bin_width_deg_var = (
-        view_state.phi_block_phi_bin_width_deg_var
-    )
-    background_subtraction_phi_block_quantile_var = view_state.phi_block_quantile_var
-    background_subtraction_phi_block_min_pixels_var = view_state.phi_block_min_pixels_var
-    background_subtraction_phi_block_min_coverage_var = view_state.phi_block_min_coverage_var
-    background_subtraction_phi_block_smooth_theta_bins_var = (
-        view_state.phi_block_smooth_theta_bins_var
-    )
-    background_subtraction_phi_block_smooth_phi_bins_var = view_state.phi_block_smooth_phi_bins_var
-    background_subtraction_phi_block_outlier_sigma_var = view_state.phi_block_outlier_sigma_var
-    background_subtraction_phi_block_interpolation_var = view_state.phi_block_interpolation_var
-    background_subtraction_phi_block_scale_var = view_state.phi_block_scale_var
-    background_subtraction_phi_block_preserve_block_edges_var = (
-        view_state.phi_block_preserve_block_edges_var
-    )
-    background_subtraction_peak_mask_sigma_var = view_state.peak_mask_sigma_var
-    background_subtraction_peak_mask_radius_px_var = view_state.peak_mask_radius_px_var
-    background_subtraction_direct_beam_mask_radius_px_var = (
-        view_state.direct_beam_mask_radius_px_var
-    )
-    background_subtraction_clip_for_display_var = view_state.clip_for_display_var
-    background_subtraction_diagnostics_var = view_state.diagnostics_var
-    background_subtraction_status_var = view_state.status_var
-
-    def _on_control_change(*_args) -> None:
-        _mark_background_subtraction_dirty("Changed. Press Fit.")
-
-    def _on_preview_control_change(*_args) -> None:
-        _mark_background_subtraction_dirty("Preview changed. Press Fit.")
-        if not bool(getattr(simulation_runtime_state, "startup_updates_suspended", False)):
-            schedule_update()
-
-    def _on_auto_preview_change(*_args) -> None:
-        if _background_subtraction_auto_preview_enabled():
-            _schedule_background_subtraction_preview()
-        else:
-            _cancel_background_subtraction_preview()
-
-    for var in (
-        background_subtraction_enabled_var,
-        background_subtraction_mode_var,
-        background_subtraction_apply_to_fit_var,
-        background_subtraction_scale_var,
-        background_subtraction_auto_scale_var,
-        background_subtraction_radial_bin_width_deg_var,
-        background_subtraction_radial_quantile_var,
-        background_subtraction_radial_smooth_sigma_deg_var,
-        background_subtraction_caked_theta_window_deg_var,
-        background_subtraction_caked_phi_window_deg_var,
-        background_subtraction_caked_quantile_var,
-        background_subtraction_phi_block_theta_bin_width_deg_var,
-        background_subtraction_phi_block_phi_bin_width_deg_var,
-        background_subtraction_phi_block_quantile_var,
-        background_subtraction_phi_block_min_pixels_var,
-        background_subtraction_phi_block_min_coverage_var,
-        background_subtraction_phi_block_smooth_theta_bins_var,
-        background_subtraction_phi_block_smooth_phi_bins_var,
-        background_subtraction_phi_block_outlier_sigma_var,
-        background_subtraction_phi_block_interpolation_var,
-        background_subtraction_phi_block_scale_var,
-        background_subtraction_phi_block_preserve_block_edges_var,
-        background_subtraction_peak_mask_sigma_var,
-        background_subtraction_peak_mask_radius_px_var,
-        background_subtraction_direct_beam_mask_radius_px_var,
-        background_subtraction_diagnostics_var,
-    ):
-        trace_add = getattr(var, "trace_add", None)
-        if callable(trace_add):
-            try:
-                trace_add("write", _on_control_change)
-            except Exception:
-                pass
-
-    for var in (
-        background_subtraction_apply_to_display_var,
-        background_subtraction_display_mode_var,
-        background_subtraction_clip_for_display_var,
-    ):
-        trace_add = getattr(var, "trace_add", None)
-        if callable(trace_add):
-            try:
-                trace_add("write", _on_preview_control_change)
-            except Exception:
-                pass
-
-    auto_preview_var = getattr(view_state, "auto_preview_var", None)
-    trace_add = getattr(auto_preview_var, "trace_add", None)
-    if callable(trace_add):
-        try:
-            trace_add("write", _on_auto_preview_change)
-        except Exception:
-            pass
 
 
 def _geometry_manual_position_error_px(
@@ -8757,17 +7778,6 @@ def _geometry_fit_caked_view_for_index(
         ),
         "transform_bundle": transform_bundle,
     }
-    subtraction_result = background_runtime_state.background_subtraction_result
-    if isinstance(subtraction_result, Mapping):
-        payload.update(
-            {
-                "background_raw": subtraction_result.get("raw"),
-                "background_model": subtraction_result.get("model"),
-                "background_subtracted": subtraction_result.get("corrected"),
-                "background_subtraction_config": subtraction_result.get("config"),
-                "background_subtraction_diagnostics": subtraction_result.get("diagnostics"),
-            }
-        )
     return _normalize_geometry_fit_caked_view_payload(
         payload,
         detector_shape=detector_shape,
@@ -26686,7 +25696,6 @@ def do_update():
     normalization_sig = None
     normalization_cache_outcome = "disabled"
     native_background = _current_background_backend_for_comparison()
-    background_subtraction_sig = _background_subtraction_signature()
     if native_background is not None and display_image is not None:
         normalization_sig = (
             new_sim_image_sig,
@@ -26697,7 +25706,6 @@ def do_update():
             bool(background_runtime_state.backend_flip_y),
             tuple(display_image.shape),
             tuple(np.asarray(native_background).shape),
-            background_subtraction_sig,
         )
         if simulation_runtime_state.normalization_scale_cache.get("sig") == normalization_sig:
             normalization_scale = float(
@@ -26734,7 +25742,6 @@ def do_update():
             int(background_runtime_state.backend_rotation_k) % 4,
             bool(background_runtime_state.backend_flip_x),
             bool(background_runtime_state.backend_flip_y),
-            background_subtraction_sig,
         )
         if simulation_runtime_state.peak_intensities and normalization_scale != 1.0:
             simulation_runtime_state.peak_intensities[:] = [
@@ -26827,7 +25834,6 @@ def do_update():
             bool(background_runtime_state.backend_flip_x),
             bool(background_runtime_state.backend_flip_y),
             tuple(np.asarray(native_background).shape),
-            background_subtraction_sig,
             caked_correct_solid_angle,
         )
 
@@ -28564,7 +27570,6 @@ def _load_background_files_for_import_state(
         refresh_background_file_status=_refresh_background_status,
         schedule_update=None,
     )
-    _invalidate_background_subtraction_cache()
 
 
 def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
@@ -38482,6 +37487,158 @@ def _analysis_curve_data(
     return np.empty((0,), dtype=float), np.empty((0,), dtype=float), resolved
 
 
+def _analysis_linear_background_enabled() -> bool:
+    var = getattr(
+        analysis_peak_tools_view_state,
+        "subtract_linear_background_var",
+        None,
+    )
+    return bool(
+        getattr(
+            var,
+            "get",
+            lambda: True,
+        )()
+    )
+
+
+def _analysis_linear_background_corrected_curves(
+    source_payload: Mapping[str, object] | None,
+    selected_items: Sequence[Mapping[str, object]],
+) -> dict[str, object] | None:
+    """Return selected-box 1D curves after local 2D plane subtraction."""
+
+    if not isinstance(source_payload, Mapping):
+        return None
+    try:
+        source_image = np.asarray(source_payload.get("image"), dtype=float)
+        radial_axis = np.asarray(source_payload.get("radial_axis"), dtype=float).reshape(-1)
+        azimuth_axis = np.asarray(source_payload.get("azimuth_axis"), dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if (
+        source_image.ndim != 2
+        or source_image.size <= 0
+        or radial_axis.size != int(source_image.shape[1])
+        or azimuth_axis.size != int(source_image.shape[0])
+    ):
+        return None
+
+    windows = _analysis_selected_box_index_windows(
+        radial_axis,
+        azimuth_axis,
+        source_image.shape,
+    )
+    if not windows:
+        return None
+
+    analysis_peak_tools = _get_analysis_peak_tools_module()
+    subtract_plane = getattr(analysis_peak_tools, "subtract_linear_background_plane", None)
+    if not callable(subtract_plane):
+        return None
+    corrected = np.full(source_image.shape, np.nan, dtype=float)
+    fit_metadata: list[dict[str, object]] = []
+    selected_peaks: list[dict[str, object]] = []
+    for item in selected_items or ():
+        if not isinstance(item, Mapping):
+            continue
+        peak_entry = item.get("peak_entry")
+        if isinstance(peak_entry, Mapping):
+            selected_peaks.append(dict(peak_entry))
+        else:
+            selected_peaks.append(dict(item))
+    col_start_values: list[int] = []
+    col_stop_values: list[int] = []
+    row_ranges: list[tuple[int, int]] = []
+    for window in windows:
+        try:
+            row_start = int(window["row_start"])
+            row_stop = int(window["row_stop"])
+            col_start = int(window["col_start"])
+            col_stop = int(window["col_stop"])
+        except Exception:
+            continue
+        if row_stop <= row_start or col_stop <= col_start:
+            continue
+        roi = np.asarray(source_image[row_start:row_stop, col_start:col_stop], dtype=float)
+        theta_values = np.asarray(radial_axis[col_start:col_stop], dtype=float)
+        phi_values = np.asarray(azimuth_axis[row_start:row_stop], dtype=float)
+        result = subtract_plane(
+            theta_values,
+            phi_values,
+            roi,
+            selected_peaks,
+        )
+        if not bool(result.get("success", False)):
+            continue
+        corrected_roi = np.asarray(result.get("corrected"), dtype=float)
+        if corrected_roi.shape != roi.shape:
+            continue
+        corrected[row_start:row_stop, col_start:col_stop] = corrected_roi
+        col_start_values.append(col_start)
+        col_stop_values.append(col_stop)
+        row_ranges.append((row_start, row_stop))
+        fit_metadata.append(
+            {
+                "coefficients": list(result.get("coefficients", [])),
+                "theta_ref": float(result.get("theta_ref", np.nan)),
+                "phi_ref": float(result.get("phi_ref", np.nan)),
+                "fit_sample_count": int(result.get("fit_sample_count", 0)),
+                "finite_sample_count": int(result.get("finite_sample_count", 0)),
+                "used_fallback_fit_mask": bool(result.get("used_fallback_fit_mask", False)),
+                "row_start": int(row_start),
+                "row_stop": int(row_stop),
+                "col_start": int(col_start),
+                "col_stop": int(col_stop),
+            }
+        )
+
+    if not fit_metadata or not col_start_values or not row_ranges:
+        return None
+
+    col_start = max(0, min(col_start_values))
+    col_stop = min(int(source_image.shape[1]), max(col_stop_values))
+    row_mask = np.zeros(int(source_image.shape[0]), dtype=bool)
+    for row_start, row_stop in row_ranges:
+        row_mask[row_start:row_stop] = True
+    if col_stop <= col_start or not np.any(row_mask):
+        return None
+
+    radial_roi = corrected[row_mask, col_start:col_stop]
+    with np.errstate(invalid="ignore"):
+        radial_y = np.nanmean(radial_roi, axis=0)
+    radial_x = np.asarray(radial_axis[col_start:col_stop], dtype=float)
+
+    azimuth_x_parts: list[np.ndarray] = []
+    azimuth_y_parts: list[np.ndarray] = []
+    for row_start, row_stop in row_ranges:
+        az_roi = corrected[row_start:row_stop, col_start:col_stop]
+        if az_roi.size <= 0:
+            continue
+        with np.errstate(invalid="ignore"):
+            az_y = np.nanmean(az_roi, axis=1)
+        azimuth_x_parts.append(np.asarray(azimuth_axis[row_start:row_stop], dtype=float))
+        azimuth_y_parts.append(np.asarray(az_y, dtype=float))
+    if not azimuth_x_parts or not azimuth_y_parts:
+        return None
+
+    return {
+        "radial": (
+            np.asarray(radial_x, dtype=float),
+            np.asarray(radial_y, dtype=float),
+        ),
+        "azimuth": (
+            np.concatenate(azimuth_x_parts).astype(float, copy=False),
+            np.concatenate(azimuth_y_parts).astype(float, copy=False),
+        ),
+        "metadata": {
+            "enabled": True,
+            "method": "local_2d_linear_plane",
+            "windows": fit_metadata,
+        },
+    }
+
+
 def _analysis_peak_duplicate_tolerances() -> tuple[float, float]:
     radial_axis = np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float)
     azimuth_axis = np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float)
@@ -38959,6 +38116,7 @@ def _render_analysis_peak_tools_controls(
                 lambda: True,
             )()
         ),
+        subtract_linear_background=_analysis_linear_background_enabled(),
         selection_status_text=_analysis_peak_selection_status_text(),
         fit_results_text=_analysis_peak_fit_results_text(),
     )
@@ -39457,6 +38615,13 @@ def _fit_selected_analysis_peaks() -> None:
         "profile_model_label",
         lambda value: str(value),
     )
+    source_payloads_by_name = {
+        _normalize_analysis_peak_source(payload.get("source")): payload
+        for payload in _analysis_caked_peak_sources()
+        if isinstance(payload, Mapping)
+    }
+    use_linear_background = _analysis_linear_background_enabled()
+    linear_background_by_source: dict[str, dict[str, object] | None] = {}
     for axis_kind in axes_to_fit:
         axis_results: list[dict[str, object]] = []
         grouped_source_items: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -39500,6 +38665,27 @@ def _fit_selected_analysis_peaks() -> None:
                 source_name,
                 allow_fallback=False,
             )
+            linear_background_metadata: Mapping[str, object] | None = None
+            if use_linear_background and resolved_source == source_name:
+                if source_name not in linear_background_by_source:
+                    linear_background_by_source[source_name] = (
+                        _analysis_linear_background_corrected_curves(
+                            source_payloads_by_name.get(source_name),
+                            grouped_items,
+                        )
+                    )
+                linear_payload = linear_background_by_source.get(source_name)
+                if isinstance(linear_payload, Mapping):
+                    corrected_pair = linear_payload.get(axis_kind)
+                    if isinstance(corrected_pair, (list, tuple)) and len(corrected_pair) >= 2:
+                        corrected_x = np.asarray(corrected_pair[0], dtype=float)
+                        corrected_y = np.asarray(corrected_pair[1], dtype=float)
+                        if corrected_x.size > 0 and corrected_x.size == corrected_y.size:
+                            x_curve = corrected_x
+                            y_curve = corrected_y
+                            metadata = linear_payload.get("metadata")
+                            if isinstance(metadata, Mapping):
+                                linear_background_metadata = dict(metadata)
             if resolved_source != source_name:
                 for model in models:
                     label = str(model_label_resolver(model))
@@ -39719,6 +38905,9 @@ def _fit_selected_analysis_peaks() -> None:
                                 dtype=float,
                             )
                             plotted_group = True
+                        if isinstance(linear_background_metadata, Mapping):
+                            fit_entry["background_subtracted"] = True
+                            fit_entry["linear_background"] = dict(linear_background_metadata)
                         axis_results.append(fit_entry)
                         emitted_guess_indices.add(int(center_guess_index))
                         total_attempts += 1
@@ -46852,7 +46041,6 @@ def ensure_runtime_controls_initialized() -> None:
     if _RUNTIME_CONTROLS_INITIALIZED:
         return
     _initialize_runtime_controls_block_01()
-    _initialize_runtime_controls_block_background_subtraction()
     _initialize_runtime_controls_block_02()
     _initialize_runtime_controls_block_03()
     _initialize_runtime_controls_block_04()

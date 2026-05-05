@@ -8,6 +8,7 @@ import json
 import math
 import os
 import time
+import warnings
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -17,12 +18,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ra_sim.config import get_dir, get_instrument_config, get_path
-from ra_sim.fitting.diffuse_background import (
-    DiffuseBackgroundConfig,
-    diffuse_background_config_from_mapping,
-    diffuse_background_config_to_mapping,
-    fit_diffuse_background_native,
-)
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.osc_reader import read_osc
 from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenance
@@ -93,6 +88,15 @@ class _RuntimeDefaults:
     two_theta_range: tuple[float, float]
     mx: int
     background_flags: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _LegacyBackgroundSubtractionConfig:
+    enabled: bool = False
+    mode: str = "off"
+    apply_to_fit: bool = False
+    diagnostics: bool = False
+    scale: float = 1.0
 
 
 class _HeadlessVar:
@@ -581,15 +585,38 @@ def _coerce_bool(value: object, default: bool) -> bool:
     return bool(default)
 
 
-def _headless_background_subtraction_config(
+_legacy_background_subtraction_warning_emitted = False
+
+
+def _legacy_background_subtraction_requested(
     saved_state: Mapping[str, object],
     defaults: _RuntimeDefaults,
     *,
     mode_override: object | None,
-    scale_override: object | None,
-    diagnostics_override: bool | None,
-    phi_block_overrides: Mapping[str, object] | None = None,
-) -> DiffuseBackgroundConfig:
+) -> bool:
+    override_text = (
+        ""
+        if mode_override is None
+        else str(mode_override).strip().lower().replace("_", "-")
+    )
+    if override_text and override_text not in {"off", "saved"}:
+        return True
+    if override_text == "off":
+        return False
+
+    saved_variables = (
+        saved_state.get("variables", {})
+        if isinstance(saved_state.get("variables"), Mapping)
+        else {}
+    )
+    if _coerce_bool(saved_variables.get("background_subtraction_enabled_var"), False):
+        return True
+    saved_mode = str(
+        saved_variables.get("background_subtraction_mode_var") or ""
+    ).strip().lower().replace("_", "-")
+    if saved_mode and saved_mode != "off":
+        return True
+
     geometry_cfg = (
         defaults.fit_config.get("geometry", {})
         if isinstance(defaults.fit_config, Mapping)
@@ -600,262 +627,45 @@ def _headless_background_subtraction_config(
         if isinstance(geometry_cfg, Mapping)
         else {}
     )
-    config_mapping = diffuse_background_config_to_mapping(
-        diffuse_background_config_from_mapping(
-            config_cfg if isinstance(config_cfg, Mapping) else None
-        )
+    if isinstance(config_cfg, Mapping):
+        if _coerce_bool(config_cfg.get("enabled"), False):
+            return True
+        config_mode = str(config_cfg.get("mode") or "").strip().lower().replace("_", "-")
+        if config_mode and config_mode != "off":
+            return True
+    return False
+
+
+def _warn_legacy_background_subtraction_noop() -> None:
+    global _legacy_background_subtraction_warning_emitted
+    if _legacy_background_subtraction_warning_emitted:
+        return
+    _legacy_background_subtraction_warning_emitted = True
+    warnings.warn(
+        "Legacy global background subtraction is ignored. "
+        "Use Analyze peak fitting's local linear background subtraction instead.",
+        RuntimeWarning,
+        stacklevel=3,
     )
 
-    saved_variables = (
-        saved_state.get("variables", {})
-        if isinstance(saved_state.get("variables"), Mapping)
-        else {}
-    )
-    for key in tuple(config_mapping):
-        saved_name = f"background_subtraction_{key}_var"
-        if saved_name in saved_variables:
-            config_mapping[key] = saved_variables[saved_name]
 
-    override_text = (
-        ""
-        if mode_override is None
-        else str(mode_override).strip().lower().replace("_", "-")
-    )
-    if override_text and override_text != "saved":
-        if override_text == "off":
-            config_mapping["enabled"] = False
-            config_mapping["mode"] = "off"
-        else:
-            config_mapping["enabled"] = True
-            config_mapping["mode"] = override_text
-
-    if scale_override is not None:
-        config_mapping["scale"] = scale_override
-    if diagnostics_override is not None:
-        config_mapping["diagnostics"] = bool(diagnostics_override)
-    if isinstance(phi_block_overrides, Mapping):
-        for key, value in phi_block_overrides.items():
-            if key in config_mapping and value is not None:
-                config_mapping[str(key)] = value
-
-    return diffuse_background_config_from_mapping(config_mapping)
-
-
-def _headless_fit_background_subtraction_for_image(
-    backend_image: np.ndarray,
+def _headless_background_subtraction_config(
+    saved_state: Mapping[str, object],
+    defaults: _RuntimeDefaults,
     *,
-    params: Mapping[str, object],
-    pixel_size_m: float,
-    config: DiffuseBackgroundConfig,
-) -> dict[str, object] | None:
-    if not (config.enabled and config.mode != "off"):
-        return None
-    image = np.asarray(backend_image, dtype=np.float64)
-    if image.ndim != 2:
-        return None
-    detector_shape = tuple(int(v) for v in image.shape[:2])
-    center = _headless_geometry_fit_center(params)
-    if center is None:
-        return None
-    try:
-        distance_m = float(params.get("corto_detector", np.nan))
-        pixel_size = float(pixel_size_m)
-        wavelength_m = float(params.get("lambda", np.nan)) * 1.0e-10
-    except Exception:
-        return None
-    if not (
-        np.isfinite(distance_m)
-        and distance_m > 0.0
-        and np.isfinite(pixel_size)
-        and pixel_size > 0.0
+    mode_override: object | None,
+    scale_override: object | None,
+    diagnostics_override: bool | None,
+    phi_block_overrides: Mapping[str, object] | None = None,
+) -> _LegacyBackgroundSubtractionConfig:
+    _ = scale_override, diagnostics_override, phi_block_overrides
+    if _legacy_background_subtraction_requested(
+        saved_state,
+        defaults,
+        mode_override=mode_override,
     ):
-        return None
-
-    exact_cake = _load_exact_cake_portable_module()
-    try:
-        ai = exact_cake.FastAzimuthalIntegrator(
-            dist=float(distance_m),
-            poni1=float(center[0]) * float(pixel_size),
-            poni2=float(center[1]) * float(pixel_size),
-            rot1=0.0,
-            rot2=0.0,
-            rot3=0.0,
-            wavelength=float(wavelength_m) if np.isfinite(wavelength_m) else None,
-            pixel1=float(pixel_size),
-            pixel2=float(pixel_size),
-        )
-        try:
-            two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
-        except TypeError:
-            two_theta = np.rad2deg(ai.twoThetaArray(shape=detector_shape))
-        try:
-            raw_phi = ai.chiArray(shape=detector_shape, unit="deg")
-        except TypeError:
-            raw_phi = np.rad2deg(ai.chiArray(shape=detector_shape))
-        phi = exact_cake.raw_phi_to_gui_phi(raw_phi)
-    except Exception:
-        return None
-
-    finite_two_theta = np.asarray(two_theta, dtype=np.float64)
-    finite_two_theta = finite_two_theta[np.isfinite(finite_two_theta)]
-    radial_axis = None
-    if finite_two_theta.size:
-        radial_axis = np.linspace(
-            float(np.nanmin(finite_two_theta)),
-            float(np.nanmax(finite_two_theta)),
-            500,
-        )
-    azimuth_axis = np.linspace(-180.0, 180.0, 361)
-    try:
-        return fit_diffuse_background_native(
-            image,
-            two_theta_deg=np.asarray(two_theta, dtype=np.float64),
-            phi_deg=np.asarray(phi, dtype=np.float64),
-            caked_radial_axis_deg=radial_axis,
-            caked_azimuth_axis_deg=azimuth_axis,
-            config=config,
-            direct_beam_center_rc=(float(center[0]), float(center[1])),
-        )
-    except Exception:
-        return None
-
-
-def _headless_background_subtraction_json_safe(value: object) -> object:
-    if isinstance(value, DiffuseBackgroundConfig):
-        return diffuse_background_config_to_mapping(value)
-    if isinstance(value, Mapping):
-        return {
-            str(key): _headless_background_subtraction_json_safe(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_headless_background_subtraction_json_safe(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return {"shape": list(value.shape), "dtype": str(value.dtype)}
-    if isinstance(value, (np.integer, np.floating)):
-        return value.item()
-    if isinstance(value, np.bool_):
-        return bool(value)
-    return value
-
-
-def _write_background_subtraction_png(path: Path, value: object) -> None:
-    try:
-        arr = np.asarray(value, dtype=np.float64)
-    except Exception:
-        return
-    if arr.ndim != 2 or arr.size <= 0:
-        return
-    finite = arr[np.isfinite(arr)]
-    if finite.size <= 0:
-        return
-    try:
-        vmin, vmax = np.nanpercentile(finite, [1.0, 99.0])
-        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
-            vmin = float(np.nanmin(finite))
-            vmax = float(np.nanmax(finite))
-        import matplotlib
-
-        matplotlib.use("Agg", force=True)
-        from matplotlib import image as mpl_image
-
-        mpl_image.imsave(path, arr, cmap="turbo", vmin=float(vmin), vmax=float(vmax))
-    except Exception:
-        return
-
-
-def _write_background_phi_block_grid_csv(result: Mapping[str, object], output_dir: Path) -> None:
-    try:
-        grid = np.asarray(result.get("phi_block_grid"), dtype=np.float64)
-        counts = np.asarray(result.get("phi_block_counts"), dtype=np.int64)
-        valid_fraction = np.asarray(
-            result.get("phi_block_valid_fraction_grid"),
-            dtype=np.float64,
-        )
-        phi_edges = np.asarray(result.get("phi_block_phi_edges_deg"), dtype=np.float64).reshape(-1)
-        theta_edges = np.asarray(result.get("phi_block_theta_edges_deg"), dtype=np.float64).reshape(-1)
-    except Exception:
-        return
-    if grid.ndim != 2 or counts.shape != grid.shape:
-        return
-    if valid_fraction.shape != grid.shape:
-        valid_fraction = np.full(grid.shape, np.nan, dtype=np.float64)
-    if phi_edges.size != grid.shape[0] + 1 or theta_edges.size != grid.shape[1] + 1:
-        return
-    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
-    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
-    with (output_dir / "background_phi_block_grid.csv").open("w", encoding="utf-8") as handle:
-        handle.write("phi_bin_center_deg,theta_bin_center_deg,block_value,count,valid_fraction\n")
-        for pi, phi_value in enumerate(phi_centers):
-            for ti, theta_value in enumerate(theta_centers):
-                handle.write(
-                    f"{float(phi_value):.12g},"
-                    f"{float(theta_value):.12g},"
-                    f"{float(grid[pi, ti]):.12g},"
-                    f"{int(counts[pi, ti])},"
-                    f"{float(valid_fraction[pi, ti]):.12g}\n"
-                )
-
-
-def _write_headless_background_subtraction_diagnostics(
-    result: Mapping[str, object],
-    *,
-    output_dir: Path,
-    cache_signature_summary: object,
-) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    config = result.get("config")
-    diagnostics = dict(result.get("diagnostics", {}) or {})
-    diagnostics["cache_signature_summary"] = cache_signature_summary
-    (output_dir / "background_subtraction_config.json").write_text(
-        json.dumps(
-            _headless_background_subtraction_json_safe(config),
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    (output_dir / "background_subtraction_diagnostics.json").write_text(
-        json.dumps(
-            _headless_background_subtraction_json_safe(diagnostics),
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    radial_centers = np.asarray(result.get("radial_bin_centers_deg", []), dtype=np.float64)
-    radial_profile = np.asarray(result.get("radial_profile", []), dtype=np.float64)
-    with (output_dir / "background_radial_profile.csv").open("w", encoding="utf-8") as handle:
-        handle.write("two_theta_deg,background\n")
-        for theta_value, profile_value in zip(radial_centers, radial_profile, strict=False):
-            handle.write(f"{float(theta_value):.12g},{float(profile_value):.12g}\n")
-    for key, filename in (
-        ("raw", "background_raw_native.npy"),
-        ("model", "background_model_native.npy"),
-        ("corrected", "background_subtracted_native.npy"),
-        ("valid_mask", "background_valid_mask.npy"),
-        ("exclusion_mask", "background_exclusion_mask.npy"),
-        ("phi_block_model_caked", "background_phi_block_model_caked.npy"),
-        ("phi_block_model_detector", "background_phi_block_model_detector.npy"),
-        ("phi_block_grid", "background_phi_block_grid.npy"),
-        ("phi_block_counts", "background_phi_block_counts.npy"),
-    ):
-        value = result.get(key)
-        if value is not None:
-            np.save(output_dir / filename, np.asarray(value))
-    for key, filename in (
-        ("phi_block_model_caked", "background_phi_block_model_caked.png"),
-        ("phi_block_model_detector", "background_phi_block_model_detector.png"),
-        (
-            "after_radial_before_phi_blocks_caked",
-            "background_after_radial_before_phi_blocks_caked.png",
-        ),
-        ("after_phi_blocks_caked", "background_after_phi_blocks_caked.png"),
-    ):
-        value = result.get(key)
-        if value is not None:
-            _write_background_subtraction_png(output_dir / filename, value)
-    _write_background_phi_block_grid_csv(result, output_dir)
+        _warn_legacy_background_subtraction_noop()
+    return _LegacyBackgroundSubtractionConfig()
 
 
 def _headless_geometry_fit_center(params: Mapping[str, object]) -> tuple[float, float] | None:
@@ -2555,7 +2365,7 @@ def run_headless_geometry_fit(
     state_types = _load_gui_state_types()
     defaults = _build_runtime_defaults(saved_state)
     var_store = _build_var_store(saved_state, defaults)
-    background_subtraction_config = _headless_background_subtraction_config(
+    _headless_background_subtraction_config(
         saved_state,
         defaults,
         mode_override=background_subtraction_mode,
@@ -2902,7 +2712,6 @@ def run_headless_geometry_fit(
 
     caked_views_by_background: dict[int, dict[str, object]] = {}
     caked_projection_payloads_by_background: dict[int, dict[str, object]] = {}
-    background_subtraction_diagnostics_written: set[tuple[object, ...]] = set()
 
     def _manual_current_background_uses_caked_space() -> bool:
         try:
@@ -2959,13 +2768,6 @@ def run_headless_geometry_fit(
             bool(background_state.backend_flip_x),
             bool(background_state.backend_flip_y),
             int(background_state.backend_rotation_k),
-            tuple(
-                sorted(
-                    diffuse_background_config_to_mapping(
-                        background_subtraction_config
-                    ).items()
-                )
-            ),
             source_signature,
         )
 
@@ -3079,11 +2881,6 @@ def run_headless_geometry_fit(
             "transform_bundle_generation",
             "caked_axis_shape",
             "raw_to_gui_row_permutation",
-            "background_raw",
-            "background_model",
-            "background_subtracted",
-            "background_subtraction_config",
-            "background_subtraction_diagnostics",
         ):
             if key in payload:
                 hydrated_payload[key] = payload[key]
@@ -3210,40 +3007,8 @@ def run_headless_geometry_fit(
         if isinstance(hydrated_cached, dict):
             caked_views_by_background[background_idx] = hydrated_cached
             return hydrated_cached
-        backend_image = raw_backend_image
-        subtraction_result = None
-        if (
-            background_subtraction_config.enabled
-            and background_subtraction_config.apply_to_fit
-        ):
-            subtraction_result = _headless_fit_background_subtraction_for_image(
-                raw_backend_image,
-                params=params_local,
-                pixel_size_m=float(defaults.pixel_size_m),
-                config=background_subtraction_config,
-            )
-            if isinstance(subtraction_result, Mapping):
-                corrected = np.asarray(
-                    subtraction_result.get("corrected"),
-                    dtype=np.float64,
-                )
-                if corrected.shape == raw_backend_image.shape:
-                    backend_image = corrected
-                if background_subtraction_config.diagnostics:
-                    diagnostic_signature = (int(background_idx), payload_signature)
-                    if diagnostic_signature not in background_subtraction_diagnostics_written:
-                        _write_headless_background_subtraction_diagnostics(
-                            subtraction_result,
-                            output_dir=downloads_path,
-                            cache_signature_summary=_signature_summary(
-                                payload_signature
-                            ),
-                        )
-                        background_subtraction_diagnostics_written.add(
-                            diagnostic_signature
-                        )
         payload = _build_headless_geometry_fit_caked_view_payload(
-            backend_image,
+            raw_backend_image,
             params=params_local,
             pixel_size_m=float(defaults.pixel_size_m),
         )
@@ -3272,18 +3037,6 @@ def run_headless_geometry_fit(
                 ),
             }
         )
-        if isinstance(subtraction_result, Mapping):
-            payload.update(
-                {
-                    "background_raw": raw_backend_image,
-                    "background_model": subtraction_result.get("model"),
-                    "background_subtracted": subtraction_result.get("corrected"),
-                    "background_subtraction_config": background_subtraction_config,
-                    "background_subtraction_diagnostics": subtraction_result.get(
-                        "diagnostics"
-                    ),
-                }
-            )
         hydrated_payload = _headless_geometry_fit_hydrate_caked_payload(
             payload,
             signature=payload_signature,

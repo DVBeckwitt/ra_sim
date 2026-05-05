@@ -49,11 +49,11 @@ non-interactive path:
 
 - Geometry-fit-cached mosaic fitting depends on the latest successful manual geometry dataset.
 - Mosaic fitting must refuse stale geometry, stale selected backgrounds, stale Qr/Qz grouping, or changed shared-theta metadata.
-- Structure-factor fitting must not use GUI display normalization. It should compare background-subtracted detector ROI counts to ray-carried simulated intensity summed into the same ROI.
+- Structure-factor fitting must not use GUI display normalization. It should compare detector ROI counts to ray-carried simulated intensity summed into the same ROI.
 - Detector-space agreement comes first; 1D views are validation tools, not the primary fitting target.
 - Use Setup > Beam Controls > `Pick Beam Center` to set the GUI beam center from the loaded background image. The pick temporarily returns to detector view, shows the background if hidden, zooms around the press point, maps the clicked detector-display point once at the displayed detector extent, then writes `center_x` as Beam Center Row and `center_y` as Beam Center Col through the visible slider and entry widgets on release. In the default 3000 px clockwise detector view, `row = display_row` and `col = detector_width - display_col`; `RA_SIM_TRACE_BEAM_CENTER=1` records the widget/update/marker/remap path to `debug/beam_center_trace.jsonl`.
 - Use `Toggle Simulation` to hide or show the simulated detector/caked overlay without changing the loaded background image, fit inputs, or generated simulation data.
-- Diffuse background subtraction remains off by default. When enabled, the Background Subtraction panel's `Use before fit/pick` option uses the signed subtracted background for Qr picking, auto-match, and fit comparison while keeping the raw background available.
+- Setup > Backgrounds still controls background loading, switching, and theta metadata. There is no global background-subtraction path; loaded backgrounds remain raw for display, matching, geometry fitting, manual picks, and headless fitting.
 - Selected-Qr rod ROI mode can be selected in detector view or caked view. Q-space view disables it because the ROI is defined from detector-space Qr/Qz support.
 - In detector view, selected-Qr rod ROI mode displays the detector-native Qr/Qz support mask directly from detector Q maps, clipped by Qz, phi, finite-Q, and detector validity. This detector-native mask is visual/drag support only; it does not provide the plotted Qz profile. It does not show the old detector `2theta/phi` angular ROI while rod mode is enabled.
 - In caked view, the selected-Qr rod ROI overlay uses the caked Qr/Qz/phi mask. Selected-Qr rod Qz profiles are always integrated from the caked `2theta/phi` result, even while the main view is detector mode.
@@ -61,7 +61,7 @@ non-interactive path:
 - Use `Include rod shape` in selected-Qr rod ROI mode when the selected Qr/Qz group's shape support should clip each selected rod mask in addition to the numeric Qr band. The toggle is saved as `analysis_range.include_selected_qr_rod_shape`.
 - `Caked image intensity` controls full caked-image pixels plus standard radial/azimuthal integrations. It defaults to support-normalized density and can show raw accumulated caked-bin signal for inspection. The choice is saved as `analysis_range.caked_intensity_mode`, and changing it repaints the main caked figure with the selected pixel semantics.
 - Changing the standard integration region no longer rescales the main caked image. The radial 2theta and azimuthal phi 1D plots still recompute and autoscale to the selected region.
-- Peak-fit results in Analyze are shown as a monospaced table with center, Gaussian FWHM, Lorentzian FWHM, Gaussian/Lorentzian mixture percent, model, and RMSE for radial and azimuthal fits. Pseudo-Voigt percentages use area-normalized Gaussian/Lorentzian equations, so the Lorentzian value is the fitted Lorentzian area fraction.
+- Peak-fit results in Analyze are shown as a monospaced table with center, Gaussian FWHM, Lorentzian FWHM, Gaussian/Lorentzian mixture percent, model, and RMSE for radial and azimuthal fits. `Subtract linear background` is enabled by default for `Fit Selected Peaks`; it fits one local 2D plane inside the selected caked box and subtracts it only from the peak-fit data. Pseudo-Voigt percentages use area-normalized Gaussian/Lorentzian equations, so the Lorentzian value is the fitted Lorentzian area fraction.
 - `Rod profile intensity` defaults to `Raw accumulated intensity` when fresh Selected-Qr rod ROI mode is enabled in detector view, and to `Intensity density (support-normalized)` in caked view. Restored or user-edited values are preserved and saved as `analysis_range.rod_profile_intensity_mode`.
 - Multiple Qr rods can be selected at once with the extended-selection rod list. Multi-select order is the rod-list display order in `analysis_range.selected_qr_rod_keys`; `analysis_range.selected_qr_rod_key` remains the first selected rod for legacy state compatibility.
 - When selected-Qr rod ROI mode is active, the 1D analysis panel shows one Qz subplot per selected rod, stacked vertically. The standard radial/azimuthal integration layout is restored when rod mode is turned off.
@@ -92,7 +92,7 @@ non-interactive path:
 - Fixed: detector-view selected-Qr rod ROI mode now displays the detector-native Qr/Qz support mask for overlay/drag only, while Qz profiles stay on the caked `2theta/phi` integration path.
 - Added: multiple selected Qr rods plot as vertically stacked Qz profiles, with union masks used only for overlay and drag support.
 - Changed: selected-Qr rod selection uses an extended-selection list, detector-view rod profiles default to raw accumulated intensity, and `Delta Qr width` is stored as full width with legacy half-width migration.
-- Default: diffuse background subtraction is still off by default, including notebook startup state. Enable `Use before fit/pick` only when subtraction should feed picking and fitting.
+- Default: Analyze peak fitting locally subtracts a linear 2D background plane unless `Subtract linear background` is unchecked. This does not mutate detector, caked, matching, manual-pick, geometry-fit, or headless inputs.
 
 For deeper physical and implementation detail, use:
 

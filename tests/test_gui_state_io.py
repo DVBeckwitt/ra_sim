@@ -175,7 +175,7 @@ def test_load_gui_state_file_accepts_legacy_wrapper_without_type(tmp_path):
     assert loaded["state"]["flags"]["background_visible"] is False
 
 
-def test_collect_snapshot_persists_background_subtraction_vars() -> None:
+def test_collect_snapshot_ignores_legacy_background_subtraction_vars() -> None:
     class _FakeTkVar:
         def __init__(self, value) -> None:
             self.value = value
@@ -187,34 +187,9 @@ def test_collect_snapshot_persists_background_subtraction_vars() -> None:
         global_items={
             "background_subtraction_enabled_var": _FakeTkVar(True),
             "background_subtraction_mode_var": _FakeTkVar("radial"),
-            "background_subtraction_apply_to_fit_var": _FakeTkVar(True),
-            "background_subtraction_apply_to_display_var": _FakeTkVar(False),
-            "background_subtraction_display_mode_var": _FakeTkVar("model"),
             "background_subtraction_scale_var": _FakeTkVar(0.85),
-            "background_subtraction_auto_scale_var": _FakeTkVar(False),
-            "background_subtraction_radial_bin_width_deg_var": _FakeTkVar(0.2),
-            "background_subtraction_radial_quantile_var": _FakeTkVar(0.25),
-            "background_subtraction_radial_smooth_sigma_deg_var": _FakeTkVar(1.0),
-            "background_subtraction_caked_theta_window_deg_var": _FakeTkVar(2.5),
-            "background_subtraction_caked_phi_window_deg_var": _FakeTkVar(25.0),
-            "background_subtraction_caked_quantile_var": _FakeTkVar(0.3),
-            "background_subtraction_phi_block_theta_bin_width_deg_var": _FakeTkVar(1.25),
-            "background_subtraction_phi_block_phi_bin_width_deg_var": _FakeTkVar(18.0),
-            "background_subtraction_phi_block_quantile_var": _FakeTkVar(0.55),
-            "background_subtraction_phi_block_min_pixels_var": _FakeTkVar(30),
-            "background_subtraction_phi_block_min_coverage_var": _FakeTkVar(0.10),
-            "background_subtraction_phi_block_smooth_theta_bins_var": _FakeTkVar(0.8),
-            "background_subtraction_phi_block_smooth_phi_bins_var": _FakeTkVar(0.4),
-            "background_subtraction_phi_block_outlier_sigma_var": _FakeTkVar(7.0),
-            "background_subtraction_phi_block_interpolation_var": _FakeTkVar("linear"),
-            "background_subtraction_phi_block_scale_var": _FakeTkVar(0.75),
-            "background_subtraction_phi_block_preserve_block_edges_var": _FakeTkVar(False),
-            "background_subtraction_peak_mask_sigma_var": _FakeTkVar(3.0),
-            "background_subtraction_peak_mask_radius_px_var": _FakeTkVar(16.0),
-            "background_subtraction_direct_beam_mask_radius_px_var": _FakeTkVar(45.0),
-            "background_subtraction_clip_for_display_var": _FakeTkVar(True),
-            "background_subtraction_diagnostics_var": _FakeTkVar(False),
             "background_subtraction_status_var": _FakeTkVar("transient"),
+            "gamma_var": _FakeTkVar(1.25),
         },
         tk_variable_type=_FakeTkVar,
         occ_vars=[],
@@ -239,38 +214,10 @@ def test_collect_snapshot_persists_background_subtraction_vars() -> None:
     )
 
     variables = snapshot["variables"]
-    files = snapshot["files"]
-    assert variables["background_subtraction_enabled_var"] is True
-    assert variables["background_subtraction_mode_var"] == "radial"
-    assert variables["background_subtraction_display_mode_var"] == "model"
-    assert variables["background_subtraction_scale_var"] == 0.85
-    assert variables["background_subtraction_auto_scale_var"] is False
-    assert variables["background_subtraction_radial_bin_width_deg_var"] == 0.2
-    assert variables["background_subtraction_radial_quantile_var"] == 0.25
-    assert variables["background_subtraction_radial_smooth_sigma_deg_var"] == 1.0
-    assert variables["background_subtraction_caked_theta_window_deg_var"] == 2.5
-    assert variables["background_subtraction_caked_phi_window_deg_var"] == 25.0
-    assert variables["background_subtraction_caked_quantile_var"] == 0.3
-    assert variables["background_subtraction_phi_block_theta_bin_width_deg_var"] == 1.25
-    assert variables["background_subtraction_phi_block_phi_bin_width_deg_var"] == 18.0
-    assert variables["background_subtraction_phi_block_quantile_var"] == 0.55
-    assert variables["background_subtraction_phi_block_min_pixels_var"] == 30
-    assert variables["background_subtraction_phi_block_min_coverage_var"] == 0.10
-    assert variables["background_subtraction_phi_block_smooth_theta_bins_var"] == 0.8
-    assert variables["background_subtraction_phi_block_smooth_phi_bins_var"] == 0.4
-    assert variables["background_subtraction_phi_block_outlier_sigma_var"] == 7.0
-    assert variables["background_subtraction_phi_block_interpolation_var"] == "linear"
-    assert variables["background_subtraction_phi_block_scale_var"] == 0.75
-    assert variables["background_subtraction_phi_block_preserve_block_edges_var"] is False
-    assert variables["background_subtraction_peak_mask_sigma_var"] == 3.0
-    assert variables["background_subtraction_peak_mask_radius_px_var"] == 16.0
-    assert variables["background_subtraction_direct_beam_mask_radius_px_var"] == 45.0
-    assert variables["background_subtraction_clip_for_display_var"] is True
-    assert variables["background_subtraction_diagnostics_var"] is False
-    assert "background_subtraction_status_var" not in variables
-    assert files["primary_cif_path"] == "primary.cif"
-    assert files["secondary_cif_path"] is None
-
+    assert variables["gamma_var"] == 1.25
+    assert all(not str(name).startswith("background_subtraction_") for name in variables)
+    assert snapshot["files"]["primary_cif_path"] == "primary.cif"
+    assert snapshot["files"]["secondary_cif_path"] is None
 
 def test_saved_state_without_background_subtraction_fields_still_loads(tmp_path) -> None:
     file_path = tmp_path / "legacy_without_background_subtraction.json"

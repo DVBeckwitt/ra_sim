@@ -92,6 +92,133 @@ def sample_curve_value(
     return float(np.interp(position_value, axis_arr, curve_arr))
 
 
+def subtract_linear_background_plane(
+    theta_values: Sequence[float] | None,
+    phi_values: Sequence[float] | None,
+    roi_values: Sequence[Sequence[float]] | np.ndarray | None,
+    peak_centers: Sequence[Mapping[str, object]] | None = None,
+    *,
+    theta_exclusion_half_width: float | None = None,
+    phi_exclusion_half_width: float | None = None,
+) -> dict[str, object]:
+    """Fit and subtract one local 2D linear background plane from a caked ROI."""
+
+    theta_axis = np.asarray(theta_values, dtype=float).reshape(-1)
+    phi_axis = np.asarray(phi_values, dtype=float).reshape(-1)
+    roi = np.asarray(roi_values, dtype=float)
+    if (
+        roi.ndim != 2
+        or theta_axis.size != int(roi.shape[1])
+        or phi_axis.size != int(roi.shape[0])
+        or theta_axis.size <= 0
+        or phi_axis.size <= 0
+    ):
+        return {
+            "success": False,
+            "error": "ROI shape does not match caked axes.",
+        }
+
+    theta_grid, phi_grid = np.meshgrid(theta_axis, phi_axis)
+    finite = np.isfinite(roi) & np.isfinite(theta_grid) & np.isfinite(phi_grid)
+    finite_count = int(np.count_nonzero(finite))
+    if finite_count < 3:
+        return {
+            "success": False,
+            "error": "Not enough finite ROI samples for linear background.",
+        }
+
+    def _axis_step(values: np.ndarray, fallback: float) -> float:
+        finite_values = np.sort(values[np.isfinite(values)])
+        if finite_values.size >= 2:
+            diffs = np.diff(finite_values)
+            diffs = diffs[np.isfinite(diffs) & (np.abs(diffs) > 0.0)]
+            if diffs.size:
+                return float(np.nanmedian(np.abs(diffs)))
+        return float(fallback)
+
+    def _wrapped_delta(values: np.ndarray, center: float) -> np.ndarray:
+        return ((np.asarray(values, dtype=float) - float(center) + 180.0) % 360.0) - 180.0
+
+    theta_step = _axis_step(theta_axis, 0.03)
+    phi_step = _axis_step(phi_axis, 0.25)
+    theta_half = (
+        max(3.0 * theta_step, 0.08)
+        if theta_exclusion_half_width is None
+        else max(float(theta_exclusion_half_width), 0.0)
+    )
+    phi_half = (
+        max(3.0 * phi_step, 0.5)
+        if phi_exclusion_half_width is None
+        else max(float(phi_exclusion_half_width), 0.0)
+    )
+
+    peak_mask = np.zeros(roi.shape, dtype=bool)
+    for entry in peak_centers or ():
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            theta_center = float(entry.get("two_theta_deg"))
+            phi_center = float(entry.get("phi_deg"))
+        except Exception:
+            continue
+        if not (np.isfinite(theta_center) and np.isfinite(phi_center)):
+            continue
+        peak_mask |= (
+            (np.abs(theta_grid - theta_center) <= theta_half)
+            & (np.abs(_wrapped_delta(phi_grid, phi_center)) <= phi_half)
+        )
+
+    fit_mask = finite & ~peak_mask
+    used_fallback = False
+    minimum_fit_count = max(6, min(finite_count, int(math.ceil(0.20 * finite_count))))
+    if int(np.count_nonzero(fit_mask)) < minimum_fit_count:
+        fit_mask = finite
+        used_fallback = True
+
+    theta_ref = float(np.nanmedian(theta_grid[finite]))
+    phi_ref = float(wrap_angle_degrees(np.nanmedian(phi_grid[finite])))
+    design = np.column_stack(
+        [
+            np.ones(int(np.count_nonzero(fit_mask)), dtype=float),
+            np.asarray(theta_grid[fit_mask] - theta_ref, dtype=float),
+            np.asarray(_wrapped_delta(phi_grid[fit_mask], phi_ref), dtype=float),
+        ]
+    )
+    y_fit = np.asarray(roi[fit_mask], dtype=float)
+    try:
+        coeff, *_ = np.linalg.lstsq(design, y_fit, rcond=None)
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+        }
+    coeff = np.asarray(coeff, dtype=float)
+    if coeff.size < 3 or not np.all(np.isfinite(coeff[:3])):
+        coeff = np.asarray([float(np.nanmedian(y_fit)), 0.0, 0.0], dtype=float)
+
+    plane = (
+        float(coeff[0])
+        + float(coeff[1]) * (theta_grid - theta_ref)
+        + float(coeff[2]) * _wrapped_delta(phi_grid, phi_ref)
+    )
+    corrected = np.asarray(roi - plane, dtype=float)
+    return {
+        "success": True,
+        "corrected": corrected,
+        "background_plane": np.asarray(plane, dtype=float),
+        "fit_mask": np.asarray(fit_mask, dtype=bool),
+        "peak_mask": np.asarray(peak_mask, dtype=bool),
+        "coefficients": [float(coeff[0]), float(coeff[1]), float(coeff[2])],
+        "theta_ref": float(theta_ref),
+        "phi_ref": float(phi_ref),
+        "fit_sample_count": int(np.count_nonzero(fit_mask)),
+        "finite_sample_count": int(finite_count),
+        "used_fallback_fit_mask": bool(used_fallback),
+        "theta_exclusion_half_width": float(theta_half),
+        "phi_exclusion_half_width": float(phi_half),
+    }
+
+
 def match_selected_peak_index(
     peaks: Sequence[dict[str, object]] | None,
     *,

@@ -38,7 +38,6 @@ intensity contract, but remains downstream of green mosaic fitting.
 | Generated disordered Qr live path | bug/feature | - | none | p1 | 2026-05-03 | [generated-disordered-qr-live-path.md](in-progress/generated-disordered-qr-live-path.md) |
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
-| Diffuse background subtraction | feature | - | none | p1 | 2026-04-28 | [diffuse-background-subtraction.md](in-progress/diffuse-background-subtraction.md) |
 | Fast-path cache audit and QR selector policy | bug | - | none | p2 | 2026-04-28 | [fast-path-cache-audit-phase1.md](in-progress/fast-path-cache-audit-phase1.md) |
 
 Q-space viewer fix status note:
@@ -130,25 +129,6 @@ geometry replay/workflow suites and full-suite status remain red in this
 worktree for adjacent replay/finalizer and unrelated fixture/doc/env failures,
 so the follow-up stays tracked as in-progress until broader tree health is
 clean.
-
-Diffuse background subtraction status note:
-The shared radial/caked subtraction model, GUI Background tab, headless/CLI
-overrides, diagnostics, cache invalidation, and off-mode safeguards are
-implemented. The Background tab UX is now workflow-oriented with presets,
-explained sliders, collapsible advanced sections, dirty status feedback,
-debounced auto-preview, diagnostics summaries, and compact copy for labels,
-buttons, hints, statuses, presets, tooltips, and diagnostics. The current
-feature extension adds phi-block residual subtraction after the radial model,
-with `radial_plus_phi_blocks` and
-`radial_plus_phi_blocks_plus_caked_2d` modes, GUI controls, CLI overrides,
-component diagnostics, and phi-block artifact exports. Targeted
-GUI/state/import-safe/headless/numerical tests pass, including the phi-block
-combined relevant suite with 429 tests. Full-suite runs timed out locally after
-the UX/copy passes and again after the phi-block extension. Real detector smoke
-tests for radial/phi-block/slow-caked mode comparisons, manual GUI
-preview/orientation checks, tooltip/preset interaction checks, saved-state
-headless override checks, and real diagnostic artifact inspection still need
-project input data.
 
 Fast-path cache audit and QR selector policy status note:
 Phases 1-9 are implemented and locally validated. QR/Qz masks remain explicit
@@ -288,6 +268,7 @@ still failing. Full fitter validation is not claimed.
 | Mosaic mass conservation validation | feature | - | none | p1 | 2026-04-22 | [mosaic-mass-conservation-validation.md](archive/mosaic-mass-conservation-validation.md) |
 | Numba import fallback | bug | - | none | p2 | 2026-05-04 | [numba-import-fallback.md](archive/numba-import-fallback.md) |
 | Qr integration region mask | bug | - | none | p2 | 2026-04-30 | [qr-integration-region-mask.md](archive/qr-integration-region-mask.md) |
+| Remove global background subtraction | bug/feature | Codex | none | p1 | 2026-05-05 | [remove-global-background-subtraction.md](archive/remove-global-background-subtraction.md) |
 | Rod profile intensity density | bug/feature | - | none | p1 | 2026-04-30 | [rod-profile-intensity-density.md](archive/rod-profile-intensity-density.md) |
 | Skip discarded fit hit tables | refactor | - | none | p2 | 2026-04-22 | [skip-discarded-fit-hit-tables.md](archive/skip-discarded-fit-hit-tables.md) |
 | Startup default detector visibility regression | bug | - | none | p1 | 2026-04-18 | [startup-default-detector-visibility.md](archive/startup-default-detector-visibility.md) |

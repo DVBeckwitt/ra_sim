@@ -1132,7 +1132,6 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.controls_notebook, _FakeNotebook)
     assert [text for _, text in view_state.controls_notebook.tabs] == [
         "Setup",
-        "Background",
         "Match",
         "Refine",
         "Simulation",
@@ -1144,7 +1143,6 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
         "Sample Structure",
     ]
     assert isinstance(view_state.setup_body, _FakeFrame)
-    assert isinstance(view_state.background_body, _FakeFrame)
     assert isinstance(view_state.match_body, _FakeFrame)
     assert isinstance(view_state.simulation_body, _FakeFrame)
     assert isinstance(view_state.refine_basic_body, _FakeFrame)
@@ -1154,7 +1152,6 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.parameter_geometry_body, _FakeFrame)
     assert isinstance(view_state.parameter_structure_body, _FakeFrame)
     assert isinstance(view_state.setup_canvas, _FakeCanvas)
-    assert isinstance(view_state.background_canvas, _FakeCanvas)
     assert isinstance(view_state.match_canvas, _FakeCanvas)
     assert isinstance(view_state.simulation_canvas, _FakeCanvas)
     assert isinstance(view_state.refine_basic_canvas, _FakeCanvas)
@@ -1217,8 +1214,6 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
 
     view_state.control_tab_var.set("match")
     assert view_state.controls_notebook.selected_tab is view_state.match_tab
-    view_state.control_tab_var.set("background")
-    assert view_state.controls_notebook.selected_tab is view_state.background_tab
     view_state.control_tab_var.set("simulation")
     assert view_state.controls_notebook.selected_tab is view_state.simulation_tab
 
@@ -3076,12 +3071,15 @@ def test_analysis_peak_tools_controls_store_vars_and_commands(monkeypatch) -> No
         "Gaussian",
         "Lorentzian",
         "Pseudo-Voigt (eta)",
+        "Subtract linear background",
         "Radial (2θ)",
         "Azimuth (φ)",
     ]
     assert view_state.fit_gaussian_var.get() is True
     assert view_state.fit_lorentzian_var.get() is False
     assert view_state.fit_pseudo_voigt_var.get() is True
+    assert view_state.subtract_linear_background_var.get() is True
+    assert view_state.subtract_linear_background_checkbutton is _FakeCheckbutton.created[3]
     assert view_state.fit_radial_var.get() is True
     assert view_state.fit_azimuth_var.get() is False
     assert view_state.selection_status_var.get() == "Selected peaks: 2"
@@ -3652,199 +3650,6 @@ def test_create_background_theta_controls_stores_vars_and_binds_apply(monkeypatc
     view_state.background_theta_offset_entry.bindings["<Return>"](None)
     _FakeButton.created[-1].command()
     assert applied == ["apply", "apply", "apply"]
-
-
-def test_background_subtraction_preset_values_are_stable() -> None:
-    balanced = views.background_subtraction_preset_values("Balanced")
-    protect_peaks = views.background_subtraction_preset_values("Protect Peaks")
-    aggressive = views.background_subtraction_preset_values("aggressive")
-
-    assert balanced["enabled"] is True
-    assert balanced["scale"] == 1.0
-    assert balanced["mode"] == "radial_plus_caked_2d"
-    assert protect_peaks["radial_quantile"] < balanced["radial_quantile"]
-    assert protect_peaks["peak_mask_radius_px"] > balanced["peak_mask_radius_px"]
-    assert aggressive["scale"] > balanced["scale"]
-    assert aggressive["radial_quantile"] > balanced["radial_quantile"]
-    with pytest.raises(KeyError):
-        views.background_subtraction_preset_values("unknown")
-
-
-def test_create_background_subtraction_controls_stores_vars_and_callbacks(
-    monkeypatch,
-) -> None:
-    _FakeLabel.created = []
-    _FakeButton.created = []
-    _FakeCheckbutton.created = []
-    _FakeRadiobutton.created = []
-    created_sliders = []
-
-    def _fake_create_slider(
-        label,
-        min_val,
-        max_val,
-        initial_val,
-        step_size,
-        parent,
-        update_callback=None,
-        **kwargs,
-    ):
-        var = _FakeVar(initial_val)
-        slider = _FakeScale(parent, from_=min_val, to=max_val)
-        created_sliders.append(
-            {
-                "label": label,
-                "var": var,
-                "slider": slider,
-                "step": step_size,
-                "parent": parent,
-                "update_callback": update_callback,
-                "kwargs": kwargs,
-            }
-        )
-        return var, slider
-
-    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
-    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
-    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
-    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
-    monkeypatch.setattr(views.ttk, "Combobox", _FakeEntry)
-    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
-    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
-    monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
-    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
-    monkeypatch.setattr(views, "create_slider", _fake_create_slider)
-    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
-    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
-    monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
-
-    view_state = state.BackgroundSubtractionControlsViewState()
-    events: list[object] = []
-
-    views.create_background_subtraction_controls(
-        parent=object(),
-        view_state=view_state,
-        initial_values={
-            "enabled": True,
-            "mode": "radial",
-            "apply_to_fit": True,
-            "apply_to_display": True,
-            "display_mode": "subtracted",
-            "scale": 0.8,
-            "auto_scale": False,
-            "radial_bin_width_deg": 0.2,
-            "phi_block_theta_bin_width_deg": 1.25,
-            "phi_block_phi_bin_width_deg": 18.0,
-            "phi_block_quantile": 0.55,
-            "phi_block_scale": 0.75,
-            "phi_block_interpolation": "linear",
-            "phi_block_preserve_block_edges": False,
-            "diagnostics": False,
-        },
-        on_fit_model=lambda: events.append("fit"),
-        on_apply=lambda: events.append("apply"),
-        on_reset=lambda: events.append("reset"),
-        on_export_diagnostics=lambda: events.append("export"),
-        on_apply_preset=lambda name: events.append(("preset", name)),
-    )
-
-    assert isinstance(view_state.frame, _FakeFrame)
-    assert view_state.frame.kwargs["text"] == "Background subtraction"
-    assert view_state.enabled_var.get() is True
-    assert view_state.mode_var.get() == "radial"
-    assert view_state.apply_to_fit_var.get() is True
-    assert view_state.apply_to_display_var.get() is True
-    assert view_state.display_mode_var.get() == "subtracted"
-    assert view_state.scale_var.get() == 0.8
-    assert view_state.radial_bin_width_deg_var.get() == 0.2
-    assert view_state.radial_quantile_var.get() == 0.35
-    assert view_state.phi_block_theta_bin_width_deg_var.get() == 1.25
-    assert view_state.phi_block_phi_bin_width_deg_var.get() == 18.0
-    assert view_state.phi_block_quantile_var.get() == 0.55
-    assert view_state.phi_block_scale_var.get() == 0.75
-    assert view_state.phi_block_interpolation_var.get() == "linear"
-    assert view_state.phi_block_preserve_block_edges_var.get() is False
-    assert view_state.diagnostics_var.get() is False
-    assert view_state.status_var.get() == "Ready. Press Fit."
-    assert view_state.diagnostics_summary_var.get() == "No fit yet."
-    assert view_state.scale_slider is created_sliders[0]["slider"]
-    assert view_state.radial_smooth_sigma_deg_slider is created_sliders[1]["slider"]
-    assert view_state.peak_mask_radius_px_slider is created_sliders[2]["slider"]
-    assert view_state.direct_beam_mask_radius_px_slider is created_sliders[3]["slider"]
-    assert view_state.radial_bin_width_deg_slider is created_sliders[4]["slider"]
-    assert view_state.radial_quantile_slider is created_sliders[5]["slider"]
-    assert view_state.caked_theta_window_deg_slider is created_sliders[6]["slider"]
-    assert view_state.caked_phi_window_deg_slider is created_sliders[7]["slider"]
-    assert view_state.caked_quantile_slider is created_sliders[8]["slider"]
-    assert view_state.phi_block_theta_bin_width_deg_slider is created_sliders[9]["slider"]
-    assert view_state.phi_block_phi_bin_width_deg_slider is created_sliders[10]["slider"]
-    assert view_state.phi_block_quantile_slider is created_sliders[11]["slider"]
-    assert view_state.phi_block_min_pixels_slider is created_sliders[12]["slider"]
-    assert view_state.phi_block_min_coverage_slider is created_sliders[13]["slider"]
-    assert view_state.phi_block_smooth_theta_bins_slider is created_sliders[14]["slider"]
-    assert view_state.phi_block_smooth_phi_bins_slider is created_sliders[15]["slider"]
-    assert view_state.phi_block_outlier_sigma_slider is created_sliders[16]["slider"]
-    assert view_state.phi_block_scale_slider is created_sliders[17]["slider"]
-    assert view_state.peak_mask_sigma_slider is created_sliders[18]["slider"]
-    assert [item["label"] for item in created_sliders] == [
-        "Strength",
-        "Smoothness",
-        "Peak mask",
-        "Beam mask",
-        "2θ bin",
-        "Baseline",
-        "2D 2θ window",
-        "2D φ window",
-        "2D baseline",
-        "Phi-block 2θ bin",
-        "Phi-block phi bin",
-        "Phi-block quantile",
-        "Phi-block min pixels",
-        "Phi-block min coverage",
-        "Phi-block 2θ smoothing",
-        "Phi-block phi smoothing",
-        "Phi-block outlier sigma",
-        "Phi-block strength",
-        "Peak sensitivity",
-    ]
-    assert set(view_state.preset_buttons) == {
-        "conservative",
-        "balanced",
-        "aggressive",
-        "protect_peaks",
-        "direct_beam_heavy",
-        "reset_defaults",
-    }
-    assert {button.kwargs["text"] for button in _FakeButton.created} >= {
-        "Safe",
-        "Balanced",
-        "Strong",
-        "Protect peaks",
-        "Beam-heavy",
-        "Fit",
-        "Apply",
-        "Reset",
-        "Export",
-    }
-    radio_values = {button.value for button in _FakeRadiobutton.created}
-    assert "radial_plus_phi_blocks" in radio_values
-    assert "radial_plus_phi_blocks_plus_caked_2d" in radio_values
-    assert "phi_block_model" in radio_values
-
-    buttons_by_text = {button.kwargs["text"]: button for button in _FakeButton.created}
-    buttons_by_text["Fit"].command()
-    buttons_by_text["Apply"].command()
-    buttons_by_text["Reset"].command()
-    buttons_by_text["Export"].command()
-    assert events == ["fit", "apply", "reset", "export"]
-
-    buttons_by_text["Balanced"].command()
-    assert view_state.enabled_var.get() is True
-    assert view_state.mode_var.get() == "radial_plus_caked_2d"
-    assert view_state.scale_var.get() == 1.0
-    assert view_state.radial_quantile_var.get() == 0.35
-    assert view_state.status_var.get() == "Preset set. Press Fit."
-    assert events[-1] == ("preset", "balanced")
 
 
 def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(

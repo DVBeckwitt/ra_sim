@@ -558,7 +558,8 @@ def test_run_headless_geometry_fit_forwards_background_subtraction_overrides(
     }
 
 
-def test_headless_background_subtraction_config_uses_saved_and_overrides() -> None:
+def test_headless_background_subtraction_config_warns_and_forces_noop() -> None:
+    headless_geometry_fit._legacy_background_subtraction_warning_emitted = False
     defaults = SimpleNamespace(
         fit_config={
             "geometry": {
@@ -582,14 +583,15 @@ def test_headless_background_subtraction_config_uses_saved_and_overrides() -> No
         }
     }
 
-    saved_cfg = headless_geometry_fit._headless_background_subtraction_config(
-        saved_state,
-        defaults,
-        mode_override="saved",
-        scale_override=None,
-        diagnostics_override=None,
-        phi_block_overrides=None,
-    )
+    with pytest.warns(RuntimeWarning, match="Legacy global background subtraction is ignored"):
+        saved_cfg = headless_geometry_fit._headless_background_subtraction_config(
+            saved_state,
+            defaults,
+            mode_override="saved",
+            scale_override=None,
+            diagnostics_override=None,
+            phi_block_overrides=None,
+        )
     off_cfg = headless_geometry_fit._headless_background_subtraction_config(
         saved_state,
         defaults,
@@ -599,16 +601,13 @@ def test_headless_background_subtraction_config_uses_saved_and_overrides() -> No
         phi_block_overrides={"phi_block_scale": 0.7},
     )
 
-    assert saved_cfg.enabled is True
-    assert saved_cfg.mode == "radial"
-    assert saved_cfg.scale == 0.9
-    assert saved_cfg.phi_block_scale == 0.8
+    assert saved_cfg.enabled is False
+    assert saved_cfg.mode == "off"
+    assert saved_cfg.apply_to_fit is False
     assert saved_cfg.diagnostics is False
     assert off_cfg.enabled is False
     assert off_cfg.mode == "off"
-    assert off_cfg.scale == 0.5
-    assert off_cfg.phi_block_scale == 0.7
-    assert off_cfg.diagnostics is True
+    assert off_cfg.apply_to_fit is False
 
 
 def test_run_headless_mosaic_shape_fit_forwards_to_geometry_runner(monkeypatch) -> None:

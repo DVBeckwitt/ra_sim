@@ -231,7 +231,9 @@ def is_persistable_gui_var(
 
     if not isinstance(value, tk_variable_type):
         return False
-    if name.startswith("_") or name in GUI_STATE_EXCLUDED_VAR_NAMES:
+    if name.startswith("_") or name.startswith("background_subtraction_"):
+        return False
+    if name in GUI_STATE_EXCLUDED_VAR_NAMES:
         return False
     if name.endswith(("_button_var", "_entry_var", "_label_var", "_status_var")):
         return False
@@ -507,6 +509,8 @@ def apply_gui_state_variables(
         return warnings
 
     for name, stored_value in saved_variables.items():
+        if str(name).startswith("background_subtraction_"):
+            continue
         target_var = global_items.get(str(name))
         if not isinstance(target_var, tk_variable_type):
             continue

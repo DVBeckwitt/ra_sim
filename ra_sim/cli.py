@@ -841,7 +841,7 @@ def run_headless_geometry_fit(
         None,
     )
     if callable(build_subtraction_config):
-        background_subtraction_config = build_subtraction_config(
+        build_subtraction_config(
             updated_state,
             SimpleNamespace(fit_config=dict(fit_cfg) if isinstance(fit_cfg, Mapping) else {}),
             mode_override=background_subtraction_mode,
@@ -849,13 +849,6 @@ def run_headless_geometry_fit(
             diagnostics_override=background_subtraction_diagnostics,
             phi_block_overrides=background_subtraction_phi_block_overrides,
         )
-    else:
-        background_subtraction_config = SimpleNamespace(
-            enabled=False,
-            apply_to_fit=True,
-            diagnostics=False,
-        )
-    background_subtraction_diagnostics_written: set[tuple[object, ...]] = set()
     downloads_dir = Path(output_dir or Path(source_path).resolve().parent)
 
     image_size = int(detector_cfg.get("image_size", simulation_defaults.image_size))
@@ -1481,74 +1474,15 @@ def run_headless_geometry_fit(
         if backend_background is None:
             backend_background = native_background
         raw_backend_image = np.asarray(backend_background, dtype=np.float64)
-        backend_image = raw_backend_image
-        subtraction_result = None
-        if (
-            background_subtraction_config.enabled
-            and background_subtraction_config.apply_to_fit
-        ):
-            subtraction_result = (
-                shared_headless._headless_fit_background_subtraction_for_image(
-                    raw_backend_image,
-                    params=params_local,
-                    pixel_size_m=float(pixel_size_m),
-                    config=background_subtraction_config,
-                )
-            )
-            if isinstance(subtraction_result, Mapping):
-                corrected = np.asarray(
-                    subtraction_result.get("corrected"),
-                    dtype=np.float64,
-                )
-                if corrected.shape == raw_backend_image.shape:
-                    backend_image = corrected
-                if background_subtraction_config.diagnostics:
-                    diagnostics_signature = (
-                        int(background_idx),
-                        repr(
-                            sorted(
-                                (str(key), repr(value))
-                                for key, value in params_local.items()
-                            )
-                        ),
-                        tuple(
-                            sorted(
-                                shared_headless.diffuse_background_config_to_mapping(
-                                    background_subtraction_config
-                                ).items()
-                            )
-                        ),
-                    )
-                    if diagnostics_signature not in background_subtraction_diagnostics_written:
-                        shared_headless._write_headless_background_subtraction_diagnostics(
-                            subtraction_result,
-                            output_dir=downloads_dir,
-                            cache_signature_summary=repr(diagnostics_signature)[:240],
-                        )
-                        background_subtraction_diagnostics_written.add(
-                            diagnostics_signature
-                        )
         payload = (
             shared_headless._build_headless_geometry_fit_caked_view_payload(
-                backend_image,
+                raw_backend_image,
                 params=params_local,
                 pixel_size_m=float(pixel_size_m),
             )
         )
         if not isinstance(payload, dict):
             return None
-        if isinstance(subtraction_result, Mapping):
-            payload.update(
-                {
-                    "background_raw": raw_backend_image,
-                    "background_model": subtraction_result.get("model"),
-                    "background_subtracted": subtraction_result.get("corrected"),
-                    "background_subtraction_config": background_subtraction_config,
-                    "background_subtraction_diagnostics": subtraction_result.get(
-                        "diagnostics"
-                    ),
-                }
-            )
         hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
             payload,
             detector_shape=np.asarray(raw_backend_image).shape[:2],
@@ -3243,63 +3177,63 @@ def _build_parser() -> argparse.ArgumentParser:
             "radial-plus-phi-blocks-plus-caked-2d",
         ),
         default="saved",
-        help="Diffuse-background subtraction override for fit input (default: saved).",
+        help="Legacy no-op background-subtraction override; accepted for compatibility.",
     )
     fit_geometry_parser.add_argument(
         "--background-subtraction-scale",
         type=float,
         default=None,
-        help="Override diffuse-background subtraction scale.",
+        help="Legacy no-op diffuse-background scale override.",
     )
     fit_geometry_parser.add_argument(
         "--background-subtraction-diagnostics",
         action="store_true",
         default=None,
-        help="Write diffuse-background subtraction diagnostics during headless fitting.",
+        help="Legacy no-op diagnostics flag; no artifacts are written.",
     )
     fit_geometry_parser.add_argument(
         "--background-phi-block-theta-bin-width-deg",
         type=float,
         default=None,
-        help="Override phi-block subtraction 2theta bin width in degrees.",
+        help="Legacy no-op phi-block 2theta bin width override.",
     )
     fit_geometry_parser.add_argument(
         "--background-phi-block-phi-bin-width-deg",
         type=float,
         default=None,
-        help="Override phi-block subtraction phi bin width in degrees.",
+        help="Legacy no-op phi-block phi bin width override.",
     )
     fit_geometry_parser.add_argument(
         "--background-phi-block-quantile",
         type=float,
         default=None,
-        help="Override phi-block subtraction quantile.",
+        help="Legacy no-op phi-block quantile override.",
     )
     fit_geometry_parser.add_argument(
         "--background-phi-block-scale",
         type=float,
         default=None,
-        help="Override phi-block component scale.",
+        help="Legacy no-op phi-block component scale.",
     )
     fit_geometry_parser.add_argument(
         "--background-phi-block-interpolation",
         choices=("nearest", "linear"),
         default=None,
-        help="Override phi-block upsampling interpolation.",
+        help="Legacy no-op phi-block upsampling interpolation.",
     )
     fit_geometry_parser.add_argument(
         "--background-phi-block-preserve-block-edges",
         dest="background_phi_block_preserve_block_edges",
         action="store_true",
         default=None,
-        help="Use nearest-neighbor phi-block upsampling.",
+        help="Legacy no-op nearest-neighbor phi-block upsampling flag.",
     )
     fit_geometry_parser.add_argument(
         "--background-no-phi-block-preserve-block-edges",
         dest="background_phi_block_preserve_block_edges",
         action="store_false",
         default=None,
-        help="Allow linear phi-block upsampling when selected.",
+        help="Legacy no-op linear phi-block upsampling flag.",
     )
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
 
@@ -3376,63 +3310,63 @@ def _build_parser() -> argparse.ArgumentParser:
             "radial-plus-phi-blocks-plus-caked-2d",
         ),
         default="saved",
-        help="Diffuse-background subtraction override for fit input (default: saved).",
+        help="Legacy no-op background-subtraction override; accepted for compatibility.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-subtraction-scale",
         type=float,
         default=None,
-        help="Override diffuse-background subtraction scale.",
+        help="Legacy no-op diffuse-background scale override.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-subtraction-diagnostics",
         action="store_true",
         default=None,
-        help="Write diffuse-background subtraction diagnostics during headless fitting.",
+        help="Legacy no-op diagnostics flag; no artifacts are written.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-phi-block-theta-bin-width-deg",
         type=float,
         default=None,
-        help="Override phi-block subtraction 2theta bin width in degrees.",
+        help="Legacy no-op phi-block 2theta bin width override.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-phi-block-phi-bin-width-deg",
         type=float,
         default=None,
-        help="Override phi-block subtraction phi bin width in degrees.",
+        help="Legacy no-op phi-block phi bin width override.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-phi-block-quantile",
         type=float,
         default=None,
-        help="Override phi-block subtraction quantile.",
+        help="Legacy no-op phi-block quantile override.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-phi-block-scale",
         type=float,
         default=None,
-        help="Override phi-block component scale.",
+        help="Legacy no-op phi-block component scale.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-phi-block-interpolation",
         choices=("nearest", "linear"),
         default=None,
-        help="Override phi-block upsampling interpolation.",
+        help="Legacy no-op phi-block upsampling interpolation.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-phi-block-preserve-block-edges",
         dest="background_phi_block_preserve_block_edges",
         action="store_true",
         default=None,
-        help="Use nearest-neighbor phi-block upsampling.",
+        help="Legacy no-op nearest-neighbor phi-block upsampling flag.",
     )
     fit_mosaic_shape_parser.add_argument(
         "--background-no-phi-block-preserve-block-edges",
         dest="background_phi_block_preserve_block_edges",
         action="store_false",
         default=None,
-        help="Allow linear phi-block upsampling when selected.",
+        help="Legacy no-op linear phi-block upsampling flag.",
     )
     fit_mosaic_shape_parser.set_defaults(func=_cmd_fit_mosaic_shape)
 
