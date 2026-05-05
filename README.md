@@ -628,6 +628,23 @@ the plotted caked-axis angle:
 So the internal `chiArray(...)` result is the raw detector azimuth, while the
 displayed caked view uses the GUI remap above.
 
+### Caked Intensity Convention
+
+The main GUI caked `(phi, 2theta)` view uses detector-count density by default:
+
+```math
+I_{\mathrm{density}} =
+\frac{\sum \mathrm{detector\ counts}}{\sum \mathrm{detector\ pixel\ support}}
+```
+
+This means the GUI `density` mode does not apply solid-angle correction during
+the detector-to-cake conversion. A flat detector-count background should stay
+approximately flat versus `2theta` except for edge support, masks, and geometric
+bin coverage. The separate `raw_sum` display mode remains the accumulated
+caked-bin signal.
+
+Q-space conversion is separate and keeps its own physical-intensity convention.
+
 ### Performance Behavior
 
 The exact-cake path is optimized for repeated interactive use:
@@ -637,6 +654,8 @@ The exact-cake path is optimized for repeated interactive use:
 - exact-cake LUTs are cached as process-level LRU entries keyed by flat
   geometry, detector shape, and output binning/range
 - solid-angle normalization is cached per integrator instance by detector shape
+  for explicit solid-angle-corrected calls, but the GUI caked density path does
+  not use it by default
 - the Numba kernel is warmed once on a tiny dummy image in a background thread
   when the GUI runtime starts
 - once the GUI knows the live geometry and detector shape, it schedules an idle

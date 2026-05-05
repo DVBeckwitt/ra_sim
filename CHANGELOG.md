@@ -103,6 +103,7 @@
   - Warmed caked Qr/Qz projection cache data immediately after detector-mode Qr/Qz selector changes, so manual picking can use caked sim/background coordinates without first switching to caked view.
   - Added a GUI control and saved-state flag for hiding or showing the simulation overlay independently from the background image.
   - Added an Analyze `Caked image intensity` control so full caked images and standard radial/azimuthal integrations can switch between support-normalized density and raw accumulated caked-bin signal, saved as `analysis_range.caked_intensity_mode`.
+  - Fixed the main GUI `phi x 2theta` caked density convention so simulation/background caking and caked 1D profiles use detector-count density without solid-angle normalization, matching notebook `sum_signal / pixel_support` behavior while preserving raw-sum mode and Q-space conversion.
   - Fixed the Analyze caked intensity toggle so switching density/raw modes repaints the main caked figure raster instead of reusing stale projected pixels.
   - Changed Analyze peak-fit results from compact summary lines to a monospaced table showing Gaussian FWHM, Lorentzian FWHM, Gaussian/Lorentzian mix percent, center, and RMSE for radial and azimuthal fits.
   - Fixed Analyze pseudo-Voigt peak fitting to use area-normalized Gaussian and Lorentzian equations, so the reported Lorentzian percentage reflects fitted Lorentzian area instead of a height-weighted mix.

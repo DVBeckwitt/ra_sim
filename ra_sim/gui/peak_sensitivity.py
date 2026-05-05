@@ -22,6 +22,7 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.gui.caked_intensity_policy import GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE
 from ra_sim.io.data_loading import load_gui_state_file
 from ra_sim.utils.calculations import resolve_canonical_branch
 
@@ -2391,7 +2392,7 @@ def _build_caked_payload(
             image,
             npt_rad=int(payload_diag["npt_rad"]),
             npt_azim=int(payload_diag["npt_azim"]),
-            correctSolidAngle=True,
+            correctSolidAngle=GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE,
             method="lut",
             unit="2th_deg",
         )

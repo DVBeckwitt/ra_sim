@@ -36,6 +36,7 @@ from ra_sim.fitting.optimization import (
 )
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
+from ra_sim.gui.caked_intensity_policy import GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
@@ -565,7 +566,7 @@ def build_geometry_fit_exact_caked_view_payload(
             image,
             npt_rad=radial_bins,
             npt_azim=azimuth_bins,
-            correctSolidAngle=True,
+            correctSolidAngle=GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE,
             method="lut",
             unit="2th_deg",
         )

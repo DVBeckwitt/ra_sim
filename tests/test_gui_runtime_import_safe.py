@@ -1292,7 +1292,7 @@ def test_runtime_caking_does_not_call_exact_integrator(monkeypatch) -> None:
     assert calls[0]["data_shape"] == (3, 4)
     assert calls[0]["kwargs"]["npt_rad"] == 32
     assert calls[0]["kwargs"]["npt_azim"] == 64
-    assert calls[0]["kwargs"]["correctSolidAngle"] is True
+    assert calls[0]["kwargs"]["correctSolidAngle"] is False
     assert calls[0]["kwargs"]["method"] == "lut"
     assert calls[0]["kwargs"]["unit"] == "2th_deg"
     np.testing.assert_array_equal(
@@ -1304,6 +1304,73 @@ def test_runtime_caking_does_not_call_exact_integrator(monkeypatch) -> None:
         np.array([2, 3], dtype=np.int32),
     )
 
+def test_runtime_caking_can_override_detector_count_density_policy() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    calls: list[dict[str, object]] = []
+
+    class _FakeAI:
+        def integrate2d(self, data, **kwargs):
+            del data
+            calls.append(dict(kwargs))
+            return "lut-result"
+
+    result = runtime_session.caking(
+        np.ones((4, 5), dtype=float),
+        _FakeAI(),
+        correct_solid_angle=True,
+    )
+
+    assert result == "lut-result"
+    assert calls
+    assert calls[0]["correctSolidAngle"] is True
+
+
+def test_runtime_caked_view_policy_uses_detector_count_density() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    assert runtime_session.GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE is False
+    assert runtime_session.resolve_gui_caked_view_correct_solid_angle(None) is False
+    assert runtime_session.resolve_gui_caked_view_correct_solid_angle(True) is True
+
+
+def test_runtime_caking_flat_image_does_not_gain_solid_angle_ramp() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    exact_cake_portable = importlib.import_module("ra_sim.simulation.exact_cake_portable")
+    ai = exact_cake_portable.FastAzimuthalIntegrator(
+        dist=0.025,
+        poni1=0.006,
+        poni2=0.006,
+        pixel1=1.0e-4,
+        pixel2=1.0e-4,
+        wavelength=1.0e-10,
+    )
+    image = np.ones((128, 128), dtype=np.float32)
+
+    res = runtime_session.caking(image, ai, npt_rad=64, npt_azim=90)
+
+    density = np.asarray(res.intensity, dtype=float)
+    normalization = np.asarray(res.sum_normalization, dtype=float)
+    valid = np.isfinite(density) & np.isfinite(normalization) & (normalization > 0.0)
+    support = np.sum(valid, axis=0)
+    radial_profile = np.nanmedian(np.where(valid, density, np.nan), axis=0)
+    finite = np.isfinite(radial_profile) & (support >= 0.5 * float(np.nanmax(support)))
+    finite_idx = np.flatnonzero(finite)
+    edge_count = max(1, len(finite_idx) // 5)
+    mid_idx = finite_idx[edge_count:-edge_count]
+
+    assert len(mid_idx) >= 8
+    ratio = np.nanmax(radial_profile[mid_idx]) / np.nanmin(radial_profile[mid_idx])
+    assert ratio < 1.02
+
+
+def test_gui_phi_two_theta_call_sites_do_not_force_solid_angle_correction() -> None:
+    geometry_source = (GUI_SOURCE_ROOT / "geometry_fit.py").read_text(encoding="utf-8")
+    peak_source = (GUI_SOURCE_ROOT / "peak_sensitivity.py").read_text(encoding="utf-8")
+
+    assert "correctSolidAngle=True" not in geometry_source.replace(" ", "")
+    assert "correctSolidAngle=True" not in peak_source.replace(" ", "")
+    assert "correctSolidAngle=GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE" in geometry_source
+    assert "correctSolidAngle=GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE" in peak_source
 
 def test_runtime_session_live_manual_peak_cache_update_uses_branch_aware_keys(
     monkeypatch,
@@ -9022,7 +9089,13 @@ def _install_matching_hidden_analysis_payload_state(
     sim_signature = ("sim-sig",)
     caked_geometry_sig = ("caked-geom",)
     q_space_payload_geometry_sig = ("q-geom",)
-    sim_caking_sig = (sim_signature, caked_geometry_sig, 1.0)
+    caked_correct_solid_angle = runtime_session.resolve_gui_caked_view_correct_solid_angle(None)
+    sim_caking_sig = (
+        sim_signature,
+        caked_geometry_sig,
+        1.0,
+        caked_correct_solid_angle,
+    )
     current_analysis_cache_sig = (
         (
             sim_caking_sig,

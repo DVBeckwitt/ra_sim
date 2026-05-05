@@ -327,6 +327,10 @@ from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import display_projection as gui_display_projection
+from ra_sim.gui.caked_intensity_policy import (
+    GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE,
+    resolve_gui_caked_view_correct_solid_angle,
+)
 from ra_sim.gui import main_matplotlib_interaction as gui_main_matplotlib_interaction
 from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome
 from ra_sim.gui import state as gui_state
@@ -15648,11 +15652,15 @@ def caking(
     npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS,
     rows=None,
     cols=None,
+    correct_solid_angle: bool | None = None,
 ):
+    resolved_correct_solid_angle = resolve_gui_caked_view_correct_solid_angle(
+        correct_solid_angle
+    )
     integrate_kwargs = {
         "npt_rad": int(max(1, npt_rad)),
         "npt_azim": int(max(1, npt_azim)),
-        "correctSolidAngle": True,
+        "correctSolidAngle": resolved_correct_solid_angle,
         "method": "lut",
         "unit": "2th_deg",
     }
@@ -23342,6 +23350,9 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     is_preview = bool(job.get("is_preview", False))
     q_space_requested = bool(job.get("q_space_requested", False))
     caked_outputs_requested = bool(job.get("caked_outputs_requested", True))
+    caked_correct_solid_angle = resolve_gui_caked_view_correct_solid_angle(
+        job.get("caked_correct_solid_angle", None)
+    )
     caked_intensity_mode = _normalize_caked_intensity_mode(
         job.get("caked_intensity_mode", "density")
     )
@@ -23385,12 +23396,24 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         if caked_outputs_requested:
             with temporary_numba_thread_limit(default_reserved_cpu_worker_count()):
                 with _analysis_timing_span("caking"):
-                    sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+                    sim_res2 = caking(
+                        sim_image,
+                        ai,
+                        npt_rad=npt_rad,
+                        npt_azim=npt_azim,
+                        correct_solid_angle=caked_correct_solid_angle,
+                    )
                 if cached_bg_res2 is not None:
                     bg_res2 = cached_bg_res2
                 elif bg_array is not None:
                     with _analysis_timing_span("background_caking"):
-                        bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+                        bg_res2 = caking(
+                            bg_array,
+                            ai,
+                            npt_rad=npt_rad,
+                            npt_azim=npt_azim,
+                            correct_solid_angle=caked_correct_solid_angle,
+                        )
                 else:
                     bg_res2 = None
             with _analysis_timing_span("display_prepare", product="caked"):
@@ -26787,10 +26810,12 @@ def do_update():
             npt_rad=DEFAULT_ANALYSIS_RADIAL_BINS,
             npt_azim=DEFAULT_ANALYSIS_AZIMUTH_BINS,
         )
+    caked_correct_solid_angle = resolve_gui_caked_view_correct_solid_angle(None)
     sim_caking_sig = (
         new_sim_image_sig,
         sig,
         round(float(normalization_scale), 9),
+        caked_correct_solid_angle,
     )
     bg_caking_sig = None
     if native_background is not None:
@@ -26803,6 +26828,7 @@ def do_update():
             bool(background_runtime_state.backend_flip_y),
             tuple(np.asarray(native_background).shape),
             background_subtraction_sig,
+            caked_correct_solid_angle,
         )
 
     show_caked_2d = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
@@ -27056,6 +27082,7 @@ def do_update():
                 "q_space_geometry": _copy_q_space_geometry(q_space_geometry),
                 "q_space_requested": q_space_requested,
                 "caked_outputs_requested": caked_outputs_requested,
+                "caked_correct_solid_angle": caked_correct_solid_angle,
                 "caked_intensity_mode": caked_intensity_mode,
                 "requested_view_mode": requested_view_mode,
                 "sim_caking_sig": sim_caking_sig,
