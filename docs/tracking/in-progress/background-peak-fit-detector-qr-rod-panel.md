@@ -46,6 +46,12 @@ the Qr rod detector and integration figures source-consistent:
   point to the interpolated `Data` trace at the plotted L coordinate. `HK=0`
   rod-profile panels use a log y-axis with positive limits derived from the
   plotted data/simulation values.
+- `HK=0` Qr rod center integrations no longer subtract the shared linear
+  baseline from plotted real data. For this rod only, plotted `Data` remains
+  raw `background_density`, and the shared linear baseline is added to plotted
+  `Simulation` as `joint_peak_density + joint_linear_baseline_density`.
+- The central `00L` detector-region rod line now uses a separate linewidth at
+  half the non-specular HK rod centerline width.
 - Earlier per-tilt background-vs-fit plots now label peaks directly with compact
   `(HK,L)` text instead of numbered labels with a side key and branch suffix.
 
@@ -73,6 +79,12 @@ Passing checks:
   `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_tail_model`
   pass, along with the parallel source/behavior checks for HK arrows, removed
   stars, magma detector color, and `HK=0` log scaling.
+- Targeted parallel-notebook regression checks pass for the `HK=0` raw-data /
+  baseline-added-simulation behavior, existing `HK=0` log scaling, and removed
+  detector-region placed-star markers:
+  `python -m pytest tests/test_background_peak_fits_notebook.py::test_parallel_qr_rod_profile_hk_zero_adds_baseline_to_simulation_only tests/test_background_peak_fits_notebook.py::test_parallel_qr_rod_profile_hk_zero_uses_log_y_axis tests/test_background_peak_fits_notebook.py::test_parallel_detector_region_final_figure_omits_placed_peak_stars`.
+- Parallel-only notebook test subset passes:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k parallel`.
 
 Known validation limits:
 

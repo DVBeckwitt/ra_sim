@@ -303,6 +303,50 @@ def test_parallel_qr_rod_profile_hk_zero_uses_log_y_axis() -> None:
     assert "ax.set_title(r\"$HK = 0$\")" in source
 
 
+def test_parallel_qr_rod_profile_hk_zero_adds_baseline_to_simulation_only() -> None:
+    source = _notebook_source(PARALLEL_NOTEBOOK_PATH)
+    assert "subtract_baseline_from_data=False" in source
+    assert (
+        "For HK=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` "
+        "is `joint_peak_density + joint_linear_baseline_density`."
+    ) in source
+
+    namespace = _notebook_functions(
+        "normalized_data_simulation_payload",
+        notebook_path=PARALLEL_NOTEBOOK_PATH,
+    )
+    normalize = namespace["normalized_data_simulation_payload"]
+    measured = np.asarray([10.0, 20.0, 30.0], dtype=np.float64)
+    peak = np.asarray([2.0, 4.0, 6.0], dtype=np.float64)
+    baseline = np.asarray([1.0, 3.0, 5.0], dtype=np.float64)
+
+    default_payload = normalize(measured, peak, baseline)
+    np.testing.assert_allclose(
+        np.asarray(default_payload["data"], dtype=np.float64) * float(default_payload["scale"]),
+        measured - baseline,
+    )
+    np.testing.assert_allclose(
+        np.asarray(default_payload["simulation"], dtype=np.float64)
+        * float(default_payload["scale"]),
+        peak,
+    )
+
+    hk0_payload = normalize(
+        measured,
+        peak,
+        baseline,
+        subtract_baseline_from_data=False,
+    )
+    np.testing.assert_allclose(
+        np.asarray(hk0_payload["data"], dtype=np.float64) * float(hk0_payload["scale"]),
+        measured,
+    )
+    np.testing.assert_allclose(
+        np.asarray(hk0_payload["simulation"], dtype=np.float64) * float(hk0_payload["scale"]),
+        peak + baseline,
+    )
+
+
 def test_parallel_qr_rod_profile_hk_arrow_helper_uses_l_axis_markers() -> None:
     namespace = _notebook_functions(
         "hk_display_label",
