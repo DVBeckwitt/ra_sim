@@ -4031,17 +4031,18 @@ def _geometry_manual_saved_background_detector_origin(
         return False
     if origin in detector_tokens or frame in detector_tokens:
         return True
-    return (
-        _geometry_manual_finite_point(
-            entry,
-            (
-                ("detector_x", "detector_y"),
-                ("background_detector_x", "background_detector_y"),
-                ("x", "y"),
-            ),
-        )
-        is not None
+    detector_specific = _geometry_manual_finite_point(
+        entry,
+        (
+            ("detector_x", "detector_y"),
+            ("background_detector_x", "background_detector_y"),
+        ),
     )
+    if detector_specific is not None:
+        return True
+    if _geometry_manual_saved_caked_background_display_point(entry) is not None:
+        return False
+    return _geometry_manual_finite_point(entry, (("x", "y"),)) is not None
 
 
 def _geometry_manual_saved_background_display_point_for_view(

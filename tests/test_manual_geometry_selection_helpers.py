@@ -10973,6 +10973,21 @@ def test_detector_origin_initial_pairs_display_reprojects_background_in_saved_an
         "manual_background_input_origin": "caked",
         "manual_background_input_frame": "caked_2theta_phi",
     }
+    legacy_caked_pair = {
+        "pair_id": "bg0:legacy-caked",
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": group_key,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "x": 10.0,
+        "y": 20.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+        "refined_sim_caked_x": 30.25,
+        "refined_sim_caked_y": -57.5,
+    }
 
     def _entry_display_coords(_entry):
         return (22.0, -25.0)
@@ -10995,6 +11010,18 @@ def test_detector_origin_initial_pairs_display_reprojects_background_in_saved_an
         prefer_cache=True,
         use_caked_display=True,
         pairs_for_index=lambda _idx: [dict(caked_origin_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=_entry_display_coords,
+    )
+    _measured, legacy_caked_initial = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(legacy_caked_pair)],
         current_geometry_fit_params=lambda: {"a": 1.0},
         get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
         simulated_peaks_for_params=lambda *_args, **_kwargs: [],
@@ -11025,10 +11052,36 @@ def test_detector_origin_initial_pairs_display_reprojects_background_in_saved_an
         use_caked_display=True,
         entry_display_coords=_entry_display_coords,
     )
+    legacy_caked_session_initial = mg.geometry_manual_session_initial_pairs_display(
+        {
+            "background_index": 0,
+            "group_key": group_key,
+            "group_entries": [
+                {
+                    "label": "-1,0,5",
+                    "hkl": (-1, 0, 5),
+                    "q_group_key": group_key,
+                    "source_table_index": 9,
+                    "source_row_index": 0,
+                    "source_branch_index": 1,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                    "_caked_qr_projection_cache": True,
+                    "display_frame": "caked_display",
+                }
+            ],
+            "pending_entries": [dict(legacy_caked_pair)],
+        },
+        current_background_index=0,
+        use_caked_display=True,
+        entry_display_coords=_entry_display_coords,
+    )
 
     assert detector_initial[0]["bg_display"] == (22.0, -25.0)
     assert session_initial[0]["bg_display"] == (22.0, -25.0)
     assert caked_initial[0]["bg_display"] == (999.0, -999.0)
+    assert legacy_caked_initial[0]["bg_display"] == (999.0, -999.0)
+    assert legacy_caked_session_initial[0]["bg_display"] == (999.0, -999.0)
 
 
 def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_build_pairs() -> None:
@@ -20835,6 +20888,8 @@ def _diag_runtime_value(value):
 
 
 def _diag_load_saved_state():
+    if not _QR_PICKER_DIAG_STATE_PATH.exists():
+        pytest.skip(f"new4 diagnostic state not available: {_QR_PICKER_DIAG_STATE_PATH}")
     loaded = load_gui_state_file(_QR_PICKER_DIAG_STATE_PATH)
     if isinstance(loaded, Mapping) and isinstance(loaded.get("state"), Mapping):
         return dict(loaded["state"])
