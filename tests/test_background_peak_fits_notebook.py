@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.optimize import least_squares, nnls
 
@@ -20,22 +21,22 @@ PARALLEL_NOTEBOOK_PATH = Path(
 RUNNER_PATH = Path("scripts/diagnostics/run_all_background_peak_fits.py")
 
 
-def _notebook_source() -> str:
-    if not NOTEBOOK_PATH.exists():
-        pytest.skip(f"{NOTEBOOK_PATH} is not present in this checkout")
-    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+def _notebook_source(notebook_path: Path = NOTEBOOK_PATH) -> str:
+    if not notebook_path.exists():
+        pytest.skip(f"{notebook_path} is not present in this checkout")
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     return "\n".join("".join(cell.get("source", [])) for cell in notebook.get("cells", []))
 
 
-def _notebook_functions(*names: str) -> dict[str, object]:
-    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+def _notebook_functions(*names: str, notebook_path: Path = NOTEBOOK_PATH) -> dict[str, object]:
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     wanted = set(names)
     selected: list[ast.FunctionDef] = []
     for index, cell in enumerate(notebook.get("cells", [])):
         if cell.get("cell_type") != "code":
             continue
         source = "".join(cell.get("source", []))
-        tree = ast.parse(source, filename=f"{NOTEBOOK_PATH}:cell{index}")
+        tree = ast.parse(source, filename=f"{notebook_path}:cell{index}")
         selected.extend(
             node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted
         )
@@ -43,6 +44,7 @@ def _notebook_functions(*names: str) -> dict[str, object]:
     ast.fix_missing_locations(module)
     namespace: dict[str, object] = {
         "np": np,
+        "pd": pd,
         "least_squares": least_squares,
         "_rod_qz_nnls": nnls,
         "ROD_QZ_TAIL_POWER_GRID": np.asarray([0.75, 1.0, 1.35, 2.0, 3.5, 7.0], dtype=np.float64),
@@ -55,7 +57,7 @@ def _notebook_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_TAIL_MAX_AUTO_PEAKS": 10,
         "ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE": 1.0e-5,
     }
-    exec(compile(module, str(NOTEBOOK_PATH), "exec"), namespace)
+    exec(compile(module, str(notebook_path), "exec"), namespace)
     return namespace
 
 
@@ -221,15 +223,7 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
 
 
 def test_parallel_background_peak_fits_notebook_uses_process_pool_worker() -> None:
-    if not PARALLEL_NOTEBOOK_PATH.exists():
-        pytest.skip(f"{PARALLEL_NOTEBOOK_PATH} is not present in this checkout")
-    source = "\n".join(
-        "".join(cell.get("source", []))
-        for cell in json.loads(PARALLEL_NOTEBOOK_PATH.read_text(encoding="utf-8")).get(
-            "cells",
-            [],
-        )
-    )
+    source = _notebook_source(PARALLEL_NOTEBOOK_PATH)
 
     for token in (
         "ProcessPoolExecutor",
@@ -248,15 +242,7 @@ def test_parallel_background_peak_fits_notebook_uses_process_pool_worker() -> No
 
 
 def test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_tail_model() -> None:
-    if not PARALLEL_NOTEBOOK_PATH.exists():
-        pytest.skip(f"{PARALLEL_NOTEBOOK_PATH} is not present in this checkout")
-    source = "\n".join(
-        "".join(cell.get("source", []))
-        for cell in json.loads(PARALLEL_NOTEBOOK_PATH.read_text(encoding="utf-8")).get(
-            "cells",
-            [],
-        )
-    )
+    source = _notebook_source(PARALLEL_NOTEBOOK_PATH)
 
     for token in (
         'FIT_MODEL_NAME = "rotated_gaussian_core_lorentzian_tail_shared_center"',
@@ -277,6 +263,96 @@ def test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_ta
         "baseline_equation\": \"density = b + m*(two_theta_deg - seed_two_theta_deg)",
     ):
         assert removed not in source
+
+
+def test_parallel_qr_rod_profiles_annotate_hk_locations_with_arrows() -> None:
+    source = _notebook_source(PARALLEL_NOTEBOOK_PATH)
+
+    for token in (
+        "def annotate_rod_profile_hk_locations(",
+        "line_x: object,",
+        "line_y: object,",
+        "source = plot_marker_table if marker_source is None else marker_source",
+        '"qz_marker"',
+        '"branch"',
+        "qz_values_to_l_axis(",
+        "line_y_at_markers = np.interp(",
+        "hk_display_label(m_value)",
+        "ax.annotate(",
+        '"arrowstyle": "->"',
+        "annotation_clip=True",
+        "branch_value=branch_name",
+    ):
+        assert token in source
+
+
+def test_parallel_detector_region_final_figure_omits_placed_peak_stars() -> None:
+    source = _notebook_source(PARALLEL_NOTEBOOK_PATH)
+
+    assert "detector_region_cmap = mpl.colormaps[JOURNAL_DETECTOR_CMAP].copy()" in source
+    assert 'marker="*"' not in source
+    assert '"Placed peak"' not in source
+    assert "stars mark accepted placed peaks" not in source
+
+
+def test_parallel_qr_rod_profile_hk_zero_uses_log_y_axis() -> None:
+    source = _notebook_source(PARALLEL_NOTEBOOK_PATH)
+
+    assert "hk0_positive_y = np.asarray([], dtype=np.float64)" in source
+    assert "ax.set_yscale(\"log\")\n        if hk0_positive_y.size:" in source
+    assert "ax.set_title(r\"$HK = 0$\")" in source
+
+
+def test_parallel_qr_rod_profile_hk_arrow_helper_uses_l_axis_markers() -> None:
+    namespace = _notebook_functions(
+        "hk_display_label",
+        "l_reference_rows",
+        "qz_values_to_l_axis",
+        "annotate_rod_profile_hk_locations",
+        notebook_path=PARALLEL_NOTEBOOK_PATH,
+    )
+    namespace["plot_marker_table"] = pd.DataFrame(
+        [
+            {"m": 3, "branch": "+", "qz_marker": 0.5, "l": 1},
+            {"m": 3, "branch": "+", "qz_marker": 1.0, "l": 2},
+            {"m": 4, "branch": "+", "qz_marker": 1.5, "l": 3},
+        ]
+    )
+    annotate_rod_profile_hk_locations = namespace["annotate_rod_profile_hk_locations"]
+
+    class _Axis:
+        def __init__(self) -> None:
+            self.annotations: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def get_xlim(self) -> tuple[float, float]:
+            return 0.0, 2.5
+
+        def get_ylim(self) -> tuple[float, float]:
+            return -0.2, 1.2
+
+        def annotate(self, *args: object, **kwargs: object) -> None:
+            self.annotations.append((args, kwargs))
+
+    axis = _Axis()
+
+    annotate_rod_profile_hk_locations(
+        axis,
+        m_value=3,
+        branch_value="+",
+        line_x=np.asarray([0.5, 1.0, 2.0], dtype=np.float64),
+        line_y=np.asarray([0.1, 0.4, 0.9], dtype=np.float64),
+    )
+
+    assert len(axis.annotations) == 2
+    labels = [args[0] for args, _kwargs in axis.annotations]
+    assert labels == [r"$HK = 3$", r"$HK = 3$"]
+    xy_positions = [kwargs["xy"] for _args, kwargs in axis.annotations]
+    np.testing.assert_allclose(
+        np.asarray(xy_positions, dtype=np.float64),
+        np.asarray([(1.0, 0.4), (2.0, 0.9)], dtype=np.float64),
+    )
+    assert all(kwargs["arrowprops"]["arrowstyle"] == "->" for _args, kwargs in axis.annotations)
+    assert all(kwargs["annotation_clip"] is True for _args, kwargs in axis.annotations)
 
 
 def _synthetic_peak_fit_case(

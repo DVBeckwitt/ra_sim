@@ -4,7 +4,7 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-05
+Last updated: 2026-05-06
 Status: implemented locally, validation partial
 
 ## Problem
@@ -31,16 +31,21 @@ the Qr rod detector and integration figures source-consistent:
 - Mixed target-Qr identities are rejected by `(target_source_label, m)` or, if
   needed, `(target_source_label, m, branch)` instead of being forced into one
   plotted rod.
-- Rejected rods are omitted from fit anchors, placed stars, profile samples,
-  Qr-center fitting, integration profiles, and detector rod plotting.
+- Rejected rods are omitted from fit anchors, profile samples, Qr-center
+  fitting, integration profiles, and detector rod plotting.
 - Detector-space debug now reports `curve_distance_px` using point-to-polyline
   segment distance on the same projected arrays used for plotting.
-- Detector view uses linear grayscale intensity, projected rod lines, accepted
-  placed-star diagnostics, HK branch labels at the low-L rod base, and
-  transparent Delta-Qr bands including the central `HK=0` rod.
+- Detector view uses the existing magma detector colormap, projected rod
+  lines, HK branch labels at the low-L rod base, and transparent Delta-Qr
+  bands including the central `HK=0` rod. Placed-peak star markers were
+  removed from the final figure.
 - Integrated Qr rod figure centers `HK=0`, labels its x-axis as `L`, uses
   `Intensity (a.u.)` only on the HK=0 row, aligns non-specular x ranges from
   `L=2`, and places the Data/Simulation legend in the top-right panel.
+- Integrated Qr rod profiles now annotate HK locations with arrows whose tips
+  point to the interpolated `Data` trace at the plotted L coordinate. `HK=0`
+  rod-profile panels use a log y-axis with positive limits derived from the
+  plotted data/simulation values.
 - Earlier per-tilt background-vs-fit plots now label peaks directly with compact
   `(HK,L)` text instead of numbered labels with a side key and branch suffix.
 
@@ -58,14 +63,16 @@ Passing checks:
 - Notebook JSON parse.
 - `nbformat.validate`.
 - AST parse and compile for all code cells.
-- Static checks for restored placed-star markers, `"Placed peak"`,
+- Static checks for removed placed-star markers, restored magma detector
+  colormap, HK arrow annotations on the plotted line, `HK=0` log y-axis,
   `curve_distance_px`, mixed-Qr rejection reason, `FIT_QZ_WEIGHT = 0.0`, and
   shared predicate use across fit/profile/marker paths.
 - Parallel-notebook pytest checks:
   `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_process_pool_worker`
   and
   `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_tail_model`
-  both pass.
+  pass, along with the parallel source/behavior checks for HK arrows, removed
+  stars, magma detector color, and `HK=0` log scaling.
 
 Known validation limits:
 
@@ -73,9 +80,10 @@ Known validation limits:
 - Full `tests/test_background_peak_fits_notebook.py` remains red in this
   checkout because the non-parallel notebook expectations/failure path are
   unrelated to the patched ignored notebook.
-- Visual acceptance still needs manual notebook regeneration: grayscale detector
-  background, HK labels near low-L rod bases, central `HK=0` Delta-Qr band,
-  no misleading mixed-target rods, and reasonable `curve_distance_px` values.
+- Visual acceptance still needs manual notebook regeneration: magma detector
+  background, no placed-star markers, HK arrows landing on the rod-profile
+  data lines, `HK=0` log-scale readability, central `HK=0` Delta-Qr band, no
+  misleading mixed-target rods, and reasonable `curve_distance_px` values.
 
 ## Follow-up
 
