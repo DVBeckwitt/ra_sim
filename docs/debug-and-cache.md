@@ -46,6 +46,43 @@ Retention modes:
 - `auto`: retain when the active feature benefits from reuse
 - `always`: retain whenever built
 
+## Background Peak-Fit Diagnostic Caches
+
+The parallel background peak-fit diagnostic script
+`scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
+uses a final Qr-rod profile cache in the diagnostic output directory.
+
+Current status as of 2026-05-06:
+
+- cache filename: `<state-stem>_qr_rod_profile_cache.pkl`
+- cache identity: GUI-state filename, not the absolute state path, so reruns of
+  the same state filename can reuse the previous final Qr-rod fit
+- reset control: `RA_SIM_RESET_QR_ROD_PROFILE_CACHE=1`
+- optional imported peak-edit key: `RA_SIM_QR_ROD_PEAK_EDITS`
+- cache-hit guard: final-fit payloads must include
+  `final_rod_profile_table`, `final_marker_table`,
+  `final_rod_component_table`, `final_peak_edit_cache_key`, and marker columns
+  `qz_marker`, `fit_l`, and `display_l`
+
+The diagnostic separates fitting coordinates from display labels. `fit_l` is
+the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.
+`display_l` is the visible label override used for `(HK,L)` annotations. Manual
+or imported L edits must update `display_l` and must not move the fitted marker
+position.
+
+On Windows, the generated top-level diagnostic normalizes `process` and `auto`
+fit backend requests to `thread`. This avoids `multiprocessing.spawn`
+re-importing the notebook-style script as `__mp_main__` and rerunning the whole
+diagnostic inside worker children. POSIX runs can still use the process backend.
+
+Validated runtime status:
+
+- `tests/test_background_peak_fits_notebook.py` passes, `29 passed`
+- `python -m ra_sim.dev check` passes
+- a Bi2Se3 diagnostic run completed with `fit_backend=thread`, `79/79`
+  successful background peak fits, final Qr-rod cache reuse, marker CSV columns
+  `fit_l`/`display_l`, and regenerated rod-profile figures
+
 ## GUI Runtime Update Fast Paths
 
 The GUI runtime records a pure update decision before it executes an update.

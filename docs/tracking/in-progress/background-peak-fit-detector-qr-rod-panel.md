@@ -5,7 +5,7 @@ Owner: -
 Issue: none
 Priority: p1
 Last updated: 2026-05-06
-Status: implemented locally, validation partial
+Status: implemented locally, validated
 
 ## Problem
 
@@ -16,12 +16,17 @@ could be inconsistent with plotted markers when multiple target-Qr sources
 shared one HK value, and the detector figure did not expose a direct pixel-space
 curve-distance diagnostic.
 
+Follow-up work found the generated `.py` diagnostic had drifted from the
+intended notebook fixes and the notebook had been reverted. The working
+diagnostic surface is now the tracked Python script
+`scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`.
+The notebook is not the source of truth for this repair.
+
 ## Change
 
-Updated
-`scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.ipynb`
-in notebook cell 14, plus the earlier per-tilt peak-label helper cell, to make
-the Qr rod detector and integration figures source-consistent:
+Recreated and updated
+`scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
+to make the Qr rod detector and integration figures source-consistent:
 
 - Detector rod calibration is Qr-driven by default with `FIT_QZ_WEIGHT = 0.0`;
   Qz residuals remain diagnostics.
@@ -54,44 +59,60 @@ the Qr rod detector and integration figures source-consistent:
   half the non-specular HK rod centerline width.
 - Earlier per-tilt background-vs-fit plots now label peaks directly with compact
   `(HK,L)` text instead of numbered labels with a side key and branch suffix.
+- Final Qr-rod joint fits are cached by GUI-state filename in
+  `*_qr_rod_profile_cache.pkl`; reruns of the same state filename can reuse the
+  final rod-profile fit instead of refining again, and
+  `RA_SIM_RESET_QR_ROD_PROFILE_CACHE=1` clears the cache.
+- Final-fit cache hits are accepted only when the cached marker table includes
+  `qz_marker`, `fit_l`, and `display_l`; older caches without these fields are
+  treated as stale.
+- Manual or imported `L` values are display overrides only. `fit_l` remains the
+  fitted coordinate used for Qz-to-L mapping and fitting; `display_l` controls
+  the visible `(HK,L)` labels.
+- Rod-profile figures now draw the actual fit marker positions on the plotted
+  data trace and annotate labels from `display_l`.
+- Local peak snapping is bounded to each marker's local two-theta/phi window and
+  requires a true local maximum. If no local peak top exists in that window, the
+  projected marker position is kept instead of jumping to another peak.
+- The detector selected-Q-region figure uses `specular_l_marker_table` for
+  specular Qz support bounds, so cache-hit runs no longer depend on
+  cache-miss-only `specular_qz_values`.
+- On Windows, the script normalizes `process`/`auto` fit backend requests to
+  `thread` because the generated top-level diagnostic cannot safely be imported
+  by `multiprocessing.spawn` child processes.
 
 ## Status
 
-Implemented in the ignored parallel notebook. The patch is intended as a local
-diagnostic/publication-notebook fix, not a package release. No version bump,
-changelog finalization, schema change, CLI change, or runtime package API change
-was made.
+Implemented in the recreated diagnostic script and covered by regression tests.
+The patch is a local diagnostic/publication workflow fix, not a package
+release. No version bump, config schema change, CLI change, or runtime package
+API change was made.
 
 ## Validation
 
 Passing checks:
 
-- Notebook JSON parse.
-- `nbformat.validate`.
-- AST parse and compile for all code cells.
-- Static checks for removed placed-star markers, restored magma detector
-  colormap, HK arrow annotations on the plotted line, `HK=0` log y-axis,
-  `curve_distance_px`, mixed-Qr rejection reason, `FIT_QZ_WEIGHT = 0.0`, and
-  shared predicate use across fit/profile/marker paths.
-- Parallel-notebook pytest checks:
-  `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_process_pool_worker`
-  and
-  `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_tail_model`
-  pass, along with the parallel source/behavior checks for HK arrows, removed
-  stars, magma detector color, and `HK=0` log scaling.
-- Targeted parallel-notebook regression checks pass for the `HK=0` raw-data /
-  baseline-added-simulation behavior, existing `HK=0` log scaling, and removed
-  detector-region placed-star markers:
-  `python -m pytest tests/test_background_peak_fits_notebook.py::test_parallel_qr_rod_profile_hk_zero_adds_baseline_to_simulation_only tests/test_background_peak_fits_notebook.py::test_parallel_qr_rod_profile_hk_zero_uses_log_y_axis tests/test_background_peak_fits_notebook.py::test_parallel_detector_region_final_figure_omits_placed_peak_stars`.
-- Parallel-only notebook test subset passes:
-  `python -m pytest tests/test_background_peak_fits_notebook.py -k parallel`.
+- `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
+  passes.
+- `python -m pytest tests/test_background_peak_fits_notebook.py -ra` passes,
+  `29 passed`.
+- `python -m ra_sim.dev check` passes, including ruff, `280` fast tests, and
+  mypy.
+- Runtime reproduction with
+  `python all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
+  from `scripts/diagnostics` completed successfully on 2026-05-06. The run used
+  `fit_backend=thread`, fit `79/79` background peaks with `0` failures, reused
+  `Bi2Se3_qr_rod_profile_cache.pkl`, and produced the rod-profile and detector
+  selected-Q-region figures without the prior Windows child-process traceback.
+- Runtime artifact check confirmed
+  `figure7_bi2se3_qr_rod_qz_profiles_peak_markers_5deg.csv` has `32` rows and
+  includes `fit_l` and `display_l`.
+- Runtime artifact check confirmed
+  `figure7_bi2se3_qr_rod_qz_profiles.png` exists in the manuscript figure
+  directory, is nonempty, and was regenerated by the validation run.
 
 Known validation limits:
 
-- The target notebook section was not rerun with local data during this patch.
-- Full `tests/test_background_peak_fits_notebook.py` remains red in this
-  checkout because the non-parallel notebook expectations/failure path are
-  unrelated to the patched ignored notebook.
 - Visual acceptance still needs manual notebook regeneration: magma detector
   background, no placed-star markers, HK arrows landing on the rod-profile
   data lines, `HK=0` log-scale readability, central `HK=0` Delta-Qr band, no

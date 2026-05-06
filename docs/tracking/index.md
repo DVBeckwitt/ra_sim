@@ -61,23 +61,25 @@ over-wrapped compatible-projector `TypeError`s, and trimming one single-use GUI
 canvas helper.
 
 Background peak fit detector Qr rod panel status note:
-The ignored parallel diagnostics notebook now treats the detector Qr-rod panel
-as a source-consistent geometry/overlay diagnostic. Cell 14 uses Qr-driven rod
-rotation fitting (`FIT_QZ_WEIGHT = 0.0`), skips specular anchors, balances
-anchors by rod identity, rejects mixed target-Qr identities by source/HK (or
-branch if needed), applies the same acceptance predicate to fit anchors,
-markers, profile samples, and branch items, and reports detector-space
-`curve_distance_px` from point-to-polyline segment distance. The detector panel
-uses the existing magma detector colormap, removes placed-star markers from the
-final figure, keeps low-L `HK=<m> +/-` labels, projected centerlines, and
-transparent Delta-Qr bands including `HK=0`. The integrated Qr figure centers
-`HK=0`, labels only that row with `Intensity (a.u.)`, uses a log y-axis for the
-`HK=0` row, aligns non-specular L axes from `L=2`, places the Data/Simulation
-legend in the top-right panel, and adds HK arrows whose tips land on the
-interpolated plotted Data trace. JSON parse, AST parse, static checks, and the
-parallel notebook pytest checks pass. Full notebook-section rerun and visual
-acceptance remain pending; full `tests/test_background_peak_fits_notebook.py`
-is still red in unrelated non-parallel notebook expectations.
+The tracked Python diagnostic script now treats the detector Qr-rod panel as a
+source-consistent geometry/overlay diagnostic and is the source of truth for the
+recreated workflow. The notebook was intentionally not patched. The script uses
+Qr-driven rod rotation fitting (`FIT_QZ_WEIGHT = 0.0`), skips specular anchors,
+balances anchors by rod identity, rejects mixed target-Qr identities by
+source/HK (or branch if needed), applies the same acceptance predicate to fit
+anchors, markers, profile samples, and branch items, and reports detector-space
+`curve_distance_px` from point-to-polyline segment distance. The rod profile
+path now caches final Qr-rod joint fits by state filename, requires cached
+marker tables to carry `fit_l` and `display_l`, treats manual/imported L edits
+as display-only label overrides, draws the used fit markers on the plotted data
+trace, keeps local peak snapping bounded to each marker window, and uses
+specular marker tables for cache-hit detector support. On Windows the script
+normalizes process/auto fit backend requests to thread to avoid
+`multiprocessing.spawn` re-running the top-level diagnostic in child workers.
+`tests/test_background_peak_fits_notebook.py` passes (`29 passed`),
+`ra_sim.dev check` passes, and a Bi2Se3 runtime run completed with `79/79`
+successful background peak fits, final Qr-rod cache reuse, regenerated
+rod-profile figures, and no prior child-process traceback.
 
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the
