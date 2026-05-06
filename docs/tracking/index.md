@@ -69,17 +69,18 @@ balances anchors by rod identity, rejects mixed target-Qr identities by
 source/HK (or branch if needed), applies the same acceptance predicate to fit
 anchors, markers, profile samples, and branch items, and reports detector-space
 `curve_distance_px` from point-to-polyline segment distance. The rod profile
-path now caches final Qr-rod joint fits by state filename, requires cached
-marker tables to carry `fit_l` and `display_l`, treats manual/imported L edits
-as display-only label overrides, draws the used fit markers on the plotted data
-trace, keeps local peak snapping bounded to each marker window, and uses
-specular marker tables for cache-hit detector support. On Windows the script
-normalizes process/auto fit backend requests to thread to avoid
-`multiprocessing.spawn` re-running the top-level diagnostic in child workers.
-`tests/test_background_peak_fits_notebook.py` passes (`29 passed`),
-`ra_sim.dev check` passes, and a Bi2Se3 runtime run completed with `79/79`
-successful background peak fits, final Qr-rod cache reuse, regenerated
-rod-profile figures, and no prior child-process traceback.
+path now caches final Qr-rod joint fits by state filename in a JSON envelope,
+ignores and regenerates legacy pickle cache payloads, requires cached marker
+tables to be drawable (`m`, `branch`, `qz_marker`, `display_l`, and either
+`fit_l` or `l`), treats manual/imported L edits as display-only label
+overrides, draws the used fit markers on the plotted data trace, keeps local
+peak snapping bounded to each marker window, and uses specular marker tables
+for cache-hit detector support. On Windows the script normalizes process/auto
+fit backend requests to thread to avoid `multiprocessing.spawn` re-running the
+top-level diagnostic in child workers. `tests/test_background_peak_fits_notebook.py`
+passes (`29 passed`), `ra_sim.dev check` passes, and a Bi2Se3 runtime run
+completed with `79/79` successful background peak fits, final Qr-rod cache
+reuse, regenerated rod-profile figures, and no prior child-process traceback.
 
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the

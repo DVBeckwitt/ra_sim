@@ -87,9 +87,11 @@ to make the Qr rod detector and integration figures source-consistent:
 ## Status
 
 Implemented in the recreated diagnostic script and covered by regression tests.
-The patch is a local diagnostic/publication workflow fix, not a package
-release. No version bump, config schema change, CLI change, or runtime package
-API change was made.
+The cache-hit bug is fixed, including the follow-up hardening that rejects
+unplottable marker caches and regenerates legacy pickle cache files instead of
+deserializing them. The patch is a local diagnostic/publication workflow fix,
+not a package release. No version bump, config schema change, CLI change, or
+runtime package API change was made.
 
 ## Validation
 
