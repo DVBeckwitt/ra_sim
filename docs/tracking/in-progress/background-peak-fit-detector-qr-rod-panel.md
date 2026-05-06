@@ -63,9 +63,12 @@ to make the Qr rod detector and integration figures source-consistent:
   `*_qr_rod_profile_cache.pkl`; reruns of the same state filename can reuse the
   final rod-profile fit instead of refining again, and
   `RA_SIM_RESET_QR_ROD_PROFILE_CACHE=1` clears the cache.
+- The cache file keeps the existing filename pattern but is read as a JSON
+  envelope. Legacy pickle payloads are ignored and regenerated rather than
+  deserialized.
 - Final-fit cache hits are accepted only when the cached marker table includes
-  `qz_marker`, `fit_l`, and `display_l`; older caches without these fields are
-  treated as stale.
+  `m`, `branch`, `qz_marker`, `display_l`, and either `fit_l` or `l`; older
+  caches without these fields are treated as stale.
 - Manual or imported `L` values are display overrides only. `fit_l` remains the
   fitted coordinate used for Qz-to-L mapping and fitting; `display_l` controls
   the visible `(HK,L)` labels.

@@ -55,6 +55,8 @@ uses a final Qr-rod profile cache in the diagnostic output directory.
 Current status as of 2026-05-06:
 
 - cache filename: `<state-stem>_qr_rod_profile_cache.pkl`
+- cache format: JSON envelope; legacy pickle payloads are ignored and
+  regenerated instead of being deserialized
 - cache identity: GUI-state filename, not the absolute state path, so reruns of
   the same state filename can reuse the previous final Qr-rod fit
 - reset control: `RA_SIM_RESET_QR_ROD_PROFILE_CACHE=1`
@@ -62,7 +64,7 @@ Current status as of 2026-05-06:
 - cache-hit guard: final-fit payloads must include
   `final_rod_profile_table`, `final_marker_table`,
   `final_rod_component_table`, `final_peak_edit_cache_key`, and marker columns
-  `qz_marker`, `fit_l`, and `display_l`
+  `m`, `branch`, `qz_marker`, `display_l`, and either `fit_l` or `l`
 
 The diagnostic separates fitting coordinates from display labels. `fit_l` is
 the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.

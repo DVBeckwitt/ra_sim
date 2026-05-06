@@ -3,7 +3,6 @@ from concurrent.futures import ProcessPoolExecutor
 import hashlib
 import json
 import os
-import pickle
 import py_compile
 import re
 from pathlib import Path
@@ -89,10 +88,15 @@ def _notebook_functions(*names: str, notebook_path: Path = NOTEBOOK_PATH) -> dic
         "ROD_QZ_NONLINEAR_TAIL_POWER_BOUNDS": (0.55, 12.0),
         "ROD_QZ_NONLINEAR_MAX_NFEV": 1200,
         "QR_ROD_PROFILE_CACHE_SCHEMA": "ra_sim.qr_rod_profile_cache.v1",
+        "QR_ROD_PROFILE_CACHE_TABLE_KEYS": {
+            "final_rod_profile_table",
+            "final_marker_table",
+            "final_rod_component_table",
+        },
         "Path": Path,
         "hashlib": hashlib,
+        "json": json,
         "njit": _identity_njit,
-        "pickle": pickle,
         "POSITIVE_QZ_MIN": 0.0,
         "THETA_HALF_WINDOW_DEG": 1.8,
         "PHI_HALF_WINDOW_DEG": 6.0,
@@ -383,6 +387,7 @@ def test_parallel_qr_rod_profile_cache_reuses_same_state_filename(tmp_path: Path
         "_safe_run_name",
         "qr_rod_profile_cache_path",
         "qr_rod_profile_cache_key",
+        "_qr_rod_profile_cache_payload_for_json",
         "load_qr_rod_profile_cache",
         "write_qr_rod_profile_cache",
         "reset_qr_rod_profile_cache",
@@ -412,8 +417,11 @@ def test_parallel_qr_rod_profile_cache_reuses_same_state_filename(tmp_path: Path
     other_state_path = tmp_path / "other_state.json"
     other_state_path.write_text('{"sample": "a"}\n', encoding="utf-8")
     assert namespace["load_qr_rod_profile_cache"](cache_path, other_state_path) is None
+    cache_path.write_text("not-json", encoding="utf-8")
+    assert namespace["load_qr_rod_profile_cache"](cache_path, state_path) is None
     assert namespace["reset_qr_rod_profile_cache"](cache_path) is True
     assert namespace["reset_qr_rod_profile_cache"](cache_path) is False
+    assert "pickle.load" not in _notebook_source(PARALLEL_SCRIPT_PATH)
 
 
 def test_parallel_qr_rod_final_fit_cache_hit_skips_joint_refinement() -> None:
@@ -441,7 +449,7 @@ def test_parallel_qr_rod_final_fit_cache_hit_skips_joint_refinement() -> None:
     assert "saved final Qr-rod fit cache=" in source
 
 
-def test_parallel_qr_rod_final_fit_cache_requires_marker_display_columns() -> None:
+def test_parallel_qr_rod_final_fit_cache_requires_drawable_marker_columns() -> None:
     namespace = _notebook_functions(
         "qr_rod_profile_cache_has_final_fit",
         notebook_path=PARALLEL_SCRIPT_PATH,
@@ -451,7 +459,7 @@ def test_parallel_qr_rod_final_fit_cache_requires_marker_display_columns() -> No
     payload = {
         "final_rod_profile_table": pd.DataFrame({"qz_center": [1.0], "joint_fit_density": [2.0]}),
         "final_marker_table": pd.DataFrame(
-            {"qz_marker": [1.0], "fit_l": [1.0], "display_l": [9.5]}
+            {"m": [3], "branch": ["+"], "qz_marker": [1.0], "fit_l": [1.0], "display_l": [9.5]}
         ),
         "final_rod_component_table": pd.DataFrame({"component_density": [2.0]}),
         "final_peak_edit_cache_key": edit_key,
@@ -459,9 +467,14 @@ def test_parallel_qr_rod_final_fit_cache_requires_marker_display_columns() -> No
 
     assert cache_has_final_fit(payload, edit_key) is True
 
-    stale_payload = dict(payload)
-    stale_payload["final_marker_table"] = pd.DataFrame({"qz_marker": [1.0], "l": [1.0]})
-    assert cache_has_final_fit(stale_payload, edit_key) is False
+    for stale_marker_table in (
+        pd.DataFrame({"branch": ["+"], "qz_marker": [1.0], "fit_l": [1.0], "display_l": [9.5]}),
+        pd.DataFrame({"m": [3], "qz_marker": [1.0], "fit_l": [1.0], "display_l": [9.5]}),
+        pd.DataFrame({"m": [3], "branch": ["+"], "qz_marker": [1.0], "display_l": [9.5]}),
+    ):
+        stale_payload = dict(payload)
+        stale_payload["final_marker_table"] = stale_marker_table
+        assert cache_has_final_fit(stale_payload, edit_key) is False
 
 
 def test_parallel_qr_rod_detector_region_specular_support_is_cache_safe() -> None:
@@ -536,8 +549,8 @@ def test_parallel_qr_rod_profile_hk_arrow_helper_uses_l_axis_markers() -> None:
     )
     namespace["plot_marker_table"] = pd.DataFrame(
         [
-            {"m": 3, "branch": "+", "qz_marker": 0.5, "l": 1, "fit_l": 1, "display_l": 9.5},
-            {"m": 3, "branch": "+", "qz_marker": 1.0, "l": 2, "fit_l": 2},
+            {"m": 3, "branch": "+", "qz_marker": 0.5, "fit_l": 1, "display_l": 9.5},
+            {"m": 3, "branch": "+", "qz_marker": 1.0, "fit_l": 2},
             {"m": 4, "branch": "+", "qz_marker": 1.5, "l": 3, "fit_l": 3, "display_l": 3},
         ]
     )
@@ -588,8 +601,8 @@ def test_parallel_qr_rod_profile_fit_marker_helper_draws_used_positions() -> Non
     draw_rod_profile_fit_markers = namespace["draw_rod_profile_fit_markers"]
     marker_source = pd.DataFrame(
         [
-            {"m": 3, "branch": "+", "qz_marker": 0.5, "l": 1, "fit_l": 1, "display_l": 7.25},
-            {"m": 3, "branch": "+", "qz_marker": 1.0, "l": 2, "fit_l": 2, "display_l": 8.25},
+            {"m": 3, "branch": "+", "qz_marker": 0.5, "fit_l": 1, "display_l": 7.25},
+            {"m": 3, "branch": "+", "qz_marker": 1.0, "fit_l": 2, "display_l": 8.25},
         ]
     )
 

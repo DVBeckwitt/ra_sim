@@ -28,7 +28,6 @@ import json
 import hashlib
 import math
 import os
-import pickle
 import re
 import sys
 import time
@@ -111,6 +110,11 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
+QR_ROD_PROFILE_CACHE_TABLE_KEYS = {
+    "final_rod_profile_table",
+    "final_marker_table",
+    "final_rod_component_table",
+}
 
 
 def qr_rod_profile_cache_path(output_dir: Path | str, state_path: Path | str) -> Path:
@@ -124,6 +128,14 @@ def qr_rod_profile_cache_key(state_path: Path | str) -> dict[str, object]:
     return {"state_name": Path(state_path).expanduser().name}
 
 
+def _qr_rod_profile_cache_payload_for_json(payload: dict[str, object]) -> dict[str, object]:
+    out = dict(payload)
+    for key in QR_ROD_PROFILE_CACHE_TABLE_KEYS:
+        if key in out:
+            out[key] = pd.DataFrame(out[key]).to_dict(orient="list")
+    return out
+
+
 def load_qr_rod_profile_cache(
     cache_path: Path | str, state_path: Path | str
 ) -> dict[str, object] | None:
@@ -131,8 +143,8 @@ def load_qr_rod_profile_cache(
     if not path.exists():
         return None
     try:
-        with path.open("rb") as handle:
-            envelope = pickle.load(handle)
+        with path.open("r", encoding="utf-8") as handle:
+            envelope = json.load(handle)
     except Exception as exc:
         print(f"ignored unreadable Qr-rod profile cache={path}: {exc}")
         return None
@@ -164,10 +176,10 @@ def write_qr_rod_profile_cache(
     envelope = {
         "schema": QR_ROD_PROFILE_CACHE_SCHEMA,
         "state_cache_key": qr_rod_profile_cache_key(state_path),
-        "payload": dict(payload),
+        "payload": _qr_rod_profile_cache_payload_for_json(payload),
     }
-    with path.open("wb") as handle:
-        pickle.dump(envelope, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(envelope, handle)
 
 
 def reset_qr_rod_profile_cache(cache_path: Path | str) -> bool:
@@ -221,7 +233,12 @@ def qr_rod_profile_cache_has_final_fit(
     if not {"joint_fit_density", "fit_density"} & set(rod_profile_table.columns):
         return False
     marker_table = pd.DataFrame(payload["final_marker_table"])
-    if marker_table.empty or not {"qz_marker", "fit_l", "display_l"}.issubset(marker_table.columns):
+    required_marker_columns = {"m", "branch", "qz_marker", "display_l"}
+    if (
+        marker_table.empty
+        or not required_marker_columns.issubset(marker_table.columns)
+        or not {"fit_l", "l"} & set(marker_table.columns)
+    ):
         return False
     if peak_edit_cache_key.get("mode") == "last_cached":
         return True
@@ -8441,7 +8458,12 @@ def l_reference_rows(
     *, m_value: int, branch_value: str, marker_source: pd.DataFrame | None = None
 ) -> pd.DataFrame:
     source = plot_marker_table if marker_source is None else marker_source
-    if source is None or source.empty or "qz_marker" not in source or "l" not in source:
+    if (
+        source is None
+        or source.empty
+        or "qz_marker" not in source
+        or not {"fit_l", "l"} & set(source.columns)
+    ):
         return pd.DataFrame()
     sub = source[
         (np.asarray(source["m"], dtype=int) == int(m_value))
