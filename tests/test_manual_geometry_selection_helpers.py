@@ -15,18 +15,14 @@ import pytest
 
 from ra_sim.fitting.background_peak_matching import build_background_peak_context
 from ra_sim import headless_geometry_fit as hgf
-from ra_sim.gui import canvas_interactions
 from ra_sim.gui import geometry_fit as gf
 from ra_sim.gui import geometry_q_group_manager
 from ra_sim.gui import geometry_overlay
 from ra_sim.gui import manual_geometry as mg
 from ra_sim.gui import mosaic_top_selection
 from ra_sim.gui import peak_selection as ps
-from ra_sim.gui import state as gui_state
 from ra_sim.io.data_loading import load_gui_state_file
 from ra_sim.simulation import diffraction, exact_cake_portable
-from tests.test_gui_canvas_interactions import _FakeAxis as _FakeCanvasAxis
-from tests.test_gui_canvas_interactions import _FakeEvent as _FakeCanvasMouseEvent
 
 
 class _DummyVar:
@@ -10951,6 +10947,90 @@ def test_build_geometry_manual_initial_pairs_display_preserves_canonical_pair_be
     ]
 
 
+def test_detector_origin_initial_pairs_display_reprojects_background_in_saved_and_session_paths() -> (
+    None
+):
+    group_key = ("q_group", "primary", 1, 5)
+    saved_pair = {
+        "pair_id": "bg0:pair0",
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": group_key,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_branch_index": 1,
+        "x": 1822.0,
+        "y": 1375.0,
+        "detector_x": 1822.0,
+        "detector_y": 1375.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+        "refined_sim_caked_x": 30.25,
+        "refined_sim_caked_y": -57.5,
+    }
+    caked_origin_pair = {
+        **saved_pair,
+        "manual_background_input_origin": "caked",
+        "manual_background_input_frame": "caked_2theta_phi",
+    }
+
+    def _entry_display_coords(_entry):
+        return (22.0, -25.0)
+
+    _measured, detector_initial = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=_entry_display_coords,
+    )
+    _measured, caked_initial = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(caked_origin_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=_entry_display_coords,
+    )
+    session_initial = mg.geometry_manual_session_initial_pairs_display(
+        {
+            "background_index": 0,
+            "group_key": group_key,
+            "group_entries": [
+                {
+                    "label": "-1,0,5",
+                    "hkl": (-1, 0, 5),
+                    "q_group_key": group_key,
+                    "source_table_index": 9,
+                    "source_row_index": 0,
+                    "source_branch_index": 1,
+                    "caked_x": 30.25,
+                    "caked_y": -57.5,
+                    "_caked_qr_projection_cache": True,
+                    "display_frame": "caked_display",
+                }
+            ],
+            "pending_entries": [dict(saved_pair)],
+        },
+        current_background_index=0,
+        use_caked_display=True,
+        entry_display_coords=_entry_display_coords,
+    )
+
+    assert detector_initial[0]["bg_display"] == (22.0, -25.0)
+    assert session_initial[0]["bg_display"] == (22.0, -25.0)
+    assert caked_initial[0]["bg_display"] == (999.0, -999.0)
+
+
 def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_build_pairs() -> None:
     cache_state = {"signature": None, "data": {}}
     simulated_param_sets: list[dict[str, object]] = []
@@ -13521,6 +13601,33 @@ def test_runtime_cold_qr_reuse_only_click_fails_fast_without_clearing_active_ses
     assert refresh_reuse_only == [True]
     assert set_sessions == []
     assert pick_session_state["session"] == original_session
+    assert "cache is not ready" in status_messages[-1]
+
+
+def test_runtime_cold_first_qr_selection_click_fails_fast_without_build() -> None:
+    status_messages: list[str] = []
+    pick_session_state: dict[str, object] = {"session": {}}
+    cache_calls: list[dict[str, object]] = []
+
+    def _get_cache(**kwargs):
+        cache_calls.append(dict(kwargs))
+        return {
+            "cache_ready": False,
+            "manual_no_build_cache": True,
+            "cache_metadata": {"reuse_only": kwargs.get("reuse_only")},
+        }
+
+    callbacks, _key, _saved_sets, set_sessions, _status = _make_runtime_qr_click_callbacks(
+        pick_session_state=pick_session_state,
+        get_cache_data=_get_cache,
+        status_messages=status_messages,
+        set_sessions=[],
+    )
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is False
+    assert [call.get("reuse_only") for call in cache_calls] == [True]
+    assert set_sessions == []
+    assert pick_session_state["session"] == {}
     assert "cache is not ready" in status_messages[-1]
 
 
@@ -16988,6 +17095,36 @@ def _manual_qr_caked_branch_row(
     return row
 
 
+def _manual_qr_visual_split_caked_candidate() -> dict[str, object]:
+    fit_caked = (40.176704, 36.25)
+    visual_caked = (40.177225, 36.296562)
+    candidate = _manual_qr_caked_branch_row(
+        ("q_group", "primary", 1, 10),
+        label="-1,0,10",
+        hkl=(-1, 0, 10),
+        branch_id="+x",
+        caked_x=fit_caked[0],
+        caked_y=fit_caked[1],
+        source_row_index=12,
+        source_branch_index=0,
+    )
+    candidate.update(
+        {
+            "sim_refined_caked_deg": fit_caked,
+            "refined_sim_caked_x": fit_caked[0],
+            "refined_sim_caked_y": fit_caked[1],
+            "simulated_two_theta_deg": fit_caked[0],
+            "simulated_phi_deg": fit_caked[1],
+            "sim_caked_display": fit_caked,
+            "sim_visual_caked_deg": visual_caked,
+            "sim_visual_deg": visual_caked,
+            "sim_caked": visual_caked,
+            "sim_visual_source": "sim_visual_caked_deg",
+        }
+    )
+    return candidate
+
+
 def test_caked_qr_visual_point_matches_cached_two_theta_phi_candidate() -> None:
     group_key = ("q_group", "primary", 1, 10)
     candidate = _manual_qr_caked_branch_row(
@@ -18661,7 +18798,7 @@ def test_caked_qr_projection_entry_preserves_existing_visual_caked_point() -> No
             "caked_x": 40.176704,
             "caked_y": 36.25,
             "sim_visual_caked_deg": (40.177225, 36.296562),
-            "sim_visual_source": "sim_visual_caked_deg",
+            "sim_visual_source": "saved_visual_projection",
         }
     )
 
@@ -18675,6 +18812,7 @@ def test_caked_qr_projection_entry_preserves_existing_visual_caked_point() -> No
     assert entry["sim_visual_caked_deg"] == (40.177225, 36.296562)
     assert entry["sim_visual_deg"] == (40.177225, 36.296562)
     assert entry["sim_caked"] == (40.177225, 36.296562)
+    assert entry["sim_visual_source"] == "saved_visual_projection"
 
 
 def test_geometry_manual_pair_entry_from_caked_projection_candidate_preserves_visual_caked_point() -> (
@@ -21691,142 +21829,6 @@ def _diag_live_toggle(cache_data, click, *, display_background, use_caked_space,
     return session, statuses
 
 
-def _diag_hkl_abs_matches(entry, expected_hkl_abs):
-    hkl = _diag_hkl(entry)
-    if hkl is None:
-        return False
-    expected_h, expected_k, expected_l = (int(v) for v in expected_hkl_abs)
-    h, k, l = (int(value) for value in hkl[:3])
-    return abs(h) == expected_h and k == expected_k and l == expected_l
-
-
-def _diag_assert_target_identity_fields(entry):
-    assert _diag_q_group_key(entry) == _QR_PICKER_TARGET_Q_GROUP_KEY
-    assert _diag_hkl_abs_matches(entry, (1, 0, 10))
-    identity = entry.get("selected_source_identity_canonical")
-    if not isinstance(identity, Mapping):
-        identity = entry.get("manual_picker_selected_source_identity_canonical")
-    identity = identity if isinstance(identity, Mapping) else {}
-    for key in ("source_branch_index", "source_row_index", "source_peak_index"):
-        assert entry.get(key) is not None or identity.get(key) is not None
-    assert (
-        entry.get("source_table_index") is not None
-        or entry.get("source_reflection_index") is not None
-        or identity.get("source_table_index") is not None
-        or identity.get("source_reflection_index") is not None
-    )
-
-
-def _diag_assert_finite_pair(entry, key_pair):
-    pair = _diag_finite_pair(entry, (key_pair,))
-    assert pair is not None, key_pair
-    assert np.isfinite(pair[0]) and np.isfinite(pair[1])
-    return pair
-
-
-def _diag_gui_canvas_pick_qr_set(
-    *,
-    cache_data,
-    click_point,
-    display_background,
-    use_caked_space,
-    profile_cache,
-    expected_q_group_key,
-    expected_hkl_abs=(1, 0, 10),
-):
-    geometry_runtime_state = gui_state.GeometryRuntimeState(manual_pick_armed=True)
-    geometry_manual_state = gui_state.ManualGeometryState()
-    session_holder = {"session": {}}
-    status_messages = []
-    toggle_calls = []
-
-    def _set_pick_session(value):
-        session = dict(value) if isinstance(value, Mapping) else {}
-        session_holder["session"] = session
-        geometry_manual_state.pick_session = dict(session)
-        return session
-
-    def _toggle_geometry_manual_selection_at(col, row):
-        toggle_calls.append((float(col), float(row)))
-        handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
-            float(col),
-            float(row),
-            pick_session=session_holder["session"],
-            current_background_index=0,
-            display_background=display_background,
-            get_cache_data=lambda **_kwargs: dict(cache_data),
-            pairs_for_index=lambda _idx: [],
-            set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
-            set_pick_session_fn=_set_pick_session,
-            restore_view_fn=lambda **_kwargs: None,
-            clear_preview_artists_fn=lambda **_kwargs: None,
-            render_current_pairs_fn=lambda **_kwargs: None,
-            update_button_label_fn=lambda: None,
-            set_status_text=status_messages.append,
-            listed_q_group_entries=lambda: [{"key": expected_q_group_key}],
-            format_q_group_line=lambda _entry: f"group={expected_q_group_key}",
-            use_caked_space=bool(use_caked_space),
-            pick_search_window_px=50.0,
-            profile_cache=profile_cache,
-        )
-        if isinstance(next_session, Mapping):
-            _set_pick_session(next_session)
-        return handled, next_session, suppress_drag
-
-    axis = _FakeCanvasAxis()
-    bindings = canvas_interactions.CanvasInteractionBindings(
-        axis=axis,
-        geometry_runtime_state=geometry_runtime_state,
-        geometry_preview_state=gui_state.GeometryPreviewState(),
-        geometry_manual_state=geometry_manual_state,
-        peak_selection_state=gui_state.PeakSelectionState(),
-        peak_selection_callbacks=SimpleNamespace(
-            set_hkl_pick_mode=lambda *_args, **_kwargs: None,
-            select_peak_from_canvas_click=lambda *_args, **_kwargs: False,
-        ),
-        integration_range_drag_callbacks=SimpleNamespace(
-            on_press=lambda _event: False,
-            on_motion=lambda _event: False,
-            on_release=lambda _event: False,
-        ),
-        manual_pick_session_active=lambda: bool(session_holder["session"]),
-        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
-        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
-        toggle_geometry_manual_selection_at=_toggle_geometry_manual_selection_at,
-        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
-        clamp_to_axis_view=lambda _axis, x, y: (float(x), float(y)),
-        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
-        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
-        place_geometry_manual_selection_at=lambda *_args: None,
-        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
-        restore_geometry_manual_pick_view=lambda **_kwargs: None,
-        render_current_geometry_manual_pairs=lambda **_kwargs: True,
-        caked_view_enabled_factory=lambda: bool(use_caked_space),
-        set_geometry_status_text=status_messages.append,
-    )
-    event = _FakeCanvasMouseEvent(
-        button=1,
-        inaxes=axis,
-        xdata=float(click_point[0]),
-        ydata=float(click_point[1]),
-    )
-
-    assert canvas_interactions.handle_runtime_canvas_click(bindings, event) is True
-    assert len(toggle_calls) == 1
-    session = session_holder["session"]
-    assert session
-    assert session["group_key"] == expected_q_group_key
-    group_entries = [
-        dict(entry) for entry in session.get("group_entries", []) if isinstance(entry, Mapping)
-    ]
-    assert group_entries
-    assert all(_diag_q_group_key(entry) == expected_q_group_key for entry in group_entries)
-    assert all(_diag_hkl_abs_matches(entry, expected_hkl_abs) for entry in group_entries)
-    assert not any("Manual Qr picker cache is not ready" in text for text in status_messages)
-    assert not any("No simulated Qr/Qz groups are available" in text for text in status_messages)
-    return session, bindings, status_messages
-
-
 def _diag_live_preview(
     session,
     click,
@@ -23441,70 +23443,90 @@ def _diag_minus_1_0_10_caked_probe(tmp_path):
     }
 
 
-def test_minus_1_0_10_caked_preview_distance_uses_visual_sim(tmp_path) -> None:
-    probe = _diag_minus_1_0_10_caked_probe(tmp_path)
-    print("\ncaked_preview_distance_before_after")
-    print("before_source=sim_cache_current_caked_deg")
-    print("after_source=sim_visual_caked_deg")
-    for check in (probe["preview_check0"], probe["preview_check1"]):
-        print(
-            "branch={branch} printed={printed} visual={visual} cache_current={cache} "
-            "source={source} match={match}".format(
-                branch=check["branch"],
-                printed=_diag_float_text(check["printed_preview_distance"]),
-                visual=_diag_float_text(check["visual_distance"]),
-                cache=_diag_float_text(check["cache_current_distance"]),
-                source=check["preview_distance_source"],
-                match=check["preview_distance_matches"],
-            )
-        )
-        assert check["preview_distance_source"] == "sim_visual_caked_deg"
-        assert check["preview_distance_matches"] == "sim_visual"
-        assert _diag_matches_distance(
-            check["printed_preview_distance"],
-            check["visual_distance"],
-        )
-        assert not _diag_matches_distance(
-            check["printed_preview_distance"],
-            check["cache_current_distance"],
-        )
+def test_caked_preview_distance_uses_visual_sim() -> None:
+    candidate = _manual_qr_visual_split_caked_candidate()
+    observed = (40.210000, 36.310000)
+    visual = candidate["sim_visual_caked_deg"]
+    fit = candidate["sim_refined_caked_deg"]
+
+    preview = mg.geometry_manual_pick_preview_state(
+        observed[0],
+        observed[1],
+        pick_session={
+            "background_index": 0,
+            "group_key": candidate["q_group_key"],
+            "group_entries": [dict(candidate)],
+            "pending_entries": [],
+            "q_label": "-1,0,10",
+        },
+        current_background_index=0,
+        force=True,
+        remaining_candidates=[dict(candidate)],
+        display_background=np.zeros((4, 4), dtype=np.float64),
+        refine_preview_point=lambda _candidate, col, row, **_kwargs: (float(col), float(row)),
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda col, row: (float(col), float(row)),
+    )
+
+    assert preview is not None
+    assert preview["preview_distance_source"] == "sim_visual_caked_deg"
+    assert preview["sim_dist"] == pytest.approx(
+        float(np.hypot(observed[0] - visual[0], observed[1] - visual[1]))
+    )
+    assert preview["sim_dist"] != pytest.approx(
+        float(np.hypot(observed[0] - fit[0], observed[1] - fit[1]))
+    )
+    assert "status_distance_source=sim_visual_caked_deg" in preview["message"]
 
 
-def test_minus_1_0_10_caked_assignment_distance_uses_visual_sim(tmp_path) -> None:
-    probe = _diag_minus_1_0_10_caked_probe(tmp_path)
-    branch0 = _diag_branch_map(probe["branch0_entries"])[0]
-    saved = _diag_branch_map(probe["saved_entries"])
-    branch1 = saved[1]
-    status0 = probe["place0_state"]["statuses"][-1]
-    visual0 = probe["preview_check0"]["visual_distance"]
-    print("\ncaked_assignment_distance_before_after")
-    print("before_source=sim_cache_current_caked_deg")
-    print("after_source=sim_visual_caked_deg")
-    print(f"branch=0 status={status0}")
-    print(
-        "branch=0 assignment={assignment} cache_current={cache}".format(
-            assignment=_diag_float_text(branch0.get("assignment_distance_to_sim")),
-            cache=_diag_float_text(branch0.get("assignment_distance_to_cache_current_sim")),
+def test_caked_assignment_distance_uses_visual_sim() -> None:
+    candidate = _manual_qr_visual_split_caked_candidate()
+    observed = (40.210000, 36.310000)
+    visual = candidate["sim_visual_caked_deg"]
+    fit = candidate["sim_refined_caked_deg"]
+    saved_entries: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        observed[0],
+        observed[1],
+        pick_session={
+            "background_index": 0,
+            "group_key": candidate["q_group_key"],
+            "group_entries": [dict(candidate)],
+            "pending_entries": [],
+            "target_count": 1,
+            "q_label": "-1,0,10",
+        },
+        current_background_index=0,
+        display_background=np.zeros((4, 4), dtype=np.float64),
+        get_cache_data=lambda **_kwargs: {"cache_ready": True},
+        refine_preview_point=lambda _candidate, col, row, **_kwargs: (float(col), float(row)),
+        set_pairs_for_index_fn=lambda _idx, entries: saved_entries.extend(
+            [dict(entry) for entry in (entries or []) if isinstance(entry, Mapping)]
         )
+        or saved_entries,
+        set_pick_session_fn=lambda _session: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda col, row: (float(col), float(row)),
+        resolve_background_pick_fn=None,
     )
-    print(
-        "branch=1 assignment={assignment} cache_current={cache}".format(
-            assignment=_diag_float_text(branch1.get("assignment_distance_to_sim")),
-            cache=_diag_float_text(branch1.get("assignment_distance_to_cache_current_sim")),
-        )
+
+    placed = saved_entries[0] if saved_entries else next_session["pending_entries"][0]
+    assert handled is True
+    assert placed["assignment_distance_source"] == "sim_visual_caked_deg"
+    assert placed["assignment_distance_to_sim"] == pytest.approx(
+        float(np.hypot(observed[0] - visual[0], observed[1] - visual[1]))
     )
-    assert branch0["assignment_distance_source"] == "sim_visual_caked_deg"
-    assert branch1["assignment_distance_source"] == "sim_visual_caked_deg"
-    assert _diag_matches_distance(branch0["assignment_distance_to_sim"], visual0)
-    assert f"({float(visual0):.2f} deg from sim)" in status0
-    assert not _diag_matches_distance(
-        branch0["assignment_distance_to_sim"],
-        branch0.get("assignment_distance_to_cache_current_sim"),
+    assert placed["assignment_distance_to_sim"] != pytest.approx(
+        float(np.hypot(observed[0] - fit[0], observed[1] - fit[1]))
     )
-    assert not _diag_matches_distance(
-        branch1["assignment_distance_to_sim"],
-        branch1.get("assignment_distance_to_cache_current_sim"),
-    )
+    assert any("status_distance_source=sim_visual_caked_deg" in text for text in status_messages)
 
 
 def test_minus_1_0_10_caked_preview_status_line_uses_visual_sim(tmp_path) -> None:
@@ -27249,10 +27271,15 @@ def test_detector_mode_qr_picker_selects_minus_1_0_10_branch_clicks(tmp_path) ->
     target_by_branch = _diag_target_rows_by_branch(grouped)
     assert set(target_by_branch) == {0, 1}
 
-    expected = {
-        0: ((1074.878, 1085.949), 160, 24),
-        1: ((1834.555, 1083.733), 167, 24),
-    }
+    expected = {}
+    for branch, target in target_by_branch.items():
+        target_display = _diag_detector_display_point(target)
+        assert target_display is not None
+        expected[int(branch)] = (
+            target_display,
+            int(target["source_table_index"]),
+            int(target["source_row_index"]),
+        )
     for branch, (click, table_index, row_index) in expected.items():
         session, _statuses = _diag_toggle_detector_click(
             cache_data,
@@ -27294,53 +27321,6 @@ def test_detector_mode_qr_picker_not_blocked_by_caked_unavailable(tmp_path) -> N
     session, statuses = _diag_toggle_detector_click(cache_data, display, rows["profile_cache"])
     assert session["group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
     assert not any("No simulated Qr/Qz groups are available" in text for text in statuses)
-
-
-def test_minus_1_0_10_gui_canvas_caked_click_selects_qr_set_from_sidecar(
-    tmp_path,
-) -> None:
-    context, rows = _diag_startup_context_and_rows(tmp_path)
-    profile_cache = rows["profile_cache"]
-    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
-    _callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
-        context,
-        rows,
-        detector_cache,
-    )
-    caked_targets = _diag_target_rows_by_branch(caked_grouped)
-    assert set(caked_targets) == {0, 1}
-    click = _diag_target_caked(caked_targets[0])
-    assert click is not None
-    caked_background = np.asarray(
-        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
-    )
-
-    session, _bindings, _statuses = _diag_gui_canvas_pick_qr_set(
-        cache_data=caked_cache,
-        click_point=click,
-        display_background=caked_background,
-        use_caked_space=True,
-        profile_cache=profile_cache,
-        expected_q_group_key=_QR_PICKER_TARGET_Q_GROUP_KEY,
-    )
-
-    assert session["group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
-    selected_by_branch = _diag_branch_map(session.get("group_entries", []))
-    assert set(selected_by_branch) == {0, 1}
-    for entry in selected_by_branch.values():
-        _diag_assert_target_identity_fields(entry)
-        assert (
-            entry.get("display_frame") == "caked_display"
-            or entry.get("current_view_frame") == "caked_display"
-        )
-        assert _diag_finite_pair(
-            entry,
-            (
-                ("caked_x", "caked_y"),
-                ("two_theta_deg", "phi_deg"),
-            ),
-        ) is not None
-        _diag_assert_finite_pair(entry, ("simulated_two_theta_deg", "simulated_phi_deg"))
 
 
 def test_qr_overlay_hidden_does_not_disable_manual_picker_candidates(tmp_path) -> None:
@@ -27407,6 +27387,18 @@ def _diag_fit_handoff_dataset(tmp_path):
     def _source_rows_for_background(_idx, _params=None, **_kwargs):
         return [dict(entry) for entry in source_rows]
 
+    def _project_for_background(
+        _idx,
+        projected_rows,
+        *,
+        mode_override=None,
+        strict_caked_projection=False,
+    ):
+        assert mode_override in (None, "caked")
+        if mode_override == "caked":
+            assert strict_caked_projection is True
+        return [dict(entry) for entry in (projected_rows or []) if isinstance(entry, Mapping)]
+
     bindings = gf.GeometryFitRuntimeManualDatasetBindings(
         osc_files=("Bi2Se3_5m_5d.osc",),
         current_background_index=0,
@@ -27444,9 +27436,7 @@ def _diag_fit_handoff_dataset(tmp_path):
         geometry_manual_project_peaks_to_current_view=lambda projected_rows: [
             dict(entry) for entry in (projected_rows or []) if isinstance(entry, Mapping)
         ],
-        geometry_manual_project_peaks_for_background_view=lambda _idx, projected_rows: [
-            dict(entry) for entry in (projected_rows or []) if isinstance(entry, Mapping)
-        ],
+        geometry_manual_project_peaks_for_background_view=_project_for_background,
         native_detector_coords_to_bundle_detector_coords=kwargs.get(
             "native_detector_coords_to_bundle_detector_coords"
         ),

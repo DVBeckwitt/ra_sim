@@ -12017,6 +12017,20 @@ def _toggle_hkl_pick_mode_with_mode_banner() -> None:
         refresh_mode_banner()
 
 
+def _runtime_geometry_manual_pick_cache_data(**kwargs):
+    request = dict(kwargs)
+    prefer_cache = bool(request.pop("prefer_cache", True))
+    if "param_set" in request:
+        param_set = request.pop("param_set")
+    else:
+        param_set = _current_geometry_fit_params()
+    return _get_geometry_manual_pick_cache(
+        param_set=param_set,
+        prefer_cache=prefer_cache,
+        **request,
+    )
+
+
 def _initialize_runtime_controls_block_10() -> None:
     global \
         peak_selection_runtime_callbacks, \
@@ -12091,11 +12105,7 @@ def _initialize_runtime_controls_block_10() -> None:
             set_background_file_status_text=_refresh_background_status,
             pair_group_count=_geometry_manual_pair_group_count,
             set_status_text=lambda text: progress_label_geometry.config(text=text),
-            get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
-                param_set=_current_geometry_fit_params(),
-                prefer_cache=True,
-                **kwargs,
-            ),
+            get_cache_data=_runtime_geometry_manual_pick_cache_data,
             set_pairs_for_index=_set_geometry_manual_pairs_for_index,
             pairs_for_index=_geometry_manual_pairs_for_index,
             set_pick_session=_set_geometry_manual_pick_session,

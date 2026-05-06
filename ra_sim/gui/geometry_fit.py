@@ -4026,13 +4026,21 @@ def _geometry_fit_put_simulated_point_fields(
     if point_frame == "detector_native":
         row["sim_native"] = point_pair
     elif point_frame == "caked_2theta_phi":
+        visual_caked = _geometry_fit_point_list(row.get("sim_visual_caked_deg"))
+        visual_deg = _geometry_fit_point_list(row.get("sim_visual_deg"))
+        sim_caked = _geometry_fit_point_list(row.get("sim_caked"))
+        fallback_visual = visual_caked or visual_deg or sim_caked or point_pair
+
+        def _pair(value: Sequence[float] | tuple[float, float]) -> tuple[float, float]:
+            return (float(value[0]), float(value[1]))
+
         row["simulated_two_theta_deg"] = point_x
         row["simulated_phi_deg"] = point_y
         row["sim_caked_display"] = point_pair
         row["sim_refined_caked_deg"] = point_pair
-        row["sim_visual_caked_deg"] = point_pair
-        row["sim_visual_deg"] = point_pair
-        row["sim_caked"] = point_pair
+        row["sim_visual_caked_deg"] = _pair(visual_caked or fallback_visual)
+        row["sim_visual_deg"] = _pair(visual_deg or fallback_visual)
+        row["sim_caked"] = _pair(sim_caked or fallback_visual)
     else:
         row["sim_display"] = point_pair
 
@@ -11059,6 +11067,7 @@ def build_geometry_manual_fit_dataset(
                 "manual caked geometry fit requires a per-background projector that accepts "
                 "mode_override and strict_caked_projection"
             )
+            projector_signature_known = False
             if caked_projection_required:
                 projection_kwargs = {
                     "mode_override": "caked",
@@ -11069,6 +11078,7 @@ def build_geometry_manual_fit_dataset(
                 except (TypeError, ValueError):
                     projector_signature = None
                 if projector_signature is not None:
+                    projector_signature_known = True
                     projector_params = projector_signature.parameters
                     accepts_projection_kwargs = any(
                         param.kind == inspect.Parameter.VAR_KEYWORD
@@ -11097,8 +11107,10 @@ def build_geometry_manual_fit_dataset(
                         if isinstance(entry, Mapping)
                     )
                 except TypeError as exc:
-                    if caked_projection_required:
+                    if caked_projection_required and not projector_signature_known:
                         raise RuntimeError(caked_projection_error) from exc
+                    if caked_projection_required:
+                        raise
                     return normalized_rows
                 except Exception:
                     if caked_projection_required:

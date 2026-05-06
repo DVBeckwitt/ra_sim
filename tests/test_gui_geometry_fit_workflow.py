@@ -22408,6 +22408,98 @@ def test_build_geometry_manual_fit_dataset_caked_projector_receives_forced_caked
     assert set(calls) == {("caked", True)}
 
 
+def test_geometry_fit_put_simulated_point_fields_preserves_visual_caked_aliases() -> None:
+    row: dict[str, object] = {
+        "sim_visual_caked_deg": (1.0, 2.0),
+        "sim_visual_deg": (3.0, 4.0),
+        "sim_caked": (5.0, 6.0),
+        "sim_visual_source": "saved_visual_projection",
+    }
+
+    geometry_fit._geometry_fit_put_simulated_point_fields(
+        row,
+        (40.176704, 36.25),
+        "caked_2theta_phi",
+    )
+
+    assert row["simulated_two_theta_deg"] == 40.176704
+    assert row["simulated_phi_deg"] == 36.25
+    assert row["sim_refined_caked_deg"] == (40.176704, 36.25)
+    assert row["sim_caked_display"] == (40.176704, 36.25)
+    assert row["sim_visual_caked_deg"] == (1.0, 2.0)
+    assert row["sim_visual_deg"] == (3.0, 4.0)
+    assert row["sim_caked"] == (5.0, 6.0)
+    assert row["sim_visual_source"] == "saved_visual_projection"
+
+    fallback_row: dict[str, object] = {}
+    geometry_fit._geometry_fit_put_simulated_point_fields(
+        fallback_row,
+        (40.176704, 36.25),
+        "caked_2theta_phi",
+    )
+    assert fallback_row["sim_visual_caked_deg"] == (40.176704, 36.25)
+    assert fallback_row["sim_visual_deg"] == (40.176704, 36.25)
+    assert fallback_row["sim_caked"] == (40.176704, 36.25)
+
+
+def test_build_geometry_manual_fit_dataset_caked_projector_internal_type_error_propagates() -> (
+    None
+):
+    def _project_for_background(
+        _background_index,
+        _rows,
+        *,
+        mode_override=None,
+        strict_caked_projection=False,
+    ):
+        assert mode_override == "caked"
+        assert strict_caked_projection is True
+        raise TypeError("inner")
+
+    manual_dataset_bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=[
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "manual_background_input_frame": "caked_2theta_phi",
+                    "background_two_theta_deg": 10.0,
+                    "background_phi_deg": 20.0,
+                    "caked_x": 10.0,
+                    "caked_y": 20.0,
+                }
+            ],
+            simulated_rows=[
+                {
+                    "background_index": 0,
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "sim_col_raw": 3.0,
+                    "sim_row_raw": 4.0,
+                    "caked_x": 30.0,
+                    "caked_y": 40.0,
+                }
+            ],
+            refresh_pairs=False,
+        ),
+        geometry_manual_project_peaks_for_background_view=_project_for_background,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    with pytest.raises(TypeError, match="inner"):
+        geometry_fit.build_geometry_manual_fit_dataset(
+            0,
+            theta_base=1.5,
+            base_fit_params={"theta_offset": 0.0},
+            manual_dataset_bindings=manual_dataset_bindings,
+            orientation_cfg={},
+        )
+
+
 def test_build_geometry_manual_fit_dataset_caked_requires_per_background_projector() -> None:
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],

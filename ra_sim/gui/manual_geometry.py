@@ -3461,7 +3461,7 @@ def _geometry_manual_caked_qr_projection_entry(
     projected["sim_visual_caked_deg"] = visual_pair
     projected["sim_visual_deg"] = visual_pair
     projected["sim_caked"] = visual_pair
-    projected["sim_visual_source"] = "sim_visual_caked_deg"
+    projected.setdefault("sim_visual_source", "sim_visual_caked_deg")
     return projected
 
 
@@ -4007,6 +4007,63 @@ def _geometry_manual_saved_caked_background_display_point(
         entry,
         (("background_two_theta_deg", "background_phi_deg"),),
     )
+
+
+def _geometry_manual_saved_background_detector_origin(
+    entry: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    caked_tokens = {"caked", "caked_display", "caked_2theta_phi", "two_theta_phi"}
+    detector_tokens = {
+        "detector",
+        "detector_display",
+        "detector_native",
+        "native_detector",
+    }
+    origin = _geometry_manual_normalized_frame_token(
+        entry.get("manual_background_input_origin")
+    )
+    frame = _geometry_manual_normalized_frame_token(
+        entry.get("manual_background_input_frame")
+    )
+    if origin in caked_tokens or frame in caked_tokens:
+        return False
+    if origin in detector_tokens or frame in detector_tokens:
+        return True
+    return (
+        _geometry_manual_finite_point(
+            entry,
+            (
+                ("detector_x", "detector_y"),
+                ("background_detector_x", "background_detector_y"),
+                ("x", "y"),
+            ),
+        )
+        is not None
+    )
+
+
+def _geometry_manual_saved_background_display_point_for_view(
+    entry: Mapping[str, object] | None,
+    *,
+    use_caked_display: bool,
+    entry_display_coords: Callable[[dict[str, object] | None], tuple[float, float] | None],
+) -> tuple[float, float] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    if bool(use_caked_display) and _geometry_manual_saved_background_detector_origin(entry):
+        detector_projected = entry_display_coords(dict(entry))
+        if detector_projected is not None:
+            return detector_projected
+    caked_point = (
+        _geometry_manual_saved_caked_background_display_point(entry)
+        if bool(use_caked_display)
+        else None
+    )
+    if caked_point is not None:
+        return caked_point
+    return entry_display_coords(dict(entry))
 
 
 def _geometry_manual_entry_explicit_current_view_display_point(
@@ -13266,13 +13323,11 @@ def geometry_manual_session_initial_pairs_display(
                 measured_entry = dict(pending_candidates[int(resolved_index)])
         _copy_q_values_from_sources(entry, display_entry, measured_entry)
         if isinstance(measured_entry, dict):
-            bg_coords = (
-                _geometry_manual_saved_caked_background_display_point(measured_entry)
-                if bool(use_caked_display)
-                else None
+            bg_coords = _geometry_manual_saved_background_display_point_for_view(
+                measured_entry,
+                use_caked_display=bool(use_caked_display),
+                entry_display_coords=entry_display_coords,
             )
-            if bg_coords is None:
-                bg_coords = entry_display_coords(measured_entry)
             if bg_coords is not None:
                 entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         initial_pairs_display.append(entry)
@@ -13314,13 +13369,11 @@ def geometry_manual_background_reference_initial_display_entry(
     ):
         if key in saved:
             initial_entry[key] = saved[key]
-    bg_coords = (
-        _geometry_manual_saved_caked_background_display_point(saved)
-        if bool(use_caked_display)
-        else None
+    bg_coords = _geometry_manual_saved_background_display_point_for_view(
+        saved,
+        use_caked_display=bool(use_caked_display),
+        entry_display_coords=entry_display_coords,
     )
-    if bg_coords is None:
-        bg_coords = entry_display_coords(saved)
     if bg_coords is None:
         bg_coords = _geometry_manual_finite_point(
             saved,
@@ -13974,13 +14027,11 @@ def build_geometry_manual_initial_pairs_display(
             initial_entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             initial_entry["q_group_key"] = tuple(raw_group_key)
-        bg_coords = (
-            _geometry_manual_saved_caked_background_display_point(entry)
-            if bool(use_caked_display)
-            else None
+        bg_coords = _geometry_manual_saved_background_display_point_for_view(
+            entry,
+            use_caked_display=bool(use_caked_display),
+            entry_display_coords=entry_display_coords,
         )
-        if bg_coords is None:
-            bg_coords = entry_display_coords(entry)
         if bg_coords is not None:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         raw_caked_projection_entry = _geometry_manual_lookup_caked_qr_projection_entry(

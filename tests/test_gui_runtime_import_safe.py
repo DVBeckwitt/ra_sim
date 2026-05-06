@@ -20577,6 +20577,56 @@ def test_manual_pick_arming_schedules_pick_cache_prewarm(monkeypatch) -> None:
     assert scheduled == ["prewarm", "prewarm"]
 
 
+def test_runtime_manual_pick_cache_wrapper_allows_explicit_prefer_cache(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: {"a": 5.0},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: calls.append(dict(kwargs)) or {"ok": True},
+        raising=False,
+    )
+
+    payload = runtime_session._runtime_geometry_manual_pick_cache_data(
+        prefer_cache=False,
+        reuse_only=True,
+    )
+
+    assert payload == {"ok": True}
+    assert calls == [
+        {
+            "param_set": {"a": 5.0},
+            "prefer_cache": False,
+            "reuse_only": True,
+        }
+    ]
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_params",
+        lambda: (_ for _ in ()).throw(AssertionError("current params called")),
+        raising=False,
+    )
+
+    payload = runtime_session._runtime_geometry_manual_pick_cache_data(
+        param_set={"b": 7.0},
+        prefer_cache=True,
+    )
+
+    assert payload == {"ok": True}
+    assert calls[-1] == {
+        "param_set": {"b": 7.0},
+        "prefer_cache": True,
+    }
+
+
 def test_simulation_ready_schedules_prewarm_when_manual_pick_disarmed(
     monkeypatch,
 ) -> None:
