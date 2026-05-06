@@ -1633,7 +1633,7 @@ def _refresh_legacy_dense_pair_entry(entry):
     return refreshed
 
 
-def _identity_geometry_project_rows(_background_index, rows):
+def _identity_geometry_project_rows(_background_index, rows, **_kwargs):
     return [dict(row) for row in (rows or ()) if isinstance(row, Mapping)]
 
 
@@ -1933,7 +1933,7 @@ def test_build_geometry_manual_fit_dataset_projects_raw_sim_image_rows_into_back
             float(entry.get("y", 0.0)),
         ),
         geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: (
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: (
             callbacks.project_peaks_to_current_view(rows)
         ),
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
@@ -2046,7 +2046,7 @@ def test_build_geometry_manual_fit_dataset_reprojects_refined_detector_display_w
             float(entry.get("y", 0.0)),
         ),
         geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: (
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: (
             callbacks.project_peaks_to_current_view(rows)
         ),
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
@@ -22277,8 +22277,8 @@ def test_build_geometry_manual_fit_dataset_caked_projector_error_fails_closed() 
         geometry_manual_project_peaks_to_current_view=lambda _rows: pytest.fail(
             "caked dataset must use per-background projector"
         ),
-        geometry_manual_project_peaks_for_background_view=lambda *_args: (_ for _ in ()).throw(
-            RuntimeError("projector broke")
+        geometry_manual_project_peaks_for_background_view=(
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("projector broke"))
         ),
         unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
@@ -22299,6 +22299,113 @@ def test_build_geometry_manual_fit_dataset_caked_projector_error_fails_closed() 
             manual_dataset_bindings=manual_dataset_bindings,
             orientation_cfg={},
         )
+
+
+def test_build_geometry_manual_fit_dataset_caked_projector_without_kwargs_fails_closed() -> None:
+    def _project_for_background(_background_index, rows):
+        return [dict(row) for row in (rows or ()) if isinstance(row, Mapping)]
+
+    manual_dataset_bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=[
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "manual_background_input_frame": "caked_2theta_phi",
+                    "background_two_theta_deg": 10.0,
+                    "background_phi_deg": 20.0,
+                    "caked_x": 10.0,
+                    "caked_y": 20.0,
+                }
+            ],
+            simulated_rows=[
+                {
+                    "background_index": 0,
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "sim_col_raw": 3.0,
+                    "sim_row_raw": 4.0,
+                    "caked_x": 30.0,
+                    "caked_y": 40.0,
+                }
+            ],
+            refresh_pairs=False,
+        ),
+        geometry_manual_project_peaks_for_background_view=_project_for_background,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    with pytest.raises(RuntimeError, match="mode_override.*strict_caked_projection"):
+        geometry_fit.build_geometry_manual_fit_dataset(
+            0,
+            theta_base=1.5,
+            base_fit_params={"theta_offset": 0.0},
+            manual_dataset_bindings=manual_dataset_bindings,
+            orientation_cfg={},
+        )
+
+
+def test_build_geometry_manual_fit_dataset_caked_projector_receives_forced_caked_kwargs() -> None:
+    calls: list[tuple[object, object]] = []
+
+    def _project_for_background(
+        _background_index,
+        rows,
+        *,
+        mode_override=None,
+        strict_caked_projection=False,
+    ):
+        calls.append((mode_override, strict_caked_projection))
+        return [dict(row) for row in (rows or ()) if isinstance(row, Mapping)]
+
+    manual_dataset_bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=[
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "manual_background_input_frame": "caked_2theta_phi",
+                    "background_two_theta_deg": 10.0,
+                    "background_phi_deg": 20.0,
+                    "caked_x": 10.0,
+                    "caked_y": 20.0,
+                }
+            ],
+            simulated_rows=[
+                {
+                    "background_index": 0,
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "sim_col_raw": 3.0,
+                    "sim_row_raw": 4.0,
+                    "caked_x": 30.0,
+                    "caked_y": 40.0,
+                }
+            ],
+            refresh_pairs=False,
+        ),
+        geometry_manual_project_peaks_for_background_view=_project_for_background,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert calls
+    assert set(calls) == {("caked", True)}
 
 
 def test_build_geometry_manual_fit_dataset_caked_requires_per_background_projector() -> None:
@@ -22405,7 +22512,7 @@ def test_build_geometry_manual_fit_dataset_requires_exact_caked_bundle_for_proje
             }
         ],
         geometry_manual_entry_display_coords=lambda entry: (10.0, 20.0),
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: [
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: [
             dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)
         ],
         unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
@@ -22510,7 +22617,7 @@ def test_build_geometry_manual_fit_dataset_uses_projection_payload_without_image
             }
         ],
         geometry_manual_entry_display_coords=lambda entry: (10.0, -4.0),
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: [
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: [
             dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)
         ],
         unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
@@ -22636,7 +22743,7 @@ def test_build_geometry_manual_fit_dataset_projects_raw_detector_rows_into_caked
             float(entry.get("caked_y", 0.0)),
         ),
         geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: (
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: (
             callbacks.project_peaks_to_current_view(rows)
         ),
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
@@ -22766,7 +22873,7 @@ def test_build_geometry_manual_fit_dataset_exact_projector_uses_manual_selection
             float(entry.get("caked_y", 0.0)),
         ),
         geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: (
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: (
             callbacks.project_peaks_to_current_view(rows)
         ),
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
@@ -22926,7 +23033,7 @@ def test_build_geometry_manual_fit_dataset_exact_projector_converts_fit_detector
             float(entry.get("caked_y", 0.0)),
         ),
         geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: (
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: (
             callbacks.project_peaks_to_current_view(rows)
         ),
         backend_detector_coords_to_native_detector_coords=lambda col, row, native_shape=None: (
@@ -23085,7 +23192,7 @@ def test_build_geometry_manual_fit_dataset_exact_projector_uses_current_local_pa
             float(entry.get("caked_y", 0.0)),
         ),
         geometry_manual_project_peaks_to_current_view=callbacks.project_peaks_to_current_view,
-        geometry_manual_project_peaks_for_background_view=lambda _idx, rows: (
+        geometry_manual_project_peaks_for_background_view=lambda _idx, rows, **_kwargs: (
             callbacks.project_peaks_to_current_view(rows)
         ),
         unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
@@ -23293,6 +23400,8 @@ def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_witho
                 "source_table_index": 1,
                 "source_row_index": 2,
                 "hkl": (1, 1, 0),
+                "manual_background_input_origin": "caked",
+                "manual_background_input_frame": "caked_2theta_phi",
                 "x": 30.0,
                 "y": 40.0,
                 "caked_x": 150.0,
@@ -23352,7 +23461,15 @@ def test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_witho
 
     assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (91.0, 82.0)
-    assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
+    assert "sim_native" not in dataset["initial_pairs_display"][0]
+    assert dataset["provider_pairs"][0]["simulated_frame"] == "caked_2theta_phi"
+    assert dataset["provider_pairs"][0]["simulated_point"] == [91.0, 82.0]
+    assert dataset["measured_for_fit"][0]["provider_simulated_frame"] == "caked_2theta_phi"
+    assert dataset["measured_for_fit"][0]["simulated_two_theta_deg"] == 91.0
+    assert dataset["measured_for_fit"][0]["simulated_phi_deg"] == 82.0
+    assert dataset["initial_pairs_display"][0]["provider_simulated_frame"] == "caked_2theta_phi"
+    assert dataset["initial_pairs_display"][0]["simulated_two_theta_deg"] == 91.0
+    assert dataset["initial_pairs_display"][0]["simulated_phi_deg"] == 82.0
 
 
 def test_build_geometry_manual_fit_dataset_prefers_current_view_overlay_fallback_in_caked_view() -> (

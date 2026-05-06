@@ -3430,16 +3430,38 @@ def _geometry_manual_caked_qr_projection_entry(
     if caked_point is None:
         return None
 
+    caked_x = float(caked_point[0])
+    caked_y = float(caked_point[1])
+    caked_pair = (caked_x, caked_y)
+    visual_caked = _geometry_manual_tuple_point(entry, "sim_visual_caked_deg")
+    if visual_caked is None:
+        visual_caked = _geometry_manual_tuple_point(entry, "sim_visual_deg")
+    if visual_caked is None:
+        visual_caked = _geometry_manual_tuple_point(entry, "sim_caked")
+    if visual_caked is None:
+        visual_pair = caked_pair
+    else:
+        visual_pair = (float(visual_caked[0]), float(visual_caked[1]))
     projected = dict(entry)
     projected["_caked_qr_projection_cache"] = True
     projected["display_frame"] = "caked_display"
     projected["current_view_frame"] = "caked_display"
-    projected["display_col"] = float(caked_point[0])
-    projected["display_row"] = float(caked_point[1])
-    projected["caked_x"] = float(caked_point[0])
-    projected["caked_y"] = float(caked_point[1])
-    projected["two_theta_deg"] = float(caked_point[0])
-    projected["phi_deg"] = float(caked_point[1])
+    projected["display_col"] = caked_x
+    projected["display_row"] = caked_y
+    projected["caked_x"] = caked_x
+    projected["caked_y"] = caked_y
+    projected["two_theta_deg"] = caked_x
+    projected["phi_deg"] = caked_y
+    projected["simulated_two_theta_deg"] = caked_x
+    projected["simulated_phi_deg"] = caked_y
+    projected["refined_sim_caked_x"] = caked_x
+    projected["refined_sim_caked_y"] = caked_y
+    projected["sim_caked_display"] = caked_pair
+    projected["sim_refined_caked_deg"] = caked_pair
+    projected["sim_visual_caked_deg"] = visual_pair
+    projected["sim_visual_deg"] = visual_pair
+    projected["sim_caked"] = visual_pair
+    projected["sim_visual_source"] = "sim_visual_caked_deg"
     return projected
 
 
@@ -4294,6 +4316,21 @@ def _geometry_manual_saved_background_point_with_frame(
 ) -> tuple[tuple[float, float] | None, str, str]:
     if not isinstance(entry, Mapping):
         return None, "unknown", "unknown"
+    caked_point = _geometry_manual_finite_point(
+        entry,
+        (
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+        ),
+    )
+    manual_frame = str(entry.get("manual_background_input_frame", "")).strip().lower()
+    manual_origin = str(entry.get("manual_background_input_origin", "")).strip().lower()
+    if (
+        caked_point is not None
+        and (manual_frame == "caked_2theta_phi" or manual_origin == "caked")
+    ):
+        return caked_point, "caked_2theta_phi", "manual_picker_saved"
     point = _geometry_manual_finite_point(entry, (("x", "y"),))
     if point is not None:
         return point, "display", "manual_picker_saved"
@@ -4306,16 +4343,8 @@ def _geometry_manual_saved_background_point_with_frame(
     )
     if point is not None:
         return point, "detector_native", "manual_picker_saved"
-    point = _geometry_manual_finite_point(
-        entry,
-        (
-            ("background_two_theta_deg", "background_phi_deg"),
-            ("caked_x", "caked_y"),
-            ("raw_caked_x", "raw_caked_y"),
-        ),
-    )
-    if point is not None:
-        return point, "caked_2theta_phi", "manual_picker_saved"
+    if caked_point is not None:
+        return caked_point, "caked_2theta_phi", "manual_picker_saved"
     return None, "unknown", "unknown"
 
 
@@ -4324,6 +4353,21 @@ def _geometry_manual_saved_simulated_point(
 ) -> tuple[tuple[float, float] | None, str, str]:
     if not isinstance(entry, Mapping):
         return None, "unknown", "unknown"
+    caked_point = _geometry_manual_finite_point(
+        entry,
+        (
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("two_theta_deg", "phi_deg"),
+        ),
+    )
+    manual_frame = str(entry.get("manual_background_input_frame", "")).strip().lower()
+    manual_origin = str(entry.get("manual_background_input_origin", "")).strip().lower()
+    if (
+        caked_point is not None
+        and (manual_frame == "caked_2theta_phi" or manual_origin == "caked")
+    ):
+        return caked_point, "caked_2theta_phi", "manual_picker_saved"
     point = _geometry_manual_finite_point(entry, (("refined_sim_x", "refined_sim_y"),))
     if point is not None:
         return point, "display", "manual_picker_saved"
@@ -4339,16 +4383,8 @@ def _geometry_manual_saved_simulated_point(
     )
     if point is not None:
         return point, "detector_native", "manual_picker_saved"
-    point = _geometry_manual_finite_point(
-        entry,
-        (
-            ("refined_sim_caked_x", "refined_sim_caked_y"),
-            ("simulated_two_theta_deg", "simulated_phi_deg"),
-            ("two_theta_deg", "phi_deg"),
-        ),
-    )
-    if point is not None:
-        return point, "caked_2theta_phi", "manual_picker_saved"
+    if caked_point is not None:
+        return caked_point, "caked_2theta_phi", "manual_picker_saved"
     return None, "unknown", "unknown"
 
 
@@ -11211,17 +11247,24 @@ def _geometry_manual_candidate_caked_sim_point(
     refined_caked = _geometry_manual_tuple_point(candidate, "sim_refined_caked_deg")
     if refined_caked is not None:
         return refined_caked
-    visual_caked = _geometry_manual_tuple_point(candidate, "sim_visual_deg")
-    if visual_caked is not None:
-        return visual_caked
-    visual_caked = _geometry_manual_tuple_point(candidate, "sim_caked")
-    if visual_caked is not None:
-        return visual_caked
+    refined_caked = _geometry_manual_finite_point(
+        candidate,
+        (("refined_sim_caked_x", "refined_sim_caked_y"),),
+    )
+    if refined_caked is not None:
+        return refined_caked
+    simulated_caked = _geometry_manual_finite_point(
+        candidate,
+        (("simulated_two_theta_deg", "simulated_phi_deg"),),
+    )
+    if simulated_caked is not None:
+        return simulated_caked
+    caked_display = _geometry_manual_tuple_point(candidate, "sim_caked_display")
+    if caked_display is not None:
+        return caked_display
     return _geometry_manual_finite_point(
         candidate,
         (
-            ("refined_sim_caked_x", "refined_sim_caked_y"),
-            ("simulated_two_theta_deg", "simulated_phi_deg"),
             ("caked_x", "caked_y"),
             ("raw_caked_x", "raw_caked_y"),
             ("two_theta_deg", "phi_deg"),
@@ -11235,27 +11278,15 @@ def _geometry_manual_candidate_visual_caked_sim_point(
     visual_caked = _geometry_manual_tuple_point(candidate, "sim_visual_caked_deg")
     if visual_caked is not None:
         return visual_caked, "sim_visual_caked_deg"
-    refined_caked = _geometry_manual_tuple_point(candidate, "sim_refined_caked_deg")
-    if refined_caked is not None:
-        return refined_caked, "sim_visual_caked_deg"
     visual_caked = _geometry_manual_tuple_point(candidate, "sim_visual_deg")
     if visual_caked is not None:
         return visual_caked, "sim_visual_caked_deg"
     visual_caked = _geometry_manual_tuple_point(candidate, "sim_caked")
     if visual_caked is not None:
         return visual_caked, "sim_visual_caked_deg"
-    refined_caked = _geometry_manual_finite_point(
-        candidate,
-        (("refined_sim_caked_x", "refined_sim_caked_y"),),
-    )
-    if refined_caked is not None:
-        return refined_caked, "sim_visual_caked_deg"
-    cached_caked = _geometry_manual_finite_point(
-        candidate,
-        (("caked_x", "caked_y"), ("two_theta_deg", "phi_deg")),
-    )
-    if cached_caked is not None:
-        return cached_caked, "sim_visual_caked_deg"
+    fallback_caked = _geometry_manual_candidate_caked_sim_point(candidate)
+    if fallback_caked is not None:
+        return fallback_caked, "sim_visual_caked_deg"
     return None, "<unavailable>"
 
 
@@ -11824,6 +11855,9 @@ def geometry_manual_pair_entry_from_candidate(
             "sim_visual_deg",
             "sim_visual_source",
             "sim_caked",
+            "sim_caked_display",
+            "simulated_two_theta_deg",
+            "simulated_phi_deg",
         )
     )
     for provenance_key in sorted(provenance_keys):
@@ -11861,15 +11895,41 @@ def geometry_manual_pair_entry_from_candidate(
         entry["refined_sim_native_x"] = float(simulated_native_point[0])
         entry["refined_sim_native_y"] = float(simulated_native_point[1])
 
-    simulated_caked_point = _geometry_manual_tuple_point(candidate, "sim_refined_caked_deg")
-    if simulated_caked_point is None:
-        simulated_caked_point = _geometry_manual_finite_point(
+    fit_caked_point = _geometry_manual_candidate_caked_sim_point(candidate)
+    if fit_caked_point is None and (
+        bool(candidate.get("_caked_qr_projection_cache"))
+        or str(candidate.get("display_frame", candidate.get("current_view_frame", "")) or "")
+        .strip()
+        .lower()
+        == "caked_display"
+    ):
+        fit_caked_point = _geometry_manual_finite_point(
             candidate,
-            (("refined_sim_caked_x", "refined_sim_caked_y"),),
+            (("caked_x", "caked_y"),),
         )
-    if simulated_caked_point is not None:
-        entry["refined_sim_caked_x"] = float(simulated_caked_point[0])
-        entry["refined_sim_caked_y"] = float(simulated_caked_point[1])
+    visual_caked_point = _geometry_manual_tuple_point(candidate, "sim_visual_caked_deg")
+    if visual_caked_point is None:
+        visual_caked_point = _geometry_manual_tuple_point(candidate, "sim_visual_deg")
+    if visual_caked_point is None:
+        visual_caked_point = _geometry_manual_tuple_point(candidate, "sim_caked")
+    if visual_caked_point is None:
+        visual_caked_point = fit_caked_point
+    if fit_caked_point is not None:
+        fit_caked_x = float(fit_caked_point[0])
+        fit_caked_y = float(fit_caked_point[1])
+        fit_caked_pair = (fit_caked_x, fit_caked_y)
+        entry["refined_sim_caked_x"] = fit_caked_x
+        entry["refined_sim_caked_y"] = fit_caked_y
+        entry["simulated_two_theta_deg"] = fit_caked_x
+        entry["simulated_phi_deg"] = fit_caked_y
+        entry["sim_caked_display"] = fit_caked_pair
+        entry["sim_refined_caked_deg"] = fit_caked_pair
+    if visual_caked_point is not None:
+        visual_caked_pair = (float(visual_caked_point[0]), float(visual_caked_point[1]))
+        entry["sim_visual_caked_deg"] = visual_caked_pair
+        entry["sim_visual_deg"] = visual_caked_pair
+        entry["sim_caked"] = visual_caked_pair
+        entry.setdefault("sim_visual_source", "sim_visual_caked_deg")
 
     if placement_error_px is not None and np.isfinite(float(placement_error_px)):
         entry["placement_error_px"] = max(0.0, float(placement_error_px))

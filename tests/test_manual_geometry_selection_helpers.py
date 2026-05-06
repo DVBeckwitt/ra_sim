@@ -15,14 +15,18 @@ import pytest
 
 from ra_sim.fitting.background_peak_matching import build_background_peak_context
 from ra_sim import headless_geometry_fit as hgf
+from ra_sim.gui import canvas_interactions
 from ra_sim.gui import geometry_fit as gf
 from ra_sim.gui import geometry_q_group_manager
 from ra_sim.gui import geometry_overlay
 from ra_sim.gui import manual_geometry as mg
 from ra_sim.gui import mosaic_top_selection
 from ra_sim.gui import peak_selection as ps
+from ra_sim.gui import state as gui_state
 from ra_sim.io.data_loading import load_gui_state_file
 from ra_sim.simulation import diffraction, exact_cake_portable
+from tests.test_gui_canvas_interactions import _FakeAxis as _FakeCanvasAxis
+from tests.test_gui_canvas_interactions import _FakeEvent as _FakeCanvasMouseEvent
 
 
 class _DummyVar:
@@ -10854,6 +10858,10 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
             "q_group_key": ("q_group", "primary", 1, 5),
             "bg_display": (29.5, -58.0),
             "sim_display": (30.25, -57.5),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_branch_index": 1,
         }
     ]
 
@@ -10926,6 +10934,10 @@ def test_build_geometry_manual_initial_pairs_display_preserves_canonical_pair_be
             "q_group_key": ("q_group", "primary", 1, 5),
             "bg_display": (1822.0, 1375.0),
             "sim_display": (1365.0, 1168.0),
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 9,
+            "source_branch_index": 1,
         }
     ]
     assert caked_pairs == [
@@ -17443,7 +17455,16 @@ def test_build_geometry_manual_pick_cache_adds_caked_qr_projection_cache() -> No
     assert cache_entry["sim_detector_frame_provenance"] == (
         "native_detector_coords_to_detector_display_coords"
     )
-    assert "refined_sim_caked_x" not in cache_entry
+    _assert_pair_close(
+        (cache_entry["refined_sim_caked_x"], cache_entry["refined_sim_caked_y"]),
+        detector_to_caked["caked_visual"],
+    )
+    _assert_pair_close(
+        (cache_entry["simulated_two_theta_deg"], cache_entry["simulated_phi_deg"]),
+        detector_to_caked["caked_visual"],
+    )
+    _assert_pair_close(cache_entry["sim_visual_caked_deg"], detector_to_caked["caked_visual"])
+    assert cache_entry["refined_sim_caked_x"] != pytest.approx(114.5)
     assert "refined_sim_x" not in cache_entry
 
 
@@ -18615,7 +18636,95 @@ def test_caked_qr_projection_entry_accepts_native_without_detector_raw() -> None
     assert entry["caked_y"] == -26.0
     assert entry["two_theta_deg"] == 23.0
     assert entry["phi_deg"] == -26.0
+    assert entry["simulated_two_theta_deg"] == 23.0
+    assert entry["simulated_phi_deg"] == -26.0
+    assert entry["refined_sim_caked_x"] == 23.0
+    assert entry["refined_sim_caked_y"] == -26.0
+    assert entry["sim_caked_display"] == (23.0, -26.0)
+    assert entry["sim_refined_caked_deg"] == (23.0, -26.0)
+    assert entry["sim_visual_caked_deg"] == (23.0, -26.0)
+    assert entry["sim_visual_deg"] == (23.0, -26.0)
+    assert entry["sim_caked"] == (23.0, -26.0)
     assert "sim_col_raw" not in entry
+
+
+def test_caked_qr_projection_entry_preserves_existing_visual_caked_point() -> None:
+    entry = mg._geometry_manual_caked_qr_projection_entry(
+        {
+            "label": "-1,0,10",
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "source_table_index": 0,
+            "source_row_index": 42,
+            "source_branch_index": 0,
+            "native_col": 1085.5,
+            "native_row": 1921.3,
+            "caked_x": 40.176704,
+            "caked_y": 36.25,
+            "sim_visual_caked_deg": (40.177225, 36.296562),
+            "sim_visual_source": "sim_visual_caked_deg",
+        }
+    )
+
+    assert entry is not None
+    assert entry["display_col"] == 40.176704
+    assert entry["display_row"] == 36.25
+    assert entry["simulated_two_theta_deg"] == 40.176704
+    assert entry["simulated_phi_deg"] == 36.25
+    assert entry["sim_refined_caked_deg"] == (40.176704, 36.25)
+    assert entry["sim_caked_display"] == (40.176704, 36.25)
+    assert entry["sim_visual_caked_deg"] == (40.177225, 36.296562)
+    assert entry["sim_visual_deg"] == (40.177225, 36.296562)
+    assert entry["sim_caked"] == (40.177225, 36.296562)
+
+
+def test_geometry_manual_pair_entry_from_caked_projection_candidate_preserves_visual_caked_point() -> (
+    None
+):
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "_caked_qr_projection_cache": True,
+            "display_frame": "caked_display",
+            "current_view_frame": "caked_display",
+            "label": "-1,0,10",
+            "hkl": (-1, 0, 10),
+            "source_table_index": 0,
+            "source_row_index": 12,
+            "source_reflection_index": 160,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "native_col": 42.0,
+            "native_row": 120.0,
+            "display_col": 37.25,
+            "display_row": -41.5,
+            "caked_x": 37.25,
+            "caked_y": -41.5,
+            "two_theta_deg": 37.25,
+            "phi_deg": -41.5,
+            "sim_refined_caked_deg": (40.176704, 36.25),
+            "sim_visual_caked_deg": (40.177225, 36.296562),
+            "sim_visual_source": "sim_visual_caked_deg",
+        },
+        37.75,
+        -41.25,
+        group_key=("q_group", "primary", 1, 10),
+        caked_col=37.75,
+        caked_row=-41.25,
+    )
+
+    assert entry is not None
+    assert entry["background_two_theta_deg"] == 37.75
+    assert entry["background_phi_deg"] == -41.25
+    assert entry["simulated_two_theta_deg"] == 40.176704
+    assert entry["simulated_phi_deg"] == 36.25
+    assert entry["refined_sim_caked_x"] == 40.176704
+    assert entry["refined_sim_caked_y"] == 36.25
+    assert entry["sim_caked_display"] == (40.176704, 36.25)
+    assert entry["sim_refined_caked_deg"] == (40.176704, 36.25)
+    assert entry["sim_visual_caked_deg"] == (40.177225, 36.296562)
+    assert entry["sim_visual_deg"] == (40.177225, 36.296562)
+    assert entry["sim_caked"] == (40.177225, 36.296562)
+    assert entry["sim_visual_source"] == "sim_visual_caked_deg"
 
 
 def test_manual_qr_caked_saved_replay_matches_detector_origin_caked_baseline() -> None:
@@ -21580,6 +21689,142 @@ def _diag_live_toggle(cache_data, click, *, display_background, use_caked_space,
     assert sessions
     assert session == sessions[-1]
     return session, statuses
+
+
+def _diag_hkl_abs_matches(entry, expected_hkl_abs):
+    hkl = _diag_hkl(entry)
+    if hkl is None:
+        return False
+    expected_h, expected_k, expected_l = (int(v) for v in expected_hkl_abs)
+    h, k, l = (int(value) for value in hkl[:3])
+    return abs(h) == expected_h and k == expected_k and l == expected_l
+
+
+def _diag_assert_target_identity_fields(entry):
+    assert _diag_q_group_key(entry) == _QR_PICKER_TARGET_Q_GROUP_KEY
+    assert _diag_hkl_abs_matches(entry, (1, 0, 10))
+    identity = entry.get("selected_source_identity_canonical")
+    if not isinstance(identity, Mapping):
+        identity = entry.get("manual_picker_selected_source_identity_canonical")
+    identity = identity if isinstance(identity, Mapping) else {}
+    for key in ("source_branch_index", "source_row_index", "source_peak_index"):
+        assert entry.get(key) is not None or identity.get(key) is not None
+    assert (
+        entry.get("source_table_index") is not None
+        or entry.get("source_reflection_index") is not None
+        or identity.get("source_table_index") is not None
+        or identity.get("source_reflection_index") is not None
+    )
+
+
+def _diag_assert_finite_pair(entry, key_pair):
+    pair = _diag_finite_pair(entry, (key_pair,))
+    assert pair is not None, key_pair
+    assert np.isfinite(pair[0]) and np.isfinite(pair[1])
+    return pair
+
+
+def _diag_gui_canvas_pick_qr_set(
+    *,
+    cache_data,
+    click_point,
+    display_background,
+    use_caked_space,
+    profile_cache,
+    expected_q_group_key,
+    expected_hkl_abs=(1, 0, 10),
+):
+    geometry_runtime_state = gui_state.GeometryRuntimeState(manual_pick_armed=True)
+    geometry_manual_state = gui_state.ManualGeometryState()
+    session_holder = {"session": {}}
+    status_messages = []
+    toggle_calls = []
+
+    def _set_pick_session(value):
+        session = dict(value) if isinstance(value, Mapping) else {}
+        session_holder["session"] = session
+        geometry_manual_state.pick_session = dict(session)
+        return session
+
+    def _toggle_geometry_manual_selection_at(col, row):
+        toggle_calls.append((float(col), float(row)))
+        handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+            float(col),
+            float(row),
+            pick_session=session_holder["session"],
+            current_background_index=0,
+            display_background=display_background,
+            get_cache_data=lambda **_kwargs: dict(cache_data),
+            pairs_for_index=lambda _idx: [],
+            set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+            set_pick_session_fn=_set_pick_session,
+            restore_view_fn=lambda **_kwargs: None,
+            clear_preview_artists_fn=lambda **_kwargs: None,
+            render_current_pairs_fn=lambda **_kwargs: None,
+            update_button_label_fn=lambda: None,
+            set_status_text=status_messages.append,
+            listed_q_group_entries=lambda: [{"key": expected_q_group_key}],
+            format_q_group_line=lambda _entry: f"group={expected_q_group_key}",
+            use_caked_space=bool(use_caked_space),
+            pick_search_window_px=50.0,
+            profile_cache=profile_cache,
+        )
+        if isinstance(next_session, Mapping):
+            _set_pick_session(next_session)
+        return handled, next_session, suppress_drag
+
+    axis = _FakeCanvasAxis()
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=geometry_runtime_state,
+        geometry_preview_state=gui_state.GeometryPreviewState(),
+        geometry_manual_state=geometry_manual_state,
+        peak_selection_state=gui_state.PeakSelectionState(),
+        peak_selection_callbacks=SimpleNamespace(
+            set_hkl_pick_mode=lambda *_args, **_kwargs: None,
+            select_peak_from_canvas_click=lambda *_args, **_kwargs: False,
+        ),
+        integration_range_drag_callbacks=SimpleNamespace(
+            on_press=lambda _event: False,
+            on_motion=lambda _event: False,
+            on_release=lambda _event: False,
+        ),
+        manual_pick_session_active=lambda: bool(session_holder["session"]),
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=_toggle_geometry_manual_selection_at,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda _axis, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: bool(use_caked_space),
+        set_geometry_status_text=status_messages.append,
+    )
+    event = _FakeCanvasMouseEvent(
+        button=1,
+        inaxes=axis,
+        xdata=float(click_point[0]),
+        ydata=float(click_point[1]),
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_click(bindings, event) is True
+    assert len(toggle_calls) == 1
+    session = session_holder["session"]
+    assert session
+    assert session["group_key"] == expected_q_group_key
+    group_entries = [
+        dict(entry) for entry in session.get("group_entries", []) if isinstance(entry, Mapping)
+    ]
+    assert group_entries
+    assert all(_diag_q_group_key(entry) == expected_q_group_key for entry in group_entries)
+    assert all(_diag_hkl_abs_matches(entry, expected_hkl_abs) for entry in group_entries)
+    assert not any("Manual Qr picker cache is not ready" in text for text in status_messages)
+    assert not any("No simulated Qr/Qz groups are available" in text for text in status_messages)
+    return session, bindings, status_messages
 
 
 def _diag_live_preview(
@@ -27049,6 +27294,53 @@ def test_detector_mode_qr_picker_not_blocked_by_caked_unavailable(tmp_path) -> N
     session, statuses = _diag_toggle_detector_click(cache_data, display, rows["profile_cache"])
     assert session["group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
     assert not any("No simulated Qr/Qz groups are available" in text for text in statuses)
+
+
+def test_minus_1_0_10_gui_canvas_caked_click_selects_qr_set_from_sidecar(
+    tmp_path,
+) -> None:
+    context, rows = _diag_startup_context_and_rows(tmp_path)
+    profile_cache = rows["profile_cache"]
+    detector_cache = _diag_detector_picker_cache(rows["overlay_rows"], overlay_grouped={})
+    _callbacks, caked_cache, caked_grouped = _diag_build_caked_qr_cache(
+        context,
+        rows,
+        detector_cache,
+    )
+    caked_targets = _diag_target_rows_by_branch(caked_grouped)
+    assert set(caked_targets) == {0, 1}
+    click = _diag_target_caked(caked_targets[0])
+    assert click is not None
+    caked_background = np.asarray(
+        _diag_runtime_value(context["projection_kwargs"]["last_caked_background_image_unscaled"])
+    )
+
+    session, _bindings, _statuses = _diag_gui_canvas_pick_qr_set(
+        cache_data=caked_cache,
+        click_point=click,
+        display_background=caked_background,
+        use_caked_space=True,
+        profile_cache=profile_cache,
+        expected_q_group_key=_QR_PICKER_TARGET_Q_GROUP_KEY,
+    )
+
+    assert session["group_key"] == _QR_PICKER_TARGET_Q_GROUP_KEY
+    selected_by_branch = _diag_branch_map(session.get("group_entries", []))
+    assert set(selected_by_branch) == {0, 1}
+    for entry in selected_by_branch.values():
+        _diag_assert_target_identity_fields(entry)
+        assert (
+            entry.get("display_frame") == "caked_display"
+            or entry.get("current_view_frame") == "caked_display"
+        )
+        assert _diag_finite_pair(
+            entry,
+            (
+                ("caked_x", "caked_y"),
+                ("two_theta_deg", "phi_deg"),
+            ),
+        ) is not None
+        _diag_assert_finite_pair(entry, ("simulated_two_theta_deg", "simulated_phi_deg"))
 
 
 def test_qr_overlay_hidden_does_not_disable_manual_picker_candidates(tmp_path) -> None:

@@ -12861,6 +12861,372 @@ def test_toggle_caked_2d_hides_selected_peak_when_reselect_fails(
     assert redraw_calls == [False]
 
 
+def test_apply_main_caked_view_toggle_clears_manual_pick_artists_before_scheduled_update(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    calls: list[object] = []
+    overlay_record = {
+        "hkl": (1, 0, 0),
+        "fit": "record",
+        "final_sim_native": (1.0, 2.0),
+        "final_bg_native": (3.0, 4.0),
+    }
+    overlay_state = {
+        "overlay_records": [dict(overlay_record)],
+        "initial_pairs_display": [{"pair": "view-bound"}],
+        "max_display_markers": 120,
+    }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=_Var(True)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(unscaled_image=np.ones((2, 2), dtype=np.float64)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: calls.append("clear_pending"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_pick_artists",
+        lambda *, redraw=True: calls.append(("clear_pick", bool(redraw))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_fit_last_overlay_state",
+        lambda overlay_state: calls.append(("set_overlay", overlay_state)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_last_overlay_state",
+        lambda: dict(overlay_state),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "schedule_update",
+        lambda: calls.append("schedule"),
+        raising=False,
+    )
+
+    runtime_session._apply_main_caked_view_toggle()
+
+    assert calls == [
+        "clear_pending",
+        ("clear_pick", True),
+        (
+            "set_overlay",
+            {
+                "overlay_records": [overlay_record],
+                "initial_pairs_display": [],
+                "max_display_markers": 120,
+            },
+        ),
+        "schedule",
+    ]
+
+
+def test_apply_main_caked_view_toggle_clears_view_bound_overlay_state_before_detector_refresh(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    class _Axis:
+        def set_aspect(self, _value: object) -> None:
+            calls.append("set_aspect")
+
+        def set_title(self, _value: object) -> None:
+            calls.append("set_title")
+
+    calls: list[object] = []
+    overlay_state = {
+        "overlay_records": [],
+        "initial_pairs_display": [{"pair": "view-bound"}],
+    }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(unscaled_image=np.ones((2, 2), dtype=np.float64)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 64, raising=False)
+    monkeypatch.setattr(runtime_session, "ax", _Axis(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: calls.append("clear_pending"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_pick_artists",
+        lambda *, redraw=True: calls.append(("clear_pick", bool(redraw))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_fit_last_overlay_state",
+        lambda overlay_state: calls.append(("set_overlay", overlay_state)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_last_overlay_state",
+        lambda: dict(overlay_state),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_restore_combined_detector_intersection_cache",
+        lambda: calls.append("restore_cache"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_primary_figure_mode",
+        lambda: "caked",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_canvas_interactions",
+        SimpleNamespace(
+            capture_axis_limits=lambda _ax: ("old_limits",),
+            restore_axis_view=(
+                lambda *_args, **kwargs: calls.append(
+                    ("restore_axis", bool(kwargs.get("preserve")))
+                )
+            ),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_scale_factor_to_existing_results",
+        lambda **_kwargs: calls.append("apply_scale"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_main_figure_chrome",
+        SimpleNamespace(
+            set_main_figure_axes_axis_visibility=lambda *_args, **_kwargs: calls.append(
+                "axis_visibility"
+            ),
+            apply_main_figure_axes_chrome=lambda *_args, **_kwargs: calls.append(
+                "axes_chrome"
+            ),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_sync_primary_raster_geometry",
+        lambda **_kwargs: calls.append("sync_raster"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_request_main_canvas_redraw",
+        lambda **_kwargs: calls.append("main_redraw"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_settled_overlays",
+        lambda: calls.append("refresh_overlays"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_refresh_run_status_bar",
+        lambda: calls.append("status"),
+        raising=False,
+    )
+
+    runtime_session._apply_main_caked_view_toggle()
+
+    assert calls[:4] == [
+        "clear_pending",
+        ("clear_pick", True),
+        ("set_overlay", None),
+        "restore_cache",
+    ]
+    assert "refresh_overlays" in calls
+
+
+def test_apply_main_caked_view_toggle_drops_display_only_overlay_records(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def get(self) -> bool:
+            return True
+
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=_Var()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(unscaled_image=np.ones((2, 2), dtype=np.float64)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_pick_artists",
+        lambda *, redraw=True: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_last_overlay_state",
+        lambda: {
+            "overlay_records": [
+                {
+                    "hkl": (1, 0, 0),
+                    "final_sim_display": (1.0, 2.0),
+                    "final_bg_display": (3.0, 4.0),
+                }
+            ],
+            "initial_pairs_display": [{"pair": "view-bound"}],
+            "max_display_markers": 120,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_fit_last_overlay_state",
+        lambda overlay_state: calls.append(("set_overlay", overlay_state)),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "schedule_update", lambda: None, raising=False)
+
+    runtime_session._apply_main_caked_view_toggle()
+
+    assert calls == [("set_overlay", None)]
+
+
+def test_clear_geometry_pick_artists_skips_missing_overlay_redraw_callback(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.delattr(runtime_session, "_request_overlay_canvas_redraw", raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(pick_artists=["artist"]),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "gui_overlays",
+        SimpleNamespace(
+            clear_artists=lambda artists, *, draw_idle, redraw: calls.append(
+                {
+                    "artists": artists,
+                    "draw_idle": draw_idle,
+                    "redraw": redraw,
+                }
+            )
+        ),
+        raising=False,
+    )
+
+    runtime_session._clear_geometry_pick_artists(redraw=True)
+
+    assert calls == [{"artists": ["artist"], "draw_idle": None, "redraw": True}]
+
+
+def test_apply_main_caked_view_toggle_propagates_clear_artist_runtime_error(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def get(self) -> bool:
+            return True
+
+    def _raise_clear_error(*, redraw=True):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=_Var()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(unscaled_image=np.ones((2, 2), dtype=np.float64)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_pending_main_figure_preview_interaction",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_pick_artists",
+        _raise_clear_error,
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        runtime_session._apply_main_caked_view_toggle()
+
+
 def test_set_persistent_view_mode_keeps_q_space_when_enabling_caked_data(
     monkeypatch,
 ) -> None:

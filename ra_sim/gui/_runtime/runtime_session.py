@@ -5521,6 +5521,52 @@ def _set_geometry_fit_last_overlay_state(
     )
 
 
+def _geometry_fit_overlay_state_finite_pair(value: object) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+        return None
+    try:
+        point = (float(value[0]), float(value[1]))
+    except Exception:
+        return None
+    if not (np.isfinite(point[0]) and np.isfinite(point[1])):
+        return None
+    return point
+
+
+def _geometry_fit_overlay_record_redraw_safe(record: object) -> bool:
+    if not isinstance(record, Mapping):
+        return False
+    return bool(
+        _geometry_fit_overlay_state_finite_pair(record.get("final_sim_native")) is not None
+        and _geometry_fit_overlay_state_finite_pair(record.get("final_bg_native")) is not None
+    )
+
+
+def _invalidate_geometry_fit_view_bound_overlay_state() -> None:
+    """Drop stale view-bound initial markers while preserving durable fit overlays."""
+
+    last_overlay_state = globals().get("_geometry_fit_last_overlay_state")
+    set_overlay_state = globals().get("_set_geometry_fit_last_overlay_state")
+    if not (callable(last_overlay_state) and callable(set_overlay_state)):
+        return
+    overlay_state = last_overlay_state()
+    if not isinstance(overlay_state, Mapping):
+        return
+    raw_records = overlay_state.get("overlay_records")
+    if not isinstance(raw_records, Sequence) or isinstance(raw_records, (str, bytes)):
+        raw_records = ()
+    preserved_records = [
+        dict(record) for record in raw_records if _geometry_fit_overlay_record_redraw_safe(record)
+    ]
+    if not preserved_records:
+        set_overlay_state(None)
+        return
+    updated_state = dict(overlay_state)
+    updated_state["overlay_records"] = preserved_records
+    updated_state["initial_pairs_display"] = []
+    set_overlay_state(updated_state)
+
+
 def _current_geometry_fit_ui_params() -> dict[str, object]:
     """Capture the current geometry-fit UI parameter values."""
 
@@ -10963,10 +11009,13 @@ def _initialize_runtime_controls_block_04() -> None:
             project_peaks_to_current_view=_project_geometry_manual_peaks_to_current_view,
             project_peaks_to_caked_view=_project_geometry_manual_peaks_to_caked_view,
             project_peaks_for_background_view=(
-                lambda background_index, rows: _geometry_manual_project_peaks_for_background(
-                    int(background_index),
-                    rows,
-                    strict_caked_projection=False,
+                lambda background_index, rows, **kwargs: (
+                    _geometry_manual_project_peaks_for_background(
+                        int(background_index),
+                        rows,
+                        mode_override=kwargs.get("mode_override"),
+                        strict_caked_projection=bool(kwargs.get("strict_caked_projection", False)),
+                    )
                 )
             ),
             entry_display_coords=_geometry_manual_entry_display_coords,
@@ -11222,9 +11271,10 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
 def _clear_geometry_pick_artists(*, redraw: bool = True):
     """Remove geometry fit markers from the plot and reset the cache."""
 
+    draw_idle = globals().get("_request_overlay_canvas_redraw")
     gui_overlays.clear_artists(
         geometry_runtime_state.pick_artists,
-        draw_idle=_request_overlay_canvas_redraw,
+        draw_idle=draw_idle if callable(draw_idle) else None,
         redraw=redraw,
     )
 
@@ -12436,6 +12486,12 @@ def _apply_main_caked_view_toggle() -> None:
         )()
     )
     _clear_pending_main_figure_preview_interaction()
+    clear_pick_artists = globals().get("_clear_geometry_pick_artists")
+    if callable(clear_pick_artists):
+        clear_pick_artists(redraw=True)
+    invalidate_overlay_state = globals().get("_invalidate_geometry_fit_view_bound_overlay_state")
+    if callable(invalidate_overlay_state):
+        invalidate_overlay_state()
     if show_caked_now or simulation_runtime_state.unscaled_image is None:
         schedule_update_fn = globals().get("schedule_update")
         if callable(schedule_update_fn):
@@ -41366,9 +41422,7 @@ def _build_geometry_fit_async_job(
                 raise RuntimeError(message) from exc
         changed_backfill_count = 0
         try:
-            changed_backfill_count = int(
-                _backfill_geometry_manual_pair_caked_coordinate_cache()
-            )
+            changed_backfill_count = int(_backfill_geometry_manual_pair_caked_coordinate_cache())
         except Exception:
             changed_backfill_count = 0
         if changed_backfill_count > 0:
@@ -41388,9 +41442,7 @@ def _build_geometry_fit_async_job(
                         "measured_for_fit": [
                             entry
                             for entry in manual_pairs_by_background.get(int(idx), ())
-                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(
-                                entry
-                            )
+                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
                         ],
                     }
                     for idx in required_indices
@@ -41444,9 +41496,7 @@ def _build_geometry_fit_async_job(
                         "measured_for_fit": [
                             entry
                             for entry in manual_pairs_by_background.get(int(idx), ())
-                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(
-                                entry
-                            )
+                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
                         ],
                     }
                     for idx in required_indices
@@ -42727,11 +42777,22 @@ def _run_async_geometry_fit_worker_job(
     def _project_source_rows_for_background(
         background_index: int,
         raw_rows: Sequence[object] | None,
+        *,
+        mode_override: str | None = None,
+        strict_caked_projection: bool = True,
     ) -> Sequence[object]:
         normalized_rows = _geometry_fit_rows_for_background(background_index, raw_rows)
         if not normalized_rows:
             return []
-        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+        normalized_mode = (
+            str(
+                mode_override
+                if mode_override is not None
+                else job_data.get("projection_view_mode") or "detector"
+            )
+            .strip()
+            .lower()
+        )
         if normalized_mode not in {"detector", "caked", "q_space"}:
             normalized_mode = "detector"
         current_background_index = int(job_data.get("current_background_index", 0))
@@ -42772,6 +42833,8 @@ def _run_async_geometry_fit_worker_job(
                 allow_generated_payload=True,
             )
             if not isinstance(resolved_caked_payload, Mapping):
+                if not bool(strict_caked_projection):
+                    return []
                 raise RuntimeError(
                     f"exact caked projector unavailable for background {int(background_index) + 1}"
                 )
@@ -42785,6 +42848,8 @@ def _run_async_geometry_fit_worker_job(
                 hydrated_caked_payload.get("transform_bundle"),
                 CakeTransformBundle,
             ):
+                if not bool(strict_caked_projection):
+                    return []
                 raise RuntimeError(
                     f"exact caked projector unavailable for background {int(background_index) + 1}"
                 )
@@ -42911,7 +42976,9 @@ def _run_async_geometry_fit_worker_job(
             if normalized_mode == "q_space":
                 return []
             if normalized_mode == "caked":
-                raise
+                if bool(strict_caked_projection):
+                    raise
+                return []
             return normalized_rows
 
     def _project_source_rows_by_row_background(
@@ -44746,9 +44813,11 @@ def _run_async_geometry_fit_worker_job(
         geometry_manual_caked_view_for_index=_load_caked_view_by_index_snapshot,
         geometry_manual_project_peaks_to_current_view=_project_source_rows_by_row_background,
         geometry_manual_project_peaks_for_background_view=(
-            lambda background_index, rows: _project_source_rows_for_background(
+            lambda background_index, rows, **kwargs: _project_source_rows_for_background(
                 int(background_index),
                 rows,
+                mode_override=kwargs.get("mode_override"),
+                strict_caked_projection=bool(kwargs.get("strict_caked_projection", True)),
             )
         ),
         geometry_manual_caked_projection_for_index=_load_caked_projection_by_index_snapshot,
@@ -45229,9 +45298,13 @@ def _initialize_runtime_controls_block_50() -> None:
                 _geometry_manual_project_peaks_by_row_background
             ),
             "geometry_manual_project_peaks_for_background_view": (
-                lambda background_index, rows: _geometry_manual_project_peaks_for_background(
-                    int(background_index),
-                    rows,
+                lambda background_index, rows, **kwargs: (
+                    _geometry_manual_project_peaks_for_background(
+                        int(background_index),
+                        rows,
+                        mode_override=kwargs.get("mode_override"),
+                        strict_caked_projection=bool(kwargs.get("strict_caked_projection", True)),
+                    )
                 )
             ),
             "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,

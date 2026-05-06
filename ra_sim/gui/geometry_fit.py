@@ -1323,7 +1323,7 @@ class GeometryFitRuntimeManualDatasetBindings:
         Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
     ) = None
     geometry_manual_project_peaks_for_background_view: (
-        Callable[[int, Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
+        Callable[..., list[dict[str, object]]] | None
     ) = None
     backend_detector_coords_to_native_detector_coords: (
         Callable[
@@ -4020,14 +4020,21 @@ def _geometry_fit_put_simulated_point_fields(
     point_frame = _geometry_fit_normalize_point_frame(frame)
     if point_list is None:
         return
+    point_x = float(point_list[0])
+    point_y = float(point_list[1])
+    point_pair = (point_x, point_y)
     if point_frame == "detector_native":
-        row["sim_native"] = (float(point_list[0]), float(point_list[1]))
+        row["sim_native"] = point_pair
     elif point_frame == "caked_2theta_phi":
-        row["simulated_two_theta_deg"] = float(point_list[0])
-        row["simulated_phi_deg"] = float(point_list[1])
-        row["sim_caked_display"] = (float(point_list[0]), float(point_list[1]))
+        row["simulated_two_theta_deg"] = point_x
+        row["simulated_phi_deg"] = point_y
+        row["sim_caked_display"] = point_pair
+        row["sim_refined_caked_deg"] = point_pair
+        row["sim_visual_caked_deg"] = point_pair
+        row["sim_visual_deg"] = point_pair
+        row["sim_caked"] = point_pair
     else:
-        row["sim_display"] = (float(point_list[0]), float(point_list[1]))
+        row["sim_display"] = point_pair
 
 
 def _geometry_fit_saved_state_provider_pair(
@@ -4061,6 +4068,9 @@ def _geometry_fit_saved_state_provider_pair(
         and simulated_source in _GEOMETRY_FIT_PICKER_OWNED_POINT_SOURCES
         else "picker_saved_value_unavailable"
     )
+    provider_hkl = _geometry_fit_normalized_hkl(truth_pair.get("normalized_hkl"))
+    if provider_hkl is None:
+        provider_hkl = _geometry_fit_normalized_hkl(saved_entry.get("hkl"))
     provider_pair = {
         "pair_index": int(pair_index),
         "provider_pair_index": int(pair_index),
@@ -4073,7 +4083,8 @@ def _geometry_fit_saved_state_provider_pair(
             saved_entry.get("source_q_group_key", saved_entry.get("q_group_key"))
         ),
         "branch_group_key": truth_pair.get("branch_group_key"),
-        "normalized_hkl": truth_pair.get("normalized_hkl"),
+        "hkl": provider_hkl,
+        "normalized_hkl": provider_hkl,
         "source_branch_index": truth_pair.get("source_branch_index"),
         "selected_source_identity_canonical": identity,
         "background_point": background_point,
@@ -8440,7 +8451,7 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
     ) = None,
     geometry_manual_project_peaks_for_background_view: (
-        Callable[[int, Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
+        Callable[..., list[dict[str, object]]] | None
     ) = None,
     unrotate_display_peaks: Callable[..., list[dict[str, object]]],
     display_to_native_sim_coords: Callable[..., tuple[float, float]],
@@ -8552,7 +8563,7 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
         Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
     ) = None,
     geometry_manual_project_peaks_for_background_view: (
-        Callable[[int, Sequence[dict[str, object]] | None], list[dict[str, object]]] | None
+        Callable[..., list[dict[str, object]]] | None
     ) = None,
     unrotate_display_peaks: Callable[..., list[dict[str, object]]],
     display_to_native_sim_coords: Callable[..., tuple[float, float]],
@@ -10892,14 +10903,13 @@ def build_geometry_manual_fit_dataset(
                         )
                         initial_entry.pop("sim_native_raw_live_source", None)
         elif point_frame == "caked_2theta_phi":
-            initial_entry["simulated_two_theta_deg"] = float(point_list[0])
-            initial_entry["simulated_phi_deg"] = float(point_list[1])
+            _geometry_fit_put_simulated_point_fields(
+                initial_entry,
+                point_list,
+                "caked_2theta_phi",
+            )
             if use_caked_display:
                 initial_entry["sim_display"] = (
-                    float(point_list[0]),
-                    float(point_list[1]),
-                )
-                initial_entry["sim_caked_display"] = (
                     float(point_list[0]),
                     float(point_list[1]),
                 )
@@ -11044,6 +11054,34 @@ def build_geometry_manual_fit_dataset(
                     grouped_rows[int(row_background_idx)] = []
                 grouped_rows[int(row_background_idx)].append(entry)
             projected_rows = []
+            projection_kwargs: dict[str, object] = {}
+            caked_projection_error = (
+                "manual caked geometry fit requires a per-background projector that accepts "
+                "mode_override and strict_caked_projection"
+            )
+            if caked_projection_required:
+                projection_kwargs = {
+                    "mode_override": "caked",
+                    "strict_caked_projection": True,
+                }
+                try:
+                    projector_signature = inspect.signature(per_background_projector)
+                except (TypeError, ValueError):
+                    projector_signature = None
+                if projector_signature is not None:
+                    projector_params = projector_signature.parameters
+                    accepts_projection_kwargs = any(
+                        param.kind == inspect.Parameter.VAR_KEYWORD
+                        for param in projector_params.values()
+                    )
+                    if not (
+                        accepts_projection_kwargs
+                        or (
+                            "mode_override" in projector_params
+                            and "strict_caked_projection" in projector_params
+                        )
+                    ):
+                        raise RuntimeError(caked_projection_error)
             for row_background_idx in ordered_backgrounds:
                 try:
                     projected_rows.extend(
@@ -11052,11 +11090,16 @@ def build_geometry_manual_fit_dataset(
                             per_background_projector(
                                 int(row_background_idx),
                                 grouped_rows[int(row_background_idx)],
+                                **projection_kwargs,
                             )
                             or ()
                         )
                         if isinstance(entry, Mapping)
                     )
+                except TypeError as exc:
+                    if caked_projection_required:
+                        raise RuntimeError(caked_projection_error) from exc
+                    return normalized_rows
                 except Exception:
                     if caked_projection_required:
                         raise
@@ -11306,9 +11349,10 @@ def build_geometry_manual_fit_dataset(
             row["caked_y"] = float(simulated_point[1])
             row["two_theta_deg"] = float(simulated_point[0])
             row["phi_deg"] = float(simulated_point[1])
-            row["sim_caked_display"] = (
-                float(simulated_point[0]),
-                float(simulated_point[1]),
+            _geometry_fit_put_simulated_point_fields(
+                row,
+                simulated_point,
+                "caked_2theta_phi",
             )
 
         display_point = None
@@ -11337,18 +11381,18 @@ def build_geometry_manual_fit_dataset(
 
         caked_point = _caked_angle_pair(
             row,
-            x_keys=("refined_sim_caked_x", "simulated_two_theta_deg", "two_theta_deg", "caked_x"),
-            y_keys=("refined_sim_caked_y", "simulated_phi_deg", "phi_deg", "caked_y"),
+            x_keys=("simulated_two_theta_deg", "two_theta_deg", "caked_x", "refined_sim_caked_x"),
+            y_keys=("simulated_phi_deg", "phi_deg", "caked_y", "refined_sim_caked_y"),
         )
         if caked_point is not None:
             row["caked_x"] = float(caked_point[0])
             row["caked_y"] = float(caked_point[1])
             row["two_theta_deg"] = float(caked_point[0])
             row["phi_deg"] = float(caked_point[1])
+            _geometry_fit_put_simulated_point_fields(row, caked_point, "caked_2theta_phi")
             if use_caked_display:
                 row["sim_col"] = float(caked_point[0])
                 row["sim_row"] = float(caked_point[1])
-                row["sim_caked_display"] = (float(caked_point[0]), float(caked_point[1]))
 
         native_point = None
         for x_key, y_key in (
@@ -12209,6 +12253,13 @@ def build_geometry_manual_fit_dataset(
                 row.setdefault("projection_frame", "caked_display")
                 row.setdefault("coordinate_provenance", "trial_geometry_projection")
                 row.setdefault("is_dynamic_trial_row", True)
+            caked_point = _caked_angle_pair(
+                row,
+                x_keys=("simulated_two_theta_deg", "two_theta_deg", "caked_x"),
+                y_keys=("simulated_phi_deg", "phi_deg", "caked_y"),
+            ) or _geometry_fit_point_list(row.get("sim_caked_display"))
+            if caked_point is not None:
+                _geometry_fit_put_simulated_point_fields(row, caked_point, "caked_2theta_phi")
             marked.append(row)
         return marked
 
@@ -12448,8 +12499,13 @@ def build_geometry_manual_fit_dataset(
             "display_row": float(caked_point[1]),
             "sim_col": float(caked_point[0]),
             "sim_row": float(caked_point[1]),
+            "simulated_two_theta_deg": float(caked_point[0]),
+            "simulated_phi_deg": float(caked_point[1]),
             "sim_caked_display": (float(caked_point[0]), float(caked_point[1])),
+            "sim_refined_caked_deg": (float(caked_point[0]), float(caked_point[1])),
             "sim_visual_caked_deg": (float(caked_point[0]), float(caked_point[1])),
+            "sim_visual_deg": (float(caked_point[0]), float(caked_point[1])),
+            "sim_caked": (float(caked_point[0]), float(caked_point[1])),
         }
         for key in (
             "pair_id",
@@ -14544,7 +14600,7 @@ def build_geometry_manual_fit_dataset(
                     float(saved_caked_simulated_point[0]),
                     float(saved_caked_simulated_point[1]),
                 ]
-                provider_simulated_frame = "display"
+                provider_simulated_frame = "caked_2theta_phi"
                 provider_simulated_point_source = "manual_picker_saved"
         saved_identity_available = any(
             saved_entry_for_diag.get(key) is not None
@@ -14613,7 +14669,7 @@ def build_geometry_manual_fit_dataset(
                     float(saved_caked_simulated_point[0]),
                     float(saved_caked_simulated_point[1]),
                 ]
-                provider_simulated_frame = "display"
+                provider_simulated_frame = "caked_2theta_phi"
                 provider_simulated_point_source = "manual_picker_saved"
                 provider_saved_simulated_point_available = True
         rebinding_fallback_used = bool(
@@ -14684,15 +14740,19 @@ def build_geometry_manual_fit_dataset(
         provider_identity = gui_manual_geometry.canonical_geometry_source_identity(
             identity_source_entry
         )
+        semantic_hkl = _normalized_hkl(saved_entry_for_diag.get("hkl"))
+        if semantic_hkl is None and isinstance(selected_source_entry_for_diag, Mapping):
+            semantic_hkl = _normalized_hkl(selected_source_entry_for_diag.get("hkl"))
+        provider_hkl = (
+            tuple(int(value) for value in semantic_hkl) if semantic_hkl is not None else None
+        )
         semantic_pair_key = {
             "background_index": int(background_idx),
             "q_group_key": _geometry_fit_jsonable(saved_entry_for_diag.get("q_group_key")),
             "branch_group_key": _geometry_fit_jsonable(
                 saved_entry_for_diag.get("branch_group_key")
             ),
-            "normalized_hkl": _geometry_fit_jsonable(
-                _normalized_hkl(saved_entry_for_diag.get("hkl"))
-            ),
+            "normalized_hkl": _geometry_fit_jsonable(provider_hkl),
             "source_branch_index": (
                 int(saved_branch_index) if saved_branch_index is not None else None
             ),
@@ -14722,6 +14782,7 @@ def build_geometry_manual_fit_dataset(
                 else None
             ),
             "branch_group_key": semantic_pair_key["branch_group_key"],
+            "hkl": provider_hkl,
             "normalized_hkl": semantic_pair_key["normalized_hkl"],
             "source_branch_index": semantic_pair_key["source_branch_index"],
             "selected_source_identity_canonical": provider_identity,
@@ -15153,7 +15214,7 @@ def build_geometry_manual_fit_dataset(
                         float(saved_caked_simulated_point[0]),
                         float(saved_caked_simulated_point[1]),
                     ]
-                    provider_simulated_frame = "display"
+                    provider_simulated_frame = "caked_2theta_phi"
                     provider_simulated_point_source = "manual_picker_saved"
         provider_overwrites_existing_sim = bool(
             provider_simulated_point_source in _GEOMETRY_FIT_PICKER_OWNED_POINT_SOURCES
@@ -15180,7 +15241,11 @@ def build_geometry_manual_fit_dataset(
                     float(saved_caked_simulated_point[0]),
                     float(saved_caked_simulated_point[1]),
                 )
-                initial_entry["provider_simulated_frame"] = "display"
+                initial_entry["simulated_two_theta_deg"] = float(
+                    saved_caked_simulated_point[0]
+                )
+                initial_entry["simulated_phi_deg"] = float(saved_caked_simulated_point[1])
+                initial_entry["provider_simulated_frame"] = "caked_2theta_phi"
                 initial_entry["provider_simulated_point_source"] = "manual_picker_saved"
         _geometry_fit_apply_source_coverage_identity(initial_entry)
         initial_pairs_display.append(initial_entry)
@@ -15351,6 +15416,8 @@ def build_geometry_manual_fit_dataset(
             "source_row_index",
             "source_branch_index",
             "source_peak_index",
+            "hkl",
+            "normalized_hkl",
             "background_detector_x",
             "background_detector_y",
             "background_detector_input_frame",
@@ -15365,6 +15432,13 @@ def build_geometry_manual_fit_dataset(
             "background_reference_lambda",
             "background_reference_qr",
             "background_reference_qz",
+            "provider_simulated_frame",
+            "provider_simulated_point_source",
+            "simulated_two_theta_deg",
+            "simulated_phi_deg",
+            "sim_caked_display",
+            "sim_refined_caked_deg",
+            "sim_visual_caked_deg",
         ):
             if key in initial_entry:
                 measured_entry[key] = initial_entry.get(key)
@@ -15427,6 +15501,7 @@ def build_geometry_manual_fit_dataset(
             "q_group_key": provider_pair.get("q_group_key"),
             "source_q_group_key": provider_pair.get("source_q_group_key"),
             "branch_group_key": provider_pair.get("branch_group_key"),
+            "hkl": provider_pair.get("hkl"),
             "normalized_hkl": provider_pair.get("normalized_hkl"),
             "source_branch_index": provider_pair.get("source_branch_index"),
             "selected_source_identity_canonical": provider_pair.get(

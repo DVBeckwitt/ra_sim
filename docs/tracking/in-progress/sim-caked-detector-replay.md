@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-04-30
+Last updated: 2026-05-06
 
 ## Summary
 
@@ -23,6 +23,27 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-05-06 update: the manual Qr/Qz caked picker slice now preserves the
+separate fit/cache and visual caked coordinate contracts when saving manual
+pairs. `geometry_manual_pair_entry_from_candidate(...)` keeps refined/cache
+caked values in `simulated_two_theta_deg`, `simulated_phi_deg`,
+`refined_sim_caked_x/y`, `sim_refined_caked_deg`, and `sim_caked_display`,
+while visual aliases stay on `sim_visual_caked_deg`, `sim_visual_deg`, and
+`sim_caked` when present. Required caked geometry-fit projection now fails
+closed unless the per-background projector can receive forced caked kwargs, and
+the runtime projector callbacks accept/forward those kwargs. The main
+detector/caked view toggle now clears manual pick artists, drops stale
+`initial_pairs_display`, preserves only redraw-safe fitted overlay records, and
+propagates unexpected cleanup errors.
+
+Review status for this patch: focused behavior, runtime, compile, lint, diff,
+and `ra_sim.dev check` validation are green. A follow-up review pass identified
+three remaining cleanup items before merge-quality handoff: keep
+`_geometry_fit_put_simulated_point_fields(...)` from overwriting existing
+visual caked aliases, avoid wrapping compatible projector body `TypeError`s as
+projector-contract errors, and trim the single-use retained GUI canvas helper.
+Those review items are documented but not fixed in this commit.
 
 2026-04-30 update: detector-mode Qr/Qz selector changes now warm the caked
 projection sidecar immediately, without toggling the GUI into caked view. The
@@ -72,6 +93,11 @@ Bug/error status:
 
 - original detector-mode Qr-set cache miss is fixed at helper and runtime
   wiring level;
+- saved manual caked fit/cache fields and visual caked aliases are now split at
+  manual-pair save time;
+- required caked geometry-fit projection now fails closed instead of silently
+  falling back to detector projection;
+- caked-view toggle cleanup no longer swallows unexpected artist/state errors;
 - code path updated across helper refresh, initial saved redraw, runtime
   detector projection, and detector-mode Qr selector cache warming;
 - adjacent replay regressions found in review were patched in the same blast
