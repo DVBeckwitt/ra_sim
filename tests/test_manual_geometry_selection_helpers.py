@@ -11084,6 +11084,68 @@ def test_detector_origin_initial_pairs_display_reprojects_background_in_saved_an
     assert legacy_caked_session_initial[0]["bg_display"] == (999.0, -999.0)
 
 
+@pytest.mark.parametrize(
+    ("entry", "expected_detector_origin"),
+    [
+        (
+            {
+                "detector_x": 10.0,
+                "detector_y": 20.0,
+                "background_two_theta_deg": 999.0,
+                "background_phi_deg": -999.0,
+            },
+            True,
+        ),
+        (
+            {
+                "detector_x": 10.0,
+                "detector_y": 20.0,
+                "caked_x": 30.0,
+                "caked_y": -40.0,
+                "background_two_theta_deg": 30.0,
+                "background_phi_deg": -40.0,
+            },
+            False,
+        ),
+        (
+            {
+                "x": 10.0,
+                "y": 20.0,
+                "background_two_theta_deg": 30.0,
+                "background_phi_deg": -40.0,
+            },
+            False,
+        ),
+        (
+            {
+                "manual_background_input_origin": "detector",
+                "detector_x": 10.0,
+                "detector_y": 20.0,
+                "caked_x": 30.0,
+                "caked_y": -40.0,
+            },
+            True,
+        ),
+        (
+            {
+                "manual_background_input_frame": "caked_2theta_phi",
+                "detector_x": 10.0,
+                "detector_y": 20.0,
+            },
+            False,
+        ),
+    ],
+)
+def test_saved_background_origin_inference_for_legacy_rows(
+    entry,
+    expected_detector_origin,
+) -> None:
+    assert (
+        mg._geometry_manual_saved_background_detector_origin(entry)
+        is expected_detector_origin
+    )
+
+
 def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_build_pairs() -> None:
     cache_state = {"signature": None, "data": {}}
     simulated_param_sets: list[dict[str, object]] = []
@@ -13898,7 +13960,276 @@ def test_manual_qr_toggle_cold_cache_fails_fast_without_build() -> None:
     assert handled is False
     assert next_session == {}
     assert suppress_drag is False
-    assert "cache is not ready" in status_messages[-1]
+    assert "no detector source rows" in status_messages[-1]
+
+
+def test_detector_first_qr_selection_reuses_picker_ready_refinement_cold_cache() -> None:
+    background = np.zeros((256, 256), dtype=float)
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "native_col": 2.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks({"value": False}, raw_rows)
+    warmed_cache = _build_detector_cross_view_pick_cache(
+        callbacks,
+        raw_rows,
+        build_caked_projection_sidecar=False,
+    )
+    state = {"signature": None, "cache": {}}
+    runtime_callbacks = _make_runtime_cache_callbacks_for_existing_cache(
+        use_caked=False,
+        background=background,
+        state=state,
+    )
+    requested_signature = runtime_callbacks.pick_cache_signature(
+        param_set={"a": 1.0},
+        background_index=0,
+        background_image=background,
+    )
+    warmed_cache["signature"] = requested_signature
+    warmed_cache["placed_signature"] = requested_signature[0]
+    warmed_cache.pop("qr_sim_refinement_signature", None)
+    warmed_cache.pop("qr_sim_refinement_lookup_signature", None)
+    warmed_cache["qr_sim_refinement_complete"] = False
+    warmed_cache["qr_sim_refinement_lookup_complete"] = False
+    state.update({"signature": requested_signature, "cache": warmed_cache})
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        102.0,
+        204.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=background,
+        get_cache_data=runtime_callbacks.get_pick_cache,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["tagged_candidate"]["q_group_key"] == group_key
+
+
+def test_detector_first_qr_selection_reuses_sidecar_prewarmed_detector_rows() -> None:
+    background = np.zeros((256, 256), dtype=float)
+    group_key = ("q_group", "primary", 3, 4)
+    raw_rows = [
+        {
+            "label": "3,0,4",
+            "q_group_key": group_key,
+            "branch_id": "+x",
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_reflection_index": 16,
+            "source_ray_id": "plus-ray",
+            "hkl": (3, 0, 4),
+            "native_col": 2.0,
+            "native_row": 4.0,
+        }
+    ]
+    callbacks = _cross_view_selection_callbacks({"value": False}, raw_rows)
+    warmed_cache = _build_detector_cross_view_pick_cache(
+        callbacks,
+        raw_rows,
+        build_caked_projection_sidecar=True,
+    )
+    _mark_runtime_cache_qr_refinement_ready(
+        warmed_cache,
+        caked_projection_signature=("caked", 10.0, 20.0),
+    )
+    state = {"signature": warmed_cache["signature"], "cache": warmed_cache}
+    runtime_callbacks = _make_runtime_cache_callbacks_for_existing_cache(
+        use_caked=False,
+        background=background,
+        state=state,
+    )
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        102.0,
+        204.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=background,
+        get_cache_data=runtime_callbacks.get_pick_cache,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["tagged_candidate"]["q_group_key"] == group_key
+
+
+def test_detector_first_qr_selection_cold_cache_builds_picker_candidates_only() -> None:
+    group_key = ("q_group", "primary", 1, 0)
+    detector_entry = _runtime_qr_click_candidate(group_key)
+    cache_calls: list[dict[str, object]] = []
+
+    def _get_cache(**kwargs):
+        cache_calls.append(dict(kwargs))
+        if len(cache_calls) == 1:
+            return {
+                "cache_ready": False,
+                "manual_no_build_cache": True,
+                "cache_metadata": {"cache_action": "miss", "reuse_only": True},
+            }
+        return {
+            "cache_ready": False,
+            "picker_candidates_ready": True,
+            "signature": ("picker-only",),
+            "detector_picker_rows": [dict(detector_entry)],
+            "detector_picker_source_rows": [dict(detector_entry)],
+            "detector_picker_grouped_candidates": {group_key: [dict(detector_entry)]},
+            "cache_metadata": {
+                "cache_action": "rebuilt",
+                "picker_candidates_only": True,
+                "qr_refinement_skipped": True,
+                "qr_lookup_rebuild_skipped": True,
+            },
+        }
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=_get_cache,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert [call["reuse_only"] for call in cache_calls] == [True, False]
+    assert [call["build_caked_projection_sidecar"] for call in cache_calls] == [False, False]
+    assert cache_calls[1]["prefer_cache"] is True
+    assert cache_calls[1]["picker_candidates_only"] is True
+
+
+def test_runtime_pick_cache_picker_candidates_only_skips_refinement_and_fresh_simulation(
+    monkeypatch,
+) -> None:
+    background = np.zeros((32, 32), dtype=float)
+    group_key = ("q_group", "primary", 1, 0)
+    detector_entry = _runtime_qr_click_candidate(group_key)
+    stored: dict[str, object] = {"signature": None, "cache": {}}
+    source_calls: list[str | None] = []
+    prefer_cache_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        mg,
+        "geometry_manual_refine_qr_sim_candidates_in_cache",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("refine called")),
+    )
+    monkeypatch.setattr(
+        mg,
+        "geometry_manual_rebuild_refined_qr_cache_lookups",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("lookup rebuild called")),
+    )
+
+    def _source_rows(_idx, _params, **kwargs):
+        source_calls.append(kwargs.get("consumer"))
+        return [dict(detector_entry)]
+
+    def _simulated(_params, *, prefer_cache):
+        prefer_cache_calls.append(bool(prefer_cache))
+        if not prefer_cache:
+            raise AssertionError("fresh simulation called")
+        return []
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={},
+        last_simulation_signature=lambda: ("sim", 1),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: background,
+        use_caked_space=lambda: False,
+        replace_cache_state=lambda signature, cache_data: stored.update(
+            {"signature": signature, "cache": dict(cache_data)}
+        ),
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        pairs_for_index=lambda _idx: [],
+        source_rows_for_background=_source_rows,
+        simulated_peaks_for_params=_simulated,
+        build_grouped_candidates=_group_by_q_group,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (
+            float(entry["display_col"]),
+            float(entry["display_row"]),
+        ),
+        current_cache_signature=lambda: stored["signature"],
+        current_cache_data=lambda: stored["cache"],
+    )
+
+    cache_data = callbacks.get_pick_cache(
+        param_set={"a": 1.0},
+        prefer_cache=True,
+        picker_candidates_only=True,
+    )
+
+    assert cache_data["cache_ready"] is False
+    assert cache_data["picker_candidates_ready"] is True
+    assert cache_data["detector_picker_grouped_candidates"][group_key]
+    assert cache_data["cache_metadata"]["picker_candidates_only"] is True
+    assert cache_data["cache_metadata"]["qr_refinement_skipped"] is True
+    assert cache_data["cache_metadata"]["qr_lookup_rebuild_skipped"] is True
+    assert stored["cache"]["picker_candidates_ready"] is True
+    assert prefer_cache_calls == [True]
+    assert source_calls == ["manual_pick_cache"]
+    trace = mg.geometry_manual_detector_picker_input_trace(
+        cache_data,
+        display_background=background,
+        grouped_candidates=cache_data["detector_picker_grouped_candidates"],
+    )
+    assert trace["picker_candidates_ready"] is True
+    assert trace["bounded_picker_build_attempted"] is True
+    assert trace["bounded_picker_build_returned_row_count"] == 1
 
 
 def test_manual_qr_place_cold_cache_uses_no_build_sentinel() -> None:
@@ -18916,6 +19247,68 @@ def test_geometry_manual_pair_entry_from_caked_projection_candidate_preserves_vi
     assert entry["sim_visual_deg"] == (40.177225, 36.296562)
     assert entry["sim_caked"] == (40.177225, 36.296562)
     assert entry["sim_visual_source"] == "sim_visual_caked_deg"
+
+
+def test_caked_to_detector_replay_uses_visual_caked_point_for_display() -> None:
+    refined_caked = (40.176704, 36.25)
+    visual_caked = (40.177225, 36.296562)
+    saved_entry = {
+        "label": "-1,0,10",
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "source_table_index": 0,
+        "source_row_index": 42,
+        "source_reflection_index": 160,
+        "source_branch_index": 1,
+        "source_ray_id": "minus-ray",
+        "native_col": 1085.5,
+        "native_row": 1921.3,
+    }
+    projected_entry = {
+        **saved_entry,
+        "caked_x": refined_caked[0],
+        "caked_y": refined_caked[1],
+        "two_theta_deg": refined_caked[0],
+        "phi_deg": refined_caked[1],
+        "sim_refined_caked_deg": refined_caked,
+        "sim_visual_caked_deg": visual_caked,
+        "sim_visual_deg": visual_caked,
+        "sim_caked": visual_caked,
+    }
+
+    def _caked_to_detector(two_theta, phi):
+        if (float(two_theta), float(phi)) == pytest.approx(visual_caked):
+            return 500.0, 600.0
+        if (float(two_theta), float(phi)) == pytest.approx(refined_caked):
+            return 100.0, 200.0
+        return None
+
+    def _detector_to_native(col, row):
+        if (float(col), float(row)) == pytest.approx((500.0, 600.0)):
+            return 50.0, 60.0
+        if (float(col), float(row)) == pytest.approx((100.0, 200.0)):
+            return 10.0, 20.0
+        return None
+
+    def _native_to_caked(col, row):
+        if (float(col), float(row)) == pytest.approx((50.0, 60.0)):
+            return visual_caked
+        if (float(col), float(row)) == pytest.approx((10.0, 20.0)):
+            return refined_caked
+        return None
+
+    replay = mg.resolve_sim_detector_replay_from_caked_projection(
+        saved_entry,
+        projected_entry,
+        caked_angles_to_background_display_coords=_caked_to_detector,
+        background_display_to_native_detector_coords=_detector_to_native,
+        native_detector_coords_to_caked_display_coords=_native_to_caked,
+    )
+
+    assert replay is not None
+    assert replay["sim_detector_display_col"] == 500.0
+    assert replay["sim_detector_display_row"] == 600.0
+    assert replay["sim_detector_anchor_x"] == 50.0
+    assert replay["sim_detector_anchor_y"] == 60.0
 
 
 def test_manual_qr_caked_saved_replay_matches_detector_origin_caked_baseline() -> None:

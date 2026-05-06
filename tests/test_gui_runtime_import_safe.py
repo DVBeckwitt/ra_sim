@@ -20721,6 +20721,99 @@ def test_prewarm_pick_cache_skips_when_integration_update_pending(monkeypatch) -
     assert runtime_session._prewarm_geometry_manual_pick_cache_if_ready() is False
 
 
+def test_prewarm_pick_cache_skips_when_caked_mode_probe_errors(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    calls: list[dict[str, object]] = []
+    background = np.zeros((8, 8), dtype=float)
+    runtime_state = SimpleNamespace(
+        update_running=False,
+        worker_active_job=None,
+        worker_queued_job=None,
+        update_pending=None,
+        integration_update_pending=None,
+    )
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=3),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: background,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {"a": 5.0})
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: (_ for _ in ()).throw(RuntimeError("view probe failed")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prewarm_geometry_manual_pick_cache",
+        lambda **kwargs: calls.append(dict(kwargs)) or {"ok": True},
+        raising=False,
+    )
+
+    assert runtime_session._prewarm_geometry_manual_pick_cache_if_ready() is False
+    assert calls == []
+
+
+def test_detector_mode_manual_pick_prewarm_requests_detector_cache(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    calls: list[dict[str, object]] = []
+    background = np.zeros((8, 8), dtype=float)
+    runtime_state = SimpleNamespace(
+        update_running=False,
+        worker_active_job=None,
+        worker_queued_job=None,
+        update_pending=None,
+        integration_update_pending=None,
+    )
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=3),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: background,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {"a": 5.0})
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_prewarm_geometry_manual_pick_cache",
+        lambda **kwargs: calls.append(dict(kwargs)) or {"ok": True},
+        raising=False,
+    )
+
+    assert runtime_session._prewarm_geometry_manual_pick_cache_if_ready() is True
+    assert calls == [
+        {
+            "param_set": {"a": 5.0},
+            "background_index": 3,
+            "background_image": background,
+            "build_caked_projection_sidecar": False,
+        }
+    ]
+
+
 def test_reuse_only_refresh_miss_preserves_active_pick_session_exactly(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     group_key = ("q_group", "primary", 1, 0)

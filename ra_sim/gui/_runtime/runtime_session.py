@@ -7848,12 +7848,19 @@ def _prewarm_geometry_manual_pick_cache_if_ready() -> bool:
         background_image = None
     if background_image is None:
         return False
+    pick_uses_caked = False
+    pick_uses_caked_factory = globals().get("_geometry_manual_pick_uses_caked_space")
+    if callable(pick_uses_caked_factory):
+        try:
+            pick_uses_caked = bool(pick_uses_caked_factory())
+        except Exception:
+            return False
     try:
         cache_data = prewarm(
             param_set=dict(_current_geometry_fit_params() or {}),
             background_index=int(background_runtime_state.current_background_index),
             background_image=background_image,
-            build_caked_projection_sidecar=True,
+            build_caked_projection_sidecar=bool(pick_uses_caked),
         )
     except Exception:
         return False

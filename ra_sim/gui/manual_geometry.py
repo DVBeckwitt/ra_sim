@@ -3649,13 +3649,17 @@ def resolve_sim_detector_replay_from_caked_projection(
         return None
 
     projected_entry = _geometry_manual_caked_qr_projection_entry(current_projected_sim_entry)
-    current_caked_point = _geometry_manual_finite_point(
-        projected_entry,
-        (
-            ("caked_x", "caked_y"),
-            ("two_theta_deg", "phi_deg"),
-        ),
+    current_caked_point, _current_caked_source = (
+        _geometry_manual_candidate_visual_caked_sim_point(projected_entry)
     )
+    if current_caked_point is None:
+        current_caked_point = _geometry_manual_finite_point(
+            projected_entry,
+            (
+                ("caked_x", "caked_y"),
+                ("two_theta_deg", "phi_deg"),
+            ),
+        )
     if current_caked_point is None:
         return None
 
@@ -4031,6 +4035,16 @@ def _geometry_manual_saved_background_detector_origin(
         return False
     if origin in detector_tokens or frame in detector_tokens:
         return True
+    strong_caked_background = _geometry_manual_finite_point(
+        entry,
+        (
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+            ("refined_background_two_theta_deg", "refined_background_phi_deg"),
+        ),
+    )
+    if strong_caked_background is not None:
+        return False
     detector_specific = _geometry_manual_finite_point(
         entry,
         (
@@ -9348,6 +9362,12 @@ def geometry_manual_format_detector_picker_diagnostic_block(
         "fresh_source_row_count",
         "detector_picker_candidate_count",
         "detector_picker_candidate_count_by_source",
+        "picker_candidates_ready",
+        "refinement_lookup_ready",
+        "cache_signature_compatible_for_picker",
+        "sidecar_cache_reused_for_detector",
+        "bounded_picker_build_attempted",
+        "bounded_picker_build_returned_row_count",
         "manual_pick_cache_source",
         "manual_pick_cache_stale_reason",
         "source_rows_provider_attempted",
@@ -9500,6 +9520,29 @@ def geometry_manual_detector_picker_input_trace(
         ),
         "manual_pick_cache_source": cache_metadata.get("cache_source"),
         "manual_pick_cache_stale_reason": cache_metadata.get("stale_reason"),
+        "picker_candidates_ready": bool(cache_metadata.get("picker_candidates_ready", False)),
+        "refinement_lookup_ready": bool(
+            cache_metadata.get(
+                "refinement_lookup_ready",
+                cache_metadata.get("qr_lookup_rebuild_skipped") is False
+                and cache_metadata.get("qr_lookup_rebuild_wall_ms") is not None,
+            )
+        ),
+        "cache_signature_compatible_for_picker": bool(
+            cache_metadata.get("cache_signature_compatible_for_picker", False)
+        ),
+        "sidecar_cache_reused_for_detector": bool(
+            cache_metadata.get("sidecar_cache_reused_for_detector", False)
+        ),
+        "bounded_picker_build_attempted": bool(
+            cache_metadata.get(
+                "bounded_picker_build_attempted",
+                cache_metadata.get("picker_candidates_only", False),
+            )
+        ),
+        "bounded_picker_build_returned_row_count": cache_metadata.get(
+            "bounded_picker_build_returned_row_count"
+        ),
         "source_rows_provider_attempted": bool(
             cache_metadata.get("source_rows_provider_attempted", False)
         ),
@@ -9750,6 +9793,7 @@ def build_geometry_manual_pick_cache(
     ]
     | None = None,
     build_caked_projection_sidecar: bool = False,
+    picker_candidates_only: bool = False,
 ) -> tuple[dict[str, object], object, dict[str, object]]:
     """Build or reuse the current manual-pick simulation/background cache."""
 
@@ -9780,7 +9824,8 @@ def build_geometry_manual_pick_cache(
     )
     reuse_requires_caked_projection = _geometry_manual_cache_signature_uses_caked(cache_sig)
     build_requires_caked_projection = bool(
-        reuse_requires_caked_projection or build_caked_projection_sidecar
+        not bool(picker_candidates_only)
+        and (reuse_requires_caked_projection or build_caked_projection_sidecar)
     )
     profile_cache_for_picker = (
         param_set.get("mosaic_params")
@@ -10319,7 +10364,12 @@ def build_geometry_manual_pick_cache(
             pass
         elif stale_reason is None and callable(source_rows_for_background):
             stale_reason = "source snapshot rows were empty."
-    if prefer_cache and not simulated_peaks and bg_index == current_bg_index:
+    if (
+        prefer_cache
+        and not simulated_peaks
+        and bg_index == current_bg_index
+        and not bool(picker_candidates_only)
+    ):
         fresh_simulation_prefer_cache_false_attempted = True
         rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
@@ -10465,7 +10515,12 @@ def build_geometry_manual_pick_cache(
             stale_reason_override=stale_reason,
         ):
             pass
-    if not prefer_cache and not simulated_peaks and bg_index == current_bg_index:
+    if (
+        not prefer_cache
+        and not simulated_peaks
+        and bg_index == current_bg_index
+        and not bool(picker_candidates_only)
+    ):
         fresh_simulation_prefer_cache_false_attempted = True
         rebuilt_simulated_peaks = geometry_manual_simulated_peaks_from_callback(
             simulated_peaks_for_params,
@@ -10608,6 +10663,10 @@ def build_geometry_manual_pick_cache(
     cache_metadata["fresh_simulation_prefer_cache_false_attempted"] = bool(
         fresh_simulation_prefer_cache_false_attempted
     )
+    cache_metadata["picker_candidates_only"] = bool(picker_candidates_only)
+    if bool(picker_candidates_only):
+        cache_metadata["qr_refinement_skipped"] = True
+        cache_metadata["qr_lookup_rebuild_skipped"] = True
     cache_metadata["detector_picker_coverage_rebuild_attempted"] = bool(
         detector_picker_coverage_rebuild_attempted
     )
@@ -14454,6 +14513,7 @@ def make_runtime_geometry_manual_cache_callbacks(
         background_index: int | None = None,
         background_image: object | None = None,
         build_caked_projection_sidecar: bool = False,
+        picker_candidates_only: bool = False,
         caked_projection_signature_override: object = None,
         project_peaks_to_caked_view: Callable[
             [Sequence[dict[str, object]] | None],
@@ -14579,7 +14639,6 @@ def make_runtime_geometry_manual_cache_callbacks(
                 )
                 grouped_ready = _manual_pick_cache_has_caked_projection_sidecar(existing_cache)
             else:
-                signature_ready = bool(existing_signature == requested_signature)
                 grouped_ready = geometry_manual_pick_cache_has_detector_picker_sources(
                     existing_cache,
                     display_background=background_local,
@@ -14590,10 +14649,31 @@ def make_runtime_geometry_manual_cache_callbacks(
                         else None
                     ),
                 )
+                relaxed_signature_ready = bool(
+                    grouped_ready
+                    and (
+                        _manual_pick_cache_source_and_masks_reusable(
+                            existing_signature,
+                            requested_signature,
+                        )
+                        or _manual_pick_cache_source_and_masks_reusable(
+                            existing_cache.get("placed_signature", existing_signature),
+                            requested_signature,
+                        )
+                    )
+                )
+                signature_ready = bool(
+                    existing_signature == requested_signature or relaxed_signature_ready
+                )
             if not signature_ready:
                 return _reuse_only_miss("manual pick cache not warm for click")
             if not grouped_ready:
                 return _reuse_only_miss("manual pick cache not warm for click")
+            sidecar_cache_reused_for_detector = bool(
+                not build_caked_projection_sidecar
+                and existing_signature != requested_signature
+                and _manual_pick_cache_caked_projection_token(existing_signature) is not None
+            )
             refinement_signature = geometry_manual_qr_sim_refinement_signature(
                 existing_cache,
                 simulation_signature=last_simulation_signature_value,
@@ -14615,11 +14695,38 @@ def make_runtime_geometry_manual_cache_callbacks(
                 and existing_cache.get("qr_sim_refinement_lookup_complete") is True
             )
             if not refinement_ready:
+                if not bool(build_caked_projection_sidecar):
+                    existing_cache["cache_ready"] = False
+                    existing_cache["picker_candidates_ready"] = True
+                    existing_cache["cache_metadata"] = _geometry_manual_cache_metadata_update(
+                        existing_cache,
+                        cache_ready=False,
+                        picker_candidates_ready=True,
+                        refinement_lookup_ready=False,
+                        cache_signature_compatible_for_picker=True,
+                        sidecar_cache_reused_for_detector=sidecar_cache_reused_for_detector,
+                        cache_action="reused",
+                        reuse_only=True,
+                        stale_reason=(
+                            "manual pick detector candidates ready; refinement lookup not warm"
+                        ),
+                        get_pick_cache_total_wall_ms=_geometry_manual_elapsed_ms(get_start),
+                        get_pick_cache_build_wall_ms=0.0,
+                        qr_sim_refinement_wall_ms=0.0,
+                        qr_lookup_rebuild_wall_ms=0.0,
+                        qr_refinement_skipped=True,
+                        qr_lookup_rebuild_skipped=True,
+                    )
+                    return _attach_source_snapshot_diagnostics(existing_cache)
                 return _reuse_only_miss("manual pick cache not warm for click")
             existing_cache["cache_ready"] = True
             existing_cache["cache_metadata"] = _geometry_manual_cache_metadata_update(
                 existing_cache,
                 cache_ready=True,
+                picker_candidates_ready=True,
+                refinement_lookup_ready=True,
+                cache_signature_compatible_for_picker=True,
+                sidecar_cache_reused_for_detector=sidecar_cache_reused_for_detector,
                 cache_action="reused",
                 reuse_only=True,
                 stale_reason=None,
@@ -14657,10 +14764,68 @@ def make_runtime_geometry_manual_cache_callbacks(
             project_peaks_for_background_view=project_peaks_for_background_view,
             current_match_config=_current_match_config,
             auto_match_background_context=auto_match_background_context,
-            build_caked_projection_sidecar=bool(build_caked_projection_sidecar),
+            build_caked_projection_sidecar=(
+                False if bool(picker_candidates_only) else bool(build_caked_projection_sidecar)
+            ),
+            picker_candidates_only=bool(picker_candidates_only),
         )
         get_build_wall_ms = _geometry_manual_elapsed_ms(build_start)
         same_next_cache = isinstance(next_cache_data, dict) and next_cache_data is cache_data
+
+        def _mark_picker_candidates_only(raw_cache: Mapping[str, object] | None) -> dict[str, object]:
+            if not isinstance(raw_cache, Mapping):
+                return {}
+            picker_cache = dict(raw_cache)
+            picker_ready = geometry_manual_pick_cache_has_detector_picker_sources(
+                picker_cache,
+                display_background=background_local,
+                profile_cache=(
+                    param_set.get("mosaic_params")
+                    if isinstance(param_set, Mapping)
+                    and isinstance(param_set.get("mosaic_params"), Mapping)
+                    else None
+                ),
+            )
+            picker_cache["cache_ready"] = False
+            picker_cache["picker_candidates_ready"] = bool(picker_ready)
+            picker_cache["cache_metadata"] = _geometry_manual_cache_metadata_update(
+                picker_cache,
+                cache_ready=False,
+                picker_candidates_ready=bool(picker_ready),
+                bounded_picker_build_attempted=True,
+                bounded_picker_build_returned_row_count=int(
+                    len(picker_cache.get("detector_picker_rows", ()) or ())
+                ),
+                cache_action=picker_cache.get("cache_metadata", {}).get("cache_action")
+                if isinstance(picker_cache.get("cache_metadata"), Mapping)
+                else "rebuilt",
+                reuse_only=False,
+                picker_candidates_only=True,
+                stale_reason=(
+                    None
+                    if picker_ready
+                    else "manual pick detector picker-only recovery found no candidates"
+                ),
+                get_pick_cache_total_wall_ms=_geometry_manual_elapsed_ms(get_start),
+                get_pick_cache_build_wall_ms=get_build_wall_ms,
+                qr_sim_refinement_wall_ms=0.0,
+                qr_lookup_rebuild_wall_ms=0.0,
+                qr_refinement_skipped=True,
+                qr_lookup_rebuild_skipped=True,
+            )
+            return _attach_source_snapshot_diagnostics(picker_cache)
+
+        if bool(picker_candidates_only):
+            cache_data = _mark_picker_candidates_only(cache_data)
+            if isinstance(next_cache_data, dict):
+                next_cache_data = cache_data if same_next_cache else _mark_picker_candidates_only(
+                    next_cache_data
+                )
+            replace_cache_state(
+                next_signature,
+                dict(next_cache_data) if isinstance(next_cache_data, dict) else {},
+            )
+            return cache_data
 
         def _refine_cache_once(raw_cache: Mapping[str, object] | None) -> dict[str, object]:
             if not isinstance(raw_cache, Mapping):
@@ -16919,14 +17084,62 @@ def geometry_manual_toggle_selection_at(
         return False, current_session, False
 
     cache_ready = not (isinstance(cache_data, Mapping) and cache_data.get("cache_ready") is False)
+    if (
+        not grouped_candidates
+        and not bool(use_caked_space)
+        and not bool(saved_pair_move_only)
+        and not cache_ready
+        and not geometry_manual_pick_session_active(
+            current_session,
+            current_background_index=current_background_index,
+            require_current_background=True,
+        )
+    ):
+        cache_data = get_cache_data(
+            background_image=display_background,
+            prefer_cache=True,
+            reuse_only=False,
+            build_caked_projection_sidecar=False,
+            picker_candidates_only=True,
+        )
+        grouped_candidates = geometry_manual_detector_picker_grouped_candidates_from_cache(
+            cache_data,
+            display_background=display_background,
+            profile_cache=profile_cache,
+        )
+        picker_trace = geometry_manual_detector_picker_input_trace(
+            cache_data,
+            view_mode="detector",
+            background_index=int(current_background_index),
+            display_background=display_background,
+            grouped_candidates=grouped_candidates,
+            profile_cache=profile_cache,
+        )
+        if callable(trace_picker_input_fn):
+            trace_picker_input_fn(dict(picker_trace))
+        cache_ready = not (
+            isinstance(cache_data, Mapping) and cache_data.get("cache_ready") is False
+        )
     if not grouped_candidates:
         if not bool(use_caked_space) and picker_trace is not None:
             print(geometry_manual_format_detector_picker_diagnostic_block(picker_trace))
         if callable(set_status_text):
             if not cache_ready:
-                set_status_text(
-                    "Manual Qr picker cache is not ready; update simulation or move the mouse to warm it."
+                empty_reason = (
+                    str(picker_trace.get("reason_candidates_are_empty", ""))
+                    if isinstance(picker_trace, Mapping)
+                    else ""
                 )
+                if empty_reason == "no_detector_picker_source_rows":
+                    set_status_text(
+                        "Manual Qr picker has no detector source rows. "
+                        "Update simulation or refresh the Qr/Qz list."
+                    )
+                else:
+                    set_status_text(
+                        "Manual Qr picker cache is warming; click again after the current "
+                        "simulation update settles."
+                    )
             else:
                 set_status_text(
                     caked_projection_fallback_note
