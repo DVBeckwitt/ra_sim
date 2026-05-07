@@ -52,7 +52,7 @@ The parallel background peak-fit diagnostic script
 `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
 uses a final Qr-rod profile cache in the diagnostic output directory.
 
-Current status as of 2026-05-06:
+Current status as of 2026-05-07:
 
 - cache filename: `<state-stem>_qr_rod_profile_cache.pkl`
 - cache format: JSON envelope; legacy pickle payloads are ignored and
@@ -77,11 +77,21 @@ fit backend requests to `thread`. This avoids `multiprocessing.spawn`
 re-importing the notebook-style script as `__mp_main__` and rerunning the whole
 diagnostic inside worker children. POSIX runs can still use the process backend.
 
-Validated runtime status:
+The diagnostic writes `hk0_l1_star.png` to the figure output directory. This is
+a raw detector-intensity crop from the beam center through and above the
+drawable `HK=0`, `L=1` / `00L` marker, saved with grayscale scaling from the
+crop values. If the beam center, detector image, or drawable `HK=0`, `L=1`
+marker cannot be resolved, the script prints a skipped reason and continues.
 
-- `tests/test_background_peak_fits_notebook.py` passes, `29 passed`
-- `python -m ra_sim.dev check` passes
-- a Bi2Se3 diagnostic run completed with `fit_backend=thread`, `79/79`
+Focused validation status:
+
+- `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
+  passes
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k hk0_l1_star -ra`
+  passes, `5 passed`
+- full `tests/test_background_peak_fits_notebook.py` still has unrelated
+  non-parallel notebook expectation/helper failures in this checkout
+- earlier Bi2Se3 diagnostic validation completed with `fit_backend=thread`, `79/79`
   successful background peak fits, final Qr-rod cache reuse, marker CSV columns
   `fit_l`/`display_l`, and regenerated rod-profile figures
 

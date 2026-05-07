@@ -1,11 +1,14 @@
 import ast
 from concurrent.futures import ProcessPoolExecutor
 import json
+import math
 import os
 import re
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.optimize import least_squares, nnls
 
@@ -16,6 +19,9 @@ from scripts.diagnostics.run_all_background_peak_fits import _output_dir_for_sta
 NOTEBOOK_PATH = Path("scripts/diagnostics/all_background_peak_fits.ipynb")
 PARALLEL_NOTEBOOK_PATH = Path(
     "scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.ipynb"
+)
+PARALLEL_SCRIPT_PATH = Path(
+    "scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py"
 )
 RUNNER_PATH = Path("scripts/diagnostics/run_all_background_peak_fits.py")
 
@@ -56,6 +62,33 @@ def _notebook_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE": 1.0e-5,
     }
     exec(compile(module, str(NOTEBOOK_PATH), "exec"), namespace)
+    return namespace
+
+
+def _script_functions(*names: str) -> dict[str, object]:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    wanted = set(names)
+    tree = ast.parse(PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(PARALLEL_SCRIPT_PATH))
+    selected = [
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted
+    ]
+    missing = wanted - {node.name for node in selected}
+    assert not missing
+    module = ast.Module(
+        body=[
+            ast.ImportFrom(
+                module="__future__",
+                names=[ast.alias(name="annotations")],
+                level=0,
+            ),
+            *selected,
+        ],
+        type_ignores=[],
+    )
+    ast.fix_missing_locations(module)
+    namespace: dict[str, object] = {"math": math, "np": np, "pd": pd, "Path": Path, "plt": plt}
+    exec(compile(module, str(PARALLEL_SCRIPT_PATH), "exec"), namespace)
     return namespace
 
 
@@ -216,6 +249,115 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
         "notebook={notebook_path}",
         "--keep-going",
         "state_count > 1",
+    ):
+        assert token in source
+
+
+def test_parallel_script_hk0_l1_star_crop_bounds_contains_beam_and_peak() -> None:
+    namespace = _script_functions("hk0_l1_star_crop_bounds")
+    crop_bounds = namespace["hk0_l1_star_crop_bounds"]
+
+    bounds = crop_bounds(
+        (200, 300),
+        (150.0, 160.0),
+        (148.0, 60.0),
+        lateral_half_width_px=12,
+        above_peak_padding_px=20,
+        below_beam_padding_px=5,
+    )
+
+    assert bounds is not None
+    row_slice, col_slice = bounds
+    assert row_slice.start <= 40
+    assert row_slice.stop >= 166
+    assert col_slice.start <= 136
+    assert col_slice.stop >= 163
+
+
+def test_parallel_script_hk0_l1_star_crop_bounds_clips_and_rejects_invalid() -> None:
+    namespace = _script_functions("hk0_l1_star_crop_bounds")
+    crop_bounds = namespace["hk0_l1_star_crop_bounds"]
+
+    row_slice, col_slice = crop_bounds(
+        (80, 70),
+        (4.0, 78.0),
+        (2.0, 1.0),
+        lateral_half_width_px=20,
+        above_peak_padding_px=20,
+        below_beam_padding_px=10,
+    )
+
+    assert row_slice.start == 0
+    assert row_slice.stop == 80
+    assert col_slice.start == 0
+    assert col_slice.stop <= 70
+    assert crop_bounds((80, 70), (np.nan, 78.0), (2.0, 1.0)) is None
+    assert crop_bounds((80, 70), (4.0, 78.0), (np.inf, 1.0)) is None
+
+
+def test_parallel_script_hk0_l1_star_selects_l1_marker_center() -> None:
+    namespace = _script_functions("hk0_l1_star_marker_center")
+    marker_center = namespace["hk0_l1_star_marker_center"]
+    markers = pd.DataFrame(
+        [
+            {
+                "m": 0,
+                "l": 2,
+                "refined_two_theta_deg": 20.0,
+                "refined_phi_deg": 0.0,
+            },
+            {
+                "m": 0,
+                "l": 1,
+                "refined_two_theta_deg": 12.0,
+                "refined_phi_deg": 3.0,
+            },
+            {
+                "m": 1,
+                "l": 1,
+                "refined_two_theta_deg": 99.0,
+                "refined_phi_deg": 9.0,
+            },
+        ]
+    )
+
+    center = marker_center(markers, projector=lambda theta, phi: (theta + 1.0, phi + 2.0))
+
+    assert center == (13.0, 5.0)
+
+
+def test_parallel_script_hk0_l1_star_save_writes_png(tmp_path) -> None:
+    namespace = _script_functions("hk0_l1_star_crop_bounds", "save_hk0_l1_star_crop")
+    save_crop = namespace["save_hk0_l1_star_crop"]
+    image = np.arange(10_000, dtype=np.float64).reshape(100, 100)
+    out_path = tmp_path / "hk0_l1_star.png"
+
+    result = save_crop(
+        image,
+        out_path,
+        beam_center=(50.0, 82.0),
+        peak_center=(52.0, 28.0),
+        lateral_half_width_px=18,
+        above_peak_padding_px=16,
+        below_beam_padding_px=8,
+    )
+
+    assert result == out_path
+    assert out_path.exists()
+    assert out_path.stat().st_size > 0
+
+
+def test_parallel_script_hk0_l1_star_output_is_wired() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    for token in (
+        '"hk0_l1_star.png"',
+        "hk0_l1_star_marker_center(",
+        "save_hk0_l1_star_crop(",
+        "detector_xy_from_caked_angles(profile_bg",
+        "skipped hk0_l1_star.png",
     ):
         assert token in source
 
