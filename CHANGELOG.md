@@ -72,7 +72,11 @@
   - Fixed diagnostic Qz rod profiles to plot acceptance-normalized intensity density instead of raw integrated sums, removing false high-2θ support ramps.
   - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with rotated 2D Gaussian-plus-plane fits, then fit each Qr-rod Qz profile jointly as a simultaneous sum of all projected branch-point Gaussian peaks to avoid overlap overestimation between close peaks.
   - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
-  - Added `hk0_l1_star.png` to the parallel background peak-fit diagnostic script as a raw detector crop from the beam center through the `HK=0`, `L=1` / `00L` marker.
+  - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
+  - Restored default-on Qr-rod peak marker editing in the generated `.py` diagnostic with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup|skip|auto`, JSON round trip through `RA_SIM_QR_ROD_PEAK_EDITS`, and marker-table cache-key invalidation before final joint Qz fitting.
+  - Fixed the Qr-rod peak marker editor so dynamically projected `HK=0` / `00L` specular markers are included before final-fit cache lookup and fitting.
+  - Changed the Qr-rod peak marker editor Snap action to snap all markers in the selected rod panel to nearby local profile peaks.
+  - Added editable per-peak Qr-rod marker titles so the popup `Label` field controls the final Qr-rod figure text, with blank titles falling back to `L=<display_l>`.
   - Fixed the parallel background peak-fit diagnostic script so Qr-rod marker labels are defined before profile annotation/redraw code can call them.
   - Fixed the parallel background peak-fit diagnostic runner so the generated `.py` diagnostic can run through the guarded Windows process backend, restoring process-pool CPU use while keeping direct top-level `.py` execution on the safe thread fallback.
   - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.

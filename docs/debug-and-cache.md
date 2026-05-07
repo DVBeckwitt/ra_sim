@@ -60,16 +60,36 @@ Current status as of 2026-05-07:
   the same state filename can reuse the previous final Qr-rod fit
 - reset control: `RA_SIM_RESET_QR_ROD_PROFILE_CACHE=1`
 - optional imported peak-edit key: `RA_SIM_QR_ROD_PEAK_EDITS`
+- peak-edit mode: `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup|skip|auto`;
+  default is `popup`
 - cache-hit guard: final-fit payloads must include
   `final_rod_profile_table`, `final_marker_table`,
   `final_rod_component_table`, `final_peak_edit_cache_key`, and marker columns
-  `m`, `branch`, `qz_marker`, `display_l`, and either `fit_l` or `l`
+  `m`, `branch`, `qz_marker`, `display_l`, and either `fit_l` or `l`;
+  `marker_title` is included when a final-figure label was edited
 
 The diagnostic separates fitting coordinates from display labels. `fit_l` is
 the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.
-`display_l` is the visible label override used for `(HK,L)` annotations. Manual
-or imported L edits must update `display_l` and must not move the fitted marker
-position.
+`display_l` is the fallback visible L value used for final Qr-rod peak
+annotations. `marker_title` is the optional user-edited final-figure label. If
+`marker_title` is blank, the Qr-rod figure labels a peak as `L=<display_l>`.
+Display-label-only edits must update `display_l` or `marker_title` and must not
+move the fitted marker position. Qr-rod peak marker edits intentionally update
+`qz_marker` and therefore invalidate the final joint-fit cache.
+
+Qr-rod peak marker edits are applied before the final Qr-rod joint-fit cache is
+checked. The marker editor is on by default with `popup`. Use `skip` for
+unattended runs. `auto` opens the editor only on interactive Matplotlib desktop
+backends and skips it for CI/headless backends. The editor can load and save
+JSON marker tables through `RA_SIM_QR_ROD_PEAK_EDITS`; accepted popup edits are
+hashed into the final-fit cache key so stale fitted profiles are not reused.
+The editor input includes the dynamically projected `HK=0` / `00L` specular
+markers before cache lookup and fitting, so the specular rod peaks can be
+organized with the non-specular Qr rod peaks. Select a rod panel in the editor
+and press `Snap` to move all markers in that panel to nearby local profile
+peaks. Select a marker and edit the `Label` text box to set the exact title used
+for that peak in the final Qr-rod figure; clicking another marker or accepting
+the popup preserves the edited title.
 
 On Windows, direct top-level execution of the generated `.py` diagnostic
 normalizes `process` and `auto` fit backend requests to `thread`. This avoids
@@ -88,18 +108,18 @@ duration of the run. A 2026-05-07 Bi2Se3 guarded run reported
 compared with the direct Windows thread-path report of `backend=thread_pool`,
 `pids=1`, and `elapsed=220.07s`.
 
-The diagnostic writes `hk0_l1_star.png` to the figure output directory. This is
+The diagnostic writes `hk0_l3_star.png` to the figure output directory. This is
 a raw detector-intensity crop from the beam center through and above the
-drawable `HK=0`, `L=1` / `00L` marker, saved with grayscale scaling from the
-crop values. If the beam center, detector image, or drawable `HK=0`, `L=1`
+drawable `HK=0`, `L=3` / `00L` marker, saved with grayscale scaling from the
+crop values. If the beam center, detector image, or drawable `HK=0`, `L=3`
 marker cannot be resolved, the script prints a skipped reason and continues.
 
 Focused validation status:
 
 - `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
   passes
-- `python -m pytest tests/test_background_peak_fits_notebook.py -k hk0_l1_star -ra`
-  passes, `5 passed`
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title" -ra`
+  passes, `13 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
   passes, `8 passed`
 - `python -m ra_sim.dev check` passes, `280 passed`

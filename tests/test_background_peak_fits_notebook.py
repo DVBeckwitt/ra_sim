@@ -1,5 +1,6 @@
 import ast
 from concurrent.futures import ProcessPoolExecutor
+import hashlib
 import json
 import math
 import os
@@ -93,7 +94,15 @@ def _script_functions(*names: str) -> dict[str, object]:
         type_ignores=[],
     )
     ast.fix_missing_locations(module)
-    namespace: dict[str, object] = {"math": math, "np": np, "pd": pd, "Path": Path, "plt": plt}
+    namespace: dict[str, object] = {
+        "hashlib": hashlib,
+        "json": json,
+        "math": math,
+        "np": np,
+        "pd": pd,
+        "Path": Path,
+        "plt": plt,
+    }
     exec(compile(module, str(PARALLEL_SCRIPT_PATH), "exec"), namespace)
     return namespace
 
@@ -347,9 +356,9 @@ def test_parallel_script_windows_process_backend_requires_runner_guard() -> None
     )
 
 
-def test_parallel_script_hk0_l1_star_crop_bounds_contains_beam_and_peak() -> None:
-    namespace = _script_functions("hk0_l1_star_crop_bounds")
-    crop_bounds = namespace["hk0_l1_star_crop_bounds"]
+def test_parallel_script_hk0_l3_star_crop_bounds_contains_beam_and_peak() -> None:
+    namespace = _script_functions("hk0_star_crop_bounds")
+    crop_bounds = namespace["hk0_star_crop_bounds"]
 
     bounds = crop_bounds(
         (200, 300),
@@ -368,9 +377,9 @@ def test_parallel_script_hk0_l1_star_crop_bounds_contains_beam_and_peak() -> Non
     assert col_slice.stop >= 163
 
 
-def test_parallel_script_hk0_l1_star_crop_bounds_clips_and_rejects_invalid() -> None:
-    namespace = _script_functions("hk0_l1_star_crop_bounds")
-    crop_bounds = namespace["hk0_l1_star_crop_bounds"]
+def test_parallel_script_hk0_l3_star_crop_bounds_clips_and_rejects_invalid() -> None:
+    namespace = _script_functions("hk0_star_crop_bounds")
+    crop_bounds = namespace["hk0_star_crop_bounds"]
 
     row_slice, col_slice = crop_bounds(
         (80, 70),
@@ -389,26 +398,26 @@ def test_parallel_script_hk0_l1_star_crop_bounds_clips_and_rejects_invalid() -> 
     assert crop_bounds((80, 70), (4.0, 78.0), (np.inf, 1.0)) is None
 
 
-def test_parallel_script_hk0_l1_star_selects_l1_marker_center() -> None:
-    namespace = _script_functions("hk0_l1_star_marker_center")
-    marker_center = namespace["hk0_l1_star_marker_center"]
+def test_parallel_script_hk0_l3_star_selects_l3_marker_center() -> None:
+    namespace = _script_functions("hk0_star_marker_center")
+    marker_center = namespace["hk0_star_marker_center"]
     markers = pd.DataFrame(
         [
             {
                 "m": 0,
-                "l": 2,
+                "l": 1,
                 "refined_two_theta_deg": 20.0,
                 "refined_phi_deg": 0.0,
             },
             {
                 "m": 0,
-                "l": 1,
+                "l": 3,
                 "refined_two_theta_deg": 12.0,
                 "refined_phi_deg": 3.0,
             },
             {
                 "m": 1,
-                "l": 1,
+                "l": 3,
                 "refined_two_theta_deg": 99.0,
                 "refined_phi_deg": 9.0,
             },
@@ -420,11 +429,11 @@ def test_parallel_script_hk0_l1_star_selects_l1_marker_center() -> None:
     assert center == (13.0, 5.0)
 
 
-def test_parallel_script_hk0_l1_star_save_writes_png(tmp_path) -> None:
-    namespace = _script_functions("hk0_l1_star_crop_bounds", "save_hk0_l1_star_crop")
-    save_crop = namespace["save_hk0_l1_star_crop"]
+def test_parallel_script_hk0_l3_star_save_writes_png(tmp_path) -> None:
+    namespace = _script_functions("hk0_star_crop_bounds", "save_hk0_star_crop")
+    save_crop = namespace["save_hk0_star_crop"]
     image = np.arange(10_000, dtype=np.float64).reshape(100, 100)
-    out_path = tmp_path / "hk0_l1_star.png"
+    out_path = tmp_path / "hk0_l3_star.png"
 
     result = save_crop(
         image,
@@ -441,19 +450,204 @@ def test_parallel_script_hk0_l1_star_save_writes_png(tmp_path) -> None:
     assert out_path.stat().st_size > 0
 
 
-def test_parallel_script_hk0_l1_star_output_is_wired() -> None:
+def test_parallel_script_hk0_l3_star_output_is_wired() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
     for token in (
-        '"hk0_l1_star.png"',
-        "hk0_l1_star_marker_center(",
-        "save_hk0_l1_star_crop(",
+        '"hk0_l3_star.png"',
+        "hk0_star_marker_center(",
+        "save_hk0_star_crop(",
         "detector_xy_from_caked_angles(profile_bg",
-        "skipped hk0_l1_star.png",
+        "skipped hk0_l3_star.png",
+        "HK=0, L=3",
     ):
         assert token in source
+
+
+def test_parallel_script_qr_rod_marker_group_edits_replace_only_one_group() -> None:
+    namespace = _script_functions("replace_qr_rod_marker_group_qz")
+    replace_group = namespace["replace_qr_rod_marker_group_qz"]
+    markers = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0, "display_l": 2.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 4.0, "display_l": 4.0},
+            {"m": 3, "branch": "-", "qz_marker": 5.0, "fit_l": 8.0, "display_l": 8.0},
+        ]
+    )
+
+    edited = replace_group(markers, m_value=1, branch_value="+", qz_values=[2.25, 0.75, 0.75])
+
+    edited_group = edited[(edited["m"] == 1) & (edited["branch"] == "+")]
+    other_group = edited[(edited["m"] == 3) & (edited["branch"] == "-")]
+    assert edited_group["qz_marker"].tolist() == [0.75, 2.25]
+    assert edited_group["marker_source"].tolist() == ["manual_edit", "manual_edit"]
+    assert edited_group["fit_l"].tolist() == pytest.approx([1.5, 4.5])
+    assert other_group["qz_marker"].tolist() == [5.0]
+
+
+def test_parallel_script_qr_rod_marker_table_includes_specular_hk0_markers() -> None:
+    namespace = _script_functions("marker_table_with_specular_l_markers")
+    include_specular = namespace["marker_table_with_specular_l_markers"]
+    markers = pd.DataFrame(
+        [{"m": 1, "branch": "+", "hkl": "-1,0,2", "qz_marker": 1.0}]
+    )
+    specular = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "hkl": "0,0,1", "qz_marker": 0.5},
+            {"m": 0, "branch": "qz", "hkl": "0,0,1", "qz_marker": 0.5},
+            {"m": 0, "branch": "qz", "hkl": "0,0,3", "qz_marker": 1.5},
+        ]
+    )
+
+    merged = include_specular(markers, specular)
+
+    assert merged[merged["m"] == 0]["hkl"].tolist() == ["0,0,1", "0,0,3"]
+    assert merged[merged["m"] == 1]["hkl"].tolist() == ["-1,0,2"]
+
+
+def test_parallel_script_qr_rod_snap_moves_all_panel_markers_to_local_peaks() -> None:
+    namespace = _script_functions("snap_qr_rod_markers_to_profile_peaks")
+    snap_markers = namespace["snap_qr_rod_markers_to_profile_peaks"]
+    x = np.linspace(0.0, 3.0, 301, dtype=np.float64)
+    y = (
+        np.exp(-0.5 * ((x - 0.95) / 0.025) ** 2)
+        + 0.7 * np.exp(-0.5 * ((x - 2.05) / 0.030) ** 2)
+    )
+
+    snapped = snap_markers([0.90, 2.12], x, y)
+
+    assert snapped.tolist() == pytest.approx([0.95, 2.05], abs=0.011)
+
+
+def test_parallel_script_qr_rod_marker_hash_changes_cache_key() -> None:
+    namespace = _script_functions("qr_rod_peak_edit_cache_key")
+    cache_key = namespace["qr_rod_peak_edit_cache_key"]
+    markers = pd.DataFrame(
+        [{"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0, "display_l": 2.0}]
+    )
+    shifted = markers.copy()
+    shifted.loc[0, "qz_marker"] = 1.25
+
+    assert cache_key(None) == {"mode": "last_cached"}
+    assert cache_key(None, marker_table=markers, mode="popup") != cache_key(
+        None, marker_table=shifted, mode="popup"
+    )
+    assert cache_key(None, marker_table=markers, mode="popup")["mode"] == "popup"
+
+
+def test_parallel_script_marker_title_changes_cache_key() -> None:
+    namespace = _script_functions("qr_rod_peak_edit_cache_key")
+    cache_key = namespace["qr_rod_peak_edit_cache_key"]
+    markers = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "+",
+                "qz_marker": 1.0,
+                "fit_l": 2.0,
+                "display_l": 2.0,
+                "marker_title": "L=2",
+            }
+        ]
+    )
+    relabeled = markers.copy()
+    relabeled.loc[0, "marker_title"] = "L=2 shoulder"
+
+    assert cache_key(None, marker_table=markers, mode="popup") != cache_key(
+        None, marker_table=relabeled, mode="popup"
+    )
+
+
+def test_parallel_script_qr_rod_peak_edit_runtime_mode_respects_headless() -> None:
+    namespace = _script_functions("qr_rod_peak_edit_runtime_mode")
+    runtime_mode = namespace["qr_rod_peak_edit_runtime_mode"]
+
+    assert runtime_mode("auto", backend_name="agg", env={}) == "skip"
+    assert runtime_mode("auto", backend_name="TkAgg", env={}) == "popup"
+    assert runtime_mode("auto", backend_name="TkAgg", env={"CI": "1"}) == "skip"
+    assert runtime_mode("popup", backend_name="agg", env={"CI": "1"}) == "popup"
+    assert runtime_mode("skip", backend_name="TkAgg", env={}) == "skip"
+
+
+def test_parallel_script_qr_rod_peak_edits_round_trip_json(tmp_path: Path) -> None:
+    namespace = _script_functions(
+        "clean_marker_title",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    write_edits = namespace["write_qr_rod_peak_edits"]
+    load_edits = namespace["load_qr_rod_peak_edits"]
+    edit_path = tmp_path / "qr_rod_peak_edits.json"
+    markers = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "+",
+                "qz_marker": 1.0,
+                "fit_l": 2.0,
+                "display_l": 2.0,
+                "marker_title": "L=2",
+            }
+        ]
+    )
+
+    write_edits(edit_path, markers)
+    loaded = load_edits(edit_path)
+
+    assert loaded[
+        ["m", "branch", "qz_marker", "fit_l", "display_l", "marker_title"]
+    ].to_dict("records") == [
+        {
+            "m": 1,
+            "branch": "+",
+            "qz_marker": 1.0,
+            "fit_l": 2.0,
+            "display_l": 2.0,
+            "marker_title": "L=2",
+        }
+    ]
+
+
+def test_parallel_script_marker_title_overrides_final_rod_label() -> None:
+    namespace = _script_functions(
+        "clean_marker_title",
+        "marker_row_title",
+        "l_tick_label",
+        "hk_display_label",
+        "rod_marker_annotation_label",
+    )
+    marker_label = namespace["rod_marker_annotation_label"]
+
+    assert marker_label({"display_l": 2.0}, 1) == "L=2"
+    assert marker_label({"display_l": 2.0, "marker_title": "L=2 shoulder"}, 1) == "L=2 shoulder"
+    assert marker_label({"display_l": 2.0, "marker_title": "  "}, 1) == "L=2"
+
+
+def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    marker_table_index = source.index("marker_table = pd.DataFrame(marker_rows)")
+    specular_call = source.index(
+        "specular_l_marker_table = specular_l_marker_rows_for_background",
+        marker_table_index,
+    )
+    specular_merge = source.index(
+        "marker_table = marker_table_with_specular_l_markers(",
+        specular_call,
+    )
+    editor_call = source.index("edit_qr_rod_peak_markers(", marker_table_index)
+    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", marker_table_index)
+    final_fit_call = source.index("add_joint_qz_fit_columns(", marker_table_index)
+
+    assert specular_call < specular_merge < editor_call < cache_key_call < final_fit_call
+    assert "RA_SIM_QR_ROD_PEAK_EDIT_MODE" in source
+    assert '"QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "popup"' in source
+    assert "TextBox(" in source
+    assert "marker_title" in source
+    assert 'getattr(event, "inaxes", None) is getattr(box, "ax", None)' in source
 
 
 def test_parallel_script_defines_rod_marker_label_before_first_call() -> None:

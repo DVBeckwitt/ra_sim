@@ -17,6 +17,7 @@ CAKE_WORKERS_OVERRIDE = "24"
 PROFILE_FIT_WORKERS_OVERRIDE = "16"
 ROD_PROFILE_FIT_WORKERS_OVERRIDE = "16"
 USE_GPU_OVERRIDE = "1"
+QR_ROD_PEAK_EDIT_MODE_OVERRIDE = ""
 
 # Faster development output. Use 300 / 1 for final vector figures.
 FIGURE_DPI_OVERRIDE = "200"
@@ -178,7 +179,92 @@ def reset_qr_rod_profile_cache(cache_path: Path | str) -> bool:
     return True
 
 
-def qr_rod_peak_edit_cache_key(path_value: object = None) -> dict[str, object]:
+def clean_marker_title(value: object, *, max_chars: int = 80) -> str:
+    if value is None:
+        return ""
+    try:
+        if isinstance(value, float) and not np.isfinite(value):
+            return ""
+    except Exception:
+        pass
+    text = " ".join(str(value).split())
+    if text.lower() == "nan":
+        return ""
+    limit = max(int(max_chars), 0)
+    return text[:limit] if limit else text
+
+
+def hk_display_label(m_value: object) -> str:
+    return rf"$HK = {int(m_value)}$"
+
+
+def l_tick_label(value: float) -> str:
+    if np.isfinite(value) and abs(float(value) - round(float(value))) < 1.0e-6:
+        return f"{int(round(float(value)))}"
+    return f"{float(value):.2f}"
+
+
+def marker_row_title(marker_row: dict[str, object] | pd.Series, m_value: int) -> str:
+    marker_title = clean_marker_title(marker_row.get("marker_title", ""))
+    if marker_title:
+        return marker_title
+    try:
+        display_l = float(marker_row.get("display_l", np.nan))
+    except Exception:
+        display_l = np.nan
+    if not np.isfinite(display_l):
+        try:
+            display_l = float(marker_row.get("fit_l", marker_row.get("l", np.nan)))
+        except Exception:
+            display_l = np.nan
+    if np.isfinite(display_l):
+        return f"L={l_tick_label(float(display_l))}"
+    return hk_display_label(int(m_value))
+
+
+def qr_rod_peak_edit_cache_key(
+    path_value: object = None,
+    *,
+    marker_table: pd.DataFrame | None = None,
+    mode: object = None,
+) -> dict[str, object]:
+    if marker_table is not None:
+        table = pd.DataFrame(marker_table).copy()
+        columns = [
+            col
+            for col in (
+                "m",
+                "branch",
+                "qz_marker",
+                "fit_l",
+                "display_l",
+                "marker_title",
+                "l",
+                "hkl",
+                "label",
+            )
+            if col in table
+        ]
+        if columns:
+            normalized = table[columns].copy()
+            for col in ("m", "qz_marker", "fit_l", "display_l", "l"):
+                if col in normalized:
+                    normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
+            if {"m", "branch", "qz_marker"}.issubset(normalized.columns):
+                normalized = normalized.sort_values(
+                    ["m", "branch", "qz_marker"], kind="mergesort"
+                ).reset_index(drop=True)
+            records = json.loads(
+                normalized.to_json(orient="records", double_precision=12, default_handler=str)
+            )
+        else:
+            records = []
+        data = json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return {
+            "mode": str(mode or "marker_table"),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "rows": int(len(table)),
+        }
     text = "" if path_value is None else str(path_value).strip()
     if not text:
         return {"mode": "last_cached"}
@@ -226,6 +312,618 @@ def qr_rod_profile_cache_has_final_fit(
     if peak_edit_cache_key.get("mode") == "last_cached":
         return True
     return payload.get("final_peak_edit_cache_key") == peak_edit_cache_key
+
+
+def qr_rod_peak_edit_runtime_mode(
+    requested: object = "auto",
+    *,
+    backend_name: object = None,
+    env: dict[str, object] | None = None,
+) -> str:
+    mode = str(requested or "auto").strip().lower()
+    if mode in {"0", "false", "off", "none", "no", "skip"}:
+        return "skip"
+    if mode in {"1", "true", "on", "yes", "interactive", "popup"}:
+        return "popup"
+    env_map = os.environ if env is None else env
+    for key in ("CI", "RA_SIM_HEADLESS", "RA_SIM_QR_ROD_PEAK_EDIT_HEADLESS"):
+        if str(env_map.get(key, "")).strip().lower() in {"1", "true", "yes", "on"}:
+            return "skip"
+    backend = str(backend_name if backend_name is not None else mpl.get_backend()).lower()
+    if any(token in backend for token in ("tk", "qt", "wx", "gtk", "macosx")):
+        return "popup"
+    return "skip"
+
+
+def replace_qr_rod_marker_group_qz(
+    marker_table: pd.DataFrame,
+    *,
+    m_value: int,
+    branch_value: str,
+    qz_values: object,
+) -> pd.DataFrame:
+    table = pd.DataFrame(marker_table).copy()
+    if table.empty:
+        table = pd.DataFrame(columns=["m", "branch", "qz_marker"])
+    qz = np.asarray(qz_values, dtype=np.float64).reshape(-1)
+    qz = np.unique(np.sort(qz[np.isfinite(qz)]))
+    m_series = pd.to_numeric(
+        table["m"] if "m" in table else pd.Series(np.nan, index=table.index),
+        errors="coerce",
+    )
+    branch_series = (
+        table["branch"].astype(str)
+        if "branch" in table
+        else pd.Series("", index=table.index, dtype=object)
+    )
+    group_mask = (np.asarray(m_series, dtype=np.float64) == int(m_value)) & (
+        branch_series.astype(str) == str(branch_value)
+    )
+    other = table.loc[~group_mask].copy()
+    group = table.loc[group_mask].copy()
+    if not group.empty and "qz_marker" in group:
+        group = group.sort_values("qz_marker", kind="mergesort")
+    ref_qz = (
+        pd.to_numeric(group["qz_marker"], errors="coerce").to_numpy(dtype=np.float64)
+        if "qz_marker" in group
+        else np.asarray([], dtype=np.float64)
+    )
+    l_col = "fit_l" if "fit_l" in group else "l" if "l" in group else ""
+    ref_l = (
+        pd.to_numeric(group[l_col], errors="coerce").to_numpy(dtype=np.float64)
+        if l_col
+        else np.asarray([], dtype=np.float64)
+    )
+    finite_refs = np.isfinite(ref_qz) & np.isfinite(ref_l)
+    ref_qz = ref_qz[finite_refs]
+    ref_l = ref_l[finite_refs]
+    slope = np.nan
+    intercept = np.nan
+    if ref_qz.size >= 2 and float(np.nanmax(ref_qz)) > float(np.nanmin(ref_qz)):
+        slope, intercept = np.polyfit(ref_qz, ref_l, 1)
+    elif ref_qz.size == 1 and abs(float(ref_qz[0])) > 1.0e-12:
+        slope = float(ref_l[0]) / float(ref_qz[0])
+        intercept = 0.0
+
+    template_rows = group.to_dict("records")
+    edited_rows: list[dict[str, object]] = []
+    for index, qz_value in enumerate(qz):
+        row = dict(template_rows[min(index, len(template_rows) - 1)] if template_rows else {})
+        row["m"] = int(m_value)
+        row["hk"] = int(m_value)
+        row["branch"] = str(branch_value)
+        row["qz_marker"] = float(qz_value)
+        row["projected_qz_marker"] = float(qz_value)
+        if np.isfinite(slope) and np.isfinite(intercept):
+            l_value = float(slope * float(qz_value) + intercept)
+            row["fit_l"] = l_value
+            row["display_l"] = l_value
+            row["l"] = l_value
+        row["marker_source"] = "manual_edit"
+        edited_rows.append(row)
+
+    edited_group = pd.DataFrame(edited_rows)
+    if edited_group.empty:
+        return other.reset_index(drop=True)
+    columns = list(dict.fromkeys([*table.columns.tolist(), *edited_group.columns.tolist()]))
+    return pd.concat(
+        [other.reindex(columns=columns), edited_group.reindex(columns=columns)],
+        ignore_index=True,
+        sort=False,
+    )
+
+
+def write_qr_rod_peak_edits(path_value: Path | str, marker_table: pd.DataFrame) -> Path:
+    path = Path(path_value).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    table = pd.DataFrame(marker_table).copy()
+    records = json.loads(table.to_json(orient="records", double_precision=12, default_handler=str))
+    payload = {"schema": "ra_sim.qr_rod_peak_edits.v1", "markers": records}
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def load_qr_rod_peak_edits(path_value: Path | str) -> pd.DataFrame:
+    path = Path(path_value).expanduser()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    records = payload.get("markers", []) if isinstance(payload, dict) else payload
+    if not isinstance(records, list):
+        raise ValueError("Qr-rod peak edits must be a JSON list or contain a markers list")
+    table = pd.DataFrame(records)
+    if table.empty:
+        return pd.DataFrame(columns=["m", "branch", "qz_marker", "marker_title"])
+    required = {"m", "branch", "qz_marker"}
+    missing = required - set(table.columns)
+    if missing:
+        raise ValueError(f"Qr-rod peak edits missing columns: {sorted(missing)}")
+    for col in ("m", "hk", "qz_marker", "projected_qz_marker", "fit_l", "display_l", "l"):
+        if col in table:
+            table[col] = pd.to_numeric(table[col], errors="coerce")
+    table["m"] = np.asarray(table["m"], dtype=int)
+    table["branch"] = table["branch"].astype(str)
+    if "marker_title" in table:
+        table["marker_title"] = [clean_marker_title(value) for value in table["marker_title"]]
+    table = table[np.isfinite(np.asarray(table["qz_marker"], dtype=np.float64))].copy()
+    return table.sort_values(["m", "branch", "qz_marker"], kind="mergesort").reset_index(
+        drop=True
+    )
+
+
+def marker_table_with_specular_l_markers(
+    marker_table: pd.DataFrame,
+    specular_l_marker_table: pd.DataFrame,
+) -> pd.DataFrame:
+    base = pd.DataFrame(marker_table).copy()
+    specular = pd.DataFrame(specular_l_marker_table).copy()
+    if specular.empty:
+        return base.reset_index(drop=True)
+    if base.empty:
+        return specular.reset_index(drop=True)
+    columns = list(dict.fromkeys([*base.columns.tolist(), *specular.columns.tolist()]))
+    merged = pd.concat(
+        [base.reindex(columns=columns), specular.reindex(columns=columns)],
+        ignore_index=True,
+        sort=False,
+    )
+    duplicate_key = None
+    if {"m", "branch", "hkl"}.issubset(merged.columns):
+        duplicate_key = ["m", "branch", "hkl"]
+    elif {"m", "branch", "qz_marker"}.issubset(merged.columns):
+        duplicate_key = ["m", "branch", "qz_marker"]
+    if duplicate_key is not None:
+        merged = merged.drop_duplicates(subset=duplicate_key, keep="first")
+    return merged.reset_index(drop=True)
+
+
+def snap_qr_rod_markers_to_profile_peaks(
+    qz_markers: object,
+    qz_center: object,
+    background_density: object,
+    *,
+    window_fraction: float = 0.035,
+) -> np.ndarray:
+    markers = np.asarray(qz_markers, dtype=np.float64).reshape(-1)
+    x = np.asarray(qz_center, dtype=np.float64).reshape(-1)
+    y = np.asarray(background_density, dtype=np.float64).reshape(-1)
+    snapped = markers.copy()
+    finite_markers = np.isfinite(markers)
+    finite_profile = np.isfinite(x) & np.isfinite(y)
+    if np.count_nonzero(finite_markers) < 1 or np.count_nonzero(finite_profile) < 3:
+        return snapped
+    x_valid = x[finite_profile]
+    y_valid = y[finite_profile]
+    x_span = float(np.nanmax(x_valid) - np.nanmin(x_valid))
+    if not np.isfinite(x_span) or x_span <= 0.0:
+        return snapped
+    half_window = max(x_span * max(float(window_fraction), 0.0), 1.0e-6)
+    for index, marker in enumerate(markers):
+        if not np.isfinite(marker):
+            continue
+        local = np.abs(x_valid - float(marker)) <= half_window
+        if not np.any(local):
+            continue
+        snapped[index] = float(x_valid[local][int(np.nanargmax(y_valid[local]))])
+    return snapped
+
+
+def show_qr_rod_peak_marker_popup(
+    marker_table: pd.DataFrame,
+    rod_profile_table: pd.DataFrame,
+    *,
+    backend_name: object = None,
+) -> tuple[pd.DataFrame, bool]:
+    backend = str(backend_name if backend_name is not None else mpl.get_backend())
+    if qr_rod_peak_edit_runtime_mode("auto", backend_name=backend, env={}) != "popup":
+        raise RuntimeError(f"Matplotlib backend {backend!r} is not interactive")
+    try:
+        from matplotlib.widgets import Button, TextBox
+    except Exception as exc:
+        raise RuntimeError(f"Matplotlib editor widgets are unavailable: {exc}") from exc
+
+    original = pd.DataFrame(marker_table).copy()
+    edited = original.copy()
+    profiles = pd.DataFrame(rod_profile_table).copy()
+    if edited.empty or profiles.empty or not {"m", "branch", "qz_center"}.issubset(profiles):
+        return edited, False
+
+    groups: list[tuple[int, str]] = []
+    for row in profiles[["m", "branch"]].drop_duplicates().to_dict("records"):
+        try:
+            group = (int(row["m"]), str(row["branch"]))
+        except Exception:
+            continue
+        if group not in groups:
+            groups.append(group)
+    if not groups:
+        return edited, False
+
+    cols = min(3, max(1, len(groups)))
+    rows = int(math.ceil(len(groups) / cols))
+    fig, axes = plt.subplots(
+        rows,
+        cols,
+        squeeze=False,
+        figsize=(4.2 * cols, 2.7 * rows + 0.6),
+        num="Qr rod peak marker editor",
+    )
+    try:
+        fig.canvas.manager.set_window_title("Qr rod peak marker editor")
+    except Exception:
+        pass
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.18, hspace=0.55, wspace=0.30)
+
+    flat_axes = list(axes.ravel())
+    axes_by_group = dict(zip(groups, flat_axes))
+    group_by_axes = {ax: group for group, ax in axes_by_group.items()}
+    for ax in flat_axes[len(groups) :]:
+        ax.set_axis_off()
+
+    result = {"accepted": True}
+    selected: dict[str, object] = {"group": None, "index": None, "dragging": False}
+    title_box_state: dict[str, object] = {"box": None, "syncing": False}
+
+    def group_marker_rows(m_value: int, branch_value: str) -> pd.DataFrame:
+        if edited.empty or not {"m", "branch", "qz_marker"}.issubset(edited):
+            return pd.DataFrame()
+        mask = (np.asarray(edited["m"], dtype=int) == int(m_value)) & (
+            edited["branch"].astype(str) == str(branch_value)
+        )
+        sub = edited.loc[mask].copy()
+        if sub.empty:
+            return sub
+        sub["_source_index"] = sub.index
+        sub["qz_marker"] = pd.to_numeric(sub["qz_marker"], errors="coerce")
+        sub = sub[np.isfinite(np.asarray(sub["qz_marker"], dtype=np.float64))].copy()
+        return sub.sort_values("qz_marker", kind="mergesort").reset_index(drop=True)
+
+    def group_markers(m_value: int, branch_value: str) -> np.ndarray:
+        rows = group_marker_rows(m_value, branch_value)
+        if rows.empty:
+            return np.asarray([], dtype=np.float64)
+        values = np.asarray(rows["qz_marker"], dtype=np.float64)
+        return np.sort(values[np.isfinite(values)])
+
+    def selected_marker_row() -> tuple[int, pd.Series] | None:
+        group = selected.get("group")
+        index = selected.get("index")
+        if group is None or index is None:
+            return None
+        m_value, branch_value = group
+        rows = group_marker_rows(int(m_value), str(branch_value))
+        if rows.empty or int(index) < 0 or int(index) >= len(rows):
+            return None
+        row = rows.iloc[int(index)]
+        return int(row["_source_index"]), row
+
+    def sync_title_box() -> None:
+        box = title_box_state.get("box")
+        if box is None:
+            return
+        selected_row = selected_marker_row()
+        title = ""
+        if selected_row is not None:
+            _source_index, row = selected_row
+            group = selected.get("group")
+            if group is not None:
+                title = marker_row_title(row, int(group[0]))
+        title_box_state["syncing"] = True
+        try:
+            box.set_val(title)
+        finally:
+            title_box_state["syncing"] = False
+
+    def set_selected_marker_title(text: object, *, redraw_figure: bool = True) -> None:
+        if bool(title_box_state.get("syncing", False)):
+            return
+        selected_row = selected_marker_row()
+        if selected_row is None:
+            return
+        source_index, _row = selected_row
+        nonlocal edited
+        if "marker_title" not in edited:
+            edited["marker_title"] = ""
+        title = clean_marker_title(text)
+        if clean_marker_title(edited.loc[source_index, "marker_title"]) == title:
+            return
+        edited.loc[source_index, "marker_title"] = title
+        if redraw_figure:
+            redraw()
+
+    def flush_title_box() -> None:
+        box = title_box_state.get("box")
+        if box is None:
+            return
+        set_selected_marker_title(getattr(box, "text", ""), redraw_figure=False)
+
+    def profile_xy(m_value: int, branch_value: str) -> tuple[np.ndarray, np.ndarray]:
+        sub = profiles[
+            (np.asarray(profiles["m"], dtype=int) == int(m_value))
+            & (profiles["branch"].astype(str) == str(branch_value))
+        ].copy()
+        if sub.empty or "background_density" not in sub:
+            return np.asarray([], dtype=np.float64), np.asarray([], dtype=np.float64)
+        x = np.asarray(sub["qz_center"], dtype=np.float64)
+        y = np.asarray(sub["background_density"], dtype=np.float64)
+        finite = np.isfinite(x) & np.isfinite(y)
+        x = x[finite]
+        y = y[finite]
+        if x.size < 1:
+            return x, y
+        order = np.argsort(x)
+        return x[order], y[order]
+
+    def marker_y_values(markers: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        if markers.size == 0:
+            return np.asarray([], dtype=np.float64)
+        if x.size < 2:
+            return np.zeros(markers.shape, dtype=np.float64)
+        return np.interp(markers, x, y, left=np.nan, right=np.nan)
+
+    def set_group_markers(m_value: int, branch_value: str, values: object) -> None:
+        nonlocal edited
+        edited = replace_qr_rod_marker_group_qz(
+            edited,
+            m_value=int(m_value),
+            branch_value=str(branch_value),
+            qz_values=values,
+        )
+
+    def redraw() -> None:
+        selected_group = selected.get("group")
+        selected_index = selected.get("index")
+        for group, ax in axes_by_group.items():
+            m_value, branch_value = group
+            ax.clear()
+            x, y = profile_xy(m_value, branch_value)
+            if x.size:
+                ax.plot(x, y, color="0.25", linewidth=0.9)
+            markers = group_markers(m_value, branch_value)
+            marker_rows = group_marker_rows(m_value, branch_value)
+            y_markers = marker_y_values(markers, x, y)
+            finite = np.isfinite(markers) & np.isfinite(y_markers)
+            if np.any(finite):
+                colors = ["white"] * int(np.count_nonzero(finite))
+                if selected_group == group and selected_index is not None:
+                    finite_indices = np.flatnonzero(finite)
+                    try:
+                        color_index = list(finite_indices).index(int(selected_index))
+                        colors[color_index] = "#d95f02"
+                    except ValueError:
+                        pass
+                ax.scatter(
+                    markers[finite],
+                    y_markers[finite],
+                    s=24.0,
+                    marker="o",
+                    facecolors=colors,
+                    edgecolors="black",
+                    linewidths=0.7,
+                    zorder=5,
+                )
+                visible_rows = marker_rows.loc[finite].reset_index(drop=True)
+                for marker_x, marker_y, marker_row in zip(
+                    markers[finite], y_markers[finite], visible_rows.to_dict("records")
+                ):
+                    ax.annotate(
+                        marker_row_title(marker_row, int(m_value)),
+                        xy=(float(marker_x), float(marker_y)),
+                        xytext=(0.0, 7.0),
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom",
+                        fontsize=6.5,
+                        color="black",
+                        annotation_clip=True,
+                        zorder=6,
+                    )
+            title_color = "#d95f02" if selected_group == group else "black"
+            ax.set_title(f"HK={m_value} {branch_value}", fontsize=9, color=title_color)
+            ax.set_xlabel("Qz", fontsize=8)
+            ax.tick_params(labelsize=7)
+        fig.canvas.draw_idle()
+
+    def select_nearest(group: tuple[int, str], x_value: float) -> bool:
+        markers = group_markers(group[0], group[1])
+        if markers.size == 0 or not np.isfinite(x_value):
+            return False
+        axis = axes_by_group[group]
+        x_lo, x_hi = axis.get_xlim()
+        tolerance = max(abs(float(x_hi) - float(x_lo)) * 0.025, 1.0e-6)
+        nearest_index = int(np.nanargmin(np.abs(markers - float(x_value))))
+        if abs(float(markers[nearest_index]) - float(x_value)) > tolerance:
+            return False
+        selected["group"] = group
+        selected["index"] = nearest_index
+        sync_title_box()
+        return True
+
+    def add_marker(group: tuple[int, str], x_value: float) -> None:
+        markers = group_markers(group[0], group[1]).tolist()
+        markers.append(float(x_value))
+        set_group_markers(group[0], group[1], markers)
+        select_nearest(group, float(x_value))
+        redraw()
+
+    def move_selected(x_value: float) -> None:
+        group = selected.get("group")
+        index = selected.get("index")
+        if group is None or index is None or not np.isfinite(x_value):
+            return
+        m_value, branch_value = group
+        markers = group_markers(m_value, branch_value).tolist()
+        if int(index) < 0 or int(index) >= len(markers):
+            return
+        markers[int(index)] = float(x_value)
+        set_group_markers(m_value, branch_value, markers)
+        select_nearest((int(m_value), str(branch_value)), float(x_value))
+        redraw()
+
+    def delete_selected() -> None:
+        group = selected.get("group")
+        index = selected.get("index")
+        if group is None or index is None:
+            return
+        m_value, branch_value = group
+        markers = group_markers(m_value, branch_value).tolist()
+        if int(index) < 0 or int(index) >= len(markers):
+            return
+        del markers[int(index)]
+        set_group_markers(m_value, branch_value, markers)
+        selected["index"] = None
+        sync_title_box()
+        redraw()
+
+    def snap_selected_group() -> None:
+        group = selected.get("group")
+        if group is None:
+            return
+        flush_title_box()
+        m_value, branch_value = group
+        markers = group_markers(m_value, branch_value)
+        if markers.size < 1:
+            return
+        x, y = profile_xy(m_value, branch_value)
+        snapped = snap_qr_rod_markers_to_profile_peaks(markers, x, y)
+        if np.array_equal(snapped, markers):
+            return
+        selected_marker = None
+        index = selected.get("index")
+        if index is not None and int(index) >= 0 and int(index) < markers.size:
+            selected_marker = float(snapped[int(index)])
+        set_group_markers(m_value, branch_value, snapped)
+        if selected_marker is not None:
+            select_nearest((int(m_value), str(branch_value)), selected_marker)
+        redraw()
+
+    def on_press(event) -> None:
+        if event.inaxes not in group_by_axes or event.xdata is None:
+            return
+        flush_title_box()
+        group = group_by_axes[event.inaxes]
+        selected["group"] = group
+        selected["index"] = None
+        sync_title_box()
+        if getattr(event, "dblclick", False):
+            add_marker(group, float(event.xdata))
+            return
+        if select_nearest(group, float(event.xdata)):
+            selected["dragging"] = True
+        redraw()
+
+    def on_motion(event) -> None:
+        if not selected.get("dragging") or event.xdata is None:
+            return
+        if event.inaxes not in group_by_axes or group_by_axes[event.inaxes] != selected.get("group"):
+            return
+        move_selected(float(event.xdata))
+
+    def on_release(_event) -> None:
+        selected["dragging"] = False
+
+    def on_key(event) -> None:
+        box = title_box_state.get("box")
+        if box is not None and getattr(event, "inaxes", None) is getattr(box, "ax", None):
+            return
+        key = str(getattr(event, "key", "")).lower()
+        if key in {"delete", "backspace"}:
+            delete_selected()
+        elif key in {"s"}:
+            snap_selected_group()
+        elif key in {"enter", "return"}:
+            flush_title_box()
+            result["accepted"] = True
+            plt.close(fig)
+        elif key in {"escape"}:
+            result["accepted"] = False
+            plt.close(fig)
+
+    def accept(_event) -> None:
+        flush_title_box()
+        result["accepted"] = True
+        plt.close(fig)
+
+    def cancel(_event) -> None:
+        result["accepted"] = False
+        plt.close(fig)
+
+    button_axes = [
+        fig.add_axes([0.56, 0.035, 0.10, 0.05]),
+        fig.add_axes([0.68, 0.035, 0.10, 0.05]),
+        fig.add_axes([0.80, 0.035, 0.10, 0.05]),
+    ]
+    title_box = TextBox(fig.add_axes([0.08, 0.035, 0.40, 0.05]), "Label", textalignment="left")
+    title_box.on_submit(set_selected_marker_title)
+    title_box_state["box"] = title_box
+    buttons = [
+        Button(button_axes[0], "Snap"),
+        Button(button_axes[1], "Cancel"),
+        Button(button_axes[2], "Accept"),
+    ]
+    buttons[0].on_clicked(lambda event: snap_selected_group())
+    buttons[1].on_clicked(cancel)
+    buttons[2].on_clicked(accept)
+    fig._ra_sim_qr_rod_peak_edit_widgets = [title_box, *buttons]
+    fig.canvas.mpl_connect("button_press_event", on_press)
+    fig.canvas.mpl_connect("motion_notify_event", on_motion)
+    fig.canvas.mpl_connect("button_release_event", on_release)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    redraw()
+    plt.show(block=True)
+    if not result["accepted"]:
+        return original, False
+    return edited.reset_index(drop=True), True
+
+
+def edit_qr_rod_peak_markers(
+    marker_table: pd.DataFrame,
+    rod_profile_table: pd.DataFrame,
+    *,
+    mode: object = "auto",
+    edit_path: object = None,
+    required_marker_table: pd.DataFrame | None = None,
+    backend_name: object = None,
+    env: dict[str, object] | None = None,
+) -> tuple[pd.DataFrame, str]:
+    table = pd.DataFrame(marker_table).copy()
+    source_mode = "last_cached"
+    path_text = "" if edit_path is None else str(edit_path).strip()
+    if path_text:
+        try:
+            table = load_qr_rod_peak_edits(path_text)
+            if required_marker_table is not None:
+                table = marker_table_with_specular_l_markers(table, required_marker_table)
+            source_mode = "imported_edits"
+            print(f"loaded Qr-rod peak edits={Path(path_text).expanduser()}")
+        except Exception as exc:
+            print(f"ignored Qr-rod peak edits={Path(path_text).expanduser()}: {exc}")
+
+    runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
+    if runtime_mode != "popup":
+        print(f"Qr-rod peak marker editor: mode={runtime_mode} source={source_mode}")
+        return table, source_mode
+
+    try:
+        edited, accepted = show_qr_rod_peak_marker_popup(
+            table,
+            rod_profile_table,
+            backend_name=backend_name,
+        )
+    except Exception as exc:
+        if str(mode or "auto").strip().lower() == "popup":
+            raise RuntimeError(f"Qr-rod peak marker popup unavailable: {exc}") from exc
+        print(f"skipped Qr-rod peak marker popup: {exc}")
+        return table, source_mode
+    if not accepted:
+        print(f"Qr-rod peak marker editor: mode=popup source={source_mode} accepted=False")
+        return table, source_mode
+    if path_text:
+        try:
+            saved_path = write_qr_rod_peak_edits(path_text, edited)
+            print(f"saved Qr-rod peak edits={saved_path}")
+        except Exception as exc:
+            print(f"failed saving Qr-rod peak edits={Path(path_text).expanduser()}: {exc}")
+    print("Qr-rod peak marker editor: mode=popup source=popup accepted=True")
+    return edited, "popup"
 
 
 def qr_rod_profile_cache_with_final_fit(
@@ -1159,7 +1857,7 @@ def robust_display_limits(
     return float(vmin), float(vmax)
 
 
-def hk0_l1_star_crop_bounds(
+def hk0_star_crop_bounds(
     image_shape: tuple[int, int],
     beam_center: tuple[float, float],
     peak_center: tuple[float, float],
@@ -1168,7 +1866,7 @@ def hk0_l1_star_crop_bounds(
     above_peak_padding_px: int = 96,
     below_beam_padding_px: int = 24,
 ) -> tuple[slice, slice] | None:
-    """Return detector row/column slices spanning beam center to the 00L L=1 peak."""
+    """Return detector row/column slices spanning beam center to a target 00L peak."""
     if len(image_shape) < 2:
         return None
     height = int(image_shape[0])
@@ -1194,13 +1892,20 @@ def hk0_l1_star_crop_bounds(
     return slice(row_start, row_stop), slice(col_start, col_stop)
 
 
-def hk0_l1_star_marker_center(
+def hk0_star_marker_center(
     marker_table: pd.DataFrame,
     *,
     projector,
+    target_l: float = 3.0,
 ) -> tuple[float, float] | None:
-    """Project the drawable HK=0, L=1 marker row to detector x/y pixels."""
+    """Project the drawable HK=0 target-L marker row to detector x/y pixels."""
     if marker_table is None or marker_table.empty:
+        return None
+    try:
+        target_l_value = float(target_l)
+    except Exception:
+        return None
+    if not np.isfinite(target_l_value):
         return None
     records = marker_table.to_dict("records")
     candidates: list[tuple[float, dict[str, object]]] = []
@@ -1230,10 +1935,10 @@ def hk0_l1_star_marker_center(
                     l_value = None
         if l_value is None or not np.isfinite(l_value):
             continue
-        distance_to_l1 = abs(float(l_value) - 1.0)
-        if distance_to_l1 > 1.0e-6:
+        distance_to_target_l = abs(float(l_value) - target_l_value)
+        if distance_to_target_l > 1.0e-6:
             continue
-        candidates.append((distance_to_l1, row))
+        candidates.append((distance_to_target_l, row))
     for _distance, row in sorted(candidates, key=lambda item: item[0]):
         try:
             theta = float(row["refined_two_theta_deg"])
@@ -1254,7 +1959,7 @@ def hk0_l1_star_marker_center(
     return None
 
 
-def save_hk0_l1_star_crop(
+def save_hk0_star_crop(
     detector_image: np.ndarray,
     output_path: Path | str,
     *,
@@ -1264,9 +1969,9 @@ def save_hk0_l1_star_crop(
     above_peak_padding_px: int = 96,
     below_beam_padding_px: int = 24,
 ) -> Path | None:
-    """Save the HK=0, L=1 raw detector crop as a grayscale PNG."""
+    """Save the HK=0 target-L raw detector crop as a grayscale PNG."""
     image = np.ma.asarray(detector_image, dtype=np.float64)
-    bounds = hk0_l1_star_crop_bounds(
+    bounds = hk0_star_crop_bounds(
         tuple(image.shape),
         beam_center,
         peak_center,
@@ -8320,6 +9025,49 @@ else:
         (ROD_PROFILE_TILT_DEG, 0.0, "(0,L)", "no caked qz values in dynamic specular window")
     )
 
+
+def specular_l_marker_rows_for_background(
+    bg: dict[str, object], qz_map: np.ndarray
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    theta_axis = np.asarray(bg["theta_axis"], dtype=np.float64)
+    phi_axis = np.asarray(bg["phi_axis"], dtype=np.float64)
+    qz_values = np.asarray(qz_map, dtype=np.float64)
+    for item in candidate_marker_items_for_background(bg):
+        try:
+            h, k, l_value = parse_hkl_label(str(item["label"]))
+            theta0 = float(item["params"][1])
+            phi0 = float(item["params"][2])
+        except Exception:
+            continue
+        if int(l_value) <= 0:
+            continue
+        if h != 0 or k != 0 or not (np.isfinite(theta0) and np.isfinite(phi0)):
+            continue
+        if theta0 > float(ROD_PROFILE_MAX_TWO_THETA_DEG):
+            continue
+        row = int(np.nanargmin(np.abs(wrapped_delta_deg(phi_axis, phi0))))
+        col = int(np.nanargmin(np.abs(theta_axis - theta0)))
+        qz_value = float(qz_values[row, col])
+        if not np.isfinite(qz_value) or qz_value <= POSITIVE_QZ_MIN:
+            continue
+        rows.append(
+            {
+                "m": 0,
+                "hk": 0,
+                "branch": "qz",
+                "hkl": str(item["label"]),
+                "l": int(l_value),
+                "fit_l": int(l_value),
+                "display_l": float(l_value),
+                "qz_marker": qz_value,
+                "refined_two_theta_deg": theta0,
+                "refined_phi_deg": phi0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 for rod in rod_entries:
     samples = gui_qr_cylinder_overlay.project_selected_qr_rod_caked_samples(
         selected_entry=rod,
@@ -8460,6 +9208,8 @@ if rod_profile_table.empty:
     raise RuntimeError(
         f"no positive-Qz {ROD_PROFILE_TILT_LABEL} deg Qr rod profiles were generated"
     )
+specular_l_marker_table = specular_l_marker_rows_for_background(profile_bg, profile_qz_map)
+marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
 QR_ROD_PROFILE_CACHE_PATH = qr_rod_profile_cache_path(OUT_DIR, STATE_PATH)
 if _truthy_setting(
     "RESET_QR_ROD_PROFILE_CACHE_OVERRIDE", "RA_SIM_RESET_QR_ROD_PROFILE_CACHE", False
@@ -8470,7 +9220,23 @@ qr_rod_profile_cache = load_qr_rod_profile_cache(QR_ROD_PROFILE_CACHE_PATH, STAT
 qr_rod_peak_edits_path = _setting_text(
     "QR_ROD_PEAK_EDITS_PATH_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDITS", ""
 )
-qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(qr_rod_peak_edits_path or None)
+qr_rod_peak_edit_mode = _setting_text(
+    "QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "popup"
+)
+marker_table, qr_rod_peak_edit_source = edit_qr_rod_peak_markers(
+    marker_table,
+    rod_profile_table,
+    mode=qr_rod_peak_edit_mode,
+    edit_path=qr_rod_peak_edits_path or None,
+    required_marker_table=specular_l_marker_table,
+    backend_name=mpl.get_backend(),
+    env=os.environ,
+)
+qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
+    None if qr_rod_peak_edit_source == "last_cached" else qr_rod_peak_edits_path or None,
+    marker_table=marker_table if qr_rod_peak_edit_source != "last_cached" else None,
+    mode=qr_rod_peak_edit_source,
+)
 if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):
     rod_profile_table = pd.DataFrame(qr_rod_profile_cache["final_rod_profile_table"]).copy()
     marker_table = pd.DataFrame(qr_rod_profile_cache["final_marker_table"]).copy()
@@ -8497,6 +9263,7 @@ else:
     )
     write_qr_rod_profile_cache(QR_ROD_PROFILE_CACHE_PATH, STATE_PATH, qr_rod_profile_cache)
     print(f"saved final Qr-rod fit cache={QR_ROD_PROFILE_CACHE_PATH}")
+marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
 print(
     f"rod-profile joint fits: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} workers={ROD_PROFILE_FIT_WORKERS} gpu={GPU_ACCELERATION_ENABLED}"
 )
@@ -8525,61 +9292,9 @@ print(f"saved={rod_profile_csv}")
 print(f"saved={marker_csv}")
 print(f"saved={component_csv}")
 
-
-def specular_l_marker_rows_for_background(
-    bg: dict[str, object], qz_map: np.ndarray
-) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    theta_axis = np.asarray(bg["theta_axis"], dtype=np.float64)
-    phi_axis = np.asarray(bg["phi_axis"], dtype=np.float64)
-    qz_values = np.asarray(qz_map, dtype=np.float64)
-    for item in candidate_marker_items_for_background(bg):
-        try:
-            h, k, l_value = parse_hkl_label(str(item["label"]))
-            theta0 = float(item["params"][1])
-            phi0 = float(item["params"][2])
-        except Exception:
-            continue
-        if int(l_value) <= 0:
-            continue
-        if h != 0 or k != 0 or not (np.isfinite(theta0) and np.isfinite(phi0)):
-            continue
-        if theta0 > float(ROD_PROFILE_MAX_TWO_THETA_DEG):
-            continue
-        row = int(np.nanargmin(np.abs(wrapped_delta_deg(phi_axis, phi0))))
-        col = int(np.nanargmin(np.abs(theta_axis - theta0)))
-        qz_value = float(qz_values[row, col])
-        if not np.isfinite(qz_value) or qz_value <= POSITIVE_QZ_MIN:
-            continue
-        rows.append(
-            {
-                "m": 0,
-                "hk": 0,
-                "branch": "qz",
-                "hkl": str(item["label"]),
-                "l": int(l_value),
-                "fit_l": int(l_value),
-                "display_l": float(l_value),
-                "qz_marker": qz_value,
-                "refined_two_theta_deg": theta0,
-                "refined_phi_deg": phi0,
-            }
-        )
-    return pd.DataFrame(rows)
-
-
 plot_marker_table = marker_table.copy()
 if not plot_marker_table.empty and "m" in plot_marker_table:
     plot_marker_table["hk"] = np.asarray(plot_marker_table["m"], dtype=int)
-specular_l_marker_table = specular_l_marker_rows_for_background(profile_bg, profile_qz_map)
-if not specular_l_marker_table.empty:
-    plot_marker_table = pd.concat(
-        [plot_marker_table, specular_l_marker_table], ignore_index=True, sort=False
-    )
-
-
-def hk_display_label(m_value: object) -> str:
-    return rf"$HK = {int(m_value)}$"
 
 
 def l_reference_rows(
@@ -8684,29 +9399,8 @@ def draw_rod_profile_fit_markers(
     )
 
 
-def l_tick_label(value: float) -> str:
-    if np.isfinite(value) and abs(float(value) - round(float(value))) < 1.0e-6:
-        return f"{int(round(float(value)))}"
-    return f"{float(value):.2f}"
-
-
-def hk_l_tick_label(m_value: object, l_value: float) -> str:
-    return f"({int(m_value)},{l_tick_label(float(l_value))})"
-
-
 def rod_marker_annotation_label(marker_row: dict[str, object] | pd.Series, m_value: int) -> str:
-    try:
-        display_l = float(marker_row.get("display_l", np.nan))
-    except Exception:
-        display_l = np.nan
-    if not np.isfinite(display_l):
-        try:
-            display_l = float(marker_row.get("fit_l", marker_row.get("l", np.nan)))
-        except Exception:
-            display_l = np.nan
-    if np.isfinite(display_l):
-        return hk_l_tick_label(int(m_value), float(display_l))
-    return hk_display_label(int(m_value))
+    return marker_row_title(marker_row, int(m_value))
 
 
 def annotate_rod_profile_hk_locations(
@@ -9788,24 +10482,25 @@ beam_center = (
     float(getattr(profile_bg["qr_overlay_config"], "center_col", center_col_px)),
     float(getattr(profile_bg["qr_overlay_config"], "center_row", center_row_px)),
 )
-hk0_l1_star_center = hk0_l1_star_marker_center(
+hk0_l3_star_center = hk0_star_marker_center(
     specular_l_marker_table,
     projector=lambda theta, phi: detector_xy_from_caked_angles(profile_bg, theta, phi),
+    target_l=3.0,
 )
-hk0_l1_star_path = FIGURE_OUT_DIR / "hk0_l1_star.png"
-if hk0_l1_star_center is None:
-    print("skipped hk0_l1_star.png: drawable HK=0, L=1 marker was unavailable")
+hk0_l3_star_path = FIGURE_OUT_DIR / "hk0_l3_star.png"
+if hk0_l3_star_center is None:
+    print("skipped hk0_l3_star.png: drawable HK=0, L=3 marker was unavailable")
 else:
-    hk0_l1_star_saved = save_hk0_l1_star_crop(
+    hk0_l3_star_saved = save_hk0_star_crop(
         np.asarray(profile_bg.get("raw_detector_image", profile_bg["detector_image"]), dtype=np.float64),
-        hk0_l1_star_path,
+        hk0_l3_star_path,
         beam_center=beam_center,
-        peak_center=hk0_l1_star_center,
+        peak_center=hk0_l3_star_center,
     )
-    if hk0_l1_star_saved is None:
-        print("skipped hk0_l1_star.png: crop bounds were empty or invalid")
+    if hk0_l3_star_saved is None:
+        print("skipped hk0_l3_star.png: crop bounds were empty or invalid")
     else:
-        print(f"saved={hk0_l1_star_saved}")
+        print(f"saved={hk0_l3_star_saved}")
 used_label_positions: list[np.ndarray] = []
 for label_entry in rod_label_entries:
     if str(label_entry.get("label_mode", "")) == "low_l_base":
