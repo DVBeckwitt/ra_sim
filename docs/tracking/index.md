@@ -31,8 +31,8 @@ intensity contract, but remains downstream of green mosaic fitting.
 | Deterministic geometry runtime fix pass | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-04 | [deterministic-geometry-runtime-fix-pass.md](in-progress/deterministic-geometry-runtime-fix-pass.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
-| Sim caked detector replay | bug | - | none | p1 | 2026-05-06 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
-| Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-06 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
+| Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
+| Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-05 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
 | Beam center background pick | feature | - | none | p1 | 2026-05-01 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
 | 6H Qr reference SF picking | feature/bug | - | none | p1 | 2026-04-30 | [6h-qr-reference-sf-picking.md](in-progress/6h-qr-reference-sf-picking.md) |
@@ -51,36 +51,29 @@ blocked by pre-existing formatting drift in dirty
 `ra_sim/fitting/optimization.py`.
 
 Replay status note: `Sim caked detector replay` remains in progress. Latest
-patch splits saved manual caked fit/cache coordinates from visual caked aliases,
-forces required caked geometry-fit projection through compatible
-per-background projectors, and narrows caked-view overlay invalidation to stale
-view-bound markers. Focused manual/projector/runtime tests and
-`ra_sim.dev check` pass. Review follow-up remains for preserving existing
-visual aliases inside the shared geometry-fit simulated-point helper, avoiding
-over-wrapped compatible-projector `TypeError`s, and trimming one single-use GUI
-canvas helper.
+patch warms detector-mode Qr/Qz caked projection sidecars immediately after
+selector changes, without toggling the GUI to caked view. Detector picker rows
+remain primary, caked sim/background entries and lookups are cached for replay,
+and focused sidecar/Qr selector/import-safe tests pass. Broader workflow
+validation is still blocked by pre-existing local failures and formatting
+drift in the dirty worktree.
 
 Background peak fit detector Qr rod panel status note:
-The tracked Python diagnostic script now treats the detector Qr-rod panel as a
-source-consistent geometry/overlay diagnostic and is the source of truth for the
-recreated workflow. The notebook was intentionally not patched. The script uses
-Qr-driven rod rotation fitting (`FIT_QZ_WEIGHT = 0.0`), skips specular anchors,
-balances anchors by rod identity, rejects mixed target-Qr identities by
-source/HK (or branch if needed), applies the same acceptance predicate to fit
-anchors, markers, profile samples, and branch items, and reports detector-space
-`curve_distance_px` from point-to-polyline segment distance. The rod profile
-path now caches final Qr-rod joint fits by state filename in a JSON envelope,
-ignores and regenerates legacy pickle cache payloads, requires cached marker
-tables to be drawable (`m`, `branch`, `qz_marker`, `display_l`, and either
-`fit_l` or `l`), treats manual/imported L edits as display-only label
-overrides, draws the used fit markers on the plotted data trace, keeps local
-peak snapping bounded to each marker window, and uses specular marker tables
-for cache-hit detector support. On Windows the script normalizes process/auto
-fit backend requests to thread to avoid `multiprocessing.spawn` re-running the
-top-level diagnostic in child workers. `tests/test_background_peak_fits_notebook.py`
-passes (`29 passed`), `ra_sim.dev check` passes, and a Bi2Se3 runtime run
-completed with `79/79` successful background peak fits, final Qr-rod cache
-reuse, regenerated rod-profile figures, and no prior child-process traceback.
+The ignored parallel diagnostics notebook now treats the detector Qr-rod panel
+as a source-consistent geometry/overlay diagnostic. Cell 14 uses Qr-driven rod
+rotation fitting (`FIT_QZ_WEIGHT = 0.0`), skips specular anchors, balances
+anchors by rod identity, rejects mixed target-Qr identities by source/HK (or
+branch if needed), applies the same acceptance predicate to fit anchors,
+markers, profile samples, and branch items, and reports detector-space
+`curve_distance_px` from point-to-polyline segment distance. The detector panel
+keeps accepted placed-star diagnostics, low-L `HK=<m> +/-` labels, projected
+centerlines, and transparent Delta-Qr bands including `HK=0`. The integrated
+Qr figure centers `HK=0`, labels only that row with `Intensity (a.u.)`, aligns
+non-specular L axes from `L=2`, and places the Data/Simulation legend in the
+top-right panel. JSON, nbformat, compile, static checks, and the two parallel
+notebook pytest checks pass. Full notebook-section rerun and visual acceptance
+remain pending; full `tests/test_background_peak_fits_notebook.py` is still red
+in unrelated non-parallel notebook expectations.
 
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the

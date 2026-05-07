@@ -1,14 +1,11 @@
 import ast
 from concurrent.futures import ProcessPoolExecutor
-import hashlib
 import json
 import os
-import py_compile
 import re
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 from scipy.optimize import least_squares, nnls
 
@@ -20,56 +17,32 @@ NOTEBOOK_PATH = Path("scripts/diagnostics/all_background_peak_fits.ipynb")
 PARALLEL_NOTEBOOK_PATH = Path(
     "scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.ipynb"
 )
-PARALLEL_SCRIPT_PATH = Path(
-    "scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py"
-)
 RUNNER_PATH = Path("scripts/diagnostics/run_all_background_peak_fits.py")
 
 
-def _identity_njit(*args: object, **_kwargs: object) -> object:
-    if args and callable(args[0]) and len(args) == 1:
-        return args[0]
-
-    def _decorator(func: object) -> object:
-        return func
-
-    return _decorator
-
-
-def _notebook_source(notebook_path: Path = NOTEBOOK_PATH) -> str:
-    if not notebook_path.exists():
-        pytest.skip(f"{notebook_path} is not present in this checkout")
-    if notebook_path.suffix == ".py":
-        return notebook_path.read_text(encoding="utf-8")
-    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+def _notebook_source() -> str:
+    if not NOTEBOOK_PATH.exists():
+        pytest.skip(f"{NOTEBOOK_PATH} is not present in this checkout")
+    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
     return "\n".join("".join(cell.get("source", [])) for cell in notebook.get("cells", []))
 
 
-def _notebook_functions(*names: str, notebook_path: Path = NOTEBOOK_PATH) -> dict[str, object]:
+def _notebook_functions(*names: str) -> dict[str, object]:
+    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
     wanted = set(names)
     selected: list[ast.FunctionDef] = []
-    if notebook_path.suffix == ".py":
-        tree = ast.parse(notebook_path.read_text(encoding="utf-8"), filename=str(notebook_path))
+    for index, cell in enumerate(notebook.get("cells", [])):
+        if cell.get("cell_type") != "code":
+            continue
+        source = "".join(cell.get("source", []))
+        tree = ast.parse(source, filename=f"{NOTEBOOK_PATH}:cell{index}")
         selected.extend(
             node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted
         )
-    else:
-        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
-        for index, cell in enumerate(notebook.get("cells", [])):
-            if cell.get("cell_type") != "code":
-                continue
-            source = "".join(cell.get("source", []))
-            tree = ast.parse(source, filename=f"{notebook_path}:cell{index}")
-            selected.extend(
-                node
-                for node in tree.body
-                if isinstance(node, ast.FunctionDef) and node.name in wanted
-            )
     module = ast.Module(body=selected, type_ignores=[])
     ast.fix_missing_locations(module)
     namespace: dict[str, object] = {
         "np": np,
-        "pd": pd,
         "least_squares": least_squares,
         "_rod_qz_nnls": nnls,
         "ROD_QZ_TAIL_POWER_GRID": np.asarray([0.75, 1.0, 1.35, 2.0, 3.5, 7.0], dtype=np.float64),
@@ -81,51 +54,20 @@ def _notebook_functions(*names: str, notebook_path: Path = NOTEBOOK_PATH) -> dic
         "ROD_QZ_TAIL_MAX_HALFWIDTH_FRACTION": 0.70,
         "ROD_QZ_TAIL_MAX_AUTO_PEAKS": 10,
         "ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE": 1.0e-5,
-        "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
-        "ROD_QZ_NONLINEAR_REFINEMENT_ENABLED": True,
-        "ROD_QZ_NONLINEAR_MAX_COMPONENTS": 14,
-        "ROD_QZ_NONLINEAR_CENTER_BOUND_BINS": 4.0,
-        "ROD_QZ_NONLINEAR_TAIL_POWER_BOUNDS": (0.55, 12.0),
-        "ROD_QZ_NONLINEAR_MAX_NFEV": 1200,
-        "QR_ROD_PROFILE_CACHE_SCHEMA": "ra_sim.qr_rod_profile_cache.v1",
-        "QR_ROD_PROFILE_CACHE_TABLE_KEYS": {
-            "final_rod_profile_table",
-            "final_marker_table",
-            "final_rod_component_table",
-        },
-        "Path": Path,
-        "hashlib": hashlib,
-        "json": json,
-        "njit": _identity_njit,
-        "POSITIVE_QZ_MIN": 0.0,
-        "THETA_HALF_WINDOW_DEG": 1.8,
-        "PHI_HALF_WINDOW_DEG": 6.0,
-        "re": re,
     }
-    exec(compile(module, str(notebook_path), "exec"), namespace)
+    exec(compile(module, str(NOTEBOOK_PATH), "exec"), namespace)
     return namespace
 
 
-def test_parallel_background_peak_fits_script_exists_and_compiles() -> None:
-    assert PARALLEL_SCRIPT_PATH.exists()
-    py_compile.compile(str(PARALLEL_SCRIPT_PATH), doraise=True)
+def test_all_background_peak_fits_limits_qz_profiles_to_sixty_deg_two_theta() -> None:
+    source = _notebook_source()
 
-
-def test_parallel_background_peak_fits_limits_qz_profiles_to_configured_two_theta() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
-
-    assert "ROD_PROFILE_MAX_TWO_THETA_DEG = 70.3" in source
-    assert (
-        "ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG = float(ROD_PROFILE_MAX_TWO_THETA_DEG)" in source
-    )
-    assert "ROD_PROFILE_MAX_TWO_THETA_DEG = rod_profile_two_theta_limit_for_background(" in source
-    assert "profile_bg, ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG" in source
+    assert "ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0" in source
     assert "detector_two_theta_map=profile_detector_two_theta_map" in source
     assert "theta_map <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)" in source
     assert "two_theta_values <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)" in source
-    assert "branch_mask = (" in source
-    assert "& theta_region_within_profile_limit[None, :]" in source
-    assert "theta_region_within_profile_limit[None, :]" in source
+    assert "branch_mask = branch_mask & theta_region_within_profile_limit[None, :]" in source
+    assert "ax.set_xlim(caked_region_theta_min, caked_region_theta_max)" in source
 
 
 def test_background_peak_fits_notebook_uses_density_profiles() -> None:
@@ -163,31 +105,29 @@ def test_background_peak_fits_notebook_uses_density_caked_figures() -> None:
     assert 'caked_region_bg = caked_log_image(np.asarray(profile_bg["caked_image"]' not in source
 
 
-def test_parallel_background_peak_fits_script_uses_tail_aware_peak_fits() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
+def test_background_peak_fits_notebook_uses_rotated_gaussian_peak_fits() -> None:
+    source = _notebook_source()
 
     for token in (
-        'FIT_MODEL_NAME = "rotated_gaussian_core_lorentzian_tail_shared_center"',
         "GAUSSIAN_TAIL_DISTANCE_WEIGHT = 1.25",
         "GAUSSIAN_CORE_SIGNAL_DOWNSCALE = 0.06",
         "GAUSSIAN_TAIL_OVERPREDICTION_START = 0.55",
         "GAUSSIAN_TAIL_OVERPREDICTION_WEIGHT = 1.75",
         "def _rotated_gaussian_value_numba",
-        "gaussian_core = math.exp(-0.5 * gaussian_r2)",
-        "lorentzian_tail = 1.0 /",
-        "(u / gamma_l_u) * (u / gamma_l_u)",
+        "peak = math.exp(-0.5 * r2)",
         "_rotated_gaussian_residual_points_numba",
         "tail_overprediction_weight",
         "if residual > 0.0:",
         "residual *= tail_overprediction_weight[idx]",
-        '"fit_model": FIT_MODEL_NAME',
-        "positive_l_caked_peak_model_for_display",
+        '"fit_model": "rotated_gaussian_plane"',
+        "Fitted tail-aware peak sum",
         "def fit_joint_qz_peak_sum",
         "def gaussian_sum_qz_model",
         "def add_joint_qz_fit_columns",
         '"joint_fit_density"',
         '"joint_fit_peak_count"',
-        'sub.get("joint_peak_density", sub["fit_density"])',
+        "projected branch-point peaks in each rod/branch are fit together",
+        'sub.get("joint_fit_density", sub["fit_density"])',
     ):
         assert token in source
 
@@ -197,8 +137,6 @@ def test_parallel_background_peak_fits_script_uses_tail_aware_peak_fits() -> Non
 
 def test_joint_qz_fit_keeps_close_peak_valley_low() -> None:
     namespace = _notebook_functions(
-        "_center_search_profile",
-        "_empty_joint_qz_payload",
         "rolling_lower_envelope",
         "gaussian_sum_qz_model",
         "_unique_sorted_markers",
@@ -211,14 +149,9 @@ def test_joint_qz_fit_keeps_close_peak_valley_low() -> None:
         "_estimate_peak_hwhm",
         "_pearson_vii_profile",
         "_tail_aware_basis",
-        "_shared_linear_qz_baseline",
         "_weighted_nonnegative_amplitudes",
         "_aggregate_tail_components",
-        "_pearson_vii_component_sum",
-        "_component_density_to_sorted",
-        "_refine_pearson_vii_components",
         "fit_joint_qz_peak_sum",
-        notebook_path=PARALLEL_SCRIPT_PATH,
     )
     fit_joint_qz_peak_sum = namespace["fit_joint_qz_peak_sum"]
     x = np.linspace(0.82, 1.24, 180, dtype=np.float64)
@@ -288,10 +221,17 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
 
 
 def test_parallel_background_peak_fits_notebook_uses_process_pool_worker() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
+    if not PARALLEL_NOTEBOOK_PATH.exists():
+        pytest.skip(f"{PARALLEL_NOTEBOOK_PATH} is not present in this checkout")
+    source = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in json.loads(PARALLEL_NOTEBOOK_PATH.read_text(encoding="utf-8")).get(
+            "cells",
+            [],
+        )
+    )
 
     for token in (
-        "def normalize_fit_backend(",
         "ProcessPoolExecutor",
         "fit_peak_from_process_job",
         "save_peak_fit_background_arrays",
@@ -307,22 +247,16 @@ def test_parallel_background_peak_fits_notebook_uses_process_pool_worker() -> No
         assert token in source
 
 
-def test_parallel_background_peak_fits_avoids_windows_spawn_pool_for_top_level_script() -> None:
-    namespace = _notebook_functions(
-        "normalize_fit_backend",
-        notebook_path=PARALLEL_SCRIPT_PATH,
-    )
-    normalize_fit_backend = namespace["normalize_fit_backend"]
-
-    assert normalize_fit_backend("process", workers=28, platform_name="nt") == "thread"
-    assert normalize_fit_backend("auto", workers=28, platform_name="nt") == "thread"
-    assert normalize_fit_backend("process", workers=1, platform_name="nt") == "serial"
-    assert normalize_fit_backend("process", workers=28, platform_name="posix") == "process"
-    assert normalize_fit_backend("bad", workers=28, platform_name="posix") == "process"
-
-
 def test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_tail_model() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
+    if not PARALLEL_NOTEBOOK_PATH.exists():
+        pytest.skip(f"{PARALLEL_NOTEBOOK_PATH} is not present in this checkout")
+    source = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in json.loads(PARALLEL_NOTEBOOK_PATH.read_text(encoding="utf-8")).get(
+            "cells",
+            [],
+        )
+    )
 
     for token in (
         'FIT_MODEL_NAME = "rotated_gaussian_core_lorentzian_tail_shared_center"',
@@ -340,339 +274,9 @@ def test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_ta
 
     for removed in (
         "rotated_gaussian_peak_only_output_with_shared_linear_two_theta_baseline",
-        'baseline_equation": "density = b + m*(two_theta_deg - seed_two_theta_deg)',
+        "baseline_equation\": \"density = b + m*(two_theta_deg - seed_two_theta_deg)",
     ):
         assert removed not in source
-
-
-def test_parallel_qr_rod_profiles_annotate_hk_locations_with_arrows() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
-
-    for token in (
-        '"fit_l": int(l_value)',
-        '"display_l": float(l_value)',
-        "def draw_rod_profile_fit_markers(",
-        "def annotate_rod_profile_hk_locations(",
-        "line_x: object,",
-        "line_y: object,",
-        "source = plot_marker_table if marker_source is None else marker_source",
-        '"qz_marker"',
-        '"branch"',
-        '"fit_l"',
-        '"display_l"',
-        "qz_values_to_l_axis(",
-        "ax.scatter(",
-        'label="Fit marker"',
-        "rod_marker_annotation_label(",
-        "line_y_at_markers = np.interp(",
-        "ax.annotate(",
-        '"arrowstyle": "->"',
-        "annotation_clip=True",
-        "branch_value=branch_name",
-    ):
-        assert token in source
-
-
-def test_parallel_detector_region_final_figure_omits_placed_peak_stars() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
-
-    assert "detector_region_cmap = mpl.colormaps[JOURNAL_DETECTOR_CMAP].copy()" in source
-    assert 'marker="*"' not in source
-    assert '"Placed peak"' not in source
-    assert "stars mark accepted placed peaks" not in source
-
-
-def test_parallel_qr_rod_profile_cache_reuses_same_state_filename(tmp_path: Path) -> None:
-    namespace = _notebook_functions(
-        "_safe_run_name",
-        "qr_rod_profile_cache_path",
-        "qr_rod_profile_cache_key",
-        "_qr_rod_profile_cache_payload_for_json",
-        "load_qr_rod_profile_cache",
-        "write_qr_rod_profile_cache",
-        "reset_qr_rod_profile_cache",
-        notebook_path=PARALLEL_SCRIPT_PATH,
-    )
-    state_path = tmp_path / "sample_state.json"
-    state_path.write_text('{"sample": "a"}\n', encoding="utf-8")
-    cache_path = namespace["qr_rod_profile_cache_path"](tmp_path, state_path)
-    payload = {
-        "final_rod_profile_table": pd.DataFrame({"qz_center": [1.0]}),
-        "final_marker_table": pd.DataFrame({"qz_marker": [1.0]}),
-        "final_rod_component_table": pd.DataFrame({"component_density": [2.0]}),
-        "final_peak_edit_cache_key": {"mode": "last_cached"},
-    }
-
-    namespace["write_qr_rod_profile_cache"](cache_path, state_path, payload)
-    same_name_dir = tmp_path / "rerun"
-    same_name_dir.mkdir()
-    same_name_state_path = same_name_dir / state_path.name
-    same_name_state_path.write_text('{"sample": "changed"}\n', encoding="utf-8")
-    loaded = namespace["load_qr_rod_profile_cache"](cache_path, same_name_state_path)
-
-    assert cache_path.name == "sample_state_qr_rod_profile_cache.pkl"
-    assert loaded is not None
-    assert list(loaded["final_rod_profile_table"]["qz_center"]) == [1.0]
-
-    other_state_path = tmp_path / "other_state.json"
-    other_state_path.write_text('{"sample": "a"}\n', encoding="utf-8")
-    assert namespace["load_qr_rod_profile_cache"](cache_path, other_state_path) is None
-    cache_path.write_text("not-json", encoding="utf-8")
-    assert namespace["load_qr_rod_profile_cache"](cache_path, state_path) is None
-    assert namespace["reset_qr_rod_profile_cache"](cache_path) is True
-    assert namespace["reset_qr_rod_profile_cache"](cache_path) is False
-    assert "pickle.load" not in _notebook_source(PARALLEL_SCRIPT_PATH)
-
-
-def test_parallel_qr_rod_final_fit_cache_hit_skips_joint_refinement() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
-
-    cache_path_pos = source.find(
-        "QR_ROD_PROFILE_CACHE_PATH = qr_rod_profile_cache_path(OUT_DIR, STATE_PATH)"
-    )
-    load_pos = source.find(
-        "qr_rod_profile_cache = load_qr_rod_profile_cache(QR_ROD_PROFILE_CACHE_PATH, STATE_PATH)"
-    )
-    hit_pos = source.find(
-        "if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):"
-    )
-    refine_pos = source.find("rod_profile_table = add_joint_qz_fit_columns(")
-    save_pos = source.find(
-        "write_qr_rod_profile_cache(QR_ROD_PROFILE_CACHE_PATH, STATE_PATH, qr_rod_profile_cache)"
-    )
-
-    assert cache_path_pos >= 0
-    assert cache_path_pos < load_pos < hit_pos < refine_pos < save_pos
-    assert "RA_SIM_RESET_QR_ROD_PROFILE_CACHE" in source
-    assert "RA_SIM_QR_ROD_PEAK_EDITS" in source
-    assert "reused final Qr-rod fit cache=" in source
-    assert "saved final Qr-rod fit cache=" in source
-
-
-def test_parallel_qr_rod_final_fit_cache_requires_drawable_marker_columns() -> None:
-    namespace = _notebook_functions(
-        "qr_rod_profile_cache_has_final_fit",
-        notebook_path=PARALLEL_SCRIPT_PATH,
-    )
-    cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
-    edit_key = {"mode": "last_cached"}
-    payload = {
-        "final_rod_profile_table": pd.DataFrame({"qz_center": [1.0], "joint_fit_density": [2.0]}),
-        "final_marker_table": pd.DataFrame(
-            {"m": [3], "branch": ["+"], "qz_marker": [1.0], "fit_l": [1.0], "display_l": [9.5]}
-        ),
-        "final_rod_component_table": pd.DataFrame({"component_density": [2.0]}),
-        "final_peak_edit_cache_key": edit_key,
-    }
-
-    assert cache_has_final_fit(payload, edit_key) is True
-
-    for stale_marker_table in (
-        pd.DataFrame({"branch": ["+"], "qz_marker": [1.0], "fit_l": [1.0], "display_l": [9.5]}),
-        pd.DataFrame({"m": [3], "qz_marker": [1.0], "fit_l": [1.0], "display_l": [9.5]}),
-        pd.DataFrame({"m": [3], "branch": ["+"], "qz_marker": [1.0], "display_l": [9.5]}),
-    ):
-        stale_payload = dict(payload)
-        stale_payload["final_marker_table"] = stale_marker_table
-        assert cache_has_final_fit(stale_payload, edit_key) is False
-
-
-def test_parallel_qr_rod_detector_region_specular_support_is_cache_safe() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
-
-    assert 'np.asarray(specular_l_marker_table["qz_marker"], dtype=np.float64)' in source
-    assert "specular_detector_qz_values = np.asarray(specular_qz_values" not in source
-
-
-def test_parallel_qr_rod_profile_hk_zero_uses_log_y_axis() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
-
-    assert "hk0_positive_y = np.asarray([], dtype=np.float64)" in source
-    assert 'ax.set_yscale("log")\n        if hk0_positive_y.size:' in source
-    assert 'ax.set_title(r"$HK = 0$")' in source
-
-
-def test_parallel_qr_rod_profile_hk_zero_adds_baseline_to_simulation_only() -> None:
-    source = _notebook_source(PARALLEL_SCRIPT_PATH)
-    assert "subtract_baseline_from_data=False" in source
-    assert (
-        "For HK=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` "
-        "is `joint_peak_density + joint_linear_baseline_density`."
-    ) in source
-
-    namespace = _notebook_functions(
-        "normalized_data_simulation_payload",
-        notebook_path=PARALLEL_SCRIPT_PATH,
-    )
-    normalize = namespace["normalized_data_simulation_payload"]
-    measured = np.asarray([10.0, 20.0, 30.0], dtype=np.float64)
-    peak = np.asarray([2.0, 4.0, 6.0], dtype=np.float64)
-    baseline = np.asarray([1.0, 3.0, 5.0], dtype=np.float64)
-
-    default_payload = normalize(measured, peak, baseline)
-    np.testing.assert_allclose(
-        np.asarray(default_payload["data"], dtype=np.float64) * float(default_payload["scale"]),
-        measured - baseline,
-    )
-    np.testing.assert_allclose(
-        np.asarray(default_payload["simulation"], dtype=np.float64)
-        * float(default_payload["scale"]),
-        peak,
-    )
-
-    hk0_payload = normalize(
-        measured,
-        peak,
-        baseline,
-        subtract_baseline_from_data=False,
-    )
-    np.testing.assert_allclose(
-        np.asarray(hk0_payload["data"], dtype=np.float64) * float(hk0_payload["scale"]),
-        measured,
-    )
-    np.testing.assert_allclose(
-        np.asarray(hk0_payload["simulation"], dtype=np.float64) * float(hk0_payload["scale"]),
-        peak + baseline,
-    )
-
-
-def test_parallel_qr_rod_profile_hk_arrow_helper_uses_l_axis_markers() -> None:
-    namespace = _notebook_functions(
-        "hk_display_label",
-        "l_tick_label",
-        "hk_l_tick_label",
-        "rod_marker_annotation_label",
-        "l_reference_rows",
-        "qz_values_to_l_axis",
-        "annotate_rod_profile_hk_locations",
-        notebook_path=PARALLEL_SCRIPT_PATH,
-    )
-    namespace["plot_marker_table"] = pd.DataFrame(
-        [
-            {"m": 3, "branch": "+", "qz_marker": 0.5, "fit_l": 1, "display_l": 9.5},
-            {"m": 3, "branch": "+", "qz_marker": 1.0, "fit_l": 2},
-            {"m": 4, "branch": "+", "qz_marker": 1.5, "l": 3, "fit_l": 3, "display_l": 3},
-        ]
-    )
-    annotate_rod_profile_hk_locations = namespace["annotate_rod_profile_hk_locations"]
-
-    class _Axis:
-        def __init__(self) -> None:
-            self.annotations: list[tuple[tuple[object, ...], dict[str, object]]] = []
-
-        def get_xlim(self) -> tuple[float, float]:
-            return 0.0, 2.5
-
-        def get_ylim(self) -> tuple[float, float]:
-            return -0.2, 1.2
-
-        def annotate(self, *args: object, **kwargs: object) -> None:
-            self.annotations.append((args, kwargs))
-
-    axis = _Axis()
-
-    annotate_rod_profile_hk_locations(
-        axis,
-        m_value=3,
-        branch_value="+",
-        line_x=np.asarray([0.5, 1.0, 2.0], dtype=np.float64),
-        line_y=np.asarray([0.1, 0.4, 0.9], dtype=np.float64),
-    )
-
-    assert len(axis.annotations) == 2
-    labels = [args[0] for args, _kwargs in axis.annotations]
-    assert labels == ["(3,9.50)", "(3,2)"]
-    xy_positions = [kwargs["xy"] for _args, kwargs in axis.annotations]
-    np.testing.assert_allclose(
-        np.asarray(xy_positions, dtype=np.float64),
-        np.asarray([(1.0, 0.4), (2.0, 0.9)], dtype=np.float64),
-    )
-    assert all(kwargs["arrowprops"]["arrowstyle"] == "->" for _args, kwargs in axis.annotations)
-    assert all(kwargs["annotation_clip"] is True for _args, kwargs in axis.annotations)
-
-
-def test_parallel_qr_rod_profile_fit_marker_helper_draws_used_positions() -> None:
-    namespace = _notebook_functions(
-        "l_reference_rows",
-        "qz_values_to_l_axis",
-        "draw_rod_profile_fit_markers",
-        notebook_path=PARALLEL_SCRIPT_PATH,
-    )
-    draw_rod_profile_fit_markers = namespace["draw_rod_profile_fit_markers"]
-    marker_source = pd.DataFrame(
-        [
-            {"m": 3, "branch": "+", "qz_marker": 0.5, "fit_l": 1, "display_l": 7.25},
-            {"m": 3, "branch": "+", "qz_marker": 1.0, "fit_l": 2, "display_l": 8.25},
-        ]
-    )
-
-    class _Axis:
-        def __init__(self) -> None:
-            self.scatters: list[tuple[tuple[object, ...], dict[str, object]]] = []
-
-        def scatter(self, *args: object, **kwargs: object) -> None:
-            self.scatters.append((args, kwargs))
-
-    axis = _Axis()
-    draw_rod_profile_fit_markers(
-        axis,
-        m_value=3,
-        branch_value="+",
-        line_x=np.asarray([1.0, 2.0], dtype=np.float64),
-        line_y=np.asarray([0.25, 0.75], dtype=np.float64),
-        marker_source=marker_source,
-    )
-
-    assert len(axis.scatters) == 1
-    args, kwargs = axis.scatters[0]
-    np.testing.assert_allclose(np.asarray(args[0], dtype=np.float64), np.asarray([1.0, 2.0]))
-    np.testing.assert_allclose(np.asarray(args[1], dtype=np.float64), np.asarray([0.25, 0.75]))
-    assert kwargs["label"] == "Fit marker"
-    assert kwargs["zorder"] > 6
-
-
-def test_parallel_marker_refinement_uses_local_window_and_keeps_unmatched_markers() -> None:
-    namespace = _notebook_functions(
-        "_wrapped_delta_deg_scalar_numba",
-        "_is_local_peak_top_numba",
-        "_find_marker_peak_in_window_numba",
-        "_refine_marker_to_local_peak_numba",
-        "refine_marker_to_local_peak",
-        notebook_path=PARALLEL_SCRIPT_PATH,
-    )
-    refine_marker_to_local_peak = namespace["refine_marker_to_local_peak"]
-
-    theta_axis = np.linspace(0.0, 8.0, 81, dtype=np.float64)
-    phi_axis = np.linspace(-2.0, 2.0, 41, dtype=np.float64)
-    theta_grid = np.broadcast_to(theta_axis[None, :], (phi_axis.size, theta_axis.size))
-    qz_map = theta_grid + 0.25
-    branch_mask = np.ones(qz_map.shape, dtype=bool)
-    local_row = int(np.argmin(np.abs(phi_axis - 0.0)))
-    local_col = int(np.argmin(np.abs(theta_axis - 1.1)))
-    far_col = int(np.argmin(np.abs(theta_axis - 6.0)))
-
-    model = np.zeros(qz_map.shape, dtype=np.float64)
-    image = np.ones(qz_map.shape, dtype=np.float64)
-    model[local_row, local_col] = 12.0
-    model[local_row, far_col] = 200.0
-    item = {"params": np.asarray([1.0, 1.0, 0.0, 0.08, 0.08], dtype=np.float64)}
-    bg = {
-        "theta_axis": theta_axis,
-        "phi_axis": phi_axis,
-        "caked_peak_model": model,
-        "caked_image": image,
-    }
-
-    refined = refine_marker_to_local_peak(bg, item, branch_mask, qz_map)
-
-    assert refined is not None
-    assert refined[1] == pytest.approx(theta_axis[local_col])
-    assert refined[1] != pytest.approx(theta_axis[far_col])
-
-    flat_bg = dict(bg)
-    flat_bg["caked_peak_model"] = np.zeros(qz_map.shape, dtype=np.float64)
-    flat_bg["caked_image"] = np.ones(qz_map.shape, dtype=np.float64)
-    assert refine_marker_to_local_peak(flat_bg, item, branch_mask, qz_map) is None
 
 
 def _synthetic_peak_fit_case(
