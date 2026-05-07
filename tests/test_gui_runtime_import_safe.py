@@ -20073,6 +20073,110 @@ def test_manual_pick_cache_source_rows_rebuild_allowed_for_restored_q_group_rows
     assert diagnostics["status"] == "snapshot_rebuilt"
 
 
+def test_manual_pick_cache_rebuild_uses_stored_disordered_rows_for_restored_q_groups(
+    monkeypatch,
+) -> None:
+    from ra_sim.gui import manual_geometry
+    from ra_sim.utils.pbi2_ht_shift_cif import (
+        DISORDERED_PHASE_DISPLAY_LABEL,
+        DISORDERED_PHASE_SOURCE_LABEL,
+    )
+
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    runtime_session.background_runtime_state.current_background_index = 0
+    simulation_state.source_row_snapshots = {}
+    simulation_state.stored_max_positions_local = None
+    simulation_state.stored_intersection_cache = None
+    simulation_state.peak_records = []
+    simulation_state.stored_disordered_phase_max_positions = [
+        np.asarray(
+            [[10.0, 1.0, 1.0, 0.0, 2.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+    ]
+    simulation_state.stored_disordered_phase_peak_table_lattice = [
+        (
+            4.557,
+            20.937,
+            DISORDERED_PHASE_SOURCE_LABEL,
+            DISORDERED_PHASE_DISPLAY_LABEL,
+            "disordered",
+        )
+    ]
+    simulation_state.stored_disordered_phase_source_reflection_indices = [12]
+    disordered_key = ("q_group", DISORDERED_PHASE_SOURCE_LABEL, 4, 1)
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(
+            cached_entries=[
+                {
+                    "key": disordered_key,
+                    "source_label": DISORDERED_PHASE_SOURCE_LABEL,
+                    "phase_label": DISORDERED_PHASE_DISPLAY_LABEL,
+                    "structure_role": "disordered",
+                    "hkl_preview": [(2, 0, 1)],
+                    "peak_count": 1,
+                    "included": True,
+                }
+            ],
+            restored_q_group_rows_pending_live_refresh=True,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda _idx, **_kwargs: {
+            "mode": "detector",
+            "detector_shape": [4, 4],
+            "available": True,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_project_peaks_for_background",
+        lambda _idx, rows, **_kwargs: [dict(entry) for entry in rows or ()],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_last_live_preview_cache_metadata",
+        lambda: {
+            "live_rows_signature_match": False,
+            "live_rows_signature_reason": "stale_empty_preview_cache",
+        },
+        raising=False,
+    )
+
+    returned_rows = runtime_session._geometry_manual_source_rows_for_background(
+        0,
+        {"a": 4.557, "c": 6.979},
+        consumer="manual_pick_cache",
+    )
+    _candidate_rows, grouped = manual_geometry.geometry_manual_detector_picker_candidates_from_rows(
+        returned_rows,
+        display_background=np.zeros((4, 4), dtype=np.float64),
+        native_background=np.zeros((4, 4), dtype=np.float64),
+    )
+    diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert disordered_key in grouped
+    assert returned_rows[0]["source_label"] == DISORDERED_PHASE_SOURCE_LABEL
+    assert returned_rows[0]["phase_label"] == DISORDERED_PHASE_DISPLAY_LABEL
+    assert returned_rows[0]["structure_role"] == "disordered"
+    assert diagnostics["status"] == "snapshot_rebuilt"
+    assert diagnostics["rebuild_source"] == "live_runtime_cache"
+
+
 def test_manual_pick_cache_caked_view_uses_detector_rows_when_projector_missing(
     monkeypatch,
 ) -> None:

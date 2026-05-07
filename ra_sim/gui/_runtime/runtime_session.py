@@ -30963,6 +30963,29 @@ def _geometry_manual_rebuild_source_rows_for_background(
             if callable(_last_live_preview_cache_metadata)
             else {}
         )
+        live_source_counts = _geometry_fit_live_row_source_counts(live_rows)
+        if (
+            _geometry_fit_q_group_cache_has_restored_source(DISORDERED_PHASE_SOURCE_LABEL)
+            and int(live_source_counts.get(DISORDERED_PHASE_SOURCE_LABEL, 0) or 0) <= 0
+        ):
+            disordered_rows = _geometry_manual_stored_disordered_phase_source_rows(params_local)
+            if disordered_rows:
+                disordered_cache_source = "stored_disordered_phase_hit_tables"
+                live_rows.extend(disordered_rows)
+                cache_metadata["stored_disordered_phase_source_rows"] = int(
+                    len(disordered_rows)
+                )
+                cache_metadata["live_rows_cache_source"] = (
+                    f"live_preview_cache+{disordered_cache_source}"
+                    if live_source_counts
+                    else disordered_cache_source
+                )
+                if not live_source_counts:
+                    cache_metadata["live_rows_signature_match"] = True
+                    cache_metadata["live_rows_signature_reason"] = disordered_cache_source
+                cache_metadata["source_counts"] = _geometry_fit_live_row_source_counts(
+                    live_rows
+                )
         if cache_metadata:
             return {
                 "rows": live_rows,
@@ -40824,6 +40847,98 @@ def _geometry_fit_q_group_cache_entries() -> list[dict[str, object]]:
     if not isinstance(raw_entries, Sequence) or isinstance(raw_entries, (str, bytes)):
         return []
     return [dict(entry) for entry in raw_entries if isinstance(entry, Mapping)]
+
+
+def _geometry_fit_q_group_cache_has_restored_source(source_label: object) -> bool:
+    q_group_state = globals().get("geometry_q_group_state")
+    if not bool(getattr(q_group_state, "restored_q_group_rows_pending_live_refresh", False)):
+        return False
+    try:
+        expected_label = gui_controllers.normalize_bragg_qr_source_label(str(source_label))
+    except Exception:
+        expected_label = str(source_label or "primary")
+    for entry in _geometry_fit_q_group_cache_entries():
+        raw_label = entry.get("source_label")
+        for key_name in ("key", "q_group_key", "source_q_group_key", "group_key"):
+            group_key = _geometry_fit_normalized_q_group_key(entry.get(key_name))
+            if group_key is not None and str(group_key[0]) == "q_group":
+                raw_label = group_key[1]
+                break
+        try:
+            candidate_label = gui_controllers.normalize_bragg_qr_source_label(
+                str(raw_label) if raw_label is not None else "primary"
+            )
+        except Exception:
+            candidate_label = str(raw_label or "primary")
+        if candidate_label == expected_label:
+            return True
+    return False
+
+
+def _geometry_manual_stored_disordered_phase_source_rows(
+    params_local: Mapping[str, object],
+) -> list[dict[str, object]]:
+    stored_rows = getattr(
+        simulation_runtime_state,
+        "stored_disordered_phase_max_positions",
+        None,
+    )
+    if not isinstance(stored_rows, Sequence) or isinstance(stored_rows, (str, bytes)):
+        return []
+    hit_tables = list(stored_rows)
+    if not hit_tables:
+        return []
+
+    try:
+        primary_a = float(params_local.get("a", np.nan))
+    except Exception:
+        primary_a = float("nan")
+    try:
+        primary_c = float(params_local.get("c", np.nan))
+    except Exception:
+        primary_c = float("nan")
+    try:
+        image_size_value = int(image_size)
+    except Exception:
+        image_size_value = 0
+    if image_size_value <= 0:
+        return []
+
+    peak_table_lattice = _disordered_phase_lattice_entries_for_rows(len(hit_tables))
+    source_reflection_indices_raw = getattr(
+        simulation_runtime_state,
+        "stored_disordered_phase_source_reflection_indices",
+        None,
+    )
+    source_reflection_indices = (
+        list(source_reflection_indices_raw)
+        if isinstance(source_reflection_indices_raw, Sequence)
+        and not isinstance(source_reflection_indices_raw, (str, bytes))
+        and len(source_reflection_indices_raw) == len(hit_tables)
+        else gui_geometry_q_group_manager.audited_full_order_source_reflection_indices(
+            hit_tables,
+            owner="runtime_session._geometry_manual_stored_disordered_phase_source_rows",
+        )
+    )
+    source_rows = gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        hit_tables,
+        image_shape=(int(image_size_value), int(image_size_value)),
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        peak_table_lattice=peak_table_lattice,
+        source_reflection_indices=source_reflection_indices,
+        primary_a=primary_a,
+        primary_c=primary_c,
+        default_source_label=DISORDERED_PHASE_SOURCE_LABEL,
+        round_pixel_centers=False,
+        allow_nominal_hkl_indices=True,
+    )
+    rows = [dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)]
+    for row in rows:
+        row["source_label"] = DISORDERED_PHASE_SOURCE_LABEL
+        row.setdefault("phase_label", DISORDERED_PHASE_DISPLAY_LABEL)
+        row.setdefault("structure_role", "disordered")
+        row.setdefault("row_origin", "stored_disordered_phase_hit_table")
+    return rows
 
 
 def _geometry_fit_hkl_from_row(row: Mapping[str, object]) -> tuple[int, int, int] | None:

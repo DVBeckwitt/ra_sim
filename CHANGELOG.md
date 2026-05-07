@@ -48,6 +48,7 @@
   - Fixed generated disordered-phase Qr/Qz references so nonzero disordered stacking weights invalidate live picker caches, schedule disordered hit-table collection even when primary hit tables are reusable, and preserve `source_label="disordered_phase"` in pickable Qr/Qz groups.
   - Added live runtime trace diagnostics for generated disordered-phase Qr/Qz references, including source counts, skip reasons, collection counts, and published group/peak counts.
   - Added an explicit `Include generated disordered-phase Qr refs` GUI toggle, enabled by default and independent from the packaged 6H reference toggle.
+  - Fixed imported PbI2 generated-disordered Qr/Qz sets so restored `disordered_phase` q-group rows rebuild manual-picker detector source rows from stored modified-CIF hit tables when live preview rows are empty or stale.
   - Fixed source-consistent generated-disordered manual Qr/Qz handoff through detector picker candidates, placement, saved geometry pairs, and geometry-fit preflight, including a job-local picker/Q-group source-row fallback and a deduped fresh rebuild `consumer` wrapper.
   - Added trial caked axes-only payload support so refined geometry probes can recompute dynamic Qr/Qz source rows without rasterizing a full caked image.
   - Added New4 ladder worker phase/partial-report telemetry, residual-evaluation timing, cache-rebuild counters, and timeout diagnostics; singleton solve rungs can skip the duplicate initial dry-run objective and use the first solver evaluation instead.

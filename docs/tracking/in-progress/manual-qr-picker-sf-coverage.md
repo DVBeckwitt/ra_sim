@@ -38,14 +38,24 @@ manual-pick rebuild artifacts for the current background. This fixes the
 reported Bi2Se3, Bi2Te3, and PbI2 imports where the manual picker showed:
 `Manual Qr picker has no detector source rows. Update simulation or refresh the Qr/Qz list.`
 
+For the PbI2 modified-CIF disorder path, restored `disordered_phase` Qr rows now
+rebuild detector picker source rows from stored generated-disordered hit-table
+maxima when live preview rows are empty or stale. This keeps the Qr set peaks
+pickable without falling back to primary or packaged 6H rows.
+
 ## Bug / error / feature status
 
 - Bug status: fixed for saved GUI states that contain nonempty
-  `state.geometry.q_group_rows` and empty `state.geometry.peak_records`.
+  `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
+  including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
+  technique.
 - Error status: the specific no-detector-source-rows warning is no longer
-  expected for those imported states after restore.
+  expected for those imported states after restore when source rows or stored
+  generated-disordered hit tables are available.
 - Feature status: no new operator-facing feature, schema migration, or public
   API. This is compatibility hardening for existing saved GUI states.
+- Launch status: focused runtime/import gates passed locally. Rollback is a
+  normal revert of the source-row restore fix.
 
 ## Next actions
 
@@ -71,6 +81,12 @@ reported Bi2Se3, Bi2Te3, and PbI2 imports where the manual picker showed:
 - `python -m pytest tests/test_gui_state_restore_helpers.py tests/test_gui_geometry_q_group_manager.py tests/test_gui_runtime_import_safe.py tests/test_manual_geometry_selection_helpers.py -k "apply_gui_state_geometry or preserves_imported_rows_during_empty_refresh or runtime_snapshot_capture_refreshes_open_window or manual_pick_cache_source_rows_rebuild_allowed or picker_candidates_only_skips_refinement_and_fresh_simulation"`:
   11 passed.
 - `python -m ruff check ra_sim/gui/_runtime/runtime_session.py ra_sim/gui/geometry_q_group_manager.py ra_sim/gui/state.py ra_sim/gui/state_io.py tests/test_gui_geometry_q_group_manager.py tests/test_gui_runtime_import_safe.py tests/test_gui_state_restore_helpers.py`:
+  passed.
+- `python -m pytest tests/test_gui_state_restore_helpers.py::test_apply_gui_state_geometry_restores_saved_q_group_rows_without_peak_records tests/test_gui_runtime_import_safe.py::test_manual_pick_cache_source_rows_rebuild_allowed_for_restored_q_group_rows tests/test_gui_runtime_import_safe.py::test_manual_pick_cache_rebuild_uses_stored_disordered_rows_for_restored_q_groups tests/test_disordered_phase_live_runtime_regression.py::test_live_regression_disordered_q_groups_are_clickable_candidates tests/test_disordered_phase_picker_to_fitter_end_to_end.py tests/test_disordered_phase_q_group_cache.py -q`:
+  10 passed.
+- `python -m ruff check ra_sim/gui/_runtime/runtime_session.py tests/test_gui_runtime_import_safe.py tests/test_gui_state_restore_helpers.py`:
+  passed.
+- `python -m py_compile ra_sim/gui/_runtime/runtime_session.py tests/test_gui_runtime_import_safe.py tests/test_gui_state_restore_helpers.py`:
   passed.
 - Full `python -m pytest tests/test_manual_geometry_selection_helpers.py -ra`
   timed out after 15 minutes in this workspace. Focused

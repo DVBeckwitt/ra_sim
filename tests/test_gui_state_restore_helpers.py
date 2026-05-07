@@ -366,6 +366,16 @@ def test_apply_gui_state_geometry_restores_saved_q_group_rows_without_peak_recor
                     "hkl_preview": [[1, 0, 8]],
                 },
                 {
+                    "key": ["q_group", "disordered_phase", 4, 1],
+                    "source_label": "disordered_phase",
+                    "phase_label": "Disordered phase",
+                    "structure_role": "disordered",
+                    "included": True,
+                    "display_label": "disordered Qr=2.0 Gz=1",
+                    "peak_count": 1,
+                    "hkl_preview": [[2, 0, 1]],
+                },
+                {
                     "key": ["bad"],
                     "included": True,
                 },
@@ -393,7 +403,17 @@ def test_apply_gui_state_geometry_restores_saved_q_group_rows_without_peak_recor
             "display_label": "primary Qr=1.0 Gz=8",
             "peak_count": 2,
             "hkl_preview": [[1, 0, 8]],
-        }
+        },
+        {
+            "key": ("q_group", "disordered_phase", 4, 1),
+            "source_label": "disordered_phase",
+            "phase_label": "Disordered phase",
+            "structure_role": "disordered",
+            "included": True,
+            "display_label": "disordered Qr=2.0 Gz=1",
+            "peak_count": 1,
+            "hkl_preview": [[2, 0, 1]],
+        },
     ]
     assert q_group_state.restored_q_group_rows_pending_live_refresh is True
     assert q_group_state.refresh_requested is True
