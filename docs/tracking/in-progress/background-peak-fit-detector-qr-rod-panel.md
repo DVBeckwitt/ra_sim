@@ -44,9 +44,10 @@ to make the Qr rod detector and integration figures source-consistent:
   placed-star diagnostics, HK branch labels at the low-L rod base, and
   transparent Delta-Qr bands including the central `HK=0` rod.
 - The detector selected-region figure now gives the central `HK=0` / `00L`
-  rod a dedicated high-contrast sky-blue style, thicker centerline, line halo,
+  rod a dedicated high-contrast sky-blue style, same-width centerline,
   stronger band fill, and expanded Delta-Qr boundary so the actual selected
-  region remains visible over high-intensity detector pixels.
+  region remains visible over high-intensity detector pixels without making the
+  centerline dominate the region.
 - Integrated Qr rod figure centers `HK=0`, labels its x-axis as `L`, uses
   `Intensity (a.u.)` only on the HK=0 row, aligns non-specular x ranges from
   `L=2`, and places the Data/Simulation legend in the top-right panel.
@@ -200,9 +201,9 @@ Passing checks:
   edge clipping, invalid inputs, `HK=0`, `L=3` marker selection, synthetic PNG
   save, detector-style color/log rendering, and diagnostic call-site wiring.
 - Targeted detector selected-region source/helper coverage verifies the
-  central `HK=0` / `00L` rod uses the dedicated high-contrast style, thicker
-  centerline, stronger Delta-Qr band styling, unchanged Delta-Qr mask-builder
-  input, and expanded boundary mask.
+  central `HK=0` / `00L` rod uses the dedicated high-contrast style,
+  same-width centerline without a halo, stronger Delta-Qr band styling,
+  unchanged Delta-Qr mask-builder input, and expanded boundary mask.
 - Targeted Qr-rod marker edit coverage for per-rod marker replacement,
   marker-table cache-key hashing, headless/interactive mode resolution, JSON
   edit round trip including `marker_title`, final-label override behavior,

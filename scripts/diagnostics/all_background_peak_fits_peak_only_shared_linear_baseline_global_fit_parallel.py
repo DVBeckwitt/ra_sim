@@ -10735,14 +10735,10 @@ detector_region_cmap.set_bad("#050505")
 detector_region_centerline_lw = 1.1
 detector_region_band_alpha = 0.11
 detector_region_boundary_alpha = 0.72
-detector_region_specular_centerline_lw = 1.45 * detector_region_centerline_lw
-detector_region_specular_band_alpha = 0.24
-detector_region_specular_boundary_alpha = 0.96
-detector_region_specular_boundary_expand_px = 1
-detector_region_specular_path_effects = [
-    pe.withStroke(linewidth=detector_region_specular_centerline_lw + 2.2, foreground="black"),
-    pe.withStroke(linewidth=detector_region_specular_centerline_lw + 0.9, foreground="white"),
-]
+detector_region_specular_centerline_lw = detector_region_centerline_lw
+detector_region_specular_band_alpha = 0.42
+detector_region_specular_boundary_alpha = 1.0
+detector_region_specular_boundary_expand_px = 2
 
 
 def detector_xy_from_caked_angles(
@@ -11356,7 +11352,6 @@ for projected_col, projected_row in specular_lines:
         linewidth=detector_region_specular_centerline_lw,
         alpha=1.0,
         zorder=5.2,
-        path_effects=detector_region_specular_path_effects,
     )
     rod_label_entries.append(
         {

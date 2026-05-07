@@ -666,11 +666,12 @@ def test_parallel_script_detector_hk0_region_uses_prominent_specular_style() -> 
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert 'specular_color = OKABE_ITO["sky"]' in source
-    assert "detector_region_specular_centerline_lw = 1.45 * detector_region_centerline_lw" in source
-    assert "detector_region_specular_band_alpha = 0.24" in source
-    assert "detector_region_specular_boundary_alpha = 0.96" in source
-    assert "detector_region_specular_boundary_expand_px = 1" in source
+    assert "detector_region_specular_centerline_lw = detector_region_centerline_lw" in source
+    assert "detector_region_specular_band_alpha = 0.42" in source
+    assert "detector_region_specular_boundary_alpha = 1.0" in source
+    assert "detector_region_specular_boundary_expand_px = 2" in source
     assert 'specular_color = OKABE_ITO["purple"]' not in source
+    assert "path_effects=detector_region_specular_path_effects" not in source
 
 
 def test_parallel_script_detector_hk0_delta_q_draw_uses_specular_style() -> None:
