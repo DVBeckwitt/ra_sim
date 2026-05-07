@@ -4067,10 +4067,14 @@ def _geometry_manual_saved_background_display_point_for_view(
 ) -> tuple[float, float] | None:
     if not isinstance(entry, Mapping):
         return None
-    if bool(use_caked_display) and _geometry_manual_saved_background_detector_origin(entry):
+    detector_origin = bool(use_caked_display) and _geometry_manual_saved_background_detector_origin(
+        entry
+    )
+    if detector_origin:
         detector_projected = entry_display_coords(dict(entry))
         if detector_projected is not None:
             return detector_projected
+        return None
     caked_point = (
         _geometry_manual_saved_caked_background_display_point(entry)
         if bool(use_caked_display)
@@ -15236,10 +15240,59 @@ def make_runtime_geometry_manual_projection_callbacks(
     def _entry_display_coords(
         entry: dict[str, object] | None,
     ) -> tuple[float, float] | None:
+        detector_origin = _geometry_manual_saved_background_detector_origin(entry)
         refreshed_entry = _refresh_entry_geometry(entry)
         if not isinstance(refreshed_entry, dict):
             return None
         use_caked = _pick_uses_caked_space()
+        if use_caked and detector_origin:
+            for detector_source in (entry, refreshed_entry):
+                if not isinstance(detector_source, Mapping):
+                    continue
+                native_point = None
+                for x_key, y_key in (
+                    ("detector_x", "detector_y"),
+                    ("background_detector_x", "background_detector_y"),
+                    ("detector_native_x", "detector_native_y"),
+                    ("refined_detector_native_col", "refined_detector_native_row"),
+                ):
+                    native_point = _finite_projection_point(
+                        (detector_source.get(x_key), detector_source.get(y_key)),
+                    )
+                    if native_point is not None:
+                        break
+                if native_point is None:
+                    for tuple_key in ("geometry_detector_native_px", "raw_detector_native_px"):
+                        native_point = _finite_projection_point(detector_source.get(tuple_key))
+                        if native_point is not None:
+                            break
+                if native_point is not None:
+                    converted = _native_to_caked_display_coords(
+                        float(native_point[0]),
+                        float(native_point[1]),
+                    )
+                    if converted is not None:
+                        return float(converted[0]), float(converted[1])
+            for detector_source in (entry, refreshed_entry):
+                if not isinstance(detector_source, Mapping):
+                    continue
+                display_point = None
+                for tuple_key in ("geometry_detector_display_px", "raw_detector_display_px"):
+                    display_point = _finite_projection_point(detector_source.get(tuple_key))
+                    if display_point is not None:
+                        break
+                if display_point is None:
+                    display_point = _finite_projection_point(
+                        (detector_source.get("x"), detector_source.get("y")),
+                    )
+                if display_point is None:
+                    continue
+                converted = _background_display_to_caked_display(
+                    float(display_point[0]),
+                    float(display_point[1]),
+                )
+                if converted is not None:
+                    return float(converted[0]), float(converted[1])
         key_x = "caked_x" if use_caked else "x"
         key_y = "caked_y" if use_caked else "y"
         try:
@@ -18343,6 +18396,19 @@ def geometry_manual_place_selection_at(
                     native_detector_coords_to_caked_display_coords
                 ),
             )
+
+    if use_caked_space:
+        for stale_sim_caked_key in (
+            "refined_sim_caked_x",
+            "refined_sim_caked_y",
+            "sim_refined_caked_deg",
+            "sim_caked_display",
+            "simulated_two_theta_deg",
+            "simulated_phi_deg",
+        ):
+            pair_entry.pop(stale_sim_caked_key, None)
+        if pair_entry.get("sim_visual_caked_deg") is not None:
+            pair_entry["sim_visual_source"] = "sim_visual_caked_deg"
 
     if isinstance(candidate_distance_details, Mapping):
         if np.isfinite(float(candidate_dist)):

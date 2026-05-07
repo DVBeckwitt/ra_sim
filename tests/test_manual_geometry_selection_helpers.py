@@ -17057,6 +17057,78 @@ def test_runtime_projection_uses_sim_detector_adapter_after_caked_view() -> None
     assert visible["source_ray_id"] == "winning-ray"
 
 
+def test_runtime_entry_display_reprojects_detector_origin_before_stale_caked_fields(
+    monkeypatch,
+) -> None:
+    use_caked = {"value": True}
+    monkeypatch.setattr(
+        mg,
+        "native_detector_coords_to_caked_display_coords",
+        lambda col, row, **_kwargs: (float(col) + 10.0, float(row) + 20.0),
+    )
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: use_caked["value"],
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([10.0, 20.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([20.0, 30.0], dtype=float),
+        current_background_display=lambda: np.zeros((256, 256), dtype=float),
+        current_background_native=lambda: np.zeros((256, 256), dtype=float),
+        image_size=256,
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col) + 100.0,
+            float(row) + 200.0,
+        ),
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 10.0,
+            float(row) + 20.0,
+        ),
+    )
+    saved_pair = {
+        "label": "3,0,4",
+        "hkl": (3, 0, 4),
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "x": 103.0,
+        "y": 204.0,
+        "detector_x": 3.0,
+        "detector_y": 4.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+        "manual_background_input_origin": "detector",
+    }
+
+    assert callbacks.entry_display_coords(saved_pair) == (13.0, 24.0)
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=callbacks.entry_display_coords,
+    )
+
+    assert displayed[0]["bg_display"] == (13.0, 24.0)
+
+    _measured, unresolved_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda _entry: None,
+    )
+
+    assert "bg_display" not in unresolved_display[0]
+
+
 def _cross_view_selection_callbacks(use_caked, raw_rows):
     return mg.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: use_caked["value"],
