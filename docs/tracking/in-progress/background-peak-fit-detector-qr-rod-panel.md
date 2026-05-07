@@ -40,9 +40,13 @@ to make the Qr rod detector and integration figures source-consistent:
   Qr-center fitting, integration profiles, and detector rod plotting.
 - Detector-space debug now reports `curve_distance_px` using point-to-polyline
   segment distance on the same projected arrays used for plotting.
-- Detector view uses linear grayscale intensity, projected rod lines, accepted
+- Detector view uses a linear detector-intensity colormap, projected rod lines, accepted
   placed-star diagnostics, HK branch labels at the low-L rod base, and
   transparent Delta-Qr bands including the central `HK=0` rod.
+- The detector selected-region figure now gives the central `HK=0` / `00L`
+  rod a dedicated high-contrast sky-blue style, thicker centerline, line halo,
+  stronger band fill, and expanded Delta-Qr boundary so the actual selected
+  region remains visible over high-intensity detector pixels.
 - Integrated Qr rod figure centers `HK=0`, labels its x-axis as `L`, uses
   `Intensity (a.u.)` only on the HK=0 row, aligns non-specular x ranges from
   `L=2`, and places the Data/Simulation legend in the top-right panel.
@@ -134,6 +138,10 @@ Feature status:
 - `hk0_l3_star.png` is implemented in the diagnostic `.py` as a raw detector
   crop from the beam center through and above the `HK=0`, `L=3` / `00L`
   marker, rendered with detector-style color and log intensity normalization.
+- The detector selected-region figure uses dedicated high-contrast styling for
+  the central `HK=0` / `00L` rod. This is a display-only change; Qr/Qz maps,
+  Delta-Qr values, selected masks, integration, fitting, and cache identities
+  are unchanged.
 - Qr-rod peak marker editing is implemented in the diagnostic `.py` and is on
   by default with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup`; `skip` disables it for
   unattended runs and optional JSON round trip is available through
@@ -191,6 +199,10 @@ Passing checks:
 - Targeted `hk0_l3_star.png` helper and wiring coverage for crop bounds,
   edge clipping, invalid inputs, `HK=0`, `L=3` marker selection, synthetic PNG
   save, detector-style color/log rendering, and diagnostic call-site wiring.
+- Targeted detector selected-region source/helper coverage verifies the
+  central `HK=0` / `00L` rod uses the dedicated high-contrast style, thicker
+  centerline, stronger Delta-Qr band styling, unchanged Delta-Qr mask-builder
+  input, and expanded boundary mask.
 - Targeted Qr-rod marker edit coverage for per-rod marker replacement,
   marker-table cache-key hashing, headless/interactive mode resolution, JSON
   edit round trip including `marker_title`, final-label override behavior,
@@ -224,12 +236,13 @@ Known validation limits:
   `python -m ra_sim.dev check` passed.
 - The L3 star crop, empty-row suppression, cache reuse, and interactive Qr-rod
   marker editor still need a real Bi2Se3/Bi2Te3 script run after this slice.
-- Visual acceptance still needs manual script-output review: grayscale detector
-  background, HK labels near low-L rod bases, central `HK=0` Delta-Qr band,
-  the `hk0_l3_star.png` crop fully containing the L=3 intensity, the Qr-rod
-  crop's log color scaling, the Qr-rod popup appearing on an interactive
-  backend, edited peak titles appearing in the final Qr-rod figure, no
-  misleading mixed-target rods, and reasonable `curve_distance_px` values.
+- Visual acceptance still needs manual script-output review: colored detector
+  background, HK labels near low-L rod bases, emphasized central `HK=0`
+  Delta-Qr band, the `hk0_l3_star.png` crop fully containing the L=3
+  intensity, the Qr-rod crop's log color scaling, the Qr-rod popup appearing
+  on an interactive backend, edited peak titles appearing in the final Qr-rod
+  figure, no misleading mixed-target rods, and reasonable `curve_distance_px`
+  values.
 
 ## Follow-up
 

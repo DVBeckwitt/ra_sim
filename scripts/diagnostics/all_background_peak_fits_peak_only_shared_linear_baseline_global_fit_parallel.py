@@ -54,6 +54,7 @@ from matplotlib.colors import ListedColormap, LogNorm
 import numpy as np
 import pandas as pd
 from IPython.display import Image, display
+from scipy.ndimage import binary_dilation
 from scipy.optimize import least_squares, nnls
 
 try:
@@ -10732,9 +10733,16 @@ else:
 detector_region_cmap = mpl.colormaps[JOURNAL_DETECTOR_CMAP].copy()
 detector_region_cmap.set_bad("#050505")
 detector_region_centerline_lw = 1.1
-detector_region_specular_centerline_lw = 0.5 * detector_region_centerline_lw
 detector_region_band_alpha = 0.11
 detector_region_boundary_alpha = 0.72
+detector_region_specular_centerline_lw = 1.45 * detector_region_centerline_lw
+detector_region_specular_band_alpha = 0.24
+detector_region_specular_boundary_alpha = 0.96
+detector_region_specular_boundary_expand_px = 1
+detector_region_specular_path_effects = [
+    pe.withStroke(linewidth=detector_region_specular_centerline_lw + 2.2, foreground="black"),
+    pe.withStroke(linewidth=detector_region_specular_centerline_lw + 0.9, foreground="white"),
+]
 
 
 def detector_xy_from_caked_angles(
@@ -10935,6 +10943,15 @@ def specular_detector_centerline_fallback(
     return [(pts[:, 0], pts[:, 1])]
 
 
+def expanded_detector_mask(mask: np.ndarray, radius_px: int = 0) -> np.ndarray:
+    mask_array = np.asarray(mask, dtype=bool)
+    radius = max(int(radius_px), 0)
+    if radius == 0 or mask_array.ndim != 2 or not np.any(mask_array):
+        return mask_array.copy()
+    structure = np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
+    return np.asarray(binary_dilation(mask_array, structure=structure), dtype=bool)
+
+
 def draw_detector_mask_layer(mask: np.ndarray, color: str, *, alpha: float, zorder: float) -> None:
     mask = np.asarray(mask, dtype=bool) & detector_region_shape_mask
     if mask.shape != detector_region_shape or not np.any(mask):
@@ -10952,20 +10969,31 @@ def draw_detector_mask_layer(mask: np.ndarray, color: str, *, alpha: float, zord
     )
 
 
-def draw_detector_delta_q_region(visual: dict[str, object] | None, color: str) -> None:
+def draw_detector_delta_q_region(
+    visual: dict[str, object] | None,
+    color: str,
+    *,
+    fill_alpha: float = detector_region_band_alpha,
+    boundary_alpha: float = detector_region_boundary_alpha,
+    boundary_expand_px: int = 0,
+) -> None:
     if not isinstance(visual, dict):
         return
     fill = np.asarray(visual.get("band_fill_mask"), dtype=bool)
     if fill.shape == detector_region_shape:
-        draw_detector_mask_layer(fill, color, alpha=detector_region_band_alpha, zorder=3.0)
+        draw_detector_mask_layer(fill, color, alpha=float(fill_alpha), zorder=3.0)
     boundary_inner = np.asarray(visual.get("band_boundary_inner_visible"), dtype=bool)
     boundary_outer = np.asarray(visual.get("band_boundary_outer_visible"), dtype=bool)
     if (
         boundary_inner.shape == detector_region_shape
         and boundary_outer.shape == detector_region_shape
     ):
+        boundary_mask = expanded_detector_mask(boundary_inner | boundary_outer, boundary_expand_px)
         draw_detector_mask_layer(
-            boundary_inner | boundary_outer, color, alpha=detector_region_boundary_alpha, zorder=4.0
+            boundary_mask,
+            color,
+            alpha=float(boundary_alpha),
+            zorder=4.0,
         )
 
 
@@ -11285,7 +11313,7 @@ for index, rod in enumerate(rod_entries):
             }
         )
 
-specular_color = OKABE_ITO["purple"]
+specular_color = OKABE_ITO["sky"]
 specular_detector_qz_values = (
     np.asarray(specular_l_marker_table["qz_marker"], dtype=np.float64)
     if not specular_l_marker_table.empty and "qz_marker" in specular_l_marker_table
@@ -11310,7 +11338,13 @@ if specular_detector_qz_values.size >= 2:
             shape_mask=detector_region_shape_mask,
         )
     )
-    draw_detector_delta_q_region(specular_delta_q_visual, specular_color)
+    draw_detector_delta_q_region(
+        specular_delta_q_visual,
+        specular_color,
+        fill_alpha=detector_region_specular_band_alpha,
+        boundary_alpha=detector_region_specular_boundary_alpha,
+        boundary_expand_px=detector_region_specular_boundary_expand_px,
+    )
 specular_lines = specular_detector_lines_from_markers(specular_l_marker_table)
 if not specular_lines:
     specular_lines = specular_detector_centerline_fallback()
@@ -11322,6 +11356,7 @@ for projected_col, projected_row in specular_lines:
         linewidth=detector_region_specular_centerline_lw,
         alpha=1.0,
         zorder=5.2,
+        path_effects=detector_region_specular_path_effects,
     )
     rod_label_entries.append(
         {

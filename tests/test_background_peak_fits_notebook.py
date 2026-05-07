@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.ndimage import binary_dilation
 from scipy.optimize import least_squares, nnls
 
 from scripts.diagnostics import background_peak_fit_worker as peak_fit_worker
@@ -109,6 +110,7 @@ def _script_functions(*names: str) -> dict[str, object]:
         "re": re,
         "plt": plt,
         "LogNorm": LogNorm,
+        "binary_dilation": binary_dilation,
         "JOURNAL_DETECTOR_CMAP": "magma",
         "least_squares": least_squares,
         "_rod_qz_nnls": nnls,
@@ -656,6 +658,55 @@ def test_parallel_script_hk0_l3_star_output_is_wired() -> None:
         "HK=0, L=3",
     ):
         assert token in source
+
+
+def test_parallel_script_detector_hk0_region_uses_prominent_specular_style() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'specular_color = OKABE_ITO["sky"]' in source
+    assert "detector_region_specular_centerline_lw = 1.45 * detector_region_centerline_lw" in source
+    assert "detector_region_specular_band_alpha = 0.24" in source
+    assert "detector_region_specular_boundary_alpha = 0.96" in source
+    assert "detector_region_specular_boundary_expand_px = 1" in source
+    assert 'specular_color = OKABE_ITO["purple"]' not in source
+
+
+def test_parallel_script_detector_hk0_delta_q_draw_uses_specular_style() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    specular_draw_start = source.index(
+        "draw_detector_delta_q_region(\n        specular_delta_q_visual"
+    )
+    specular_draw = source[
+        specular_draw_start : source.index(
+            "specular_lines = specular_detector_lines_from_markers", specular_draw_start
+        )
+    ]
+
+    assert "fill_alpha=detector_region_specular_band_alpha" in specular_draw
+    assert "boundary_alpha=detector_region_specular_boundary_alpha" in specular_draw
+    assert "boundary_expand_px=detector_region_specular_boundary_expand_px" in specular_draw
+    assert (
+        "delta_qr=float(qr_rod_delta_qr)"
+        in source[source.index("specular_delta_q_visual = (") : specular_draw_start]
+    )
+
+
+def test_parallel_script_detector_mask_expansion_thickens_boundary_only() -> None:
+    namespace = _script_functions("expanded_detector_mask")
+    expand_mask = namespace["expanded_detector_mask"]
+    mask = np.zeros((5, 5), dtype=bool)
+    mask[2, 2] = True
+
+    expanded = expand_mask(mask, radius_px=1)
+
+    assert int(np.count_nonzero(expanded)) == 9
+    assert np.array_equal(expand_mask(mask, radius_px=0), mask)
+    assert not np.shares_memory(expand_mask(mask, radius_px=0), mask)
 
 
 def test_parallel_script_qr_rod_marker_group_edits_replace_only_one_group() -> None:
