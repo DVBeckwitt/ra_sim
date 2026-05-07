@@ -75,6 +75,7 @@
   - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
   - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a colored, log-scaled raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
   - Added `SAMPLE_NAME_OVERRIDE` / `RA_SIM_ALL_BACKGROUND_SAMPLE_NAME` to the parallel `.py` diagnostic so direct runs can replace only the sample label and filename stem, such as `Bi2Se3` to `Bi2Te3`, without changing the run directory.
+  - Added a filename-keyed pre-editor cache to the parallel `.py` diagnostic so repeated runs with the same state/background filenames can reuse completed global peak fits, line-profile fits, and Qr-rod profile construction before the manual marker editor opens.
   - Restored default-on Qr-rod peak marker editing in the generated `.py` diagnostic with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup|skip|auto`, JSON round trip through `RA_SIM_QR_ROD_PEAK_EDITS`, and marker-table cache-key invalidation before final joint Qz fitting.
   - Added Qr-rod marker editor `Import` and `Export` buttons for the same JSON marker-table format used by `RA_SIM_QR_ROD_PEAK_EDITS`.
   - Fixed the Qr-rod peak marker editor so dynamically projected `HK=0` / `00L` specular markers are included before final-fit cache lookup and fitting.
@@ -84,6 +85,9 @@
   - Rounded generated Qr-rod peak fallback L labels to integer values while preserving user-edited marker titles.
   - Moved final Qr-rod peak labels to the upper-right of each marked peak with leader arrows pointing back to the peak.
   - Fixed final Qr-rod joint fitting so weak labeled peaks such as HK=0 `006` are preserved through nonlinear refinement, and invalidated older final-fit caches that could omit those components.
+  - Fixed Qr-rod marker export propagation so manually added duplicate-HKL marker rows are preserved and edited `HK=0` marker Qz positions update the marker CSV, detector selected-region figure, and `hk0_l3_star.png`.
+  - Changed direct Windows execution of the parallel `.py` diagnostic to relaunch through the existing guarded runner for the default process backend, so global peak fitting uses the process pool unless `BACKGROUND_FIT_BACKEND=thread` or `serial` is explicitly requested.
+  - Fixed the final Qr-rod profile figure so rods with no drawable branch data, such as the empty Bi2Te3 `HK=7` row, are skipped instead of reserving blank figure rows.
   - Fixed the parallel background peak-fit diagnostic script so Qr-rod marker labels are defined before profile annotation/redraw code can call them.
   - Fixed the parallel background peak-fit diagnostic runner so the generated `.py` diagnostic can run through the guarded Windows process backend, restoring process-pool CPU use while keeping direct top-level `.py` execution on the safe thread fallback.
   - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.

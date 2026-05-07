@@ -19,6 +19,7 @@ PROFILE_FIT_WORKERS_OVERRIDE = "16"
 ROD_PROFILE_FIT_WORKERS_OVERRIDE = "16"
 USE_GPU_OVERRIDE = "1"
 QR_ROD_PEAK_EDIT_MODE_OVERRIDE = ""
+RESET_PRE_EDITOR_CACHE_OVERRIDE = ""
 
 # Faster development output. Use 300 / 1 for final vector figures.
 FIGURE_DPI_OVERRIDE = "200"
@@ -32,6 +33,7 @@ import math
 import os
 import pickle
 import re
+import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -95,7 +97,7 @@ from ra_sim.simulation.exact_cake_portable import (
     raw_phi_to_gui_phi,
 )
 
-DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "Bi2Se3.json"
+DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "Bi2Te3.json"
 
 
 def _setting_text(local_name: str, env_name: str, default: object = "") -> str:
@@ -114,6 +116,224 @@ def _safe_run_name(value: object) -> str:
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
 QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_v2"
+PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
+PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
+PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
+PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_v1"
+
+
+def _cache_normalize_value(value: object) -> object:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return None if not np.isfinite(value) else round(float(value), 12)
+    if isinstance(value, Path):
+        return value.name
+    if isinstance(value, np.generic):
+        return _cache_normalize_value(value.item())
+    if isinstance(value, np.ndarray):
+        return [_cache_normalize_value(item) for item in value.tolist()]
+    if isinstance(value, dict):
+        return {
+            str(key): _cache_normalize_value(value[key])
+            for key in sorted(value, key=lambda item: str(item))
+        }
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        if isinstance(value, set):
+            items = sorted(items, key=lambda item: str(item))
+        return [_cache_normalize_value(item) for item in items]
+    return str(value)
+
+
+def pre_editor_cache_path(output_dir: Path | str, state_path: Path | str) -> Path:
+    return (
+        Path(output_dir).expanduser()
+        / f"{_safe_run_name(Path(str(state_path)).stem)}_pre_qr_rod_marker_editor_cache.pkl"
+    )
+
+
+def pre_editor_cache_key(
+    state_path: Path | str, *, input_signature: dict[str, object] | None = None
+) -> dict[str, object]:
+    normalized_inputs = _cache_normalize_value(input_signature or {})
+    data = json.dumps(normalized_inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "state_name": Path(state_path).expanduser().name,
+        "signature": PRE_EDITOR_CACHE_SIGNATURE,
+        "input_sha256": hashlib.sha256(data).hexdigest(),
+        "inputs": normalized_inputs,
+    }
+
+
+def load_pre_editor_cache(
+    cache_path: Path | str, cache_key: dict[str, object]
+) -> dict[str, object] | None:
+    path = Path(cache_path).expanduser()
+    if not path.exists():
+        return None
+    try:
+        with path.open("rb") as handle:
+            envelope = pickle.load(handle)
+    except Exception as exc:
+        print(f"ignored unreadable pre-editor diagnostic cache={path}: {exc}")
+        return None
+    if not isinstance(envelope, dict):
+        print(f"ignored incompatible pre-editor diagnostic cache={path}: expected mapping")
+        return None
+    if envelope.get("schema") != PRE_EDITOR_CACHE_SCHEMA:
+        print(
+            f"ignored incompatible pre-editor diagnostic cache={path}: schema={envelope.get('schema')!r}"
+        )
+        return None
+    if envelope.get("cache_key") != cache_key:
+        print(f"ignored stale pre-editor diagnostic cache={path}: input signature changed")
+        return None
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        print(f"ignored incompatible pre-editor diagnostic cache={path}: payload missing")
+        return None
+    return payload
+
+
+def write_pre_editor_cache(
+    cache_path: Path | str,
+    cache_key: dict[str, object],
+    payload: dict[str, object],
+) -> None:
+    path = Path(cache_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    envelope = {
+        "schema": PRE_EDITOR_CACHE_SCHEMA,
+        "cache_key": dict(cache_key),
+        "payload": dict(payload),
+    }
+    with path.open("wb") as handle:
+        pickle.dump(envelope, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def reset_pre_editor_cache(cache_path: Path | str) -> bool:
+    path = Path(cache_path).expanduser()
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
+def pre_editor_cache_get_stage(
+    cache_payload: dict[str, object] | None, stage_name: str, stage_signature: str
+) -> dict[str, object] | None:
+    if not isinstance(cache_payload, dict):
+        return None
+    stages = cache_payload.get("stages")
+    if not isinstance(stages, dict):
+        return None
+    stage = stages.get(stage_name)
+    if not isinstance(stage, dict) or stage.get("stage_signature") != stage_signature:
+        return None
+    payload = stage.get("payload")
+    return payload if isinstance(payload, dict) else None
+
+
+def pre_editor_cache_with_stage(
+    cache_payload: dict[str, object] | None,
+    stage_name: str,
+    stage_signature: str,
+    stage_payload: dict[str, object],
+) -> dict[str, object]:
+    next_payload = dict(cache_payload or {})
+    stages = dict(next_payload.get("stages") or {})
+    stages[str(stage_name)] = {
+        "stage_signature": str(stage_signature),
+        "payload": dict(stage_payload),
+    }
+    next_payload["stages"] = stages
+    return next_payload
+
+
+def background_peak_fit_stage_is_valid(
+    stage_payload: dict[str, object] | None, *, expected_fit_count: int
+) -> bool:
+    if not isinstance(stage_payload, dict):
+        return False
+    try:
+        if int(stage_payload.get("fit_job_count", -1)) != int(expected_fit_count):
+            return False
+    except Exception:
+        return False
+    fit_results_by_bg = stage_payload.get("fit_results_by_bg")
+    if not isinstance(fit_results_by_bg, dict) or not isinstance(
+        stage_payload.get("fit_failures_by_bg"), dict
+    ):
+        return False
+    try:
+        result_slots = sum(len(list(items)) for items in fit_results_by_bg.values())
+    except Exception:
+        return False
+    return int(result_slots) == int(expected_fit_count)
+
+
+def profile_fit_stage_is_valid(
+    stage_payload: dict[str, object] | None, *, expected_profile_count: int
+) -> bool:
+    if not isinstance(stage_payload, dict):
+        return False
+    records = stage_payload.get("profile_fit_records")
+    try:
+        if int(stage_payload.get("profile_target_count", -1)) != int(expected_profile_count):
+            return False
+    except Exception:
+        return False
+    return (
+        isinstance(records, list)
+        and len(records) == int(expected_profile_count)
+        and all(isinstance(record, dict) for record in records)
+    )
+
+
+def qr_rod_pre_editor_stage_is_valid(stage_payload: dict[str, object] | None) -> bool:
+    if not isinstance(stage_payload, dict):
+        return False
+    required = {
+        "rod_profile_table",
+        "marker_table",
+        "region_overlays",
+        "rod_entries",
+        "rod_qspace_calibration",
+        "rod_profile_max_two_theta_deg",
+    }
+    if not required.issubset(stage_payload):
+        return False
+    rod_profile_table = pd.DataFrame(stage_payload["rod_profile_table"])
+    marker_table = pd.DataFrame(stage_payload["marker_table"])
+    return (
+        not rod_profile_table.empty
+        and "qz_center" in rod_profile_table
+        and "background_density" in rod_profile_table
+        and "qz_marker" in marker_table
+    )
+
+
+def pre_editor_fit_job_signature(
+    fit_jobs: list[tuple[int, int, dict[str, object]]]
+) -> list[dict[str, object]]:
+    rows = []
+    for bg_idx, local_idx, entry in fit_jobs:
+        rows.append(
+            {
+                "background_index": int(bg_idx),
+                "local_index": int(local_idx),
+                "label": str(entry.get("_label", entry.get("label", ""))),
+                "branch": str(entry.get("_branch", entry.get("branch", ""))),
+                "theta_seed_deg": _cache_normalize_value(entry.get("_theta_seed_deg")),
+                "phi_seed_deg": _cache_normalize_value(entry.get("_phi_seed_deg")),
+                "q_group_key": _cache_normalize_value(entry.get("q_group_key")),
+                "branch_id": str(entry.get("branch_id", "")),
+                "source_branch_index": _cache_normalize_value(entry.get("source_branch_index")),
+            }
+        )
+    return rows
 
 
 def qr_rod_profile_cache_path(output_dir: Path | str, state_path: Path | str) -> Path:
@@ -246,6 +466,67 @@ def qz_l_linear_coeff_from_marker_rows(marker_rows: object) -> tuple[float, floa
     if not (np.isfinite(slope) and np.isfinite(intercept)) or abs(float(slope)) <= 1.0e-12:
         return 1.0, 0.0
     return float(slope), float(intercept)
+
+
+def drawable_rod_profile_keys(
+    rod_profile_table: pd.DataFrame,
+    marker_table: pd.DataFrame,
+    *,
+    min_points: int = 2,
+) -> set[tuple[int, str]]:
+    table = pd.DataFrame(rod_profile_table).copy()
+    if table.empty or not {"m", "branch", "qz_center"}.issubset(table.columns):
+        return set()
+    y_columns = [
+        column
+        for column in (
+            "background_density",
+            "joint_peak_density",
+            "joint_fit_density",
+            "fit_density",
+        )
+        if column in table
+    ]
+    if not y_columns:
+        return set()
+    table["_m_key"] = pd.to_numeric(table["m"], errors="coerce")
+    table["_branch_key"] = table["branch"].astype(str)
+    table = table[np.isfinite(np.asarray(table["_m_key"], dtype=np.float64))].copy()
+    if table.empty:
+        return set()
+    markers = pd.DataFrame(marker_table).copy()
+    drawable: set[tuple[int, str]] = set()
+    for (m_key, branch_key), sub in table.groupby(["_m_key", "_branch_key"], sort=False):
+        m_value = int(m_key)
+        branch_value = str(branch_key)
+        qz = pd.to_numeric(sub["qz_center"], errors="coerce").to_numpy(dtype=np.float64)
+        finite = np.isfinite(qz)
+        if "pixel_count" in sub:
+            pixel_count = pd.to_numeric(sub["pixel_count"], errors="coerce").to_numpy(
+                dtype=np.float64
+            )
+            finite &= np.isfinite(pixel_count) & (pixel_count > 0.0)
+        finite_y = np.zeros(qz.shape, dtype=bool)
+        for column in y_columns:
+            values = pd.to_numeric(sub[column], errors="coerce").to_numpy(dtype=np.float64)
+            finite_y |= np.isfinite(values)
+        finite &= finite_y
+        if np.count_nonzero(finite) < int(min_points):
+            continue
+        l_values = qz.copy()
+        if not markers.empty and {"m", "branch", "qz_marker"}.issubset(markers.columns):
+            marker_m = pd.to_numeric(markers["m"], errors="coerce").to_numpy(dtype=np.float64)
+            marker_branch = markers["branch"].astype(str).to_numpy(dtype=object)
+            marker_sub = markers[
+                (marker_m == float(m_value)) & (marker_branch == branch_value)
+            ].copy()
+            if not marker_sub.empty and {"fit_l", "l", "display_l"} & set(marker_sub.columns):
+                slope, intercept = qz_l_linear_coeff_from_marker_rows(marker_sub)
+                l_values = float(slope) * qz + float(intercept)
+        finite &= np.isfinite(l_values) & (l_values > 0.0)
+        if np.count_nonzero(finite) >= int(min_points):
+            drawable.add((m_value, branch_value))
+    return drawable
 
 
 def qr_rod_peak_edit_cache_key(
@@ -484,22 +765,158 @@ def marker_table_with_specular_l_markers(
     specular = pd.DataFrame(specular_l_marker_table).copy()
     if specular.empty:
         return base.reset_index(drop=True)
-    if base.empty:
-        return specular.reset_index(drop=True)
     columns = list(dict.fromkeys([*base.columns.tolist(), *specular.columns.tolist()]))
-    merged = pd.concat(
-        [base.reindex(columns=columns), specular.reindex(columns=columns)],
-        ignore_index=True,
-        sort=False,
-    )
     duplicate_key = None
-    if {"m", "branch", "hkl"}.issubset(merged.columns):
+    if {"m", "branch", "hkl"}.issubset(columns):
         duplicate_key = ["m", "branch", "hkl"]
-    elif {"m", "branch", "qz_marker"}.issubset(merged.columns):
+    elif {"m", "branch", "qz_marker"}.issubset(columns):
         duplicate_key = ["m", "branch", "qz_marker"]
+    base = base.reindex(columns=columns)
+    specular = specular.reindex(columns=columns)
     if duplicate_key is not None:
-        merged = merged.drop_duplicates(subset=duplicate_key, keep="first")
-    return merged.reset_index(drop=True)
+        seen = set()
+        if not base.empty:
+            seen.update(
+                tuple(row[col] for col in duplicate_key) for row in base.to_dict("records")
+            )
+        keep_rows: list[dict[str, object]] = []
+        for row in specular.to_dict("records"):
+            key = tuple(row[col] for col in duplicate_key)
+            if key in seen:
+                continue
+            seen.add(key)
+            keep_rows.append(row)
+        specular = pd.DataFrame(keep_rows, columns=columns)
+    return pd.concat([base, specular], ignore_index=True, sort=False).reset_index(drop=True)
+
+
+def specular_export_marker_table_from_final_markers(
+    marker_table: pd.DataFrame,
+    specular_l_marker_table: pd.DataFrame,
+    *,
+    qz_map: object,
+    region_mask: object,
+    theta_axis: object,
+    phi_axis: object,
+) -> pd.DataFrame:
+    final_markers = pd.DataFrame(marker_table).copy()
+    fallback = pd.DataFrame(specular_l_marker_table).copy()
+    if final_markers.empty or not {"m", "branch", "qz_marker"}.issubset(final_markers.columns):
+        return fallback.reset_index(drop=True)
+    m_values = pd.to_numeric(final_markers["m"], errors="coerce").to_numpy(dtype=np.float64)
+    branches = final_markers["branch"].astype(str)
+    specular = final_markers.loc[(m_values == 0.0) & (branches == "qz")].copy()
+    if specular.empty:
+        return fallback.reset_index(drop=True)
+    specular["qz_marker"] = pd.to_numeric(specular["qz_marker"], errors="coerce")
+    specular = specular[np.isfinite(np.asarray(specular["qz_marker"], dtype=np.float64))].copy()
+    if specular.empty:
+        return fallback.reset_index(drop=True)
+
+    fallback_by_hkl: dict[str, dict[str, object]] = {}
+    fallback_by_l: dict[int, dict[str, object]] = {}
+
+    def finite_number(value: object) -> float:
+        try:
+            number = float(value)
+        except Exception:
+            return np.nan
+        return number if np.isfinite(number) else np.nan
+
+    def marker_l_value(row: dict[str, object]) -> float:
+        for column in ("fit_l", "l", "display_l"):
+            number = finite_number(row.get(column, np.nan))
+            if np.isfinite(number):
+                return float(number)
+        return np.nan
+
+    def has_value(value: object) -> bool:
+        if value is None:
+            return False
+        try:
+            missing = pd.isna(value)
+            if isinstance(missing, (bool, np.bool_)):
+                return not bool(missing)
+        except Exception:
+            pass
+        try:
+            if isinstance(value, float) and not np.isfinite(value):
+                return False
+        except Exception:
+            pass
+        return True
+
+    for record in fallback.to_dict("records"):
+        hkl = str(record.get("hkl", "")).strip()
+        if hkl:
+            fallback_by_hkl.setdefault(hkl, record)
+        l_value = marker_l_value(record)
+        if np.isfinite(l_value):
+            fallback_by_l.setdefault(int(round(float(l_value))), record)
+
+    qz_values = np.asarray(qz_map, dtype=np.float64)
+    valid = np.isfinite(qz_values)
+    mask_values = np.asarray(region_mask, dtype=bool)
+    if mask_values.shape == qz_values.shape:
+        valid &= mask_values
+    theta_values = np.asarray(theta_axis, dtype=np.float64)
+    phi_values = np.asarray(phi_axis, dtype=np.float64)
+
+    def axis_value(values: np.ndarray, row: int, col: int, *, prefer_col: bool) -> float:
+        if values.ndim == 1:
+            index = col if prefer_col else row
+            if 0 <= index < values.shape[0]:
+                return finite_number(values[index])
+        elif values.shape == qz_values.shape:
+            return finite_number(values[row, col])
+        return np.nan
+
+    def nearest_angles(qz_value: float) -> tuple[float, float] | None:
+        if qz_values.ndim != 2 or qz_values.size < 1 or not np.any(valid):
+            return None
+        distance = np.abs(qz_values - float(qz_value))
+        distance = np.where(valid, distance, np.inf)
+        if not np.any(np.isfinite(distance)):
+            return None
+        row, col = np.unravel_index(int(np.nanargmin(distance)), distance.shape)
+        theta = axis_value(theta_values, int(row), int(col), prefer_col=True)
+        phi = axis_value(phi_values, int(row), int(col), prefer_col=False)
+        if not (np.isfinite(theta) and np.isfinite(phi)):
+            return None
+        return float(theta), float(phi)
+
+    records: list[dict[str, object]] = []
+    for edit_row in specular.sort_values("qz_marker", kind="mergesort").to_dict("records"):
+        hkl = str(edit_row.get("hkl", "")).strip()
+        l_value = marker_l_value(edit_row)
+        base_row = fallback_by_hkl.get(hkl)
+        if base_row is None and np.isfinite(l_value):
+            base_row = fallback_by_l.get(int(round(float(l_value))))
+        row = dict(base_row or {})
+        for key, value in edit_row.items():
+            if has_value(value):
+                row[key] = value
+        row["m"] = 0
+        row["hk"] = 0
+        row["branch"] = "qz"
+        qz_value = finite_number(row.get("qz_marker", np.nan))
+        if not np.isfinite(qz_value):
+            continue
+        row["qz_marker"] = float(qz_value)
+        row["projected_qz_marker"] = float(qz_value)
+        l_value = marker_l_value(row)
+        if np.isfinite(l_value):
+            row["fit_l"] = float(l_value)
+            row["display_l"] = float(l_value)
+            row["l"] = float(l_value)
+            if not str(row.get("hkl", "")).strip():
+                row["hkl"] = f"0,0,{int(round(float(l_value)))}"
+        angles = nearest_angles(float(qz_value))
+        if angles is not None:
+            row["refined_two_theta_deg"] = angles[0]
+            row["refined_phi_deg"] = angles[1]
+        records.append(row)
+    return pd.DataFrame(records).reset_index(drop=True)
 
 
 def snap_qr_rod_markers_to_profile_peaks(
@@ -1111,6 +1528,56 @@ def _truthy_setting(local_name: str, env_name: str, default: bool = False) -> bo
     return text in {"1", "true", "yes", "y", "on", "gpu", "cuda", "cupy"}
 
 
+def should_reenter_guarded_process_runner(
+    requested: object,
+    *,
+    workers: int,
+    platform_name: str | None = None,
+    process_guard_enabled: bool = False,
+) -> bool:
+    if platform_name is None:
+        platform_name = os.name
+    backend = str(requested).strip().lower() or "process"
+    return (
+        platform_name == "nt"
+        and backend in {"auto", "process"}
+        and int(workers) > 1
+        and not bool(process_guard_enabled)
+    )
+
+
+def guarded_process_runner_command(
+    *,
+    python_executable: object,
+    runner_path: object,
+    diagnostic_path: object,
+    state_path: object,
+    run_name: object,
+    fit_workers: int | None = None,
+    numba_threads: int | None = None,
+    process_numba_threads: int | None = None,
+) -> list[str]:
+    command = [
+        str(python_executable),
+        str(runner_path),
+        "--notebook",
+        str(diagnostic_path),
+        "--run-name",
+        str(run_name),
+        "--fit-backend",
+        "process",
+    ]
+    for flag, value in (
+        ("--fit-workers", fit_workers),
+        ("--numba-threads", numba_threads),
+        ("--process-numba-threads", process_numba_threads),
+    ):
+        if value is not None:
+            command.extend([flag, str(int(value))])
+    command.append(str(state_path))
+    return command
+
+
 def normalize_fit_backend(
     requested: object,
     *,
@@ -1317,6 +1784,44 @@ REQUESTED_FIT_BACKEND = (
 PROCESS_GUARD_ENABLED = _truthy_setting(
     "PROCESS_GUARD_OVERRIDE", "RA_SIM_ALL_BACKGROUND_PROCESS_GUARD", False
 )
+PROCESS_NUMBA_THREADS = max(
+    1,
+    min(
+        _positive_int_setting(
+            "PROCESS_NUMBA_THREADS_OVERRIDE", "BACKGROUND_PROCESS_NUMBA_THREADS", 1
+        ),
+        CPU_COUNT,
+    ),
+)
+if should_reenter_guarded_process_runner(
+    REQUESTED_FIT_BACKEND,
+    workers=FIT_WORKERS,
+    process_guard_enabled=PROCESS_GUARD_ENABLED,
+):
+    guarded_command = guarded_process_runner_command(
+        python_executable=sys.executable,
+        runner_path=Path(__file__).with_name("run_all_background_peak_fits.py").resolve(),
+        diagnostic_path=Path(__file__).resolve(),
+        state_path=STATE_PATH,
+        run_name=STATE_RUN_NAME,
+        fit_workers=FIT_WORKERS,
+        numba_threads=NUMBA_WORKERS,
+        process_numba_threads=PROCESS_NUMBA_THREADS,
+    )
+    guarded_env = os.environ.copy()
+    guarded_env["RA_SIM_ALL_BACKGROUND_PROCESS_GUARD"] = "1"
+    print(
+        "direct Windows process backend: launching guarded runner "
+        f"for {FIT_WORKERS} process workers",
+        flush=True,
+    )
+    guarded_result = subprocess.run(
+        guarded_command,
+        cwd=str(ROOT),
+        env=guarded_env,
+        check=False,
+    )
+    raise SystemExit(int(guarded_result.returncode))
 FIT_BACKEND = normalize_fit_backend(
     REQUESTED_FIT_BACKEND,
     workers=FIT_WORKERS,
@@ -1334,15 +1839,6 @@ if FIT_BACKEND != REQUESTED_FIT_BACKEND:
         )
     else:
         print(f"fit backend normalized from {REQUESTED_FIT_BACKEND!r} to {FIT_BACKEND!r}")
-PROCESS_NUMBA_THREADS = max(
-    1,
-    min(
-        _positive_int_setting(
-            "PROCESS_NUMBA_THREADS_OVERRIDE", "BACKGROUND_PROCESS_NUMBA_THREADS", 1
-        ),
-        CPU_COUNT,
-    ),
-)
 EXACT_CAKE_ENGINE = (
     _setting_text("EXACT_CAKE_ENGINE_OVERRIDE", "BACKGROUND_EXACT_CAKE_ENGINE", "numba")
     .strip()
@@ -3046,6 +3542,55 @@ for prep in background_preps:
 if not fit_jobs:
     raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)
 
+PRE_EDITOR_CACHE_PATH = pre_editor_cache_path(OUT_DIR, STATE_PATH)
+PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
+    "state_filename": Path(STATE_PATH).name,
+    "background_files": [Path(path).name for path in background_files],
+    "background_tilt_deg": {
+        int(idx): float(BACKGROUND_TILT_DEG[idx]) for idx in sorted(BACKGROUND_TILT_DEG)
+    },
+    "backend_orientation": {
+        "rotation_k": int(backend_rotation_k),
+        "flip_x": bool(backend_flip_x),
+        "flip_y": bool(backend_flip_y),
+    },
+    "geometry": {
+        "center_row_px": float(center_row_px),
+        "center_col_px": float(center_col_px),
+        "distance_m": float(distance_m),
+        "pixel_size_m": float(PIXEL_SIZE_M),
+        "wavelength_m": float(WAVELENGTH_M),
+    },
+    "fit_settings": {
+        "fit_model": FIT_MODEL_NAME,
+        "theta_half_window_deg": float(THETA_HALF_WINDOW_DEG),
+        "phi_half_window_deg": float(PHI_HALF_WINDOW_DEG),
+        "center_theta_bound_deg": float(CENTER_THETA_BOUND_DEG),
+        "center_phi_bound_deg": float(CENTER_PHI_BOUND_DEG),
+        "peak_fit_max_nfev": int(PEAK_FIT_MAX_NFEV),
+        "peak_fit_shared_linear_baseline": bool(PEAK_FIT_SHARED_LINEAR_BASELINE_ENABLED),
+        "background_solid_angle_correction": bool(BACKGROUND_SOLID_ANGLE_CORRECTION),
+        "caked_intensity_mode": str(CAKED_FIGURE_INTENSITY_MODE),
+        "exact_cake_engine": str(EXACT_CAKE_ENGINE),
+        "rod_profile_qz_bins": int(ROD_PROFILE_QZ_BINS),
+        "rod_profile_max_two_theta_deg": float(ROD_PROFILE_MAX_TWO_THETA_DEG),
+        "rod_profile_delta_qr": float(qr_rod_delta_qr),
+        "rod_phi_samples": int(rod_phi_samples),
+        "rod_qz_shared_linear_baseline": bool(ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED),
+        "rod_qz_nonlinear_refinement": bool(ROD_QZ_NONLINEAR_REFINEMENT_ENABLED),
+    },
+    "fit_jobs": pre_editor_fit_job_signature(fit_jobs),
+}
+PRE_EDITOR_CACHE_KEY = pre_editor_cache_key(
+    STATE_PATH, input_signature=PRE_EDITOR_CACHE_INPUT_SIGNATURE
+)
+if _truthy_setting("RESET_PRE_EDITOR_CACHE_OVERRIDE", "RA_SIM_RESET_PRE_EDITOR_CACHE", False):
+    removed_pre_editor_cache = reset_pre_editor_cache(PRE_EDITOR_CACHE_PATH)
+    print(
+        f"reset pre-editor diagnostic cache={PRE_EDITOR_CACHE_PATH} removed={removed_pre_editor_cache}"
+    )
+pre_editor_cache = load_pre_editor_cache(PRE_EDITOR_CACHE_PATH, PRE_EDITOR_CACHE_KEY)
+
 
 def _reset_fit_containers() -> None:
     fit_results_by_bg.clear()
@@ -3181,23 +3726,72 @@ if requested_fit_backend == "auto":
 if global_fit_workers <= 1:
     requested_fit_backend = "serial"
 
-try:
-    if requested_fit_backend == "process":
-        active_fit_backend, fit_pid_counts, fit_task_elapsed = _run_process_peak_jobs()
-    elif requested_fit_backend == "thread":
+background_peak_fit_stage = pre_editor_cache_get_stage(
+    pre_editor_cache, "background_peak_fits", PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE
+)
+background_peak_fit_cache_hit = background_peak_fit_stage_is_valid(
+    background_peak_fit_stage, expected_fit_count=len(fit_jobs)
+)
+if background_peak_fit_cache_hit:
+    cached_fit_results_by_bg = {
+        int(bg_idx): list(items)
+        for bg_idx, items in dict(background_peak_fit_stage["fit_results_by_bg"]).items()
+    }
+    cached_fit_failures_by_bg = {
+        int(bg_idx): list(items)
+        for bg_idx, items in dict(background_peak_fit_stage["fit_failures_by_bg"]).items()
+    }
+    for prep in background_preps:
+        bg_idx = int(prep["background_index"])
+        expected_count = len(list(prep["prepared_entries"]))
+        if (
+            bg_idx not in cached_fit_results_by_bg
+            or len(cached_fit_results_by_bg[bg_idx]) != expected_count
+        ):
+            background_peak_fit_cache_hit = False
+            print(
+                f"ignored incomplete pre-editor background peak-fit cache={PRE_EDITOR_CACHE_PATH}: background {bg_idx} expected {expected_count} results"
+            )
+            break
+    if background_peak_fit_cache_hit:
+        fit_results_by_bg = cached_fit_results_by_bg
+        fit_failures_by_bg = cached_fit_failures_by_bg
+        active_fit_backend = "pre_editor_cache"
+        fit_pid_counts = {}
+        fit_task_elapsed = []
+        print(f"reused pre-editor background peak-fit cache={PRE_EDITOR_CACHE_PATH}")
+if not background_peak_fit_cache_hit:
+    try:
+        if requested_fit_backend == "process":
+            active_fit_backend, fit_pid_counts, fit_task_elapsed = _run_process_peak_jobs()
+        elif requested_fit_backend == "thread":
+            active_fit_backend, fit_pid_counts, fit_task_elapsed = _run_local_peak_jobs(
+                force_serial=False
+            )
+        else:
+            active_fit_backend, fit_pid_counts, fit_task_elapsed = _run_local_peak_jobs(
+                force_serial=True
+            )
+    except (BrokenProcessPool, OSError, RuntimeError) as exc:
+        if requested_fit_backend != "process":
+            raise
+        print(f"process peak-fit pool failed; falling back to thread pool: {exc!r}")
+        _reset_fit_containers()
         active_fit_backend, fit_pid_counts, fit_task_elapsed = _run_local_peak_jobs(
             force_serial=False
         )
-    else:
-        active_fit_backend, fit_pid_counts, fit_task_elapsed = _run_local_peak_jobs(
-            force_serial=True
-        )
-except (BrokenProcessPool, OSError, RuntimeError) as exc:
-    if requested_fit_backend != "process":
-        raise
-    print(f"process peak-fit pool failed; falling back to thread pool: {exc!r}")
-    _reset_fit_containers()
-    active_fit_backend, fit_pid_counts, fit_task_elapsed = _run_local_peak_jobs(force_serial=False)
+    pre_editor_cache = pre_editor_cache_with_stage(
+        pre_editor_cache,
+        "background_peak_fits",
+        PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE,
+        {
+            "fit_job_count": int(len(fit_jobs)),
+            "fit_results_by_bg": fit_results_by_bg,
+            "fit_failures_by_bg": fit_failures_by_bg,
+        },
+    )
+    write_pre_editor_cache(PRE_EDITOR_CACHE_PATH, PRE_EDITOR_CACHE_KEY, pre_editor_cache)
+    print(f"saved pre-editor background peak-fit cache={PRE_EDITOR_CACHE_PATH}")
 
 fit_elapsed = time.perf_counter() - fit_start
 finite_task_elapsed = np.asarray(
@@ -4956,51 +5550,78 @@ def _fit_profile_cache_item(
 profile_fit_cache: dict[int, dict[str, object]] = {}
 profile_targets = [(bg, item) for bg in ordered_backgrounds for item in bg["fit_results"]]
 profile_worker_count = min(PROFILE_FIT_WORKERS, max(1, len(profile_targets)))
-if profile_worker_count > 1:
-    with ThreadPoolExecutor(max_workers=profile_worker_count) as executor:
-        future_to_item = {
-            executor.submit(_fit_profile_cache_item, bg, item): (bg, item)
-            for bg, item in profile_targets
-        }
-        for future in as_completed(future_to_item):
-            bg, item = future_to_item[future]
-            try:
-                item_id, cached = future.result()
-            except Exception as exc:
-                axis_payloads = {}
-                for axis in PROFILE_AXES:
-                    empty = np.array([], dtype=np.float64)
-                    payload = _profile_empty_payload(axis, str(exc), empty)
-                    quality = profile_fit_quality(axis, empty, empty, payload)
-                    payload["quality"] = quality
-                    axis_payloads[axis] = {
-                        "x": empty,
-                        "measured_raw": empty,
-                        "local_fit_raw": empty,
-                        "payload": payload,
-                        "quality": quality,
+profile_fit_stage = pre_editor_cache_get_stage(
+    pre_editor_cache, "profile_fits", PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE
+)
+profile_fit_cache_hit = profile_fit_stage_is_valid(
+    profile_fit_stage, expected_profile_count=len(profile_targets)
+)
+if profile_fit_cache_hit:
+    profile_fit_records = list(profile_fit_stage["profile_fit_records"])
+    for (_bg, item), cached in zip(profile_targets, profile_fit_records, strict=False):
+        if isinstance(cached, dict):
+            profile_fit_cache[id(item)] = cached
+            profile_fit_failures.extend(list(cached.get("failures", []) or []))
+    print(f"reused pre-editor profile-fit cache={PRE_EDITOR_CACHE_PATH}")
+else:
+    if profile_worker_count > 1:
+        with ThreadPoolExecutor(max_workers=profile_worker_count) as executor:
+            future_to_item = {
+                executor.submit(_fit_profile_cache_item, bg, item): (bg, item)
+                for bg, item in profile_targets
+            }
+            for future in as_completed(future_to_item):
+                bg, item = future_to_item[future]
+                try:
+                    item_id, cached = future.result()
+                except Exception as exc:
+                    axis_payloads = {}
+                    for axis in PROFILE_AXES:
+                        empty = np.array([], dtype=np.float64)
+                        payload = _profile_empty_payload(axis, str(exc), empty)
+                        quality = profile_fit_quality(axis, empty, empty, payload)
+                        payload["quality"] = quality
+                        axis_payloads[axis] = {
+                            "x": empty,
+                            "measured_raw": empty,
+                            "local_fit_raw": empty,
+                            "payload": payload,
+                            "quality": quality,
+                        }
+                    cached = {
+                        "axes": axis_payloads,
+                        "accepted": False,
+                        "failures": [
+                            (
+                                float(bg["tilt_deg"]),
+                                str(item["label"]),
+                                str(item["branch"]),
+                                "both",
+                                str(exc),
+                            )
+                        ],
                     }
-                cached = {
-                    "axes": axis_payloads,
-                    "accepted": False,
-                    "failures": [
-                        (
-                            float(bg["tilt_deg"]),
-                            str(item["label"]),
-                            str(item["branch"]),
-                            "both",
-                            str(exc),
-                        )
-                    ],
-                }
-                item_id = id(item)
+                    item_id = id(item)
+                profile_fit_cache[item_id] = cached
+                profile_fit_failures.extend(cached["failures"])
+    else:
+        for bg, item in profile_targets:
+            item_id, cached = _fit_profile_cache_item(bg, item)
             profile_fit_cache[item_id] = cached
             profile_fit_failures.extend(cached["failures"])
-else:
-    for bg, item in profile_targets:
-        item_id, cached = _fit_profile_cache_item(bg, item)
-        profile_fit_cache[item_id] = cached
-        profile_fit_failures.extend(cached["failures"])
+    pre_editor_cache = pre_editor_cache_with_stage(
+        pre_editor_cache,
+        "profile_fits",
+        PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE,
+        {
+            "profile_target_count": int(len(profile_targets)),
+            "profile_fit_records": [
+                profile_fit_cache[id(item)] for _bg, item in profile_targets
+            ],
+        },
+    )
+    write_pre_editor_cache(PRE_EDITOR_CACHE_PATH, PRE_EDITOR_CACHE_KEY, pre_editor_cache)
+    print(f"saved pre-editor profile-fit cache={PRE_EDITOR_CACHE_PATH}")
 
 for bg, item in profile_targets:
     cached = profile_fit_cache[id(item)]
@@ -8724,35 +9345,55 @@ if not matching_profile_bgs:
     )
 profile_bg = matching_profile_bgs[0]
 ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG = float(ROD_PROFILE_MAX_TWO_THETA_DEG)
-ROD_PROFILE_MAX_TWO_THETA_DEG = rod_profile_two_theta_limit_for_background(
-    profile_bg, ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG
+qr_rod_pre_editor_stage = pre_editor_cache_get_stage(
+    pre_editor_cache, "qr_rod_pre_editor", PRE_EDITOR_QR_ROD_STAGE_SIGNATURE
 )
-if ROD_PROFILE_MAX_TWO_THETA_DEG > ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG + 1.0e-9:
-    print(
-        f"expanded Qr rod 2theta limit from {ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG:.1f} to {ROD_PROFILE_MAX_TWO_THETA_DEG:.1f} deg to include selected-state peaks"
+qr_rod_pre_editor_cache_hit = qr_rod_pre_editor_stage_is_valid(qr_rod_pre_editor_stage)
+if qr_rod_pre_editor_cache_hit:
+    ROD_PROFILE_MAX_TWO_THETA_DEG = float(
+        qr_rod_pre_editor_stage["rod_profile_max_two_theta_deg"]
     )
-rod_entries = build_profile_rod_entries(ROD_PROFILE_TILT_DEG)
-if not rod_entries:
-    raise RuntimeError(
-        f"no non-specular Qr rods were available for {ROD_PROFILE_TILT_LABEL} deg branch plotting"
-    )
-rod_entries, rod_qspace_calibration = fit_rod_qspace_calibration(profile_bg, rod_entries)
-ACTIVE_REJECTED_ROD_KEYS = rejected_rod_key_set(rod_qspace_calibration.get("rejected_rod_keys", []))
-if ACTIVE_REJECTED_ROD_KEYS:
-    rejected_for_plot = [
-        rod for rod in rod_entries if rod_rejected_for_plot(rod, ACTIVE_REJECTED_ROD_KEYS)
-    ]
-    if rejected_for_plot:
-        print(
-            "rejected mixed-Qr plotted rods: "
-            + ", ".join(f"{rod_identity_key(rod)}" for rod in rejected_for_plot)
+    rod_entries = [dict(row) for row in qr_rod_pre_editor_stage["rod_entries"]]
+    rod_qspace_calibration = dict(qr_rod_pre_editor_stage["rod_qspace_calibration"])
+    ACTIVE_REJECTED_ROD_KEYS = rejected_rod_key_set(
+        qr_rod_pre_editor_stage.get(
+            "active_rejected_rod_keys", rod_qspace_calibration.get("rejected_rod_keys", [])
         )
-    rod_entries = [
-        rod for rod in rod_entries if not rod_rejected_for_plot(rod, ACTIVE_REJECTED_ROD_KEYS)
-    ]
+    )
+    apply_rod_qspace_calibration([profile_bg], rod_qspace_calibration)
+    print(f"reused pre-editor Qr-rod profile cache={PRE_EDITOR_CACHE_PATH}")
+else:
+    ROD_PROFILE_MAX_TWO_THETA_DEG = rod_profile_two_theta_limit_for_background(
+        profile_bg, ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG
+    )
+    if ROD_PROFILE_MAX_TWO_THETA_DEG > ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG + 1.0e-9:
+        print(
+            f"expanded Qr rod 2theta limit from {ROD_PROFILE_CONFIGURED_MAX_TWO_THETA_DEG:.1f} to {ROD_PROFILE_MAX_TWO_THETA_DEG:.1f} deg to include selected-state peaks"
+        )
+    rod_entries = build_profile_rod_entries(ROD_PROFILE_TILT_DEG)
     if not rod_entries:
-        raise RuntimeError("all non-specular Qr rods rejected by mixed target Qr spread")
-apply_rod_qspace_calibration([profile_bg], rod_qspace_calibration)
+        raise RuntimeError(
+            f"no non-specular Qr rods were available for {ROD_PROFILE_TILT_LABEL} deg branch plotting"
+        )
+    rod_entries, rod_qspace_calibration = fit_rod_qspace_calibration(profile_bg, rod_entries)
+    ACTIVE_REJECTED_ROD_KEYS = rejected_rod_key_set(
+        rod_qspace_calibration.get("rejected_rod_keys", [])
+    )
+    if ACTIVE_REJECTED_ROD_KEYS:
+        rejected_for_plot = [
+            rod for rod in rod_entries if rod_rejected_for_plot(rod, ACTIVE_REJECTED_ROD_KEYS)
+        ]
+        if rejected_for_plot:
+            print(
+                "rejected mixed-Qr plotted rods: "
+                + ", ".join(f"{rod_identity_key(rod)}" for rod in rejected_for_plot)
+            )
+        rod_entries = [
+            rod for rod in rod_entries if not rod_rejected_for_plot(rod, ACTIVE_REJECTED_ROD_KEYS)
+        ]
+        if not rod_entries:
+            raise RuntimeError("all non-specular Qr rods rejected by mixed target Qr spread")
+    apply_rod_qspace_calibration([profile_bg], rod_qspace_calibration)
 
 
 def display_detector_rotation_fit_debug(
@@ -9044,28 +9685,31 @@ def fit_qr_centers_for_rod_entries(
     return fitted_rods
 
 
-rod_entries = fit_qr_centers_for_rod_entries(
-    profile_bg,
-    rod_entries,
-    detector_q_maps=profile_detector_q_maps,
-    detector_phi_map=profile_detector_phi_map,
-    detector_two_theta_map=profile_detector_two_theta_map,
-)
-rod_qspace_calibration["qr_fitted_by_m"] = {int(rod["m"]): float(rod["qr"]) for rod in rod_entries}
-rod_qspace_calibration["qr_original_by_m"] = {
-    int(rod["m"]): float(rod.get("qr_original", rod["qr"])) for rod in rod_entries
-}
-rod_qspace_calibration["qr_fit_method_by_m"] = {
-    int(rod["m"]): str(rod.get("qr_fit_method", "original")) for rod in rod_entries
-}
-print(
-    "Qr rod center adjustment before integration: "
-    + ", ".join(
-        f"HK={int(rod['m'])}: {float(rod.get('qr_original', rod['qr'])):.5g}->{float(rod['qr']):.5g} "
-        f"({int(rod.get('qr_fit_count', 0))}/{int(rod.get('qr_fit_sample_count', 0))})"
-        for rod in rod_entries
+if not qr_rod_pre_editor_cache_hit:
+    rod_entries = fit_qr_centers_for_rod_entries(
+        profile_bg,
+        rod_entries,
+        detector_q_maps=profile_detector_q_maps,
+        detector_phi_map=profile_detector_phi_map,
+        detector_two_theta_map=profile_detector_two_theta_map,
     )
-)
+    rod_qspace_calibration["qr_fitted_by_m"] = {
+        int(rod["m"]): float(rod["qr"]) for rod in rod_entries
+    }
+    rod_qspace_calibration["qr_original_by_m"] = {
+        int(rod["m"]): float(rod.get("qr_original", rod["qr"])) for rod in rod_entries
+    }
+    rod_qspace_calibration["qr_fit_method_by_m"] = {
+        int(rod["m"]): str(rod.get("qr_fit_method", "original")) for rod in rod_entries
+    }
+    print(
+        "Qr rod center adjustment before integration: "
+        + ", ".join(
+            f"HK={int(rod['m'])}: {float(rod.get('qr_original', rod['qr'])):.5g}->{float(rod['qr']):.5g} "
+            f"({int(rod.get('qr_fit_count', 0))}/{int(rod.get('qr_fit_sample_count', 0))})"
+            for rod in rod_entries
+        )
+    )
 
 
 def specular_window_for_background(bg: dict[str, object]) -> tuple[float, float, float, float]:
@@ -9133,6 +9777,18 @@ profile_rows = []
 marker_rows = []
 region_overlays = []
 profile_failures = []
+if qr_rod_pre_editor_cache_hit:
+    rod_profile_table_cached = pd.DataFrame(
+        qr_rod_pre_editor_stage["rod_profile_table"]
+    ).copy()
+    marker_table_cached = pd.DataFrame(qr_rod_pre_editor_stage["marker_table"]).copy()
+    profile_rows = [rod_profile_table_cached]
+    marker_rows = marker_table_cached.to_dict("records")
+    region_overlays = list(qr_rod_pre_editor_stage.get("region_overlays", []) or [])
+    profile_failures = list(qr_rod_pre_editor_stage.get("profile_failures", []) or [])
+    specular_l_marker_table = pd.DataFrame(
+        qr_rod_pre_editor_stage.get("specular_l_marker_table", pd.DataFrame())
+    ).copy()
 specular_rod_entry = {
     "key": ("q_group", "primary", 0, "qz_rod"),
     "source": "primary",
@@ -9140,28 +9796,34 @@ specular_rod_entry = {
     "qr": 0.0,
 }
 specular_qz_values = profile_qz_map[specular_region_mask & np.isfinite(profile_qz_map)]
-if specular_qz_values.size >= 2:
-    specular_edges = np.linspace(
-        float(np.nanmin(specular_qz_values)),
-        float(np.nanmax(specular_qz_values)),
-        ROD_PROFILE_QZ_BINS + 1,
-        dtype=np.float64,
-    )
-    profile_rows.append(
-        profile_from_full_mask(
-            profile_bg,
-            specular_rod_entry,
-            branch_name="qz",
-            branch_label=rf"(0,L) strip, ${specular_theta_min_deg:.1f}^\circ<2\theta<{specular_theta_max_deg:.1f}^\circ$",
-            qz_edges=specular_edges,
-            mask=specular_region_mask,
-            qz_map=profile_qz_map,
+if not qr_rod_pre_editor_cache_hit:
+    if specular_qz_values.size >= 2:
+        specular_edges = np.linspace(
+            float(np.nanmin(specular_qz_values)),
+            float(np.nanmax(specular_qz_values)),
+            ROD_PROFILE_QZ_BINS + 1,
+            dtype=np.float64,
         )
-    )
-else:
-    profile_failures.append(
-        (ROD_PROFILE_TILT_DEG, 0.0, "(0,L)", "no caked qz values in dynamic specular window")
-    )
+        profile_rows.append(
+            profile_from_full_mask(
+                profile_bg,
+                specular_rod_entry,
+                branch_name="qz",
+                branch_label=rf"(0,L) strip, ${specular_theta_min_deg:.1f}^\circ<2\theta<{specular_theta_max_deg:.1f}^\circ$",
+                qz_edges=specular_edges,
+                mask=specular_region_mask,
+                qz_map=profile_qz_map,
+            )
+        )
+    else:
+        profile_failures.append(
+            (
+                ROD_PROFILE_TILT_DEG,
+                0.0,
+                "(0,L)",
+                "no caked qz values in dynamic specular window",
+            )
+        )
 
 
 def specular_l_marker_rows_for_background(
@@ -9206,7 +9868,7 @@ def specular_l_marker_rows_for_background(
     return pd.DataFrame(rows)
 
 
-for rod in rod_entries:
+for rod in ([] if qr_rod_pre_editor_cache_hit else rod_entries):
     samples = gui_qr_cylinder_overlay.project_selected_qr_rod_caked_samples(
         selected_entry=rod,
         config=profile_bg["qr_overlay_config"],
@@ -9346,8 +10008,33 @@ if rod_profile_table.empty:
     raise RuntimeError(
         f"no positive-Qz {ROD_PROFILE_TILT_LABEL} deg Qr rod profiles were generated"
     )
-specular_l_marker_table = specular_l_marker_rows_for_background(profile_bg, profile_qz_map)
+if not qr_rod_pre_editor_cache_hit:
+    specular_l_marker_table = specular_l_marker_rows_for_background(profile_bg, profile_qz_map)
 marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
+if not qr_rod_pre_editor_cache_hit:
+    pre_editor_cache = pre_editor_cache_with_stage(
+        pre_editor_cache,
+        "qr_rod_pre_editor",
+        PRE_EDITOR_QR_ROD_STAGE_SIGNATURE,
+        {
+            "rod_profile_table": rod_profile_table,
+            "marker_table": marker_table,
+            "region_overlays": region_overlays,
+            "profile_failures": profile_failures,
+            "specular_l_marker_table": specular_l_marker_table,
+            "rod_entries": [dict(rod) for rod in rod_entries],
+            "rod_qspace_calibration": dict(rod_qspace_calibration),
+            "active_rejected_rod_keys": [
+                list(key)
+                for key in sorted(
+                    ACTIVE_REJECTED_ROD_KEYS, key=lambda item: tuple(str(part) for part in item)
+                )
+            ],
+            "rod_profile_max_two_theta_deg": float(ROD_PROFILE_MAX_TWO_THETA_DEG),
+        },
+    )
+    write_pre_editor_cache(PRE_EDITOR_CACHE_PATH, PRE_EDITOR_CACHE_KEY, pre_editor_cache)
+    print(f"saved pre-editor Qr-rod profile cache={PRE_EDITOR_CACHE_PATH}")
 QR_ROD_PROFILE_CACHE_PATH = qr_rod_profile_cache_path(OUT_DIR, STATE_PATH)
 if _truthy_setting(
     "RESET_QR_ROD_PROFILE_CACHE_OVERRIDE", "RA_SIM_RESET_QR_ROD_PROFILE_CACHE", False
@@ -9401,6 +10088,19 @@ else:
     )
     write_qr_rod_profile_cache(QR_ROD_PROFILE_CACHE_PATH, STATE_PATH, qr_rod_profile_cache)
     print(f"saved final Qr-rod fit cache={QR_ROD_PROFILE_CACHE_PATH}")
+marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
+specular_l_marker_table = specular_export_marker_table_from_final_markers(
+    marker_table,
+    specular_l_marker_table,
+    qz_map=profile_qz_map,
+    region_mask=specular_region_mask,
+    theta_axis=theta_region_axis,
+    phi_axis=phi_region_axis,
+)
+if not marker_table.empty and {"m", "branch"}.issubset(marker_table.columns):
+    marker_m = pd.to_numeric(marker_table["m"], errors="coerce").to_numpy(dtype=np.float64)
+    marker_branch = marker_table["branch"].astype(str).to_numpy(dtype=object)
+    marker_table = marker_table.loc[~((marker_m == 0.0) & (marker_branch == "qz"))].copy()
 marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
 print(
     f"rod-profile joint fits: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} workers={ROD_PROFILE_FIT_WORKERS} gpu={GPU_ACCELERATION_ENABLED}"
@@ -9809,7 +10509,28 @@ def plot_tail_component_distributions(
         )
 
 
-plot_rod_entries = rod_entries + [specular_rod_entry]
+drawable_profile_keys = drawable_rod_profile_keys(rod_profile_table, plot_marker_table)
+plot_rod_entries = [
+    rod
+    for rod in rod_entries
+    if any((int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows)
+]
+skipped_empty_plot_hk = [
+    int(rod["m"])
+    for rod in rod_entries
+    if not any(
+        (int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows
+    )
+]
+if (0, "qz") in drawable_profile_keys:
+    plot_rod_entries.append(specular_rod_entry)
+if skipped_empty_plot_hk:
+    print(
+        "skipped empty Qr-rod final figure rows: "
+        + ", ".join(f"HK={value}" for value in skipped_empty_plot_hk)
+    )
+if not plot_rod_entries:
+    raise RuntimeError("no drawable Qr-rod profile rows are available for the final figure")
 fig = plt.figure(
     figsize=(JOURNAL_FULL_WIDTH_IN, max(2.05 * len(plot_rod_entries), 5.0)), constrained_layout=True
 )

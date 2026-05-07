@@ -50,10 +50,33 @@ Retention modes:
 
 The parallel background peak-fit diagnostic script
 `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
-uses a final Qr-rod profile cache in the diagnostic output directory.
+uses pre-editor and final Qr-rod profile caches in the diagnostic output
+directory.
+
+On Windows, direct `.py` execution with the default `process` backend now
+relaunches through `scripts/diagnostics/run_all_background_peak_fits.py` with
+`RA_SIM_ALL_BACKGROUND_PROCESS_GUARD=1` before expensive fitting begins. The
+child run should report `process_guard=True`; uncached peak fitting should
+report `backend=process_pool` with multiple PIDs. Use
+`BACKGROUND_FIT_BACKEND=thread` or `BACKGROUND_FIT_BACKEND=serial` to opt out
+of that relaunch for debugging.
 
 Current status as of 2026-05-07:
 
+- pre-editor cache filename:
+  `<state-stem>_pre_qr_rod_marker_editor_cache.pkl`
+- pre-editor cache format: pickle envelope with schema and full input
+  signature validation
+- pre-editor cache identity: GUI-state filename plus background filenames,
+  incident-angle mapping, backend orientation, detector geometry, fit settings,
+  and peak-job signatures
+- sample/output name overrides are intentionally excluded from pre-editor cache
+  identity, so changing only `RA_SIM_ALL_BACKGROUND_SAMPLE_NAME` can reuse the
+  same fitted data
+- pre-editor reset control: `RA_SIM_RESET_PRE_EDITOR_CACHE=1`
+- pre-editor cached stages: global background peak fits, local line-profile
+  fits, and Qr-rod profile/marker-table construction before the marker editor
+  opens
 - cache filename: `<state-stem>_qr_rod_profile_cache.pkl`
 - cache format: pickle envelope with schema and state cache-key validation
 - cache identity: GUI-state filename, not the absolute state path, so reruns of
@@ -67,6 +90,10 @@ Current status as of 2026-05-07:
   `final_rod_component_table`, `final_peak_edit_cache_key`, and marker columns
   `m`, `branch`, `qz_marker`, `display_l`, and either `fit_l` or `l`;
   `marker_title` is included when a final-figure label was edited
+- after the final cache lookup, the diagnostic rebuilds the exported `HK=0`
+  marker table from the post-editor marker rows so manually moved specular
+  markers drive the marker CSV, detector selected-region figure, and
+  `hk0_l3_star.png`
 - final-fit cache keys include `fit_signature=joint_qz_labeled_marker_fit_v2`
   so older cached joint fits that could drop weak labeled markers, such as
   `00L`/`006`, are recomputed
@@ -89,6 +116,12 @@ JSON marker tables through `RA_SIM_QR_ROD_PEAK_EDITS`; accepted popup edits are
 hashed into the final-fit cache key so stale fitted profiles are not reused.
 No-edit runs also require the current final-fit signature before a cached joint
 fit is reused.
+On a matching pre-editor cache hit, the diagnostic still prepares the current
+background images and rewrites downstream artifacts, but it skips fitting and
+profile-integration stages that were already completed for the same state and
+input filenames. This gets repeated runs to the Qr-rod marker editor faster
+without bypassing the editor or reusing a final joint Qz fit across changed
+manual marker positions.
 The editor input includes the dynamically projected `HK=0` / `00L` specular
 markers before cache lookup and fitting, so the specular rod peaks can be
 organized with the non-specular Qr rod peaks. Select a rod panel in the editor
@@ -105,10 +138,11 @@ drawn above and to the right of the marked peak with a leader arrow pointing
 back to the peak, and generated fallback L labels are rounded to integers.
 
 On Windows, direct top-level execution of the generated `.py` diagnostic
-normalizes `process` and `auto` fit backend requests to `thread`. This avoids
-`multiprocessing.spawn` re-importing the notebook-style script as `__mp_main__`
-and rerunning the whole diagnostic inside worker children. Use the guarded
-runner for full CPU process parallelism:
+relaunches `process` and `auto` fit backend requests through the guarded runner
+before expensive fitting begins. This avoids `multiprocessing.spawn`
+re-importing the notebook-style script as `__mp_main__` and rerunning the whole
+diagnostic inside worker children while still using full CPU process
+parallelism. The equivalent explicit guarded-runner command is:
 
 ```powershell
 python scripts/diagnostics/run_all_background_peak_fits.py --notebook scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py --fit-backend process --fit-workers 28 --process-numba-threads 1 "$env:USERPROFILE\.local\share\ra_sim\Bi2Se3.json"
@@ -116,7 +150,9 @@ python scripts/diagnostics/run_all_background_peak_fits.py --notebook scripts/di
 
 The runner accepts either a notebook or a `.py` diagnostic through the existing
 `--notebook` compatibility flag and sets the internal process guard for the
-duration of the run. A 2026-05-07 Bi2Se3 guarded run reported
+duration of the run. Use `BACKGROUND_FIT_BACKEND=thread` or
+`BACKGROUND_FIT_BACKEND=serial` to skip the relaunch for debugging. A
+2026-05-07 Bi2Se3 guarded run reported
 `backend=process_pool`, `pids=28`, and `global peak fitting elapsed=22.83s`,
 compared with the direct Windows thread-path report of `backend=thread_pool`,
 `pids=1`, and `elapsed=220.07s`.

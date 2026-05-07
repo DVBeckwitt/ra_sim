@@ -79,11 +79,27 @@ to make the Qr rod detector and integration figures source-consistent:
 - The guarded runner now accepts the generated `.py` diagnostic through the
   existing `--notebook` flag and sets the internal process guard needed for
   Windows process-pool fitting.
-- The generated `.py` diagnostic allows the process backend only when that
-  guard is present. Direct Windows execution still falls back to threads and
-  prints the guarded-runner command.
+- Direct Windows execution of the generated `.py` diagnostic now relaunches
+  itself through the guarded runner when the requested backend is `process` or
+  `auto`, so the default command uses process-pool fitting instead of silently
+  falling back to threads. Explicit `BACKGROUND_FIT_BACKEND=thread` and
+  `BACKGROUND_FIT_BACKEND=serial` remain direct opt-outs.
 - Runtime logging now includes the process guard state next to worker and
   Numba-thread settings.
+- The generated `.py` diagnostic now writes a pre-editor cache keyed by the
+  GUI-state filename, background filenames, geometry, orientation, fit settings,
+  and peak-job signature. Matching reruns reuse completed global peak fits,
+  line-profile fits, and Qr-rod profile/marker-table construction before the
+  manual marker editor opens.
+- Post-editor Qr-rod marker export now preserves manually added rows even when
+  they inherit duplicate `hkl` labels from an existing marker. The final
+  specular `HK=0` marker table is rebuilt from the post-editor marker table,
+  so edited Qz positions propagate into the marker CSV, detector
+  selected-region figure, and `hk0_l3_star.png` crop.
+- Final Qr-rod profile figure row selection now filters rods through the
+  drawable profile data and marker-derived positive-L mapping before allocating
+  subplot rows. Empty rods, such as the observed Bi2Te3 `HK=7` row, are skipped
+  instead of producing blank figure rows.
 
 ## Status
 
@@ -103,6 +119,11 @@ Bug/error status:
   labels but absent from the fitted components.
 - Missing `HK=0` / `00L` markers in the editor is fixed by merging specular
   marker rows into the editable marker table before the editor opens.
+- Stale `HK=0` marker projection in exported images is fixed by rebuilding
+  specular detector angles from the final post-editor Qz positions before the
+  detector and L3 star images are written.
+- Empty final Qr-rod profile rows are fixed by excluding rod entries whose
+  branches have no drawable positive-L profile data.
 - The Qr-rod marker-label helper ordering bug is fixed; profile annotation and
   redraw paths no longer call `rod_marker_annotation_label(...)` before it is
   defined.
@@ -142,6 +163,16 @@ Feature status:
   A Bi2Se3 run on 2026-05-07 reported `backend=process_pool`, `pids=28`, and
   `global peak fitting elapsed=22.83s`, versus the direct-thread report of
   `backend=thread_pool`, `pids=1`, and `elapsed=220.07s`.
+- Direct Windows `.py` execution now enters that guarded runner path
+  automatically for the default process backend, while preserving the existing
+  thread/serial opt-outs for debugging.
+- Pre-editor cache reuse is implemented in the diagnostic `.py`. Use
+  `RA_SIM_RESET_PRE_EDITOR_CACHE=1` to force recomputation of cached global
+  peak fits, line-profile fits, and Qr-rod pre-marker profile data. The cache
+  does not bypass the marker editor or reuse final joint Qz fits across changed
+  marker edits. Sample/output label overrides are excluded from this cache
+  identity, so changing only the output stem from `Bi2Se3` to `Bi2Te3` can reuse
+  the same cached fit data.
 - The helper interface is internal to the diagnostic script; no CLI, config,
   saved-state, or package API surface changed.
 - No dead Qr-rod helper or cache code was removed in this slice:
@@ -154,6 +185,9 @@ Passing checks:
 
 - `.py` parse and compile.
 - Guarded runner `.py` source execution and Windows process-backend guard tests.
+- Direct Windows `.py` process-backend re-entry coverage verifies default
+  process/auto runs launch the guarded runner before preparation or backend
+  normalization, while explicit thread/serial backends remain direct opt-outs.
 - Targeted `hk0_l3_star.png` helper and wiring coverage for crop bounds,
   edge clipping, invalid inputs, `HK=0`, `L=3` marker selection, synthetic PNG
   save, detector-style color/log rendering, and diagnostic call-site wiring.
@@ -174,14 +208,22 @@ Passing checks:
   and
   `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_gaussian_core_lorentzian_tail_model`
   both pass.
+- Pre-editor cache regression coverage verifies filename/signature identity,
+  pickle-envelope stage round trip, stage validation, reset behavior, and cache
+  lookup ordering before the expensive fit/profile/editor stages.
+- Post-editor marker export regression coverage verifies duplicate-HKL manual
+  rows are retained and edited `HK=0` Qz markers are converted to the updated
+  detector theta/phi used by downstream exported images.
+- Final Qr-rod profile row regression coverage verifies empty rods such as the
+  observed Bi2Te3 `HK=7` case are excluded before subplot rows are allocated.
 
 Known validation limits:
 
-- Full `tests/test_background_peak_fits_notebook.py` remains red in this
-  checkout because the non-parallel notebook expectations/failure path are
-  unrelated to the patched ignored notebook.
-- The L3 star crop and interactive Qr-rod marker editor still need a real
-  Bi2Se3 script run after this slice.
+- Full `tests/test_background_peak_fits_notebook.py` was not rerun in this
+  final packaging slice; targeted diagnostic slices and
+  `python -m ra_sim.dev check` passed.
+- The L3 star crop, empty-row suppression, cache reuse, and interactive Qr-rod
+  marker editor still need a real Bi2Se3/Bi2Te3 script run after this slice.
 - Visual acceptance still needs manual script-output review: grayscale detector
   background, HK labels near low-L rod bases, central `HK=0` Delta-Qr band,
   the `hk0_l3_star.png` crop fully containing the L=3 intensity, the Qr-rod

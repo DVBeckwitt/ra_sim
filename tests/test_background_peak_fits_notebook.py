@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import pickle
 import re
 from pathlib import Path
 from textwrap import dedent
@@ -104,6 +105,8 @@ def _script_functions(*names: str) -> dict[str, object]:
         "np": np,
         "pd": pd,
         "Path": Path,
+        "pickle": pickle,
+        "re": re,
         "plt": plt,
         "LogNorm": LogNorm,
         "JOURNAL_DETECTOR_CMAP": "magma",
@@ -125,6 +128,11 @@ def _script_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_NONLINEAR_MAX_NFEV": 1200,
         "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
         "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_v2",
+        "PRE_EDITOR_CACHE_SCHEMA": "ra_sim.background_pre_editor_cache.v1",
+        "PRE_EDITOR_CACHE_SIGNATURE": "pre_qr_rod_marker_editor_inputs_v1",
+        "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v1",
+        "PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE": "profile_fit_cache_v1",
+        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_v1",
     }
     exec(compile(module, str(PARALLEL_SCRIPT_PATH), "exec"), namespace)
     return namespace
@@ -427,6 +435,96 @@ def test_parallel_script_windows_process_backend_requires_runner_guard() -> None
     )
 
 
+def test_parallel_script_direct_windows_process_backend_reenters_guarded_runner() -> None:
+    namespace = _script_functions("should_reenter_guarded_process_runner")
+    should_reenter = namespace["should_reenter_guarded_process_runner"]
+
+    assert should_reenter(
+        "process",
+        workers=28,
+        platform_name="nt",
+        process_guard_enabled=False,
+    )
+    assert should_reenter(
+        "auto",
+        workers=28,
+        platform_name="nt",
+        process_guard_enabled=False,
+    )
+    assert not should_reenter(
+        "process",
+        workers=28,
+        platform_name="nt",
+        process_guard_enabled=True,
+    )
+    assert not should_reenter(
+        "thread",
+        workers=28,
+        platform_name="nt",
+        process_guard_enabled=False,
+    )
+    assert not should_reenter(
+        "process",
+        workers=1,
+        platform_name="nt",
+        process_guard_enabled=False,
+    )
+    assert not should_reenter(
+        "process",
+        workers=28,
+        platform_name="posix",
+        process_guard_enabled=False,
+    )
+
+
+def test_parallel_script_guarded_process_runner_command_forwards_run_contract() -> None:
+    namespace = _script_functions("guarded_process_runner_command")
+    command_for_runner = namespace["guarded_process_runner_command"]
+
+    command = command_for_runner(
+        python_executable=r"C:\Python313\python.exe",
+        runner_path=r"C:\repo\scripts\diagnostics\run_all_background_peak_fits.py",
+        diagnostic_path=r"C:\repo\scripts\diagnostics\all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py",
+        state_path=r"C:\Users\Kenpo\.local\share\ra_sim\Bi2Se3.json",
+        run_name="Bi2Se3",
+        fit_workers=28,
+        numba_threads=24,
+        process_numba_threads=1,
+    )
+
+    assert command == [
+        r"C:\Python313\python.exe",
+        r"C:\repo\scripts\diagnostics\run_all_background_peak_fits.py",
+        "--notebook",
+        r"C:\repo\scripts\diagnostics\all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py",
+        "--run-name",
+        "Bi2Se3",
+        "--fit-backend",
+        "process",
+        "--fit-workers",
+        "28",
+        "--numba-threads",
+        "24",
+        "--process-numba-threads",
+        "1",
+        r"C:\Users\Kenpo\.local\share\ra_sim\Bi2Se3.json",
+    ]
+
+
+def test_parallel_script_direct_process_reentry_is_before_backend_normalization_and_prep() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    reentry_call = source.index("if should_reenter_guarded_process_runner(")
+    normalize_call = source.index("FIT_BACKEND = normalize_fit_backend(")
+    prep_start = source.index("prep_total_start = time.perf_counter()")
+
+    assert reentry_call < normalize_call < prep_start
+    assert "direct Windows process backend: launching guarded runner" in source
+    assert "subprocess.run(" in source
+
+
 def test_parallel_script_hk0_l3_star_crop_bounds_contains_beam_and_peak() -> None:
     namespace = _script_functions("hk0_star_crop_bounds")
     crop_bounds = namespace["hk0_star_crop_bounds"]
@@ -601,6 +699,156 @@ def test_parallel_script_qr_rod_marker_table_includes_specular_hk0_markers() -> 
     assert merged[merged["m"] == 1]["hkl"].tolist() == ["-1,0,2"]
 
 
+def test_parallel_script_qr_rod_marker_table_preserves_manual_duplicate_hkl_rows() -> None:
+    namespace = _script_functions("marker_table_with_specular_l_markers")
+    include_specular = namespace["marker_table_with_specular_l_markers"]
+    markers = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "hkl": "0,0,3", "qz_marker": 1.0},
+            {"m": 0, "branch": "qz", "hkl": "0,0,3", "qz_marker": 1.4},
+        ]
+    )
+    specular = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "hkl": "0,0,3", "qz_marker": 1.0},
+            {"m": 0, "branch": "qz", "hkl": "0,0,6", "qz_marker": 2.0},
+        ]
+    )
+
+    merged = include_specular(markers, specular)
+
+    assert merged[merged["m"] == 0]["qz_marker"].tolist() == [1.0, 1.4, 2.0]
+
+
+def test_parallel_script_final_rod_profile_entries_exclude_empty_hk_rows() -> None:
+    namespace = _script_functions(
+        "qz_l_linear_coeff_from_marker_rows",
+        "drawable_rod_profile_keys",
+    )
+    drawable_keys = namespace["drawable_rod_profile_keys"]
+    profile_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_center": 1.0, "pixel_count": 5, "background_density": 2.0, "joint_peak_density": 0.5},
+            {"m": 1, "branch": "+", "qz_center": 1.5, "pixel_count": 6, "background_density": 2.5, "joint_peak_density": 0.6},
+            {"m": 7, "branch": "+", "qz_center": 1.0, "pixel_count": 0, "background_density": np.nan, "joint_peak_density": np.nan},
+            {"m": 7, "branch": "-", "qz_center": 1.4, "pixel_count": 0, "background_density": np.nan, "joint_peak_density": np.nan},
+            {"m": 3, "branch": "-", "qz_center": 1.0, "pixel_count": 5, "background_density": 1.0, "joint_peak_density": 0.2},
+            {"m": 3, "branch": "-", "qz_center": 1.5, "pixel_count": 5, "background_density": 1.2, "joint_peak_density": 0.3},
+            {"m": 0, "branch": "qz", "qz_center": 0.8, "pixel_count": 4, "background_density": 3.0, "joint_peak_density": 0.7},
+            {"m": 0, "branch": "qz", "qz_center": 1.1, "pixel_count": 4, "background_density": 3.2, "joint_peak_density": 0.8},
+        ]
+    )
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0},
+            {"m": 1, "branch": "+", "qz_marker": 1.5, "fit_l": 3.0},
+            {"m": 3, "branch": "-", "qz_marker": 1.0, "fit_l": -2.0},
+            {"m": 3, "branch": "-", "qz_marker": 1.5, "fit_l": -1.0},
+            {"m": 0, "branch": "qz", "qz_marker": 0.8, "fit_l": 3.0},
+            {"m": 0, "branch": "qz", "qz_marker": 1.1, "fit_l": 4.0},
+        ]
+    )
+
+    assert drawable_keys(profile_table, marker_table) == {(0, "qz"), (1, "+")}
+
+
+def test_parallel_script_final_rod_profile_figure_filters_empty_entries() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    helper_def = source.index("def drawable_rod_profile_keys(")
+    plot_keys = source.index("drawable_profile_keys = drawable_rod_profile_keys(", helper_def)
+    plot_entries = source.index("plot_rod_entries =", plot_keys)
+    figure = source.index("fig = plt.figure(", plot_entries)
+
+    assert helper_def < plot_keys < plot_entries < figure
+    assert "plot_rod_entries = rod_entries + [specular_rod_entry]" not in source
+
+
+def test_parallel_script_specular_export_markers_follow_edited_qz_positions() -> None:
+    namespace = _script_functions("specular_export_marker_table_from_final_markers")
+    export_markers = namespace["specular_export_marker_table_from_final_markers"]
+    final_markers = pd.DataFrame(
+        [
+            {
+                "m": 0,
+                "branch": "qz",
+                "hkl": "0,0,3",
+                "qz_marker": 2.0,
+                "fit_l": 3.0,
+                "display_l": 3.0,
+                "refined_two_theta_deg": 10.0,
+                "refined_phi_deg": -5.0,
+                "marker_title": "L=3 moved",
+            }
+        ]
+    )
+    original_specular = pd.DataFrame(
+        [
+            {
+                "m": 0,
+                "branch": "qz",
+                "hkl": "0,0,3",
+                "qz_marker": 1.0,
+                "fit_l": 3.0,
+                "display_l": 3.0,
+                "refined_two_theta_deg": 10.0,
+                "refined_phi_deg": -5.0,
+            }
+        ]
+    )
+    qz_map = np.asarray(
+        [
+            [0.5, 1.0, 1.5],
+            [0.7, 1.3, 2.0],
+        ],
+        dtype=np.float64,
+    )
+    region_mask = np.ones(qz_map.shape, dtype=bool)
+    theta_axis = np.asarray([10.0, 20.0, 30.0], dtype=np.float64)
+    phi_axis = np.asarray([-5.0, 5.0], dtype=np.float64)
+
+    exported = export_markers(
+        final_markers,
+        original_specular,
+        qz_map=qz_map,
+        region_mask=region_mask,
+        theta_axis=theta_axis,
+        phi_axis=phi_axis,
+    )
+
+    row = exported.iloc[0]
+    assert row["qz_marker"] == pytest.approx(2.0)
+    assert row["refined_two_theta_deg"] == pytest.approx(30.0)
+    assert row["refined_phi_deg"] == pytest.approx(5.0)
+    assert row["marker_title"] == "L=3 moved"
+
+
+def test_parallel_script_specular_exports_are_rebuilt_from_final_markers_before_saving() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_cache_marker_merge = source.index(
+        "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
+        source.index("saved final Qr-rod fit cache="),
+    )
+    rebuild_call = source.index(
+        "specular_l_marker_table = specular_export_marker_table_from_final_markers(",
+        final_cache_marker_merge,
+    )
+    replace_final_markers = source.index(
+        "marker_table = marker_table.loc[~((marker_m == 0.0) & (marker_branch == \"qz\"))].copy()",
+        rebuild_call,
+    )
+    marker_csv = source.index("marker_table.to_csv(marker_csv", replace_final_markers)
+    detector_export = source.index("specular_detector_qz_values = (", marker_csv)
+    star_export = source.index("hk0_l3_star_center = hk0_star_marker_center(", detector_export)
+
+    assert final_cache_marker_merge < rebuild_call < replace_final_markers < marker_csv
+    assert marker_csv < detector_export < star_export
+
+
 def test_parallel_script_qr_rod_editor_qz_l_axis_coefficients() -> None:
     namespace = _script_functions("qz_l_linear_coeff_from_marker_rows")
     qz_l_coeff = namespace["qz_l_linear_coeff_from_marker_rows"]
@@ -699,6 +947,109 @@ def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
         payload,
         {"mode": "last_cached", "fit_signature": "joint_qz_labeled_marker_fit_v2"},
     )
+
+
+def test_parallel_script_pre_editor_cache_key_uses_state_filename_and_inputs() -> None:
+    namespace = _script_functions(
+        "_cache_normalize_value",
+        "pre_editor_cache_key",
+    )
+    cache_key = namespace["pre_editor_cache_key"]
+    inputs = {
+        "background_files": [r"C:\data\Bi2Se3_5m_5d.osc"],
+        "fit_jobs": [{"background_index": 0, "label": "0,0,6"}],
+        "fit_settings": {"fit_model": "model-a", "workers": 28},
+    }
+
+    key_a = cache_key(r"C:\one\Bi2Se3.json", input_signature=inputs)
+    key_b = cache_key(r"D:\other\Bi2Se3.json", input_signature=inputs)
+    changed_inputs = dict(inputs)
+    changed_inputs["background_files"] = [r"C:\data\Bi2Te3_5m_5d.osc"]
+    key_c = cache_key(r"C:\one\Bi2Se3.json", input_signature=changed_inputs)
+
+    assert key_a == key_b
+    assert key_a["state_name"] == "Bi2Se3.json"
+    assert key_a["signature"] == "pre_qr_rod_marker_editor_inputs_v1"
+    assert key_a["input_sha256"] != key_c["input_sha256"]
+
+
+def test_parallel_script_pre_editor_cache_round_trips_stages(tmp_path: Path) -> None:
+    namespace = _script_functions(
+        "_cache_normalize_value",
+        "_safe_run_name",
+        "pre_editor_cache_path",
+        "pre_editor_cache_key",
+        "load_pre_editor_cache",
+        "write_pre_editor_cache",
+        "reset_pre_editor_cache",
+        "pre_editor_cache_get_stage",
+        "pre_editor_cache_with_stage",
+        "background_peak_fit_stage_is_valid",
+        "profile_fit_stage_is_valid",
+        "qr_rod_pre_editor_stage_is_valid",
+    )
+    path_for_cache = namespace["pre_editor_cache_path"]
+    cache_key = namespace["pre_editor_cache_key"]
+    load_cache = namespace["load_pre_editor_cache"]
+    write_cache = namespace["write_pre_editor_cache"]
+    reset_cache = namespace["reset_pre_editor_cache"]
+    get_stage = namespace["pre_editor_cache_get_stage"]
+    with_stage = namespace["pre_editor_cache_with_stage"]
+
+    cache_path = path_for_cache(tmp_path, r"C:\states\Bi2Se3.json")
+    key = cache_key("Bi2Se3.json", input_signature={"background_files": ["a.osc"]})
+    payload: dict[str, object] = {}
+    payload = with_stage(
+        payload,
+        "background_peak_fits",
+        "background_peak_fit_results_v1",
+        {
+            "fit_job_count": 1,
+            "fit_results_by_bg": {0: [{"label": "0,0,6", "params": np.array([1.0])}]},
+            "fit_failures_by_bg": {0: []},
+        },
+    )
+    payload = with_stage(
+        payload,
+        "profile_fits",
+        "profile_fit_cache_v1",
+        {"profile_target_count": 1, "profile_fit_records": [{"accepted": True}]},
+    )
+    payload = with_stage(
+        payload,
+        "qr_rod_pre_editor",
+        "qr_rod_pre_marker_profiles_v1",
+        {
+            "rod_profile_table": pd.DataFrame({"qz_center": [1.0], "background_density": [2.0]}),
+            "marker_table": pd.DataFrame({"m": [0], "branch": ["qz"], "qz_marker": [1.0]}),
+            "region_overlays": [],
+            "rod_entries": [{"m": 0, "qr": 0.0}],
+            "rod_qspace_calibration": {"success": True},
+            "rod_profile_max_two_theta_deg": 70.3,
+        },
+    )
+
+    write_cache(cache_path, key, payload)
+    loaded = load_cache(cache_path, key)
+
+    assert loaded is not None
+    assert namespace["background_peak_fit_stage_is_valid"](
+        get_stage(loaded, "background_peak_fits", "background_peak_fit_results_v1"),
+        expected_fit_count=1,
+    )
+    assert namespace["profile_fit_stage_is_valid"](
+        get_stage(loaded, "profile_fits", "profile_fit_cache_v1"),
+        expected_profile_count=1,
+    )
+    assert namespace["qr_rod_pre_editor_stage_is_valid"](
+        get_stage(loaded, "qr_rod_pre_editor", "qr_rod_pre_marker_profiles_v1")
+    )
+    assert load_cache(
+        cache_path,
+        cache_key("Bi2Se3.json", input_signature={"background_files": ["b.osc"]}),
+    ) is None
+    assert reset_cache(cache_path)
+    assert not cache_path.exists()
 
 
 def test_parallel_script_qr_rod_peak_edit_runtime_mode_respects_headless() -> None:
@@ -808,6 +1159,34 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() ->
     assert "TextBox(" in source
     assert "marker_title" in source
     assert 'getattr(event, "inaxes", None) is getattr(box, "ax", None)' in source
+
+
+def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    background_cache_lookup = source.index(
+        '"background_peak_fits", PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE'
+    )
+    process_fit_call = source.index("_run_process_peak_jobs()", background_cache_lookup)
+    profile_cache_lookup = source.index('"profile_fits", PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE')
+    profile_fit_call = source.index("_fit_profile_cache_item(bg, item)", profile_cache_lookup)
+    qr_rod_pre_cache_lookup = source.index(
+        '"qr_rod_pre_editor", PRE_EDITOR_QR_ROD_STAGE_SIGNATURE'
+    )
+    marker_editor_call = source.index("edit_qr_rod_peak_markers(", qr_rod_pre_cache_lookup)
+
+    assert background_cache_lookup < process_fit_call
+    assert profile_cache_lookup < profile_fit_call
+    assert qr_rod_pre_cache_lookup < marker_editor_call
+    assert "RA_SIM_RESET_PRE_EDITOR_CACHE" in source
+    signature_block = source[
+        source.index("PRE_EDITOR_CACHE_INPUT_SIGNATURE = {") : source.index(
+            "PRE_EDITOR_CACHE_KEY = pre_editor_cache_key("
+        )
+    ]
+    assert '"sample_name": SAMPLE_NAME' not in signature_block
 
 
 def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
