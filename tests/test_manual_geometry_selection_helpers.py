@@ -2209,6 +2209,90 @@ def test_geometry_manual_pair_entry_from_candidate_rejects_caked_alias_as_detect
     assert "refined_sim_caked_y" not in entry
 
 
+def test_pair_entry_does_not_use_background_caked_xy_as_simulated_fit_caked_point() -> None:
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "-1,0,10",
+            "hkl": (-1, 0, 10),
+            "q_group_key": ("q_group", "primary", -1, 0, 10),
+            "caked_x": 113.5,
+            "caked_y": -12.5,
+            "background_two_theta_deg": 113.5,
+            "background_phi_deg": -12.5,
+            "detector_x": 997.0,
+            "detector_y": 996.0,
+        },
+        peak_col=997.0,
+        peak_row=996.0,
+        detector_col=997.0,
+        detector_row=996.0,
+        group_key=("q_group", "primary", -1, 0, 10),
+    )
+
+    assert entry is not None
+    assert "refined_sim_caked_x" not in entry
+    assert "refined_sim_caked_y" not in entry
+    assert "sim_refined_caked_deg" not in entry
+    assert "sim_caked_display" not in entry
+
+
+def test_pair_entry_allows_bare_caked_xy_for_explicit_simulated_caked_projection_candidate() -> (
+    None
+):
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "-1,0,10",
+            "hkl": (-1, 0, 10),
+            "q_group_key": ("q_group", "primary", -1, 0, 10),
+            "_caked_qr_projection_cache": True,
+            "display_frame": "caked_display",
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "source_branch_index": 0,
+            "caked_x": 40.176704,
+            "caked_y": 36.25,
+        },
+        peak_col=997.0,
+        peak_row=996.0,
+        detector_col=997.0,
+        detector_row=996.0,
+        group_key=("q_group", "primary", -1, 0, 10),
+    )
+
+    assert entry is not None
+    assert entry["sim_refined_caked_deg"] == (40.176704, 36.25)
+    assert entry["sim_caked_display"] == (40.176704, 36.25)
+
+
+def test_pair_entry_explicit_simulated_caked_fields_beat_bare_caked_xy() -> None:
+    entry = mg.geometry_manual_pair_entry_from_candidate(
+        {
+            "label": "-1,0,10",
+            "hkl": (-1, 0, 10),
+            "q_group_key": ("q_group", "primary", -1, 0, 10),
+            "_caked_qr_projection_cache": True,
+            "display_frame": "caked_display",
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "source_branch_index": 0,
+            "sim_refined_caked_deg": (40.176704, 36.25),
+            "caked_x": 999.0,
+            "caked_y": -999.0,
+        },
+        peak_col=997.0,
+        peak_row=996.0,
+        detector_col=997.0,
+        detector_row=996.0,
+        group_key=("q_group", "primary", -1, 0, 10),
+    )
+
+    assert entry is not None
+    assert entry["sim_refined_caked_deg"] == (40.176704, 36.25)
+    assert entry["sim_caked_display"] == (40.176704, 36.25)
+    assert entry["refined_sim_caked_x"] == 40.176704
+    assert entry["refined_sim_caked_y"] == 36.25
+
+
 def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_state() -> None:
     events: list[tuple[object, ...]] = []
     status_texts: list[str] = []
@@ -11287,6 +11371,101 @@ def test_detector_caked_detector_background_replay_uses_detector_origin_runtime_
     assert entry["manual_background_input_frame"] == "detector_display"
     assert entry["detector_x"] == 1000.0
     assert entry["detector_y"] == 2000.0
+
+
+def test_runtime_entry_display_coords_detector_origin_caked_view_unresolved_without_projection_does_not_use_stale_caked_fields(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        mg,
+        "native_detector_coords_to_caked_display_coords",
+        lambda *_args, **_kwargs: None,
+    )
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([10.0, 20.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([20.0, 30.0], dtype=float),
+        current_background_display=lambda: np.zeros((256, 256), dtype=float),
+        current_background_native=lambda: np.zeros((256, 256), dtype=float),
+        image_size=256,
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+    )
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "detector_display",
+        "x": 100.0,
+        "y": 200.0,
+        "detector_x": 100.0,
+        "detector_y": 200.0,
+        "background_detector_x": 100.0,
+        "background_detector_y": 200.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+        "caked_x": 999.0,
+        "caked_y": -999.0,
+    }
+
+    assert callbacks.entry_display_coords(entry) is None
+
+
+def test_initial_pairs_display_detector_origin_caked_view_unresolved_without_projection_does_not_use_stale_caked_fields(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        mg,
+        "native_detector_coords_to_caked_display_coords",
+        lambda *_args, **_kwargs: None,
+    )
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([10.0, 20.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([20.0, 30.0], dtype=float),
+        current_background_display=lambda: np.zeros((256, 256), dtype=float),
+        current_background_native=lambda: np.zeros((256, 256), dtype=float),
+        image_size=256,
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+    )
+    entry = {
+        "label": "3,0,4",
+        "hkl": (3, 0, 4),
+        "q_group_key": ("q_group", "primary", 3, 4),
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "detector_display",
+        "x": 100.0,
+        "y": 200.0,
+        "detector_x": 100.0,
+        "detector_y": 200.0,
+        "background_detector_x": 100.0,
+        "background_detector_y": 200.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+        "caked_x": 999.0,
+        "caked_y": -999.0,
+    }
+
+    _measured, pairs = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=True,
+        pairs_for_index=lambda _idx: [dict(entry)],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {"simulated_lookup": {}},
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=callbacks.entry_display_coords,
+    )
+
+    assert pairs[0].get("bg_display") != (999.0, -999.0)
+    assert "bg_display" not in pairs[0]
 
 
 def test_caked_detector_caked_background_replay_uses_caked_origin_runtime_projection(

@@ -1,6 +1,6 @@
 # Sim caked detector replay
 
-Status: implemented; focused runtime validation passed; manual GUI smoke pending
+Status: implemented; automated validation passed; manual GUI smoke pending
 Type: bug
 Owner:
 Issue: none
@@ -23,6 +23,27 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-05-07 final coordinate-authority update: detector-origin background rows
+rendered in caked view now fail closed when live detector/native-to-caked
+projection is unavailable. The runtime resolver no longer falls through to
+stale saved `caked_x/y` or `background_two_theta_deg/background_phi_deg` for
+known detector-origin rows. Manual pair creation also treats bare `caked_x/y`
+as ambiguous by default: the values can populate simulated fit/cache caked
+fields only when the candidate has explicit simulated caked projection
+provenance, source identity, and no manual/background authority. Explicit
+simulated fit/cache fields still beat bare caked aliases.
+
+Bug/error status: fixed and covered by focused regressions for runtime redraw,
+initial saved-pair redraw, background-shaped candidates, explicit simulated
+caked projection candidates, and explicit simulated caked field precedence.
+Feature status: no new operator control, CLI flag, saved-state schema, or
+artifact format. Migration/deprecation status: no migration required; legacy
+ambiguous rows are handled conservatively at read/save time and stale derived
+fields remain data, not authority. Shipping status: automated local gates are
+green; manual detector/caked GUI smoke remains the final operator acceptance
+step. Rollback is a normal git revert; no cleanup job, data repair, or
+feature-flag migration is required.
 
 2026-05-07 round-trip replay update: detector-origin and caked-origin manual
 background rows now resolve display coordinates from provenance first during
@@ -198,6 +219,23 @@ Feature status:
 ## Validation
 
 Latest local validation, 2026-05-07:
+
+- `python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "background_caked_xy_as_simulated or explicit_simulated_caked_projection_candidate or visual_caked or manual_qr_caked_saved" -ra`
+  passed (`12 passed`).
+- `python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "runtime_entry_display_coords or background_reference_detector_origin or background_reference_caked_origin or detector_caked_detector or caked_detector_caked or caked_to_detector_replay" -ra`
+  passed (`9 passed`).
+- `python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "detector_first_qr_selection or picker_candidates_only or sidecar_prewarmed_detector_rows or cold_cache or warm_manual_qr" -ra`
+  passed (`8 passed`).
+- `python -m pytest -q tests/test_gui_geometry_fit_workflow.py -k "simulated_point_fields_preserves_visual_caked_aliases or internal_type_error_propagates or manual_fit_dataset and caked and projector" -ra`
+  passed (`7 passed`).
+- `python -m pytest -q tests/test_gui_runtime_import_safe.py -k "manual_pick_cache_wrapper or prewarm or apply_main_caked_view_toggle or toggle_caked_2d" -ra`
+  passed (`17 passed`).
+- `python -m compileall -q ra_sim/gui tests` passed.
+- `python -m ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py`
+  passed.
+- `git diff --check` passed, with existing LF/CRLF warnings only.
+
+Earlier local validation, 2026-05-07:
 
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py -k "saved_background_origin_prefers_detector_origin_over_caked_frame or detector_origin_caked_display_prefers_projection_over_conflicting_frame or detector_origin_caked_display_does_not_fallback_to_stale_caked_fields or detector_caked_detector_replay_preserves_detector_origin_anchor or caked_detector_caked_replay_preserves_visual_caked_anchor or place_selection_at_detector_pick_saves_projected_caked or saves_background_qr_reference_without" -ra`
   passed (`7 passed`).

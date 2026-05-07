@@ -59,10 +59,14 @@ fields as replay/cache data only. The follow-up runtime patch also prevents
 stale refreshed `x/y` or detector aliases from winning cross-view redraw:
 detector-origin rows return to detector anchors, caked-origin rows project from
 the saved visual caked point, and provenance-known background references fail
-closed when projection is unavailable. Already-saved contradictory rows are
-compatible without state migration. No new operator control, public API, cache
-redesign, or schema migration. Manual detector/caked GUI smoke remains pending
-before closing the tracking item.
+closed when projection is unavailable. The final coordinate-authority patch
+also makes bare `caked_x/y` opt-in for simulated fit/cache truth: only explicit
+simulated caked projection rows can promote those aliases, while
+background/replay-shaped rows stay unresolved for sim fit/cache fields.
+Already-saved contradictory rows are compatible without state migration. No new
+operator control, public API, cache redesign, or schema migration. Automated
+local gates are green; manual detector/caked GUI smoke remains pending before
+closing the tracking item.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel

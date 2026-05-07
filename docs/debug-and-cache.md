@@ -393,6 +393,12 @@ simulation-only caked fields, then detector/native fallback only if no caked
 simulated point exists. Measured/background caked fields such as
 `background_two_theta_deg`, `background_phi_deg`, `caked_x`, or `caked_y`
 belong to the background marker and must not contaminate the simulated marker.
+Bare `caked_x/y` is intentionally ambiguous and may become simulated fit/cache
+truth only for explicit simulated caked projection rows with source identity
+and caked-projection provenance. Background/replay-shaped rows must use
+explicit simulated fields such as `sim_refined_caked_deg`,
+`refined_sim_caked_x/y`, `simulated_two_theta_deg/simulated_phi_deg`, or
+`sim_caked_display`.
 
 Live caked visual-source ledger rows are disabled by default. Set
 `RA_SIM_LIVE_CAKED_TRACE=1` to print `[ra-sim] live_caked_visual_source` rows,
@@ -425,6 +431,8 @@ the saved origin/frame contract across detector -> caked -> detector view
 replays. Detector-origin rows no longer fall back to stale caked fields when the
 live caked projection is unavailable, and caked-origin rows preserve their
 visual caked anchor while still projecting back to detector display when needed.
+Manual pair creation also keeps ambiguous bare `caked_x/y` out of simulated
+fit/cache fields unless the row is explicitly a simulated caked projection.
 
 Status as of 2026-05-05: live caked trace output is opt-in, unchanged trace rows
 are suppressed unless explicitly requested, warm caked pick-cache calls skip

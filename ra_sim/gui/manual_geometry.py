@@ -11406,14 +11406,43 @@ def _geometry_manual_candidate_caked_sim_point(
     caked_display = _geometry_manual_tuple_point(candidate, "sim_caked_display")
     if caked_display is not None:
         return caked_display
-    return _geometry_manual_finite_point(
-        candidate,
-        (
-            ("caked_x", "caked_y"),
-            ("raw_caked_x", "raw_caked_y"),
-            ("two_theta_deg", "phi_deg"),
-        ),
-    )
+    if _geometry_manual_candidate_allows_bare_caked_sim_point(candidate):
+        return _geometry_manual_finite_point(candidate, (("caked_x", "caked_y"),))
+    return None
+
+
+def _geometry_manual_candidate_allows_bare_caked_sim_point(
+    candidate: Mapping[str, object] | None,
+) -> bool:
+    if not isinstance(candidate, Mapping):
+        return False
+    if bool(candidate.get("background_qr_set_reference", False)):
+        return False
+    if _geometry_manual_normalized_frame_token(
+        candidate.get("manual_background_input_origin")
+    ):
+        return False
+    if _geometry_manual_normalized_frame_token(
+        candidate.get("manual_background_input_frame")
+    ):
+        return False
+    if (
+        _geometry_manual_finite_point(
+            candidate,
+            (
+                ("background_two_theta_deg", "background_phi_deg"),
+                ("background_detector_x", "background_detector_y"),
+            ),
+        )
+        is not None
+    ):
+        return False
+    if _geometry_manual_caked_qr_projection_key(candidate) is None:
+        return False
+    if bool(candidate.get("_caked_qr_projection_cache", False)):
+        return True
+    display_frame = _geometry_manual_entry_display_frame(candidate)
+    return display_frame == "caked"
 
 
 def _geometry_manual_candidate_visual_caked_sim_point(
@@ -12040,17 +12069,6 @@ def geometry_manual_pair_entry_from_candidate(
         entry["refined_sim_native_y"] = float(simulated_native_point[1])
 
     fit_caked_point = _geometry_manual_candidate_caked_sim_point(candidate)
-    if fit_caked_point is None and (
-        bool(candidate.get("_caked_qr_projection_cache"))
-        or str(candidate.get("display_frame", candidate.get("current_view_frame", "")) or "")
-        .strip()
-        .lower()
-        == "caked_display"
-    ):
-        fit_caked_point = _geometry_manual_finite_point(
-            candidate,
-            (("caked_x", "caked_y"),),
-        )
     visual_caked_point = _geometry_manual_tuple_point(candidate, "sim_visual_caked_deg")
     if visual_caked_point is None:
         visual_caked_point = _geometry_manual_tuple_point(candidate, "sim_visual_deg")
@@ -15452,6 +15470,7 @@ def make_runtime_geometry_manual_projection_callbacks(
                 )
                 if converted is not None:
                     return float(converted[0]), float(converted[1])
+            return None
         key_x = "caked_x" if use_caked else "x"
         key_y = "caked_y" if use_caked else "y"
         try:
