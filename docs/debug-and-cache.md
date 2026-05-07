@@ -67,12 +67,16 @@ Current status as of 2026-05-07:
   `final_rod_component_table`, `final_peak_edit_cache_key`, and marker columns
   `m`, `branch`, `qz_marker`, `display_l`, and either `fit_l` or `l`;
   `marker_title` is included when a final-figure label was edited
+- final-fit cache keys include `fit_signature=joint_qz_labeled_marker_fit_v2`
+  so older cached joint fits that could drop weak labeled markers, such as
+  `00L`/`006`, are recomputed
 
 The diagnostic separates fitting coordinates from display labels. `fit_l` is
 the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.
 `display_l` is the fallback visible L value used for final Qr-rod peak
 annotations. `marker_title` is the optional user-edited final-figure label. If
-`marker_title` is blank, the Qr-rod figure labels a peak as `L=<display_l>`.
+`marker_title` is blank, the Qr-rod figure labels a peak as
+`L=<rounded display_l>`.
 Display-label-only edits must update `display_l` or `marker_title` and must not
 move the fitted marker position. Qr-rod peak marker edits intentionally update
 `qz_marker` and therefore invalidate the final joint-fit cache.
@@ -83,13 +87,19 @@ unattended runs. `auto` opens the editor only on interactive Matplotlib desktop
 backends and skips it for CI/headless backends. The editor can load and save
 JSON marker tables through `RA_SIM_QR_ROD_PEAK_EDITS`; accepted popup edits are
 hashed into the final-fit cache key so stale fitted profiles are not reused.
+No-edit runs also require the current final-fit signature before a cached joint
+fit is reused.
 The editor input includes the dynamically projected `HK=0` / `00L` specular
 markers before cache lookup and fitting, so the specular rod peaks can be
 organized with the non-specular Qr rod peaks. Select a rod panel in the editor
 and press `Snap` to move all markers in that panel to nearby local profile
-peaks. Select a marker and edit the `Label` text box to set the exact title used
-for that peak in the final Qr-rod figure; clicking another marker or accepting
-the popup preserves the edited title.
+peaks. The editor plots and accepts click/drag positions on the fitted integer
+`L` axis for each rod panel, while the saved marker table still stores
+`qz_marker`. Select a marker and edit the `Label` text box to set the exact
+title used for that peak in the final Qr-rod figure; clicking another marker or
+accepting the popup preserves the edited title. Final Qr-rod figure labels are
+drawn above and to the right of the marked peak with a leader arrow pointing
+back to the peak, and generated fallback L labels are rounded to integers.
 
 On Windows, direct top-level execution of the generated `.py` diagnostic
 normalizes `process` and `auto` fit backend requests to `thread`. This avoids
@@ -108,18 +118,27 @@ duration of the run. A 2026-05-07 Bi2Se3 guarded run reported
 compared with the direct Windows thread-path report of `backend=thread_pool`,
 `pids=1`, and `elapsed=220.07s`.
 
+Direct `.py` runs can replace only the sample portion of generated labels and
+figure/table filename stems by setting `SAMPLE_NAME_OVERRIDE = "Bi2Te3"` in the
+parameter block, or by setting `RA_SIM_ALL_BACKGROUND_SAMPLE_NAME` before
+launch. This leaves `RUN_NAME` and output-directory selection
+unchanged, so the override changes stems such as `figure7_bi2te3_...` without
+moving the run directory.
+
 The diagnostic writes `hk0_l3_star.png` to the figure output directory. This is
 a raw detector-intensity crop from the beam center through and above the
-drawable `HK=0`, `L=3` / `00L` marker, saved with grayscale scaling from the
-crop values. If the beam center, detector image, or drawable `HK=0`, `L=3`
-marker cannot be resolved, the script prints a skipped reason and continues.
+drawable `HK=0`, `L=3` / `00L` marker, saved with the same colored detector
+colormap and log intensity normalization used by the detector-style diagnostic
+figures. This log scaling applies only to the `hk0_l3_star.png` crop. If the
+beam center, detector image, or drawable `HK=0`, `L=3` marker cannot be
+resolved, the script prints a skipped reason and continues.
 
 Focused validation status:
 
 - `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
   passes
-- `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title" -ra`
-  passes, `13 passed`
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title or sample_name_override or labeled_weak_hk0_marker or qr_rod_final_cache_requires_fit_signature or final_rod_labels_point_from_upper_right or qr_rod_editor_qz_l_axis_coefficients or qr_rod_peak_editor_uses_l_axis" -ra`
+  passes, `20 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
   passes, `8 passed`
 - `python -m ra_sim.dev check` passes, `280 passed`
@@ -305,6 +324,15 @@ Caked manual picking uses two different coordinate responsibilities:
 - caked aliases such as `caked_x`, `caked_y`, `raw_caked_x`, `raw_caked_y`,
   `two_theta_deg`, and `phi_deg` hold current-view angular coordinates.
 
+Manual background replay treats `manual_background_input_origin` as the
+authoritative persisted origin. If a legacy or mixed saved row says
+`manual_background_input_origin="detector"` but carries a stale caked
+`manual_background_input_frame`, detector origin still wins and caked redraw
+must reproject from detector truth instead of reading stale saved caked fields.
+New manual background placements now persist both origin and frame
+(`detector_display` or `caked_2theta_phi`) so future replay does not have to
+infer the coordinate family from ambiguous legacy aliases.
+
 For source-backed caked Qr/Qz selection, the detector-to-caked projection cache
 is the authority for hit testing, active selected markers, and saved-pair
 redraw. The cache is keyed by stable source/branch identity and stores the
@@ -352,6 +380,12 @@ into private read-only objects before attaching a trusted
 Source-less or legacy projection tokens are not correctness keys for warm-cache
 reuse. Do not mutate simulation or caked image arrays in place without also
 bumping the corresponding simulation or projection signature.
+
+Status as of 2026-05-07: detector/caked manual background replay now preserves
+the saved origin/frame contract across detector -> caked -> detector view
+replays. Detector-origin rows no longer fall back to stale caked fields when the
+live caked projection is unavailable, and caked-origin rows preserve their
+visual caked anchor while still projecting back to detector display when needed.
 
 Status as of 2026-05-05: live caked trace output is opt-in, unchanged trace rows
 are suppressed unless explicitly requested, warm caked pick-cache calls skip

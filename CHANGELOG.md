@@ -38,6 +38,7 @@
 - **Fitting and optimization**
   - Fixed geometry-fit live-cache preflight so source-matched q-group rows can satisfy generated-disordered manual pairs without falling through to fresh simulation or caked-projector setup, and restored locked/stale QR prediction-branch source switching before `locked_qr_row_unavailable` is returned.
   - Fixed manual Qr/Qz caked replay and fit handoff so detector-origin saved rows redraw through detector projection, visual caked aliases stay separate from fit/cache aliases, required caked projector errors stay precise, and cold detector clicks fail fast instead of rebuilding picker caches on the UI path.
+  - Fixed saved manual background origin replay so explicit detector-origin rows win over stale caked frame tokens, and new manual placements persist the matching origin/frame contract.
   - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI startup, headless `fit-geometry`, and headless `simulate` paths, and kept beam-center picking out of the center-dependent caked wrapper.
   - Fixed beam-center picking to use the clicked detector-display point exactly, avoiding local peak snapping before applying the GUI contract `row = display_row`, `col = detector_width - display_col`.
   - Untangled `Pick Beam Center` coordinate handling so the pick writes one canonical GUI Row/Col pair through the visible sliders and entries, projects the marker back into detector/caked views from that same pair, and keeps detector-center remap reads on the same values.
@@ -72,11 +73,16 @@
   - Fixed diagnostic Qz rod profiles to plot acceptance-normalized intensity density instead of raw integrated sums, removing false high-2θ support ramps.
   - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with rotated 2D Gaussian-plus-plane fits, then fit each Qr-rod Qz profile jointly as a simultaneous sum of all projected branch-point Gaussian peaks to avoid overlap overestimation between close peaks.
   - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
-  - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
+  - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a colored, log-scaled raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
+  - Added `SAMPLE_NAME_OVERRIDE` / `RA_SIM_ALL_BACKGROUND_SAMPLE_NAME` to the parallel `.py` diagnostic so direct runs can replace only the sample label and filename stem, such as `Bi2Se3` to `Bi2Te3`, without changing the run directory.
   - Restored default-on Qr-rod peak marker editing in the generated `.py` diagnostic with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup|skip|auto`, JSON round trip through `RA_SIM_QR_ROD_PEAK_EDITS`, and marker-table cache-key invalidation before final joint Qz fitting.
   - Fixed the Qr-rod peak marker editor so dynamically projected `HK=0` / `00L` specular markers are included before final-fit cache lookup and fitting.
   - Changed the Qr-rod peak marker editor Snap action to snap all markers in the selected rod panel to nearby local profile peaks.
-  - Added editable per-peak Qr-rod marker titles so the popup `Label` field controls the final Qr-rod figure text, with blank titles falling back to `L=<display_l>`.
+  - Changed the Qr-rod peak marker editor plots to use fitted integer `L` x-axes while still saving marker positions as Qz.
+  - Added editable per-peak Qr-rod marker titles so the popup `Label` field controls the final Qr-rod figure text, with blank titles falling back to `L=<rounded display_l>`.
+  - Rounded generated Qr-rod peak fallback L labels to integer values while preserving user-edited marker titles.
+  - Moved final Qr-rod peak labels to the upper-right of each marked peak with leader arrows pointing back to the peak.
+  - Fixed final Qr-rod joint fitting so weak labeled peaks such as HK=0 `006` are preserved through nonlinear refinement, and invalidated older final-fit caches that could omit those components.
   - Fixed the parallel background peak-fit diagnostic script so Qr-rod marker labels are defined before profile annotation/redraw code can call them.
   - Fixed the parallel background peak-fit diagnostic runner so the generated `.py` diagnostic can run through the guarded Windows process backend, restoring process-pool CPU use while keeping direct top-level `.py` execution on the safe thread fallback.
   - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.

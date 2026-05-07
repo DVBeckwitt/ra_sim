@@ -7,6 +7,7 @@ GUI_STATE_PATH = ""
 OUTPUT_DIR = ""
 FIGURE_OUTPUT_DIR = ""
 RUN_NAME = ""
+SAMPLE_NAME_OVERRIDE = ""
 
 # 32-core workstation defaults. Fit parallelism is now a global queue across all backgrounds.
 FIT_WORKERS_OVERRIDE = "28"
@@ -112,6 +113,7 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_v2"
 
 
 def qr_rod_profile_cache_path(output_dir: Path | str, state_path: Path | str) -> Path:
@@ -199,9 +201,9 @@ def hk_display_label(m_value: object) -> str:
 
 
 def l_tick_label(value: float) -> str:
-    if np.isfinite(value) and abs(float(value) - round(float(value))) < 1.0e-6:
+    if np.isfinite(value):
         return f"{int(round(float(value)))}"
-    return f"{float(value):.2f}"
+    return ""
 
 
 def marker_row_title(marker_row: dict[str, object] | pd.Series, m_value: int) -> str:
@@ -220,6 +222,30 @@ def marker_row_title(marker_row: dict[str, object] | pd.Series, m_value: int) ->
     if np.isfinite(display_l):
         return f"L={l_tick_label(float(display_l))}"
     return hk_display_label(int(m_value))
+
+
+def qz_l_linear_coeff_from_marker_rows(marker_rows: object) -> tuple[float, float]:
+    table = pd.DataFrame(marker_rows).copy()
+    if table.empty or "qz_marker" not in table:
+        return 1.0, 0.0
+    l_col = "fit_l" if "fit_l" in table else "l" if "l" in table else "display_l"
+    if l_col not in table:
+        return 1.0, 0.0
+    ref_qz = pd.to_numeric(table["qz_marker"], errors="coerce").to_numpy(dtype=np.float64)
+    ref_l = pd.to_numeric(table[l_col], errors="coerce").to_numpy(dtype=np.float64)
+    finite = np.isfinite(ref_qz) & np.isfinite(ref_l)
+    ref_qz = ref_qz[finite]
+    ref_l = ref_l[finite]
+    if ref_qz.size >= 2 and float(np.nanmax(ref_qz)) > float(np.nanmin(ref_qz)):
+        slope, intercept = np.polyfit(ref_qz, ref_l, 1)
+    elif ref_qz.size == 1 and abs(float(ref_qz[0])) > 1.0e-12:
+        slope = float(ref_l[0]) / float(ref_qz[0])
+        intercept = 0.0
+    else:
+        slope, intercept = 1.0, 0.0
+    if not (np.isfinite(slope) and np.isfinite(intercept)) or abs(float(slope)) <= 1.0e-12:
+        return 1.0, 0.0
+    return float(slope), float(intercept)
 
 
 def qr_rod_peak_edit_cache_key(
@@ -264,10 +290,11 @@ def qr_rod_peak_edit_cache_key(
             "mode": str(mode or "marker_table"),
             "sha256": hashlib.sha256(data).hexdigest(),
             "rows": int(len(table)),
+            "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
         }
     text = "" if path_value is None else str(path_value).strip()
     if not text:
-        return {"mode": "last_cached"}
+        return {"mode": "last_cached", "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE}
     path = Path(text).expanduser()
     if not path.exists():
         return {
@@ -276,6 +303,7 @@ def qr_rod_peak_edit_cache_key(
             "path_name": path.name,
             "sha256": None,
             "size": None,
+            "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
         }
     data = path.read_bytes()
     return {
@@ -284,6 +312,7 @@ def qr_rod_peak_edit_cache_key(
         "path_name": path.name,
         "sha256": hashlib.sha256(data).hexdigest(),
         "size": len(data),
+        "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
     }
 
 
@@ -309,8 +338,6 @@ def qr_rod_profile_cache_has_final_fit(
     marker_table = pd.DataFrame(payload["final_marker_table"])
     if marker_table.empty or not {"qz_marker", "fit_l", "display_l"}.issubset(marker_table.columns):
         return False
-    if peak_edit_cache_key.get("mode") == "last_cached":
-        return True
     return payload.get("final_peak_edit_cache_key") == peak_edit_cache_key
 
 
@@ -583,6 +610,19 @@ def show_qr_rod_peak_marker_popup(
         values = np.asarray(rows["qz_marker"], dtype=np.float64)
         return np.sort(values[np.isfinite(values)])
 
+    def group_qz_l_coeff(m_value: int, branch_value: str) -> tuple[float, float]:
+        return qz_l_linear_coeff_from_marker_rows(group_marker_rows(m_value, branch_value))
+
+    def qz_to_editor_l(m_value: int, branch_value: str, qz_values: object) -> np.ndarray:
+        slope, intercept = group_qz_l_coeff(m_value, branch_value)
+        qz = np.asarray(qz_values, dtype=np.float64)
+        return float(slope) * qz + float(intercept)
+
+    def editor_l_to_qz(m_value: int, branch_value: str, l_values: object) -> np.ndarray:
+        slope, intercept = group_qz_l_coeff(m_value, branch_value)
+        l = np.asarray(l_values, dtype=np.float64)
+        return (l - float(intercept)) / float(slope)
+
     def selected_marker_row() -> tuple[int, pd.Series] | None:
         group = selected.get("group")
         index = selected.get("index")
@@ -674,13 +714,22 @@ def show_qr_rod_peak_marker_popup(
         for group, ax in axes_by_group.items():
             m_value, branch_value = group
             ax.clear()
-            x, y = profile_xy(m_value, branch_value)
-            if x.size:
-                ax.plot(x, y, color="0.25", linewidth=0.9)
+            x_qz, y = profile_xy(m_value, branch_value)
+            x_l = qz_to_editor_l(m_value, branch_value, x_qz)
+            finite_profile = np.isfinite(x_l) & np.isfinite(y)
+            if np.any(finite_profile):
+                order = np.argsort(x_l[finite_profile])
+                ax.plot(
+                    x_l[finite_profile][order],
+                    y[finite_profile][order],
+                    color="0.25",
+                    linewidth=0.9,
+                )
             markers = group_markers(m_value, branch_value)
+            marker_l = qz_to_editor_l(m_value, branch_value, markers)
             marker_rows = group_marker_rows(m_value, branch_value)
-            y_markers = marker_y_values(markers, x, y)
-            finite = np.isfinite(markers) & np.isfinite(y_markers)
+            y_markers = marker_y_values(markers, x_qz, y)
+            finite = np.isfinite(marker_l) & np.isfinite(y_markers)
             if np.any(finite):
                 colors = ["white"] * int(np.count_nonzero(finite))
                 if selected_group == group and selected_index is not None:
@@ -691,7 +740,7 @@ def show_qr_rod_peak_marker_popup(
                     except ValueError:
                         pass
                 ax.scatter(
-                    markers[finite],
+                    marker_l[finite],
                     y_markers[finite],
                     s=24.0,
                     marker="o",
@@ -702,7 +751,7 @@ def show_qr_rod_peak_marker_popup(
                 )
                 visible_rows = marker_rows.loc[finite].reset_index(drop=True)
                 for marker_x, marker_y, marker_row in zip(
-                    markers[finite], y_markers[finite], visible_rows.to_dict("records")
+                    marker_l[finite], y_markers[finite], visible_rows.to_dict("records")
                 ):
                     ax.annotate(
                         marker_row_title(marker_row, int(m_value)),
@@ -718,7 +767,8 @@ def show_qr_rod_peak_marker_popup(
                     )
             title_color = "#d95f02" if selected_group == group else "black"
             ax.set_title(f"HK={m_value} {branch_value}", fontsize=9, color=title_color)
-            ax.set_xlabel("Qz", fontsize=8)
+            ax.set_xlabel("L", fontsize=8)
+            ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
             ax.tick_params(labelsize=7)
         fig.canvas.draw_idle()
 
@@ -726,11 +776,15 @@ def show_qr_rod_peak_marker_popup(
         markers = group_markers(group[0], group[1])
         if markers.size == 0 or not np.isfinite(x_value):
             return False
+        marker_l = qz_to_editor_l(group[0], group[1], markers)
+        finite = np.isfinite(marker_l)
+        if not np.any(finite):
+            return False
         axis = axes_by_group[group]
         x_lo, x_hi = axis.get_xlim()
         tolerance = max(abs(float(x_hi) - float(x_lo)) * 0.025, 1.0e-6)
-        nearest_index = int(np.nanargmin(np.abs(markers - float(x_value))))
-        if abs(float(markers[nearest_index]) - float(x_value)) > tolerance:
+        nearest_index = int(np.nanargmin(np.where(finite, np.abs(marker_l - float(x_value)), np.inf)))
+        if abs(float(marker_l[nearest_index]) - float(x_value)) > tolerance:
             return False
         selected["group"] = group
         selected["index"] = nearest_index
@@ -739,7 +793,8 @@ def show_qr_rod_peak_marker_popup(
 
     def add_marker(group: tuple[int, str], x_value: float) -> None:
         markers = group_markers(group[0], group[1]).tolist()
-        markers.append(float(x_value))
+        qz_value = float(editor_l_to_qz(group[0], group[1], [float(x_value)])[0])
+        markers.append(qz_value)
         set_group_markers(group[0], group[1], markers)
         select_nearest(group, float(x_value))
         redraw()
@@ -753,7 +808,7 @@ def show_qr_rod_peak_marker_popup(
         markers = group_markers(m_value, branch_value).tolist()
         if int(index) < 0 or int(index) >= len(markers):
             return
-        markers[int(index)] = float(x_value)
+        markers[int(index)] = float(editor_l_to_qz(m_value, branch_value, [float(x_value)])[0])
         set_group_markers(m_value, branch_value, markers)
         select_nearest((int(m_value), str(branch_value)), float(x_value))
         redraw()
@@ -792,7 +847,8 @@ def show_qr_rod_peak_marker_popup(
             selected_marker = float(snapped[int(index)])
         set_group_markers(m_value, branch_value, snapped)
         if selected_marker is not None:
-            select_nearest((int(m_value), str(branch_value)), selected_marker)
+            selected_l = float(qz_to_editor_l(m_value, branch_value, [selected_marker])[0])
+            select_nearest((int(m_value), str(branch_value)), selected_l)
         redraw()
 
     def on_press(event) -> None:
@@ -1034,7 +1090,8 @@ if not FIGURE_OUT_DIR.is_absolute():
     FIGURE_OUT_DIR = ROOT / FIGURE_OUT_DIR
 FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SAMPLE_NAME = _sample_name_from_path(STATE_PATH) or STATE_RUN_NAME
+SAMPLE_NAME_OVERRIDE_TEXT = _setting_text("SAMPLE_NAME_OVERRIDE", "RA_SIM_ALL_BACKGROUND_SAMPLE_NAME", "")
+SAMPLE_NAME = SAMPLE_NAME_OVERRIDE_TEXT or _sample_name_from_path(STATE_PATH) or STATE_RUN_NAME
 SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
 SAMPLE_STEM = _safe_run_name(SAMPLE_NAME).lower()
 
@@ -1969,7 +2026,7 @@ def save_hk0_star_crop(
     above_peak_padding_px: int = 96,
     below_beam_padding_px: int = 24,
 ) -> Path | None:
-    """Save the HK=0 target-L raw detector crop as a grayscale PNG."""
+    """Save the HK=0 target-L raw detector crop as a colored log-scale PNG."""
     image = np.ma.asarray(detector_image, dtype=np.float64)
     bounds = hk0_star_crop_bounds(
         tuple(image.shape),
@@ -1986,14 +2043,12 @@ def save_hk0_star_crop(
     finite = crop[np.isfinite(crop)]
     if finite.size == 0:
         return None
-    vmin = float(np.nanmin(finite))
-    vmax = float(np.nanmax(finite))
-    if not np.isfinite(vmax) or vmax <= vmin:
-        vmax = vmin + 1.0
-    safe_crop = np.where(np.isfinite(crop), crop, vmin)
+    display_crop = detector_intensity_display(crop)
+    norm = detector_log_norm([display_crop])
+    rgba_crop = detector_display_cmap()(norm(display_crop))
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    plt.imsave(path, safe_crop, cmap="gray", vmin=vmin, vmax=vmax, origin="upper")
+    plt.imsave(path, rgba_crop, origin="upper")
     return path
 
 
@@ -2081,7 +2136,7 @@ backend_rotation_k = int(flags.get("background_backend_rotation_k", 3) or 0)
 backend_flip_x = bool(flags.get("background_backend_flip_x", False))
 backend_flip_y = bool(flags.get("background_backend_flip_y", False))
 primary_cif_path = files.get("primary_cif_path")
-detected_sample_name = _sample_name_from_path(primary_cif_path) or STATE_RUN_NAME
+detected_sample_name = SAMPLE_NAME_OVERRIDE_TEXT or _sample_name_from_path(primary_cif_path) or STATE_RUN_NAME
 if detected_sample_name:
     SAMPLE_NAME = str(detected_sample_name)
     SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
@@ -6907,7 +6962,10 @@ def _refine_pearson_vii_components(
     for component in components:
         density_sorted = _component_density_to_sorted(component, order, x.size)
         amp0 = float(np.nanmax(density_sorted)) if density_sorted.size else 0.0
-        if not np.isfinite(amp0) or amp0 <= max(1.0e-12, 0.01 * target_peak):
+        min_component_amp = max(
+            1.0e-12, float(ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE) * target_peak
+        )
+        if not np.isfinite(amp0) or amp0 <= min_component_amp:
             continue
         center0 = float(component.get("center", np.nan))
         hwhm0 = float(component.get("hwhm", np.nan))
@@ -9460,10 +9518,10 @@ def annotate_rod_profile_hk_locations(
             rod_marker_annotation_label(marker_row, int(m_value)),
             xy=(x_value, float(y_value)),
             xycoords="data",
-            xytext=(0.0, -18.0 - 5.0 * (marker_index % 3)),
+            xytext=(12.0, 12.0 + 5.0 * (marker_index % 3)),
             textcoords="offset points",
-            ha="center",
-            va="top",
+            ha="left",
+            va="bottom",
             fontsize=5.0,
             color="black",
             bbox={

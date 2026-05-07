@@ -11084,6 +11084,146 @@ def test_detector_origin_initial_pairs_display_reprojects_background_in_saved_an
     assert legacy_caked_session_initial[0]["bg_display"] == (999.0, -999.0)
 
 
+def test_saved_background_origin_prefers_detector_origin_over_caked_frame() -> None:
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "caked_2theta_phi",
+        "detector_x": 1000.0,
+        "detector_y": 2000.0,
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 20.0,
+        "caked_x": 10.0,
+        "caked_y": 20.0,
+        "x": 100.0,
+        "y": 200.0,
+    }
+
+    assert mg._geometry_manual_saved_background_detector_origin(entry) is True
+
+
+def test_detector_origin_caked_display_prefers_projection_over_conflicting_frame() -> None:
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "caked_2theta_phi",
+        "detector_x": 1000.0,
+        "detector_y": 2000.0,
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 20.0,
+        "caked_x": 10.0,
+        "caked_y": 20.0,
+        "x": 100.0,
+        "y": 200.0,
+    }
+
+    display = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=lambda _entry: (22.0, -25.0),
+    )
+
+    assert display == (22.0, -25.0)
+
+
+def test_detector_origin_caked_display_does_not_fallback_to_stale_caked_fields() -> None:
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "caked_2theta_phi",
+        "detector_x": 1000.0,
+        "detector_y": 2000.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+        "caked_x": 999.0,
+        "caked_y": -999.0,
+    }
+
+    display = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=lambda _entry: None,
+    )
+
+    assert display is None
+
+
+def test_detector_caked_detector_replay_preserves_detector_origin_anchor() -> None:
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "detector_display",
+        "detector_x": 1000.0,
+        "detector_y": 2000.0,
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 20.0,
+    }
+
+    detector_display = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=False,
+        entry_display_coords=lambda saved: (
+            float(saved["detector_x"]),
+            float(saved["detector_y"]),
+        ),
+    )
+    caked_display = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=lambda _saved: (22.0, -25.0),
+    )
+    detector_again = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=False,
+        entry_display_coords=lambda saved: (
+            float(saved["detector_x"]),
+            float(saved["detector_y"]),
+        ),
+    )
+
+    assert detector_display == (1000.0, 2000.0)
+    assert caked_display == (22.0, -25.0)
+    assert detector_again == (1000.0, 2000.0)
+
+
+def test_caked_detector_caked_replay_preserves_visual_caked_anchor() -> None:
+    visual_caked = (40.177225, 36.296562)
+    refined_caked = (40.176704, 36.25)
+    entry = {
+        "manual_background_input_origin": "caked",
+        "manual_background_input_frame": "caked_2theta_phi",
+        "background_two_theta_deg": visual_caked[0],
+        "background_phi_deg": visual_caked[1],
+        "caked_x": visual_caked[0],
+        "caked_y": visual_caked[1],
+        "sim_refined_caked_deg": refined_caked,
+        "sim_visual_caked_deg": visual_caked,
+        "sim_visual_deg": visual_caked,
+        "sim_caked": visual_caked,
+    }
+
+    def _project_visual_caked(saved):
+        assert saved["sim_visual_caked_deg"] == visual_caked
+        assert saved["sim_refined_caked_deg"] == refined_caked
+        return 500.0, 600.0
+
+    caked_display = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=_project_visual_caked,
+    )
+    detector_display = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=False,
+        entry_display_coords=_project_visual_caked,
+    )
+    caked_again = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=_project_visual_caked,
+    )
+
+    assert caked_display == visual_caked
+    assert detector_display == (500.0, 600.0)
+    assert caked_again == visual_caked
+
+
 @pytest.mark.parametrize(
     ("entry", "expected_detector_origin"),
     [
@@ -15529,6 +15669,11 @@ def test_geometry_manual_place_selection_at_detector_pick_saves_projected_caked_
     assert next_session == {}
     saved = saved_entry_sets[-1][0]
     assert saved["manual_background_input_origin"] == "detector"
+    assert saved["manual_background_input_frame"] in {
+        "detector",
+        "detector_display",
+        "native_detector",
+    }
     assert saved["geometry_detector_native_px"] == (105.0, 206.0)
     assert saved["raw_detector_native_px"] == (104.8, 205.9)
     assert saved["background_two_theta_deg"] == 10.5
@@ -15597,6 +15742,12 @@ def test_geometry_manual_place_selection_at_saves_background_qr_reference_withou
     assert saved["label"] == "2theta=10.5000,phi=20.6000"
     assert "hkl" not in saved
     assert "q_group_key" not in saved
+    assert saved["manual_background_input_origin"] == "detector"
+    assert saved["manual_background_input_frame"] in {
+        "detector",
+        "detector_display",
+        "native_detector",
+    }
     assert saved["background_qr_set_reference"] is True
     assert saved["geometry_fit_disabled"] is True
     assert saved["background_two_theta_deg"] == 10.5

@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from textwrap import dedent
 
+import matplotlib as mpl
+from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -98,10 +100,31 @@ def _script_functions(*names: str) -> dict[str, object]:
         "hashlib": hashlib,
         "json": json,
         "math": math,
+        "mpl": mpl,
         "np": np,
         "pd": pd,
         "Path": Path,
         "plt": plt,
+        "LogNorm": LogNorm,
+        "JOURNAL_DETECTOR_CMAP": "magma",
+        "least_squares": least_squares,
+        "_rod_qz_nnls": nnls,
+        "ROD_QZ_TAIL_POWER_GRID": np.asarray([0.75, 1.0, 1.35, 2.0, 3.5, 7.0], dtype=np.float64),
+        "ROD_QZ_TAIL_WIDTH_SCALE_GRID": np.asarray(
+            [0.55, 0.80, 1.15, 1.70, 2.50], dtype=np.float64
+        ),
+        "ROD_QZ_TAIL_CENTER_SEARCH_BINS": 5.0,
+        "ROD_QZ_TAIL_MIN_HALFWIDTH_BINS": 0.55,
+        "ROD_QZ_TAIL_MAX_HALFWIDTH_FRACTION": 0.70,
+        "ROD_QZ_TAIL_MAX_AUTO_PEAKS": 10,
+        "ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE": 1.0e-5,
+        "ROD_QZ_NONLINEAR_REFINEMENT_ENABLED": True,
+        "ROD_QZ_NONLINEAR_MAX_COMPONENTS": 14,
+        "ROD_QZ_NONLINEAR_CENTER_BOUND_BINS": 4.0,
+        "ROD_QZ_NONLINEAR_TAIL_POWER_BOUNDS": (0.55, 12.0),
+        "ROD_QZ_NONLINEAR_MAX_NFEV": 1200,
+        "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
+        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_v2",
     }
     exec(compile(module, str(PARALLEL_SCRIPT_PATH), "exec"), namespace)
     return namespace
@@ -218,6 +241,42 @@ def test_joint_qz_fit_keeps_close_peak_valley_low() -> None:
     assert valley < 0.12 * peak_height
 
 
+def test_parallel_script_joint_qz_fit_keeps_labeled_weak_hk0_marker() -> None:
+    namespace = _script_functions(
+        "_unique_sorted_markers",
+        "_qz_grid_step",
+        "_nanfilled_profile",
+        "_center_search_profile",
+        "_nearest_marker_spacing",
+        "_refine_centers_to_local_maxima",
+        "_fallback_markers_from_profile",
+        "_estimate_peak_hwhm",
+        "_pearson_vii_profile",
+        "_tail_aware_basis",
+        "_shared_linear_qz_baseline",
+        "_weighted_nonnegative_amplitudes",
+        "_aggregate_tail_components",
+        "_pearson_vii_component_sum",
+        "_component_density_to_sorted",
+        "_refine_pearson_vii_components",
+        "_empty_joint_qz_payload",
+        "fit_joint_qz_peak_sum",
+    )
+    fit_joint_qz_peak_sum = namespace["fit_joint_qz_peak_sum"]
+    x = np.linspace(1.0, 2.0, 260, dtype=np.float64)
+    strong_004 = 1.0 * np.exp(-0.5 * ((x - 1.30) / 0.018) ** 2)
+    weak_006 = 0.006 * np.exp(-0.5 * ((x - 1.72) / 0.018) ** 2)
+    baseline = 0.018 + 0.004 * (x - 1.5)
+    y = strong_004 + weak_006 + baseline
+
+    payload = fit_joint_qz_peak_sum(x, y, np.array([1.30, 1.72], dtype=np.float64))
+
+    assert payload["success"] is True
+    markers = sorted(float(component["marker"]) for component in payload["components"])
+    assert len(markers) == 2
+    assert markers == pytest.approx([1.30, 1.72], abs=0.025)
+
+
 def test_background_peak_fits_notebook_has_fast_state_parameters() -> None:
     source = _notebook_source()
 
@@ -245,6 +304,18 @@ def test_background_peak_fits_notebook_handles_background_reference_labels() -> 
         "skipped specular ROI examples: no fitted specular-like ROI entries were available",
         "for m_value, q_group in q_group_by_m.items():",
         "SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)",
+    ):
+        assert token in source
+
+
+def test_parallel_script_has_sample_name_override_parameter() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    for token in (
+        'SAMPLE_NAME_OVERRIDE = ""',
+        "RA_SIM_ALL_BACKGROUND_SAMPLE_NAME",
+        'SAMPLE_NAME_OVERRIDE_TEXT = _setting_text("SAMPLE_NAME_OVERRIDE", "RA_SIM_ALL_BACKGROUND_SAMPLE_NAME", "")',
+        "SAMPLE_NAME_OVERRIDE_TEXT or _sample_name_from_path(primary_cif_path)",
     ):
         assert token in source
 
@@ -430,7 +501,13 @@ def test_parallel_script_hk0_l3_star_selects_l3_marker_center() -> None:
 
 
 def test_parallel_script_hk0_l3_star_save_writes_png(tmp_path) -> None:
-    namespace = _script_functions("hk0_star_crop_bounds", "save_hk0_star_crop")
+    namespace = _script_functions(
+        "detector_display_cmap",
+        "detector_intensity_display",
+        "detector_log_norm",
+        "hk0_star_crop_bounds",
+        "save_hk0_star_crop",
+    )
     save_crop = namespace["save_hk0_star_crop"]
     image = np.arange(10_000, dtype=np.float64).reshape(100, 100)
     out_path = tmp_path / "hk0_l3_star.png"
@@ -448,6 +525,23 @@ def test_parallel_script_hk0_l3_star_save_writes_png(tmp_path) -> None:
     assert result == out_path
     assert out_path.exists()
     assert out_path.stat().st_size > 0
+    rendered = plt.imread(out_path)
+    assert rendered.shape[-1] in {3, 4}
+    assert not np.allclose(rendered[..., 0], rendered[..., 1])
+
+
+def test_parallel_script_hk0_l3_star_save_uses_detector_log_color() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def save_hk0_star_crop(") : source.index("\ndef label_from_entry(")
+    ]
+
+    assert "detector_display_cmap()" in function_source
+    assert "detector_intensity_display(crop)" in function_source
+    assert "detector_log_norm([display_crop]" in function_source
+    assert 'cmap="gray"' not in function_source
 
 
 def test_parallel_script_hk0_l3_star_output_is_wired() -> None:
@@ -507,6 +601,22 @@ def test_parallel_script_qr_rod_marker_table_includes_specular_hk0_markers() -> 
     assert merged[merged["m"] == 1]["hkl"].tolist() == ["-1,0,2"]
 
 
+def test_parallel_script_qr_rod_editor_qz_l_axis_coefficients() -> None:
+    namespace = _script_functions("qz_l_linear_coeff_from_marker_rows")
+    qz_l_coeff = namespace["qz_l_linear_coeff_from_marker_rows"]
+    markers = pd.DataFrame(
+        [
+            {"qz_marker": 0.75, "fit_l": 3},
+            {"qz_marker": 1.50, "fit_l": 6},
+        ]
+    )
+
+    slope, intercept = qz_l_coeff(markers)
+
+    assert slope == pytest.approx(4.0)
+    assert intercept == pytest.approx(0.0)
+
+
 def test_parallel_script_qr_rod_snap_moves_all_panel_markers_to_local_peaks() -> None:
     namespace = _script_functions("snap_qr_rod_markers_to_profile_peaks")
     snap_markers = namespace["snap_qr_rod_markers_to_profile_peaks"]
@@ -530,7 +640,10 @@ def test_parallel_script_qr_rod_marker_hash_changes_cache_key() -> None:
     shifted = markers.copy()
     shifted.loc[0, "qz_marker"] = 1.25
 
-    assert cache_key(None) == {"mode": "last_cached"}
+    assert cache_key(None) == {
+        "mode": "last_cached",
+        "fit_signature": "joint_qz_labeled_marker_fit_v2",
+    }
     assert cache_key(None, marker_table=markers, mode="popup") != cache_key(
         None, marker_table=shifted, mode="popup"
     )
@@ -557,6 +670,34 @@ def test_parallel_script_marker_title_changes_cache_key() -> None:
 
     assert cache_key(None, marker_table=markers, mode="popup") != cache_key(
         None, marker_table=relabeled, mode="popup"
+    )
+
+
+def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
+    namespace = _script_functions("qr_rod_profile_cache_has_final_fit")
+    cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
+    payload = {
+        "final_rod_profile_table": pd.DataFrame(
+            {"qz_center": [1.0, 2.0], "joint_fit_density": [0.1, 0.2]}
+        ),
+        "final_marker_table": pd.DataFrame(
+            {"qz_marker": [1.0], "fit_l": [6.0], "display_l": [6.0]}
+        ),
+        "final_rod_component_table": pd.DataFrame(),
+        "final_peak_edit_cache_key": {"mode": "last_cached"},
+    }
+
+    assert not cache_has_final_fit(
+        payload,
+        {"mode": "last_cached", "fit_signature": "joint_qz_labeled_marker_fit_v2"},
+    )
+    payload["final_peak_edit_cache_key"] = {
+        "mode": "last_cached",
+        "fit_signature": "joint_qz_labeled_marker_fit_v2",
+    }
+    assert cache_has_final_fit(
+        payload,
+        {"mode": "last_cached", "fit_signature": "joint_qz_labeled_marker_fit_v2"},
     )
 
 
@@ -621,8 +762,27 @@ def test_parallel_script_marker_title_overrides_final_rod_label() -> None:
     marker_label = namespace["rod_marker_annotation_label"]
 
     assert marker_label({"display_l": 2.0}, 1) == "L=2"
+    assert marker_label({"display_l": 2.49}, 1) == "L=2"
+    assert marker_label({"display_l": 2.51}, 1) == "L=3"
     assert marker_label({"display_l": 2.0, "marker_title": "L=2 shoulder"}, 1) == "L=2 shoulder"
+    assert marker_label({"display_l": 2.51, "marker_title": "L=2.51 custom"}, 1) == "L=2.51 custom"
     assert marker_label({"display_l": 2.0, "marker_title": "  "}, 1) == "L=2"
+
+
+def test_parallel_script_final_rod_labels_point_from_upper_right() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def annotate_rod_profile_hk_locations(") : source.index(
+            "\ndef qz_to_l_linear_coeff("
+        )
+    ]
+
+    assert "xytext=(12.0, 12.0 + 5.0 * (marker_index % 3))" in function_source
+    assert 'ha="left"' in function_source
+    assert 'va="bottom"' in function_source
+    assert '"arrowstyle": "->"' in function_source
 
 
 def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() -> None:
@@ -648,6 +808,24 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() ->
     assert "TextBox(" in source
     assert "marker_title" in source
     assert 'getattr(event, "inaxes", None) is getattr(box, "ax", None)' in source
+
+
+def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef edit_qr_rod_peak_markers("
+        )
+    ]
+
+    assert "qz_l_linear_coeff_from_marker_rows(" in function_source
+    assert "qz_to_editor_l(" in function_source
+    assert "editor_l_to_qz(" in function_source
+    assert 'ax.set_xlabel("L"' in function_source
+    assert "MaxNLocator(integer=True)" in function_source
+    assert 'ax.set_xlabel("Qz"' not in function_source
 
 
 def test_parallel_script_defines_rod_marker_label_before_first_call() -> None:

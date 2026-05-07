@@ -34,14 +34,21 @@ stale simulated caked cache aliases after saving the pair, preserving the
 separate visual caked source instead of letting cache fields become visual
 truth after a detector/caked view switch.
 
+2026-05-07 follow-up: saved manual background origin detection now gives
+`manual_background_input_origin` precedence over stale or conflicting
+`manual_background_input_frame` values. New detector and caked placements write
+both fields, so detector-origin rows remain detector-origin through
+detector -> caked -> detector replay, while caked-origin rows keep their visual
+caked anchor and still project to detector display when needed.
+
 Bug/error status: focused automated coverage now proves detector-origin rows do
 not redraw from stale caked fields, unresolved detector-origin caked rows fail
 closed, and caked-origin saved rows return to detector view without stale
-simulation-caked cache aliases. Feature status: no new operator control or
-public API; this is a correction to existing manual Qr/Qz replay and display
-cache behavior. Scope cleanup status: unrelated background diagnostics tests,
-docs, runner changes, notebook deletion, and generated script output were
-removed from this slice before commit.
+simulation-caked cache aliases. The latest follow-up also proves conflicting
+legacy origin/frame rows prefer the explicit origin. Feature status: no new
+operator control or public API; this is a correction to existing manual Qr/Qz
+replay and display cache behavior. Scope cleanup status: unrelated generated
+artifacts remain uncommitted.
 
 2026-05-06 update: the manual Qr/Qz caked picker slice now preserves the
 separate fit/cache and visual caked coordinate contracts when saving manual
@@ -148,6 +155,8 @@ Feature status:
 
 Latest local validation, 2026-05-07:
 
+- `python -m pytest tests/test_manual_geometry_selection_helpers.py -k "saved_background_origin_prefers_detector_origin_over_caked_frame or detector_origin_caked_display_prefers_projection_over_conflicting_frame or detector_origin_caked_display_does_not_fallback_to_stale_caked_fields or detector_caked_detector_replay_preserves_detector_origin_anchor or caked_detector_caked_replay_preserves_visual_caked_anchor or place_selection_at_detector_pick_saves_projected_caked or saves_background_qr_reference_without" -ra`
+  passed (`7 passed`).
 - `python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "detector_first_qr_selection or picker_candidates_only or sidecar_prewarmed_detector_rows or cold_cache or warm_manual_qr or saved_background_origin or detector_origin_initial_pairs_display or runtime_entry_display_reprojects_detector_origin_before_stale_caked_fields or manual_qr_caked_saved or caked_to_detector_replay or visual_caked or runtime_projection_uses_sim_detector_adapter_after_caked_view or caked_then_detector_with_stale_caked_cache or caked_manual_seed_returns_to_same_detector_visual_position or project_peaks_to_current_view_detector_replay" -ra`
   passed (`29 passed`).
 - `python -m pytest -q tests/test_gui_runtime_import_safe.py -k "manual_pick_cache_wrapper or prewarm or apply_main_caked_view_toggle or toggle_caked_2d" -ra`

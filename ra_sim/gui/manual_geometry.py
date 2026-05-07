@@ -4031,9 +4031,13 @@ def _geometry_manual_saved_background_detector_origin(
     frame = _geometry_manual_normalized_frame_token(
         entry.get("manual_background_input_frame")
     )
-    if origin in caked_tokens or frame in caked_tokens:
+    if origin in detector_tokens:
+        return True
+    if origin in caked_tokens:
         return False
-    if origin in detector_tokens or frame in detector_tokens:
+    if frame in caked_tokens:
+        return False
+    if frame in detector_tokens:
         return True
     strong_caked_background = _geometry_manual_finite_point(
         entry,
@@ -17764,6 +17768,9 @@ def geometry_manual_place_selection_at(
         pair_entry["manual_background_input_origin"] = (
             "caked" if bool(use_caked_space) else "detector"
         )
+        pair_entry["manual_background_input_frame"] = (
+            "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
+        )
         if callable(push_undo_state_fn):
             push_undo_state_fn()
         base_entries = current_session.get("base_entries", [])
@@ -18222,6 +18229,9 @@ def geometry_manual_place_selection_at(
     pair_entry["manual_geometry_run_id"] = manual_run_id
     pair_entry["manual_trace_version"] = MANUAL_GEOMETRY_TRACE_VERSION
     pair_entry["manual_background_input_origin"] = "caked" if bool(use_caked_space) else "detector"
+    pair_entry["manual_background_input_frame"] = (
+        "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
+    )
     if (
         bool(use_caked_space)
         and detector_col is not None
@@ -18322,7 +18332,9 @@ def geometry_manual_place_selection_at(
         entry["background_phi_deg"] = float(resolved_background_pick["refined_background_phi_deg"])
         entry["caked_x"] = float(resolved_background_pick["refined_background_two_theta_deg"])
         entry["caked_y"] = float(resolved_background_pick["refined_background_phi_deg"])
-        entry["manual_background_input_frame"] = "caked_2theta_phi"
+        entry["manual_background_input_frame"] = (
+            "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
+        )
 
     _apply_resolved_background_fields(pair_entry)
     if callable(refine_saved_pair_entry_fn):
@@ -18339,6 +18351,9 @@ def geometry_manual_place_selection_at(
             pair_entry["manual_trace_version"] = MANUAL_GEOMETRY_TRACE_VERSION
             pair_entry["manual_background_input_origin"] = (
                 "caked" if bool(use_caked_space) else "detector"
+            )
+            pair_entry["manual_background_input_frame"] = (
+                "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
             )
             _apply_resolved_background_fields(pair_entry)
             pair_entry.setdefault("raw_detector_display_px", raw_detector_display)
