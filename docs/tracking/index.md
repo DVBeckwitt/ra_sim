@@ -55,10 +55,14 @@ validation green for detector-origin and caked-origin manual background replay.
 Latest provenance patch makes `manual_background_input_origin` authoritative
 over conflicting frame metadata, stops detector-view clicks from saving
 `manual_background_input_frame="caked_2theta_phi"`, and keeps derived caked
-fields as replay/cache data only. Already-saved contradictory detector-origin
-rows are compatible without state migration. No new operator control, public
-API, cache redesign, or schema migration. Manual detector/caked GUI smoke
-remains pending before closing the tracking item.
+fields as replay/cache data only. The follow-up runtime patch also prevents
+stale refreshed `x/y` or detector aliases from winning cross-view redraw:
+detector-origin rows return to detector anchors, caked-origin rows project from
+the saved visual caked point, and provenance-known background references fail
+closed when projection is unavailable. Already-saved contradictory rows are
+compatible without state migration. No new operator control, public API, cache
+redesign, or schema migration. Manual detector/caked GUI smoke remains pending
+before closing the tracking item.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel

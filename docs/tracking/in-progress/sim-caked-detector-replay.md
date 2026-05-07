@@ -1,6 +1,6 @@
 # Sim caked detector replay
 
-Status: implemented; focused validation passed
+Status: implemented; focused runtime validation passed; manual GUI smoke pending
 Type: bug
 Owner:
 Issue: none
@@ -23,6 +23,27 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-05-07 round-trip replay update: detector-origin and caked-origin manual
+background rows now resolve display coordinates from provenance first during
+runtime view toggles. Detector-origin rows no longer let saved caked
+`background_two_theta_deg/background_phi_deg` or stale refreshed `x/y` become
+detector-view authority; detector redraw prefers detector/native anchors and
+then projects through the current detector-display callback. Caked-origin rows
+entering detector view project from the saved visual caked point through the
+current caked-to-detector path instead of trusting stale detector aliases.
+Background-reference redraw now fails closed as unresolved when a known-origin
+row cannot be projected, instead of falling back to finite but wrong-frame
+fields.
+
+Bug/error status: fixed in focused runtime tests, including poisoned stale
+`x/y`/display aliases. Feature status: no new UI, public API, cache layer,
+file format, or schema migration. Migration/deprecation status: existing saved
+rows remain compatible because provenance classification is handled at read and
+redraw time. Shipping status: automated local gates are green; manual
+detector -> caked -> detector and caked -> detector -> caked GUI smoke remains
+the final operator acceptance step. Rollback is a normal git revert; no cleanup
+job or data repair is required.
 
 2026-05-07 provenance update: detector-clicked background rows no longer save
 derived caked coordinates as input provenance. The explicit

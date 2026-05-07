@@ -11184,6 +11184,173 @@ def test_caked_detector_caked_replay_preserves_visual_caked_background_anchor() 
     assert caked_second == visual_caked
 
 
+def test_detector_caked_detector_background_replay_uses_detector_origin_runtime_projection(
+    monkeypatch,
+) -> None:
+    use_caked = {"value": False}
+
+    def _native_to_caked(col, row, **_kwargs):
+        lookup = {
+            (1000.0, 2000.0): (22.0, -25.0),
+            (333.0, 444.0): (999.0, -999.0),
+        }
+        return lookup.get((float(col), float(row)), (None, None))
+
+    def _caked_to_detector(two_theta, phi, **_kwargs):
+        if (float(two_theta), float(phi)) == (999.0, -999.0):
+            return 333.0, 444.0
+        return None
+
+    monkeypatch.setattr(mg, "native_detector_coords_to_caked_display_coords", _native_to_caked)
+    monkeypatch.setattr(mg, "caked_angles_to_background_display_coords", _caked_to_detector)
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: use_caked["value"],
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([-999.0, -25.0, 22.0, 999.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([-999.0, -25.0, 22.0, 999.0], dtype=float),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.zeros((8, 8), dtype=float),
+        image_size=8,
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+    )
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "detector_display",
+        "x": 333.0,
+        "y": 444.0,
+        "display_col": 333.0,
+        "display_row": 444.0,
+        "detector_x": 1000.0,
+        "detector_y": 2000.0,
+        "background_detector_x": 1000.0,
+        "background_detector_y": 2000.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+        "caked_x": 999.0,
+        "caked_y": -999.0,
+    }
+
+    assert callbacks.entry_display_coords(entry) == (1000.0, 2000.0)
+
+    use_caked["value"] = True
+    assert callbacks.entry_display_coords(entry) == (22.0, -25.0)
+
+    use_caked["value"] = False
+    assert callbacks.entry_display_coords(entry) == (1000.0, 2000.0)
+    assert entry["manual_background_input_origin"] == "detector"
+    assert entry["manual_background_input_frame"] == "detector_display"
+    assert entry["detector_x"] == 1000.0
+    assert entry["detector_y"] == 2000.0
+
+
+def test_caked_detector_caked_background_replay_uses_caked_origin_runtime_projection(
+    monkeypatch,
+) -> None:
+    use_caked = {"value": True}
+    visual_caked = (40.177225, 36.296562)
+
+    def _native_to_caked(col, row, **_kwargs):
+        if (float(col), float(row)) == (500.0, 600.0):
+            return visual_caked
+        return None
+
+    def _caked_to_detector(two_theta, phi, **_kwargs):
+        if (float(two_theta), float(phi)) == pytest.approx(visual_caked):
+            return 500.0, 600.0
+        return None
+
+    monkeypatch.setattr(mg, "native_detector_coords_to_caked_display_coords", _native_to_caked)
+    monkeypatch.setattr(mg, "caked_angles_to_background_display_coords", _caked_to_detector)
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: use_caked["value"],
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([36.0, 40.0, 41.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([36.0, 40.0, 41.0], dtype=float),
+        current_background_display=lambda: np.zeros((8, 8), dtype=float),
+        current_background_native=lambda: np.zeros((8, 8), dtype=float),
+        image_size=8,
+        native_detector_coords_to_detector_display_coords=lambda col, row: (
+            float(col),
+            float(row),
+        ),
+    )
+    entry = {
+        "manual_background_input_origin": "caked",
+        "manual_background_input_frame": "caked_2theta_phi",
+        "background_two_theta_deg": visual_caked[0],
+        "background_phi_deg": visual_caked[1],
+        "caked_x": visual_caked[0],
+        "caked_y": visual_caked[1],
+        "x": 777.0,
+        "y": 888.0,
+        "detector_x": 111.0,
+        "detector_y": 222.0,
+    }
+
+    assert callbacks.entry_display_coords(entry) == visual_caked
+
+    use_caked["value"] = False
+    assert callbacks.entry_display_coords(entry) == (500.0, 600.0)
+
+    use_caked["value"] = True
+    assert callbacks.entry_display_coords(entry) == visual_caked
+    assert entry["manual_background_input_origin"] == "caked"
+    assert entry["manual_background_input_frame"] == "caked_2theta_phi"
+    assert entry["background_two_theta_deg"] == visual_caked[0]
+    assert entry["background_phi_deg"] == visual_caked[1]
+
+
+def test_background_reference_detector_origin_caked_view_does_not_fallback_to_stale_fields() -> (
+    None
+):
+    display = mg.geometry_manual_background_reference_initial_display_entry(
+        {
+            "manual_background_input_origin": "detector",
+            "manual_background_input_frame": "detector_display",
+            "x": 1000.0,
+            "y": 2000.0,
+            "detector_x": 1000.0,
+            "detector_y": 2000.0,
+            "background_two_theta_deg": 999.0,
+            "background_phi_deg": -999.0,
+        },
+        use_caked_display=True,
+        entry_display_coords=lambda _entry: None,
+    )
+
+    assert "bg_display" not in display
+    assert display["background_reference_display_unresolved"] is True
+
+
+def test_background_reference_caked_origin_detector_view_does_not_fallback_to_stale_detector_fields() -> (
+    None
+):
+    display = mg.geometry_manual_background_reference_initial_display_entry(
+        {
+            "manual_background_input_origin": "caked",
+            "manual_background_input_frame": "caked_2theta_phi",
+            "background_two_theta_deg": 40.177225,
+            "background_phi_deg": 36.296562,
+            "caked_x": 40.177225,
+            "caked_y": 36.296562,
+            "x": 777.0,
+            "y": 888.0,
+            "detector_x": 111.0,
+            "detector_y": 222.0,
+        },
+        use_caked_display=False,
+        entry_display_coords=lambda _entry: None,
+    )
+
+    assert "bg_display" not in display
+    assert display["background_reference_display_unresolved"] is True
+
+
 @pytest.mark.parametrize(
     ("entry", "expected_detector_origin"),
     [
