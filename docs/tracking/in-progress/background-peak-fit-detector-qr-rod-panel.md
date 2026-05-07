@@ -16,7 +16,9 @@ could be inconsistent with plotted markers when multiple target-Qr sources
 shared one HK value, and the detector figure did not expose a direct pixel-space
 curve-distance diagnostic. The workflow also needed a quick raw detector crop
 showing the beam center through the `HK=0`, `L=1` / `00L` peak without opening
-the full detector-region figure.
+the full detector-region figure. Direct Windows runs also left global peak
+fitting on the slow thread backend, so the CPU-heavy stage used one process
+instead of all available worker processes.
 
 ## Change
 
@@ -47,6 +49,14 @@ to make the Qr rod detector and integration figures source-consistent:
 - The script now writes `hk0_l1_star.png`, a raw detector-intensity crop from
   the beam center through and above the drawable `HK=0`, `L=1` / `00L` marker.
   Missing marker, beam, or crop inputs skip the image without failing the run.
+- The guarded runner now accepts the generated `.py` diagnostic through the
+  existing `--notebook` flag and sets the internal process guard needed for
+  Windows process-pool fitting.
+- The generated `.py` diagnostic allows the process backend only when that
+  guard is present. Direct Windows execution still falls back to threads and
+  prints the guarded-runner command.
+- Runtime logging now includes the process guard state next to worker and
+  Numba-thread settings.
 
 ## Status
 
@@ -68,17 +78,27 @@ Feature status:
 - `hk0_l1_star.png` is implemented in the diagnostic `.py` as a raw detector
   crop from the beam center through and above the `HK=0`, `L=1` / `00L`
   marker.
+- Windows CPU parallelization is implemented through the guarded runner path.
+  A Bi2Se3 run on 2026-05-07 reported `backend=process_pool`, `pids=28`, and
+  `global peak fitting elapsed=22.83s`, versus the direct-thread report of
+  `backend=thread_pool`, `pids=1`, and `elapsed=220.07s`.
 - The helper interface is internal to the diagnostic script; no CLI, config,
   saved-state, or package API surface changed.
+- No dead Qr-rod helper or cache code was removed in this slice:
+  `marker_qz_values_for_profile(...)` and the Qr-rod pickle cache are still
+  referenced in the current `.py` diagnostic.
 
 ## Validation
 
 Passing checks:
 
 - `.py` parse and compile.
+- Guarded runner `.py` source execution and Windows process-backend guard tests.
 - Targeted `hk0_l1_star.png` helper and wiring coverage for crop bounds,
   edge clipping, invalid inputs, `HK=0`, `L=1` marker selection, synthetic PNG
   save, and diagnostic call-site wiring.
+- Fast project check tier:
+  `python -m ra_sim.dev check` passed with `280 passed`.
 - Parallel-notebook pytest checks:
   `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_process_pool_worker`
   and
@@ -87,10 +107,11 @@ Passing checks:
 
 Known validation limits:
 
-- The target script section was not rerun with local data during this patch.
 - Full `tests/test_background_peak_fits_notebook.py` remains red in this
   checkout because the non-parallel notebook expectations/failure path are
   unrelated to the patched ignored notebook.
+- `hk0_l1_star.png` skipped in the guarded-process Bi2Se3 benchmark because a
+  drawable `HK=0`, `L=1` marker was unavailable in that run.
 - Visual acceptance still needs manual script-output review: grayscale detector
   background, HK labels near low-L rod bases, central `HK=0` Delta-Qr band,
   the `hk0_l1_star.png` crop fully containing the L=1 intensity, no misleading

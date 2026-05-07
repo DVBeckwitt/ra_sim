@@ -1,4 +1,4 @@
-"""Execute the all-background peak-fit notebook for one or more GUI states.
+"""Execute the all-background peak-fit diagnostic for one or more GUI states.
 
 Examples
 --------
@@ -44,6 +44,9 @@ def _state_paths(values: list[str]) -> list[Path]:
 
 
 def _notebook_code_cells(notebook_path: Path) -> list[tuple[int, str]]:
+    if notebook_path.suffix.lower() == ".py":
+        return [(0, notebook_path.read_text(encoding="utf-8"))]
+
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     cells = notebook.get("cells", [])
     if not isinstance(cells, list):
@@ -138,6 +141,10 @@ def _execute_notebook(
             "BACKGROUND_PROCESS_NUMBA_THREADS",
             process_numba_threads,
         ),
+        "RA_SIM_ALL_BACKGROUND_PROCESS_GUARD": _set_or_clear_env(
+            "RA_SIM_ALL_BACKGROUND_PROCESS_GUARD",
+            "1",
+        ),
     }
 
     namespace = {
@@ -148,9 +155,15 @@ def _execute_notebook(
         os.chdir(repo_root)
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
+        is_python_diagnostic = notebook_path.suffix.lower() == ".py"
         for cell_index, code in _notebook_code_cells(notebook_path):
-            print(f"[{run_name}] executing notebook cell {cell_index}")
-            exec(compile(code, f"{notebook_path}#cell-{cell_index}", "exec"), namespace)
+            if is_python_diagnostic:
+                print(f"[{run_name}] executing python diagnostic script")
+                filename = str(notebook_path)
+            else:
+                print(f"[{run_name}] executing notebook cell {cell_index}")
+                filename = f"{notebook_path}#cell-{cell_index}"
+            exec(compile(code, filename, "exec"), namespace)
     finally:
         os.chdir(old_cwd)
         sys.path[:] = old_path
@@ -178,7 +191,7 @@ def _format_exception(exc: BaseException, traceback: TracebackType | None) -> st
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run scripts/diagnostics/all_background_peak_fits.ipynb for saved GUI states.",
+        description="Run an all-background peak-fit notebook or Python diagnostic for saved GUI states.",
     )
     parser.add_argument(
         "states",
@@ -189,7 +202,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--notebook",
         type=Path,
         default=DEFAULT_NOTEBOOK,
-        help="Notebook to execute.",
+        help="Notebook or Python diagnostic script to execute.",
     )
     parser.add_argument(
         "--out-dir",

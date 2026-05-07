@@ -282,6 +282,7 @@ def normalize_fit_backend(
     *,
     workers: int,
     platform_name: str | None = None,
+    process_guard_enabled: bool = False,
 ) -> str:
     if platform_name is None:
         platform_name = os.name
@@ -290,7 +291,7 @@ def normalize_fit_backend(
         backend = "process"
     if int(workers) <= 1:
         return "serial"
-    if platform_name == "nt" and backend in {"auto", "process"}:
+    if platform_name == "nt" and backend in {"auto", "process"} and not process_guard_enabled:
         return "thread"
     if backend == "auto":
         return "process"
@@ -478,13 +479,23 @@ REQUESTED_FIT_BACKEND = (
     _setting_text("FIT_BACKEND_OVERRIDE", "BACKGROUND_FIT_BACKEND", "process").strip().lower()
     or "process"
 )
-FIT_BACKEND = normalize_fit_backend(REQUESTED_FIT_BACKEND, workers=FIT_WORKERS)
+PROCESS_GUARD_ENABLED = _truthy_setting(
+    "PROCESS_GUARD_OVERRIDE", "RA_SIM_ALL_BACKGROUND_PROCESS_GUARD", False
+)
+FIT_BACKEND = normalize_fit_backend(
+    REQUESTED_FIT_BACKEND,
+    workers=FIT_WORKERS,
+    process_guard_enabled=PROCESS_GUARD_ENABLED,
+)
 if REQUESTED_FIT_BACKEND not in {"auto", "process", "thread", "serial"}:
     print(f"unsupported FIT_BACKEND={REQUESTED_FIT_BACKEND!r}; using {FIT_BACKEND!r}")
 if FIT_BACKEND != REQUESTED_FIT_BACKEND:
     if os.name == "nt" and REQUESTED_FIT_BACKEND in {"auto", "process"}:
         print(
-            "process fit backend is disabled for this top-level diagnostic script on Windows; using thread backend"
+            "process fit backend is disabled for direct top-level diagnostic scripts on Windows; "
+            "using thread backend. Use run_all_background_peak_fits.py --notebook "
+            "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py "
+            "--fit-backend process for guarded process workers."
         )
     else:
         print(f"fit backend normalized from {REQUESTED_FIT_BACKEND!r} to {FIT_BACKEND!r}")
@@ -531,6 +542,7 @@ print(
     f"fit_workers={FIT_WORKERS} profile_fit_workers={PROFILE_FIT_WORKERS} "
     f"rod_fit_workers={ROD_PROFILE_FIT_WORKERS} numba_threads={NUMBA_WORKERS} "
     f"fit_backend={FIT_BACKEND} process_numba_threads={PROCESS_NUMBA_THREADS} "
+    f"process_guard={PROCESS_GUARD_ENABLED} "
     f"cake_engine={EXACT_CAKE_ENGINE} cake_workers={CAKE_WORKERS} "
     f"gpu={GPU_ACCELERATION_ENABLED}"
 )

@@ -55,8 +55,7 @@ uses a final Qr-rod profile cache in the diagnostic output directory.
 Current status as of 2026-05-07:
 
 - cache filename: `<state-stem>_qr_rod_profile_cache.pkl`
-- cache format: JSON envelope; legacy pickle payloads are ignored and
-  regenerated instead of being deserialized
+- cache format: pickle envelope with schema and state cache-key validation
 - cache identity: GUI-state filename, not the absolute state path, so reruns of
   the same state filename can reuse the previous final Qr-rod fit
 - reset control: `RA_SIM_RESET_QR_ROD_PROFILE_CACHE=1`
@@ -72,10 +71,22 @@ the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.
 or imported L edits must update `display_l` and must not move the fitted marker
 position.
 
-On Windows, the generated top-level diagnostic normalizes `process` and `auto`
-fit backend requests to `thread`. This avoids `multiprocessing.spawn`
-re-importing the notebook-style script as `__mp_main__` and rerunning the whole
-diagnostic inside worker children. POSIX runs can still use the process backend.
+On Windows, direct top-level execution of the generated `.py` diagnostic
+normalizes `process` and `auto` fit backend requests to `thread`. This avoids
+`multiprocessing.spawn` re-importing the notebook-style script as `__mp_main__`
+and rerunning the whole diagnostic inside worker children. Use the guarded
+runner for full CPU process parallelism:
+
+```powershell
+python scripts/diagnostics/run_all_background_peak_fits.py --notebook scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py --fit-backend process --fit-workers 28 --process-numba-threads 1 "$env:USERPROFILE\.local\share\ra_sim\Bi2Se3.json"
+```
+
+The runner accepts either a notebook or a `.py` diagnostic through the existing
+`--notebook` compatibility flag and sets the internal process guard for the
+duration of the run. A 2026-05-07 Bi2Se3 guarded run reported
+`backend=process_pool`, `pids=28`, and `global peak fitting elapsed=22.83s`,
+compared with the direct Windows thread-path report of `backend=thread_pool`,
+`pids=1`, and `elapsed=220.07s`.
 
 The diagnostic writes `hk0_l1_star.png` to the figure output directory. This is
 a raw detector-intensity crop from the beam center through and above the
@@ -89,11 +100,15 @@ Focused validation status:
   passes
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k hk0_l1_star -ra`
   passes, `5 passed`
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
+  passes, `8 passed`
+- `python -m ra_sim.dev check` passes, `280 passed`
 - full `tests/test_background_peak_fits_notebook.py` still has unrelated
   non-parallel notebook expectation/helper failures in this checkout
-- earlier Bi2Se3 diagnostic validation completed with `fit_backend=thread`, `79/79`
-  successful background peak fits, final Qr-rod cache reuse, marker CSV columns
-  `fit_l`/`display_l`, and regenerated rod-profile figures
+- Bi2Se3 guarded-process diagnostic validation completed with `fit_backend=process`,
+  `backend=process_pool`, `pids=28`, `79/79` successful background peak fits,
+  final Qr-rod cache write, marker CSV columns `fit_l`/`display_l`, and
+  regenerated rod-profile figures under the benchmark artifact directory
 
 ## GUI Runtime Update Fast Paths
 

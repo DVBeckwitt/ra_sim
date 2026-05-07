@@ -5,6 +5,7 @@ import math
 import os
 import re
 from pathlib import Path
+from textwrap import dedent
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,7 +14,12 @@ import pytest
 from scipy.optimize import least_squares, nnls
 
 from scripts.diagnostics import background_peak_fit_worker as peak_fit_worker
-from scripts.diagnostics.run_all_background_peak_fits import _output_dir_for_state, _safe_run_name
+from scripts.diagnostics.run_all_background_peak_fits import (
+    _execute_notebook,
+    _notebook_code_cells,
+    _output_dir_for_state,
+    _safe_run_name,
+)
 
 
 NOTEBOOK_PATH = Path("scripts/diagnostics/all_background_peak_fits.ipynb")
@@ -239,6 +245,7 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
 
     for token in (
         "def _execute_notebook(",
+        "RA_SIM_ALL_BACKGROUND_PROCESS_GUARD",
         "RA_SIM_ALL_BACKGROUND_STATE",
         "RA_SIM_ALL_BACKGROUND_RUN_NAME",
         "RA_SIM_ALL_BACKGROUND_OUT_DIR",
@@ -251,6 +258,93 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
         "state_count > 1",
     ):
         assert token in source
+
+
+def test_background_peak_fits_runner_reads_python_diagnostic_source(tmp_path: Path) -> None:
+    diagnostic_path = tmp_path / "diagnostic.py"
+    diagnostic_path.write_text("print('script source executed')\n", encoding="utf-8")
+
+    assert _notebook_code_cells(diagnostic_path) == [(0, "print('script source executed')\n")]
+
+
+def test_background_peak_fits_runner_executes_python_diagnostic_with_process_guard(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    diagnostic_path = tmp_path / "diagnostic.py"
+    diagnostic_path.write_text(
+        dedent(
+            """
+            import json
+            import os
+            from pathlib import Path
+
+            out_dir = Path(os.environ['RA_SIM_ALL_BACKGROUND_OUT_DIR'])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / 'capture.json').write_text(json.dumps({
+                'guard': os.environ.get('RA_SIM_ALL_BACKGROUND_PROCESS_GUARD'),
+                'state': os.environ.get('RA_SIM_ALL_BACKGROUND_STATE'),
+                'run_name': os.environ.get('RA_SIM_ALL_BACKGROUND_RUN_NAME'),
+                'backend': os.environ.get('BACKGROUND_FIT_BACKEND'),
+                'process_numba_threads': os.environ.get('BACKGROUND_PROCESS_NUMBA_THREADS'),
+                'file': __file__,
+            }), encoding='utf-8')
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+
+    _execute_notebook(
+        notebook_path=diagnostic_path,
+        state_path=state_path,
+        run_name="state",
+        out_dir=out_dir,
+        repo_root=repo_root,
+        fit_workers=2,
+        numba_threads=3,
+        fit_backend="process",
+        process_numba_threads=1,
+    )
+
+    capture = json.loads((out_dir / "capture.json").read_text(encoding="utf-8"))
+    assert capture == {
+        "guard": "1",
+        "state": str(state_path),
+        "run_name": "state",
+        "backend": "process",
+        "process_numba_threads": "1",
+        "file": str(diagnostic_path),
+    }
+    assert os.environ.get("RA_SIM_ALL_BACKGROUND_PROCESS_GUARD") is None
+
+
+def test_parallel_script_windows_process_backend_requires_runner_guard() -> None:
+    namespace = _script_functions("normalize_fit_backend")
+    normalize_fit_backend = namespace["normalize_fit_backend"]
+
+    assert normalize_fit_backend("process", workers=28, platform_name="nt") == "thread"
+    assert (
+        normalize_fit_backend(
+            "process",
+            workers=28,
+            platform_name="nt",
+            process_guard_enabled=True,
+        )
+        == "process"
+    )
+    assert (
+        normalize_fit_backend(
+            "auto",
+            workers=28,
+            platform_name="nt",
+            process_guard_enabled=True,
+        )
+        == "process"
+    )
 
 
 def test_parallel_script_hk0_l1_star_crop_bounds_contains_beam_and_peak() -> None:
