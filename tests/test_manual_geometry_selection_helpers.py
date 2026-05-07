@@ -11084,6 +11084,106 @@ def test_detector_origin_initial_pairs_display_reprojects_background_in_saved_an
     assert legacy_caked_session_initial[0]["bg_display"] == (999.0, -999.0)
 
 
+def test_saved_background_origin_prefers_detector_origin_over_caked_frame() -> None:
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "caked_2theta_phi",
+        "detector_x": 1000.0,
+        "detector_y": 2000.0,
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 20.0,
+        "caked_x": 10.0,
+        "caked_y": 20.0,
+        "x": 100.0,
+        "y": 200.0,
+    }
+
+    assert mg._geometry_manual_saved_background_detector_origin(entry) is True
+    assert (
+        mg._geometry_manual_saved_background_display_point_for_view(
+            entry,
+            use_caked_display=True,
+            entry_display_coords=lambda _entry: (22.0, -25.0),
+        )
+        == (22.0, -25.0)
+    )
+    assert (
+        mg._geometry_manual_saved_background_display_point_for_view(
+            entry,
+            use_caked_display=True,
+            entry_display_coords=lambda _entry: None,
+        )
+        is None
+    )
+
+
+def test_detector_caked_detector_replay_preserves_detector_origin_background_anchor() -> None:
+    entry = {
+        "manual_background_input_origin": "detector",
+        "manual_background_input_frame": "detector_display",
+        "detector_x": 1000.0,
+        "detector_y": 2000.0,
+        "x": 1000.0,
+        "y": 2000.0,
+        "background_two_theta_deg": 999.0,
+        "background_phi_deg": -999.0,
+    }
+
+    detector_first = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=False,
+        entry_display_coords=lambda _entry: (1000.0, 2000.0),
+    )
+    caked = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=lambda _entry: (22.0, -25.0),
+    )
+    detector_second = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=False,
+        entry_display_coords=lambda _entry: (1000.0, 2000.0),
+    )
+
+    assert detector_first == (1000.0, 2000.0)
+    assert caked == (22.0, -25.0)
+    assert detector_second == (1000.0, 2000.0)
+
+
+def test_caked_detector_caked_replay_preserves_visual_caked_background_anchor() -> None:
+    visual_caked = (40.177225, 36.296562)
+    entry = {
+        "manual_background_input_origin": "caked",
+        "manual_background_input_frame": "caked_2theta_phi",
+        "background_two_theta_deg": visual_caked[0],
+        "background_phi_deg": visual_caked[1],
+        "caked_x": visual_caked[0],
+        "caked_y": visual_caked[1],
+        "refined_sim_caked_x": 40.176704,
+        "refined_sim_caked_y": 36.25,
+    }
+
+    caked_first = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=lambda _entry: (999.0, 999.0),
+    )
+    detector = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=False,
+        entry_display_coords=lambda _entry: (500.0, 600.0),
+    )
+    caked_second = mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=lambda _entry: (999.0, 999.0),
+    )
+
+    assert caked_first == visual_caked
+    assert detector == (500.0, 600.0)
+    assert caked_second == visual_caked
+
+
 @pytest.mark.parametrize(
     ("entry", "expected_detector_origin"),
     [
@@ -15529,6 +15629,7 @@ def test_geometry_manual_place_selection_at_detector_pick_saves_projected_caked_
     assert next_session == {}
     saved = saved_entry_sets[-1][0]
     assert saved["manual_background_input_origin"] == "detector"
+    assert saved["manual_background_input_frame"] == "detector_display"
     assert saved["geometry_detector_native_px"] == (105.0, 206.0)
     assert saved["raw_detector_native_px"] == (104.8, 205.9)
     assert saved["background_two_theta_deg"] == 10.5
@@ -15599,6 +15700,8 @@ def test_geometry_manual_place_selection_at_saves_background_qr_reference_withou
     assert "q_group_key" not in saved
     assert saved["background_qr_set_reference"] is True
     assert saved["geometry_fit_disabled"] is True
+    assert saved["manual_background_input_origin"] == "detector"
+    assert saved["manual_background_input_frame"] == "detector_display"
     assert saved["background_two_theta_deg"] == 10.5
     assert saved["background_phi_deg"] == 20.6
 
@@ -16558,6 +16661,8 @@ def test_geometry_manual_place_selection_at_caked_background_refines_to_peak_top
     assert pair["raw_caked_y"] == 0.0
     assert np.isclose(pair["caked_x"], 10.2, atol=0.12)
     assert np.isclose(pair["caked_y"], 0.3, atol=0.12)
+    assert pair["manual_background_input_origin"] == "caked"
+    assert pair["manual_background_input_frame"] == "caked_2theta_phi"
     assert pair["detector_x"] == pair["x"]
     assert pair["detector_y"] == pair["y"]
     assert pair["source_row_index"] == 31
@@ -16635,6 +16740,8 @@ def test_geometry_manual_place_selection_at_back_projects_caked_pick_to_detector
     assert saved_entry_sets[-1][0]["detector_y"] == 211.2
     assert saved_entry_sets[-1][0]["caked_x"] == 13.2
     assert saved_entry_sets[-1][0]["caked_y"] == 2.5
+    assert saved_entry_sets[-1][0]["manual_background_input_origin"] == "caked"
+    assert saved_entry_sets[-1][0]["manual_background_input_frame"] == "caked_2theta_phi"
 
 
 def test_geometry_manual_refine_preview_point_is_repeatable_with_peak_context_seed() -> None:
