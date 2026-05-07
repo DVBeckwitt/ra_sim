@@ -349,6 +349,80 @@ def test_apply_gui_state_geometry_restores_peak_cache_when_present() -> None:
     ]
 
 
+def test_apply_gui_state_geometry_restores_saved_q_group_rows_without_peak_records() -> None:
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[{"key": ("q_group", "stale", 99, 1)}]
+    )
+    invalidations = []
+
+    updated = state_io.apply_gui_state_geometry(
+        {
+            "q_group_rows": [
+                {
+                    "key": ["q_group", "primary", 1, 8],
+                    "included": True,
+                    "display_label": "primary Qr=1.0 Gz=8",
+                    "peak_count": 2,
+                    "hkl_preview": [[1, 0, 8]],
+                },
+                {
+                    "key": ["bad"],
+                    "included": True,
+                },
+            ],
+            "peak_records": [],
+            "manual_pairs": [],
+        },
+        q_group_state=q_group_state,
+        geometry_q_group_key_from_jsonable=lambda value: tuple(value)
+        if isinstance(value, list) and len(value) == 4
+        else None,
+        invalidate_geometry_manual_pick_cache=lambda: invalidations.append(True),
+        apply_geometry_manual_pairs_snapshot=lambda *_args, **_kwargs: None,
+        replace_runtime_peak_cache=lambda _rows: None,
+        current_background_index=0,
+        selected_hkl_target=None,
+    )
+
+    assert updated["warnings"] == []
+    assert invalidations
+    assert q_group_state.cached_entries == [
+        {
+            "key": ("q_group", "primary", 1, 8),
+            "included": True,
+            "display_label": "primary Qr=1.0 Gz=8",
+            "peak_count": 2,
+            "hkl_preview": [[1, 0, 8]],
+        }
+    ]
+    assert q_group_state.restored_q_group_rows_pending_live_refresh is True
+    assert q_group_state.refresh_requested is True
+
+
+def test_apply_gui_state_geometry_clears_restored_q_group_pending_flag_without_rows() -> None:
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[{"key": ("q_group", "stale", 99, 1)}],
+        restored_q_group_rows_pending_live_refresh=True,
+    )
+
+    state_io.apply_gui_state_geometry(
+        {
+            "q_group_rows": [],
+            "peak_records": [],
+            "manual_pairs": [],
+        },
+        q_group_state=q_group_state,
+        geometry_q_group_key_from_jsonable=lambda _value: None,
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        apply_geometry_manual_pairs_snapshot=lambda *_args, **_kwargs: None,
+        replace_runtime_peak_cache=lambda _rows: None,
+        current_background_index=0,
+        selected_hkl_target=None,
+    )
+
+    assert q_group_state.restored_q_group_rows_pending_live_refresh is False
+
+
 def test_replace_geometry_q_group_masks_normalizes_parent_keys_from_rows() -> None:
     q_group_state = state.GeometryQGroupState()
 

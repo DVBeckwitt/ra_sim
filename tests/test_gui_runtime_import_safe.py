@@ -19994,6 +19994,85 @@ def test_manual_pick_cache_source_rows_rebuild_allowed_for_manual_pick_cache(
     assert returned_rows[0]["q_group_key"] == ("q_group", "primary", 1, 10)
 
 
+def test_manual_pick_cache_source_rows_rebuild_allowed_for_restored_q_group_rows(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    runtime_session.background_runtime_state.current_background_index = 0
+    simulation_state.source_row_snapshots = {}
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_q_group_state",
+        SimpleNamespace(
+            cached_entries=[
+                {
+                    "key": ("q_group", "primary", 1, 10),
+                    "peak_count": 2,
+                    "included": True,
+                }
+            ],
+            restored_q_group_rows_pending_live_refresh=True,
+        ),
+        raising=False,
+    )
+    rows = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "hkl": (-1, 0, 10),
+            "source_table_index": 3,
+            "source_row_index": 4,
+            "source_branch_index": 0,
+            "sim_col": 12.0,
+            "sim_row": 14.0,
+            "native_col": 12.0,
+            "native_row": 14.0,
+        }
+    ]
+    rebuild_calls: list[str | None] = []
+
+    def _rebuild_source_rows(_background_idx, _param_set=None, **kwargs):
+        rebuild_calls.append(kwargs.get("consumer"))
+        return [dict(entry) for entry in rows]
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_targeted_projection_view_signature",
+        lambda _idx, **_kwargs: {
+            "mode": "detector",
+            "detector_shape": [64, 64],
+            "available": True,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_rebuild_source_rows_for_background",
+        _rebuild_source_rows,
+        raising=False,
+    )
+
+    returned_rows = runtime_session._geometry_manual_source_rows_for_background(
+        0,
+        {"a": 4.143},
+        consumer="manual_pick_cache",
+    )
+    diagnostics = runtime_session._geometry_manual_last_source_snapshot_diagnostics()
+
+    assert returned_rows == [dict(entry) for entry in rows]
+    assert rebuild_calls == ["manual_pick_cache"]
+    assert diagnostics["manual_pick_rebuild_allowed"] is True
+    assert diagnostics["manual_pick_rebuild_artifacts_available"] is True
+    assert diagnostics["restored_q_group_rows_available"] is True
+    assert diagnostics["status"] == "snapshot_rebuilt"
+
+
 def test_manual_pick_cache_caked_view_uses_detector_rows_when_projector_missing(
     monkeypatch,
 ) -> None:

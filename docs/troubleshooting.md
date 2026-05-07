@@ -79,6 +79,27 @@ Fix:
 - keep only portable examples in `config/*.example.yaml`
 - scrub local absolute paths from docs or tracked JSON/YAML before pushing
 
+## Imported GUI State Has No Qr Sets
+
+Symptom:
+
+- importing a saved GUI state with `state.geometry.q_group_rows` but empty
+  `state.geometry.peak_records` leaves the manual Qr picker with no selectable
+  Qr sets
+- the GUI status reports:
+  `Manual Qr picker has no detector source rows. Update simulation or refresh the Qr/Qz list.`
+
+Fix:
+
+- This is fixed for GUI states that persist Qr/Qz selector rows under
+  `state.geometry.q_group_rows`.
+- Import now restores those rows into the Qr/Qz selector cache, preserves them
+  through an empty transient live refresh, and lets the current-background
+  manual picker rebuild detector source rows from the restored selector state.
+- If the warning still appears for a newly captured state, confirm the JSON has
+  nonempty `state.geometry.q_group_rows`; a state with neither saved selector
+  rows nor live simulation artifacts still needs a simulation update.
+
 ## Need More Detail
 
 Use these deeper references:

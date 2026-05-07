@@ -31060,10 +31060,16 @@ def _geometry_manual_source_rows_for_background(
         current_background_idx = int(background_runtime_state.current_background_index)
     except Exception:
         current_background_idx = int(background_idx)
+    q_group_state = globals().get("geometry_q_group_state")
+    restored_q_group_rows_available = bool(
+        getattr(q_group_state, "restored_q_group_rows_pending_live_refresh", False)
+        and getattr(q_group_state, "cached_entries", None)
+    )
     has_manual_pick_rebuild_artifacts = bool(
         getattr(simulation_runtime_state, "stored_max_positions_local", None) is not None
         or getattr(simulation_runtime_state, "stored_intersection_cache", None) is not None
         or bool(getattr(simulation_runtime_state, "peak_records", None))
+        or restored_q_group_rows_available
     )
     manual_pick_cache_lookup = _geometry_manual_consumer_is_manual_pick_cache(lookup_context)
     allow_manual_pick_rebuild = bool(
@@ -31174,6 +31180,7 @@ def _geometry_manual_source_rows_for_background(
         "final_returned_row_count": 0,
         "manual_pick_rebuild_allowed": bool(allow_manual_pick_rebuild),
         "manual_pick_rebuild_artifacts_available": bool(has_manual_pick_rebuild_artifacts),
+        "restored_q_group_rows_available": bool(restored_q_group_rows_available),
     }
 
     def _print_geometry_fit_dataset_source_snapshot_diagnostics() -> None:
@@ -31218,6 +31225,9 @@ def _geometry_manual_source_rows_for_background(
                     ),
                     "manual_pick_rebuild_artifacts_available": bool(
                         dataset_debug["manual_pick_rebuild_artifacts_available"]
+                    ),
+                    "restored_q_group_rows_available": bool(
+                        dataset_debug["restored_q_group_rows_available"]
                     ),
                 }
             )
