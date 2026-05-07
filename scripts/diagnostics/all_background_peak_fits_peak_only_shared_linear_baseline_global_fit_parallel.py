@@ -98,7 +98,7 @@ from ra_sim.simulation.exact_cake_portable import (
     raw_phi_to_gui_phi,
 )
 
-DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "PbI2.json"
+DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "Bi2Te3.json"
 
 
 def _setting_text(local_name: str, env_name: str, default: object = "") -> str:
