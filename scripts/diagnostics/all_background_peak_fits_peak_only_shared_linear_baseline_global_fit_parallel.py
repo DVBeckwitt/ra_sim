@@ -8672,6 +8672,31 @@ def draw_rod_profile_fit_markers(
     )
 
 
+def l_tick_label(value: float) -> str:
+    if np.isfinite(value) and abs(float(value) - round(float(value))) < 1.0e-6:
+        return f"{int(round(float(value)))}"
+    return f"{float(value):.2f}"
+
+
+def hk_l_tick_label(m_value: object, l_value: float) -> str:
+    return f"({int(m_value)},{l_tick_label(float(l_value))})"
+
+
+def rod_marker_annotation_label(marker_row: dict[str, object] | pd.Series, m_value: int) -> str:
+    try:
+        display_l = float(marker_row.get("display_l", np.nan))
+    except Exception:
+        display_l = np.nan
+    if not np.isfinite(display_l):
+        try:
+            display_l = float(marker_row.get("fit_l", marker_row.get("l", np.nan)))
+        except Exception:
+            display_l = np.nan
+    if np.isfinite(display_l):
+        return hk_l_tick_label(int(m_value), float(display_l))
+    return hk_display_label(int(m_value))
+
+
 def annotate_rod_profile_hk_locations(
     ax: object,
     *,
@@ -8798,31 +8823,6 @@ def positive_l_rows(table: pd.DataFrame, *, m_value: int, branch_value: str) -> 
         table["qz_center"], m_value=int(m_value), branch_value=str(branch_value)
     )
     return table[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
-
-
-def l_tick_label(value: float) -> str:
-    if np.isfinite(value) and abs(float(value) - round(float(value))) < 1.0e-6:
-        return f"{int(round(float(value)))}"
-    return f"{float(value):.2f}"
-
-
-def hk_l_tick_label(m_value: object, l_value: float) -> str:
-    return f"({int(m_value)},{l_tick_label(float(l_value))})"
-
-
-def rod_marker_annotation_label(marker_row: dict[str, object] | pd.Series, m_value: int) -> str:
-    try:
-        display_l = float(marker_row.get("display_l", np.nan))
-    except Exception:
-        display_l = np.nan
-    if not np.isfinite(display_l):
-        try:
-            display_l = float(marker_row.get("fit_l", marker_row.get("l", np.nan)))
-        except Exception:
-            display_l = np.nan
-    if np.isfinite(display_l):
-        return hk_l_tick_label(int(m_value), float(display_l))
-    return hk_display_label(int(m_value))
 
 
 support_diagnostic_stem = f"{ROD_PROFILE_STEM}_support_diagnostics"

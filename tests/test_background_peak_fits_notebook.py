@@ -362,6 +362,27 @@ def test_parallel_script_hk0_l1_star_output_is_wired() -> None:
         assert token in source
 
 
+def test_parallel_script_defines_rod_marker_label_before_first_call() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    tree = ast.parse(PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(PARALLEL_SCRIPT_PATH))
+    definition_line = next(
+        node.lineno
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "rod_marker_annotation_label"
+    )
+    call_lines = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "rod_marker_annotation_label"
+    ]
+
+    assert call_lines
+    assert definition_line < min(call_lines)
+
+
 def test_parallel_background_peak_fits_notebook_uses_process_pool_worker() -> None:
     if not PARALLEL_NOTEBOOK_PATH.exists():
         pytest.skip(f"{PARALLEL_NOTEBOOK_PATH} is not present in this checkout")

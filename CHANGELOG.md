@@ -73,6 +73,7 @@
   - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with rotated 2D Gaussian-plus-plane fits, then fit each Qr-rod Qz profile jointly as a simultaneous sum of all projected branch-point Gaussian peaks to avoid overlap overestimation between close peaks.
   - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
   - Added `hk0_l1_star.png` to the parallel background peak-fit diagnostic script as a raw detector crop from the beam center through the `HK=0`, `L=1` / `00L` marker.
+  - Fixed the parallel background peak-fit diagnostic script so Qr-rod marker labels are defined before profile annotation/redraw code can call them.
   - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.
   - Decoupled manual Qr/Qz click paths from picker-cache construction: clicks now consume warm caches only, background Qr references avoid simulated inventory, redraw skips simulated lookup for background-only references, and cache diagnostics expose build/refine/lookup timing.
   - Preserved warm manual Qr/Qz picker caches after source-entry click placement so the next group click can reuse the existing cache instead of cold-failing.

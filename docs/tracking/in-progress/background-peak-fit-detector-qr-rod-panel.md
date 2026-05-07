@@ -58,6 +58,9 @@ Bug/error status:
 
 - Missing beam center, detector image, crop bounds, or drawable `HK=0`, `L=1`
   marker is handled as a skipped diagnostic image, not a run failure.
+- The Qr-rod marker-label helper ordering bug is fixed; profile annotation and
+  redraw paths no longer call `rod_marker_annotation_label(...)` before it is
+  defined.
 - Existing unrelated non-parallel notebook test failures remain out of scope.
 
 Feature status:
