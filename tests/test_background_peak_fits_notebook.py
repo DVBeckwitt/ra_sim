@@ -828,6 +828,27 @@ def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
     assert 'ax.set_xlabel("Qz"' not in function_source
 
 
+def test_parallel_script_qr_rod_peak_editor_has_import_export_buttons() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef edit_qr_rod_peak_markers("
+        )
+    ]
+
+    for token in (
+        'Button(button_axes[1], "Import")',
+        'Button(button_axes[2], "Export")',
+        "filedialog.askopenfilename(",
+        "filedialog.asksaveasfilename(",
+        "load_qr_rod_peak_edits(import_path)",
+        "write_qr_rod_peak_edits(export_path, edited)",
+    ):
+        assert token in function_source
+
+
 def test_parallel_script_defines_rod_marker_label_before_first_call() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")

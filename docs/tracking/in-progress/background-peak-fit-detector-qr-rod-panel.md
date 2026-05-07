@@ -117,6 +117,9 @@ Feature status:
   by default with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup`; `skip` disables it for
   unattended runs and optional JSON round trip is available through
   `RA_SIM_QR_ROD_PEAK_EDITS`.
+- The marker editor has `Import` and `Export` buttons that round-trip the same
+  JSON marker table as `RA_SIM_QR_ROD_PEAK_EDITS`, including adjusted
+  positions and final-figure label text.
 - Direct `.py` runs can override only the sample label/filename stem with
   `SAMPLE_NAME_OVERRIDE` or `RA_SIM_ALL_BACKGROUND_SAMPLE_NAME`; `RUN_NAME`
   continues to control the run directory.
@@ -157,8 +160,8 @@ Passing checks:
 - Targeted Qr-rod marker edit coverage for per-rod marker replacement,
   marker-table cache-key hashing, headless/interactive mode resolution, JSON
   edit round trip including `marker_title`, final-label override behavior,
-  sample-name override wiring, `HK=0` specular marker inclusion, and editor
-  call ordering before the joint-fit cache lookup.
+  in-popup import/export wiring, sample-name override wiring, `HK=0` specular
+  marker inclusion, and editor call ordering before the joint-fit cache lookup.
 - Targeted weak-peak regression coverage verifies a labeled HK=0 weak marker
   at `006`-like relative intensity remains present in the final joint-fit
   component list.

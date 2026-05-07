@@ -538,6 +538,8 @@ def show_qr_rod_peak_marker_popup(
     rod_profile_table: pd.DataFrame,
     *,
     backend_name: object = None,
+    edit_path: object = None,
+    required_marker_table: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, bool]:
     backend = str(backend_name if backend_name is not None else mpl.get_backend())
     if qr_rod_peak_edit_runtime_mode("auto", backend_name=backend, env={}) != "popup":
@@ -588,6 +590,7 @@ def show_qr_rod_peak_marker_popup(
     result = {"accepted": True}
     selected: dict[str, object] = {"group": None, "index": None, "dragging": False}
     title_box_state: dict[str, object] = {"box": None, "syncing": False}
+    edit_file_state: dict[str, object] = {"path": "" if edit_path is None else str(edit_path).strip()}
 
     def group_marker_rows(m_value: int, branch_value: str) -> pd.DataFrame:
         if edited.empty or not {"m", "branch", "qz_marker"}.issubset(edited):
@@ -674,6 +677,44 @@ def show_qr_rod_peak_marker_popup(
         if box is None:
             return
         set_selected_marker_title(getattr(box, "text", ""), redraw_figure=False)
+
+    def default_peak_edit_path() -> Path:
+        text = str(edit_file_state.get("path", "")).strip()
+        if text:
+            return Path(text).expanduser()
+        base_dir = Path(globals().get("OUT_DIR", Path.cwd())).expanduser()
+        stem = _safe_run_name(str(globals().get("ROD_PROFILE_STEM", "qr_rod_peak_markers")))
+        return base_dir / f"{stem}_peak_edits.json"
+
+    def choose_peak_edit_path(action: str) -> Path | None:
+        try:
+            from tkinter import filedialog
+        except Exception as exc:
+            print(f"Qr-rod peak marker editor {action} dialog unavailable: {exc}")
+            return None
+        initial_path = default_peak_edit_path()
+        options = {
+            "title": f"{action.title()} Qr-rod peak edits",
+            "filetypes": [
+                ("RA-SIM Qr-rod peak edits", "*.json"),
+                ("JSON files", "*.json"),
+                ("All files", "*.*"),
+            ],
+            "initialdir": str(initial_path.parent),
+        }
+        if action == "import":
+            selected_path = filedialog.askopenfilename(**options)
+        else:
+            selected_path = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                initialfile=initial_path.name,
+                **options,
+            )
+        if not selected_path:
+            return None
+        path = Path(selected_path).expanduser()
+        edit_file_state["path"] = str(path)
+        return path
 
     def profile_xy(m_value: int, branch_value: str) -> tuple[np.ndarray, np.ndarray]:
         sub = profiles[
@@ -851,6 +892,37 @@ def show_qr_rod_peak_marker_popup(
             select_nearest((int(m_value), str(branch_value)), selected_l)
         redraw()
 
+    def import_peak_edits(_event) -> None:
+        nonlocal edited
+        flush_title_box()
+        import_path = choose_peak_edit_path("import")
+        if import_path is None:
+            return
+        try:
+            imported = load_qr_rod_peak_edits(import_path)
+            if required_marker_table is not None:
+                imported = marker_table_with_specular_l_markers(imported, required_marker_table)
+            edited = imported.copy()
+            selected["group"] = None
+            selected["index"] = None
+            sync_title_box()
+            redraw()
+            print(f"imported Qr-rod peak edits={import_path}")
+        except Exception as exc:
+            print(f"failed importing Qr-rod peak edits={import_path}: {exc}")
+
+    def export_peak_edits(_event) -> None:
+        flush_title_box()
+        export_path = choose_peak_edit_path("export")
+        if export_path is None:
+            return
+        try:
+            saved_path = write_qr_rod_peak_edits(export_path, edited)
+            edit_file_state["path"] = str(saved_path)
+            print(f"exported Qr-rod peak edits={saved_path}")
+        except Exception as exc:
+            print(f"failed exporting Qr-rod peak edits={export_path}: {exc}")
+
     def on_press(event) -> None:
         if event.inaxes not in group_by_axes or event.xdata is None:
             return
@@ -903,21 +975,27 @@ def show_qr_rod_peak_marker_popup(
         plt.close(fig)
 
     button_axes = [
-        fig.add_axes([0.56, 0.035, 0.10, 0.05]),
-        fig.add_axes([0.68, 0.035, 0.10, 0.05]),
-        fig.add_axes([0.80, 0.035, 0.10, 0.05]),
+        fig.add_axes([0.46, 0.035, 0.085, 0.05]),
+        fig.add_axes([0.55, 0.035, 0.085, 0.05]),
+        fig.add_axes([0.64, 0.035, 0.085, 0.05]),
+        fig.add_axes([0.73, 0.035, 0.085, 0.05]),
+        fig.add_axes([0.82, 0.035, 0.085, 0.05]),
     ]
-    title_box = TextBox(fig.add_axes([0.08, 0.035, 0.40, 0.05]), "Label", textalignment="left")
+    title_box = TextBox(fig.add_axes([0.08, 0.035, 0.34, 0.05]), "Label", textalignment="left")
     title_box.on_submit(set_selected_marker_title)
     title_box_state["box"] = title_box
     buttons = [
         Button(button_axes[0], "Snap"),
-        Button(button_axes[1], "Cancel"),
-        Button(button_axes[2], "Accept"),
+        Button(button_axes[1], "Import"),
+        Button(button_axes[2], "Export"),
+        Button(button_axes[3], "Cancel"),
+        Button(button_axes[4], "Accept"),
     ]
     buttons[0].on_clicked(lambda event: snap_selected_group())
-    buttons[1].on_clicked(cancel)
-    buttons[2].on_clicked(accept)
+    buttons[1].on_clicked(import_peak_edits)
+    buttons[2].on_clicked(export_peak_edits)
+    buttons[3].on_clicked(cancel)
+    buttons[4].on_clicked(accept)
     fig._ra_sim_qr_rod_peak_edit_widgets = [title_box, *buttons]
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
@@ -963,6 +1041,8 @@ def edit_qr_rod_peak_markers(
             table,
             rod_profile_table,
             backend_name=backend_name,
+            edit_path=path_text,
+            required_marker_table=required_marker_table,
         )
     except Exception as exc:
         if str(mode or "auto").strip().lower() == "popup":

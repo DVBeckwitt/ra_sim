@@ -93,8 +93,11 @@ The editor input includes the dynamically projected `HK=0` / `00L` specular
 markers before cache lookup and fitting, so the specular rod peaks can be
 organized with the non-specular Qr rod peaks. Select a rod panel in the editor
 and press `Snap` to move all markers in that panel to nearby local profile
-peaks. The editor plots and accepts click/drag positions on the fitted integer
-`L` axis for each rod panel, while the saved marker table still stores
+peaks. The popup `Import` and `Export` buttons load or save the same JSON
+marker-table format used by `RA_SIM_QR_ROD_PEAK_EDITS`, so manually adjusted
+peak positions and labels can be reused across runs without editing environment
+variables. The editor plots and accepts click/drag positions on the fitted
+integer `L` axis for each rod panel, while the saved marker table still stores
 `qz_marker`. Select a marker and edit the `Label` text box to set the exact
 title used for that peak in the final Qr-rod figure; clicking another marker or
 accepting the popup preserves the edited title. Final Qr-rod figure labels are
@@ -137,8 +140,8 @@ Focused validation status:
 
 - `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
   passes
-- `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title or sample_name_override or labeled_weak_hk0_marker or qr_rod_final_cache_requires_fit_signature or final_rod_labels_point_from_upper_right or qr_rod_editor_qz_l_axis_coefficients or qr_rod_peak_editor_uses_l_axis" -ra`
-  passes, `20 passed`
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title or sample_name_override or import_export_buttons or labeled_weak_hk0_marker or qr_rod_final_cache_requires_fit_signature or final_rod_labels_point_from_upper_right or qr_rod_editor_qz_l_axis_coefficients or qr_rod_peak_editor_uses_l_axis" -ra`
+  passes, `21 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
   passes, `8 passed`
 - `python -m ra_sim.dev check` passes, `280 passed`
