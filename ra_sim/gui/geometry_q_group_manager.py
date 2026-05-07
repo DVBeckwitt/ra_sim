@@ -6151,13 +6151,35 @@ def capture_runtime_geometry_q_group_entries_snapshot(
     if not callable(build_entries_snapshot):
         return gui_controllers.listed_geometry_q_group_entries(bindings.q_group_state)
 
+    built_entries = build_entries_snapshot()
+    existing_entries = gui_controllers.listed_geometry_q_group_entries(bindings.q_group_state)
+    preserve_imported_rows = (
+        not built_entries
+        and existing_entries
+        and bool(
+            getattr(
+                bindings.q_group_state,
+                "restored_q_group_rows_pending_live_refresh",
+                False,
+            )
+        )
+        and not bool(_resolve_runtime_value(bindings.has_cached_hit_tables))
+    )
+    if preserve_imported_rows:
+        if gui_views.geometry_q_group_window_open(bindings.view_state):
+            refresh_runtime_geometry_q_group_window(bindings)
+        return existing_entries
+
     entries = replace_geometry_q_group_entries_snapshot_with_side_effects(
         preview_state=bindings.preview_state,
         q_group_state=bindings.q_group_state,
-        entries=build_entries_snapshot(),
+        entries=built_entries,
         invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
-        update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
+        update_geometry_preview_exclude_button_label=(
+            bindings.update_geometry_preview_exclude_button_label
+        ),
     )
+    bindings.q_group_state.restored_q_group_rows_pending_live_refresh = False
     if gui_views.geometry_q_group_window_open(bindings.view_state):
         refresh_runtime_geometry_q_group_window(bindings)
     return entries

@@ -1,11 +1,11 @@
 # Generated Disordered Qr Live Path
 
-Status: implemented, focused live-picker, fit-handoff, and branch-switch validation green
+Status: implemented, focused live-picker, import-restore, fit-handoff, and branch-switch validation green
 Type: bug fix / GUI picker feature
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-03
+Last updated: 2026-05-07
 
 ## Summary
 
@@ -36,6 +36,10 @@ disordered-phase candidates.
   active picker cache and keeps `source_label="disordered_phase"`.
 - Ordered and disordered rows with the same numeric Qr/Qz remain separate by
   source label.
+- Imported/restored Qr/Qz selector rows with `source_label="disordered_phase"`
+  can rebuild geometry-fit manual-picker detector source rows from stored
+  generated-disordered hit-table maxima when live preview source rows are empty
+  or stale.
 - Manual Qr/Qz selection and placement carry the selected source through
   candidates, detector hit-table coordinates, assigned HKL rows, saved manual
   pairs, and geometry-fit inputs.
@@ -71,17 +75,27 @@ disordered-phase candidates.
 - Bug status: fixed for the user-reported primary-only picker cache reuse, the
   `status=invalid reason=ready` live-cache contradiction, detector-origin
   caked-projector fallthrough, primary-only disordered fallback, and the
-  follow-up locked/stale QR branch-switch regression.
+  follow-up locked/stale QR branch-switch regression. The imported PbI2 case
+  where modified-CIF generated-disordered Qr rows restored but were not
+  recognized as pickable detector candidates is also fixed.
 - Error status: the active fallback crash
   `_build_source_rows_for_rebuild() got multiple values for keyword argument
   'consumer'` is covered by regression tests and should no longer occur on the
   patched live path. The later broad geometry failure that returned
   `locked_qr_row_unavailable` instead of `prediction_branch_source_switched`
-  is also covered by regression tests.
+  is also covered by regression tests. Restored disordered Qr rows should no
+  longer fall through to a missing detector-source-row state when stored
+  generated-disordered hit tables are present.
 - Feature status: implemented with explicit GUI control, live runtime logging,
   cache invalidation, hit-table scheduling, publishing, source-aware picker
   placement, fit-handoff diagnostics/tests, source-cache rung tests, and
-  detector/caked fit-space classification tests.
+  detector/caked fit-space classification tests. No new operator-facing UI,
+  saved-state schema, or public API was added for the PbI2 import fix.
+- Migration status: no saved-state migration, deprecation, or compatibility shim
+  is required; existing restored `q_group_rows` and stored hit-table fields are
+  reused.
+- Launch status: focused local gates are green. Rollback is a normal revert of
+  this fix, which restores the previous live-cache-only source-row behavior.
 - Remaining manual check: relaunch the GUI from the committed branch and confirm
   the live fit trace includes the `phase4d1` marker, nonzero
   `live_rows_raw_count`, and either `source_cache_live_runtime_cache_accepted`
@@ -136,6 +150,12 @@ Geometry-fit handoff diagnostics report:
 
 Focused validation:
 
+- `python -m pytest tests/test_gui_state_restore_helpers.py::test_apply_gui_state_geometry_restores_saved_q_group_rows_without_peak_records tests/test_gui_runtime_import_safe.py::test_manual_pick_cache_source_rows_rebuild_allowed_for_restored_q_group_rows tests/test_gui_runtime_import_safe.py::test_manual_pick_cache_rebuild_uses_stored_disordered_rows_for_restored_q_groups tests/test_disordered_phase_live_runtime_regression.py::test_live_regression_disordered_q_groups_are_clickable_candidates tests/test_disordered_phase_picker_to_fitter_end_to_end.py tests/test_disordered_phase_q_group_cache.py -q`
+  - 10 passed.
+- `python -m ruff check ra_sim/gui/_runtime/runtime_session.py tests/test_gui_runtime_import_safe.py tests/test_gui_state_restore_helpers.py`
+  - passed.
+- `python -m py_compile ra_sim/gui/_runtime/runtime_session.py tests/test_gui_runtime_import_safe.py tests/test_gui_state_restore_helpers.py`
+  - passed.
 - `python -m pytest tests/test_disordered_phase_user_report_live_path.py -q`
   - 1 passed.
 - `python -m pytest tests/test_disordered_phase_live_q_group_refresh.py tests/test_disordered_phase_ui_enable.py tests/test_disordered_phase_inventory_live_path.py tests/test_disordered_phase_hit_table_scheduling.py tests/test_disordered_phase_current_refresh.py tests/test_disordered_phase_user_report_live_path.py -q`

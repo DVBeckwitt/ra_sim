@@ -701,6 +701,7 @@ class GeometryQGroupState:
 
     row_vars: dict[tuple[object, ...], Any] = field(default_factory=dict)
     cached_entries: list[dict[str, object]] = field(default_factory=list)
+    restored_q_group_rows_pending_live_refresh: bool = False
     disabled_qr_sets: set[tuple[str, int]] = field(default_factory=set)
     disabled_qz_sections: set[tuple[str, int, int]] = field(default_factory=set)
     pending_legacy_disabled_qz_sections: set[tuple[str, int, int]] = field(default_factory=set)

@@ -1107,7 +1107,12 @@ def refresh_geometry_manual_pair_entry(
         "background_phi_deg",
         source=raw_entry,
     )
-    caked_background_is_authoritative = saved_background_caked_point is not None
+    background_detector_origin = _geometry_manual_saved_background_detector_origin(
+        raw_entry if raw_entry is not None else normalized
+    )
+    caked_background_is_authoritative = bool(
+        saved_background_caked_point is not None and not background_detector_origin
+    )
     saved_detector_point = _finite_pair("detector_x", "detector_y", source=raw_entry)
     if saved_detector_point is None:
         saved_detector_point = _finite_pair(
@@ -1116,9 +1121,10 @@ def refresh_geometry_manual_pair_entry(
             source=raw_entry,
         )
     detector_fields_are_authoritative = bool(
-        saved_background_caked_point is None and saved_detector_point is not None
+        background_detector_origin
+        or (saved_background_caked_point is None and saved_detector_point is not None)
     )
-    caked_point = saved_background_caked_point
+    caked_point = None if background_detector_origin else saved_background_caked_point
     if caked_point is None and not detector_fields_are_authoritative:
         caked_point = _finite_pair("caked_x", "caked_y")
     if caked_point is None and not detector_fields_are_authoritative:
@@ -3802,6 +3808,19 @@ _GEOMETRY_MANUAL_SIMULATION_DISPLAY_SOURCES = {
 
 def _geometry_manual_normalized_frame_token(value: object) -> str:
     return str(value or "").strip().lower()
+
+
+def _geometry_manual_set_background_input_provenance(
+    entry: dict[str, object],
+    *,
+    use_caked_space: bool,
+) -> None:
+    if bool(use_caked_space):
+        entry["manual_background_input_origin"] = "caked"
+        entry["manual_background_input_frame"] = "caked_2theta_phi"
+    else:
+        entry["manual_background_input_origin"] = "detector"
+        entry["manual_background_input_frame"] = "detector_display"
 
 
 def geometry_manual_entry_is_background_detector_frame(
@@ -13443,6 +13462,14 @@ def geometry_manual_background_reference_initial_display_entry(
         entry_display_coords=entry_display_coords,
     )
     if bg_coords is None:
+        detector_origin = _geometry_manual_saved_background_detector_origin(saved)
+        caked_reference = _geometry_manual_saved_caked_background_display_point(saved)
+        if bool(use_caked_display) and detector_origin:
+            initial_entry["background_reference_display_unresolved"] = True
+            return initial_entry
+        if not bool(use_caked_display) and not detector_origin and caked_reference is not None:
+            initial_entry["background_reference_display_unresolved"] = True
+            return initial_entry
         bg_coords = _geometry_manual_finite_point(
             saved,
             (
@@ -15241,6 +15268,125 @@ def make_runtime_geometry_manual_projection_callbacks(
             current_projected_sim_entry=current_projected_sim_entry,
         )
 
+    def _entry_has_explicit_detector_display_frame(
+        source: Mapping[str, object] | None,
+    ) -> bool:
+        if not isinstance(source, Mapping):
+            return False
+        detector_tokens = {
+            "detector",
+            "detector_display",
+            "detector_display_px",
+            "detector_px",
+            "current_detector_display",
+        }
+        for frame_key in (
+            "manual_background_input_frame",
+            "display_frame",
+            "display_coordinate_frame",
+            "current_view_frame",
+            "active_view_frame",
+        ):
+            if _geometry_manual_normalized_frame_token(source.get(frame_key)) in detector_tokens:
+                return True
+        return False
+
+    def _entry_has_caked_background_evidence(
+        source: Mapping[str, object] | None,
+    ) -> bool:
+        return (
+            _geometry_manual_saved_caked_background_display_point(source) is not None
+            or _geometry_manual_finite_point(
+                source,
+                (
+                    ("caked_x", "caked_y"),
+                    ("raw_caked_x", "raw_caked_y"),
+                ),
+            )
+            is not None
+        )
+
+    def _native_detector_point_to_display(
+        native_point: tuple[float, float] | None,
+    ) -> tuple[float, float] | None:
+        if native_point is None or not callable(native_detector_coords_to_detector_display_coords):
+            return None
+        return _finite_projection_point(
+            native_detector_coords_to_detector_display_coords(
+                float(native_point[0]),
+                float(native_point[1]),
+            )
+        )
+
+    def _detector_origin_display_point(
+        *sources: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            for tuple_key in ("geometry_detector_native_px", "raw_detector_native_px"):
+                display_point = _native_detector_point_to_display(
+                    _finite_projection_point(source.get(tuple_key))
+                )
+                if display_point is not None:
+                    return display_point
+            for x_key, y_key in (
+                ("detector_x", "detector_y"),
+                ("background_detector_x", "background_detector_y"),
+                ("detector_native_x", "detector_native_y"),
+                ("refined_detector_native_col", "refined_detector_native_row"),
+            ):
+                native_point = _finite_projection_point(
+                    (source.get(x_key), source.get(y_key))
+                )
+                display_point = _native_detector_point_to_display(native_point)
+                if display_point is not None:
+                    return display_point
+
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            for tuple_key in ("geometry_detector_display_px", "raw_detector_display_px"):
+                display_point = _finite_projection_point(source.get(tuple_key))
+                if display_point is not None:
+                    return display_point
+
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            allow_xy = _entry_has_explicit_detector_display_frame(
+                source
+            ) or not _entry_has_caked_background_evidence(source)
+            if not allow_xy:
+                continue
+            for x_key, y_key in (("x", "y"), ("display_col", "display_row")):
+                display_point = _finite_projection_point(
+                    (source.get(x_key), source.get(y_key))
+                )
+                if display_point is not None:
+                    return display_point
+        return None
+
+    def _caked_background_point_to_detector_display(
+        caked_point: tuple[float, float] | None,
+    ) -> tuple[float, float] | None:
+        if caked_point is None:
+            return None
+        display_point = _finite_projection_point(
+            _caked_angles_to_background_display(
+                float(caked_point[0]),
+                float(caked_point[1]),
+            )
+        )
+        if display_point is None:
+            return None
+        native_point = _background_display_to_native_detector_coords(
+            float(display_point[0]),
+            float(display_point[1]),
+        )
+        detector_display = _native_detector_point_to_display(native_point)
+        return detector_display if detector_display is not None else display_point
+
     def _entry_display_coords(
         entry: dict[str, object] | None,
     ) -> tuple[float, float] | None:
@@ -15249,6 +15395,15 @@ def make_runtime_geometry_manual_projection_callbacks(
         if not isinstance(refreshed_entry, dict):
             return None
         use_caked = _pick_uses_caked_space()
+        if not use_caked and detector_origin:
+            return _detector_origin_display_point(entry, refreshed_entry)
+        if not use_caked and not detector_origin:
+            for caked_source in (refreshed_entry, entry):
+                caked_origin_point = _geometry_manual_saved_caked_background_display_point(
+                    caked_source
+                )
+                if caked_origin_point is not None:
+                    return _caked_background_point_to_detector_display(caked_origin_point)
         if use_caked and detector_origin:
             for detector_source in (entry, refreshed_entry):
                 if not isinstance(detector_source, Mapping):
@@ -17765,11 +17920,9 @@ def geometry_manual_place_selection_at(
             sigma_px=float(sigma_px_value),
             manual_run_id=manual_run_id,
         )
-        pair_entry["manual_background_input_origin"] = (
-            "caked" if bool(use_caked_space) else "detector"
-        )
-        pair_entry["manual_background_input_frame"] = (
-            "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
+        _geometry_manual_set_background_input_provenance(
+            pair_entry,
+            use_caked_space=bool(use_caked_space),
         )
         if callable(push_undo_state_fn):
             push_undo_state_fn()
@@ -18228,9 +18381,9 @@ def geometry_manual_place_selection_at(
         return False, current_session
     pair_entry["manual_geometry_run_id"] = manual_run_id
     pair_entry["manual_trace_version"] = MANUAL_GEOMETRY_TRACE_VERSION
-    pair_entry["manual_background_input_origin"] = "caked" if bool(use_caked_space) else "detector"
-    pair_entry["manual_background_input_frame"] = (
-        "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
+    _geometry_manual_set_background_input_provenance(
+        pair_entry,
+        use_caked_space=bool(use_caked_space),
     )
     if (
         bool(use_caked_space)
@@ -18332,9 +18485,6 @@ def geometry_manual_place_selection_at(
         entry["background_phi_deg"] = float(resolved_background_pick["refined_background_phi_deg"])
         entry["caked_x"] = float(resolved_background_pick["refined_background_two_theta_deg"])
         entry["caked_y"] = float(resolved_background_pick["refined_background_phi_deg"])
-        entry["manual_background_input_frame"] = (
-            "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
-        )
 
     _apply_resolved_background_fields(pair_entry)
     if callable(refine_saved_pair_entry_fn):
@@ -18349,13 +18499,11 @@ def geometry_manual_place_selection_at(
             pair_entry = dict(refined_pair_entry)
             pair_entry["manual_geometry_run_id"] = manual_run_id
             pair_entry["manual_trace_version"] = MANUAL_GEOMETRY_TRACE_VERSION
-            pair_entry["manual_background_input_origin"] = (
-                "caked" if bool(use_caked_space) else "detector"
-            )
-            pair_entry["manual_background_input_frame"] = (
-                "caked_2theta_phi" if bool(use_caked_space) else "detector_display"
-            )
             _apply_resolved_background_fields(pair_entry)
+            _geometry_manual_set_background_input_provenance(
+                pair_entry,
+                use_caked_space=bool(use_caked_space),
+            )
             pair_entry.setdefault("raw_detector_display_px", raw_detector_display)
             pair_entry.setdefault("geometry_detector_display_px", geometry_detector_display)
             if raw_detector_native is not None:

@@ -31,7 +31,7 @@ intensity contract, but remains downstream of green mosaic fitting.
 | Deterministic geometry runtime fix pass | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-04 | [deterministic-geometry-runtime-fix-pass.md](in-progress/deterministic-geometry-runtime-fix-pass.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
-| Sim caked detector replay | bug | - | none | p1 | 2026-04-30 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
+| Sim caked detector replay | bug | - | none | p1 | 2026-05-07 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-05 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
 | Beam center background pick | feature | - | none | p1 | 2026-05-01 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
@@ -50,13 +50,19 @@ positive. Focused runtime/import-safe/update tests pass. Full dev check remains
 blocked by pre-existing formatting drift in dirty
 `ra_sim/fitting/optimization.py`.
 
-Replay status note: `Sim caked detector replay` remains in progress. Latest
-patch warms detector-mode Qr/Qz caked projection sidecars immediately after
-selector changes, without toggling the GUI to caked view. Detector picker rows
-remain primary, caked sim/background entries and lookups are cached for replay,
-and focused sidecar/Qr selector/import-safe tests pass. Broader workflow
-validation is still blocked by pre-existing local failures and formatting
-drift in the dirty worktree.
+Replay status note: `Sim caked detector replay` has focused helper/runtime
+validation green for detector-origin and caked-origin manual background replay.
+Latest provenance patch makes `manual_background_input_origin` authoritative
+over conflicting frame metadata, stops detector-view clicks from saving
+`manual_background_input_frame="caked_2theta_phi"`, and keeps derived caked
+fields as replay/cache data only. The follow-up runtime patch also prevents
+stale refreshed `x/y` or detector aliases from winning cross-view redraw:
+detector-origin rows return to detector anchors, caked-origin rows project from
+the saved visual caked point, and provenance-known background references fail
+closed when projection is unavailable. Already-saved contradictory rows are
+compatible without state migration. No new operator control, public API, cache
+redesign, or schema migration. Manual detector/caked GUI smoke remains pending
+before closing the tracking item.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel

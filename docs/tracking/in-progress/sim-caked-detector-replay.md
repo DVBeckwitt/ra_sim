@@ -1,6 +1,6 @@
 # Sim caked detector replay
 
-Status: implemented; focused validation passed
+Status: implemented; focused runtime validation passed; manual GUI smoke pending
 Type: bug
 Owner:
 Issue: none
@@ -23,6 +23,48 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-05-07 round-trip replay update: detector-origin and caked-origin manual
+background rows now resolve display coordinates from provenance first during
+runtime view toggles. Detector-origin rows no longer let saved caked
+`background_two_theta_deg/background_phi_deg` or stale refreshed `x/y` become
+detector-view authority; detector redraw prefers detector/native anchors and
+then projects through the current detector-display callback. Caked-origin rows
+entering detector view project from the saved visual caked point through the
+current caked-to-detector path instead of trusting stale detector aliases.
+Background-reference redraw now fails closed as unresolved when a known-origin
+row cannot be projected, instead of falling back to finite but wrong-frame
+fields.
+
+Bug/error status: fixed in focused runtime tests, including poisoned stale
+`x/y`/display aliases. Feature status: no new UI, public API, cache layer,
+file format, or schema migration. Migration/deprecation status: existing saved
+rows remain compatible because provenance classification is handled at read and
+redraw time. Shipping status: automated local gates are green; manual
+detector -> caked -> detector and caked -> detector -> caked GUI smoke remains
+the final operator acceptance step. Rollback is a normal git revert; no cleanup
+job or data repair is required.
+
+2026-05-07 provenance update: detector-clicked background rows no longer save
+derived caked coordinates as input provenance. The explicit
+`manual_background_input_origin` field is now authoritative over
+`manual_background_input_frame`, so already-saved contradictory rows like
+`origin="detector", frame="caked_2theta_phi"` classify as detector-origin and
+take the live detector-to-caked redraw path. New detector-view placements stamp
+`manual_background_input_frame="detector_display"` while still preserving
+derived `background_two_theta_deg`, `background_phi_deg`, `caked_x/y`, and raw
+caked replay fields. Caked-view placements continue to stamp
+`origin="caked", frame="caked_2theta_phi"`.
+
+Bug/error status: root provenance bug is fixed in code and covered by focused
+regressions. Existing contradictory saved rows do not need a schema migration
+because the classifier now treats explicit origin as the compatibility source
+of truth. Feature status: no new user-facing feature, public API, state schema,
+or cache redesign. Shipping status: targeted manual-geometry, workflow/runtime,
+compile, ruff, and diff checks pass locally; manual GUI detector/caked smoke
+remains the only acceptance item not run in this worktree. Rollback is a normal
+git revert of this provenance patch; no data migration or cleanup job is
+required.
 
 2026-05-07 update: the cross-view manual background/simulation visual-cache
 drift is fixed at helper/runtime level. Detector-origin saved background rows
@@ -146,8 +188,10 @@ Feature status:
 
 ## Next actions
 
-- do one manual detector -> caked -> detector GUI replay check and confirm no
-  post-finish jump;
+- do one manual detector -> caked -> detector GUI replay check and confirm
+  detector-origin background points stay anchored;
+- do one manual caked -> detector -> caked GUI replay check and confirm
+  visual caked background points stay anchored;
 - update the external GitHub issue/project if this follow-up is being tracked
   there.
 
@@ -166,6 +210,15 @@ Latest local validation, 2026-05-07:
 - `python -m compileall -q ra_sim/gui tests` passed.
 - `python -m ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py`
   passed.
+- `git diff --check` passed, with existing LF/CRLF warnings only.
+
+Additional provenance validation, 2026-05-07:
+
+- `python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "saved_background_origin or detector_origin_initial_pairs_display or manual_qr_caked_saved or detector_caked_detector_replay or caked_detector_caked_replay or caked_to_detector_replay or visual_caked or detector_pick_saves_projected_caked_coordinates or saves_background_qr_reference_without_hkl or back_projects_caked_pick_to_detector_space or caked_background_refines_to_peak_top" -ra`
+  passed (`21 passed`).
+- `python -m ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py`
+  passed.
+- `python -m compileall -q ra_sim/gui tests` passed.
 - `git diff --check` passed, with existing LF/CRLF warnings only.
 
 Latest local validation, 2026-04-30:

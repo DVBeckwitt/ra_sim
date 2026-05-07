@@ -5304,6 +5304,49 @@ def test_geometry_q_group_manager_runtime_snapshot_capture_refreshes_open_window
     assert events == ["invalidate", "label", "refresh"]
 
 
+def test_geometry_q_group_manager_snapshot_capture_preserves_imported_rows_during_empty_refresh(
+    monkeypatch,
+) -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[_entry(key1, peak_count=2, total_intensity=10.0)]
+    )
+    q_group_state.restored_q_group_rows_pending_live_refresh = True
+    events = []
+
+    monkeypatch.setattr(
+        geometry_q_group_manager.gui_views,
+        "geometry_q_group_window_open",
+        lambda view_state: True,
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "refresh_runtime_geometry_q_group_window",
+        lambda bindings: events.append("refresh") or True,
+    )
+
+    bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(window=object()),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=q_group_state,
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: events.append("live"),
+        build_entries_snapshot=lambda: [],
+        has_cached_hit_tables=lambda: False,
+    )
+
+    entries = geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(bindings)
+
+    assert [entry["key"] for entry in entries] == [key1]
+    assert [entry["key"] for entry in q_group_state.cached_entries] == [key1]
+    assert q_group_state.restored_q_group_rows_pending_live_refresh is True
+    assert events == ["refresh"]
+
+
 def test_geometry_q_group_manager_preview_exclusion_open_reports_status(
     monkeypatch,
 ) -> None:

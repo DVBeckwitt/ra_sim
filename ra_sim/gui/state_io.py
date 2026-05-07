@@ -686,6 +686,31 @@ def apply_gui_state_geometry(
     raw_peak_records = geometry_state.get("peak_records")
 
     saved_rows = geometry_state.get("q_group_rows", [])
+    restored_q_group_rows: list[dict[str, object]] = []
+    if isinstance(saved_rows, list):
+        for raw_row in saved_rows:
+            if not isinstance(raw_row, Mapping):
+                continue
+            group_key = geometry_q_group_key_from_jsonable(raw_row.get("key"))
+            if group_key is None:
+                continue
+            row = dict(raw_row)
+            row["key"] = group_key
+            restored_q_group_rows.append(row)
+        restored_q_group_rows = gui_controllers.clone_geometry_q_group_entries(
+            restored_q_group_rows
+        )
+    if restored_q_group_rows:
+        gui_controllers.replace_geometry_q_group_cached_entries(
+            q_group_state,
+            restored_q_group_rows,
+        )
+        q_group_state.restored_q_group_rows_pending_live_refresh = True
+        gui_controllers.request_geometry_q_group_refresh(q_group_state)
+        invalidate_geometry_manual_pick_cache()
+    else:
+        q_group_state.restored_q_group_rows_pending_live_refresh = False
+
     disabled_qr_sets = [
         raw_key
         for raw_key in (geometry_state.get("disabled_qr_sets", []) or [])
