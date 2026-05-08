@@ -1882,7 +1882,7 @@ def test_visual_caked_helper_keeps_refined_only_candidate_as_fit_cache_fallback(
 
     assert mg._geometry_manual_candidate_visual_caked_sim_point(candidate) == (
         (40.176704, 36.25),
-        "sim_visual_caked_deg",
+        "fit_cache_caked",
     )
 
 
@@ -1900,7 +1900,7 @@ def test_visual_caked_helper_uses_fit_cache_fallback_when_current_view_caked_is_
 
     assert mg._geometry_manual_candidate_visual_caked_sim_point(candidate) == (
         (40.176704, 36.25),
-        "sim_visual_caked_deg",
+        "fit_cache_caked",
     )
 
 
@@ -25756,6 +25756,15 @@ def test_minus_1_0_10_caked_refresh_uses_caked_projection_candidates_not_grouped
     )
     assert detector_session.get("group_entries")
     assert detector_sources == ["detector_grouped_candidates_from_cache"]
+    detector_map = _diag_branch_map(detector_session.get("group_entries", []))
+    detector_targets = _diag_target_rows_by_branch(probe["detector_grouped"])
+    assert set(detector_map) == {0, 1}
+    for branch, row in detector_map.items():
+        assert row.get("_caked_qr_projection_cache") is not True
+        assert row.get("display_frame") != "caked_display"
+        assert row["source_table_index"] == detector_targets[branch]["source_table_index"]
+        assert row["source_row_index"] == detector_targets[branch]["source_row_index"]
+        assert row["source_branch_index"] == branch
 
     empty_caked_cache = dict(probe["caked_cache"])
     empty_caked_cache["caked_qr_projection_grouped_candidates"] = {}
@@ -26014,6 +26023,59 @@ def test_caked_refresh_preserves_visual_but_not_cache_current_simulated_angles()
     assert _diag_pair_close(refreshed_entry["sim_visual_deg"], (40.237466, 36.527645))
     assert refreshed_entry["simulated_two_theta_deg"] == 40.142509
     assert refreshed_entry["simulated_phi_deg"] == 35.566836
+
+
+def test_refresh_session_replaces_caked_projection_rows_with_detector_rows_on_detector_refresh() -> (
+    None
+):
+    group_key = ("q_group", "primary", -1, 0, 10)
+    session = {
+        "background_index": 0,
+        "group_key": group_key,
+        "group_entries": [
+            {
+                "q_group_key": group_key,
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_branch_index": 0,
+                "_caked_qr_projection_cache": True,
+                "display_frame": "caked_display",
+                "caked_x": 22.0,
+                "caked_y": -25.0,
+                "sim_visual_caked_deg": (22.0, -25.0),
+                "sim_refined_caked_deg": (999.0, -999.0),
+                "refined_sim_caked_x": 999.0,
+                "refined_sim_caked_y": -999.0,
+            }
+        ],
+        "pending_entries": [],
+        "target_count": 1,
+    }
+    detector_row = {
+        "q_group_key": group_key,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "x": 1000.0,
+        "y": 2000.0,
+        "sim_col_raw": 1000.0,
+        "sim_row_raw": 2000.0,
+    }
+
+    refreshed = mg.refresh_geometry_manual_pick_session_candidates(
+        session,
+        grouped_candidates={group_key: [detector_row]},
+    )
+
+    row = refreshed["group_entries"][0]
+    assert row.get("_caked_qr_projection_cache") is not True
+    assert row.get("display_frame") != "caked_display"
+    assert row["sim_col_raw"] == 1000.0
+    assert row["sim_row_raw"] == 2000.0
+    assert row["sim_visual_caked_deg"] == (22.0, -25.0)
+    assert "sim_refined_caked_deg" not in row
+    assert "refined_sim_caked_x" not in row
+    assert "refined_sim_caked_y" not in row
 
 
 def test_manual_trace_no_caked_angles_to_detector_px(tmp_path) -> None:

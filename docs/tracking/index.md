@@ -69,13 +69,13 @@ local gates are green. The latest visual resolver patch keeps caked-view
 display/ranking authority separate from fit/cache truth: explicit visual
 aliases win first, safe current caked display aliases win second, refined-only
 fit/cache fields remain fallback, and background-shaped rows do not become
-simulated visual caked points. The follow-up cleanup collapsed duplicate
-explicit visual alias checks into one ordered loop without changing behavior or
-public surfaces. No migration, deprecation, CI workflow, feature flag, or
-release version change is required. Focused helper tests, compile, lint, and
-scoped diff checks are green. Full `ra_sim.dev check` remains blocked by
-unrelated formatting drift in `ra_sim/gui/_runtime/runtime_session.py`; manual
-detector/caked GUI smoke remains pending before closing the tracking item.
+simulated visual caked points. The active manual-pick session refresh now also
+lets detector rows replace sticky caked projection rows on detector refresh while
+preserving only visual caked aliases by identity. No migration, deprecation, CI
+workflow, feature flag, or release version change is required. Full
+`ra_sim.dev check` remains blocked by unrelated formatting drift in
+`ra_sim/gui/_runtime/runtime_session.py`; manual detector/caked GUI smoke remains
+pending before closing the tracking item.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel

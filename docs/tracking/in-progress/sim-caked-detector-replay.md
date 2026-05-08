@@ -24,6 +24,26 @@ Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
 
+2026-05-08 active manual pick session refresh update: detector/caked view
+toggles now refresh the active session from the current view's grouped
+candidates instead of letting caked projection rows stay sticky in
+`pick_session["group_entries"]`. The session refresh keeps source identity as
+the match key, lets detector rows replace caked projection rows on detector
+refresh, and preserves only visual caked aliases such as
+`sim_visual_caked_deg` by identity. Fit/cache caked fields are no longer copied
+by the visual-preservation helper.
+
+Bug/error status: fixed in focused helper and runtime refresh tests. This
+specifically covers detector -> caked -> detector and caked -> detector active
+session refresh, where the prior runtime path could select detector grouped
+candidates but still keep caked projection rows in session state. Feature
+status: no new operator control, public API, CLI flag, saved-state schema,
+artifact format, dependency, or CI workflow. Migration/deprecation status: no
+migration required; existing saved rows remain compatible because the change is
+runtime session refresh only. Shipping status: targeted refresh tests are
+green; manual GUI smoke remains pending. Rollback is a normal git revert; no
+data cleanup, feature flag, or migration step is required.
+
 2026-05-08 visual caked resolver update: caked-view candidate display/ranking
 now resolves visual caked points in the intended authority order:
 explicit visual aliases first, safe current-view caked display aliases second,
@@ -32,9 +52,7 @@ display caked aliases such as `caked_x/y` or `raw_caked_x/y`; refined/cache
 fields like `refined_sim_caked_x/y` stay fit/cache fallback and are not
 reported as `current_view_caked`. Background/manual-authority rows with
 background caked or detector fields are rejected as simulated visual caked
-rows. The explicit visual alias resolver was then simplified to one ordered
-alias loop without changing source labels, fallback order, public interfaces,
-or saved-state handling.
+rows.
 
 Bug/error status: fixed in focused helper tests for stale fit/cache caked
 fields, background-shaped current-view rows, explicit simulated caked
@@ -43,11 +61,10 @@ Feature status: no new operator control, public API, CLI flag, saved-state
 schema, artifact format, dependency, or CI workflow. Migration/deprecation
 status: no migration required; old ambiguous rows remain readable and are
 handled conservatively at resolver time. Shipping status: focused automated
-local gates are green for helper behavior, compile, lint, and scoped diff
-checks; full `python -m ra_sim.dev check` is still blocked by pre-existing
-formatting drift in `ra_sim/gui/_runtime/runtime_session.py`. Rollback is a
-normal git revert; no data cleanup, feature flag, release-version bump, CI
-pipeline change, or migration step is required.
+local gates are green; full `python -m ra_sim.dev check` is still blocked by
+pre-existing formatting drift in `ra_sim/gui/_runtime/runtime_session.py`.
+Rollback is a normal git revert; no data cleanup, feature flag, or migration
+step is required.
 
 2026-05-07 final coordinate-authority update: detector-origin background rows
 rendered in caked view now fail closed when live detector/native-to-caked

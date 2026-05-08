@@ -600,15 +600,10 @@ _GEOMETRY_MANUAL_QR_SIM_ALIAS_FIELDS = (
     "simulated_phi_deg",
 )
 _GEOMETRY_MANUAL_CAKED_VISUAL_PRESERVE_KEYS = (
-    "sim_refined_caked_deg",
+    "sim_visual_caked_deg",
     "sim_visual_deg",
     "sim_visual_source",
     "sim_caked",
-    "sim_refinement_source",
-    "sim_refinement_status",
-    "sim_refinement_delta_caked_deg",
-    "refined_sim_caked_x",
-    "refined_sim_caked_y",
 )
 
 
@@ -6515,18 +6510,6 @@ def _geometry_manual_entry_has_caked_visual_sim(
     return visual_point is not None
 
 
-def _geometry_manual_entry_is_caked_visual_refresh_row(
-    entry: Mapping[str, object] | None,
-) -> bool:
-    if not isinstance(entry, Mapping):
-        return False
-    if bool(entry.get("_caked_qr_projection_cache")):
-        return True
-    if _geometry_manual_entry_display_frame(entry) == "caked":
-        return _geometry_manual_entry_has_caked_visual_sim(entry)
-    return False
-
-
 def _geometry_manual_caked_visual_preservation_lookup(
     entries: Sequence[dict[str, object]] | None,
     *,
@@ -6646,16 +6629,6 @@ def refresh_geometry_manual_pick_session_candidates(
     existing_group_entries = [
         dict(entry) for entry in pick_session.get("group_entries", []) if isinstance(entry, dict)
     ]
-    if any(
-        _geometry_manual_entry_is_caked_visual_refresh_row(entry)
-        for entry in existing_group_entries
-    ) and not any(
-        _geometry_manual_entry_is_caked_visual_refresh_row(entry) for entry in live_entries
-    ):
-        refreshed_session = dict(pick_session)
-        if cache_signature is not None:
-            refreshed_session["cache_signature"] = cache_signature
-        return refreshed_session
     live_entries = _geometry_manual_collapse_q_group_representatives(
         live_entries,
         profile_cache=profile_cache,
@@ -11566,7 +11539,7 @@ def _geometry_manual_candidate_visual_caked_sim_point(
         return current_view_caked, "current_view_caked"
     fallback_caked = _geometry_manual_candidate_caked_sim_point(candidate)
     if fallback_caked is not None:
-        return fallback_caked, "sim_visual_caked_deg"
+        return fallback_caked, "fit_cache_caked"
     return None, "<unavailable>"
 
 
