@@ -1831,6 +1831,61 @@ def test_geometry_manual_candidate_helpers_prefer_caked_coords_in_caked_view() -
     assert abs(dist - caked_near_dist) < 1.0e-9
 
 
+def test_caked_view_visual_distance_uses_current_caked_display_before_stale_fit_cache() -> (
+    None
+):
+    candidate = {
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "caked_x": 13.1,
+        "caked_y": 2.1,
+        "refined_sim_caked_x": 999.0,
+        "refined_sim_caked_y": -999.0,
+    }
+
+    details = mg.geometry_manual_candidate_distance_details(
+        13.0,
+        2.0,
+        candidate,
+        use_caked_display=True,
+    )
+
+    assert details["visual_caked_point"] == (13.1, 2.1)
+    assert details["distance"] < 1.0
+
+
+def test_visual_caked_helper_rejects_background_shaped_current_view_caked_fallback() -> None:
+    candidate = {
+        "caked_x": 113.5,
+        "caked_y": -12.5,
+        "background_two_theta_deg": 113.5,
+        "background_phi_deg": -12.5,
+        "detector_x": 997.0,
+        "detector_y": 996.0,
+    }
+
+    assert mg._geometry_manual_candidate_caked_sim_point(candidate) is None
+    assert mg._geometry_manual_candidate_visual_caked_sim_point(candidate) == (
+        None,
+        "<unavailable>",
+    )
+
+
+def test_visual_caked_helper_keeps_refined_only_candidate_as_fit_cache_fallback() -> None:
+    candidate = {
+        "refined_sim_caked_x": 40.176704,
+        "refined_sim_caked_y": 36.25,
+    }
+
+    assert mg._geometry_manual_candidate_visual_caked_sim_point(candidate) == (
+        (40.176704, 36.25),
+        "sim_visual_caked_deg",
+    )
+
+
 def test_geometry_manual_choose_group_at_does_not_match_detector_pixels_in_caked_view() -> None:
     group_key, entries, dist = mg.geometry_manual_choose_group_at(
         {

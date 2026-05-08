@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-07
+Last updated: 2026-05-08
 
 ## Summary
 
@@ -23,6 +23,28 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-05-08 visual caked resolver update: caked-view candidate display/ranking
+now resolves visual caked points in the intended authority order:
+explicit visual aliases first, safe current-view caked display aliases second,
+and fit/cache caked fields last. Safe current-view fallback is limited to
+display caked aliases such as `caked_x/y` or `raw_caked_x/y`; refined/cache
+fields like `refined_sim_caked_x/y` stay fit/cache fallback and are not
+reported as `current_view_caked`. Background/manual-authority rows with
+background caked or detector fields are rejected as simulated visual caked
+rows.
+
+Bug/error status: fixed in focused helper tests for stale fit/cache caked
+fields, background-shaped current-view rows, explicit simulated caked
+projection candidates, and refined-only fit/cache fallback source authority.
+Feature status: no new operator control, public API, CLI flag, saved-state
+schema, artifact format, dependency, or CI workflow. Migration/deprecation
+status: no migration required; old ambiguous rows remain readable and are
+handled conservatively at resolver time. Shipping status: focused automated
+local gates are green; full `python -m ra_sim.dev check` is still blocked by
+pre-existing formatting drift in `ra_sim/gui/_runtime/runtime_session.py`.
+Rollback is a normal git revert; no data cleanup, feature flag, or migration
+step is required.
 
 2026-05-07 final coordinate-authority update: detector-origin background rows
 rendered in caked view now fail closed when live detector/native-to-caked
@@ -217,6 +239,19 @@ Feature status:
   there.
 
 ## Validation
+
+Latest local validation, 2026-05-08:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "geometry_manual_candidate_helpers_prefer_caked_coords_in_caked_view or background_caked_xy_as_simulated or explicit_simulated_caked_projection_candidate or explicit_simulated_caked_fields_beat_bare_caked_xy or current_caked_display_before_stale_fit_cache or visual_caked_helper_rejects_background or refined_only_candidate_as_fit_cache_fallback" -ra`
+  passed (`7 passed, 556 deselected`).
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "runtime_entry_display_coords or background_reference_detector_origin or background_reference_caked_origin or detector_caked_detector or caked_detector_caked or caked_to_detector_replay" -ra`
+  passed (`9 passed, 554 deselected`).
+- `python -m compileall -q ra_sim/gui tests` passed.
+- `python -m ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py`
+  passed.
+- `python -m ra_sim.dev check` did not pass because
+  `ra_sim/gui/_runtime/runtime_session.py` would be reformatted. That file was
+  outside this slice and was not changed here.
 
 Latest local validation, 2026-05-07:
 

@@ -11501,6 +11501,19 @@ def _geometry_manual_candidate_caked_sim_point(
 def _geometry_manual_candidate_allows_bare_caked_sim_point(
     candidate: Mapping[str, object] | None,
 ) -> bool:
+    if not _geometry_manual_candidate_allows_caked_alias_fallback(candidate):
+        return False
+    if _geometry_manual_caked_qr_projection_key(candidate) is None:
+        return False
+    if bool(candidate.get("_caked_qr_projection_cache", False)):
+        return True
+    display_frame = _geometry_manual_entry_display_frame(candidate)
+    return display_frame == "caked"
+
+
+def _geometry_manual_candidate_allows_caked_alias_fallback(
+    candidate: Mapping[str, object] | None,
+) -> bool:
     if not isinstance(candidate, Mapping):
         return False
     if bool(candidate.get("background_qr_set_reference", False)):
@@ -11513,7 +11526,7 @@ def _geometry_manual_candidate_allows_bare_caked_sim_point(
         candidate.get("manual_background_input_frame")
     ):
         return False
-    if (
+    return (
         _geometry_manual_finite_point(
             candidate,
             (
@@ -11521,15 +11534,22 @@ def _geometry_manual_candidate_allows_bare_caked_sim_point(
                 ("background_detector_x", "background_detector_y"),
             ),
         )
-        is not None
-    ):
-        return False
-    if _geometry_manual_caked_qr_projection_key(candidate) is None:
-        return False
-    if bool(candidate.get("_caked_qr_projection_cache", False)):
-        return True
-    display_frame = _geometry_manual_entry_display_frame(candidate)
-    return display_frame == "caked"
+        is None
+    )
+
+
+def _geometry_manual_entry_current_view_caked_display_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if _geometry_manual_entry_has_stale_caked_fields(entry):
+        return None
+    return _geometry_manual_finite_point(
+        entry,
+        (
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+        ),
+    )
 
 
 def _geometry_manual_candidate_visual_caked_sim_point(
@@ -11544,12 +11564,14 @@ def _geometry_manual_candidate_visual_caked_sim_point(
     visual_caked = _geometry_manual_tuple_point(candidate, "sim_caked")
     if visual_caked is not None:
         return visual_caked, "sim_visual_caked_deg"
+    current_view_caked = _geometry_manual_entry_current_view_caked_display_point(candidate)
+    if current_view_caked is not None:
+        if _geometry_manual_candidate_allows_caked_alias_fallback(candidate):
+            return current_view_caked, "current_view_caked"
+        return None, "<unavailable>"
     fallback_caked = _geometry_manual_candidate_caked_sim_point(candidate)
     if fallback_caked is not None:
         return fallback_caked, "sim_visual_caked_deg"
-    current_view_caked = _geometry_manual_entry_matching_current_view_point(candidate)
-    if current_view_caked is not None:
-        return current_view_caked, "current_view_caked"
     return None, "<unavailable>"
 
 

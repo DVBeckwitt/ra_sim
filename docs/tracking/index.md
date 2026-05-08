@@ -65,8 +65,15 @@ simulated caked projection rows can promote those aliases, while
 background/replay-shaped rows stay unresolved for sim fit/cache fields.
 Already-saved contradictory rows are compatible without state migration. No new
 operator control, public API, cache redesign, or schema migration. Automated
-local gates are green; manual detector/caked GUI smoke remains pending before
-closing the tracking item.
+local gates are green. The latest visual resolver patch keeps caked-view
+display/ranking authority separate from fit/cache truth: explicit visual
+aliases win first, safe current caked display aliases win second, refined-only
+fit/cache fields remain fallback, and background-shaped rows do not become
+simulated visual caked points. No migration, deprecation, CI workflow, feature
+flag, or release version change is required. Full `ra_sim.dev check` remains
+blocked by unrelated formatting drift in `ra_sim/gui/_runtime/runtime_session.py`;
+manual detector/caked GUI smoke remains pending before closing the tracking
+item.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel
