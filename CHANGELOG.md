@@ -114,6 +114,7 @@
   - Fixed runtime exact-caked projection digests to hash DetectorCakeLUT matrix/count content and recompute stored `projection_content_token_v3` values instead of trusting stale incoming tokens.
   - Hardened exact-caked projection-token trust so token-only payloads are absent, stored projection bundles are private read-only copies, and manual caked warm-cache reuse accepts only runtime-sourced verified tokens.
   - Fixed Bi2Se3/Bi2Te3 saved manual caked geometry fitting so provider-backed fixed pairs rebind without HKL fallback, run direct fixed-pair least squares by default, match all fixed pairs, and reduce the saved-state residuals in the active quality baseline.
+  - Fixed headless `fit-geometry` per-background caked projector compatibility so Bi2Se3 and Bi2Te3 saved manual-caked states can run constrained `gamma,Gamma` direct fits through the shared dataset builder.
 
 - **GUI and UX updates**
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and GUI Row/Col mapping to update the beam-center sliders and entries.

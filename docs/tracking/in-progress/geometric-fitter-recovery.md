@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-04-30
+Last updated: 2026-05-08
 
 ## Summary
 
@@ -68,6 +68,30 @@ candidates plus accepted Rung 5 z/zb evidence, and the final Rung 7 feature
 chain passed `dynamic_reanchor`, `discrete_modes`, `seed_multistart`,
 `full_beam_polish`, and `identifiability_features` with exact-caked evidence
 preserved in the finalizer.
+
+2026-05-08 two-rotation Bi2Se3/Bi2Te3 headless slice: headless
+`fit-geometry` now supplies the shared geometry-fit dataset builder with the
+same per-background projector keyword contract used by GUI/runtime callbacks:
+`mode_override` can force caked projection and `strict_caked_projection=False`
+can return an empty projection instead of raising. This fixes the runtime error
+`manual caked geometry fit requires a per-background projector that accepts
+mode_override and strict_caked_projection` without adding a new public flag,
+schema field, dependency, CI workflow, or migration path.
+
+Bug/error status: fixed for the requested headless path. Constrained direct
+fits were run for the user-root Bi2Se3 and Bi2Te3 saved states with
+`--active-vars gamma,Gamma --seed-policy direct`, using only the two detector
+rotation variables and no peak-position refinement. Bi2Se3 matched 82/82 fixed
+pairs with zero missing pairs and zero branch mismatches; Bi2Te3 matched 84/84
+fixed pairs with zero missing pairs and zero branch mismatches. Generated
+output states were written under `C:\Users\Kenpo\.local\share\ra_sim\` as
+`Bi2Se3_gamma_Gamma_fit.json` and `Bi2Te3_gamma_Gamma_fit.json`. Feature
+status: this is an enabling bug fix for an existing CLI workflow, not a new GUI
+feature. Shipping status: targeted CLI geometry-fit tests, compile, Ruff, and
+diff hygiene pass; full `python -m ra_sim.dev check` remains blocked by
+pre-existing formatting drift in `ra_sim/gui/_runtime/runtime_session.py`.
+Rollback is a normal git revert; no saved-state cleanup or deprecation
+migration is required.
 
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is

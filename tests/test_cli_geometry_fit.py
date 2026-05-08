@@ -50,6 +50,14 @@ def test_shared_headless_geometry_fit_backfills_caked_manual_pairs_before_prepar
     assert backfill_index < prepare_index
 
 
+def test_shared_headless_per_background_projector_accepts_caked_kwargs() -> None:
+    source = inspect.getsource(headless_geometry_fit.run_headless_geometry_fit)
+
+    assert "def _project_peaks_for_background_view(" in source
+    assert "mode_override: str | None = None" in source
+    assert "strict_caked_projection: bool = True" in source
+
+
 def test_saved_manual_caked_defaults_infer_bounded_point_only_policy() -> None:
     active_vars, seed_policy, inferred = (
         headless_geometry_fit._infer_headless_saved_manual_caked_defaults(

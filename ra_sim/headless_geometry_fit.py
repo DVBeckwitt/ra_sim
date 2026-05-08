@@ -3254,14 +3254,21 @@ def run_headless_geometry_fit(
     def _project_peaks_for_background_view(
         background_index: int,
         rows: Sequence[dict[str, object]] | None,
+        *,
+        mode_override: str | None = None,
+        strict_caked_projection: bool = True,
     ) -> list[dict[str, object]]:
         normalized_rows = [dict(entry) for entry in (rows or ()) if isinstance(entry, Mapping)]
         if not normalized_rows:
             return []
         background_idx = int(background_index)
-        if not gui_geometry_fit.geometry_manual_pairs_use_caked_fit_space(
-            _pairs_for_index(background_idx)
-        ):
+        if mode_override is None:
+            use_caked_projection = gui_geometry_fit.geometry_manual_pairs_use_caked_fit_space(
+                _pairs_for_index(background_idx)
+            )
+        else:
+            use_caked_projection = str(mode_override).strip().lower() == "caked"
+        if not use_caked_projection:
             return [
                 dict(entry)
                 for entry in (
@@ -3273,6 +3280,8 @@ def run_headless_geometry_fit(
         try:
             payload = _geometry_fit_caked_projection_for_index(background_idx)
             if not isinstance(payload, Mapping):
+                if not bool(strict_caked_projection):
+                    return []
                 raise RuntimeError(
                     f"exact caked projector unavailable for background {int(background_idx) + 1}"
                 )
